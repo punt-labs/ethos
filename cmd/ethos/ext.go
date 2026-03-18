@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 func runExt(args []string) {
@@ -64,7 +65,8 @@ func runExtSet(args []string) {
 		os.Exit(1)
 	}
 	s := store()
-	if err := s.ExtSet(args[0], args[1], args[2], args[3]); err != nil {
+	value := strings.Join(args[3:], " ")
+	if err := s.ExtSet(args[0], args[1], args[2], value); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
@@ -92,6 +94,10 @@ func runExtList(args []string) {
 		os.Exit(1)
 	}
 	s := store()
+	if !s.Exists(args[0]) {
+		fmt.Fprintf(os.Stderr, "ethos: persona %q does not exist\n", args[0])
+		os.Exit(1)
+	}
 	namespaces, err := s.ExtList(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)

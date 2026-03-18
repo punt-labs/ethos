@@ -21,7 +21,7 @@ type Identity struct {
 	// Ext holds tool-scoped extension data, assembled on Load from
 	// <persona>.ext/<namespace>.yaml files. Never persisted to the
 	// core identity YAML. Keyed by namespace (tool name), then by key.
-	Ext map[string]map[string]string `yaml:"-" json:"ext"`
+	Ext map[string]map[string]string `yaml:"-" json:"ext,omitempty"`
 }
 
 // Voice binds an identity to a Vox voice configuration.

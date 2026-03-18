@@ -55,6 +55,9 @@ func (s *Store) ExtGet(persona, namespace, key string) (map[string]string, error
 	if err := yaml.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("invalid extension file: %w", err)
 	}
+	if m == nil {
+		m = make(map[string]string)
+	}
 	if key != "" {
 		v, ok := m[key]
 		if !ok {
@@ -95,13 +98,18 @@ func (s *Store) ExtSet(persona, namespace, key, value string) error {
 		if err := yaml.Unmarshal(data, &m); err != nil {
 			return fmt.Errorf("corrupt extension file %s: %w", path, err)
 		}
-	} else {
+		if m == nil {
+			m = make(map[string]string)
+		}
+	} else if os.IsNotExist(err) {
 		// New namespace — check namespace count limit (best-effort;
 		// concurrent writers may briefly exceed the limit).
 		if err := s.checkNamespaceLimit(persona); err != nil {
 			return err
 		}
 		m = make(map[string]string)
+	} else {
+		return fmt.Errorf("reading extension file: %w", err)
 	}
 
 	// Check key count limit.

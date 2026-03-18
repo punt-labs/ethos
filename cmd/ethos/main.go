@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -302,9 +303,22 @@ func runShow(args []string) {
 		}
 	}
 	showField("Skills", strings.Join(skills, ", "))
-	for ns, keys := range id.Ext {
-		for k, v := range keys {
-			showField("ext:"+ns+"."+k, v)
+	if len(id.Ext) > 0 {
+		nsNames := make([]string, 0, len(id.Ext))
+		for ns := range id.Ext {
+			nsNames = append(nsNames, ns)
+		}
+		sort.Strings(nsNames)
+		for _, ns := range nsNames {
+			keys := id.Ext[ns]
+			keyNames := make([]string, 0, len(keys))
+			for k := range keys {
+				keyNames = append(keyNames, k)
+			}
+			sort.Strings(keyNames)
+			for _, k := range keyNames {
+				showField("ext:"+ns+"."+k, keys[k])
+			}
 		}
 	}
 }
