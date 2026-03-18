@@ -32,6 +32,10 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	s.AddTool(h.listIdentitiesTool(), h.handleListIdentities)
 	s.AddTool(h.getIdentityTool(), h.handleGetIdentity)
 	s.AddTool(h.createIdentityTool(), h.handleCreateIdentity)
+	s.AddTool(h.extGetTool(), h.handleExtGet)
+	s.AddTool(h.extSetTool(), h.handleExtSet)
+	s.AddTool(h.extDelTool(), h.handleExtDel)
+	s.AddTool(h.extListTool(), h.handleExtList)
 }
 
 // --- Tool Definitions ---
@@ -180,12 +184,102 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	return jsonResult(id)
 }
 
+// --- Extension Tool Definitions ---
+
+func (h *Handler) extGetTool() mcplib.Tool {
+	return mcplib.NewTool("ext_get",
+		mcplib.WithDescription("Read extension key(s) for a persona. Returns all keys if key is omitted."),
+		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
+		mcplib.WithString("namespace", mcplib.Required(), mcplib.Description("Tool namespace (e.g. beadle, biff)")),
+		mcplib.WithString("key", mcplib.Description("Specific key to read. Omit to read all keys.")),
+	)
+}
+
+func (h *Handler) extSetTool() mcplib.Tool {
+	return mcplib.NewTool("ext_set",
+		mcplib.WithDescription("Write an extension key-value pair for a persona."),
+		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
+		mcplib.WithString("namespace", mcplib.Required(), mcplib.Description("Tool namespace (e.g. beadle, biff)")),
+		mcplib.WithString("key", mcplib.Required(), mcplib.Description("Key name")),
+		mcplib.WithString("value", mcplib.Required(), mcplib.Description("Value to store")),
+	)
+}
+
+func (h *Handler) extDelTool() mcplib.Tool {
+	return mcplib.NewTool("ext_del",
+		mcplib.WithDescription("Delete an extension key or entire namespace for a persona."),
+		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
+		mcplib.WithString("namespace", mcplib.Required(), mcplib.Description("Tool namespace")),
+		mcplib.WithString("key", mcplib.Description("Key to delete. Omit to delete entire namespace.")),
+	)
+}
+
+func (h *Handler) extListTool() mcplib.Tool {
+	return mcplib.NewTool("ext_list",
+		mcplib.WithDescription("List all extension namespaces for a persona."),
+		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
+	)
+}
+
+// --- Extension Tool Handlers ---
+
+func (h *Handler) handleExtGet(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	persona := stringArg(req, "persona", "")
+	namespace := stringArg(req, "namespace", "")
+	key := stringArg(req, "key", "")
+
+	m, err := h.store.ExtGet(persona, namespace, key)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	return jsonResult(m)
+}
+
+func (h *Handler) handleExtSet(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	persona := stringArg(req, "persona", "")
+	namespace := stringArg(req, "namespace", "")
+	key := stringArg(req, "key", "")
+	value := stringArg(req, "value", "")
+
+	if err := h.store.ExtSet(persona, namespace, key, value); err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	return mcplib.NewToolResultText(fmt.Sprintf("set %s/%s/%s", persona, namespace, key)), nil
+}
+
+func (h *Handler) handleExtDel(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	persona := stringArg(req, "persona", "")
+	namespace := stringArg(req, "namespace", "")
+	key := stringArg(req, "key", "")
+
+	if err := h.store.ExtDel(persona, namespace, key); err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	if key == "" {
+		return mcplib.NewToolResultText(fmt.Sprintf("deleted namespace %s/%s", persona, namespace)), nil
+	}
+	return mcplib.NewToolResultText(fmt.Sprintf("deleted %s/%s/%s", persona, namespace, key)), nil
+}
+
+func (h *Handler) handleExtList(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	persona := stringArg(req, "persona", "")
+
+	namespaces, err := h.store.ExtList(persona)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	if namespaces == nil {
+		namespaces = []string{}
+	}
+	return jsonResult(namespaces)
+}
+
 // --- Helpers ---
 
 func stringArg(req mcplib.CallToolRequest, key, fallback string) string {
 	args := req.GetArguments()
 	if v, ok := args[key]; ok {
-		if s, ok := v.(string); ok && s != "" {
+		if s, ok := v.(string); ok {
 			return s
 		}
 	}
