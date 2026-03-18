@@ -173,10 +173,10 @@ func runShow(args []string) {
 	if id.Agent != "" {
 		fmt.Printf("Agent:       %s\n", id.Agent)
 	}
-	if s := strings.TrimSpace(id.WritingStyle); s != "" {
+	if s := oneLine(id.WritingStyle); s != "" {
 		fmt.Printf("Writing:     %s\n", s)
 	}
-	if s := strings.TrimSpace(id.Personality); s != "" {
+	if s := oneLine(id.Personality); s != "" {
 		fmt.Printf("Personality: %s\n", s)
 	}
 	var skills []string
@@ -188,4 +188,14 @@ func runShow(args []string) {
 	if len(skills) > 0 {
 		fmt.Printf("Skills:      %s\n", strings.Join(skills, ", "))
 	}
+}
+
+// oneLine collapses a multi-line string to a single line by joining
+// whitespace-separated fields with a single space.
+func oneLine(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.Join(fields, " ")
 }
