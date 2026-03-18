@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/punt-labs/ethos/internal/identity"
+
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
@@ -75,16 +77,17 @@ func createIdentityTool() mcplib.Tool {
 // --- Tool Handlers ---
 
 func handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	s := store()
 	handle := stringArg(req, "handle", "")
 
 	if handle != "" {
-		if err := setActiveIdentity(handle); err != nil {
+		if err := s.SetActive(handle); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("failed to set active identity: %v", err)), nil
 		}
 		return mcplib.NewToolResultText(fmt.Sprintf("Active identity set to %q", handle)), nil
 	}
 
-	id, err := activeIdentity()
+	id, err := s.Active()
 	if err != nil {
 		return mcplib.NewToolResultError("no active identity configured — run 'ethos create' first"), nil
 	}
@@ -93,7 +96,8 @@ func handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallTo
 }
 
 func handleListIdentities(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	identities, err := listIdentities()
+	s := store()
+	identities, err := s.List()
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to list identities: %v", err)), nil
 	}
@@ -105,7 +109,7 @@ func handleListIdentities(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.
 		Active bool   `json:"active"`
 	}
 
-	active, _ := activeIdentity()
+	active, _ := s.Active()
 	entries := make([]entry, 0, len(identities))
 	for _, id := range identities {
 		isActive := active != nil && active.Handle == id.Handle
@@ -126,7 +130,7 @@ func handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.C
 		return mcplib.NewToolResultError("handle is required"), nil
 	}
 
-	id, err := loadIdentity(handle)
+	id, err := store().Load(handle)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("identity not found: %v", err)), nil
 	}
@@ -135,16 +139,16 @@ func handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.C
 }
 
 func handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	var voice *Voice
+	var voice *identity.Voice
 	provider := stringArg(req, "voice_provider", "")
 	voiceID := stringArg(req, "voice_id", "")
 	if provider != "" {
-		voice = &Voice{Provider: provider, VoiceID: voiceID}
+		voice = &identity.Voice{Provider: provider, VoiceID: voiceID}
 	} else if voiceID != "" {
 		return mcplib.NewToolResultError("voice_id requires voice_provider"), nil
 	}
 
-	id := &Identity{
+	id := &identity.Identity{
 		Name:         stringArg(req, "name", ""),
 		Handle:       stringArg(req, "handle", ""),
 		Kind:         stringArg(req, "kind", ""),
@@ -157,14 +161,15 @@ func handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcpli
 		Skills:       stringArrayArg(req, "skills"),
 	}
 
-	if err := validateIdentity(id); err != nil {
+	if err := id.Validate(); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("validation failed: %v", err)), nil
 	}
-	if err := saveIdentity(id); err != nil {
+	s := store()
+	if err := s.Save(id); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to save: %v", err)), nil
 	}
 
-	setActiveIfFirst(id.Handle)
+	setActiveIfFirst(s, id.Handle)
 	return jsonResult(id)
 }
 
