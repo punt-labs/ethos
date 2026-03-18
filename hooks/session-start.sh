@@ -41,16 +41,16 @@ if [[ -n "$SESSION_ID" ]] && command -v ethos >/dev/null 2>&1; then
   # Parent agent is PPID (Claude Code process)
   CLAUDE_PID="${PPID}"
 
-  # Create roster with root (human) and primary (claude agent)
-  ethos session create \
+  # Create roster with root (human) and primary (claude agent).
+  # Only write the current-session PID file if create succeeds.
+  if ethos session create \
     --session "$SESSION_ID" \
     --root-id "$USER_ID" \
     --root-persona "$USER_PERSONA" \
     --primary-id "$CLAUDE_PID" \
-    --primary-persona "${ACTIVE_PERSONA:-agent}" 2>>"$ETHOS_LOG" || true
-
-  # Write current session file for PID-based lookup (uses store's permissions)
-  ethos session write-current --pid "$CLAUDE_PID" --session "$SESSION_ID" 2>>"$ETHOS_LOG" || true
+    --primary-persona "${ACTIVE_PERSONA:-agent}" 2>>"$ETHOS_LOG"; then
+    ethos session write-current --pid "$CLAUDE_PID" --session "$SESSION_ID" 2>>"$ETHOS_LOG" || true
+  fi
 fi
 
 # Build output
@@ -62,7 +62,8 @@ if [[ -n "$IDENTITY_INFO" ]]; then
   OUTPUT="${OUTPUT}Active identity: ${IDENTITY_INFO}"
 fi
 if [[ -n "$SESSION_ID" ]]; then
-  OUTPUT="${OUTPUT} Session: ${SESSION_ID}"
+  [[ -n "$OUTPUT" ]] && OUTPUT="${OUTPUT} "
+  OUTPUT="${OUTPUT}Session: ${SESSION_ID}"
 fi
 
 if [[ -n "$OUTPUT" ]]; then

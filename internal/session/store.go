@@ -115,7 +115,16 @@ func (s *Store) Leave(sessionID string, agentID string) error {
 
 // Delete removes a session roster and its lock file.
 func (s *Store) Delete(sessionID string) error {
+	if err := s.deleteFiles(sessionID); err != nil {
+		return err
+	}
 	os.Remove(s.lockPath(sessionID))
+	return nil
+}
+
+// deleteFiles removes the roster file only (no lock file cleanup).
+// Used inside withLock where the lock file must remain.
+func (s *Store) deleteFiles(sessionID string) error {
 	if err := os.Remove(s.rosterPath(sessionID)); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("deleting session %q: %w", sessionID, err)
 	}
@@ -152,22 +161,25 @@ func (s *Store) Purge() ([]string, error) {
 	}
 	var purged []string
 	for _, id := range ids {
-		shouldPurge := false
+		didPurge := false
 		_ = s.withLock(id, func() error {
 			roster, err := s.Load(id)
 			if err != nil {
-				shouldPurge = true
+				// Corrupt roster — delete under lock.
+				if s.deleteFiles(id) == nil {
+					didPurge = true
+				}
 				return nil
 			}
 			if isStale(roster) {
-				shouldPurge = true
+				if s.deleteFiles(id) == nil {
+					didPurge = true
+				}
 			}
 			return nil
 		})
-		if shouldPurge {
-			if delErr := s.Delete(id); delErr == nil {
-				purged = append(purged, id)
-			}
+		if didPurge {
+			purged = append(purged, id)
 		}
 	}
 	return purged, nil
