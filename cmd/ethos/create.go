@@ -86,13 +86,18 @@ func createInteractive() {
 		}
 	}
 
+	var voice *Voice
+	if voiceProvider != "" {
+		voice = &Voice{Provider: voiceProvider, VoiceID: voiceID}
+	}
+
 	id := &Identity{
 		Name:         name,
 		Handle:       handle,
 		Kind:         kind,
 		Email:        email,
 		GitHub:       github,
-		Voice:        Voice{Provider: voiceProvider, VoiceID: voiceID},
+		Voice:        voice,
 		Agent:        agent,
 		WritingStyle: writingStyle,
 		Personality:  personality,
@@ -152,6 +157,9 @@ func validateIdentity(id *Identity) error {
 	}
 	if id.Kind != "human" && id.Kind != "agent" {
 		return fmt.Errorf("kind must be 'human' or 'agent', got %q", id.Kind)
+	}
+	if id.Voice != nil && id.Voice.VoiceID != "" && id.Voice.Provider == "" {
+		return fmt.Errorf("voice_id requires voice_provider")
 	}
 	return nil
 }

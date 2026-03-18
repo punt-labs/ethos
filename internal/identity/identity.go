@@ -6,22 +6,22 @@ package identity
 // serialization. When the MCP server is implemented, both will delegate
 // to this package.
 type Identity struct {
-	Name         string   `yaml:"name"`
-	Handle       string   `yaml:"handle"`
-	Kind         string   `yaml:"kind"` // "human" or "agent"
-	Email        string   `yaml:"email,omitempty"`
-	GitHub       string   `yaml:"github,omitempty"`
-	Voice        Voice    `yaml:"voice,omitempty"`
-	Agent        string   `yaml:"agent,omitempty"`
-	WritingStyle string   `yaml:"writing_style,omitempty"`
-	Personality  string   `yaml:"personality,omitempty"`
-	Skills       []string `yaml:"skills,omitempty"`
+	Name         string   `yaml:"name" json:"name"`
+	Handle       string   `yaml:"handle" json:"handle"`
+	Kind         string   `yaml:"kind" json:"kind"`
+	Email        string   `yaml:"email,omitempty" json:"email,omitempty"`
+	GitHub       string   `yaml:"github,omitempty" json:"github,omitempty"`
+	Voice        *Voice   `yaml:"voice,omitempty" json:"voice,omitempty"`
+	Agent        string   `yaml:"agent,omitempty" json:"agent,omitempty"`
+	WritingStyle string   `yaml:"writing_style,omitempty" json:"writing_style,omitempty"`
+	Personality  string   `yaml:"personality,omitempty" json:"personality,omitempty"`
+	Skills       []string `yaml:"skills,omitempty" json:"skills,omitempty"`
 }
 
 // Voice binds an identity to a Vox voice configuration.
 type Voice struct {
-	Provider string `yaml:"provider,omitempty"`
-	VoiceID  string `yaml:"voice_id,omitempty"`
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	VoiceID  string `yaml:"voice_id,omitempty" json:"voice_id,omitempty"`
 }
 
 // Validate checks that required fields are present and valid.
