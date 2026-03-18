@@ -13,10 +13,14 @@ var version = "dev"
 var jsonOutput bool
 
 func main() {
-	// Extract global flags before command dispatch.
+	// Extract global flags. --json is recognized anywhere except after "--".
 	var args []string
+	pastSeparator := false
 	for _, a := range os.Args[1:] {
-		if a == "--json" {
+		if a == "--" {
+			pastSeparator = true
+			args = append(args, a)
+		} else if !pastSeparator && a == "--json" {
 			jsonOutput = true
 		} else {
 			args = append(args, a)
@@ -174,7 +178,10 @@ func checkIdentityDir() (string, bool) {
 		return err.Error(), false
 	}
 	if _, err := os.Stat(dir); err != nil {
-		return fmt.Sprintf("not found: %s", dir), false
+		if os.IsNotExist(err) {
+			return fmt.Sprintf("not found: %s", dir), false
+		}
+		return fmt.Sprintf("error: %v", err), false
 	}
 	return dir, true
 }
