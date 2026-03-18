@@ -10,7 +10,6 @@ TOOL_NAME=$(printf '%s' "$INPUT" | grep -o '"tool_name":"[^"]*"' | head -1 | cut
 # Format based on tool
 case "$TOOL_NAME" in
   *whoami*)
-    RESULT=$(printf '%s' "$INPUT" | grep -o '"tool_response":{[^}]*}' | head -1 || true)
     printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Identity resolved."}}'
     ;;
   *)
