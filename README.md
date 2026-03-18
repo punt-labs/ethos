@@ -80,7 +80,7 @@ $ ethos list
 | Command | What it does |
 |---------|-------------|
 | `ethos whoami [--json]` | Show the active identity |
-| `ethos whoami <handle>` | Set the active identity |
+| `ethos whoami <handle> [--json]` | Set the active identity |
 | `ethos create` | Create a new identity (interactive) |
 | `ethos create -f <path>` | Create from a YAML file |
 | `ethos list [--json]` | List all identities |
@@ -90,7 +90,8 @@ $ ethos list
 | `ethos serve` | Start MCP server (stdio) |
 
 `--json` is a global flag — valid before or after the subcommand.
-Use `ethos <command> --help` for per-command usage.
+Use `--` to stop flag parsing (e.g., `ethos create -f -- --json` treats
+`--json` as a filename). Use `ethos <command> --help` for per-command usage.
 
 ## Identity Schema
 

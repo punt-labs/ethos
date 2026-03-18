@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `show` collapses multi-line YAML values to single-line display
 - `show` handles empty VoiceID without trailing slash
 - Duplicate identity error no longer references non-existent `edit` command
-- `identityDir()`/`configDir()` return errors instead of empty string on `$HOME` failure
+- Home directory resolution returns errors instead of empty string on `$HOME` failure
 - `doctor` distinguishes permission errors from missing directory
 - `voice_id` requires `voice_provider` across all creation paths (CLI, MCP, file)
 - Malformed identity files produce stderr warnings instead of silent skips
