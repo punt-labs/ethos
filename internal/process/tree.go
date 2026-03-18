@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Package process provides utilities for walking the process tree.
 package process
 

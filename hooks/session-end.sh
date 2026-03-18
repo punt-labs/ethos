@@ -6,10 +6,11 @@ set -euo pipefail
 command -v ethos >/dev/null 2>&1 || exit 0
 
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
+mkdir -p "$(dirname "$ETHOS_LOG")"
 
 # Read hook input from stdin.
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | grep -o '"session_id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+SESSION_ID=$(echo "$INPUT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 
 [[ -n "$SESSION_ID" ]] || exit 0
 

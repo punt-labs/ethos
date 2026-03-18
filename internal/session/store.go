@@ -80,9 +80,15 @@ func (s *Store) Join(sessionID string, p Participant) error {
 			return err
 		}
 		if existing := roster.FindParticipant(p.AgentID); existing != nil {
-			existing.Persona = p.Persona
-			existing.AgentType = p.AgentType
-			existing.Parent = p.Parent
+			if p.Persona != "" {
+				existing.Persona = p.Persona
+			}
+			if p.AgentType != "" {
+				existing.AgentType = p.AgentType
+			}
+			if p.Parent != "" {
+				existing.Parent = p.Parent
+			}
 			if p.Ext != nil {
 				existing.Ext = p.Ext
 			}
@@ -146,15 +152,19 @@ func (s *Store) Purge() ([]string, error) {
 	}
 	var purged []string
 	for _, id := range ids {
-		roster, err := s.Load(id)
-		if err != nil {
-			// Corrupt roster — purge it.
-			if delErr := s.Delete(id); delErr == nil {
-				purged = append(purged, id)
+		shouldPurge := false
+		_ = s.withLock(id, func() error {
+			roster, err := s.Load(id)
+			if err != nil {
+				shouldPurge = true
+				return nil
 			}
-			continue
-		}
-		if isStale(roster) {
+			if isStale(roster) {
+				shouldPurge = true
+			}
+			return nil
+		})
+		if shouldPurge {
 			if delErr := s.Delete(id); delErr == nil {
 				purged = append(purged, id)
 			}
@@ -193,13 +203,18 @@ func (s *Store) DeleteCurrentSession(claudePID string) error {
 	return nil
 }
 
-// writeRoster marshals and writes a roster to disk.
+// writeRoster marshals and writes a roster atomically via temp file + rename.
 func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	data, err := yaml.Marshal(roster)
 	if err != nil {
 		return fmt.Errorf("marshaling roster: %w", err)
 	}
-	return os.WriteFile(s.rosterPath(sessionID), data, 0o600)
+	dest := s.rosterPath(sessionID)
+	tmp := dest + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("writing temp roster: %w", err)
+	}
+	return os.Rename(tmp, dest)
 }
 
 // withLock executes fn while holding an exclusive flock on the session's
@@ -252,6 +267,7 @@ func isOlderThan(roster *Roster, ttl time.Duration) bool {
 }
 
 // isProcessAlive checks if a process with the given PID exists.
+// Returns true for EPERM (process exists but not signalable).
 func isProcessAlive(pid int) bool {
 	p, err := os.FindProcess(pid)
 	if err != nil {
@@ -259,5 +275,9 @@ func isProcessAlive(pid int) bool {
 	}
 	// On Unix, FindProcess always succeeds. Send signal 0 to check.
 	err = p.Signal(syscall.Signal(0))
-	return err == nil
+	if err == nil {
+		return true
+	}
+	// EPERM means the process exists but we can't signal it.
+	return err == syscall.EPERM
 }

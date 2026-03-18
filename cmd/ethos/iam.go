@@ -38,8 +38,8 @@ func runIam(args []string) {
 
 // resolveSessionContext determines the session ID and agent ID from
 // the environment. Session ID comes from ETHOS_SESSION or the PID-keyed
-// current file. Agent ID comes from ETHOS_AGENT_ID, Claude PID walk,
-// or $USER.
+// current file. Agent ID comes from ETHOS_AGENT_ID or Claude PID walk.
+// Exits the process if session ID cannot be determined.
 func resolveSessionContext() (sessionID, agentID string) {
 	sessionID = os.Getenv("ETHOS_SESSION")
 	agentID = os.Getenv("ETHOS_AGENT_ID")

@@ -5,10 +5,11 @@ set -euo pipefail
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 COMMANDS_DIR="$HOME/.claude/commands"
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
+mkdir -p "$(dirname "$ETHOS_LOG")"
 
 # Read session_id from stdin JSON (Claude Code passes hook context).
 INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | grep -o '"session_id":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+SESSION_ID=$(echo "$INPUT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 
 # Deploy top-level commands (diff-and-copy, not skip-if-exists)
 DEPLOYED=()
@@ -29,7 +30,7 @@ IDENTITY_INFO=""
 ACTIVE_PERSONA=""
 if command -v ethos >/dev/null 2>&1; then
   IDENTITY_INFO=$(ethos whoami 2>>"$ETHOS_LOG" || true)
-  ACTIVE_PERSONA=$(ethos whoami --json 2>>"$ETHOS_LOG" | grep -o '"handle":"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+  ACTIVE_PERSONA=$(ethos whoami --json 2>>"$ETHOS_LOG" | grep -o '"handle" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 fi
 
 # Create session roster if we have a session ID and ethos is available
@@ -66,6 +67,6 @@ fi
 
 if [[ -n "$OUTPUT" ]]; then
   # Escape characters that would break JSON string values.
-  ESCAPED=$(echo "$OUTPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g')
+  ESCAPED=$(printf '%s' "$OUTPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n' ' ' | tr '\r' ' ')
   printf '{"hookSpecificOutput":{"additionalContext":"%s"}}' "$ESCAPED"
 fi
