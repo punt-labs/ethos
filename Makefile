@@ -6,9 +6,10 @@ LDFLAGS := -X main.version=$(VERSION)
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-lint: ## Lint (go vet + staticcheck)
+lint: ## Lint (go vet + staticcheck + shellcheck)
 	go vet ./...
 	$(shell go env GOPATH)/bin/staticcheck ./...
+	shellcheck hooks/*.sh install.sh
 
 docs: ## Lint markdown
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"

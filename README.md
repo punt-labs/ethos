@@ -16,16 +16,31 @@ Everything works without ethos; ethos makes it richer.
 ## Quick Start
 
 ```bash
-# Build and install
-make build
-make install
-
-# Create your identity
-ethos create
-
-# Check who you are
-ethos whoami
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/80f42bb/install.sh | sh
 ```
+
+<details>
+<summary>Manual install (if you already have Go)</summary>
+
+```bash
+go install github.com/punt-labs/ethos/cmd/ethos@latest
+mkdir -p ~/.punt-labs/ethos/identities
+ethos doctor
+```
+
+</details>
+
+<details>
+<summary>Verify before running</summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/80f42bb/install.sh -o install.sh
+shasum -a 256 install.sh
+cat install.sh
+sh install.sh
+```
+
+</details>
 
 ## Features
 
@@ -35,13 +50,39 @@ ethos whoami
 - **Resolution chain** --- repo-local config overrides global active identity
 - **CLI + MCP + Plugin** --- accessible from terminal, AI agents, and Claude Code
 
+## What It Looks Like
+
+```text
+$ ethos create
+Name: Jim Freeman
+Handle [jim-freeman]: jfreeman
+Kind (human/agent) [human]:
+Email (optional): jim@punt-labs.com
+GitHub username (optional): jfreeman
+Voice provider (optional, e.g. elevenlabs):
+Agent definition path (optional):
+Writing style (optional, one line): Direct. Short sentences. Data over adjectives.
+Personality (optional, one line): Principal engineer. Formal methods, accountability.
+Skills (optional, comma-separated): formal-methods, product-strategy
+Set as active identity (first identity created)
+Created identity "jfreeman" (Jim Freeman)
+
+$ ethos whoami
+Jim Freeman (jfreeman)
+
+$ ethos list
+* jfreeman         Jim Freeman
+  wei              Wei
+```
+
 ## Commands
 
 | Command | What it does |
 |---------|-------------|
 | `ethos whoami` | Show the active identity |
 | `ethos whoami <handle>` | Set the active identity |
-| `ethos create` | Create a new identity (interactive or from YAML) |
+| `ethos create` | Create a new identity (interactive) |
+| `ethos create --file <path>` | Create from a YAML file |
 | `ethos list` | List all identities |
 | `ethos show <handle>` | Show identity details |
 | `ethos version` | Print version |
@@ -93,10 +134,11 @@ use it if present. No import dependency exists.
 ## Development
 
 ```bash
-make check    # All quality gates: vet + staticcheck + markdownlint + tests
+make check    # All quality gates: vet + staticcheck + markdownlint + shellcheck + tests
 make build    # Build binary
 make format   # Auto-format code
 make dist     # Cross-compile for all platforms
+make help     # List all targets
 ```
 
 ## License
