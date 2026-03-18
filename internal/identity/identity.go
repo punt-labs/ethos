@@ -1,10 +1,11 @@
 // Package identity provides the core identity model and CRUD operations.
 package identity
 
+import "regexp"
+
+var validHandle = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
 // Identity represents a human or agent identity with channel bindings.
-// This is the canonical type — cmd/ethos has a parallel struct for CLI
-// serialization. When the MCP server is implemented, both will delegate
-// to this package.
 type Identity struct {
 	Name         string   `yaml:"name" json:"name"`
 	Handle       string   `yaml:"handle" json:"handle"`
@@ -32,8 +33,14 @@ func (id *Identity) Validate() error {
 	if id.Handle == "" {
 		return &ValidationError{Field: "handle", Message: "required"}
 	}
+	if !validHandle.MatchString(id.Handle) {
+		return &ValidationError{Field: "handle", Message: "must be lowercase alphanumeric with hyphens"}
+	}
 	if id.Kind != "human" && id.Kind != "agent" {
 		return &ValidationError{Field: "kind", Message: "must be 'human' or 'agent'"}
+	}
+	if id.Voice != nil && id.Voice.VoiceID != "" && id.Voice.Provider == "" {
+		return &ValidationError{Field: "voice", Message: "voice_id requires voice_provider"}
 	}
 	return nil
 }
