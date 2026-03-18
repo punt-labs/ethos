@@ -28,5 +28,8 @@ jobs:
       - name: Staticcheck
         run: staticcheck ./...
 
+      - name: ShellCheck
+        run: shellcheck hooks/*.sh install.sh
+
       - name: Test
         run: go test -race -count=1 ./...
