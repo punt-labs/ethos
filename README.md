@@ -79,15 +79,18 @@ $ ethos list
 
 | Command | What it does |
 |---------|-------------|
-| `ethos whoami` | Show the active identity |
+| `ethos whoami [--json]` | Show the active identity |
 | `ethos whoami <handle>` | Set the active identity |
 | `ethos create` | Create a new identity (interactive) |
-| `ethos create --file <path>` | Create from a YAML file |
-| `ethos list` | List all identities |
-| `ethos show <handle>` | Show identity details |
-| `ethos version` | Print version |
-| `ethos doctor` | Check installation health |
+| `ethos create -f <path>` | Create from a YAML file |
+| `ethos list [--json]` | List all identities |
+| `ethos show <handle> [--json]` | Show identity details |
+| `ethos version [--json]` | Print version |
+| `ethos doctor [--json]` | Check installation health |
 | `ethos serve` | Start MCP server (stdio) |
+
+`--json` is a global flag — valid before or after the subcommand.
+Use `ethos <command> --help` for per-command usage.
 
 ## Identity Schema
 
