@@ -158,28 +158,34 @@ func runShow(args []string) {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Name:     %s\n", id.Name)
-	fmt.Printf("Handle:   %s\n", id.Handle)
-	fmt.Printf("Kind:     %s\n", id.Kind)
+	fmt.Printf("Name:        %s\n", id.Name)
+	fmt.Printf("Handle:      %s\n", id.Handle)
+	fmt.Printf("Kind:        %s\n", id.Kind)
 	if id.Email != "" {
-		fmt.Printf("Email:    %s\n", id.Email)
+		fmt.Printf("Email:       %s\n", id.Email)
 	}
 	if id.GitHub != "" {
-		fmt.Printf("GitHub:   %s\n", id.GitHub)
+		fmt.Printf("GitHub:      %s\n", id.GitHub)
 	}
 	if id.Voice.Provider != "" {
-		fmt.Printf("Voice:    %s/%s\n", id.Voice.Provider, id.Voice.VoiceID)
+		fmt.Printf("Voice:       %s/%s\n", id.Voice.Provider, id.Voice.VoiceID)
 	}
 	if id.Agent != "" {
-		fmt.Printf("Agent:    %s\n", id.Agent)
+		fmt.Printf("Agent:       %s\n", id.Agent)
 	}
-	if id.WritingStyle != "" {
-		fmt.Printf("Style:    %s\n", strings.TrimSpace(id.WritingStyle))
+	if s := strings.TrimSpace(id.WritingStyle); s != "" {
+		fmt.Printf("Style:       %s\n", s)
 	}
-	if id.Personality != "" {
-		fmt.Printf("Person.:  %s\n", strings.TrimSpace(id.Personality))
+	if s := strings.TrimSpace(id.Personality); s != "" {
+		fmt.Printf("Personality: %s\n", s)
 	}
-	if len(id.Skills) > 0 {
-		fmt.Printf("Skills:   %s\n", strings.Join(id.Skills, ", "))
+	var skills []string
+	for _, sk := range id.Skills {
+		if s := strings.TrimSpace(sk); s != "" {
+			skills = append(skills, s)
+		}
+	}
+	if len(skills) > 0 {
+		fmt.Printf("Skills:      %s\n", strings.Join(skills, ", "))
 	}
 }

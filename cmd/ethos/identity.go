@@ -118,7 +118,7 @@ func identityExists(handle string) bool {
 // identity with the same handle already exists.
 func saveIdentity(id *Identity) error {
 	if identityExists(id.Handle) {
-		return fmt.Errorf("identity %q already exists", id.Handle)
+		return fmt.Errorf("identity %q already exists — delete %s to recreate", id.Handle, filepath.Join(identityDir(), filepath.Base(id.Handle)+".yaml"))
 	}
 	dir := identityDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
