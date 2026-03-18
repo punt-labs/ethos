@@ -4,10 +4,13 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+var validHandle = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // runCreateImpl implements both interactive and declarative identity creation.
 // Declarative: ethos create --file <path>
@@ -49,8 +52,9 @@ func createFromFile(path string) {
 		os.Exit(1)
 	}
 
-	// Set as active if first identity
-	setActiveIfFirst(id.Handle)
+	if setActiveIfFirst(id.Handle) {
+		fmt.Fprintf(os.Stderr, "Set as active identity (first identity created)\n")
+	}
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
 }
 
@@ -104,15 +108,17 @@ func createInteractive() {
 		os.Exit(1)
 	}
 
-	setActiveIfFirst(id.Handle)
+	if setActiveIfFirst(id.Handle) {
+		fmt.Fprintf(os.Stderr, "Set as active identity (first identity created)\n")
+	}
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
 }
 
 func prompt(reader *bufio.Reader, label, defaultVal string) string {
 	if defaultVal != "" {
-		fmt.Printf("%s [%s]: ", label, defaultVal)
+		fmt.Fprintf(os.Stderr, "%s [%s]: ", label, defaultVal)
 	} else {
-		fmt.Printf("%s: ", label)
+		fmt.Fprintf(os.Stderr, "%s: ", label)
 	}
 	line, _ := reader.ReadString('\n')
 	line = strings.TrimSpace(line)
@@ -125,7 +131,6 @@ func prompt(reader *bufio.Reader, label, defaultVal string) string {
 func slugify(name string) string {
 	name = strings.ToLower(name)
 	name = strings.ReplaceAll(name, " ", "-")
-	// Keep only alphanumeric and hyphens
 	var b strings.Builder
 	for _, c := range name {
 		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
@@ -142,19 +147,25 @@ func validateIdentity(id *Identity) error {
 	if id.Handle == "" {
 		return fmt.Errorf("handle is required")
 	}
+	if !validHandle.MatchString(id.Handle) {
+		return fmt.Errorf("handle must be lowercase alphanumeric with hyphens, got %q", id.Handle)
+	}
 	if id.Kind != "human" && id.Kind != "agent" {
 		return fmt.Errorf("kind must be 'human' or 'agent', got %q", id.Kind)
 	}
 	return nil
 }
 
-func setActiveIfFirst(handle string) {
+// setActiveIfFirst sets the identity as active if it's the only one.
+// Returns true if it was set. Never writes to stdout.
+func setActiveIfFirst(handle string) bool {
 	identities, err := listIdentities()
 	if err != nil {
-		return
+		return false
 	}
 	if len(identities) == 1 {
 		_ = setActiveIdentity(handle)
-		fmt.Printf("Set as active identity (first identity created)\n")
+		return true
 	}
+	return false
 }

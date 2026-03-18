@@ -28,6 +28,11 @@ fi
 GO_VERSION=$(go version | sed 's/.*go\([0-9]*\.[0-9]*\).*/\1/')
 info "Go ${GO_VERSION} found"
 
+# Check for git (needed for fallback build)
+if ! check git; then
+  info "WARNING: git not found — fallback build from source will not work"
+fi
+
 # Check for claude CLI (needed for plugin install)
 if ! check claude; then
   info "WARNING: claude CLI not found — skipping plugin install"
@@ -47,33 +52,33 @@ mkdir -p "$INSTALL_DIR"
 
 # Build from source via go install
 GOBIN="$INSTALL_DIR" go install "github.com/${REPO}/cmd/ethos@v${VERSION}" 2>/dev/null || {
-  # Fallback: clone and build
+  # Fallback: clone and build (requires git)
+  if ! check git; then
+    fail "go install failed and git is not available for fallback build"
+  fi
   info "  go install failed, building from source..."
+  ORIG_DIR=$(pwd)
   TMPDIR_BUILD=$(mktemp -d)
-  git clone --depth 1 --branch "v${VERSION}" "https://github.com/${REPO}.git" "$TMPDIR_BUILD" 2>/dev/null || \
-    git clone --depth 1 "https://github.com/${REPO}.git" "$TMPDIR_BUILD" 2>/dev/null || \
-    fail "Failed to clone repository"
-  cd "$TMPDIR_BUILD"
+  if ! git clone --depth 1 --branch "v${VERSION}" "https://github.com/${REPO}.git" "$TMPDIR_BUILD" 2>/dev/null; then
+    fail "Tag v${VERSION} not found. This installer requires a tagged release."
+  fi
+  cd "$TMPDIR_BUILD" || fail "Cannot enter build directory"
   CGO_ENABLED=0 go build -ldflags="-s -w -X main.version=${VERSION}" -o "${INSTALL_DIR}/${BINARY}" ./cmd/ethos/
-  cd -
+  cd "$ORIG_DIR" || true
   rm -rf "$TMPDIR_BUILD"
 }
 
-# Verify binary
-if ! check "$BINARY"; then
-  # Add to PATH hint
-  info "  Binary installed to ${INSTALL_DIR}/${BINARY}"
-  info "  Add to PATH: export PATH=\"\$HOME/.local/bin:\$PATH\""
-  export PATH="$INSTALL_DIR:$PATH"
-fi
+# Always prepend install dir so we run the freshly built binary
+export PATH="$INSTALL_DIR:$PATH"
 
-info "  $(ethos version)"
+info "  $("$INSTALL_DIR/$BINARY" version)"
 
 # --- Step 2: Create identity directory ---
 
 info ""
 info "Step 2: Creating identity directory..."
 mkdir -p "$HOME/.punt-labs/ethos/identities"
+chmod 700 "$HOME/.punt-labs/ethos/identities"
 info "  $HOME/.punt-labs/ethos/identities/"
 
 # --- Step 3: Register marketplace and install plugin ---
@@ -102,7 +107,7 @@ fi
 
 info ""
 info "Step 4: Health check..."
-ethos doctor || true
+"$INSTALL_DIR/$BINARY" doctor || true
 
 info ""
 info "Done. Run 'ethos create' to create your first identity."

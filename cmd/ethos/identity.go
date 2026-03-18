@@ -11,16 +11,16 @@ import (
 
 // Identity represents a human or agent identity with channel bindings.
 type Identity struct {
-	Name           string   `yaml:"name"`
-	Handle         string   `yaml:"handle"`
-	Kind           string   `yaml:"kind"` // "human" or "agent"
-	Email          string   `yaml:"email,omitempty"`
-	GitHub         string   `yaml:"github,omitempty"`
-	Voice          Voice    `yaml:"voice,omitempty"`
-	Agent          string   `yaml:"agent,omitempty"`
-	WritingStyle   string   `yaml:"writing_style,omitempty"`
-	Personality    string   `yaml:"personality,omitempty"`
-	Skills         []string `yaml:"skills,omitempty"`
+	Name         string   `yaml:"name"`
+	Handle       string   `yaml:"handle"`
+	Kind         string   `yaml:"kind"` // "human" or "agent"
+	Email        string   `yaml:"email,omitempty"`
+	GitHub       string   `yaml:"github,omitempty"`
+	Voice        Voice    `yaml:"voice,omitempty"`
+	Agent        string   `yaml:"agent,omitempty"`
+	WritingStyle string   `yaml:"writing_style,omitempty"`
+	Personality  string   `yaml:"personality,omitempty"`
+	Skills       []string `yaml:"skills,omitempty"`
 }
 
 // Voice binds an identity to a Vox voice configuration.
@@ -50,7 +50,9 @@ func configDir() string {
 // loadIdentity reads an identity YAML file by handle.
 func loadIdentity(handle string) (*Identity, error) {
 	dir := identityDir()
-	path := filepath.Join(dir, handle+".yaml")
+	// Use filepath.Base to prevent path traversal
+	safe := filepath.Base(handle)
+	path := filepath.Join(dir, safe+".yaml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q not found: %w", handle, err)
@@ -103,18 +105,33 @@ func activeIdentity() (*Identity, error) {
 	return loadIdentity(handle)
 }
 
-// saveIdentity writes an identity YAML file.
-func saveIdentity(id *Identity) error {
+// identityExists checks whether an identity file exists for the given handle.
+func identityExists(handle string) bool {
 	dir := identityDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	safe := filepath.Base(handle)
+	path := filepath.Join(dir, safe+".yaml")
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// saveIdentity writes an identity YAML file. Returns an error if an
+// identity with the same handle already exists.
+func saveIdentity(id *Identity) error {
+	if identityExists(id.Handle) {
+		return fmt.Errorf("identity %q already exists — use 'ethos edit' to modify", id.Handle)
+	}
+	dir := identityDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
 	}
 	data, err := yaml.Marshal(id)
 	if err != nil {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
-	path := filepath.Join(dir, id.Handle+".yaml")
-	return os.WriteFile(path, data, 0o644)
+	// Use filepath.Base to prevent path traversal
+	safe := filepath.Base(id.Handle)
+	path := filepath.Join(dir, safe+".yaml")
+	return os.WriteFile(path, data, 0o600)
 }
 
 // setActiveIdentity sets the active identity by handle.
@@ -124,9 +141,9 @@ func setActiveIdentity(handle string) error {
 		return err
 	}
 	dir := configDir()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
 	path := filepath.Join(dir, "active")
-	return os.WriteFile(path, []byte(handle+"\n"), 0o644)
+	return os.WriteFile(path, []byte(handle+"\n"), 0o600)
 }

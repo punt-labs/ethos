@@ -105,7 +105,7 @@ func handleListIdentities(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.
 	}
 
 	active, _ := activeIdentity()
-	var entries []entry
+	entries := make([]entry, 0, len(identities))
 	for _, id := range identities {
 		isActive := active != nil && active.Handle == id.Handle
 		entries = append(entries, entry{
