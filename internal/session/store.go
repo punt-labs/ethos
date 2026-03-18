@@ -179,6 +179,7 @@ func (s *Store) Purge() ([]string, error) {
 			return nil
 		})
 		if didPurge {
+			os.Remove(s.lockPath(id))
 			purged = append(purged, id)
 		}
 	}

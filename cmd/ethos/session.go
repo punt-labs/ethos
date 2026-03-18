@@ -260,6 +260,9 @@ func runSessionPurge() {
 		os.Exit(1)
 	}
 	if jsonOutput {
+		if purged == nil {
+			purged = []string{}
+		}
 		printJSON(purged)
 		return
 	}
