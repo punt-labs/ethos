@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 var version = "dev"
@@ -171,5 +172,14 @@ func runShow(args []string) {
 	}
 	if id.Agent != "" {
 		fmt.Printf("Agent:    %s\n", id.Agent)
+	}
+	if id.WritingStyle != "" {
+		fmt.Printf("Style:    %s\n", strings.TrimSpace(id.WritingStyle))
+	}
+	if id.Personality != "" {
+		fmt.Printf("Person.:  %s\n", strings.TrimSpace(id.Personality))
+	}
+	if len(id.Skills) > 0 {
+		fmt.Printf("Skills:   %s\n", strings.Join(id.Skills, ", "))
 	}
 }

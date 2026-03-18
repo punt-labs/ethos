@@ -118,7 +118,7 @@ func identityExists(handle string) bool {
 // identity with the same handle already exists.
 func saveIdentity(id *Identity) error {
 	if identityExists(id.Handle) {
-		return fmt.Errorf("identity %q already exists — use 'ethos edit' to modify", id.Handle)
+		return fmt.Errorf("identity %q already exists", id.Handle)
 	}
 	dir := identityDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
