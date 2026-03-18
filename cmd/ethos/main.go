@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/punt-labs/ethos/internal/identity"
 )
 
 var version = "dev"
@@ -133,6 +135,8 @@ Flags:
 }
 
 func runDoctor() {
+	s := store()
+
 	type checkResult struct {
 		Name   string `json:"name"`
 		Status string `json:"status"`
@@ -141,7 +145,7 @@ func runDoctor() {
 
 	checks := []struct {
 		name string
-		fn   func() (string, bool)
+		fn   func(*identity.Store) (string, bool)
 	}{
 		{"Identity directory", checkIdentityDir},
 		{"Active identity", checkActiveIdentity},
@@ -150,7 +154,7 @@ func runDoctor() {
 	allPassed := true
 	var results []checkResult
 	for _, c := range checks {
-		detail, ok := c.fn()
+		detail, ok := c.fn(s)
 		status := "PASS"
 		if !ok {
 			status = "FAIL"
@@ -172,11 +176,8 @@ func runDoctor() {
 	}
 }
 
-func checkIdentityDir() (string, bool) {
-	dir, err := identityDir()
-	if err != nil {
-		return err.Error(), false
-	}
+func checkIdentityDir(s *identity.Store) (string, bool) {
+	dir := s.IdentitiesDir()
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Sprintf("not found: %s", dir), false
@@ -186,8 +187,8 @@ func checkIdentityDir() (string, bool) {
 	return dir, true
 }
 
-func checkActiveIdentity() (string, bool) {
-	id, err := activeIdentity()
+func checkActiveIdentity(s *identity.Store) (string, bool) {
+	id, err := s.Active()
 	if err != nil {
 		return "none configured", false
 	}
@@ -195,10 +196,10 @@ func checkActiveIdentity() (string, bool) {
 }
 
 func runWhoami(args []string) {
+	s := store()
 	if len(args) > 0 {
-		// Set active identity
 		handle := args[0]
-		if err := setActiveIdentity(handle); err != nil {
+		if err := s.SetActive(handle); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 			os.Exit(1)
 		}
@@ -210,8 +211,7 @@ func runWhoami(args []string) {
 		return
 	}
 
-	// Show active identity
-	id, err := activeIdentity()
+	id, err := s.Active()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ethos: no active identity. Run 'ethos create' or 'ethos whoami <handle>'.")
 		os.Exit(1)
@@ -232,24 +232,29 @@ func runCreate(args []string) {
 }
 
 func runList() {
-	identities, err := listIdentities()
+	s := store()
+	result, err := s.List()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
+	for _, w := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "ethos: %s\n", w)
+	}
 	if jsonOutput {
-		if identities == nil {
-			identities = []*Identity{}
+		ids := result.Identities
+		if ids == nil {
+			ids = []*identity.Identity{}
 		}
-		printJSON(identities)
+		printJSON(ids)
 		return
 	}
-	if len(identities) == 0 {
+	if len(result.Identities) == 0 {
 		fmt.Println("No identities found. Run 'ethos create' to create one.")
 		return
 	}
-	active, _ := activeIdentity()
-	for _, id := range identities {
+	active, _ := s.Active()
+	for _, id := range result.Identities {
 		marker := "  "
 		if active != nil && active.Handle == id.Handle {
 			marker = "* "
@@ -263,7 +268,7 @@ func runShow(args []string) {
 		fmt.Fprintln(os.Stderr, "ethos: show requires a handle argument")
 		os.Exit(1)
 	}
-	id, err := loadIdentity(args[0])
+	id, err := store().Load(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)

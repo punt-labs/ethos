@@ -4,13 +4,11 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/identity"
 	"gopkg.in/yaml.v3"
 )
-
-var validHandle = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // runCreateImpl implements both interactive and declarative identity creation.
 // Declarative: ethos create --file <path>
@@ -38,21 +36,24 @@ func createFromFile(path string) {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	var id Identity
+	var id identity.Identity
 	if err := yaml.Unmarshal(data, &id); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: invalid YAML: %v\n", err)
 		os.Exit(1)
 	}
-	if err := validateIdentity(&id); err != nil {
+	if err := id.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	if err := saveIdentity(&id); err != nil {
+	s := store()
+	if err := s.Save(&id); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 
-	if setActiveIfFirst(id.Handle) {
+	if wasFirst, err := setActiveIfFirst(s, id.Handle); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: %v\n", err)
+	} else if wasFirst {
 		fmt.Fprintf(os.Stderr, "Set as active identity (first identity created)\n")
 	}
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
@@ -86,12 +87,12 @@ func createInteractive() {
 		}
 	}
 
-	var voice *Voice
+	var voice *identity.Voice
 	if voiceProvider != "" {
-		voice = &Voice{Provider: voiceProvider, VoiceID: voiceID}
+		voice = &identity.Voice{Provider: voiceProvider, VoiceID: voiceID}
 	}
 
-	id := &Identity{
+	id := &identity.Identity{
 		Name:         name,
 		Handle:       handle,
 		Kind:         kind,
@@ -104,16 +105,19 @@ func createInteractive() {
 		Skills:       skills,
 	}
 
-	if err := validateIdentity(id); err != nil {
+	if err := id.Validate(); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	if err := saveIdentity(id); err != nil {
+	s := store()
+	if err := s.Save(id); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 
-	if setActiveIfFirst(id.Handle) {
+	if wasFirst, err := setActiveIfFirst(s, id.Handle); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: %v\n", err)
+	} else if wasFirst {
 		fmt.Fprintf(os.Stderr, "Set as active identity (first identity created)\n")
 	}
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
@@ -145,35 +149,17 @@ func slugify(name string) string {
 	return b.String()
 }
 
-func validateIdentity(id *Identity) error {
-	if id.Name == "" {
-		return fmt.Errorf("name is required")
-	}
-	if id.Handle == "" {
-		return fmt.Errorf("handle is required")
-	}
-	if !validHandle.MatchString(id.Handle) {
-		return fmt.Errorf("handle must be lowercase alphanumeric with hyphens, got %q", id.Handle)
-	}
-	if id.Kind != "human" && id.Kind != "agent" {
-		return fmt.Errorf("kind must be 'human' or 'agent', got %q", id.Kind)
-	}
-	if id.Voice != nil && id.Voice.VoiceID != "" && id.Voice.Provider == "" {
-		return fmt.Errorf("voice_id requires voice_provider")
-	}
-	return nil
-}
-
 // setActiveIfFirst sets the identity as active if it's the only one.
-// Returns true if it was set. Never writes to stdout.
-func setActiveIfFirst(handle string) bool {
-	identities, err := listIdentities()
+func setActiveIfFirst(s *identity.Store, handle string) (bool, error) {
+	result, err := s.List()
 	if err != nil {
-		return false
+		return false, fmt.Errorf("checking identity count: %w", err)
 	}
-	if len(identities) == 1 {
-		_ = setActiveIdentity(handle)
-		return true
+	if len(result.Identities) == 1 {
+		if err := s.SetActive(handle); err != nil {
+			return false, fmt.Errorf("setting active identity: %w", err)
+		}
+		return true, nil
 	}
-	return false
+	return false, nil
 }
