@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -62,6 +63,8 @@ func main() {
 		runList()
 	case "show":
 		runShow(cmdArgs)
+	case "ext":
+		runExt(cmdArgs)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -107,6 +110,8 @@ func printSubcommandHelp(cmd string) {
 		fmt.Print("Usage: ethos serve\n\n  Start MCP server (stdio transport).\n")
 	case "version":
 		fmt.Print("Usage: ethos version\n\n  Print version.\n")
+	case "ext":
+		fmt.Print("Usage: ethos ext <subcommand> [args]\n\n  Manage tool-scoped extensions on identities.\n\n  ethos ext get <persona> <namespace> [key]\n  ethos ext set <persona> <namespace> <key> <value>\n  ethos ext del <persona> <namespace> [key]\n  ethos ext list <persona>\n")
 	default:
 		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
 		printUsage()
@@ -122,6 +127,7 @@ Product commands:
   create            Create a new identity
   list              List all identities
   show <handle>     Show identity details
+  ext               Manage tool-scoped extensions
 
 Admin commands:
   version           Print version
@@ -297,6 +303,24 @@ func runShow(args []string) {
 		}
 	}
 	showField("Skills", strings.Join(skills, ", "))
+	if len(id.Ext) > 0 {
+		nsNames := make([]string, 0, len(id.Ext))
+		for ns := range id.Ext {
+			nsNames = append(nsNames, ns)
+		}
+		sort.Strings(nsNames)
+		for _, ns := range nsNames {
+			keys := id.Ext[ns]
+			keyNames := make([]string, 0, len(keys))
+			for k := range keys {
+				keyNames = append(keyNames, k)
+			}
+			sort.Strings(keyNames)
+			for _, k := range keyNames {
+				showField("ext:"+ns+"."+k, keys[k])
+			}
+		}
+	}
 }
 
 // showField prints a labeled field if the value is non-empty.
