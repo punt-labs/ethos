@@ -114,8 +114,12 @@ func (s *Store) Leave(sessionID string, agentID string) error {
 }
 
 // Delete removes a session roster and its lock file.
+// Acquires the flock to coordinate with concurrent writers.
 func (s *Store) Delete(sessionID string) error {
-	if err := s.deleteFiles(sessionID); err != nil {
+	err := s.withLock(sessionID, func() error {
+		return s.deleteFiles(sessionID)
+	})
+	if err != nil {
 		return err
 	}
 	os.Remove(s.lockPath(sessionID))
