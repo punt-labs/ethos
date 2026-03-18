@@ -47,12 +47,15 @@ func configDir() string {
 	return filepath.Join(home, ".punt-labs", "ethos")
 }
 
+// identityPath returns the filesystem path for the given handle.
+// Uses filepath.Base to prevent path traversal.
+func identityPath(handle string) string {
+	return filepath.Join(identityDir(), filepath.Base(handle)+".yaml")
+}
+
 // loadIdentity reads an identity YAML file by handle.
 func loadIdentity(handle string) (*Identity, error) {
-	dir := identityDir()
-	// Use filepath.Base to prevent path traversal
-	safe := filepath.Base(handle)
-	path := filepath.Join(dir, safe+".yaml")
+	path := identityPath(handle)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q not found: %w", handle, err)
@@ -107,30 +110,24 @@ func activeIdentity() (*Identity, error) {
 
 // identityExists checks whether an identity file exists for the given handle.
 func identityExists(handle string) bool {
-	dir := identityDir()
-	safe := filepath.Base(handle)
-	path := filepath.Join(dir, safe+".yaml")
-	_, err := os.Stat(path)
+	_, err := os.Stat(identityPath(handle))
 	return err == nil
 }
 
 // saveIdentity writes an identity YAML file. Returns an error if an
 // identity with the same handle already exists.
 func saveIdentity(id *Identity) error {
+	path := identityPath(id.Handle)
 	if identityExists(id.Handle) {
-		return fmt.Errorf("identity %q already exists — use 'ethos edit' to modify", id.Handle)
+		return fmt.Errorf("identity %q already exists — delete %q to recreate", id.Handle, path)
 	}
-	dir := identityDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(identityDir(), 0o700); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
 	}
 	data, err := yaml.Marshal(id)
 	if err != nil {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
-	// Use filepath.Base to prevent path traversal
-	safe := filepath.Base(id.Handle)
-	path := filepath.Join(dir, safe+".yaml")
 	return os.WriteFile(path, data, 0o600)
 }
 
