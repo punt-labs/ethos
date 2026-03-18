@@ -39,7 +39,11 @@ func main() {
 
 	switch cmd {
 	case "version":
-		fmt.Printf("ethos %s\n", version)
+		if jsonOutput {
+			printJSON(map[string]string{"version": version})
+		} else {
+			fmt.Printf("ethos %s\n", version)
+		}
 	case "doctor":
 		runDoctor()
 	case "whoami":
@@ -165,8 +169,11 @@ func runDoctor() {
 }
 
 func checkIdentityDir() (string, bool) {
-	dir := identityDir()
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
+	dir, err := identityDir()
+	if err != nil {
+		return err.Error(), false
+	}
+	if _, err := os.Stat(dir); err != nil {
 		return fmt.Sprintf("not found: %s", dir), false
 	}
 	return dir, true

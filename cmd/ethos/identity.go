@@ -30,32 +30,39 @@ type Voice struct {
 }
 
 // identityDir returns the global identity storage directory.
-func identityDir() string {
+func identityDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(home, ".punt-labs", "ethos", "identities")
+	return filepath.Join(home, ".punt-labs", "ethos", "identities"), nil
 }
 
 // configDir returns the global ethos config directory.
-func configDir() string {
+func configDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return filepath.Join(home, ".punt-labs", "ethos")
+	return filepath.Join(home, ".punt-labs", "ethos"), nil
 }
 
 // identityPath returns the filesystem path for the given handle.
 // Uses filepath.Base to prevent path traversal.
-func identityPath(handle string) string {
-	return filepath.Join(identityDir(), filepath.Base(handle)+".yaml")
+func identityPath(handle string) (string, error) {
+	dir, err := identityDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, filepath.Base(handle)+".yaml"), nil
 }
 
 // loadIdentity reads an identity YAML file by handle.
 func loadIdentity(handle string) (*Identity, error) {
-	path := identityPath(handle)
+	path, err := identityPath(handle)
+	if err != nil {
+		return nil, err
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q not found: %w", handle, err)
@@ -69,7 +76,10 @@ func loadIdentity(handle string) (*Identity, error) {
 
 // listIdentities returns all identities in the global directory.
 func listIdentities() ([]*Identity, error) {
-	dir := identityDir()
+	dir, err := identityDir()
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -96,7 +106,10 @@ func listIdentities() ([]*Identity, error) {
 
 // activeIdentity returns the currently active identity.
 func activeIdentity() (*Identity, error) {
-	dir := configDir()
+	dir, err := configDir()
+	if err != nil {
+		return nil, err
+	}
 	path := filepath.Join(dir, "active")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -111,18 +124,29 @@ func activeIdentity() (*Identity, error) {
 
 // identityExists checks whether an identity file exists for the given handle.
 func identityExists(handle string) bool {
-	_, err := os.Stat(identityPath(handle))
+	path, err := identityPath(handle)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
 	return err == nil
 }
 
 // saveIdentity writes an identity YAML file. Returns an error if an
 // identity with the same handle already exists.
 func saveIdentity(id *Identity) error {
-	path := identityPath(id.Handle)
+	path, err := identityPath(id.Handle)
+	if err != nil {
+		return err
+	}
 	if identityExists(id.Handle) {
 		return fmt.Errorf("identity %q already exists — delete %q to recreate", id.Handle, path)
 	}
-	if err := os.MkdirAll(identityDir(), 0o700); err != nil {
+	dir, err := identityDir()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
 	}
 	data, err := yaml.Marshal(id)
@@ -138,7 +162,10 @@ func setActiveIdentity(handle string) error {
 	if _, err := loadIdentity(handle); err != nil {
 		return err
 	}
-	dir := configDir()
+	dir, err := configDir()
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
 	}
