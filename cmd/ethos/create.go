@@ -51,7 +51,9 @@ func createFromFile(path string) {
 		os.Exit(1)
 	}
 
-	if setActiveIfFirst(s, id.Handle) {
+	if wasFirst, err := setActiveIfFirst(s, id.Handle); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: %v\n", err)
+	} else if wasFirst {
 		fmt.Fprintf(os.Stderr, "Set as active identity (first identity created)\n")
 	}
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
@@ -113,7 +115,9 @@ func createInteractive() {
 		os.Exit(1)
 	}
 
-	if setActiveIfFirst(s, id.Handle) {
+	if wasFirst, err := setActiveIfFirst(s, id.Handle); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: %v\n", err)
+	} else if wasFirst {
 		fmt.Fprintf(os.Stderr, "Set as active identity (first identity created)\n")
 	}
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
@@ -146,14 +150,16 @@ func slugify(name string) string {
 }
 
 // setActiveIfFirst sets the identity as active if it's the only one.
-func setActiveIfFirst(s *identity.Store, handle string) bool {
-	identities, err := s.List()
+func setActiveIfFirst(s *identity.Store, handle string) (bool, error) {
+	result, err := s.List()
 	if err != nil {
-		return false
+		return false, fmt.Errorf("checking identity count: %w", err)
 	}
-	if len(identities) == 1 {
-		_ = s.SetActive(handle)
-		return true
+	if len(result.Identities) == 1 {
+		if err := s.SetActive(handle); err != nil {
+			return false, fmt.Errorf("setting active identity: %w", err)
+		}
+		return true, nil
 	}
-	return false
+	return false, nil
 }

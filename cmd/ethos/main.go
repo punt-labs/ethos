@@ -233,24 +233,28 @@ func runCreate(args []string) {
 
 func runList() {
 	s := store()
-	identities, err := s.List()
+	result, err := s.List()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
+	for _, w := range result.Warnings {
+		fmt.Fprintf(os.Stderr, "ethos: %s\n", w)
+	}
 	if jsonOutput {
-		if identities == nil {
-			identities = []*identity.Identity{}
+		ids := result.Identities
+		if ids == nil {
+			ids = []*identity.Identity{}
 		}
-		printJSON(identities)
+		printJSON(ids)
 		return
 	}
-	if len(identities) == 0 {
+	if len(result.Identities) == 0 {
 		fmt.Println("No identities found. Run 'ethos create' to create one.")
 		return
 	}
 	active, _ := s.Active()
-	for _, id := range identities {
+	for _, id := range result.Identities {
 		marker := "  "
 		if active != nil && active.Handle == id.Handle {
 			marker = "* "

@@ -77,7 +77,10 @@ func createIdentityTool() mcplib.Tool {
 // --- Tool Handlers ---
 
 func handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	s := store()
+	s, err := storeOrError()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("cannot initialize store: %v", err)), nil
+	}
 	handle := stringArg(req, "handle", "")
 
 	if handle != "" {
@@ -96,8 +99,11 @@ func handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallTo
 }
 
 func handleListIdentities(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	s := store()
-	identities, err := s.List()
+	s, err := storeOrError()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("cannot initialize store: %v", err)), nil
+	}
+	result, err := s.List()
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to list identities: %v", err)), nil
 	}
@@ -110,8 +116,8 @@ func handleListIdentities(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.
 	}
 
 	active, _ := s.Active()
-	entries := make([]entry, 0, len(identities))
-	for _, id := range identities {
+	entries := make([]entry, 0, len(result.Identities))
+	for _, id := range result.Identities {
 		isActive := active != nil && active.Handle == id.Handle
 		entries = append(entries, entry{
 			Handle: id.Handle,
@@ -130,7 +136,11 @@ func handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.C
 		return mcplib.NewToolResultError("handle is required"), nil
 	}
 
-	id, err := store().Load(handle)
+	s, err := storeOrError()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("cannot initialize store: %v", err)), nil
+	}
+	id, err := s.Load(handle)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("identity not found: %v", err)), nil
 	}
@@ -164,12 +174,15 @@ func handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcpli
 	if err := id.Validate(); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("validation failed: %v", err)), nil
 	}
-	s := store()
+	s, err := storeOrError()
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("cannot initialize store: %v", err)), nil
+	}
 	if err := s.Save(id); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to save: %v", err)), nil
 	}
 
-	setActiveIfFirst(s, id.Handle)
+	_, _ = setActiveIfFirst(s, id.Handle) // best-effort for MCP create
 	return jsonResult(id)
 }
 

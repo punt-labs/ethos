@@ -58,18 +58,26 @@ func (s *Store) Load(handle string) (*Identity, error) {
 	return &id, nil
 }
 
-// List returns all identities in the store.
-func (s *Store) List() ([]*Identity, error) {
+// ListResult holds the results of listing identities, including any
+// warnings from files that could not be loaded.
+type ListResult struct {
+	Identities []*Identity
+	Warnings   []string
+}
+
+// List returns all identities in the store. Files that cannot be loaded
+// are reported as warnings in the result rather than failing the entire list.
+func (s *Store) List() (*ListResult, error) {
 	dir := s.identitiesDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return &ListResult{}, nil
 		}
 		return nil, fmt.Errorf("reading identity directory: %w", err)
 	}
 
-	var identities []*Identity
+	result := &ListResult{}
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
 			continue
@@ -77,12 +85,12 @@ func (s *Store) List() ([]*Identity, error) {
 		handle := strings.TrimSuffix(entry.Name(), ".yaml")
 		id, err := s.Load(handle)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: skipping %s: %v\n", entry.Name(), err)
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), err))
 			continue
 		}
-		identities = append(identities, id)
+		result.Identities = append(result.Identities, id)
 	}
-	return identities, nil
+	return result, nil
 }
 
 // Active returns the currently active identity.
@@ -119,12 +127,8 @@ func (s *Store) Exists(handle string) bool {
 }
 
 // Save writes an identity YAML file. Returns an error if an identity
-// with the same handle already exists.
+// with the same handle already exists. Uses O_EXCL for atomic create.
 func (s *Store) Save(id *Identity) error {
-	path := s.Path(id.Handle)
-	if s.Exists(id.Handle) {
-		return fmt.Errorf("identity %q already exists — delete %q to recreate", id.Handle, path)
-	}
 	dir := s.identitiesDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
@@ -133,7 +137,17 @@ func (s *Store) Save(id *Identity) error {
 	if err != nil {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600)
+	path := s.Path(id.Handle)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("identity %q already exists — delete %q to recreate", id.Handle, path)
+		}
+		return fmt.Errorf("creating identity file: %w", err)
+	}
+	defer f.Close()
+	_, err = f.Write(data)
+	return err
 }
 
 // IdentitiesDir returns the path to the identities subdirectory.
