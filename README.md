@@ -47,6 +47,7 @@ sh install.sh
 - **Unified identity** --- one YAML file per human or agent, same schema for both
 - **Channel bindings** --- voice (Vox), email (Beadle), GitHub (Biff), Claude Code agent definition
 - **Sidecar architecture** --- publishes state to the filesystem; other tools read it optionally
+- **Session roster** --- tracks all participants (human + agents) in a session with parent-child tree
 - **Resolution chain** --- repo-local config overrides global active identity
 - **CLI + MCP + Plugin** --- accessible from terminal, AI agents, and Claude Code
 
@@ -87,6 +88,13 @@ $ ethos list
 | `ethos show <handle> [--json]` | Show identity details |
 | `ethos version [--json]` | Print version |
 | `ethos doctor [--json]` | Check installation health |
+| `ethos ext` | Manage tool-scoped extensions |
+| `ethos iam <persona>` | Declare persona in current session |
+| `ethos session` | Show current session participants |
+| `ethos session create` | Create a new session roster |
+| `ethos session join` | Add a participant to a session |
+| `ethos session leave` | Remove a participant from a session |
+| `ethos session purge` | Clean up stale session rosters |
 | `ethos serve` | Start MCP server (stdio) |
 
 `--json` is a global flag — valid before or after the subcommand.

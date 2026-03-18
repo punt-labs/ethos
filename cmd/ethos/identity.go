@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/session"
 )
 
 // store returns the default identity store.
@@ -17,4 +18,15 @@ func store() *identity.Store {
 		os.Exit(1)
 	}
 	return s
+}
+
+// sessionStore returns the default session store rooted at the same
+// location as the identity store.
+func sessionStore() *session.Store {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
+		os.Exit(1)
+	}
+	return session.NewStore(home + "/.punt-labs/ethos")
 }

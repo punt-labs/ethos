@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Session roster for multi-participant identity awareness (DES-007)
+  - `internal/session/` package with `Store` (flock-based concurrency), `Roster`, and `Participant` types
+  - `internal/process/` package for process tree walking (find topmost Claude ancestor PID)
+  - `ethos iam <persona>` command to declare persona in current session
+  - `ethos session` commands: `create`, `join`, `leave`, `purge`, and default roster display
+  - MCP tools: `session_iam`, `session_roster`, `session_join`, `session_leave`
+  - Hooks: `SubagentStart`, `SubagentStop`, `SessionEnd` lifecycle hooks
+  - PID-keyed current session files for session ID propagation to non-hook callers
+  - Extended `SessionStart` hook to create session roster with root + primary participants
 - Initial project scaffolding — Go module, CLI entry point, Makefile, CI workflows
 - Identity YAML schema with channel bindings (voice, email, GitHub, agent)
 - `ethos version` and `ethos doctor` admin commands
