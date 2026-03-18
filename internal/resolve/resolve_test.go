@@ -10,6 +10,7 @@ import (
 )
 
 func TestResolve_RepoLocalConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	root := t.TempDir()
 	configDir := filepath.Join(root, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(configDir, 0o755))

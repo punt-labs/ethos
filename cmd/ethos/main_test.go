@@ -19,7 +19,9 @@ func TestOneLine(t *testing.T) {
 		{"\n\n\n", ""},
 	}
 	for _, tt := range tests {
-		assert.Equal(t, tt.want, oneLine(tt.input))
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.want, oneLine(tt.input))
+		})
 	}
 }
 
@@ -43,6 +45,8 @@ func TestSlugify(t *testing.T) {
 		{"", ""},
 	}
 	for _, tt := range tests {
-		assert.Equal(t, tt.want, slugify(tt.input))
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.want, slugify(tt.input))
+		})
 	}
 }

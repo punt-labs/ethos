@@ -205,4 +205,8 @@ func TestStore_FilePermissions(t *testing.T) {
 	info, err := os.Stat(s.Path("jfreeman"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	dirInfo, err := os.Stat(s.IdentitiesDir())
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), dirInfo.Mode().Perm())
 }

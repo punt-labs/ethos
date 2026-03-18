@@ -27,6 +27,14 @@ func callTool(args map[string]interface{}) mcplib.CallToolRequest {
 	}
 }
 
+func resultText(t *testing.T, result *mcplib.CallToolResult) string {
+	t.Helper()
+	require.NotEmpty(t, result.Content, "expected non-empty Content")
+	tc, ok := result.Content[0].(mcplib.TextContent)
+	require.True(t, ok, "expected TextContent, got %T", result.Content[0])
+	return tc.Text
+}
+
 func TestNewHandler_NilPanics(t *testing.T) {
 	assert.Panics(t, func() {
 		NewHandler(nil)
@@ -61,14 +69,14 @@ func TestHandleWhoami_SetAndGet(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
-	text := result.Content[0].(mcplib.TextContent).Text
+	text := resultText(t, result)
 	assert.Contains(t, text, "alice")
 
 	// Get active.
 	result, err = h.handleWhoami(context.Background(), callTool(nil))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
-	text = result.Content[0].(mcplib.TextContent).Text
+	text = resultText(t, result)
 	assert.Contains(t, text, "Alice")
 }
 
@@ -87,7 +95,7 @@ func TestHandleListIdentities_Empty(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	text := result.Content[0].(mcplib.TextContent).Text
+	text := resultText(t, result)
 	var entries []interface{}
 	require.NoError(t, json.Unmarshal([]byte(text), &entries))
 	assert.Empty(t, entries)
@@ -106,7 +114,7 @@ func TestHandleListIdentities_WithActive(t *testing.T) {
 	result, err := h.handleListIdentities(context.Background(), callTool(nil))
 	require.NoError(t, err)
 
-	text := result.Content[0].(mcplib.TextContent).Text
+	text := resultText(t, result)
 	var entries []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(text), &entries))
 	assert.Len(t, entries, 2)
@@ -133,7 +141,7 @@ func TestHandleGetIdentity_Found(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	text := result.Content[0].(mcplib.TextContent).Text
+	text := resultText(t, result)
 	var id map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(text), &id))
 	assert.Equal(t, "Alice", id["name"])
@@ -194,7 +202,7 @@ func TestHandleCreateIdentity_VoiceIDWithoutProvider(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	text := result.Content[0].(mcplib.TextContent).Text
+	text := resultText(t, result)
 	assert.Contains(t, text, "voice_id requires voice_provider")
 }
 
