@@ -102,3 +102,60 @@ in server context.
   empty-string failure when `$HOME` is unset, untestable without env mutation.
 - Passing root path to every function call — noisy signatures, repeated
   path construction.
+
+## DES-007: Session roster — multi-participant identity awareness (OPEN)
+
+**Status**: Open. The registry layer (DES-001 through DES-006) is settled.
+This decision concerns the session layer that sits on top of it.
+
+**Problem**: Ethos currently tracks one "active" identity. In practice, a
+session has multiple participants — a human, a primary agent, and potentially
+many subagents. Any participant needs to be able to answer two questions:
+
+1. **Who am I?** — my own identity
+2. **Who is everyone else?** — the full roster of participants in this session
+
+A subagent three levels deep needs to know the human's name (for a Biff
+greeting), its parent agent's identity (for attribution), and its siblings
+(for coordination). The human needs to know which agents are active. The
+current single-slot `active` file cannot express this.
+
+**What exists today**: The identity registry (`~/.punt-labs/ethos/identities/`)
+stores all known identities. The `active` file names one. The resolution
+chain (repo-local → global) resolves one handle. This is the foundation —
+you need to know who exists before you can track who is present.
+
+**What is missing**: A session-scoped roster that tracks all current
+participants, their roles (human, agent), their relationships (who spawned
+whom), and provides a query interface so any participant can discover the
+others.
+
+**Open questions**:
+
+- **Propagation**: How does session state reach subagents? Environment
+  variables survive process boundaries. Files are durable but require
+  coordination. Claude Code's agent lifecycle and hook model constrain
+  what is possible.
+- **Lifecycle**: Who adds participants to the roster? The session-start
+  hook can register the primary agent. But subagents are spawned
+  dynamically — does the parent register them, or do they self-register?
+- **Scope**: Is the roster per-terminal-session, per-repo, or per-machine?
+  Multiple concurrent sessions (e.g., two worktrees) may have different
+  rosters.
+- **Query interface**: `ethos whoami` returns "me." What returns "everyone"?
+  A new command (`ethos session`)? A flag (`ethos whoami --session`)?
+  An MCP tool (`session_roster`)?
+- **Ephemeral vs durable**: The registry is durable (YAML files). The
+  session roster is ephemeral (lives only while participants are active).
+  Where does ephemeral state live? A file that gets cleaned up? A socket?
+
+**Constraints**:
+
+- Must work without a daemon — ethos is a CLI tool, not a server.
+- Must survive subagent spawning — new processes need access.
+- Must not require ethos as a dependency — the sidecar contract (DES-001)
+  must hold. Other tools read known paths, not import ethos.
+- Must handle concurrent sessions on the same machine.
+
+**Not yet decided**: Architecture, storage mechanism, API surface. This
+ADR will be updated as the design matures.
