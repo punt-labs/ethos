@@ -174,7 +174,7 @@ func runShow(args []string) {
 		fmt.Printf("Agent:       %s\n", id.Agent)
 	}
 	if s := strings.TrimSpace(id.WritingStyle); s != "" {
-		fmt.Printf("Style:       %s\n", s)
+		fmt.Printf("Writing:     %s\n", s)
 	}
 	if s := strings.TrimSpace(id.Personality); s != "" {
 		fmt.Printf("Personality: %s\n", s)

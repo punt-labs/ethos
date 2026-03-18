@@ -117,10 +117,11 @@ func identityExists(handle string) bool {
 // saveIdentity writes an identity YAML file. Returns an error if an
 // identity with the same handle already exists.
 func saveIdentity(id *Identity) error {
-	if identityExists(id.Handle) {
-		return fmt.Errorf("identity %q already exists — delete %s to recreate", id.Handle, filepath.Join(identityDir(), filepath.Base(id.Handle)+".yaml"))
-	}
 	dir := identityDir()
+	if identityExists(id.Handle) {
+		path := filepath.Join(dir, filepath.Base(id.Handle)+".yaml")
+		return fmt.Errorf("identity %q already exists — delete %q to recreate", id.Handle, path)
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
 	}
