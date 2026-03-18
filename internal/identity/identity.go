@@ -17,6 +17,11 @@ type Identity struct {
 	WritingStyle string   `yaml:"writing_style,omitempty" json:"writing_style,omitempty"`
 	Personality  string   `yaml:"personality,omitempty" json:"personality,omitempty"`
 	Skills       []string `yaml:"skills,omitempty" json:"skills,omitempty"`
+
+	// Ext holds tool-scoped extension data, assembled on Load from
+	// <persona>.ext/<namespace>.yaml files. Never persisted to the
+	// core identity YAML. Keyed by namespace (tool name), then by key.
+	Ext map[string]map[string]string `yaml:"-" json:"ext,omitempty"`
 }
 
 // Voice binds an identity to a Vox voice configuration.

@@ -55,6 +55,8 @@ func (s *Store) Load(handle string) (*Identity, error) {
 	if id.Voice != nil && id.Voice.Provider == "" && id.Voice.VoiceID == "" {
 		id.Voice = nil
 	}
+	// Assemble extension data from <persona>.ext/ directory.
+	id.Ext = s.loadExtensions(handle)
 	return &id, nil
 }
 
@@ -146,8 +148,11 @@ func (s *Store) Save(id *Identity) error {
 		return fmt.Errorf("creating identity file: %w", err)
 	}
 	defer f.Close()
-	_, err = f.Write(data)
-	return err
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	// Create extension directory alongside the identity file.
+	return os.MkdirAll(s.ExtDir(id.Handle), 0o700)
 }
 
 // IdentitiesDir returns the path to the identities subdirectory.
