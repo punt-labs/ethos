@@ -19,7 +19,7 @@ This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit
 ```bash
 make build                              # Build ethos binary
 make install                            # Build and install to ~/.local/bin
-make check                              # All quality gates (vet, staticcheck, markdownlint, tests)
+make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, tests)
 ./ethos version                         # Print version
 ./ethos doctor                          # Check installation health
 ./ethos whoami                          # Show active identity
@@ -43,6 +43,7 @@ Expands to `make lint docs test`:
 
 - `go vet ./...`
 - `staticcheck ./...`
+- `shellcheck hooks/*.sh install.sh`
 - `npx markdownlint-cli2 "**/*.md"`
 - `go test -race -count=1 ./...`
 
@@ -114,6 +115,7 @@ All code changes go on feature branches. Never commit directly to main.
 | `feat/` | New features |
 | `fix/` | Bug fixes |
 | `refactor/` | Code improvements |
+| `test/` | Test coverage |
 | `docs/` | Documentation only |
 | `chore/` | Maintenance and housekeeping |
 

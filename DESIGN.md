@@ -80,3 +80,25 @@ generate the `.md` or point to an existing one.
   and tool restrictions that make Claude Code agents effective.
 - Ethos identity and agent `.md` as independent, unlinked artifacts —
   creates drift between "who the agent is" and "what the agent does."
+
+## DES-006: Store type for identity persistence (SETTLED)
+
+**Decision**: Identity CRUD operations live in `internal/identity.Store`,
+a struct that takes a root directory path. `cmd/ethos/` has a thin `store()`
+helper that creates a `DefaultStore` from `$HOME`. MCP handlers receive the
+Store via the `Handler` struct at construction time.
+
+**Reasoning**: The original scaffolding had identity I/O functions as
+package-level functions in `cmd/ethos/identity.go` with a parallel `Identity`
+struct. This made the persistence untestable (hardcoded `$HOME` paths) and
+duplicated the canonical type in `internal/identity/`. The Store pattern
+makes all CRUD operations testable with `t.TempDir()` and eliminates the
+type duplication. Injecting the Store into MCP handlers avoids `os.Exit`
+in server context.
+
+**Rejected alternatives**:
+
+- Package-level functions with `identityDir()` returning `string` — silent
+  empty-string failure when `$HOME` is unset, untestable without env mutation.
+- Passing root path to every function call — noisy signatures, repeated
+  path construction.
