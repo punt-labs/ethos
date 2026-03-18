@@ -62,8 +62,10 @@ Expands to `make lint docs test`:
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
-| Global active | `~/.punt-labs/ethos/active` | No |
+| Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No |
+| Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
+| Active identity | `~/.punt-labs/ethos/active` | No |
+| Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
 

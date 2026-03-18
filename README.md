@@ -118,22 +118,33 @@ skills:
 
 | Scope | Path | Tracked? |
 |-------|------|----------|
-| Identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No (personal) |
+| Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No (personal) |
+| Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
 | Active identity | `~/.punt-labs/ethos/active` | No |
+| Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
 
-## How Other Tools Read Ethos
+## How Other Tools Use Ethos
 
-Ethos is a sidecar. Other tools check for identity state at known paths and
-use it if present. No import dependency exists.
+Ethos is a sidecar. Other tools read identity state at known paths and
+store tool-specific attributes via the extension mechanism. No import
+dependency exists.
 
-| Tool | What it reads | How |
-|------|--------------|-----|
-| Vox | `voice.provider`, `voice.voice_id` | Reads active identity YAML before speaking |
-| Beadle | `email` | Uses as sender address |
-| Biff | `github` | Shows in `/who` and `/finger` |
-| Claude Code | `agent` | References the `.md` agent definition |
+**Core identity fields** (owned by ethos): name, handle, kind, email,
+github, voice, agent, writing\_style, personality, skills.
+
+**Extensions** (owned by each tool): any tool can read/write namespaced
+key-value pairs in `<persona>.ext/<tool>.yaml`. For example, Beadle
+stores its GPG key ID, Biff stores a preferred TTY name, Vox stores a
+default mood. Ethos assembles the merged view when you load an identity
+but never interprets extension contents.
+
+```bash
+ethos ext set jfreeman beadle gpg_key_id 3AA5C34371567BD2
+ethos ext get jfreeman beadle gpg_key_id
+ethos show jfreeman   # includes ext map with all tool namespaces
+```
 
 ## Development
 
