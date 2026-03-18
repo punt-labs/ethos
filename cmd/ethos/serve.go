@@ -141,7 +141,7 @@ func handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcpli
 		Kind:         stringArg(req, "kind", ""),
 		Email:        stringArg(req, "email", ""),
 		GitHub:       stringArg(req, "github", ""),
-		Voice:        Voice{Provider: stringArg(req, "voice_provider", ""), VoiceID: stringArg(req, "voice_id", "")},
+		Voice:        &Voice{Provider: stringArg(req, "voice_provider", ""), VoiceID: stringArg(req, "voice_id", "")},
 		Agent:        stringArg(req, "agent", ""),
 		WritingStyle: stringArg(req, "writing_style", ""),
 		Personality:  stringArg(req, "personality", ""),

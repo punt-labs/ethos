@@ -92,7 +92,7 @@ func createInteractive() {
 		Kind:         kind,
 		Email:        email,
 		GitHub:       github,
-		Voice:        Voice{Provider: voiceProvider, VoiceID: voiceID},
+		Voice:        &Voice{Provider: voiceProvider, VoiceID: voiceID},
 		Agent:        agent,
 		WritingStyle: writingStyle,
 		Personality:  personality,
