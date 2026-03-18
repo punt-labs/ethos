@@ -123,12 +123,6 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 		})
 	}
 
-	if len(result.Warnings) > 0 {
-		return jsonResult(struct {
-			Identities []entry  `json:"identities"`
-			Warnings   []string `json:"warnings"`
-		}{entries, result.Warnings})
-	}
 	return jsonResult(entries)
 }
 
@@ -177,20 +171,12 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	}
 
 	// Set as active if it's the first identity.
-	var warnings []string
+	// Best-effort: set as active if first identity.
 	listResult, listErr := h.store.List()
 	if listErr == nil && len(listResult.Identities) == 1 {
-		if err := h.store.SetActive(id.Handle); err != nil {
-			warnings = append(warnings, fmt.Sprintf("could not set as active: %v", err))
-		}
+		_ = h.store.SetActive(id.Handle)
 	}
 
-	if len(warnings) > 0 {
-		return jsonResult(struct {
-			Identity *identity.Identity `json:"identity"`
-			Warnings []string           `json:"warnings"`
-		}{id, warnings})
-	}
 	return jsonResult(id)
 }
 
