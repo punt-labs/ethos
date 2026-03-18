@@ -26,20 +26,12 @@ func NewHandler(s *identity.Store) *Handler {
 	return &Handler{store: s}
 }
 
-// Tools returns all MCP tool definitions paired with their handlers.
-func (h *Handler) Tools() []struct {
-	Tool    mcplib.Tool
-	Handler mcpserver.ToolHandlerFunc
-} {
-	return []struct {
-		Tool    mcplib.Tool
-		Handler mcpserver.ToolHandlerFunc
-	}{
-		{h.whoamiTool(), h.handleWhoami},
-		{h.listIdentitiesTool(), h.handleListIdentities},
-		{h.getIdentityTool(), h.handleGetIdentity},
-		{h.createIdentityTool(), h.handleCreateIdentity},
-	}
+// RegisterTools adds all ethos MCP tools to the given server.
+func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
+	s.AddTool(h.whoamiTool(), h.handleWhoami)
+	s.AddTool(h.listIdentitiesTool(), h.handleListIdentities)
+	s.AddTool(h.getIdentityTool(), h.handleGetIdentity)
+	s.AddTool(h.createIdentityTool(), h.handleCreateIdentity)
 }
 
 // --- Tool Definitions ---
@@ -131,15 +123,18 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 		})
 	}
 
-	type listResponse struct {
-		Identities []entry  `json:"identities"`
-		Warnings   []string `json:"warnings,omitempty"`
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("JSON marshal error: %v", err)), nil
 	}
-
-	return jsonResult(listResponse{
-		Identities: entries,
-		Warnings:   result.Warnings,
-	})
+	text := string(data)
+	if len(result.Warnings) > 0 {
+		text += "\n\nwarnings:\n"
+		for _, w := range result.Warnings {
+			text += "  " + w + "\n"
+		}
+	}
+	return mcplib.NewToolResultText(text), nil
 }
 
 func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -187,17 +182,23 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	}
 
 	// Set as active if it's the first identity.
+	var warning string
 	listResult, listErr := h.store.List()
 	if listErr == nil && len(listResult.Identities) == 1 {
 		if err := h.store.SetActive(id.Handle); err != nil {
-			data, _ := json.MarshalIndent(id, "", "  ")
-			return mcplib.NewToolResultText(
-				fmt.Sprintf("%s\n\nwarning: could not set as active: %v", string(data), err),
-			), nil
+			warning = fmt.Sprintf("could not set as active: %v", err)
 		}
 	}
 
-	return jsonResult(id)
+	data, err := json.MarshalIndent(id, "", "  ")
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("JSON marshal error: %v", err)), nil
+	}
+	text := string(data)
+	if warning != "" {
+		text += "\n\nwarning: " + warning
+	}
+	return mcplib.NewToolResultText(text), nil
 }
 
 // --- Helpers ---
