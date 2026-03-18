@@ -120,13 +120,11 @@ func runWhoami(args []string) {
 }
 
 func runServe() {
-	fmt.Fprintln(os.Stderr, "ethos: MCP server not yet implemented")
-	os.Exit(1)
+	runServeImpl()
 }
 
 func runCreate(args []string) {
-	fmt.Fprintln(os.Stderr, "ethos: create not yet implemented")
-	os.Exit(1)
+	runCreateImpl(args)
 }
 
 func runList() {

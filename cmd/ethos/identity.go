@@ -103,6 +103,20 @@ func activeIdentity() (*Identity, error) {
 	return loadIdentity(handle)
 }
 
+// saveIdentity writes an identity YAML file.
+func saveIdentity(id *Identity) error {
+	dir := identityDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating identity directory: %w", err)
+	}
+	data, err := yaml.Marshal(id)
+	if err != nil {
+		return fmt.Errorf("marshaling identity: %w", err)
+	}
+	path := filepath.Join(dir, id.Handle+".yaml")
+	return os.WriteFile(path, data, 0o644)
+}
+
 // setActiveIdentity sets the active identity by handle.
 func setActiveIdentity(handle string) error {
 	// Verify the identity exists
