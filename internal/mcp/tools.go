@@ -123,18 +123,13 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 		})
 	}
 
-	data, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("JSON marshal error: %v", err)), nil
-	}
-	text := string(data)
 	if len(result.Warnings) > 0 {
-		text += "\n\nwarnings:\n"
-		for _, w := range result.Warnings {
-			text += "  " + w + "\n"
-		}
+		return jsonResult(struct {
+			Identities []entry  `json:"identities"`
+			Warnings   []string `json:"warnings"`
+		}{entries, result.Warnings})
 	}
-	return mcplib.NewToolResultText(text), nil
+	return jsonResult(entries)
 }
 
 func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -182,23 +177,21 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	}
 
 	// Set as active if it's the first identity.
-	var warning string
+	var warnings []string
 	listResult, listErr := h.store.List()
 	if listErr == nil && len(listResult.Identities) == 1 {
 		if err := h.store.SetActive(id.Handle); err != nil {
-			warning = fmt.Sprintf("could not set as active: %v", err)
+			warnings = append(warnings, fmt.Sprintf("could not set as active: %v", err))
 		}
 	}
 
-	data, err := json.MarshalIndent(id, "", "  ")
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("JSON marshal error: %v", err)), nil
+	if len(warnings) > 0 {
+		return jsonResult(struct {
+			Identity *identity.Identity `json:"identity"`
+			Warnings []string           `json:"warnings"`
+		}{id, warnings})
 	}
-	text := string(data)
-	if warning != "" {
-		text += "\n\nwarning: " + warning
-	}
-	return mcplib.NewToolResultText(text), nil
+	return jsonResult(id)
 }
 
 // --- Helpers ---
