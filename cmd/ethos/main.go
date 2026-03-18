@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 var version = "dev"
@@ -157,19 +158,41 @@ func runShow(args []string) {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Name:     %s\n", id.Name)
-	fmt.Printf("Handle:   %s\n", id.Handle)
-	fmt.Printf("Kind:     %s\n", id.Kind)
-	if id.Email != "" {
-		fmt.Printf("Email:    %s\n", id.Email)
+	showField("Name", id.Name)
+	showField("Handle", id.Handle)
+	showField("Kind", id.Kind)
+	showField("Email", id.Email)
+	showField("GitHub", id.GitHub)
+	if id.Voice.Provider != "" && id.Voice.VoiceID != "" {
+		showField("Voice", id.Voice.Provider+"/"+id.Voice.VoiceID)
+	} else if id.Voice.Provider != "" {
+		showField("Voice", id.Voice.Provider)
 	}
-	if id.GitHub != "" {
-		fmt.Printf("GitHub:   %s\n", id.GitHub)
+	showField("Agent", id.Agent)
+	showField("Writing", oneLine(id.WritingStyle))
+	showField("Personality", oneLine(id.Personality))
+	var skills []string
+	for _, sk := range id.Skills {
+		if s := strings.TrimSpace(sk); s != "" {
+			skills = append(skills, s)
+		}
 	}
-	if id.Voice.Provider != "" {
-		fmt.Printf("Voice:    %s/%s\n", id.Voice.Provider, id.Voice.VoiceID)
+	showField("Skills", strings.Join(skills, ", "))
+}
+
+// showField prints a labeled field if the value is non-empty.
+func showField(label, value string) {
+	if value != "" {
+		fmt.Printf("%-13s %s\n", label+":", value)
 	}
-	if id.Agent != "" {
-		fmt.Printf("Agent:    %s\n", id.Agent)
+}
+
+// oneLine collapses a multi-line string to a single line by joining
+// whitespace-separated fields with a single space.
+func oneLine(s string) string {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return ""
 	}
+	return strings.Join(fields, " ")
 }
