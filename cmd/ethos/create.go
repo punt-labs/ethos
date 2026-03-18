@@ -159,7 +159,7 @@ func validateIdentity(id *Identity) error {
 		return fmt.Errorf("kind must be 'human' or 'agent', got %q", id.Kind)
 	}
 	if id.Voice != nil && id.Voice.VoiceID != "" && id.Voice.Provider == "" {
-		return fmt.Errorf("voice_id requires voice provider")
+		return fmt.Errorf("voice_id requires voice_provider")
 	}
 	return nil
 }
