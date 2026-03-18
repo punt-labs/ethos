@@ -163,8 +163,10 @@ func runShow(args []string) {
 	showField("Kind", id.Kind)
 	showField("Email", id.Email)
 	showField("GitHub", id.GitHub)
-	if id.Voice.Provider != "" {
+	if id.Voice.Provider != "" && id.Voice.VoiceID != "" {
 		showField("Voice", id.Voice.Provider+"/"+id.Voice.VoiceID)
+	} else if id.Voice.Provider != "" {
+		showField("Voice", id.Voice.Provider)
 	}
 	showField("Agent", id.Agent)
 	showField("Writing", oneLine(id.WritingStyle))
