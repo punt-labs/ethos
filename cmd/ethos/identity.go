@@ -8,8 +8,8 @@ import (
 )
 
 // store returns the default identity store.
-// Exits with an error if the home directory cannot be determined.
-// Use only from CLI commands, not MCP handlers.
+// Exits the process on failure — acceptable at startup but not inside
+// request handlers. MCP handlers receive the Store via Handler injection.
 func store() *identity.Store {
 	s, err := identity.DefaultStore()
 	if err != nil {

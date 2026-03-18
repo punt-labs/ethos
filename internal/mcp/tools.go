@@ -18,7 +18,11 @@ type Handler struct {
 }
 
 // NewHandler creates a Handler with the given identity store.
+// Panics if s is nil — callers must provide a valid store.
 func NewHandler(s *identity.Store) *Handler {
+	if s == nil {
+		panic("mcp.NewHandler: store must not be nil")
+	}
 	return &Handler{store: s}
 }
 
@@ -127,7 +131,15 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 		})
 	}
 
-	return jsonResult(entries)
+	type listResponse struct {
+		Identities []entry  `json:"identities"`
+		Warnings   []string `json:"warnings,omitempty"`
+	}
+
+	return jsonResult(listResponse{
+		Identities: entries,
+		Warnings:   result.Warnings,
+	})
 }
 
 func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
