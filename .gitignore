@@ -1,0 +1,33 @@
+# Go build artifacts
+/ethos
+dist/
+coverage.out
+
+# Scratch/temp directory (TMPDIR set via .envrc)
+.tmp/
+
+# Claude local settings
+.claude/settings.local.json
+.claude/*.local.md
+
+# direnv
+.envrc
+
+# MCP (project-local, not part of plugin distribution)
+.mcp.json
+
+# TTS ephemeral audio
+.tts/
+.vox/
+
+# Biff local
+.biff.local
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.log
+*.out
+*.run.xml

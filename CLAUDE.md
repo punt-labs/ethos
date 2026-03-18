@@ -1,0 +1,160 @@
+# CLAUDE.md
+
+## No "Pre-existing" Excuse
+
+There is no such thing as a "pre-existing" issue. If you see a problem — in code you wrote, code a reviewer flagged, or code you happen to be reading — you fix it. Do not classify issues as "pre-existing" to justify ignoring them. Do not suggest that something is "outside the scope of this change." If it is broken and you can see it, it is your problem now.
+
+## Project Overview
+
+Identity binding for humans and AI agents. Ethos unifies a name, voice (Vox), email (Beadle), GitHub handle (Biff), writing style, personality, and skills into a single identity that other tools optionally read. Written in Go.
+
+Ethos is a sidecar — it publishes identity state to a known filesystem location. Vox, Beadle, and Biff work without ethos; when ethos is installed, they gain richer identity context.
+
+## Standards
+
+This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit). When this CLAUDE.md conflicts with punt-kit standards, this file wins (most specific wins).
+
+## Build & Run
+
+```bash
+make build                              # Build ethos binary
+make install                            # Build and install to ~/.local/bin
+make check                              # All quality gates (vet, staticcheck, markdownlint, tests)
+./ethos version                         # Print version
+./ethos doctor                          # Check installation health
+./ethos whoami                          # Show active identity
+./ethos whoami <handle>                 # Set active identity
+./ethos serve                           # Start MCP server (stdio transport)
+```
+
+## Scratch Files
+
+Use `.tmp/` at the project root for scratch and temporary files — never `/tmp`. The `TMPDIR` environment variable is set via `.envrc` so that `tempfile` and subprocesses automatically use it. Contents are gitignored; only `.gitkeep` is tracked.
+
+## Quality Gates
+
+Run before every commit. The Makefile is the source of truth (`make help`).
+
+```bash
+make check                             # All gates: lint + docs + test
+```
+
+Expands to `make lint docs test`:
+
+- `go vet ./...`
+- `staticcheck ./...`
+- `npx markdownlint-cli2 "**/*.md"`
+- `go test -race -count=1 ./...`
+
+## Architecture
+
+### Package Map
+
+| Package | Responsibility |
+|---------|---------------|
+| `cmd/ethos/` | CLI entry point: `whoami`, `create`, `list`, `show`, `version`, `doctor`, `serve` |
+| `internal/identity/` | Core identity model, validation, CRUD operations |
+| `internal/resolve/` | Identity resolution chain: repo-local → global → error |
+| `internal/mcp/` | MCP tool definitions and handlers |
+
+### Storage Layout
+
+| Scope | Path | Git-tracked? |
+|-------|------|-------------|
+| Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
+| Global active | `~/.punt-labs/ethos/active` | No |
+| Repo config | `.punt-labs/ethos/config.yaml` | Yes |
+| Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+
+### Identity Schema
+
+```yaml
+name: Jim Freeman
+handle: jfreeman
+kind: human                           # or "agent"
+email: jim@punt-labs.com              # beadle binding
+github: jfreeman                      # biff binding
+voice:                                # vox binding
+  provider: elevenlabs
+  voice_id: "..."
+agent: .claude/agents/jfreeman.md     # claude code agent binding
+writing_style: |
+  Direct. Short sentences. Data over adjectives.
+personality: |
+  Principal engineer. Formal methods, accountability.
+skills:
+  - formal-methods
+  - product-strategy
+```
+
+### Design Invariants
+
+- **Sidecar, not dependency.** Other tools read ethos state from the filesystem. They do not import ethos.
+- **Same schema for humans and agents.** The `kind` field is the only structural difference.
+- **Agent definition is a channel binding.** Like voice or email — the `.md` file defines tools and workflow, ethos defines who.
+
+## Go Coding Standards
+
+- **Go 1.26+**. Module path: `github.com/punt-labs/ethos`.
+- **`internal/` for everything.** Nothing is exported outside the module.
+- **No `interface{}` or `any`** unless unavoidable.
+- **Errors are values, not strings.** Wrap with `fmt.Errorf("context: %w", err)`.
+- **No panics in library code.** Panics are for programmer bugs only.
+- **Table-driven tests** with `testify/assert` and `testify/require`.
+- **`-race` mandatory** for all test runs.
+
+## Development Workflow
+
+### Branch Discipline
+
+All code changes go on feature branches. Never commit directly to main.
+
+| Prefix | Use |
+|--------|-----|
+| `feat/` | New features |
+| `fix/` | Bug fixes |
+| `refactor/` | Code improvements |
+| `docs/` | Documentation only |
+| `chore/` | Maintenance and housekeeping |
+
+### Commits
+
+One logical change per commit. Quality gates pass before every commit.
+
+Format: `type(scope): description`
+
+### Code Review
+
+1. **Create PR** via `mcp__github__create_pull_request`.
+2. **Request Copilot review** via `mcp__github__request_copilot_review`.
+3. **Watch for feedback** — `gh pr checks <number> --watch` in background.
+4. **Read all feedback** via MCP tools. Address every finding.
+5. **Fix, re-push, repeat.** Expect 2–6 cycles.
+6. **Merge only when clean** — zero new comments, all checks green.
+
+### Documentation Discipline
+
+- **CHANGELOG**: Entries in the PR branch, before merge. Follow Keep a Changelog.
+- **README**: Update when user-facing behavior changes.
+- **DESIGN.md**: Log decisions with rejected alternatives.
+
+### Session Close Protocol
+
+```bash
+git status              # Check for uncommitted work
+git add <files>         # Stage changes
+git commit -m "..."     # Commit
+bd sync                 # Sync beads
+git push                # Push to remote
+```
+
+Work is NOT complete until `git push` succeeds.
+
+## Standards References
+
+- [GitHub](https://github.com/punt-labs/punt-kit/blob/main/standards/github.md)
+- [Workflow](https://github.com/punt-labs/punt-kit/blob/main/standards/workflow.md)
+- [CLI](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md)
+- [Shell](https://github.com/punt-labs/punt-kit/blob/main/standards/shell.md)
+- [Hooks](https://github.com/punt-labs/punt-kit/blob/main/standards/hooks.md)
+- [Plugins](https://github.com/punt-labs/punt-kit/blob/main/standards/plugins.md)
