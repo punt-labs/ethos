@@ -68,6 +68,7 @@ func createIdentityTool() mcplib.Tool {
 		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file")),
 		mcplib.WithString("writing_style", mcplib.Description("Writing style description")),
 		mcplib.WithString("personality", mcplib.Description("Personality description")),
+		mcplib.WithArray("skills", mcplib.Description("List of skill tags"), mcplib.WithStringItems()),
 	)
 }
 
@@ -144,6 +145,7 @@ func handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcpli
 		Agent:        stringArg(req, "agent", ""),
 		WritingStyle: stringArg(req, "writing_style", ""),
 		Personality:  stringArg(req, "personality", ""),
+		Skills:       stringArrayArg(req, "skills"),
 	}
 
 	if err := validateIdentity(id); err != nil {
@@ -167,6 +169,21 @@ func stringArg(req mcplib.CallToolRequest, key, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func stringArrayArg(req mcplib.CallToolRequest, key string) []string {
+	args := req.GetArguments()
+	raw, ok := args[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	var result []string
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 func jsonResult(v any) (*mcplib.CallToolResult, error) {
