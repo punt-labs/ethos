@@ -86,7 +86,8 @@ func listIdentities() ([]*Identity, error) {
 		handle := strings.TrimSuffix(entry.Name(), ".yaml")
 		id, err := loadIdentity(handle)
 		if err != nil {
-			continue // skip malformed files
+			fmt.Fprintf(os.Stderr, "ethos: skipping %s: %v\n", entry.Name(), err)
+			continue
 		}
 		identities = append(identities, id)
 	}

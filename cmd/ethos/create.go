@@ -86,13 +86,18 @@ func createInteractive() {
 		}
 	}
 
+	var voice *Voice
+	if voiceProvider != "" {
+		voice = &Voice{Provider: voiceProvider, VoiceID: voiceID}
+	}
+
 	id := &Identity{
 		Name:         name,
 		Handle:       handle,
 		Kind:         kind,
 		Email:        email,
 		GitHub:       github,
-		Voice:        &Voice{Provider: voiceProvider, VoiceID: voiceID},
+		Voice:        voice,
 		Agent:        agent,
 		WritingStyle: writingStyle,
 		Personality:  personality,

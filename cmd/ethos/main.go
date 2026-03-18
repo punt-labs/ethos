@@ -98,7 +98,9 @@ func printSubcommandHelp(cmd string) {
 	case "version":
 		fmt.Print("Usage: ethos version\n\n  Print version.\n")
 	default:
+		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
 		printUsage()
+		os.Exit(1)
 	}
 }
 
