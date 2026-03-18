@@ -158,35 +158,30 @@ func runShow(args []string) {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Name:        %s\n", id.Name)
-	fmt.Printf("Handle:      %s\n", id.Handle)
-	fmt.Printf("Kind:        %s\n", id.Kind)
-	if id.Email != "" {
-		fmt.Printf("Email:       %s\n", id.Email)
-	}
-	if id.GitHub != "" {
-		fmt.Printf("GitHub:      %s\n", id.GitHub)
-	}
+	showField("Name", id.Name)
+	showField("Handle", id.Handle)
+	showField("Kind", id.Kind)
+	showField("Email", id.Email)
+	showField("GitHub", id.GitHub)
 	if id.Voice.Provider != "" {
-		fmt.Printf("Voice:       %s/%s\n", id.Voice.Provider, id.Voice.VoiceID)
+		showField("Voice", id.Voice.Provider+"/"+id.Voice.VoiceID)
 	}
-	if id.Agent != "" {
-		fmt.Printf("Agent:       %s\n", id.Agent)
-	}
-	if s := oneLine(id.WritingStyle); s != "" {
-		fmt.Printf("Writing:     %s\n", s)
-	}
-	if s := oneLine(id.Personality); s != "" {
-		fmt.Printf("Personality: %s\n", s)
-	}
+	showField("Agent", id.Agent)
+	showField("Writing", oneLine(id.WritingStyle))
+	showField("Personality", oneLine(id.Personality))
 	var skills []string
 	for _, sk := range id.Skills {
 		if s := strings.TrimSpace(sk); s != "" {
 			skills = append(skills, s)
 		}
 	}
-	if len(skills) > 0 {
-		fmt.Printf("Skills:      %s\n", strings.Join(skills, ", "))
+	showField("Skills", strings.Join(skills, ", "))
+}
+
+// showField prints a labeled field if the value is non-empty.
+func showField(label, value string) {
+	if value != "" {
+		fmt.Printf("%-13s %s\n", label+":", value)
 	}
 }
 
