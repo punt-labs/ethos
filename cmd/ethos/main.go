@@ -31,8 +31,8 @@ func main() {
 	cmd := args[0]
 	cmdArgs := args[1:]
 
-	// Check for subcommand-level --help.
-	if hasHelpFlag(cmdArgs) {
+	// Check for subcommand-level --help (skip if cmd is itself a help alias).
+	if cmd != "help" && cmd != "-h" && cmd != "--help" && hasHelpFlag(cmdArgs) {
 		printSubcommandHelp(cmd)
 		return
 	}
@@ -88,7 +88,7 @@ func printJSON(v any) {
 func printSubcommandHelp(cmd string) {
 	switch cmd {
 	case "whoami":
-		fmt.Print("Usage: ethos whoami [handle]\n\n  Show the active identity, or set it to <handle>.\n")
+		fmt.Print("Usage: ethos whoami [handle] [--json]\n\n  Show the active identity, or set it to <handle>.\n")
 	case "create":
 		fmt.Print("Usage: ethos create [--file <path>]\n\n  Create a new identity interactively, or from a YAML file.\n")
 	case "list":

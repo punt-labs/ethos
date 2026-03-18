@@ -136,8 +136,12 @@ func handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.C
 
 func handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	var voice *Voice
-	if p := stringArg(req, "voice_provider", ""); p != "" {
-		voice = &Voice{Provider: p, VoiceID: stringArg(req, "voice_id", "")}
+	provider := stringArg(req, "voice_provider", "")
+	voiceID := stringArg(req, "voice_id", "")
+	if provider != "" {
+		voice = &Voice{Provider: provider, VoiceID: voiceID}
+	} else if voiceID != "" {
+		return mcplib.NewToolResultError("voice_id requires voice_provider"), nil
 	}
 
 	id := &Identity{

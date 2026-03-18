@@ -71,6 +71,10 @@ func loadIdentity(handle string) (*Identity, error) {
 	if err := yaml.Unmarshal(data, &id); err != nil {
 		return nil, fmt.Errorf("invalid identity file %s: %w", path, err)
 	}
+	// Normalize empty Voice to nil for consistent omitempty behavior.
+	if id.Voice != nil && id.Voice.Provider == "" && id.Voice.VoiceID == "" {
+		id.Voice = nil
+	}
 	return &id, nil
 }
 
