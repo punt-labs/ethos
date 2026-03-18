@@ -18,9 +18,3 @@ func store() *identity.Store {
 	}
 	return s
 }
-
-// storeOrError returns the default identity store or an error.
-// Use from MCP handlers where os.Exit is not appropriate.
-func storeOrError() (*identity.Store, error) {
-	return identity.DefaultStore()
-}
