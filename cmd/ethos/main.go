@@ -94,7 +94,7 @@ func printSubcommandHelp(cmd string) {
 	case "whoami":
 		fmt.Print("Usage: ethos whoami [handle] [--json]\n\n  Show the active identity, or set it to <handle>.\n")
 	case "create":
-		fmt.Print("Usage: ethos create [--file <path>]\n\n  Create a new identity interactively, or from a YAML file.\n")
+		fmt.Print("Usage: ethos create [-f|--file <path>]\n\n  Create a new identity interactively, or from a YAML file.\n")
 	case "list":
 		fmt.Print("Usage: ethos list [--json]\n\n  List all identities. Active identity is marked with *.\n")
 	case "show":
