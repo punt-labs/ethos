@@ -1,56 +1,43 @@
 #!/usr/bin/env bash
-# hooks/suppress-output.sh — Format MCP tool output for ethos
-set -eo pipefail
+[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
+# Format ethos MCP tool output for the UI panel.
+# No `set -euo pipefail` — hooks must degrade gracefully on
+# malformed input rather than failing the tool call.
 
-# Read tool response from stdin
 INPUT=$(cat)
-
-TOOL_NAME=$(printf '%s' "$INPUT" | grep -o '"tool_name":"[^"]*"' | head -1 | cut -d'"' -f4 2>/dev/null || true)
+TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
+TOOL_NAME="${TOOL##*__}"
 
 # Never suppress error responses — pass them through unchanged
-if printf '%s' "$INPUT" | grep -q '"is_error" *: *true'; then
+IS_ERROR=$(printf '%s' "$INPUT" | jq -r '.tool_response | if type == "array" then .[0].is_error // false else .is_error // false end' 2>/dev/null)
+if [[ "$IS_ERROR" == "true" ]]; then
   exit 0
 fi
 
-# Format based on tool
+emit() {
+  local summary="$1"
+  jq -n --arg summary "$summary" '{
+    hookSpecificOutput: {
+      hookEventName: "PostToolUse",
+      updatedMCPToolOutput: $summary
+    }
+  }'
+}
+
 case "$TOOL_NAME" in
-  *whoami*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Identity resolved."}}'
-    ;;
-  *session_roster*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Session roster loaded."}}'
-    ;;
-  *session_iam*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Persona declared."}}'
-    ;;
-  *session_join*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Participant joined."}}'
-    ;;
-  *session_leave*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Participant left."}}'
-    ;;
-  *ext_get*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Extension loaded."}}'
-    ;;
-  *ext_set*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Extension updated."}}'
-    ;;
-  *ext_del*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Extension deleted."}}'
-    ;;
-  *ext_list*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Extensions listed."}}'
-    ;;
-  *list_identities*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Identities listed."}}'
-    ;;
-  *get_identity*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Identity loaded."}}'
-    ;;
-  *create_identity*)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Identity created."}}'
-    ;;
-  *)
-    printf '{"hookSpecificOutput":{"updatedMCPToolOutput":"Done."}}'
-    ;;
+  whoami)            emit "Identity resolved." ;;
+  session_roster)    emit "Session roster loaded." ;;
+  session_iam)       emit "Persona declared." ;;
+  session_join)      emit "Participant joined." ;;
+  session_leave)     emit "Participant left." ;;
+  ext_get)           emit "Extension loaded." ;;
+  ext_set)           emit "Extension updated." ;;
+  ext_del)           emit "Extension deleted." ;;
+  ext_list)          emit "Extensions listed." ;;
+  list_identities)   emit "Identities listed." ;;
+  get_identity)      emit "Identity loaded." ;;
+  create_identity)   emit "Identity created." ;;
+  *)                 emit "Done." ;;
 esac
+
+exit 0
