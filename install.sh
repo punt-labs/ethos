@@ -78,11 +78,15 @@ esac
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}-${OS}-${ARCH}"
 INSTALLED=0
 
-# Try downloading pre-built binary first
+# Try downloading pre-built binary first (atomic: temp file then mv)
 if [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
-  if curl -fsSL -o "${INSTALL_DIR}/${BINARY}" "$DOWNLOAD_URL" 2>/dev/null; then
-    chmod +x "${INSTALL_DIR}/${BINARY}"
+  TMPBIN="$(mktemp "${INSTALL_DIR}/${BINARY}.tmp.XXXXXX")"
+  if curl -fsSL -o "$TMPBIN" "$DOWNLOAD_URL" 2>/dev/null; then
+    chmod +x "$TMPBIN"
+    mv "$TMPBIN" "${INSTALL_DIR}/${BINARY}"
     INSTALLED=1
+  else
+    rm -f "$TMPBIN"
   fi
 fi
 
