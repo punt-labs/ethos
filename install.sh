@@ -26,11 +26,15 @@ PLUGIN_NAME="ethos"
 
 info "Checking prerequisites..."
 
+if command -v curl >/dev/null 2>&1; then
+  ok "curl found"
+else
+  warn "curl not found — pre-built binary download will not work"
+fi
+
 if command -v go >/dev/null 2>&1; then
   GO_VERSION=$(go version | sed 's/.*go\([0-9]*\.[0-9]*\).*/\1/')
-  ok "Go ${GO_VERSION}"
-else
-  fail "go is required. Install from https://go.dev/dl/"
+  ok "Go ${GO_VERSION} (fallback build)"
 fi
 
 if command -v git >/dev/null 2>&1; then
@@ -54,18 +58,43 @@ if [ "$SKIP_PLUGIN" = "0" ] && ! command -v git >/dev/null 2>&1; then
   SKIP_PLUGIN=1
 fi
 
-# --- Step 2: Build and install binary ---
+# --- Step 2: Install binary ---
 
 info "Installing ethos binary..."
 
 INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
-GOBIN="$INSTALL_DIR" go install "github.com/${REPO}/cmd/ethos@v${VERSION}" 2>/dev/null || {
-  if ! command -v git >/dev/null 2>&1; then
-    fail "go install failed and git is not available for fallback build"
+# Detect platform for pre-built binary download
+OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64)  ARCH="amd64" ;;
+  aarch64) ARCH="arm64" ;;
+  arm64)   ARCH="arm64" ;;
+  *)       ARCH="" ;;
+esac
+
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}-${OS}-${ARCH}"
+INSTALLED=0
+
+# Try downloading pre-built binary first
+if [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
+  if curl -fsSL -o "${INSTALL_DIR}/${BINARY}" "$DOWNLOAD_URL" 2>/dev/null; then
+    chmod +x "${INSTALL_DIR}/${BINARY}"
+    INSTALLED=1
   fi
-  warn "go install failed, building from source..."
+fi
+
+# Fallback: build from source with version injection
+if [ "$INSTALLED" = "0" ]; then
+  if ! command -v go >/dev/null 2>&1; then
+    fail "Pre-built binary not available for ${OS}-${ARCH} and Go is not installed"
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    fail "Pre-built binary not available and git is not installed for source build"
+  fi
+  warn "Pre-built binary not available, building from source..."
   ORIG_DIR=$(pwd)
   TMPDIR_BUILD=$(mktemp -d)
   cleanup_build() { rm -rf "$TMPDIR_BUILD"; }
@@ -78,7 +107,7 @@ GOBIN="$INSTALL_DIR" go install "github.com/${REPO}/cmd/ethos@v${VERSION}" 2>/de
   cd "$ORIG_DIR" || true
   rm -rf "$TMPDIR_BUILD"
   trap - EXIT
-}
+fi
 
 export PATH="$INSTALL_DIR:$PATH"
 ok "$("$INSTALL_DIR/$BINARY" version)"
