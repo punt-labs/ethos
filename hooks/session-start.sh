@@ -3,6 +3,7 @@
 set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
 mkdir -p "$(dirname "$ETHOS_LOG")"
@@ -11,19 +12,77 @@ mkdir -p "$(dirname "$ETHOS_LOG")"
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 
-# Deploy top-level commands (diff-and-copy, not skip-if-exists)
-DEPLOYED=()
-for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
-  [[ -f "$cmd_file" ]] || continue
-  name="$(basename "$cmd_file")"
-  [[ "$name" == *-dev.md ]] && continue
-  dest="$COMMANDS_DIR/$name"
-  mkdir -p "$COMMANDS_DIR"
-  if [[ ! -f "$dest" ]] || ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
-    cp "$cmd_file" "$dest"
-    DEPLOYED+=("/${name%.md}")
+# ── Detect dev mode ──────────────────────────────────────────────────
+IS_DEV=false
+if command -v jq &>/dev/null && [[ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]]; then
+  plugin_name="$(jq -r '.name // ""' "$PLUGIN_ROOT/.claude-plugin/plugin.json")"
+  if [[ "$plugin_name" == *-dev ]]; then
+    IS_DEV=true
   fi
-done
+fi
+
+# ── Deploy top-level commands (diff-and-copy, not skip-if-exists) ────
+# Skip entirely in dev mode — prod plugin deploys top-level commands
+DEPLOYED=()
+if [[ "$IS_DEV" == "false" ]]; then
+  for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
+    [[ -f "$cmd_file" ]] || continue
+    name="$(basename "$cmd_file")"
+    [[ "$name" == *-dev.md ]] && continue
+    dest="$COMMANDS_DIR/$name"
+    mkdir -p "$COMMANDS_DIR"
+    if [[ ! -f "$dest" ]] || ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
+      cp "$cmd_file" "$dest"
+      DEPLOYED+=("/${name%.md}")
+    fi
+  done
+fi
+
+# ── Allow MCP tools in user settings if not already allowed ──────────
+PROD_GLOB="mcp__plugin_ethos_self__*"
+DEV_GLOB="mcp__plugin_ethos-dev_self__*"
+
+if ! command -v jq &>/dev/null; then
+  echo "[$(date -Iseconds)] WARN: jq not found — skipping MCP tool auto-allow" >> "$ETHOS_LOG"
+else
+  # Create minimal settings.json if missing
+  if [[ ! -f "$SETTINGS" ]]; then
+    mkdir -p "$(dirname "$SETTINGS")"
+    echo '{}' > "$SETTINGS"
+  fi
+
+  PERMS_CHANGED=false
+
+  # Allow prod tools — check for exact wildcard entry, not substring
+  if ! jq -e ".permissions.allow // [] | index(\"$PROD_GLOB\")" "$SETTINGS" >/dev/null 2>&1; then
+    TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
+    if jq --arg g "$PROD_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
+      mv "$TMPFILE" "$SETTINGS"
+      PERMS_CHANGED=true
+    else
+      echo "[$(date -Iseconds)] ERROR: jq failed updating settings.json" >> "$ETHOS_LOG"
+      rm -f "$TMPFILE"
+    fi
+  fi
+
+  # Allow dev tools (only when running as ethos-dev)
+  if [[ "$IS_DEV" == "true" ]]; then
+    if ! jq -e ".permissions.allow // [] | index(\"$DEV_GLOB\")" "$SETTINGS" >/dev/null 2>&1; then
+      TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
+      if jq --arg g "$DEV_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
+        mv "$TMPFILE" "$SETTINGS"
+        PERMS_CHANGED=true
+      else
+        echo "[$(date -Iseconds)] ERROR: jq failed updating settings.json (dev)" >> "$ETHOS_LOG"
+        rm -f "$TMPFILE"
+      fi
+    fi
+  fi
+
+  if [[ "$PERMS_CHANGED" == "true" ]]; then
+    DEPLOYED+=("auto-allowed ethos MCP tools")
+  fi
+fi
 
 # Resolve active identity for context injection
 IDENTITY_INFO=""
