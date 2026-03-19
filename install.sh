@@ -1,6 +1,6 @@
 #!/bin/sh
 # install.sh — Install ethos CLI and Claude Code plugin
-# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/v0.1.0/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/v0.2.0/install.sh | sh
 set -eu
 
 # --- Colors (disabled when not a terminal) ---
@@ -15,7 +15,7 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1" >&2; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1" >&2; exit 1; }
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 REPO="punt-labs/ethos"
 BINARY="ethos"
 MARKETPLACE_REPO="punt-labs/claude-plugins"
