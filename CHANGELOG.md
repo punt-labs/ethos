@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-03-19
+
 ### Added
 
 - `ethos uninstall` command — removes Claude Code plugin; `--purge` removes binary and all identity data with confirmation
+- Release and Go Report Card badges in README
+
+### Changed
+
+- Installer rewritten with SSH fallback, marketplace check-before-register, uninstall-before-install, post-install verification, temp dir cleanup trap, and conditional doctor success message
+- Replaced personal identity data in docs and tests with Firefly characters (Mal Reynolds, River Tam)
+- `warn()` and `fail()` in install.sh now output to stderr
 
 ## [0.1.0] - 2026-03-18
 
@@ -61,5 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP handlers receive `Store` via injection (no `os.Exit` in handler context)
 - ShellCheck added to CI and `make lint`
 
-[Unreleased]: https://github.com/punt-labs/ethos/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/punt-labs/ethos/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/punt-labs/ethos/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/punt-labs/ethos/releases/tag/v0.1.0
