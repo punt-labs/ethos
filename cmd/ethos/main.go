@@ -69,6 +69,8 @@ func main() {
 		runIam(cmdArgs)
 	case "session":
 		runSession(cmdArgs)
+	case "uninstall":
+		runUninstall(cmdArgs)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -118,6 +120,8 @@ func printSubcommandHelp(cmd string) {
 		fmt.Print("Usage: ethos ext <subcommand> [args]\n\n  Manage tool-scoped extensions on identities.\n\n  ethos ext get <persona> <namespace> [key]\n  ethos ext set <persona> <namespace> <key> <value>\n  ethos ext del <persona> <namespace> [key]\n  ethos ext list <persona>\n")
 	case "iam":
 		fmt.Print("Usage: ethos iam <persona>\n\n  Declare your persona in the current session.\n")
+	case "uninstall":
+		fmt.Print("Usage: ethos uninstall [--purge]\n\n  Remove the Claude Code plugin.\n  With --purge: also remove the binary and all identity data.\n")
 	case "session":
 		fmt.Print("Usage: ethos session [subcommand]\n\n  Manage session roster.\n\n  ethos session                                  Show current session participants\n  ethos session create --session ID --root-id X   Create a new session roster\n  ethos session join --agent-id X [...]            Add a participant\n  ethos session leave --agent-id X                 Remove a participant\n  ethos session purge                              Clean up stale sessions\n")
 	default:
@@ -145,6 +149,7 @@ Admin commands:
   version           Print version
   doctor            Check installation health
   serve             Start MCP server (stdio transport)
+  uninstall         Remove plugin (--purge to remove binary + data)
 
 Flags:
   --json            JSON output
