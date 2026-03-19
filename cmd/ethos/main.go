@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -214,7 +213,7 @@ func checkIdentityDir(s *identity.Store) (string, bool) {
 func checkActiveIdentity(s *identity.Store) (string, bool) {
 	id, err := s.Active()
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "no active identity") {
+		if strings.Contains(err.Error(), "no active identity") {
 			return "none configured — run 'ethos create'", true
 		}
 		return fmt.Sprintf("error: %v", err), false
