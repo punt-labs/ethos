@@ -66,7 +66,12 @@ INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
 # Detect platform for pre-built binary download
-OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
+OS_RAW="$(uname -s)"
+case "$OS_RAW" in
+  Darwin) OS="darwin" ;;
+  Linux)  OS="linux" ;;
+  *)      OS="" ;;
+esac
 ARCH="$(uname -m)"
 case "$ARCH" in
   x86_64)  ARCH="amd64" ;;
@@ -79,13 +84,14 @@ DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}
 INSTALLED=0
 
 # Try downloading pre-built binary first (atomic: temp file then mv)
-if [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
+if [ -n "$OS" ] && [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
   TMPBIN="$(mktemp "${INSTALL_DIR}/${BINARY}.tmp.XXXXXX")"
-  if curl -fsSL -o "$TMPBIN" "$DOWNLOAD_URL" 2>/dev/null; then
+  if curl -fsSL -o "$TMPBIN" "$DOWNLOAD_URL"; then
     chmod +x "$TMPBIN"
     mv "$TMPBIN" "${INSTALL_DIR}/${BINARY}"
     INSTALLED=1
   else
+    warn "Download failed for ${BINARY}-${OS}-${ARCH}, falling back to source build"
     rm -f "$TMPBIN"
   fi
 fi
@@ -93,10 +99,10 @@ fi
 # Fallback: build from source with version injection
 if [ "$INSTALLED" = "0" ]; then
   if ! command -v go >/dev/null 2>&1; then
-    fail "Pre-built binary not available for ${OS}-${ARCH} and Go is not installed"
+    fail "No pre-built binary (OS=${OS_RAW}, arch=$(uname -m)) and Go is not installed"
   fi
   if ! command -v git >/dev/null 2>&1; then
-    fail "Pre-built binary not available and git is not installed for source build"
+    fail "No pre-built binary and git is not installed for source build"
   fi
   warn "Pre-built binary not available, building from source..."
   ORIG_DIR=$(pwd)
