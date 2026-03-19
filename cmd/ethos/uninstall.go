@@ -41,7 +41,11 @@ func runUninstall(args []string) {
 		if pluginFailed {
 			os.Exit(1)
 		}
-		fmt.Println("\nPlugin removed. Binary and identity data are still present.")
+		if claude != "" {
+			fmt.Println("\nPlugin removed. Binary and identity data are still present.")
+		} else {
+			fmt.Println("\nNo plugin to remove. Binary and identity data are still present.")
+		}
 		fmt.Println("Run 'ethos uninstall --purge' to remove everything.")
 		return
 	}
