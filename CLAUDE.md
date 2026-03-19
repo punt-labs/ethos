@@ -77,15 +77,15 @@ Expands to `make lint docs test`:
 ### Identity Schema
 
 ```yaml
-name: Jim Freeman
-handle: jfreeman
+name: Mal Reynolds
+handle: mal
 kind: human                           # or "agent"
-email: jim@punt-labs.com              # beadle binding
-github: jfreeman                      # biff binding
+email: mal@serenity.ship               # beadle binding
+github: mal                          # biff binding
 voice:                                # vox binding
   provider: elevenlabs
   voice_id: "..."
-agent: .claude/agents/jfreeman.md     # claude code agent binding
+agent: .claude/agents/mal.md         # claude code agent binding
 writing_style: |
   Direct. Short sentences. Data over adjectives.
 personality: |
