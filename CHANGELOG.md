@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- All hooks rewritten to match biff's proven patterns (DES-009)
+- SessionStart: removed `INPUT=$(cat)` stdin read that blocked indefinitely (Claude Code doesn't close pipe promptly)
+- Subagent/SessionEnd hooks: replaced `INPUT=$(cat)` with `read -r -t 1` (non-blocking with 1s timeout)
+- PostToolUse: kept `INPUT=$(cat)` (pipe closes for this event), removed `set -euo pipefail` for graceful degradation, switched to `jq` for JSON output
+- hooks.json: removed empty `"matcher": ""` from all non-PostToolUse hooks
+- All hooks: added kill switch, `exit 0`, `hookEventName` in output, `PLUGIN_ROOT` from `dirname` not env var
+
 ## [0.3.3] - 2026-03-19
 
 ### Fixed

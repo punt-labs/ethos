@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # hooks/subagent-start.sh — SubagentStart hook for ethos plugin
 # Registers a subagent in the session roster.
-set -eo pipefail
+[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
+set -euo pipefail
 
 command -v ethos >/dev/null 2>&1 || exit 0
 
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
 mkdir -p "$(dirname "$ETHOS_LOG")"
 
-# Read hook input from stdin.
-INPUT=$(cat)
+# Non-blocking stdin read (Claude Code may not close pipe promptly)
+INPUT=""
+if read -r -t 1 INPUT_LINE; then
+  INPUT="$INPUT_LINE"
+fi
+
 AGENT_ID=$(echo "$INPUT" | grep -o '"agent_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 AGENT_TYPE=$(echo "$INPUT" | grep -o '"agent_type" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 SESSION_ID=$(echo "$INPUT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
@@ -34,3 +39,5 @@ ethos session join \
   --parent "$PARENT" \
   --agent-type "$AGENT_TYPE" \
   --session "$SESSION_ID" 2>>"$ETHOS_LOG" || true
+
+exit 0
