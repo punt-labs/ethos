@@ -73,9 +73,9 @@ func TestValidate_HandleFormat(t *testing.T) {
 		{"a", true},
 		{"a1b2", true},
 		{"my-agent-v2", true},
-		{"Jim", false},       // uppercase
-		{"-bad", false},      // leading hyphen
-		{"bad-", false},      // trailing hyphen
+		{"Jim", false},        // uppercase
+		{"-bad", false},       // leading hyphen
+		{"bad-", false},       // trailing hyphen
 		{"bad handle", false}, // space
 		{"bad.handle", false}, // dot
 		{"", false},           // empty (caught by required check)

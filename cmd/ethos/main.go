@@ -45,36 +45,26 @@ func main() {
 		return
 	}
 
-	switch cmd {
-	case "version":
-		if jsonOutput {
-			printJSON(map[string]string{"version": version})
-		} else {
-			fmt.Printf("ethos %s\n", version)
-		}
-	case "doctor":
-		runDoctor()
-	case "whoami":
-		runWhoami(cmdArgs)
-	case "serve":
-		runServe()
-	case "create":
-		runCreate(cmdArgs)
-	case "list":
-		runList()
-	case "show":
-		runShow(cmdArgs)
-	case "ext":
-		runExt(cmdArgs)
-	case "iam":
-		runIam(cmdArgs)
-	case "session":
-		runSession(cmdArgs)
-	case "uninstall":
-		runUninstall(cmdArgs)
-	case "help", "-h", "--help":
-		printUsage()
-	default:
+	commands := map[string]func([]string){
+		"version":   func([]string) { runVersion() },
+		"doctor":    func([]string) { runDoctor() },
+		"whoami":    runWhoami,
+		"serve":     func([]string) { runServe() },
+		"create":    runCreate,
+		"list":      func([]string) { runList() },
+		"show":      runShow,
+		"ext":       runExt,
+		"iam":       runIam,
+		"session":   runSession,
+		"uninstall": runUninstall,
+		"help":      func([]string) { printUsage() },
+		"-h":        func([]string) { printUsage() },
+		"--help":    func([]string) { printUsage() },
+	}
+
+	if fn, ok := commands[cmd]; ok {
+		fn(cmdArgs)
+	} else {
 		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
 		printUsage()
 		os.Exit(1)
@@ -156,6 +146,14 @@ Flags:
   --json            JSON output
   --help, -h        Show this help
 `)
+}
+
+func runVersion() {
+	if jsonOutput {
+		printJSON(map[string]string{"version": version})
+	} else {
+		fmt.Printf("ethos %s\n", version)
+	}
 }
 
 func runDoctor() {
@@ -309,37 +307,52 @@ func runShow(args []string) {
 	showField("Kind", id.Kind)
 	showField("Email", id.Email)
 	showField("GitHub", id.GitHub)
-	if id.Voice != nil && id.Voice.Provider != "" && id.Voice.VoiceID != "" {
-		showField("Voice", id.Voice.Provider+"/"+id.Voice.VoiceID)
-	} else if id.Voice != nil && id.Voice.Provider != "" {
-		showField("Voice", id.Voice.Provider)
-	}
+	showField("Voice", voiceValue(id.Voice))
 	showField("Agent", id.Agent)
 	showField("Writing", oneLine(id.WritingStyle))
 	showField("Personality", oneLine(id.Personality))
-	var skills []string
-	for _, sk := range id.Skills {
+	showField("Skills", joinSkills(id.Skills))
+	showExtensions(id.Ext)
+}
+
+// voiceValue formats a voice binding for display.
+func voiceValue(v *identity.Voice) string {
+	if v == nil || v.Provider == "" {
+		return ""
+	}
+	if v.VoiceID != "" {
+		return v.Provider + "/" + v.VoiceID
+	}
+	return v.Provider
+}
+
+// joinSkills formats a skills slice for display.
+func joinSkills(skills []string) string {
+	var filtered []string
+	for _, sk := range skills {
 		if s := strings.TrimSpace(sk); s != "" {
-			skills = append(skills, s)
+			filtered = append(filtered, s)
 		}
 	}
-	showField("Skills", strings.Join(skills, ", "))
-	if len(id.Ext) > 0 {
-		nsNames := make([]string, 0, len(id.Ext))
-		for ns := range id.Ext {
-			nsNames = append(nsNames, ns)
+	return strings.Join(filtered, ", ")
+}
+
+// showExtensions prints sorted extension key-value pairs.
+func showExtensions(ext map[string]map[string]string) {
+	nsNames := make([]string, 0, len(ext))
+	for ns := range ext {
+		nsNames = append(nsNames, ns)
+	}
+	sort.Strings(nsNames)
+	for _, ns := range nsNames {
+		keys := ext[ns]
+		keyNames := make([]string, 0, len(keys))
+		for k := range keys {
+			keyNames = append(keyNames, k)
 		}
-		sort.Strings(nsNames)
-		for _, ns := range nsNames {
-			keys := id.Ext[ns]
-			keyNames := make([]string, 0, len(keys))
-			for k := range keys {
-				keyNames = append(keyNames, k)
-			}
-			sort.Strings(keyNames)
-			for _, k := range keyNames {
-				showField("ext:"+ns+"."+k, keys[k])
-			}
+		sort.Strings(keyNames)
+		for _, k := range keyNames {
+			showField("ext:"+ns+"."+k, keys[k])
 		}
 	}
 }
