@@ -27,7 +27,16 @@ jobs:
         run: make dist VERSION=${GITHUB_REF_NAME#v}
 
       - name: Validate binaries
-        run: test $(ls dist/ethos-* | wc -l) -eq 4
+        run: |
+          expected=4
+          actual=$(find dist -name 'ethos-*' -type f | wc -l | tr -d ' ')
+          if [ "$actual" -ne "$expected" ]; then
+            echo "::error::Expected $expected binaries, found $actual"
+            ls -la dist/
+            exit 1
+          fi
+          echo "Found $actual binaries:"
+          ls dist/ethos-*
 
       - name: Generate checksums
         working-directory: dist
