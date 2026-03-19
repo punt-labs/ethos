@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hooks/session-end.sh — SessionEnd hook for ethos plugin
 # Tears down the session roster and cleans up the current PID file.
-set -euo pipefail
+set -eo pipefail
 
 command -v ethos >/dev/null 2>&1 || exit 0
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hooks/subagent-start.sh — SubagentStart hook for ethos plugin
 # Registers a subagent in the session roster.
-set -euo pipefail
+set -eo pipefail
 
 command -v ethos >/dev/null 2>&1 || exit 0
 

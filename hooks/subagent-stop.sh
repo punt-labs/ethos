@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # hooks/subagent-stop.sh — SubagentStop hook for ethos plugin
 # Removes a subagent from the session roster.
-set -euo pipefail
+set -eo pipefail
 
 command -v ethos >/dev/null 2>&1 || exit 0
 
