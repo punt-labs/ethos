@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@2026.1
+
+      - name: Run quality gates
+        run: make lint test
+
+      - name: Build binaries
+        run: make dist VERSION=${GITHUB_REF_NAME#v}
+
+      - name: Validate binaries
+        run: test $(ls dist/ethos-* | wc -l) -eq 4
+
+      - name: Generate checksums
+        working-directory: dist
+        run: sha256sum ethos-* > checksums.txt
+
+      - name: Create release
+        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/ethos-*
+            dist/checksums.txt
