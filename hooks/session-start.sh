@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # hooks/session-start.sh — SessionStart hook for ethos plugin
-set -euo pipefail
+set -eo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 SETTINGS="$HOME/.claude/settings.json"
@@ -23,7 +23,7 @@ fi
 
 # ── Deploy top-level commands (diff-and-copy, not skip-if-exists) ────
 # Skip entirely in dev mode — prod plugin deploys top-level commands
-DEPLOYED=()
+DEPLOYED=""
 if [[ "$IS_DEV" == "false" ]]; then
   for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
     [[ -f "$cmd_file" ]] || continue
@@ -33,7 +33,7 @@ if [[ "$IS_DEV" == "false" ]]; then
     mkdir -p "$COMMANDS_DIR"
     if [[ ! -f "$dest" ]] || ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
       cp "$cmd_file" "$dest"
-      DEPLOYED+=("/${name%.md}")
+      DEPLOYED="${DEPLOYED} /${name%.md}"
     fi
   done
 fi
@@ -80,7 +80,7 @@ else
   fi
 
   if [[ "$PERMS_CHANGED" == "true" ]]; then
-    DEPLOYED+=("auto-allowed ethos MCP tools")
+    DEPLOYED="${DEPLOYED} auto-allowed-tools"
   fi
 fi
 
@@ -93,7 +93,7 @@ if command -v ethos >/dev/null 2>&1; then
 fi
 
 # Create session roster if we have a session ID and ethos is available
-if [[ -n "$SESSION_ID" ]] && command -v ethos >/dev/null 2>&1; then
+if [[ -n "${SESSION_ID:-}" ]] && command -v ethos >/dev/null 2>&1; then
   USER_ID="${USER:-$(whoami)}"
   USER_PERSONA="${ACTIVE_PERSONA:-$USER_ID}"
 
@@ -114,13 +114,14 @@ fi
 
 # Build output
 OUTPUT=""
-if [[ ${#DEPLOYED[@]} -gt 0 ]]; then
-  OUTPUT="Ethos: deployed commands: ${DEPLOYED[*]}. "
+DEPLOYED="${DEPLOYED# }"
+if [[ -n "$DEPLOYED" ]]; then
+  OUTPUT="Ethos: deployed ${DEPLOYED}. "
 fi
 if [[ -n "$IDENTITY_INFO" ]]; then
   OUTPUT="${OUTPUT}Active identity: ${IDENTITY_INFO}"
 fi
-if [[ -n "$SESSION_ID" ]]; then
+if [[ -n "${SESSION_ID:-}" ]]; then
   [[ -n "$OUTPUT" ]] && OUTPUT="${OUTPUT} "
   OUTPUT="${OUTPUT}Session: ${SESSION_ID}"
 fi
