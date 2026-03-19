@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `ethos doctor` no longer fails on fresh install when no active identity exists (WARN instead of FAIL)
+- `ethos doctor` no longer fails on fresh install when no active identity exists (PASS with guidance instead of FAIL)
 - `whoami.md` command: `allowed-tools` corrected from bare string to array
 - PostToolUse suppress hook now returns meaningful per-tool summaries instead of generic "Done."
 

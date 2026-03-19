@@ -3,7 +3,7 @@ description: Show current session participants
 allowed-tools: ["mcp__plugin_ethos-dev_self__session_roster"]
 ---
 
-# /session
+# /session-dev
 
 Call `mcp__plugin_ethos-dev_self__session_roster` with no arguments.
 

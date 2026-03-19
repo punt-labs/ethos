@@ -84,7 +84,7 @@ export PATH="$INSTALL_DIR:$PATH"
 ok "$("$INSTALL_DIR/$BINARY" version)"
 
 # Ensure ~/.local/bin is on PATH permanently (idempotent)
-SHELL_NAME="$(basename "$SHELL")"
+SHELL_NAME="$(basename "${SHELL:-sh}")"
 PROFILE=""
 case "$SHELL_NAME" in
   zsh)  PROFILE="$HOME/.zshrc" ;;

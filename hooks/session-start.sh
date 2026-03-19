@@ -6,8 +6,6 @@ PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
-TOOL_PATTERN="mcp__plugin_ethos_self__"
-DEV_TOOL_PATTERN="mcp__plugin_ethos-dev_self__"
 mkdir -p "$(dirname "$ETHOS_LOG")"
 
 # Read session_id from stdin JSON (Claude Code passes hook context).
@@ -41,15 +39,24 @@ if [[ "$IS_DEV" == "false" ]]; then
 fi
 
 # ── Allow MCP tools in user settings if not already allowed ──────────
+PROD_GLOB="mcp__plugin_ethos_self__*"
+DEV_GLOB="mcp__plugin_ethos-dev_self__*"
+
 if ! command -v jq &>/dev/null; then
   echo "[$(date -Iseconds)] WARN: jq not found — skipping MCP tool auto-allow" >> "$ETHOS_LOG"
-elif [[ -f "$SETTINGS" ]]; then
+else
+  # Create minimal settings.json if missing
+  if [[ ! -f "$SETTINGS" ]]; then
+    mkdir -p "$(dirname "$SETTINGS")"
+    echo '{}' > "$SETTINGS"
+  fi
+
   PERMS_CHANGED=false
 
-  # Allow prod tools
-  if ! jq -e ".permissions.allow // [] | map(select(contains(\"$TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
+  # Allow prod tools — check for exact wildcard entry, not substring
+  if ! jq -e ".permissions.allow // [] | index(\"$PROD_GLOB\")" "$SETTINGS" >/dev/null 2>&1; then
     TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
-    if jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos_self__*"]' "$SETTINGS" > "$TMPFILE"; then
+    if jq --arg g "$PROD_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
       mv "$TMPFILE" "$SETTINGS"
       PERMS_CHANGED=true
     else
@@ -60,9 +67,9 @@ elif [[ -f "$SETTINGS" ]]; then
 
   # Allow dev tools (only when running as ethos-dev)
   if [[ "$IS_DEV" == "true" ]]; then
-    if ! jq -e ".permissions.allow // [] | map(select(contains(\"$DEV_TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
+    if ! jq -e ".permissions.allow // [] | index(\"$DEV_GLOB\")" "$SETTINGS" >/dev/null 2>&1; then
       TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
-      if jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos-dev_self__*"]' "$SETTINGS" > "$TMPFILE"; then
+      if jq --arg g "$DEV_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
         mv "$TMPFILE" "$SETTINGS"
         PERMS_CHANGED=true
       else

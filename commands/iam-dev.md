@@ -4,7 +4,7 @@ argument-hint: "<persona>"
 allowed-tools: ["mcp__plugin_ethos-dev_self__session_iam"]
 ---
 
-# /iam
+# /iam-dev
 
 Call `mcp__plugin_ethos-dev_self__session_iam` with `persona` set to $ARGUMENTS.
 
