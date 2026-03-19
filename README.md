@@ -98,6 +98,7 @@ $ ethos list
 | `ethos session leave` | Remove a participant from a session |
 | `ethos session purge` | Clean up stale session rosters |
 | `ethos serve` | Start MCP server (stdio) |
+| `ethos uninstall` | Remove plugin (`--purge` to remove binary + data) |
 
 `--json` is a global flag — valid before or after the subcommand.
 Use `--` to stop flag parsing (e.g., `ethos create -f -- --json` treats
