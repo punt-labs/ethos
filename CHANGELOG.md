@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Architecture specification (`docs/architecture.tex`) — LaTeX document covering package map, identity model, extension system, session roster, resolution chain, MCP tool surface, design invariants, and security boundaries
+
 ## [0.3.4] - 2026-03-19
 
 ### Fixed
@@ -122,6 +126,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP handlers receive `Store` via injection (no `os.Exit` in handler context)
 - ShellCheck added to CI and `make lint`
 
-[Unreleased]: https://github.com/punt-labs/ethos/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/punt-labs/ethos/compare/v0.3.4...HEAD
 [0.2.0]: https://github.com/punt-labs/ethos/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/punt-labs/ethos/releases/tag/v0.1.0
