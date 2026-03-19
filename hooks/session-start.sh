@@ -41,24 +41,34 @@ if [[ "$IS_DEV" == "false" ]]; then
 fi
 
 # ── Allow MCP tools in user settings if not already allowed ──────────
-if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
+if ! command -v jq &>/dev/null; then
+  echo "[$(date -Iseconds)] WARN: jq not found — skipping MCP tool auto-allow" >> "$ETHOS_LOG"
+elif [[ -f "$SETTINGS" ]]; then
   PERMS_CHANGED=false
 
   # Allow prod tools
   if ! jq -e ".permissions.allow // [] | map(select(contains(\"$TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
-    TMPFILE="$(mktemp)"
-    jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos_self__*"]' "$SETTINGS" > "$TMPFILE"
-    mv "$TMPFILE" "$SETTINGS"
-    PERMS_CHANGED=true
+    TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
+    if jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos_self__*"]' "$SETTINGS" > "$TMPFILE"; then
+      mv "$TMPFILE" "$SETTINGS"
+      PERMS_CHANGED=true
+    else
+      echo "[$(date -Iseconds)] ERROR: jq failed updating settings.json" >> "$ETHOS_LOG"
+      rm -f "$TMPFILE"
+    fi
   fi
 
   # Allow dev tools (only when running as ethos-dev)
   if [[ "$IS_DEV" == "true" ]]; then
     if ! jq -e ".permissions.allow // [] | map(select(contains(\"$DEV_TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
-      TMPFILE="$(mktemp)"
-      jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos-dev_self__*"]' "$SETTINGS" > "$TMPFILE"
-      mv "$TMPFILE" "$SETTINGS"
-      PERMS_CHANGED=true
+      TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
+      if jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos-dev_self__*"]' "$SETTINGS" > "$TMPFILE"; then
+        mv "$TMPFILE" "$SETTINGS"
+        PERMS_CHANGED=true
+      else
+        echo "[$(date -Iseconds)] ERROR: jq failed updating settings.json (dev)" >> "$ETHOS_LOG"
+        rm -f "$TMPFILE"
+      fi
     fi
   fi
 

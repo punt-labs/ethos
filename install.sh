@@ -85,6 +85,7 @@ ok "$("$INSTALL_DIR/$BINARY" version)"
 
 # Ensure ~/.local/bin is on PATH permanently (idempotent)
 SHELL_NAME="$(basename "$SHELL")"
+PROFILE=""
 case "$SHELL_NAME" in
   zsh)  PROFILE="$HOME/.zshrc" ;;
   bash)
@@ -93,10 +94,11 @@ case "$SHELL_NAME" in
     else
       PROFILE="$HOME/.bashrc"
     fi ;;
+  fish) warn "fish shell detected — add $INSTALL_DIR to PATH manually" ;;
   *)    PROFILE="$HOME/.profile" ;;
 esac
 MARKER='# Added by ethos installer'
-if ! grep -qF "$MARKER" "$PROFILE" 2>/dev/null; then
+if [ -n "$PROFILE" ] && ! grep -qF "$MARKER" "$PROFILE" 2>/dev/null; then
   # shellcheck disable=SC2016 # $PATH must stay literal in the profile
   printf '\n%s\nexport PATH="%s:$PATH"\n' "$MARKER" "$INSTALL_DIR" >> "$PROFILE"
   ok "Added $INSTALL_DIR to PATH in $PROFILE"
