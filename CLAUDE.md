@@ -25,6 +25,9 @@ make check                              # All quality gates (vet, staticcheck, s
 ./ethos whoami                          # Show active identity
 ./ethos whoami <handle>                 # Set active identity
 ./ethos serve                           # Start MCP server (stdio transport)
+./ethos iam <persona>                   # Declare persona in current session
+./ethos session                         # Show current session participants
+./ethos session purge                   # Clean up stale sessions
 ```
 
 ## Scratch Files
@@ -55,6 +58,8 @@ Expands to `make lint docs test`:
 |---------|---------------|
 | `cmd/ethos/` | CLI entry point: `whoami`, `create`, `list`, `show`, `version`, `doctor`, `serve` |
 | `internal/identity/` | Core identity model, validation, CRUD operations |
+| `internal/process/` | Process tree walker: find topmost Claude ancestor PID |
+| `internal/session/` | Session roster model, store with flock-based concurrency |
 | `internal/resolve/` | Identity resolution chain: repo-local → global → error |
 | `internal/mcp/` | MCP tool definitions and handlers |
 

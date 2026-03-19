@@ -65,6 +65,10 @@ func main() {
 		runShow(cmdArgs)
 	case "ext":
 		runExt(cmdArgs)
+	case "iam":
+		runIam(cmdArgs)
+	case "session":
+		runSession(cmdArgs)
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -112,6 +116,10 @@ func printSubcommandHelp(cmd string) {
 		fmt.Print("Usage: ethos version\n\n  Print version.\n")
 	case "ext":
 		fmt.Print("Usage: ethos ext <subcommand> [args]\n\n  Manage tool-scoped extensions on identities.\n\n  ethos ext get <persona> <namespace> [key]\n  ethos ext set <persona> <namespace> <key> <value>\n  ethos ext del <persona> <namespace> [key]\n  ethos ext list <persona>\n")
+	case "iam":
+		fmt.Print("Usage: ethos iam <persona>\n\n  Declare your persona in the current session.\n")
+	case "session":
+		fmt.Print("Usage: ethos session [subcommand]\n\n  Manage session roster.\n\n  ethos session                                  Show current session participants\n  ethos session create --session ID --root-id X   Create a new session roster\n  ethos session join --agent-id X [...]            Add a participant\n  ethos session leave --agent-id X                 Remove a participant\n  ethos session purge                              Clean up stale sessions\n")
 	default:
 		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
 		printUsage()
@@ -128,6 +136,10 @@ Product commands:
   list              List all identities
   show <handle>     Show identity details
   ext               Manage tool-scoped extensions
+
+Session commands:
+  iam <persona>     Declare persona in current session
+  session           Show or manage session roster
 
 Admin commands:
   version           Print version

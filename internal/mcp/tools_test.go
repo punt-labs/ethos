@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/session"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -252,6 +253,114 @@ func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 	loaded, err := h.store.Load("alice")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"go", "testing"}, loaded.Skills)
+}
+
+// --- Session Tool Tests ---
+
+func testHandlerWithSession(t *testing.T) *Handler {
+	t.Helper()
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	return NewHandler(s, ss)
+}
+
+func TestHandleSessionRoster_NotFound(t *testing.T) {
+	h := testHandlerWithSession(t)
+	result, err := h.handleSessionRoster(context.Background(), callTool(map[string]interface{}{
+		"session_id": "nonexistent",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+}
+
+func TestHandleSessionJoinAndRoster(t *testing.T) {
+	h := testHandlerWithSession(t)
+
+	// Create a session first.
+	require.NoError(t, h.sessionStore.Create("test-sess",
+		session.Participant{AgentID: "user1", Persona: "user1"},
+		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
+	))
+
+	// Join a subagent.
+	result, err := h.handleSessionJoin(context.Background(), callTool(map[string]interface{}{
+		"session_id": "test-sess",
+		"agent_id":   "sub-1",
+		"persona":    "reviewer",
+		"parent":     "12345",
+		"agent_type": "code-reviewer",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	// Read roster.
+	result, err = h.handleSessionRoster(context.Background(), callTool(map[string]interface{}{
+		"session_id": "test-sess",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	text := resultText(t, result)
+	var roster map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(text), &roster))
+	participants := roster["participants"].([]interface{})
+	assert.Len(t, participants, 3)
+}
+
+func TestHandleSessionIam(t *testing.T) {
+	h := testHandlerWithSession(t)
+
+	require.NoError(t, h.sessionStore.Create("test-iam",
+		session.Participant{AgentID: "user1", Persona: "user1"},
+		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
+	))
+
+	result, err := h.handleSessionIam(context.Background(), callTool(map[string]interface{}{
+		"session_id": "test-iam",
+		"agent_id":   "12345",
+		"persona":    "new-persona",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	roster, err := h.sessionStore.Load("test-iam")
+	require.NoError(t, err)
+	p := roster.FindParticipant("12345")
+	assert.Equal(t, "new-persona", p.Persona)
+}
+
+func TestHandleSessionLeave(t *testing.T) {
+	h := testHandlerWithSession(t)
+
+	require.NoError(t, h.sessionStore.Create("test-leave",
+		session.Participant{AgentID: "user1", Persona: "user1"},
+		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
+	))
+	require.NoError(t, h.sessionStore.Join("test-leave",
+		session.Participant{AgentID: "sub-1", Persona: "reviewer", Parent: "12345"},
+	))
+
+	result, err := h.handleSessionLeave(context.Background(), callTool(map[string]interface{}{
+		"session_id": "test-leave",
+		"agent_id":   "sub-1",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	roster, err := h.sessionStore.Load("test-leave")
+	require.NoError(t, err)
+	assert.Len(t, roster.Participants, 2)
+}
+
+func TestHandleSession_NoStore(t *testing.T) {
+	h := testHandler(t) // No session store.
+	result, err := h.handleSessionRoster(context.Background(), callTool(map[string]interface{}{
+		"session_id": "any",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "not configured")
 }
 
 func TestStringArg(t *testing.T) {
