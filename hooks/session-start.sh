@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
-# hooks/session-start.sh — SessionStart hook for ethos plugin
-set -eo pipefail
+[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
+set -euo pipefail
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
 mkdir -p "$(dirname "$ETHOS_LOG")"
 
-# Read session_id from stdin JSON (Claude Code passes hook context).
-INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+# Non-blocking stdin read for session_id (Claude Code may not close pipe)
+SESSION_ID=""
+if read -r -t 1 INPUT_LINE; then
+  SESSION_ID=$(echo "$INPUT_LINE" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+fi
+
+ACTIONS=()
 
 # ── Detect dev mode ──────────────────────────────────────────────────
 IS_DEV=false
@@ -23,44 +27,38 @@ fi
 
 # ── Deploy top-level commands (diff-and-copy, not skip-if-exists) ────
 # Skip entirely in dev mode — prod plugin deploys top-level commands
-DEPLOYED=""
 if [[ "$IS_DEV" == "false" ]]; then
+  mkdir -p "$COMMANDS_DIR"
+  DEPLOYED=()
   for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
     [[ -f "$cmd_file" ]] || continue
     name="$(basename "$cmd_file")"
     [[ "$name" == *-dev.md ]] && continue
     dest="$COMMANDS_DIR/$name"
-    mkdir -p "$COMMANDS_DIR"
     if [[ ! -f "$dest" ]] || ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
       cp "$cmd_file" "$dest"
-      DEPLOYED="${DEPLOYED} /${name%.md}"
+      DEPLOYED+=("/${name%.md}")
     fi
   done
+  if [[ ${#DEPLOYED[@]} -gt 0 ]]; then
+    ACTIONS+=("Deployed commands: ${DEPLOYED[*]}")
+  fi
 fi
 
 # ── Allow MCP tools in user settings if not already allowed ──────────
-PROD_GLOB="mcp__plugin_ethos_self__*"
-DEV_GLOB="mcp__plugin_ethos-dev_self__*"
+if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
+  CHANGED=false
 
-if ! command -v jq &>/dev/null; then
-  echo "[$(date -Iseconds)] WARN: jq not found — skipping MCP tool auto-allow" >> "$ETHOS_LOG"
-else
-  # Create minimal settings.json if missing
-  if [[ ! -f "$SETTINGS" ]]; then
-    mkdir -p "$(dirname "$SETTINGS")"
-    echo '{}' > "$SETTINGS"
-  fi
+  PROD_GLOB="mcp__plugin_ethos_self__*"
+  DEV_GLOB="mcp__plugin_ethos-dev_self__*"
 
-  PERMS_CHANGED=false
-
-  # Allow prod tools — check for exact wildcard entry, not substring
+  # Allow prod tools
   if ! jq -e ".permissions.allow // [] | index(\"$PROD_GLOB\")" "$SETTINGS" >/dev/null 2>&1; then
     TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
     if jq --arg g "$PROD_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
       mv "$TMPFILE" "$SETTINGS"
-      PERMS_CHANGED=true
+      CHANGED=true
     else
-      echo "[$(date -Iseconds)] ERROR: jq failed updating settings.json" >> "$ETHOS_LOG"
       rm -f "$TMPFILE"
     fi
   fi
@@ -71,20 +69,19 @@ else
       TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
       if jq --arg g "$DEV_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
         mv "$TMPFILE" "$SETTINGS"
-        PERMS_CHANGED=true
+        CHANGED=true
       else
-        echo "[$(date -Iseconds)] ERROR: jq failed updating settings.json (dev)" >> "$ETHOS_LOG"
         rm -f "$TMPFILE"
       fi
     fi
   fi
 
-  if [[ "$PERMS_CHANGED" == "true" ]]; then
-    DEPLOYED="${DEPLOYED} auto-allowed-tools"
+  if [[ "$CHANGED" == "true" ]]; then
+    ACTIONS+=("Auto-allowed ethos MCP tools in permissions")
   fi
 fi
 
-# Resolve active identity for context injection
+# ── Resolve active identity ──────────────────────────────────────────
 IDENTITY_INFO=""
 ACTIVE_PERSONA=""
 if command -v ethos >/dev/null 2>&1; then
@@ -92,16 +89,16 @@ if command -v ethos >/dev/null 2>&1; then
   ACTIVE_PERSONA=$(ethos whoami --json 2>>"$ETHOS_LOG" | grep -o '"handle" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 fi
 
-# Create session roster if we have a session ID and ethos is available
-if [[ -n "${SESSION_ID:-}" ]] && command -v ethos >/dev/null 2>&1; then
+if [[ -n "$IDENTITY_INFO" ]]; then
+  ACTIONS+=("Active identity: ${IDENTITY_INFO}")
+fi
+
+# ── Create session roster ────────────────────────────────────────────
+if [[ -n "$SESSION_ID" ]] && command -v ethos >/dev/null 2>&1; then
   USER_ID="${USER:-$(whoami)}"
   USER_PERSONA="${ACTIVE_PERSONA:-$USER_ID}"
-
-  # Parent agent is PPID (Claude Code process)
   CLAUDE_PID="${PPID}"
 
-  # Create roster with root (human) and primary (claude agent).
-  # Only write the current-session PID file if create succeeds.
   if ethos session create \
     --session "$SESSION_ID" \
     --root-id "$USER_ID" \
@@ -112,22 +109,18 @@ if [[ -n "${SESSION_ID:-}" ]] && command -v ethos >/dev/null 2>&1; then
   fi
 fi
 
-# Build output
-OUTPUT=""
-DEPLOYED="${DEPLOYED# }"
-if [[ -n "$DEPLOYED" ]]; then
-  OUTPUT="Ethos: deployed ${DEPLOYED}. "
-fi
-if [[ -n "$IDENTITY_INFO" ]]; then
-  OUTPUT="${OUTPUT}Active identity: ${IDENTITY_INFO}"
-fi
-if [[ -n "${SESSION_ID:-}" ]]; then
-  [[ -n "$OUTPUT" ]] && OUTPUT="${OUTPUT} "
-  OUTPUT="${OUTPUT}Session: ${SESSION_ID}"
+# ── Notify Claude if anything was set up ─────────────────────────────
+if [[ ${#ACTIONS[@]} -gt 0 ]]; then
+  MSG="Ethos plugin setup complete."
+  for action in "${ACTIONS[@]}"; do
+    MSG="$MSG $action."
+  done
+  jq -n --arg msg "$MSG" '{
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: $msg
+    }
+  }'
 fi
 
-if [[ -n "$OUTPUT" ]]; then
-  # Escape characters that would break JSON string values.
-  ESCAPED=$(printf '%s' "$OUTPUT" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g' | tr '\n' ' ' | tr '\r' ' ')
-  printf '{"hookSpecificOutput":{"additionalContext":"%s"}}' "$ESCAPED"
-fi
+exit 0

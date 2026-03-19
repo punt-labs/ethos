@@ -488,3 +488,79 @@ files (see Biff DES-011). The SessionEnd hook deletes the file.
 - Must handle concurrent sessions on the same machine.
 - Participant records must be extensible by other tools without ethos
   changes.
+
+---
+
+## DES-009: Hook compatibility with Claude Code (SETTLED)
+
+**Status**: Settled after 5 broken releases (v0.3.0–v0.3.3).
+
+### Problem
+
+Ethos hooks crashed on every session start with `SessionStart:startup hook error`. The error persisted across 5 release cycles, each claiming to fix it.
+
+### Root Causes (3 independent bugs, all required)
+
+**1. `INPUT=$(cat)` blocks indefinitely.**
+
+Claude Code pipes JSON to hook subprocesses via stdin but does not always close the pipe promptly for SessionStart events. Bash `cat` is equivalent to Python's `sys.stdin.read()` — it blocks until EOF. Biff discovered and documented this same bug (see biff DES-025). Every ethos hook used `INPUT=$(cat)` and was vulnerable.
+
+**Fix**: Use `read -r -t 1` with a 1-second timeout for hooks that need stdin data. SessionStart hook doesn't need stdin at all — removed the read entirely.
+
+**2. `"matcher": ""` in hooks.json.**
+
+Every ethos hook entry in hooks.json had `"matcher": ""` (empty string). Every working plugin either omits the matcher key entirely (catch-all) or uses a specific regex pattern. The empty string matcher may be treated differently by Claude Code — either matching nothing or causing a configuration error.
+
+**Fix**: Remove the `"matcher"` key from all non-PostToolUse hooks, matching biff/vox/quarry pattern.
+
+**3. Missing patterns from working plugins.**
+
+Compared to biff (the most mature plugin), ethos hooks were missing:
+
+- Kill switch: `[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0`
+- `exit 0` at the end of every hook
+- `hookEventName` field in the JSON output
+- JSON output via heredoc (not `printf` with manual escaping)
+- `PLUGIN_ROOT` derived from `dirname "$0"` (not `CLAUDE_PLUGIN_ROOT` env var)
+
+**Fix**: Rewrote all 5 hooks to match biff's proven patterns exactly.
+
+### Why It Took 5 Releases
+
+1. **Never compared to working code.** The hooks were written from scratch without reading biff's working implementation. Every fix was based on theory (bash version, `set -u`, array syntax) rather than diffing against a known-good reference.
+
+2. **Point fixes without pattern search.** `set -u` was removed from session-start.sh but not the other 4 hooks. `INPUT=$(cat)` was the actual bug but was never identified because no one grepped for `cat)` across all hooks.
+
+3. **No end-to-end testing.** Every fix was verified by running `make check` (Go tests) and piping JSON to the hook manually. Neither reproduces the actual Claude Code execution environment where stdin pipes aren't closed promptly.
+
+4. **No comparison to working plugins.** The user had to ask "did you look at all the other ones which work?" after 5 failed attempts. Reading biff's DESIGN.md (DES-025) would have identified the `stdin.read()` bug immediately — it was documented with root cause analysis, rejected alternatives, and test cases.
+
+### Cross-Project Pattern
+
+Any Claude Code plugin hook that reads stdin with `cat`, `sys.stdin.read()`, or any blocking read is vulnerable. The safe patterns are:
+
+- **Don't read stdin** if you don't need the data (session-start)
+- **`read -r -t <seconds>`** in bash for hooks that need stdin data
+- **`select` + `os.read(fd, N)`** in Python (see biff DES-025)
+- **`INPUT=$(cat)` is safe for PostToolUse** — Claude Code closes the pipe for these events
+
+### Final Hook Patterns
+
+All ethos hooks now follow these rules:
+
+| Pattern | Source | Required |
+|---------|--------|----------|
+| `[[ -f "$HOME/.punt-hooks-kill" ]] && exit 0` | biff | Yes — emergency kill switch |
+| `set -euo pipefail` | biff, vox | Yes |
+| `PLUGIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"` | biff, vox | Yes — not env var |
+| `read -r -t 1` instead of `INPUT=$(cat)` | biff DES-025 | Yes for hooks needing stdin |
+| No stdin read at all | biff session-start | Yes for SessionStart |
+| No `"matcher"` key in hooks.json | biff, vox | Yes for catch-all hooks |
+| `exit 0` at end | biff | Yes |
+| JSON via heredoc with `hookEventName` | biff | Yes for hooks returning context |
+
+### Rejected Alternatives
+
+- **`set -eo pipefail` (drop `-u`)** — unnecessary. The actual bug was `cat` blocking, not unbound variables. Biff uses `set -euo pipefail` and works fine.
+- **Downloading release binary via `go install`** — `go install` doesn't support `-ldflags`, producing `ethos dev`. Fix: download pre-built binary from GitHub releases. This was a separate installer bug discovered during the same cycle.
+- **`mktemp` in `/tmp`** — not atomic for `settings.json` updates. Use `mktemp "${SETTINGS}.tmp.XXXXXX"` on the same filesystem.
