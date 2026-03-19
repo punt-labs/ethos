@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refactored `main()` command dispatch from switch to map (cyclomatic complexity 22 → 10)
+- Extracted `voiceValue()`, `joinSkills()`, `showExtensions()` from `runShow()` (complexity 16 → 6)
+- Applied `gofmt -s` to `identity_test.go`
+
 ### Added
 
 - `/session` and `/iam` slash commands with `-dev` variants for plugin parity
