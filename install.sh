@@ -1,6 +1,6 @@
 #!/bin/sh
 # install.sh — Install ethos CLI and Claude Code plugin
-# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/<SHA>/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/v0.1.0/install.sh | sh
 set -eu
 
 # --- Colors (disabled when not a terminal) ---
@@ -12,8 +12,8 @@ fi
 
 info() { printf '%b▶%b %s\n' "$BOLD" "$NC" "$1"; }
 ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
-warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1"; }
-fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1"; exit 1; }
+warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1" >&2; }
+fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1" >&2; exit 1; }
 
 VERSION="0.1.0"
 REPO="punt-labs/ethos"
@@ -48,6 +48,12 @@ else
   SKIP_PLUGIN=1
 fi
 
+# Plugin install requires git for SSH/HTTPS clone
+if [ "$SKIP_PLUGIN" = "0" ] && ! command -v git >/dev/null 2>&1; then
+  warn "git not found — skipping plugin install (required for clone)"
+  SKIP_PLUGIN=1
+fi
+
 # --- Step 2: Build and install binary ---
 
 info "Installing ethos binary..."
@@ -75,7 +81,7 @@ GOBIN="$INSTALL_DIR" go install "github.com/${REPO}/cmd/ethos@v${VERSION}" 2>/de
 }
 
 export PATH="$INSTALL_DIR:$PATH"
-ok "$BINARY $("$INSTALL_DIR/$BINARY" version)"
+ok "$("$INSTALL_DIR/$BINARY" version)"
 
 # --- Step 3: Create identity directory ---
 
