@@ -101,8 +101,8 @@ not import ethos.  The file format is the contract.
 \section{Package Map}
 % ===================================================================
 
-All packages live under \pkg{internal/} --- nothing is exported
-outside the module.  Module path:
+All reusable library code lives under \pkg{internal/}; the public
+CLI entry point lives in \pkg{cmd/ethos}.  Module path:
 \texttt{github.com/punt-labs/ethos}.
 
 \begin{center}
@@ -196,8 +196,10 @@ An identity is a YAML file at
 
 \begin{itemize}
   \item \field{name} and \field{handle} are non-empty.
-  \item \field{handle} matches \verb|^[a-z][a-z0-9-]*$| (lowercase
-    alphanumeric with hyphens, used as filename).
+  \item \field{handle} matches
+    \verb|^[a-z0-9]([a-z0-9-]*[a-z0-9])?$| (lowercase alphanumeric,
+    may contain internal hyphens but not leading/trailing, used as
+    filename).
   \item \field{kind} is one of \texttt{human} or \texttt{agent}.
   \item If \field{voice\_id} is set, \field{voice.provider} is
     required.
@@ -221,7 +223,8 @@ Validation errors are returned as a structured
                           directory. \\
 \texttt{Load(handle)}   & Read YAML, assemble extensions from
                           \fpath{<handle>.ext/} directory. \\
-\texttt{List()}          & Return all identities (summary, no extensions). \\
+\texttt{List()}          & Return all identities (calls \texttt{Load}
+                          per handle, includes extensions). \\
 \texttt{Active()}        & Read handle from the \fpath{active} file,
                           then \texttt{Load()} the full identity. \\
 \texttt{SetActive(h)}   & Write the handle to the \fpath{active} file. \\
@@ -379,7 +382,7 @@ to \field{parent:~null}), initiator (my \field{parent}), delegates
 \midrule
 \texttt{SessionStart}  & Create roster, join root + primary
                         & \field{session\_id}, \texttt{\$USER},
-                          Claude PID (tree walk) \\
+                          \texttt{\$PPID} as Claude PID \\
 \texttt{SubagentStart}  & Join subagent
                         & \field{session\_id}, \field{agent\_id},
                           \field{agent\_type} \\
@@ -420,9 +423,10 @@ ID.  The \texttt{SessionEnd} hook deletes the file.
   \item Extract the primary agent's \field{agent\_id} (second
     participant).
   \item If numeric: check whether the PID is alive via
-    \texttt{os.FindProcess} + signal~0.
-  \item If non-numeric or process check fails: age-based fallback
-    (24-hour TTL on the \field{started} timestamp).
+    \texttt{os.FindProcess} + signal~0.  If dead, treat as stale
+    immediately (no TTL fallback).
+  \item If non-numeric (parse fails): age-based fallback (24-hour
+    TTL on the \field{started} timestamp).
   \item Rosters with fewer than 2~participants are always stale
     (malformed).
 \end{enumerate}
@@ -686,7 +690,10 @@ and \texttt{session.Store} instances.
 \end{longtable}
 \end{center}
 
-All tools return JSON on success.  Error responses are plain strings.
+Most tools return JSON objects on success.  Mutating tools
+(\tool{whoami} when setting, \tool{ext\_set}, \tool{ext\_del},
+\tool{session\_iam}, \tool{session\_leave}) return plain-text
+confirmation strings instead.  Error responses are also plain strings.
 
 % ===================================================================
 \section{Design Invariants}

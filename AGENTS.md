@@ -114,12 +114,12 @@ The tree structure encodes authority: root → primary agent → subagents. Any 
 
 ### Persona Auto-Matching
 
-When a subagent starts, the hook checks if an ethos identity exists with the same name as the `agent_type`. If so, it becomes the subagent's persona automatically.
+When a subagent starts, the hook does a case-sensitive `ethos show "$AGENT_TYPE"` to check if an ethos identity exists with that exact handle. Identity handles are restricted to lowercase alphanumeric plus hyphens, so auto-matching only works for lowercase `agent_type` values.
 
 ```bash
 # Create personas for common agent types
 ethos create -f code-reviewer.yaml    # auto-matches agent_type "code-reviewer"
-ethos create -f explore.yaml          # auto-matches agent_type "Explore"
+ethos create -f explore.yaml          # auto-matches agent_type "explore"
 ```
 
 A subagent can override the default via `ethos iam <different-persona>`.
