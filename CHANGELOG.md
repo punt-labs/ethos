@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-03-19
+
 ### Fixed
 
 - All hooks rewritten to match biff's proven patterns (DES-009)

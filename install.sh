@@ -15,7 +15,7 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1" >&2; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1" >&2; exit 1; }
 
-VERSION="0.3.3"
+VERSION="0.3.4"
 REPO="punt-labs/ethos"
 BINARY="ethos"
 MARKETPLACE_REPO="punt-labs/claude-plugins"
