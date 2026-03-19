@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-03-18
+
 ### Added
 
 - Session roster for multi-participant identity awareness (DES-007)
@@ -54,3 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Validate()` expanded with handle format and voice validation
 - MCP handlers receive `Store` via injection (no `os.Exit` in handler context)
 - ShellCheck added to CI and `make lint`
+
+[Unreleased]: https://github.com/punt-labs/ethos/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/punt-labs/ethos/releases/tag/v0.1.0
