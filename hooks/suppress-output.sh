@@ -4,9 +4,15 @@
 # No `set -euo pipefail` — hooks must degrade gracefully on
 # malformed input rather than failing the tool call.
 
+# Require jq for JSON processing — degrade to no-op if missing
+command -v jq &>/dev/null || exit 0
+
 INPUT=$(cat)
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 TOOL_NAME="${TOOL##*__}"
+
+# No-op if we couldn't parse the tool name
+[[ -n "$TOOL_NAME" ]] || exit 0
 
 # Never suppress error responses — pass them through unchanged
 IS_ERROR=$(printf '%s' "$INPUT" | jq -r '.tool_response | if type == "array" then .[0].is_error // false else .is_error // false end' 2>/dev/null)

@@ -563,4 +563,4 @@ All ethos hooks now follow these rules:
 
 - **`set -eo pipefail` (drop `-u`)** — unnecessary. The actual bug was `cat` blocking, not unbound variables. Biff uses `set -euo pipefail` and works fine.
 - **Downloading release binary via `go install`** — `go install` doesn't support `-ldflags`, producing `ethos dev`. Fix: download pre-built binary from GitHub releases. This was a separate installer bug discovered during the same cycle.
-- **`mktemp` in `/tmp`** — not atomic for `settings.json` updates. Fixed to use `mktemp "${SETTINGS}.tmp.XXXXXX"` on the same filesystem.
+- **`mktemp` in `/tmp`** — not atomic for `settings.json` updates. Use `mktemp "${SETTINGS}.tmp.XXXXXX"` on the same filesystem.

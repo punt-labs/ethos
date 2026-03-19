@@ -8,6 +8,12 @@ COMMANDS_DIR="$HOME/.claude/commands"
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
 mkdir -p "$(dirname "$ETHOS_LOG")"
 
+# Non-blocking stdin read for session_id (Claude Code may not close pipe)
+SESSION_ID=""
+if read -r -t 1 INPUT_LINE; then
+  SESSION_ID=$(echo "$INPUT_LINE" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+fi
+
 ACTIONS=()
 
 # ── Detect dev mode ──────────────────────────────────────────────────
@@ -48,19 +54,25 @@ if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
 
   # Allow prod tools
   if ! jq -e ".permissions.allow // [] | index(\"$PROD_GLOB\")" "$SETTINGS" >/dev/null 2>&1; then
-    TMPFILE="$(mktemp)"
-    jq --arg g "$PROD_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"
-    mv "$TMPFILE" "$SETTINGS"
-    CHANGED=true
+    TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
+    if jq --arg g "$PROD_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
+      mv "$TMPFILE" "$SETTINGS"
+      CHANGED=true
+    else
+      rm -f "$TMPFILE"
+    fi
   fi
 
   # Allow dev tools (only when running as ethos-dev)
   if [[ "$IS_DEV" == "true" ]]; then
     if ! jq -e ".permissions.allow // [] | index(\"$DEV_GLOB\")" "$SETTINGS" >/dev/null 2>&1; then
-      TMPFILE="$(mktemp)"
-      jq --arg g "$DEV_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"
-      mv "$TMPFILE" "$SETTINGS"
-      CHANGED=true
+      TMPFILE="$(mktemp "${SETTINGS}.tmp.XXXXXX")"
+      if jq --arg g "$DEV_GLOB" '.permissions.allow = (.permissions.allow // []) + [$g]' "$SETTINGS" > "$TMPFILE"; then
+        mv "$TMPFILE" "$SETTINGS"
+        CHANGED=true
+      else
+        rm -f "$TMPFILE"
+      fi
     fi
   fi
 
@@ -71,12 +83,30 @@ fi
 
 # ── Resolve active identity ──────────────────────────────────────────
 IDENTITY_INFO=""
+ACTIVE_PERSONA=""
 if command -v ethos >/dev/null 2>&1; then
   IDENTITY_INFO=$(ethos whoami 2>>"$ETHOS_LOG" || true)
+  ACTIVE_PERSONA=$(ethos whoami --json 2>>"$ETHOS_LOG" | grep -o '"handle" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 fi
 
 if [[ -n "$IDENTITY_INFO" ]]; then
   ACTIONS+=("Active identity: ${IDENTITY_INFO}")
+fi
+
+# ── Create session roster ────────────────────────────────────────────
+if [[ -n "$SESSION_ID" ]] && command -v ethos >/dev/null 2>&1; then
+  USER_ID="${USER:-$(whoami)}"
+  USER_PERSONA="${ACTIVE_PERSONA:-$USER_ID}"
+  CLAUDE_PID="${PPID}"
+
+  if ethos session create \
+    --session "$SESSION_ID" \
+    --root-id "$USER_ID" \
+    --root-persona "$USER_PERSONA" \
+    --primary-id "$CLAUDE_PID" \
+    --primary-persona "${ACTIVE_PERSONA:-agent}" 2>>"$ETHOS_LOG"; then
+    ethos session write-current --pid "$CLAUDE_PID" --session "$SESSION_ID" 2>>"$ETHOS_LOG" || true
+  fi
 fi
 
 # ── Notify Claude if anything was set up ─────────────────────────────
@@ -85,14 +115,12 @@ if [[ ${#ACTIONS[@]} -gt 0 ]]; then
   for action in "${ACTIONS[@]}"; do
     MSG="$MSG $action."
   done
-  cat <<ENDJSON
-{
-  "hookSpecificOutput": {
-    "hookEventName": "SessionStart",
-    "additionalContext": "$MSG"
-  }
-}
-ENDJSON
+  jq -n --arg msg "$MSG" '{
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: $msg
+    }
+  }'
 fi
 
 exit 0
