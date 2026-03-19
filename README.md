@@ -18,7 +18,7 @@ Everything works without ethos; ethos makes it richer.
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/15e71d6/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/acb93a9/install.sh | sh
 ```
 
 <details>
@@ -36,7 +36,7 @@ ethos doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/15e71d6/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/acb93a9/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
