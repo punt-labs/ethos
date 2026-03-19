@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # hooks/suppress-output.sh — Format MCP tool output for ethos
-set -euo pipefail
+set -eo pipefail
 
 # Read tool response from stdin
 INPUT=$(cat)
