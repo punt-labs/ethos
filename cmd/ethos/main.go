@@ -213,7 +213,7 @@ func checkIdentityDir(s *identity.Store) (string, bool) {
 func checkActiveIdentity(s *identity.Store) (string, bool) {
 	id, err := s.Active()
 	if err != nil {
-		return "none configured", false
+		return "none configured — run 'ethos create'", true
 	}
 	return id.Name, true
 }

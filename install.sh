@@ -83,6 +83,25 @@ GOBIN="$INSTALL_DIR" go install "github.com/${REPO}/cmd/ethos@v${VERSION}" 2>/de
 export PATH="$INSTALL_DIR:$PATH"
 ok "$("$INSTALL_DIR/$BINARY" version)"
 
+# Ensure ~/.local/bin is on PATH permanently (idempotent)
+SHELL_NAME="$(basename "$SHELL")"
+case "$SHELL_NAME" in
+  zsh)  PROFILE="$HOME/.zshrc" ;;
+  bash)
+    if [ -f "$HOME/.bash_profile" ]; then
+      PROFILE="$HOME/.bash_profile"
+    else
+      PROFILE="$HOME/.bashrc"
+    fi ;;
+  *)    PROFILE="$HOME/.profile" ;;
+esac
+MARKER='# Added by ethos installer'
+if ! grep -qF "$MARKER" "$PROFILE" 2>/dev/null; then
+  # shellcheck disable=SC2016 # $PATH must stay literal in the profile
+  printf '\n%s\nexport PATH="%s:$PATH"\n' "$MARKER" "$INSTALL_DIR" >> "$PROFILE"
+  ok "Added $INSTALL_DIR to PATH in $PROFILE"
+fi
+
 # --- Step 3: Create identity directory ---
 
 info "Creating identity directory..."

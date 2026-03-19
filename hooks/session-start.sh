@@ -3,27 +3,69 @@
 set -euo pipefail
 
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+SETTINGS="$HOME/.claude/settings.json"
 COMMANDS_DIR="$HOME/.claude/commands"
 ETHOS_LOG="$HOME/.punt-labs/ethos/hook-errors.log"
+TOOL_PATTERN="mcp__plugin_ethos_self__"
+DEV_TOOL_PATTERN="mcp__plugin_ethos-dev_self__"
 mkdir -p "$(dirname "$ETHOS_LOG")"
 
 # Read session_id from stdin JSON (Claude Code passes hook context).
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | grep -o '"session_id" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
 
-# Deploy top-level commands (diff-and-copy, not skip-if-exists)
-DEPLOYED=()
-for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
-  [[ -f "$cmd_file" ]] || continue
-  name="$(basename "$cmd_file")"
-  [[ "$name" == *-dev.md ]] && continue
-  dest="$COMMANDS_DIR/$name"
-  mkdir -p "$COMMANDS_DIR"
-  if [[ ! -f "$dest" ]] || ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
-    cp "$cmd_file" "$dest"
-    DEPLOYED+=("/${name%.md}")
+# ── Detect dev mode ──────────────────────────────────────────────────
+IS_DEV=false
+if command -v jq &>/dev/null && [[ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]]; then
+  plugin_name="$(jq -r '.name // ""' "$PLUGIN_ROOT/.claude-plugin/plugin.json")"
+  if [[ "$plugin_name" == *-dev ]]; then
+    IS_DEV=true
   fi
-done
+fi
+
+# ── Deploy top-level commands (diff-and-copy, not skip-if-exists) ────
+# Skip entirely in dev mode — prod plugin deploys top-level commands
+DEPLOYED=()
+if [[ "$IS_DEV" == "false" ]]; then
+  for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
+    [[ -f "$cmd_file" ]] || continue
+    name="$(basename "$cmd_file")"
+    [[ "$name" == *-dev.md ]] && continue
+    dest="$COMMANDS_DIR/$name"
+    mkdir -p "$COMMANDS_DIR"
+    if [[ ! -f "$dest" ]] || ! diff -q "$cmd_file" "$dest" >/dev/null 2>&1; then
+      cp "$cmd_file" "$dest"
+      DEPLOYED+=("/${name%.md}")
+    fi
+  done
+fi
+
+# ── Allow MCP tools in user settings if not already allowed ──────────
+if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
+  PERMS_CHANGED=false
+
+  # Allow prod tools
+  if ! jq -e ".permissions.allow // [] | map(select(contains(\"$TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
+    TMPFILE="$(mktemp)"
+    jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos_self__*"]' "$SETTINGS" > "$TMPFILE"
+    mv "$TMPFILE" "$SETTINGS"
+    PERMS_CHANGED=true
+  fi
+
+  # Allow dev tools (only when running as ethos-dev)
+  if [[ "$IS_DEV" == "true" ]]; then
+    if ! jq -e ".permissions.allow // [] | map(select(contains(\"$DEV_TOOL_PATTERN\"))) | length > 0" "$SETTINGS" >/dev/null 2>&1; then
+      TMPFILE="$(mktemp)"
+      jq '.permissions.allow = (.permissions.allow // []) + ["mcp__plugin_ethos-dev_self__*"]' "$SETTINGS" > "$TMPFILE"
+      mv "$TMPFILE" "$SETTINGS"
+      PERMS_CHANGED=true
+    fi
+  fi
+
+  if [[ "$PERMS_CHANGED" == "true" ]]; then
+    DEPLOYED+=("auto-allowed ethos MCP tools")
+  fi
+fi
 
 # Resolve active identity for context injection
 IDENTITY_INFO=""

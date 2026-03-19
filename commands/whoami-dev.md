@@ -1,6 +1,6 @@
 ---
 description: Show or set the active identity
-allowed-tools: ["mcp__plugin_ethos_self__whoami"]
+allowed-tools: ["mcp__plugin_ethos-dev_self__whoami"]
 ---
 
 # /whoami
