@@ -1,0 +1,814 @@
+%
+% architecture.tex
+%
+% Ethos: Technical Architecture Specification
+% Written for engineers integrating identity into AI agent systems.
+%
+% Compile: pdflatex architecture.tex
+%
+
+\documentclass[a4paper,10pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue!80!black},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{red!60!black},
+  breaklines=true,
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{gray!50},
+  backgroundcolor=\color{gray!5},
+  columns=fullflexible,
+}
+
+\newcommand{\pkg}[1]{\texttt{#1}}
+\newcommand{\tool}[1]{\texttt{#1}}
+\newcommand{\field}[1]{\texttt{#1}}
+\newcommand{\cmd}[1]{\texttt{#1}}
+\newcommand{\fpath}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Ethos: Technical Architecture Specification}
+\author{Identity Binding for Humans and AI Agents}
+\date{March 2026 --- v0.3.3}
+\hypersetup{
+  pdftitle={Ethos: Technical Architecture Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Architecture},
+  pdfcreator={pdflatex}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ===================================================================
+\section{Overview}
+% ===================================================================
+
+Ethos unifies a name, voice, email, GitHub handle, writing style,
+personality, and skills into a single identity that other tools
+optionally read.  It is written in Go and ships as a CLI binary plus
+a Claude Code plugin with an MCP server.
+
+The system serves two roles:
+
+\begin{enumerate}
+  \item \textbf{Identity registry} --- CRUD operations on identity
+    YAML files stored at \fpath{\~{}/.punt-labs/ethos/identities/}.
+    Humans and agents share the same schema.
+  \item \textbf{Session roster} --- multi-participant awareness for
+    Claude Code sessions.  Tracks who is present (human, primary
+    agent, subagents), their personas, and parent-child relationships.
+\end{enumerate}
+
+Ethos is a \emph{sidecar}, not a dependency.  Other tools (Vox,
+Beadle, Biff) read ethos state from known filesystem paths.  They do
+not import ethos.  The file format is the contract.
+
+\subsection{Design Principles}
+
+\begin{enumerate}[label=\textbf{P\arabic*}.]
+  \item \textbf{Sidecar, not dependency.}  Consumers read files at
+    known paths.  No import, no version lock-step, no daemon required.
+    Tools adopt ethos at their own pace.
+  \item \textbf{Same schema for humans and agents.}  The \field{kind}
+    field (\texttt{human} or \texttt{agent}) is the only structural
+    difference.  An identity is an identity.
+  \item \textbf{Agent definition is a channel binding.}  Like voice
+    or email --- the \texttt{.md} file defines tools and workflow,
+    ethos defines \emph{who}.
+  \item \textbf{Generic extensions, not consumer fields.}  Ethos
+    never adds fields for Vox, Beadle, or Biff.  Consumers own their
+    own namespace files in the extension directory.
+  \item \textbf{Fast.}  Go's $\sim$10\,ms cold start (vs Python's
+    $\sim$200\,ms) keeps hook latency invisible.  Ethos is queried on
+    session start, on every \cmd{/who}, and before every TTS call.
+  \item \textbf{No daemon.}  All concurrency uses \texttt{flock}
+    on lock files.  No background process, no database.
+\end{enumerate}
+
+% ===================================================================
+\section{Package Map}
+% ===================================================================
+
+All reusable library code lives under \pkg{internal/}; the public
+CLI entry point lives in \pkg{cmd/ethos}.  Module path:
+\texttt{github.com/punt-labs/ethos}.
+
+\begin{center}
+\begin{longtable}{@{}lp{8cm}@{}}
+\toprule
+\textbf{Package} & \textbf{Responsibility} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Package} & \textbf{Responsibility} \\
+\midrule
+\endhead
+\pkg{cmd/ethos/}        & CLI entry point: subcommand dispatch, global
+                          \cmd{--json} flag, interactive identity creation \\
+\pkg{internal/identity/} & Core identity model (\texttt{Identity} struct),
+                          validation, CRUD via \texttt{Store}, extension
+                          I/O \\
+\pkg{internal/session/}  & Session roster model (\texttt{Roster},
+                          \texttt{Participant}), \texttt{flock}-based
+                          concurrent store, PID-keyed session discovery,
+                          staleness detection and purge \\
+\pkg{internal/process/}  & Process tree walker: find topmost \texttt{claude}
+                          ancestor PID via \texttt{ps}; result cached for
+                          process lifetime \\
+\pkg{internal/resolve/}  & Identity resolution chain: repo-local config
+                          $\to$ global active identity $\to$ error \\
+\pkg{internal/mcp/}      & MCP tool definitions and handlers (12~tools);
+                          \texttt{Handler} struct with injected stores \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Dependency Graph}
+
+Dependencies flow strictly downward.  No package imports a package
+above it in this ordering.
+
+\begin{verbatim}
+          cmd/ethos
+        /   |   |   \       \
+       /    |   |    \       \
+    mcp  resolve process identity session
+   /   \
+identity session
+\end{verbatim}
+
+\pkg{cmd/ethos} imports all five internal packages directly.
+\pkg{internal/mcp} depends on \pkg{identity} and \pkg{session}.
+\pkg{internal/identity} and \pkg{internal/session} are independent ---
+neither imports the other.  \pkg{internal/process} and
+\pkg{internal/resolve} are leaf packages with no internal dependencies.
+
+% ===================================================================
+\section{Identity Model}
+% ===================================================================
+
+\subsection{Schema}
+
+An identity is a YAML file at
+\fpath{\~{}/.punt-labs/ethos/identities/<handle>.yaml}.
+
+\begin{center}
+\begin{longtable}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endhead
+\field{name}          & string (required)  & Display name \\
+\field{handle}        & string (required)  & Unique lookup key, used as filename \\
+\field{kind}          & string (required)  & \texttt{human} or \texttt{agent} \\
+\field{email}         & string             & Beadle channel binding \\
+\field{github}        & string             & Biff channel binding \\
+\field{voice}         & object             & Vox channel binding:
+                                             \field{provider} and \field{voice\_id} \\
+\field{agent}         & string             & Path to Claude Code agent \texttt{.md}
+                                             file \\
+\field{writing\_style} & multiline string  & Prose style directives \\
+\field{personality}   & multiline string   & Behavioral directives \\
+\field{skills}        & list of strings    & Capability tags \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Validation}
+
+\texttt{Identity.Validate()} enforces:
+
+\begin{itemize}
+  \item \field{name} and \field{handle} are non-empty.
+  \item \field{handle} matches
+    \verb|^[a-z0-9]([a-z0-9-]*[a-z0-9])?$| (lowercase alphanumeric,
+    may contain internal hyphens but not leading/trailing, used as
+    filename).
+  \item \field{kind} is one of \texttt{human} or \texttt{agent}.
+  \item If \field{voice\_id} is set, \field{voice.provider} is
+    required.
+\end{itemize}
+
+Validation errors are returned as a structured
+\texttt{ValidationError} type, not strings.
+
+\subsection{Persistence}
+
+\texttt{Store} takes a root directory path
+(\fpath{\~{}/.punt-labs/ethos} by default) and provides:
+
+\begin{center}
+\begin{tabular}{@{}lp{7cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Behavior} \\
+\midrule
+\texttt{Save(id)}       & Atomic create with \texttt{O\_EXCL} --- rejects
+                          duplicate handles.  Creates the extension
+                          directory. \\
+\texttt{Load(handle)}   & Read YAML, assemble extensions from
+                          \fpath{<handle>.ext/} directory. \\
+\texttt{List()}          & Return all identities (calls \texttt{Load}
+                          per handle, includes extensions). \\
+\texttt{Active()}        & Read handle from the \fpath{active} file,
+                          then \texttt{Load()} the full identity. \\
+\texttt{SetActive(h)}   & Write the handle to the \fpath{active} file. \\
+\texttt{Exists(handle)}  & Check file existence. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===================================================================
+\section{Extension System}
+% ===================================================================
+
+Consumers of ethos (Beadle, Biff, Vox) store tool-specific attributes
+on identities without modifying the ethos schema.  Extensions use a
+namespaced, file-per-tool design.
+
+\subsection{Storage Layout}
+
+\begin{verbatim}
+~/.punt-labs/ethos/identities/
+  mal.yaml                     # ethos owns -- core identity fields
+  mal.ext/                     # extension directory
+    beadle.yaml                # beadle owns -- GPG key, IMAP config
+    biff.yaml                  # biff owns -- preferred TTY
+    vox.yaml                   # vox owns -- default mood
+\end{verbatim}
+
+Each file is a flat YAML map of key-value pairs.  Ethos never reads
+or interprets extension contents except to assemble the merged view
+returned by \texttt{Load()} and the \tool{get\_identity} MCP tool.
+
+\subsection{Ownership Rules}
+
+\begin{enumerate}
+  \item Ethos creates the \fpath{<handle>.ext/} directory on identity
+    creation.
+  \item Each tool manages its own \fpath{<namespace>.yaml} file.
+  \item Tools may read/write their file directly (sidecar contract) or
+    through the ethos CLI/MCP interface.
+  \item Tools must not write to another tool's namespace file.
+\end{enumerate}
+
+\subsection{Validation Constraints}
+
+\begin{center}
+\begin{tabular}{@{}llr@{}}
+\toprule
+\textbf{Field} & \textbf{Pattern} & \textbf{Limit} \\
+\midrule
+Namespace   & \verb|^[a-z][a-z0-9-]*$|    & 32 chars \\
+Key         & \verb|^[a-z][a-z0-9_]*$|    & 64 chars \\
+Value       & Any YAML scalar             & 4096 bytes \\
+Keys per namespace    & ---               & 64 \\
+Namespaces per persona & ---              & 32 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Two Scopes}
+
+Extensions exist at two independent scopes with different types:
+
+\begin{enumerate}
+  \item \textbf{Persona-level} (durable) --- files in
+    \fpath{<handle>.ext/}.  Flat \texttt{map[string]string} (YAML
+    scalars only).  Persist across sessions.
+  \item \textbf{Session-participant-level} (ephemeral) --- the
+    \field{ext} field on each \texttt{Participant} in the session
+    roster.  Typed as \texttt{map[string]any} (arbitrary nested
+    values).  Deleted when the session ends.
+\end{enumerate}
+
+The two scopes are structurally different.  Persona-level extensions
+enforce flat string values; session-level extensions accept arbitrary
+YAML structures.  A tool may store durable defaults at the persona
+level and ephemeral session state at the participant level.
+
+% ===================================================================
+\section{Session Roster}
+% ===================================================================
+
+The session roster provides multi-participant awareness for Claude
+Code sessions.  It answers two questions: ``Who am I?'' and ``Who is
+everyone else?''
+
+\subsection{Data Model}
+
+Stored at \fpath{\~{}/.punt-labs/ethos/sessions/<session-id>.yaml}:
+
+\begin{center}
+\begin{longtable}{@{}llp{5.5cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Source} & \textbf{Purpose} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Field} & \textbf{Source} & \textbf{Purpose} \\
+\midrule
+\endhead
+\field{session}     & Hook input        & Session identifier \\
+\field{started}     & Roster creation   & RFC~3339 timestamp \\
+\field{participants} & Hook lifecycle   & Ordered list of \texttt{Participant}
+                                          records \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Each participant record:
+
+\begin{center}
+\begin{longtable}{@{}llp{5cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endhead
+\field{agent\_id}    & string  & OS login, Claude PID, or subagent ID \\
+\field{persona}      & string  & Ethos handle; null when no identity \\
+\field{agent\_type}  & string  & Raw type (e.g., \texttt{Explore},
+                                 \texttt{code-reviewer}) \\
+\field{parent}       & string  & Parent's \field{agent\_id}; null for root \\
+\field{ext}          & \texttt{map[string]any}  & Tool-scoped ephemeral metadata \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Tree Structure}
+
+Participants form a tree.  The root (no parent) is the human user.
+The primary Claude agent is the root's child.  Subagents are children
+of the primary agent.
+
+\begin{verbatim}
+mal (root -- $USER)
+  +-- 19147 (archie -- Claude PID)
+       +-- a5734dd (code-reviewer)
+       +-- a93c2be (silent-failure-hunter)
+       +-- b8823ff (Explore, no persona)
+\end{verbatim}
+
+Any participant can derive relationships from the tree: root (walk up
+to \field{parent:~null}), initiator (my \field{parent}), delegates
+(anyone whose \field{parent} is my \field{agent\_id}), siblings (same
+\field{parent}).
+
+\subsection{Lifecycle via Hooks}
+
+\begin{center}
+\begin{tabular}{@{}llp{5cm}@{}}
+\toprule
+\textbf{Hook Event} & \textbf{Roster Operation} & \textbf{Data Available} \\
+\midrule
+\texttt{SessionStart}  & Create roster, join root + primary
+                        & \field{session\_id}, \texttt{\$USER},
+                          \texttt{\$PPID} as Claude PID \\
+\texttt{SubagentStart}  & Join subagent
+                        & \field{session\_id}, \field{agent\_id},
+                          \field{agent\_type} \\
+\texttt{SubagentStop}   & Leave subagent
+                        & \field{session\_id}, \field{agent\_id} \\
+\texttt{SessionEnd}     & Delete roster + current session file
+                        & \field{session\_id} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Concurrency}
+
+Multiple \texttt{SubagentStart} hooks may fire in parallel.  Roster
+writes use \texttt{flock(LOCK\_EX)} on a per-session lock file
+(\fpath{sessions/<session-id>.lock}) before read-modify-write.  Roster
+files are written atomically via temp file + rename.
+
+\subsection{Session Discovery}
+
+Non-hook callers (Biff, Vox) need the session ID without receiving it
+on stdin.  The \texttt{SessionStart} hook writes the session ID to a
+PID-keyed file:
+
+\begin{verbatim}
+~/.punt-labs/ethos/sessions/current/<claude-pid>
+\end{verbatim}
+
+Any descendant process walks the process tree to the topmost
+\texttt{claude} ancestor PID, reads that file, and gets the session
+ID.  The \texttt{SessionEnd} hook deletes the file.
+
+\subsection{Staleness Detection}
+
+\texttt{Store.Purge()} cleans up rosters from crashed sessions:
+
+\begin{enumerate}
+  \item Extract the primary agent's \field{agent\_id} (second
+    participant).
+  \item If numeric: check whether the PID is alive via
+    \texttt{os.FindProcess} + signal~0.  If dead, treat as stale
+    immediately (no TTL fallback).
+  \item If non-numeric (parse fails): age-based fallback (24-hour
+    TTL on the \field{started} timestamp).
+  \item Rosters with fewer than 2~participants are always stale
+    (malformed).
+\end{enumerate}
+
+% ===================================================================
+\section{Identity Resolution}
+% ===================================================================
+
+\texttt{resolve.Resolve(repoRoot)} determines the active identity
+handle through a two-level priority chain:
+
+\begin{enumerate}
+  \item \textbf{Repo-local config} ---
+    \fpath{.punt-labs/ethos/config.yaml} in the repository root.
+    Contains a \texttt{RepoConfig} struct with \field{active} and
+    \field{agents} fields.  If \field{active} is non-empty, return it.
+  \item \textbf{Global active identity} ---
+    \fpath{\~{}/.punt-labs/ethos/active} (plain text file).  If
+    non-empty, return it.
+  \item \textbf{Error} --- no active identity configured.
+\end{enumerate}
+
+This mirrors Git's resolution: \fpath{.git/config} overrides
+\fpath{\~{}/.gitconfig}.
+
+% ===================================================================
+\section{Process Tree Walker}
+% ===================================================================
+
+\texttt{process.FindClaudePID()} identifies the Claude Code instance
+that spawned the current process.  It is used to determine the
+primary agent's \field{agent\_id} for session rosters and to locate
+PID-keyed session files.
+
+\begin{enumerate}
+  \item Run \texttt{ps -eo pid=,ppid=,comm=} to snapshot the process
+    table.
+  \item Parse into a map of PID $\to$ (parent PID, command name).
+  \item Walk from the current PID upward, following parent pointers.
+  \item Track the topmost PID where the command name is
+    \texttt{claude}.
+  \item Cap the walk at 10~iterations to prevent infinite loops in
+    degenerate process trees.
+  \item If no \texttt{claude} ancestor is found, fall back to
+    \texttt{os.Getppid()}.
+  \item Cache the result for the lifetime of the process (the answer
+    does not change).
+\end{enumerate}
+
+% ===================================================================
+\section{Storage Layout}
+% ===================================================================
+
+\begin{center}
+\begin{longtable}{@{}lll@{}}
+\toprule
+\textbf{Scope} & \textbf{Path} & \textbf{Git-tracked?} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Scope} & \textbf{Path} & \textbf{Git-tracked?} \\
+\midrule
+\endhead
+Identities      & \fpath{\~{}/.punt-labs/ethos/identities/<handle>.yaml}
+                 & No \\
+Extensions       & \fpath{\~{}/.punt-labs/ethos/identities/<handle>.ext/<ns>.yaml}
+                 & No \\
+Active identity  & \fpath{\~{}/.punt-labs/ethos/active}
+                 & No \\
+Sessions         & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
+                 & No \\
+Session locks    & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
+                 & No \\
+Current session  & \fpath{\~{}/.punt-labs/ethos/sessions/current/<pid>}
+                 & No \\
+Repo config      & \fpath{.punt-labs/ethos/config.yaml}
+                 & Yes \\
+Repo agents      & \fpath{.punt-labs/ethos/agents/<name>.yaml}
+                 & Yes \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+All user-global state lives under \fpath{\~{}/.punt-labs/ethos/}.
+Repo-scoped state lives under \fpath{.punt-labs/ethos/} in the
+repository root.
+
+% ===================================================================
+\section{CLI Surface}
+% ===================================================================
+
+The binary exposes subcommands grouped by concern.  All commands
+accept a global \cmd{--json} flag for machine-readable output.
+
+\subsection{Identity Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{7cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{whoami [handle]}     & Show or set the active identity. \\
+\cmd{create [-f FILE]}    & Create identity interactively or from a
+                            YAML file. \\
+\cmd{list}                & List all identities; active marked with
+                            \texttt{*}. \\
+\cmd{show <handle>}       & Show full identity details including
+                            extensions. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Extension Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{7cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{ext get <p> <ns> [key]}       & Read one key or all keys in a
+                                     namespace. \\
+\cmd{ext set <p> <ns> <key> <val>} & Write a key-value pair. \\
+\cmd{ext del <p> <ns> [key]}       & Delete one key or an entire
+                                     namespace. \\
+\cmd{ext list <p>}                 & List all namespaces for a
+                                     persona. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Session Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{7cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{iam <persona>}            & Declare persona in current session
+                                 (auto-detects session ID and agent
+                                 ID). \\
+\cmd{session}                  & Show current session roster. \\
+\cmd{session create}           & Create a new roster (called by
+                                 SessionStart hook). \\
+\cmd{session join}             & Add a participant (called by
+                                 SubagentStart hook). \\
+\cmd{session leave}            & Remove a participant (called by
+                                 SubagentStop hook). \\
+\cmd{session write-current}    & Write PID-keyed session file. \\
+\cmd{session delete-current}   & Delete PID-keyed session file. \\
+\cmd{session purge}            & Clean up stale rosters. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Admin Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{7cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{version}              & Print version string. \\
+\cmd{doctor}               & Check installation health (identity
+                             directory, active identity). \\
+\cmd{serve}                & Start MCP server (stdio transport). \\
+\cmd{uninstall [--purge]}  & Remove plugin; \cmd{--purge} also
+                             removes binary and data. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ===================================================================
+\section{MCP Tool Surface}
+% ===================================================================
+
+\texttt{ethos serve} starts a stdio-transport MCP server that
+registers 12~tools via \texttt{Handler.RegisterTools()}.  The
+\texttt{Handler} struct receives injected \texttt{identity.Store}
+and \texttt{session.Store} instances.
+
+\subsection{Identity Tools}
+
+\begin{center}
+\begin{longtable}{@{}llp{5.5cm}@{}}
+\toprule
+\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\midrule
+\endhead
+\tool{whoami}           & ---                 & Show active identity; optional
+                                                \field{handle} to set it. \\
+\tool{list\_identities} & ---                 & List all identities with active
+                                                status. \\
+\tool{get\_identity}    & \field{handle}       & Return full identity including
+                                                extensions. \\
+\tool{create\_identity} & \field{name},
+                          \field{handle},
+                          \field{kind}         & Create identity from provided
+                                                fields. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Extension Tools}
+
+\begin{center}
+\begin{longtable}{@{}llp{5.5cm}@{}}
+\toprule
+\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\midrule
+\endhead
+\tool{ext\_get}  & \field{persona}, \field{namespace}
+                 & Read extension keys (optional \field{key} for
+                   single lookup). \\
+\tool{ext\_set}  & \field{persona}, \field{namespace},
+                   \field{key}, \field{value}
+                 & Write a key-value pair. \\
+\tool{ext\_del}  & \field{persona}, \field{namespace}
+                 & Delete a key or entire namespace (optional
+                   \field{key}). \\
+\tool{ext\_list} & \field{persona}
+                 & List all extension namespaces. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Session Tools}
+
+\begin{center}
+\begin{longtable}{@{}llp{5.5cm}@{}}
+\toprule
+\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\midrule
+\endhead
+\tool{session\_iam}     & \field{session\_id},
+                          \field{agent\_id},
+                          \field{persona}
+                        & Declare persona for a participant. \\
+\tool{session\_roster}  & \field{session\_id}
+                        & Return full roster with tree. \\
+\tool{session\_join}    & \field{session\_id},
+                          \field{agent\_id}
+                        & Register a participant (optional
+                          \field{persona}, \field{parent},
+                          \field{agent\_type}). \\
+\tool{session\_leave}   & \field{session\_id},
+                          \field{agent\_id}
+                        & Deregister a participant. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+Most tools return JSON objects on success.  Mutating tools
+(\tool{whoami} when setting, \tool{ext\_set}, \tool{ext\_del},
+\tool{session\_iam}, \tool{session\_leave}) return plain-text
+confirmation strings instead.  Error responses are also plain strings.
+
+% ===================================================================
+\section{Design Invariants}
+% ===================================================================
+
+These invariants are enforced by the architecture and hold across
+all operations:
+
+\begin{enumerate}
+  \item \textbf{Sidecar contract.}  No consumer imports ethos.
+    The contract is file paths and YAML formats.  Upgrading ethos
+    never forces consumer upgrades.
+
+  \item \textbf{Unified schema.}  Humans and agents use the same
+    \texttt{Identity} struct.  The \field{kind} field is the only
+    difference.  No separate code paths.
+
+  \item \textbf{No consumer-specific fields.}  Ethos will never add
+    \field{gpg\_key\_id}, \field{preferred\_tty}, or any field that
+    serves a single consumer.  The extension system exists for this.
+
+  \item \textbf{Atomic identity creation.}  \texttt{Store.Save}
+    opens the file with \texttt{O\_EXCL}.  Two concurrent creates
+    of the same handle: one succeeds, one fails.  No partial writes.
+
+  \item \textbf{Atomic roster writes.}  Roster files are written to
+    a temp file, then renamed.  No reader sees a partial roster.
+
+  \item \textbf{Flock concurrency.}  All roster mutations acquire
+    \texttt{flock(LOCK\_EX)} on a per-session lock file.  No daemon,
+    no database, no race conditions on concurrent subagent hooks.
+
+  \item \textbf{Extension isolation.}  Each consumer's extension
+    data lives in its own YAML file.  Concurrent writes by different
+    tools cannot corrupt each other's data.
+
+  \item \textbf{Process tree caching.}  \texttt{FindClaudePID()}
+    caches the result for the process lifetime.  The Claude ancestor
+    PID does not change during a session.
+
+  \item \textbf{No shell execution.}  All subprocess invocations use
+    argument lists, never shell interpretation.
+
+  \item \textbf{Depth-bounded tree walk.}  The process tree walk
+    caps at 10~iterations to prevent infinite loops in degenerate
+    process tables.
+\end{enumerate}
+
+% ===================================================================
+\section{Security Boundaries}
+% ===================================================================
+
+\subsection{Filesystem Boundary}
+
+\begin{itemize}
+  \item \textbf{User-global state}: \fpath{\~{}/.punt-labs/ethos/} ---
+    identities, extensions, sessions.  Standard user-mode file
+    permissions.
+  \item \textbf{Repo-local state}: \fpath{.punt-labs/ethos/} ---
+    config, agent roster.  Git-tracked; visible to collaborators.
+  \item \textbf{No secrets.}  Ethos stores no passwords, API keys,
+    or tokens.  Sensitive bindings (GPG keys, IMAP passwords) live
+    in consumer extensions or credential stores, not in ethos.
+\end{itemize}
+
+\subsection{Process Boundary}
+
+\begin{itemize}
+  \item \textbf{MCP}: stdio transport.  No network listener.
+  \item \textbf{ps}: read-only process table query for tree walking.
+    Signal~0 for process liveness checks (no side effects).
+\end{itemize}
+
+\subsection{Trust Boundary}
+
+\begin{itemize}
+  \item \textbf{Identity data is self-declared.}  Ethos does not
+    verify that the email, GitHub handle, or voice binding is
+    authentic.  Verification is the responsibility of consumers
+    (Beadle verifies PGP, Biff verifies GitHub tokens).
+  \item \textbf{Extension data is opaque.}  Ethos enforces structural
+    constraints (namespace format, key format, size limits) but does
+    not validate or interpret values.
+\end{itemize}
+
+% ===================================================================
+\section{Key Properties}
+% ===================================================================
+
+The architecture guarantees these properties, verifiable by
+inspection and testing:
+
+\begin{enumerate}
+  \item \textbf{Resolution totality}: \texttt{Resolve()} always
+    returns a handle or an error.  There is no silent empty-string
+    fallback.
+
+  \item \textbf{Extension namespace isolation}: concurrent writes by
+    different tools target different files.  No merge conflicts.
+
+  \item \textbf{Session liveness}: \texttt{Purge()} uses process
+    signal~0 for numeric PIDs and age-based TTL for non-numeric IDs.
+    Every stale roster is eventually cleaned up.
+
+  \item \textbf{Hook-driven lifecycle}: the session roster is fully
+    managed by four Claude Code hook events.  No polling, no daemon,
+    no manual intervention.
+
+  \item \textbf{Cold start performance}: Go binary with no runtime
+    dependencies.  $\sim$10\,ms cold start measured on Apple~M2.
+    Hooks are invisible to the user.
+
+  \item \textbf{Store injectability}: all CRUD operations take a
+    \texttt{Store} with a configurable root path.  Tests use
+    \texttt{t.TempDir()}.  No hardcoded \texttt{\$HOME}.
+\end{enumerate}
+
+\end{document}
