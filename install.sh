@@ -166,12 +166,13 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
   if [ -d "$INSTALLED_PLUGIN_DIR" ]; then
     ok "$PLUGIN_NAME plugin v${VERSION} installed"
   else
-    # Find what version was actually installed
+    # Find the most recently installed version (newest by mtime)
     INSTALLED_VERSION=""
-    for d in "$HOME/.claude/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME"/*/; do
-      [ -d "$d" ] || continue
-      INSTALLED_VERSION="$(basename "$d")"
-    done
+    PLUGIN_CACHE_BASE="$HOME/.claude/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME"
+    if [ -d "$PLUGIN_CACHE_BASE" ]; then
+      # shellcheck disable=SC2012 # directory names are version numbers, safe for ls
+      INSTALLED_VERSION="$(ls -1t "$PLUGIN_CACHE_BASE" 2>/dev/null | head -n 1 || true)"
+    fi
     if [ -n "$INSTALLED_VERSION" ]; then
       warn "$PLUGIN_NAME plugin v${INSTALLED_VERSION} installed (expected v${VERSION})"
       warn "The marketplace may not have v${VERSION} yet. Run:"
