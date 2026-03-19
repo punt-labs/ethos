@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `/session` and `/iam` slash commands with `-dev` variants for plugin parity
+- MCP tool permission auto-allow in SessionStart hook (matches biff pattern)
+- Persistent PATH setup in installer — appends `~/.local/bin` to shell profile
+
+### Fixed
+
+- `ethos doctor` no longer fails on fresh install when no active identity exists (PASS with guidance instead of FAIL)
+- `whoami.md` command: `allowed-tools` corrected from bare string to array
+- PostToolUse suppress hook now returns meaningful per-tool summaries instead of generic "Done."
+
+### Changed
+
+- SessionStart hook detects dev mode and skips top-level command deployment when running as `ethos-dev`
+
 ## [0.2.0] - 2026-03-19
 
 ### Added

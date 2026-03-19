@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// ErrNoActive is returned when no active identity is configured.
+var ErrNoActive = errors.New("no active identity")
 
 // Store provides CRUD operations for identities on the filesystem.
 // Identities are stored as YAML files in the identities subdirectory.
@@ -100,11 +104,14 @@ func (s *Store) Active() (*Identity, error) {
 	path := filepath.Join(s.root, "active")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("no active identity: %w", err)
+		if os.IsNotExist(err) {
+			return nil, ErrNoActive
+		}
+		return nil, fmt.Errorf("reading active identity: %w", err)
 	}
 	handle := strings.TrimSpace(string(data))
 	if handle == "" {
-		return nil, fmt.Errorf("no active identity configured")
+		return nil, ErrNoActive
 	}
 	return s.Load(handle)
 }
