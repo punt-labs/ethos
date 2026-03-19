@@ -118,10 +118,14 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
 
   if claude plugin marketplace list < /dev/null 2>/dev/null | grep -q "$MARKETPLACE_NAME"; then
     ok "marketplace already registered"
-    claude plugin marketplace update "$MARKETPLACE_NAME" < /dev/null 2>/dev/null || true
   else
     claude plugin marketplace add "$MARKETPLACE_REPO" < /dev/null || fail "Failed to register marketplace"
     ok "marketplace registered"
+  fi
+
+  # Always update to get the latest plugin versions (including this one).
+  if ! claude plugin marketplace update "$MARKETPLACE_NAME" < /dev/null 2>/dev/null; then
+    warn "marketplace update failed — plugin may install a stale version"
   fi
 
   # --- Step 5: SSH fallback for plugin install ---
@@ -156,7 +160,28 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
     cleanup_https_rewrite
     fail "$PLUGIN_NAME install reported success but plugin not found"
   fi
-  ok "$PLUGIN_NAME plugin installed"
+
+  # Verify installed plugin version matches expected version
+  INSTALLED_PLUGIN_DIR="$HOME/.claude/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME/$VERSION"
+  if [ -d "$INSTALLED_PLUGIN_DIR" ]; then
+    ok "$PLUGIN_NAME plugin v${VERSION} installed"
+  else
+    # Find the most recently installed version (newest by mtime)
+    INSTALLED_VERSION=""
+    PLUGIN_CACHE_BASE="$HOME/.claude/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME"
+    if [ -d "$PLUGIN_CACHE_BASE" ]; then
+      # shellcheck disable=SC2012 # directory names are version numbers, safe for ls
+      INSTALLED_VERSION="$(ls -1t "$PLUGIN_CACHE_BASE" 2>/dev/null | head -n 1 || true)"
+    fi
+    if [ -n "$INSTALLED_VERSION" ]; then
+      warn "$PLUGIN_NAME plugin v${INSTALLED_VERSION} installed (expected v${VERSION})"
+      warn "The marketplace may not have v${VERSION} yet. Run:"
+      warn "  claude plugin marketplace update $MARKETPLACE_NAME"
+      warn "  claude plugin install ${PLUGIN_NAME}@${MARKETPLACE_NAME} --scope user"
+    else
+      ok "$PLUGIN_NAME plugin installed (version not verified)"
+    fi
+  fi
 
   cleanup_https_rewrite
 else
