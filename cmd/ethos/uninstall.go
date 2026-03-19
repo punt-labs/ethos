@@ -20,8 +20,9 @@ func runUninstall(args []string) {
 		}
 	}
 
+	hadError := false
+
 	// Step 1: Remove Claude Code plugin.
-	pluginFailed := false
 	claude, err := exec.LookPath("claude")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ethos: claude CLI not found — skipping plugin removal")
@@ -31,22 +32,22 @@ func runUninstall(args []string) {
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: plugin uninstall failed: %v\n", err)
-			pluginFailed = true
+			hadError = true
 		} else {
 			fmt.Println("Removed Claude Code plugin.")
 		}
 	}
 
 	if !purge {
-		if pluginFailed {
-			os.Exit(1)
-		}
-		if claude != "" {
+		if claude != "" && !hadError {
 			fmt.Println("\nPlugin removed. Binary and identity data are still present.")
-		} else {
+		} else if claude == "" {
 			fmt.Println("\nNo plugin to remove. Binary and identity data are still present.")
 		}
 		fmt.Println("Run 'ethos uninstall --purge' to remove everything.")
+		if hadError {
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -75,6 +76,7 @@ func runUninstall(args []string) {
 	// Step 3: Remove data directory.
 	if err := os.RemoveAll(dataDir); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to remove %s: %v\n", dataDir, err)
+		hadError = true
 	} else {
 		fmt.Printf("Removed %s\n", dataDir)
 	}
@@ -82,16 +84,23 @@ func runUninstall(args []string) {
 	// Step 4: Remove binary.
 	if binErr != nil {
 		fmt.Fprintln(os.Stderr, "ethos: cannot determine binary path — remove manually")
+		hadError = true
 	} else if err := os.Remove(bin); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to remove %s: %v\n", bin, err)
+		hadError = true
 	} else {
 		fmt.Printf("Removed %s\n", bin)
 	}
 
+	if hadError {
+		fmt.Fprintln(os.Stderr, "\nethos: uninstall completed with errors")
+		os.Exit(1)
+	}
 	fmt.Println("\nethos is uninstalled.")
 }
 
-// resolvedBinaryPath returns the absolute, symlink-resolved path of the running executable.
+// resolvedBinaryPath returns the absolute path of the running executable.
+// Attempts symlink resolution; falls back to the unresolved path if EvalSymlinks fails.
 func resolvedBinaryPath() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -99,7 +108,7 @@ func resolvedBinaryPath() (string, error) {
 	}
 	resolved, err := filepath.EvalSymlinks(exe)
 	if err != nil {
-		return exe, nil
+		return exe, nil // best-effort: use unresolved path
 	}
 	return resolved, nil
 }
