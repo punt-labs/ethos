@@ -147,7 +147,21 @@ Format: `type(scope): description`
 - **README**: Update when user-facing behavior changes.
 - **DESIGN.md**: Log decisions with rejected alternatives.
 
+### Issue Tracking
+
+This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --status in_progress  # Claim work
+bd close <id>         # Complete work
+bd sync               # Sync with git
+```
+
 ### Session Close Protocol
+
+When ending a work session, complete ALL steps. Work is NOT complete until `git push` succeeds.
 
 ```bash
 git status              # Check for uncommitted work
@@ -155,9 +169,16 @@ git add <files>         # Stage changes
 git commit -m "..."     # Commit
 bd sync                 # Sync beads
 git push                # Push to remote
+git status              # MUST show "up to date with origin"
 ```
 
-Work is NOT complete until `git push` succeeds.
+Rules:
+
+- File issues for remaining work before closing
+- Run `make check` if code changed
+- Close finished beads, update in-progress items
+- NEVER stop before pushing — that leaves work stranded locally
+- If push fails, resolve and retry until it succeeds
 
 ## Standards References
 
