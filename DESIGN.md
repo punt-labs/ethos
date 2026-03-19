@@ -138,8 +138,8 @@ Extensions live in a directory alongside the identity YAML file:
 
 ```text
 ~/.punt-labs/ethos/identities/
-  jfreeman.yaml                    # ethos owns — core identity fields
-  jfreeman.ext/                    # extension directory
+  mal.yaml                    # ethos owns — core identity fields
+  mal.ext/                    # extension directory
     beadle.yaml                    # beadle owns — beadle-specific attributes
     biff.yaml                      # biff owns — biff-specific attributes
     vox.yaml                       # vox owns — vox-specific attributes
@@ -148,14 +148,14 @@ Extensions live in a directory alongside the identity YAML file:
 Each file is a flat YAML map of key-value pairs owned by the named tool:
 
 ```yaml
-# jfreeman.ext/beadle.yaml
+# mal.ext/beadle.yaml
 gpg_key_id: 3AA5C34371567BD2
 imap_server: mail.punt-labs.com
 trust_default: verify
 ```
 
 ```yaml
-# jfreeman.ext/biff.yaml
+# mal.ext/biff.yaml
 preferred_tty: tty1
 ```
 
@@ -172,19 +172,19 @@ preferred_tty: tty1
 
 ### Merged View
 
-When any consumer asks "who is jfreeman?", ethos returns the complete
+When any consumer asks "who is mal?", ethos returns the complete
 picture — core identity fields plus all extensions:
 
 ```yaml
-name: Jim Freeman
-handle: jfreeman
+name: Mal Reynolds
+handle: mal
 kind: human
-email: jim@punt-labs.com
-github: jfreeman
+email: mal@serenity.ship
+github: mal
 voice:
   provider: elevenlabs
   voice_id: abc123
-agent: .claude/agents/jfreeman.md
+agent: .claude/agents/mal.md
 writing_style: |
   Direct. Short sentences. Data over adjectives.
 personality: |
@@ -326,8 +326,8 @@ Session roster stored at `~/.punt-labs/ethos/sessions/<session-id>.yaml`:
 session: ba3bb20f
 started: 2026-03-18T14:30:00Z
 participants:
-  - agent_id: jfreeman          # OS login ($USER)
-    persona: jfreeman            # ethos identity lookup key
+  - agent_id: mal          # OS login ($USER)
+    persona: mal            # ethos identity lookup key
     parent: ~
     ext:
       biff:
@@ -335,7 +335,7 @@ participants:
 
   - agent_id: "19147"           # topmost claude ancestor PID (process tree walk)
     persona: archie
-    parent: jfreeman
+    parent: mal
     ext:
       biff:
         tty: s004
@@ -383,7 +383,7 @@ to `$PPID` when no `claude` ancestor is found.
 **Tree relationships:**
 
 ```text
-jfreeman (root — no parent)
+mal (root — no parent)
   └─ 19147 (archie)
        ├─ a5734dd (code-reviewer)
        ├─ a93c2be (silent-failure-hunter)

@@ -20,8 +20,8 @@ func testStore(t *testing.T) *Store {
 func TestStore_CreateAndLoad(t *testing.T) {
 	s := testStore(t)
 
-	root := Participant{AgentID: "jfreeman", Persona: "jfreeman"}
-	primary := Participant{AgentID: "12345", Persona: "archie", Parent: "jfreeman"}
+	root := Participant{AgentID: "mal", Persona: "mal"}
+	primary := Participant{AgentID: "12345", Persona: "archie", Parent: "mal"}
 	require.NoError(t, s.Create("session-1", root, primary))
 
 	roster, err := s.Load("session-1")
@@ -29,9 +29,9 @@ func TestStore_CreateAndLoad(t *testing.T) {
 	assert.Equal(t, "session-1", roster.Session)
 	assert.NotEmpty(t, roster.Started)
 	assert.Len(t, roster.Participants, 2)
-	assert.Equal(t, "jfreeman", roster.Participants[0].AgentID)
+	assert.Equal(t, "mal", roster.Participants[0].AgentID)
 	assert.Equal(t, "12345", roster.Participants[1].AgentID)
-	assert.Equal(t, "jfreeman", roster.Participants[1].Parent)
+	assert.Equal(t, "mal", roster.Participants[1].Parent)
 }
 
 func TestStore_LoadNotFound(t *testing.T) {

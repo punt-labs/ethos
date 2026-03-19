@@ -38,7 +38,7 @@ func TestSlugify(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"Jim Freeman", "jim-freeman"},
+		{"Mal Reynolds", "mal-reynolds"},
 		{"Alice", "alice"},
 		{"Bob O'Brien", "bob-obrien"},
 		{"test 123", "test-123"},

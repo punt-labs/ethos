@@ -16,10 +16,10 @@ func testStore(t *testing.T) *Store {
 
 func testIdentity() *Identity {
 	return &Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Mal Reynolds",
+		Handle: "mal",
 		Kind:   "human",
-		Email:  "jim@example.com",
+		Email:  "mal@serenity.ship",
 	}
 }
 
@@ -29,12 +29,12 @@ func TestStore_SaveAndLoad(t *testing.T) {
 
 	require.NoError(t, s.Save(id))
 
-	loaded, err := s.Load("jfreeman")
+	loaded, err := s.Load("mal")
 	require.NoError(t, err)
-	assert.Equal(t, "Jim Freeman", loaded.Name)
-	assert.Equal(t, "jfreeman", loaded.Handle)
+	assert.Equal(t, "Mal Reynolds", loaded.Name)
+	assert.Equal(t, "mal", loaded.Handle)
 	assert.Equal(t, "human", loaded.Kind)
-	assert.Equal(t, "jim@example.com", loaded.Email)
+	assert.Equal(t, "mal@serenity.ship", loaded.Email)
 }
 
 func TestStore_SaveDuplicate(t *testing.T) {
@@ -136,15 +136,15 @@ func TestStore_SetActiveNonexistent(t *testing.T) {
 
 func TestStore_Exists(t *testing.T) {
 	s := testStore(t)
-	assert.False(t, s.Exists("jfreeman"))
+	assert.False(t, s.Exists("mal"))
 
 	require.NoError(t, s.Save(testIdentity()))
-	assert.True(t, s.Exists("jfreeman"))
+	assert.True(t, s.Exists("mal"))
 }
 
 func TestStore_Path(t *testing.T) {
 	s := NewStore("/root/ethos")
-	assert.Equal(t, "/root/ethos/identities/jfreeman.yaml", s.Path("jfreeman"))
+	assert.Equal(t, "/root/ethos/identities/mal.yaml", s.Path("mal"))
 }
 
 func TestStore_PathTraversalPrevention(t *testing.T) {
@@ -202,7 +202,7 @@ func TestStore_FilePermissions(t *testing.T) {
 	s := testStore(t)
 	require.NoError(t, s.Save(testIdentity()))
 
-	info, err := os.Stat(s.Path("jfreeman"))
+	info, err := os.Stat(s.Path("mal"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 

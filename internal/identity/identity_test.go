@@ -9,8 +9,8 @@ import (
 
 func TestValidate_ValidHuman(t *testing.T) {
 	id := &Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Mal Reynolds",
+		Handle: "mal",
 		Kind:   "human",
 	}
 	assert.NoError(t, id.Validate())
@@ -67,7 +67,7 @@ func TestValidate_HandleFormat(t *testing.T) {
 		handle string
 		valid  bool
 	}{
-		{"jfreeman", true},
+		{"mal", true},
 		{"wei", true},
 		{"agent-1", true},
 		{"a", true},
