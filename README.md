@@ -2,8 +2,10 @@
 
 > Identity binding for humans and AI agents.
 
+[![Release](https://img.shields.io/github/v/release/punt-labs/ethos)](https://github.com/punt-labs/ethos/releases/latest)
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/punt-labs/ethos)](https://goreportcard.com/report/github.com/punt-labs/ethos)
 
 Ethos gives humans and AI agents a shared identity model — name, voice,
 email, GitHub handle, writing style, personality, and skills — stored as
@@ -55,25 +57,25 @@ sh install.sh
 
 ```text
 $ ethos create
-Name: Jim Freeman
-Handle [jim-freeman]: jfreeman
+Name: Mal Reynolds
+Handle [mal-reynolds]: mal
 Kind (human/agent) [human]:
-Email (optional): jim@punt-labs.com
-GitHub username (optional): jfreeman
+Email (optional): mal@serenity.ship
+GitHub username (optional): mal
 Voice provider (optional, e.g. elevenlabs):
 Agent definition path (optional):
 Writing style (optional, one line): Direct. Short sentences. Data over adjectives.
 Personality (optional, one line): Principal engineer. Formal methods, accountability.
 Skills (optional, comma-separated): formal-methods, product-strategy
 Set as active identity (first identity created)
-Created identity "jfreeman" (Jim Freeman)
+Created identity "mal" (Mal Reynolds)
 
 $ ethos whoami
-Jim Freeman (jfreeman)
+Mal Reynolds (mal)
 
 $ ethos list
-* jfreeman         Jim Freeman
-  wei              Wei
+* mal            Mal Reynolds
+  river            River Tam
 ```
 
 ## Commands
@@ -104,15 +106,15 @@ Use `--` to stop flag parsing (e.g., `ethos create -f -- --json` treats
 ## Identity Schema
 
 ```yaml
-name: Jim Freeman
-handle: jfreeman
+name: Mal Reynolds
+handle: mal
 kind: human                    # or "agent"
-email: jim@punt-labs.com       # beadle binding
-github: jfreeman               # biff binding
+email: mal@serenity.ship        # beadle binding
+github: mal                  # biff binding
 voice:                         # vox binding
   provider: elevenlabs
   voice_id: "abc123"
-agent: .claude/agents/jim.md   # claude code agent binding
+agent: .claude/agents/mal.md # claude code agent binding
 writing_style: |
   Direct. Short sentences. Data over adjectives.
 personality: |
@@ -149,9 +151,9 @@ default mood. Ethos assembles the merged view when you load an identity
 but never interprets extension contents.
 
 ```bash
-ethos ext set jfreeman beadle gpg_key_id 3AA5C34371567BD2
-ethos ext get jfreeman beadle gpg_key_id
-ethos show jfreeman   # includes ext map with all tool namespaces
+ethos ext set mal beadle gpg_key_id 3AA5C34371567BD2
+ethos ext get mal beadle gpg_key_id
+ethos show mal   # includes ext map with all tool namespaces
 ```
 
 ## Development
