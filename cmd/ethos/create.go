@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
 	"gopkg.in/yaml.v3"
 )
@@ -73,19 +74,11 @@ func createInteractive() {
 		voiceID = prompt(reader, "Voice ID", "")
 	}
 	agent := prompt(reader, "Agent definition path (optional, e.g. .claude/agents/name.md)", "")
-	writingStyle := prompt(reader, "Writing style (optional, one line)", "")
-	personality := prompt(reader, "Personality (optional, one line)", "")
-	skillsRaw := prompt(reader, "Skills (optional, comma-separated)", "")
 
-	var skills []string
-	if skillsRaw != "" {
-		for _, s := range strings.Split(skillsRaw, ",") {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				skills = append(skills, s)
-			}
-		}
-	}
+	// Attribute selection with create-new option.
+	personality := pickAttribute(reader, attribute.Personalities)
+	writingStyle := pickAttribute(reader, attribute.WritingStyles)
+	skills := pickMultiAttribute(reader, attribute.Skills)
 
 	var voice *identity.Voice
 	if voiceProvider != "" {
@@ -123,6 +116,140 @@ func createInteractive() {
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
 }
 
+// pickAttribute shows existing attributes and lets the user pick one,
+// create a new one, or skip (empty).
+func pickAttribute(reader *bufio.Reader, kind attribute.Kind) string {
+	s := attributeStore(kind)
+	result, err := s.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: could not list %s: %v\n", kind.PluralName, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n%s:\n", capitalizeFirst(kind.DisplayName))
+	if result != nil && len(result.Attributes) > 0 {
+		for i, a := range result.Attributes {
+			fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, a.Slug)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "  n. [create new]\n")
+	fmt.Fprintf(os.Stderr, "  (empty to skip)\n")
+
+	choice := prompt(reader, "Choice", "")
+	if choice == "" {
+		return ""
+	}
+	if choice == "n" || choice == "N" {
+		slug := prompt(reader, fmt.Sprintf("New %s slug", kind.DisplayName), "")
+		if slug == "" {
+			return ""
+		}
+		content, err := editContent(kind, slug)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			return ""
+		}
+		if strings.TrimSpace(content) == "" {
+			fmt.Fprintf(os.Stderr, "ethos: empty content, skipping\n")
+			return ""
+		}
+		a := &attribute.Attribute{Slug: slug, Content: content}
+		if err := s.Save(a); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			return ""
+		}
+		fmt.Fprintf(os.Stderr, "Created %s %q\n", kind.DisplayName, slug)
+		return slug
+	}
+
+	// Numeric choice.
+	if result != nil && len(result.Attributes) > 0 {
+		idx := 0
+		if _, err := fmt.Sscanf(choice, "%d", &idx); err == nil && idx >= 1 && idx <= len(result.Attributes) {
+			return result.Attributes[idx-1].Slug
+		}
+	}
+
+	// Treat as a slug directly — validate first.
+	if err := attribute.ValidateSlug(choice); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: invalid slug %q — must be lowercase alphanumeric with hyphens\n", choice)
+		return ""
+	}
+	return choice
+}
+
+// pickMultiAttribute shows existing attributes and lets the user pick
+// multiple (comma-separated numbers), create new ones, or skip.
+func pickMultiAttribute(reader *bufio.Reader, kind attribute.Kind) []string {
+	s := attributeStore(kind)
+	result, err := s.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: could not list %s: %v\n", kind.PluralName, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "\n%s (select multiple, comma-separated):\n", capitalizeFirst(kind.PluralName))
+	if result != nil && len(result.Attributes) > 0 {
+		for i, a := range result.Attributes {
+			fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, a.Slug)
+		}
+	}
+	fmt.Fprintf(os.Stderr, "  n. [create new]\n")
+	fmt.Fprintf(os.Stderr, "  (empty to skip)\n")
+
+	choice := prompt(reader, "Choice", "")
+	if choice == "" {
+		return nil
+	}
+
+	var selected []string
+	parts := strings.Split(choice, ",")
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if p == "n" || p == "N" {
+			slug := prompt(reader, fmt.Sprintf("New %s slug", kind.DisplayName), "")
+			if slug == "" {
+				continue
+			}
+			content, err := editContent(kind, slug)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+				continue
+			}
+			if strings.TrimSpace(content) == "" {
+				fmt.Fprintf(os.Stderr, "ethos: empty content, skipping\n")
+				continue
+			}
+			a := &attribute.Attribute{Slug: slug, Content: content}
+			if err := s.Save(a); err != nil {
+				fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "Created %s %q\n", kind.DisplayName, slug)
+			selected = append(selected, slug)
+			continue
+		}
+
+		// Numeric choice.
+		idx := 0
+		if result != nil && len(result.Attributes) > 0 {
+			if _, err := fmt.Sscanf(p, "%d", &idx); err == nil && idx >= 1 && idx <= len(result.Attributes) {
+				selected = append(selected, result.Attributes[idx-1].Slug)
+				continue
+			}
+		}
+
+		// Treat as slug directly — validate first.
+		if err := attribute.ValidateSlug(p); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: invalid slug %q — must be lowercase alphanumeric with hyphens\n", p)
+			continue
+		}
+		selected = append(selected, p)
+	}
+	return selected
+}
+
 func prompt(reader *bufio.Reader, label, defaultVal string) string {
 	if defaultVal != "" {
 		fmt.Fprintf(os.Stderr, "%s [%s]: ", label, defaultVal)
@@ -135,6 +262,13 @@ func prompt(reader *bufio.Reader, label, defaultVal string) string {
 		return defaultVal
 	}
 	return line
+}
+
+func capitalizeFirst(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
 }
 
 func slugify(name string) string {

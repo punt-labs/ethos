@@ -56,12 +56,13 @@ Expands to `make lint docs test`:
 
 | Package | Responsibility |
 |---------|---------------|
-| `cmd/ethos/` | CLI entry point: `whoami`, `create`, `list`, `show`, `version`, `doctor`, `serve` |
-| `internal/identity/` | Core identity model, validation, CRUD operations |
+| `cmd/ethos/` | CLI entry point: identity, attribute, session, and admin commands |
+| `internal/identity/` | Core identity model, validation, CRUD, attribute resolution |
+| `internal/attribute/` | Generic CRUD for named markdown files (skills, personalities, writing styles) |
 | `internal/process/` | Process tree walker: find topmost Claude ancestor PID |
 | `internal/session/` | Session roster model, store with flock-based concurrency |
 | `internal/resolve/` | Identity resolution chain: repo-local → global → error |
-| `internal/mcp/` | MCP tool definitions and handlers |
+| `internal/mcp/` | MCP tool definitions and handlers (25 tools) |
 
 ### Storage Layout
 
@@ -69,6 +70,9 @@ Expands to `make lint docs test`:
 |-------|------|-------------|
 | Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No |
 | Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
+| Skills | `~/.punt-labs/ethos/skills/<slug>.md` | No |
+| Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
+| Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
 | Active identity | `~/.punt-labs/ethos/active` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |

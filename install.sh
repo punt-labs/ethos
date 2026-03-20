@@ -145,10 +145,16 @@ fi
 
 # --- Step 3: Create identity directory ---
 
-info "Creating identity directory..."
+info "Creating directories..."
 mkdir -p "$HOME/.punt-labs/ethos/identities"
 chmod 700 "$HOME/.punt-labs/ethos/identities"
-ok "$HOME/.punt-labs/ethos/identities/"
+mkdir -p "$HOME/.punt-labs/ethos/skills"
+chmod 700 "$HOME/.punt-labs/ethos/skills"
+mkdir -p "$HOME/.punt-labs/ethos/personalities"
+chmod 700 "$HOME/.punt-labs/ethos/personalities"
+mkdir -p "$HOME/.punt-labs/ethos/writing-styles"
+chmod 700 "$HOME/.punt-labs/ethos/writing-styles"
+ok "$HOME/.punt-labs/ethos/"
 
 # --- Step 4: Register marketplace ---
 
