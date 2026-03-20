@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{1}{3}
+\prfaqversion{1}{4}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -191,19 +191,20 @@ Empirical studies confirm this is structural, not incidental. An analysis of 253
 
 \prsection{Solution}
 
-Ethos solves this by giving every participant---human or agent---a persistent identity that tools read automatically. After installing ethos, a developer's agent greets them by name, adapts to their communication style, and has a personality. Each agent can have a distinct persona: the code reviewer is formal and thorough, the test writer is terse and fast. Combined with a voice tool like Vox, the agent gets a lifelike voice that matches its persona. Combined with an email tool like Beadle, the agent is reachable at its own address. These are concrete daily improvements---not abstract architecture.
+Ethos solves this with two pieces: an identity registry and automatic session management. A developer runs
+{\small\texttt{ethos create}} once to define their own persona---name, email, GitHub handle, voice, writing style, personality---and creates personas for their agents the same way
+({\small\texttt{kind: agent}} instead of
+{\small\texttt{kind: human}}). After that, hooks handle the rest. When a session starts, ethos automatically registers the human and the primary agent in a session roster. When sub-agents spawn, each one is added to the roster and auto-matched to a persona by agent type---create a
+{\small\texttt{code-reviewer}} persona once, and every code-reviewer sub-agent that spawns automatically gets that identity.
 
-A developer runs
-{\small\texttt{ethos create}} once to define their persona: name, email, GitHub handle, voice preferences, writing style, and personality. Agents get the same schema with
-{\small\texttt{kind: agent}} instead of
-{\small\texttt{kind: human}}. Tools integrate at the level that fits their architecture (see \faqref{faq:architecture}): reading identity state directly from the filesystem (zero dependency), calling the CLI from hooks and scripts, or connecting to the MCP server for structured operations (\featureref{feat:mcp}). All three patterns read and write the same identity data; they differ only in coupling.
+The result is concrete: the agent greets the developer by name, adapts to their communication style, and has a distinct personality. Each sub-agent has its own persona---the code reviewer is formal and thorough, the test writer is terse. Combined with a voice tool like Vox, the agent gets a lifelike voice that matches its persona. Combined with an email tool like Beadle, the agent is reachable at its own address.
 
-The extension model lets any application attach additional attributes---a voice synthesis tool stores voice configuration, a messaging tool stores routing preferences, a code review tool stores style guidelines---all under a single identity, without ethos knowing anything about those applications (\featureref{feat:extensions}).
+Tools integrate at the level that fits: reading identity from the filesystem (zero dependency), calling the CLI from hooks and scripts, or connecting to the MCP server for structured operations (\featureref{feat:mcp}). The extension model lets any application attach additional attributes under a single identity without ethos knowing anything about those applications (\featureref{feat:extensions}).
 
 \prsection{Customer Quote}
 
 \begin{customerquote}
-\textit{``I have three Claude Code sessions running on different projects and an agent team with two sub-agents on a refactor. Before ethos, every session started from scratch---the agent didn't know my name, my coding style, or that I prefer terse responses. Now I run \texttt{ethos whoami} once, and every session knows who I am. My agents have their own personas too---the code reviewer is formal and thorough, the test writer is concise. It sounds small, but it changed how the whole team feels.''}
+\textit{``I have three Claude Code sessions running on different projects and an agent team with two sub-agents on a refactor. Before ethos, every session started from scratch---the agent didn't know my name, my coding style, or that I prefer terse responses. Now I create my personas once and every session just knows. The code reviewer sub-agent automatically picks up its formal persona, the test writer is terse, and the lead agent greets me by name. I didn't change my workflow---it's all hooks. It sounds small, but it changed how the whole team feels.''}
 
 \raggedleft --- \textbf{Priya Chakraborty}, Staff Engineer at a Series B startup
 \end{customerquote}
@@ -212,11 +213,9 @@ The extension model lets any application attach additional attributes---a voice 
 
 Getting started with ethos takes under two minutes. First, install the binary with a single curl command:
 {\small\texttt{curl -fsSL https://punt-labs.github.io/ethos/install.sh | sh}}.
-Second, create a persona:
+Second, create your persona:
 {\small\texttt{ethos create}}
-and answer four prompts (name, email, GitHub handle, writing style). Third, activate it:
-{\small\texttt{ethos whoami <handle>}}.
-From that point, every tool that reads the filesystem, calls the CLI, or connects via MCP has access to the full identity. There is no account to create, no cloud service to configure, and no API key required.
+and answer four prompts (name, email, GitHub handle, writing style). Optionally, create personas for your agents the same way---a code reviewer, a test writer, whatever roles you use. That is it. Hooks handle session management automatically: when a session starts, ethos registers you and the agent; when sub-agents spawn, they are auto-matched to personas by agent type. There is no account to create, no cloud service to configure, and no per-session setup.
 
 \prsection{Spokesperson Quote}
 
@@ -514,7 +513,9 @@ Features that are essential for launch. Without these, the product does not solv
   \featureitem{CLI interface}{{\small\texttt{ethos whoami}}, {\small\texttt{ethos show}}, {\small\texttt{ethos session}} callable from hooks, scripts, and CI pipelines}\label{feat:cli}
   \featureitem{MCP server}{{\small\texttt{ethos serve}} exposes identity operations via Model Context Protocol for MCP-compatible clients}\label{feat:mcp}
   \featureitem{Extension model}{per-tool attribute files under {\small\texttt{<persona>.ext/<tool>.yaml}} so any application can attach data}\label{feat:extensions}
-  \featureitem{Session roster}{track which personas are active in the current session with flock-based concurrency}\label{feat:session}
+  \featureitem{Session roster}{track which personas are active in the current session with parent-child tree and flock-based concurrency}\label{feat:session}
+  \featureitem{Automatic session management via hooks}{SessionStart registers human and primary agent; SubagentStart/Stop adds and removes sub-agents; SessionEnd tears down the roster}\label{feat:hooks}
+  \featureitem{Persona auto-matching}{when a sub-agent spawns, the hook matches its agent type to an ethos identity by handle---create a {\small\texttt{code-reviewer}} persona once, every code-reviewer sub-agent gets it automatically}\label{feat:auto-match}
   \featureitem{Repo-local identity overrides}{per-repo identity config at {\small\texttt{.punt-labs/ethos/config.yaml}} for project-specific persona selection}\label{feat:repo-local}
   \featureitem{Agent definitions in repo}{{\small\texttt{.punt-labs/ethos/agents/<name>.yaml}} for version-controlled agent personas shared across the team}\label{feat:repo-agents}
   \featureitem{Doctor command}{{\small\texttt{ethos doctor}} checks installation health, verifies paths, validates identity files}\label{feat:doctor}

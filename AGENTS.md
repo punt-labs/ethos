@@ -7,9 +7,13 @@ How to use ethos from an AI agent session — CLI, MCP tools, hooks, and extendi
 Ethos provides two things:
 
 1. **Identity registry** — YAML files at `~/.punt-labs/ethos/identities/<handle>.yaml`. One file per human or agent. Same schema for both.
-2. **Session roster** — who is present in the current Claude Code session (human, primary agent, subagents), their personas, and parent-child relationships.
+2. **Session roster** — who is present in the current Claude Code session (human, primary agent, subagents), their personas, and parent-child relationships. Managed automatically by hooks.
 
-Ethos is a sidecar. Other tools (Vox, Beadle, Biff) read ethos state from the filesystem. They do not import ethos. The file format is the contract.
+Tools integrate with ethos at whatever coupling level fits:
+
+- **Filesystem** — read YAML at known paths. Zero dependency on the ethos binary.
+- **CLI** — call `ethos whoami`, `ethos show`, etc. from hooks and scripts. Requires the binary.
+- **MCP server** — connect to `ethos serve` for structured identity operations during a session.
 
 ## Identity Operations
 
@@ -207,7 +211,7 @@ Tools don't need to go through ethos to read their extensions. The file path is 
 ~/.punt-labs/ethos/identities/<handle>.ext/<namespace>.yaml
 ```
 
-Any tool can read its own namespace file directly. This is the sidecar pattern — stable paths, no import dependency.
+Any tool can read its own namespace file directly — stable paths, no import dependency. This is the filesystem integration pattern; tools that prefer structured access use the CLI or MCP server instead.
 
 ### Validation Constraints
 
