@@ -643,11 +643,14 @@ if any are missing.
 ### Path containment
 
 Attribute paths must resolve within the ethos root. Containment is
-verified using `filepath.Abs` + `filepath.Clean` + `strings.HasPrefix`,
-not `filepath.Rel` (which computes relative paths but does not verify
-containment). Symlinks are allowed — users may symlink attributes from
-a dotfiles repo. The containment check runs on the logical path before
-following symlinks.
+verified by computing absolute, cleaned paths for both the ethos root
+and the candidate path, then using `filepath.Rel` to ensure the
+resulting relative path does not escape the root (rejects `..`,
+`../` prefixes, and absolute results). Naive `strings.HasPrefix` is
+not used — it is unsafe (e.g., `/ethos2` matches prefix `/ethos`).
+Symlinks are allowed — users may symlink attributes from a dotfiles
+repo. The containment check runs on the logical path before following
+symlinks.
 
 ### Sidecar README deployment
 

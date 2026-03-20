@@ -212,12 +212,15 @@ lightweight references are opt-in.
      attributes should warn, not fail)
 
 4. Path containment:
-   - `filepath.Abs` + `filepath.Clean` + `strings.HasPrefix` to verify
-     resolved path stays within ethos root
-   - Do NOT use `filepath.Rel` — it computes relative paths but does not
-     verify containment
+   - Compute absolute, cleaned paths for both the ethos root and the
+     candidate path, then use `filepath.Rel` to get the relative path
+   - Reject if the result is `".."`, starts with `".."+separator`, or
+     is absolute — these indicate escape from the root
+   - Do NOT use `strings.HasPrefix` for containment — it is unsafe
+     (e.g., `/ethos2` matches prefix `/ethos`)
    - Symlinks are allowed (dotfiles repos); containment checks the logical
      path before following symlinks
+   - Extract a small `isContained(root, path) (bool, error)` helper
 
 5. Update MCP tools:
    - `get_identity` / `whoami`: return full content by default. Add
@@ -315,9 +318,9 @@ Reads `voice` binding only. No impact.
    referenced file is missing.
 
 2. **Path traversal**: `writing_style: ../../../etc/passwd`. Mitigation:
-   `filepath.Abs` + `filepath.Clean` + `strings.HasPrefix` to verify
-   containment. Explicitly rejected in DES-010: `filepath.Rel` does not
-   verify containment. Symlinks are allowed (dotfiles repos).
+   `filepath.Rel` after cleaning both paths — reject if relative result
+   starts with `..`. Explicitly rejected in DES-010: `strings.HasPrefix`
+   is unsafe (`/ethos2` matches `/ethos`). Symlinks are allowed.
 
 3. **Large files**: A `.md` file could be arbitrarily large. No cap.
    Explicitly rejected in DES-010. If a file is too large, the author
