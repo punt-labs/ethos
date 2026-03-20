@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
@@ -429,8 +430,11 @@ func stringArg(req mcplib.CallToolRequest, key, fallback string) string {
 func boolArg(req mcplib.CallToolRequest, key string, fallback bool) bool {
 	args := req.GetArguments()
 	if v, ok := args[key]; ok {
-		if b, ok := v.(bool); ok {
+		switch b := v.(type) {
+		case bool:
 			return b
+		case string:
+			return strings.EqualFold(b, "true") || b == "1"
 		}
 	}
 	return fallback

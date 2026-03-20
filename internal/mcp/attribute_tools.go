@@ -132,18 +132,11 @@ func (h *Handler) handleListAttribute(store *attribute.Store, display string) (*
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to list %s: %v", display, err)), nil
 	}
-	type attrEntry struct {
-		Slug string `json:"slug"`
-	}
 	type attrListResponse struct {
-		Entries  []attrEntry `json:"entries"`
-		Warnings []string    `json:"warnings,omitempty"`
+		Attributes []*attribute.Attribute `json:"attributes"`
+		Warnings   []string               `json:"warnings,omitempty"`
 	}
-	entries := make([]attrEntry, 0, len(result.Attributes))
-	for _, a := range result.Attributes {
-		entries = append(entries, attrEntry{Slug: a.Slug})
-	}
-	return jsonResult(attrListResponse{Entries: entries, Warnings: result.Warnings})
+	return jsonResult(attrListResponse{Attributes: result.Attributes, Warnings: result.Warnings})
 }
 
 // Skill handlers
@@ -216,9 +209,6 @@ func (h *Handler) handleAddSkill(_ context.Context, req mcplib.CallToolRequest) 
 	slug := stringArg(req, "slug", "")
 	if handle == "" || slug == "" {
 		return mcplib.NewToolResultError("handle and slug are required"), nil
-	}
-	if !h.skills.Exists(slug) {
-		return mcplib.NewToolResultError(fmt.Sprintf("skill %q not found", slug)), nil
 	}
 	if err := h.store.Update(handle, func(id *identity.Identity) error {
 		for _, s := range id.Skills {
