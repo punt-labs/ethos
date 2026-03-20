@@ -9,6 +9,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -322,8 +323,8 @@ func (h *Handler) handleExtList(_ context.Context, req mcplib.CallToolRequest) (
 
 func (h *Handler) sessionIamTool() mcplib.Tool {
 	return mcplib.NewTool("session_iam",
-		mcplib.WithDescription("Declare persona for the current participant in a session."),
-		mcplib.WithString("session_id", mcplib.Required(), mcplib.Description("Session ID")),
+		mcplib.WithDescription("Declare persona for the current participant in a session. Session ID is auto-discovered if omitted."),
+		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
 		mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("Agent ID of the participant")),
 		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Persona handle to set")),
 	)
@@ -331,15 +332,15 @@ func (h *Handler) sessionIamTool() mcplib.Tool {
 
 func (h *Handler) sessionRosterTool() mcplib.Tool {
 	return mcplib.NewTool("session_roster",
-		mcplib.WithDescription("Return the full participant roster for a session."),
-		mcplib.WithString("session_id", mcplib.Required(), mcplib.Description("Session ID")),
+		mcplib.WithDescription("Return the full participant roster for the current session. Session ID is auto-discovered if omitted."),
+		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
 	)
 }
 
 func (h *Handler) sessionJoinTool() mcplib.Tool {
 	return mcplib.NewTool("session_join",
-		mcplib.WithDescription("Register a new participant in a session."),
-		mcplib.WithString("session_id", mcplib.Required(), mcplib.Description("Session ID")),
+		mcplib.WithDescription("Register a new participant in a session. Session ID is auto-discovered if omitted."),
+		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
 		mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("Unique agent ID")),
 		mcplib.WithString("persona", mcplib.Description("Persona handle")),
 		mcplib.WithString("parent", mcplib.Description("Parent agent ID")),
@@ -349,19 +350,40 @@ func (h *Handler) sessionJoinTool() mcplib.Tool {
 
 func (h *Handler) sessionLeaveTool() mcplib.Tool {
 	return mcplib.NewTool("session_leave",
-		mcplib.WithDescription("Remove a participant from a session."),
-		mcplib.WithString("session_id", mcplib.Required(), mcplib.Description("Session ID")),
+		mcplib.WithDescription("Remove a participant from a session. Session ID is auto-discovered if omitted."),
+		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
 		mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("Agent ID to remove")),
 	)
 }
 
 // --- Session Tool Handlers ---
 
+// resolveSessionID auto-discovers the session ID from the process tree
+// when not explicitly provided.
+func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
+	sessionID := stringArg(req, "session_id", "")
+	if sessionID != "" {
+		return sessionID, nil
+	}
+	if h.sessionStore == nil {
+		return "", fmt.Errorf("session store not configured")
+	}
+	claudePID := process.FindClaudePID()
+	sid, err := h.sessionStore.ReadCurrentSession(claudePID)
+	if err != nil {
+		return "", fmt.Errorf("no active session (could not discover from PID %s): %v", claudePID, err)
+	}
+	return sid, nil
+}
+
 func (h *Handler) handleSessionIam(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	if h.sessionStore == nil {
 		return mcplib.NewToolResultError("session store not configured"), nil
 	}
-	sessionID := stringArg(req, "session_id", "")
+	sessionID, err := h.resolveSessionID(req)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	agentID := stringArg(req, "agent_id", "")
 	persona := stringArg(req, "persona", "")
 
@@ -378,7 +400,10 @@ func (h *Handler) handleSessionRoster(_ context.Context, req mcplib.CallToolRequ
 	if h.sessionStore == nil {
 		return mcplib.NewToolResultError("session store not configured"), nil
 	}
-	sessionID := stringArg(req, "session_id", "")
+	sessionID, err := h.resolveSessionID(req)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	roster, err := h.sessionStore.Load(sessionID)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to load roster: %v", err)), nil
@@ -390,7 +415,10 @@ func (h *Handler) handleSessionJoin(_ context.Context, req mcplib.CallToolReques
 	if h.sessionStore == nil {
 		return mcplib.NewToolResultError("session store not configured"), nil
 	}
-	sessionID := stringArg(req, "session_id", "")
+	sessionID, err := h.resolveSessionID(req)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	p := session.Participant{
 		AgentID:   stringArg(req, "agent_id", ""),
 		Persona:   stringArg(req, "persona", ""),
@@ -407,7 +435,10 @@ func (h *Handler) handleSessionLeave(_ context.Context, req mcplib.CallToolReque
 	if h.sessionStore == nil {
 		return mcplib.NewToolResultError("session store not configured"), nil
 	}
-	sessionID := stringArg(req, "session_id", "")
+	sessionID, err := h.resolveSessionID(req)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	agentID := stringArg(req, "agent_id", "")
 	if err := h.sessionStore.Leave(sessionID, agentID); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to leave: %v", err)), nil
