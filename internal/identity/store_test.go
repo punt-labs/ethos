@@ -5,9 +5,17 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// createTestAttribute writes a .md file for use in identity tests.
+func createTestAttribute(t *testing.T, root string, kind attribute.Kind, slug, content string) {
+	t.Helper()
+	s := attribute.NewStore(root, kind)
+	require.NoError(t, s.Save(&attribute.Attribute{Slug: slug, Content: content}))
+}
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
@@ -173,6 +181,13 @@ func TestStore_SaveWithVoice(t *testing.T) {
 
 func TestStore_SaveWithAllFields(t *testing.T) {
 	s := testStore(t)
+
+	// Create attribute files that the identity references.
+	createTestAttribute(t, s.Root(), attribute.WritingStyles, "terse", "# Terse\nDirect.")
+	createTestAttribute(t, s.Root(), attribute.Personalities, "analytical", "# Analytical\nData-driven.")
+	createTestAttribute(t, s.Root(), attribute.Skills, "go", "# Go\nSystems programming.")
+	createTestAttribute(t, s.Root(), attribute.Skills, "testing", "# Testing\nTDD.")
+
 	id := &Identity{
 		Name:         "Full Identity",
 		Handle:       "full",
@@ -181,21 +196,86 @@ func TestStore_SaveWithAllFields(t *testing.T) {
 		GitHub:       "fullgit",
 		Voice:        &Voice{Provider: "elevenlabs", VoiceID: "v1"},
 		Agent:        ".claude/agents/full.md",
-		WritingStyle: "Terse and direct.",
-		Personality:  "Analytical.",
+		WritingStyle: "terse",
+		Personality:  "analytical",
 		Skills:       []string{"go", "testing"},
 	}
 	require.NoError(t, s.Save(id))
 
+	// Load with resolution — content fields should be populated.
 	loaded, err := s.Load("full")
 	require.NoError(t, err)
-	assert.Equal(t, id.Name, loaded.Name)
-	assert.Equal(t, id.Email, loaded.Email)
-	assert.Equal(t, id.GitHub, loaded.GitHub)
-	assert.Equal(t, id.Agent, loaded.Agent)
-	assert.Equal(t, id.WritingStyle, loaded.WritingStyle)
-	assert.Equal(t, id.Personality, loaded.Personality)
-	assert.Equal(t, id.Skills, loaded.Skills)
+	assert.Equal(t, "terse", loaded.WritingStyle)
+	assert.Equal(t, "analytical", loaded.Personality)
+	assert.Equal(t, []string{"go", "testing"}, loaded.Skills)
+	assert.Contains(t, loaded.PersonalityContent, "Analytical")
+	assert.Contains(t, loaded.WritingStyleContent, "Terse")
+	assert.Len(t, loaded.SkillContents, 2)
+	assert.Contains(t, loaded.SkillContents[0], "Go")
+	assert.Empty(t, loaded.Warnings)
+
+	// Load with Reference — content fields should be empty.
+	ref, err := s.Load("full", Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "terse", ref.WritingStyle)
+	assert.Empty(t, ref.WritingStyleContent)
+	assert.Empty(t, ref.PersonalityContent)
+	assert.Nil(t, ref.SkillContents)
+}
+
+func TestStore_SaveRejectsMissingRef(t *testing.T) {
+	s := testStore(t)
+	id := &Identity{
+		Name:        "Bad Ref",
+		Handle:      "badref",
+		Kind:        "human",
+		Personality: "nonexistent",
+	}
+	err := s.Save(id)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestStore_LoadMissingAttributeWarns(t *testing.T) {
+	s := testStore(t)
+
+	// Create identity with no attribute files.
+	dir := s.identitiesDir()
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	data := []byte("name: Test\nhandle: test\nkind: human\npersonality: missing-personality\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.yaml"), data, 0o600))
+
+	loaded, err := s.Load("test")
+	require.NoError(t, err)
+	assert.Equal(t, "missing-personality", loaded.Personality)
+	assert.Empty(t, loaded.PersonalityContent)
+	assert.Len(t, loaded.Warnings, 1)
+	assert.Contains(t, loaded.Warnings[0], "missing-personality")
+}
+
+func TestStore_Update(t *testing.T) {
+	s := testStore(t)
+
+	createTestAttribute(t, s.Root(), attribute.Personalities, "kind", "# Kind\n")
+	createTestAttribute(t, s.Root(), attribute.Personalities, "stern", "# Stern\n")
+
+	id := &Identity{
+		Name:        "Updatable",
+		Handle:      "updatable",
+		Kind:        "human",
+		Personality: "kind",
+	}
+	require.NoError(t, s.Save(id))
+
+	// Update personality.
+	require.NoError(t, s.Update("updatable", func(id *Identity) error {
+		id.Personality = "stern"
+		return nil
+	}))
+
+	loaded, err := s.Load("updatable", Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "stern", loaded.Personality)
 }
 
 func TestStore_FilePermissions(t *testing.T) {

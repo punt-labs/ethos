@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/session"
 
@@ -17,16 +18,26 @@ import (
 type Handler struct {
 	store        *identity.Store
 	sessionStore *session.Store
+	skills       *attribute.Store
+	personalities *attribute.Store
+	writingStyles *attribute.Store
 }
 
 // NewHandler creates a Handler with the given stores.
 // Panics if identity store is nil. Session store may be nil (session
-// tools will return errors if called without it).
+// tools will return errors if called without it). Attribute stores are
+// derived from the identity store's root.
 func NewHandler(s *identity.Store, ss ...*session.Store) *Handler {
 	if s == nil {
 		panic("mcp.NewHandler: store must not be nil")
 	}
-	h := &Handler{store: s}
+	root := s.Root()
+	h := &Handler{
+		store:         s,
+		skills:        attribute.NewStore(root, attribute.Skills),
+		personalities: attribute.NewStore(root, attribute.Personalities),
+		writingStyles: attribute.NewStore(root, attribute.WritingStyles),
+	}
 	if len(ss) > 0 {
 		h.sessionStore = ss[0]
 	}
@@ -35,27 +46,35 @@ func NewHandler(s *identity.Store, ss ...*session.Store) *Handler {
 
 // RegisterTools adds all ethos MCP tools to the given server.
 func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
+	// Identity tools
 	s.AddTool(h.whoamiTool(), h.handleWhoami)
 	s.AddTool(h.listIdentitiesTool(), h.handleListIdentities)
 	s.AddTool(h.getIdentityTool(), h.handleGetIdentity)
 	s.AddTool(h.createIdentityTool(), h.handleCreateIdentity)
+	// Extension tools
 	s.AddTool(h.extGetTool(), h.handleExtGet)
 	s.AddTool(h.extSetTool(), h.handleExtSet)
 	s.AddTool(h.extDelTool(), h.handleExtDel)
 	s.AddTool(h.extListTool(), h.handleExtList)
+	// Session tools
 	s.AddTool(h.sessionIamTool(), h.handleSessionIam)
 	s.AddTool(h.sessionRosterTool(), h.handleSessionRoster)
 	s.AddTool(h.sessionJoinTool(), h.handleSessionJoin)
 	s.AddTool(h.sessionLeaveTool(), h.handleSessionLeave)
+	// Attribute tools
+	h.registerAttributeTools(s)
 }
 
 // --- Tool Definitions ---
 
 func (h *Handler) whoamiTool() mcplib.Tool {
 	return mcplib.NewTool("whoami",
-		mcplib.WithDescription("Show or set the active identity. Without a handle, returns the active identity. With a handle, sets it."),
+		mcplib.WithDescription("Show or set the active identity. Without a handle, returns the active identity with resolved attribute content. With a handle, sets it."),
 		mcplib.WithString("handle",
 			mcplib.Description("Handle to set as active identity. Omit to show current."),
+		),
+		mcplib.WithBoolean("reference",
+			mcplib.Description("If true, return attribute slugs only without resolving .md content."),
 		),
 	)
 }
@@ -68,10 +87,13 @@ func (h *Handler) listIdentitiesTool() mcplib.Tool {
 
 func (h *Handler) getIdentityTool() mcplib.Tool {
 	return mcplib.NewTool("get_identity",
-		mcplib.WithDescription("Get full details of a specific identity by handle."),
+		mcplib.WithDescription("Get full details of a specific identity by handle, with resolved attribute content by default."),
 		mcplib.WithString("handle",
 			mcplib.Required(),
 			mcplib.Description("The identity handle to look up."),
+		),
+		mcplib.WithBoolean("reference",
+			mcplib.Description("If true, return attribute slugs only without resolving .md content."),
 		),
 	)
 }
@@ -105,7 +127,12 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		return mcplib.NewToolResultText(fmt.Sprintf("Active identity set to %q", handle)), nil
 	}
 
-	id, err := h.store.Active()
+	var opts []identity.LoadOption
+	if boolArg(req, "reference", false) {
+		opts = append(opts, identity.Reference(true))
+	}
+
+	id, err := h.store.Active(opts...)
 	if err != nil {
 		return mcplib.NewToolResultError("no active identity configured — run 'ethos create' first"), nil
 	}
@@ -147,7 +174,12 @@ func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolReques
 		return mcplib.NewToolResultError("handle is required"), nil
 	}
 
-	id, err := h.store.Load(handle)
+	var opts []identity.LoadOption
+	if boolArg(req, "reference", false) {
+		opts = append(opts, identity.Reference(true))
+	}
+
+	id, err := h.store.Load(handle, opts...)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("identity not found: %v", err)), nil
 	}
@@ -389,6 +421,16 @@ func stringArg(req mcplib.CallToolRequest, key, fallback string) string {
 	if v, ok := args[key]; ok {
 		if s, ok := v.(string); ok {
 			return s
+		}
+	}
+	return fallback
+}
+
+func boolArg(req mcplib.CallToolRequest, key string, fallback bool) bool {
+	args := req.GetArguments()
+	if v, ok := args[key]; ok {
+		if b, ok := v.(bool); ok {
+			return b
 		}
 	}
 	return fallback

@@ -6,9 +6,19 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"gopkg.in/yaml.v3"
 )
+
+func flock(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+}
+
+func funlock(f *os.File) error {
+	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+}
 
 // ErrNoActive is returned when no active identity is configured.
 var ErrNoActive = errors.New("no active identity")
@@ -34,6 +44,11 @@ func DefaultStore() (*Store, error) {
 	return &Store{root: filepath.Join(home, ".punt-labs", "ethos")}, nil
 }
 
+// Root returns the store's root directory.
+func (s *Store) Root() string {
+	return s.root
+}
+
 func (s *Store) identitiesDir() string {
 	return filepath.Join(s.root, "identities")
 }
@@ -44,8 +59,29 @@ func (s *Store) Path(handle string) string {
 	return filepath.Join(s.identitiesDir(), filepath.Base(handle)+".yaml")
 }
 
-// Load reads an identity YAML file by handle.
-func (s *Store) Load(handle string) (*Identity, error) {
+// LoadOption configures Load behavior.
+type LoadOption func(*loadConfig)
+
+type loadConfig struct {
+	reference bool
+}
+
+// Reference returns a LoadOption that skips attribute content resolution.
+// When true, Load returns attribute slugs in the path fields without
+// reading the .md files.
+func Reference(v bool) LoadOption {
+	return func(c *loadConfig) { c.reference = v }
+}
+
+// Load reads an identity YAML file by handle. By default, it resolves
+// attribute references (personality, writing_style, skills) to their
+// markdown content. Pass Reference(true) to return slugs only.
+func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
+	var cfg loadConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	path := s.Path(handle)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -61,7 +97,87 @@ func (s *Store) Load(handle string) (*Identity, error) {
 	}
 	// Assemble extension data from <persona>.ext/ directory.
 	id.Ext = s.loadExtensions(handle)
+
+	// Resolve attribute content unless reference-only mode.
+	if !cfg.reference {
+		id.Warnings = s.resolveAttributes(&id)
+	}
+
 	return &id, nil
+}
+
+// resolveAttributes reads .md files for personality, writing_style, and
+// skills slugs. Returns warnings for any files that could not be read.
+func (s *Store) resolveAttributes(id *Identity) []string {
+	var warnings []string
+
+	if id.Personality != "" {
+		store := attribute.NewStore(s.root, attribute.Personalities)
+		a, err := store.Load(id.Personality)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("personality %q: %v", id.Personality, err))
+		} else {
+			id.PersonalityContent = a.Content
+		}
+	}
+
+	if id.WritingStyle != "" {
+		store := attribute.NewStore(s.root, attribute.WritingStyles)
+		a, err := store.Load(id.WritingStyle)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("writing_style %q: %v", id.WritingStyle, err))
+		} else {
+			id.WritingStyleContent = a.Content
+		}
+	}
+
+	if len(id.Skills) > 0 {
+		store := attribute.NewStore(s.root, attribute.Skills)
+		id.SkillContents = make([]string, len(id.Skills))
+		for i, slug := range id.Skills {
+			a, err := store.Load(slug)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("skill %q: %v", slug, err))
+			} else {
+				id.SkillContents[i] = a.Content
+			}
+		}
+	}
+
+	return warnings
+}
+
+// ValidateRefs checks that all attribute references in an identity point
+// to existing .md files. Returns an error on the first missing reference.
+func (s *Store) ValidateRefs(id *Identity) error {
+	if id.Personality != "" {
+		store := attribute.NewStore(s.root, attribute.Personalities)
+		if !store.Exists(id.Personality) {
+			return &ValidationError{
+				Field:   "personality",
+				Message: fmt.Sprintf("%q not found — create it with 'ethos personality create %s'", id.Personality, id.Personality),
+			}
+		}
+	}
+	if id.WritingStyle != "" {
+		store := attribute.NewStore(s.root, attribute.WritingStyles)
+		if !store.Exists(id.WritingStyle) {
+			return &ValidationError{
+				Field:   "writing_style",
+				Message: fmt.Sprintf("%q not found — create it with 'ethos writing-style create %s'", id.WritingStyle, id.WritingStyle),
+			}
+		}
+	}
+	skillStore := attribute.NewStore(s.root, attribute.Skills)
+	for _, slug := range id.Skills {
+		if !skillStore.Exists(slug) {
+			return &ValidationError{
+				Field:   "skills",
+				Message: fmt.Sprintf("%q not found — create it with 'ethos skill create %s'", slug, slug),
+			}
+		}
+	}
+	return nil
 }
 
 // ListResult holds the results of listing identities, including any
@@ -71,8 +187,9 @@ type ListResult struct {
 	Warnings   []string
 }
 
-// List returns all identities in the store. Files that cannot be loaded
-// are reported as warnings in the result rather than failing the entire list.
+// List returns all identities in the store. Uses reference mode (no
+// attribute content resolution). Files that cannot be loaded are
+// reported as warnings.
 func (s *Store) List() (*ListResult, error) {
 	dir := s.identitiesDir()
 	entries, err := os.ReadDir(dir)
@@ -89,7 +206,7 @@ func (s *Store) List() (*ListResult, error) {
 			continue
 		}
 		handle := strings.TrimSuffix(entry.Name(), ".yaml")
-		id, err := s.Load(handle)
+		id, err := s.Load(handle, Reference(true))
 		if err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), err))
 			continue
@@ -99,8 +216,8 @@ func (s *Store) List() (*ListResult, error) {
 	return result, nil
 }
 
-// Active returns the currently active identity.
-func (s *Store) Active() (*Identity, error) {
+// Active returns the currently active identity (with resolved content).
+func (s *Store) Active(opts ...LoadOption) (*Identity, error) {
 	path := filepath.Join(s.root, "active")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -113,13 +230,13 @@ func (s *Store) Active() (*Identity, error) {
 	if handle == "" {
 		return nil, ErrNoActive
 	}
-	return s.Load(handle)
+	return s.Load(handle, opts...)
 }
 
 // SetActive sets the active identity by handle. Returns an error if
 // the identity does not exist.
 func (s *Store) SetActive(handle string) error {
-	if _, err := s.Load(handle); err != nil {
+	if _, err := s.Load(handle, Reference(true)); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
@@ -136,8 +253,12 @@ func (s *Store) Exists(handle string) bool {
 }
 
 // Save writes an identity YAML file. Returns an error if an identity
-// with the same handle already exists. Uses O_EXCL for atomic create.
+// with the same handle already exists or if attribute references are
+// invalid. Uses O_EXCL for atomic create.
 func (s *Store) Save(id *Identity) error {
+	if err := s.ValidateRefs(id); err != nil {
+		return err
+	}
 	dir := s.identitiesDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
@@ -160,6 +281,42 @@ func (s *Store) Save(id *Identity) error {
 	}
 	// Create extension directory alongside the identity file.
 	return os.MkdirAll(s.ExtDir(id.Handle), 0o700)
+}
+
+// Update reads an existing identity, applies a mutation function, validates
+// the result, and writes it back. Uses flock for concurrency safety.
+// Used by attribute binding operations (set_personality, add_skill, etc.).
+func (s *Store) Update(handle string, mutate func(*Identity) error) error {
+	path := s.Path(handle)
+	lockPath := path + ".lock"
+
+	// Acquire exclusive lock.
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating lock file: %w", err)
+	}
+	defer lockFile.Close()
+	defer os.Remove(lockPath)
+	if err := flock(lockFile); err != nil {
+		return fmt.Errorf("acquiring lock: %w", err)
+	}
+	defer funlock(lockFile)
+
+	id, err := s.Load(handle, Reference(true))
+	if err != nil {
+		return err
+	}
+	if err := mutate(id); err != nil {
+		return err
+	}
+	if err := s.ValidateRefs(id); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(id)
+	if err != nil {
+		return fmt.Errorf("marshaling identity: %w", err)
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 // IdentitiesDir returns the path to the identities subdirectory.
