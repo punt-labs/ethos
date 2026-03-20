@@ -53,8 +53,9 @@ sh install.sh
 - **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (structured protocol)
 - **Extensible** — any tool attaches its own attributes via `<persona>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
+- **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
 - **Resolution chain** — repo-local config overrides global active identity
-- **Channel bindings** — voice, email, GitHub handle, Claude Code agent definition
+- **Channel bindings** — an identity *has* a voice the way it *has* an email: voice (Vox), email (Beadle), GitHub (Biff), Claude Code agent definition
 
 ## What It Looks Like
 
@@ -128,6 +129,31 @@ skills:
   - product-strategy
 ```
 
+Same schema for agents — only `kind` differs:
+
+```yaml
+name: Code Reviewer
+handle: code-reviewer
+kind: agent
+writing_style: |
+  Formal. Cite line numbers. Flag security issues first.
+personality: |
+  Thorough, direct, zero tolerance for silent failures.
+skills:
+  - code-review
+  - security-analysis
+agent: .claude/agents/code-reviewer.md
+```
+
+When a `code-reviewer` subagent spawns, ethos auto-matches it to this
+persona by handle. The agent inherits the writing style, personality,
+and channel bindings defined here.
+
+**Auto-matching convention:** the ethos handle must exactly match the
+agent type string (case-sensitive, lowercase). Handles are restricted to
+`[a-z0-9-]`. If a subagent doesn't get a persona, check that you created
+an identity with a handle matching the agent type.
+
 ## Storage
 
 | Scope | Path | Tracked? |
@@ -138,6 +164,20 @@ skills:
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+
+## Per-Project Identity
+
+Override the global active identity for a specific repo by creating
+`.punt-labs/ethos/config.yaml` in the repo root:
+
+```yaml
+active: claude
+```
+
+This pins the identity to `claude` in this repo regardless of the global
+`ethos whoami` setting. Tracked in git — the whole team shares the same
+project identity. Useful when a repo's agent should always use a specific
+persona (e.g., beadle always sends email as `claude`).
 
 ## Integration
 
