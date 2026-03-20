@@ -98,9 +98,11 @@ func (s *Store) Save(a *Attribute) error {
 	}
 	if _, err = f.WriteString(content); err != nil {
 		f.Close()
+		os.Remove(p)
 		return fmt.Errorf("writing %s file: %w", s.kind.DisplayName, err)
 	}
 	if err := f.Close(); err != nil {
+		os.Remove(p)
 		return fmt.Errorf("writing %s file: %w", s.kind.DisplayName, err)
 	}
 	return nil

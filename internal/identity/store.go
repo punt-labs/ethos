@@ -6,19 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"gopkg.in/yaml.v3"
 )
-
-func flock(f *os.File) error {
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
-}
-
-func funlock(f *os.File) error {
-	return syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-}
 
 // ErrNoActive is returned when no active identity is configured.
 var ErrNoActive = errors.New("no active identity")
@@ -151,6 +142,9 @@ func (s *Store) resolveAttributes(id *Identity) []string {
 // to existing .md files. Returns an error on the first missing reference.
 func (s *Store) ValidateRefs(id *Identity) error {
 	if id.Personality != "" {
+		if err := attribute.ValidateSlug(id.Personality); err != nil {
+			return &ValidationError{Field: "personality", Message: fmt.Sprintf("invalid slug %q: %v", id.Personality, err)}
+		}
 		store := attribute.NewStore(s.root, attribute.Personalities)
 		if !store.Exists(id.Personality) {
 			return &ValidationError{
@@ -160,6 +154,9 @@ func (s *Store) ValidateRefs(id *Identity) error {
 		}
 	}
 	if id.WritingStyle != "" {
+		if err := attribute.ValidateSlug(id.WritingStyle); err != nil {
+			return &ValidationError{Field: "writing_style", Message: fmt.Sprintf("invalid slug %q: %v", id.WritingStyle, err)}
+		}
 		store := attribute.NewStore(s.root, attribute.WritingStyles)
 		if !store.Exists(id.WritingStyle) {
 			return &ValidationError{
@@ -170,6 +167,9 @@ func (s *Store) ValidateRefs(id *Identity) error {
 	}
 	skillStore := attribute.NewStore(s.root, attribute.Skills)
 	for _, slug := range id.Skills {
+		if err := attribute.ValidateSlug(slug); err != nil {
+			return &ValidationError{Field: "skills", Message: fmt.Sprintf("invalid slug %q: %v", slug, err)}
+		}
 		if !skillStore.Exists(slug) {
 			return &ValidationError{
 				Field:   "skills",
@@ -315,7 +315,15 @@ func (s *Store) Update(handle string, mutate func(*Identity) error) error {
 	if err != nil {
 		return fmt.Errorf("marshaling identity: %w", err)
 	}
-	return os.WriteFile(path, data, 0o600)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("writing identity: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("renaming identity: %w", err)
+	}
+	return nil
 }
 
 // IdentitiesDir returns the path to the identities subdirectory.
