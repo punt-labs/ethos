@@ -40,7 +40,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 
 **Example — read identity from MCP:**
 
-```
+```text
 Call mcp__plugin_ethos_self__get_identity with handle="mal"
 ```
 
