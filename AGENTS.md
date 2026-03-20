@@ -31,16 +31,34 @@ ethos show mal --json                 # JSON output
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 12 tools. The plugin auto-allows `mcp__plugin_ethos_self__*` in `settings.json` on first session.
+When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 25 tools. The plugin auto-allows `mcp__plugin_ethos_self__*` in `settings.json` on first session.
 
 **Identity tools:**
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `whoami` | optional `handle` | Show active identity, or set it |
+| `whoami` | optional `handle`, `reference` | Show active identity (with resolved content), or set it |
 | `list_identities` | — | List all identities with active status |
-| `get_identity` | `handle` | Full identity including extensions |
+| `get_identity` | `handle`, optional `reference` | Full identity with resolved attribute content |
 | `create_identity` | `name`, `handle`, `kind` + optional fields | Create a new identity |
+
+**Attribute tools:**
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `create_skill` | `slug`, `content` | Create a skill .md file |
+| `get_skill` | `slug` | Read skill content |
+| `list_skills` | — | List all skills |
+| `create_personality` | `slug`, `content` | Create a personality .md file |
+| `get_personality` | `slug` | Read personality content |
+| `list_personalities` | — | List all personalities |
+| `create_writing_style` | `slug`, `content` | Create a writing style .md file |
+| `get_writing_style` | `slug` | Read writing style content |
+| `list_writing_styles` | — | List all writing styles |
+| `set_personality` | `handle`, `slug` | Set personality on an identity |
+| `set_writing_style` | `handle`, `slug` | Set writing style on an identity |
+| `add_skill` | `handle`, `slug` | Add skill to an identity |
+| `remove_skill` | `handle`, `slug` | Remove skill from an identity |
 
 **Example — read identity from MCP:**
 
@@ -48,7 +66,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 Call mcp__plugin_ethos_self__get_identity with handle="mal"
 ```
 
-Returns JSON with all core fields plus the `ext` map (extensions from all tools).
+Returns JSON with all core fields, resolved attribute content (`writing_style_content`, `personality_content`, `skill_contents`), and the `ext` map. Pass `reference: true` for slugs only.
 
 ## Session Roster
 
@@ -276,11 +294,9 @@ voice:                                # vox channel binding
   provider: elevenlabs
   voice_id: "abc123def456"
 agent: .claude/agents/mal.md          # claude code agent binding
-writing_style: |                      # prose style directives
-  Direct. Short sentences. Data over adjectives.
-personality: |                        # behavioral directives
-  Principal engineer. Formal methods, accountability.
-skills:                               # capability tags
+writing_style: concise-quantified     # slug → writing-styles/concise-quantified.md
+personality: principal-engineer       # slug → personalities/principal-engineer.md
+skills:                               # slugs → skills/<slug>.md
   - formal-methods
   - product-strategy
 ```

@@ -50,7 +50,8 @@ sh install.sh
 ## Features
 
 - **Same schema for humans and agents** — one YAML file per persona, `kind: human` or `kind: agent`
-- **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (structured protocol)
+- **Composable attributes** — skills, personalities, and writing styles are reusable `.md` files referenced by slug
+- **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (25 tools)
 - **Extensible** — any tool attaches its own attributes via `<persona>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
 - **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
@@ -60,74 +61,184 @@ sh install.sh
 ## What It Looks Like
 
 ```text
+$ ethos personality create principal-engineer -f principal-engineer.md
+Created personality "principal-engineer"
+
+$ ethos skill create go-engineering -f go-engineering.md
+Created skill "go-engineering"
+
 $ ethos create
 Name: Mal Reynolds
 Handle [mal-reynolds]: mal
 Kind (human/agent) [human]:
 Email (optional): mal@serenity.ship
-GitHub username (optional): mal
-Voice provider (optional, e.g. elevenlabs):
-Agent definition path (optional):
-Writing style (optional, one line): Direct. Short sentences. Data over adjectives.
-Personality (optional, one line): Principal engineer. Formal methods, accountability.
-Skills (optional, comma-separated): formal-methods, product-strategy
-Set as active identity (first identity created)
+
+Personality:
+  1. principal-engineer
+  n. [create new]
+  (empty to skip)
+Choice: 1
+
+Skills (select multiple, comma-separated):
+  1. go-engineering
+  n. [create new]
+  (empty to skip)
+Choice: 1
+
 Created identity "mal" (Mal Reynolds)
 
 $ ethos whoami
 Mal Reynolds (mal)
 
-$ ethos list
-* mal            Mal Reynolds
-  river            River Tam
+$ ethos show mal
+Name:         Mal Reynolds
+Handle:       mal
+Kind:         human
+Email:        mal@serenity.ship
+Personality:  principal-engineer
+
+# Principal Engineer
+Direct, accountable, evidence-driven...
+
+Skills:       go-engineering
+
+--- go-engineering ---
+# Go Engineering
+Systems design, correctness over speed...
 ```
 
 ## Commands
 
+### Identity
+
 | Command | What it does |
 |---------|-------------|
 | `ethos whoami [--json]` | Show the active identity |
-| `ethos whoami <handle> [--json]` | Set the active identity |
-| `ethos create` | Create a new identity (interactive) |
+| `ethos whoami <handle>` | Set the active identity |
+| `ethos create` | Create a new identity (interactive wizard) |
 | `ethos create -f <path>` | Create from a YAML file |
 | `ethos list [--json]` | List all identities |
-| `ethos show <handle> [--json]` | Show identity details |
-| `ethos version [--json]` | Print version |
-| `ethos doctor [--json]` | Check installation health |
-| `ethos ext` | Manage tool-scoped extensions |
+| `ethos show <handle> [--json]` | Show identity with resolved attribute content |
+| `ethos show <handle> --reference` | Show identity with attribute slugs only |
+
+### Attributes
+
+| Command | What it does |
+|---------|-------------|
+| `ethos skill create <slug>` | Create a skill (opens `$EDITOR` or `--file`) |
+| `ethos skill list` | List all skills |
+| `ethos skill show <slug>` | Show skill content |
+| `ethos skill add <handle> <slug>` | Add skill to an identity |
+| `ethos skill remove <handle> <slug>` | Remove skill from an identity |
+| `ethos personality create <slug>` | Create a personality |
+| `ethos personality list` | List all personalities |
+| `ethos personality show <slug>` | Show personality content |
+| `ethos personality set <handle> <slug>` | Set personality on an identity |
+| `ethos writing-style create <slug>` | Create a writing style |
+| `ethos writing-style list` | List all writing styles |
+| `ethos writing-style show <slug>` | Show writing style content |
+| `ethos writing-style set <handle> <slug>` | Set writing style on an identity |
+
+### Session
+
+| Command | What it does |
+|---------|-------------|
 | `ethos iam <persona>` | Declare persona in current session |
 | `ethos session` | Show current session participants |
-| `ethos session create` | Create a new session roster |
-| `ethos session join` | Add a participant to a session |
-| `ethos session leave` | Remove a participant from a session |
 | `ethos session purge` | Clean up stale session rosters |
+
+### Extensions
+
+| Command | What it does |
+|---------|-------------|
+| `ethos ext set <persona> <ns> <key> <value>` | Write an extension key |
+| `ethos ext get <persona> <ns> [key]` | Read extension key(s) |
+| `ethos ext del <persona> <ns> [key]` | Delete key or namespace |
+| `ethos ext list <persona>` | List extension namespaces |
+
+### Admin
+
+| Command | What it does |
+|---------|-------------|
+| `ethos version [--json]` | Print version |
+| `ethos doctor [--json]` | Check installation health |
 | `ethos serve` | Start MCP server (stdio) |
 | `ethos uninstall` | Remove plugin (`--purge` to remove binary + data) |
 
 `--json` is a global flag — valid before or after the subcommand.
-Use `--` to stop flag parsing (e.g., `ethos create -f -- --json` treats
-`--json` as a filename). Use `ethos <command> --help` for per-command usage.
+
+## MCP Tools (25)
+
+When running as a Claude Code plugin, ethos registers an MCP server with
+25 tools. The plugin auto-allows `mcp__plugin_ethos_self__*` on first session.
+
+### Identity tools
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `whoami` | optional `handle`, `reference` | Show or set active identity |
+| `list_identities` | — | List all identities |
+| `get_identity` | `handle`, optional `reference` | Full identity with resolved content |
+| `create_identity` | `name`, `handle`, `kind` + optional fields | Create a new identity |
+
+### Attribute tools
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `create_skill` | `slug`, `content` | Create a skill .md file |
+| `get_skill` | `slug` | Read skill content |
+| `list_skills` | — | List all skills |
+| `create_personality` | `slug`, `content` | Create a personality .md file |
+| `get_personality` | `slug` | Read personality content |
+| `list_personalities` | — | List all personalities |
+| `create_writing_style` | `slug`, `content` | Create a writing style .md file |
+| `get_writing_style` | `slug` | Read writing style content |
+| `list_writing_styles` | — | List all writing styles |
+| `set_personality` | `handle`, `slug` | Set personality on an identity |
+| `set_writing_style` | `handle`, `slug` | Set writing style on an identity |
+| `add_skill` | `handle`, `slug` | Add skill to an identity |
+| `remove_skill` | `handle`, `slug` | Remove skill from an identity |
+
+### Extension tools
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `ext_get` | `persona`, `namespace`, optional `key` | Read extension key(s) |
+| `ext_set` | `persona`, `namespace`, `key`, `value` | Write extension key |
+| `ext_del` | `persona`, `namespace`, optional `key` | Delete key or namespace |
+| `ext_list` | `persona` | List extension namespaces |
+
+### Session tools
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `session_iam` | `session_id`, `agent_id`, `persona` | Declare persona |
+| `session_roster` | `session_id` | Full participant roster |
+| `session_join` | `session_id`, `agent_id` + optional fields | Add participant |
+| `session_leave` | `session_id`, `agent_id` | Remove participant |
 
 ## Identity Schema
 
 ```yaml
 name: Mal Reynolds
 handle: mal
-kind: human                    # or "agent"
-email: mal@serenity.ship        # email binding
-github: mal                  # GitHub binding
-voice:                         # voice binding
+kind: human                       # or "agent"
+email: mal@serenity.ship           # Beadle binding
+github: mal                        # Biff binding
+voice:                             # Vox binding
   provider: elevenlabs
   voice_id: "abc123"
-agent: .claude/agents/mal.md # claude code agent binding
-writing_style: |
-  Direct. Short sentences. Data over adjectives.
-personality: |
-  Principal engineer. Formal methods, accountability.
-skills:
-  - formal-methods
+agent: .claude/agents/mal.md       # Claude Code agent binding
+writing_style: concise-quantified  # slug → writing-styles/concise-quantified.md
+personality: principal-engineer    # slug → personalities/principal-engineer.md
+skills:                            # slugs → skills/<slug>.md
+  - go-engineering
   - product-strategy
 ```
+
+Attributes (`writing_style`, `personality`, `skills`) are slugs that reference
+`.md` files in the attribute directories. `ethos show` resolves them to full
+content by default. Multiple identities can share the same attribute files.
 
 Same schema for agents — only `kind` differs:
 
@@ -135,10 +246,7 @@ Same schema for agents — only `kind` differs:
 name: Code Reviewer
 handle: code-reviewer
 kind: agent
-writing_style: |
-  Formal. Cite line numbers. Flag security issues first.
-personality: |
-  Thorough, direct, zero tolerance for silent failures.
+personality: principal-engineer
 skills:
   - code-review
   - security-analysis
@@ -146,8 +254,8 @@ agent: .claude/agents/code-reviewer.md
 ```
 
 When a `code-reviewer` subagent spawns, ethos auto-matches it to this
-persona by handle. The agent inherits the writing style, personality,
-and channel bindings defined here.
+persona by handle. The agent inherits the personality, skills, and
+channel bindings defined here.
 
 **Auto-matching convention:** the ethos handle must exactly match the
 agent type string (case-sensitive, lowercase). Handles are restricted to
@@ -160,6 +268,9 @@ an identity with a handle matching the agent type.
 |-------|------|----------|
 | Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No (personal) |
 | Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
+| Skills | `~/.punt-labs/ethos/skills/<slug>.md` | No |
+| Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
+| Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
 | Active identity | `~/.punt-labs/ethos/active` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
@@ -187,10 +298,15 @@ Tools integrate with ethos at whatever coupling level fits:
 |---------|-----|------------|
 | **Filesystem** | Read YAML at `~/.punt-labs/ethos/identities/<handle>.yaml` | None |
 | **CLI** | Call `ethos whoami --json` or `ethos show <handle> --json` from hooks/scripts | Binary installed |
-| **MCP server** | Connect to `ethos serve` for structured identity operations | Binary installed |
+| **MCP server** | Connect to `ethos serve` for structured identity operations (25 tools) | Binary installed |
 
 **Core identity fields** (owned by ethos): name, handle, kind, email,
 github, voice, agent, writing\_style, personality, skills.
+
+**Attributes** (reusable `.md` files): skills, personalities, and writing
+styles are plain markdown documents stored in dedicated directories. Any
+identity can reference them by slug. Create with `ethos skill create`,
+`ethos personality create`, or `ethos writing-style create`.
 
 **Extensions** (owned by each tool): any tool can read/write namespaced
 key-value pairs in `<persona>.ext/<tool>.yaml`. A voice tool stores its
