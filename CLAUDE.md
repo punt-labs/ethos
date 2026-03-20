@@ -85,16 +85,14 @@ name: Mal Reynolds
 handle: mal
 kind: human                           # or "agent"
 email: mal@serenity.ship               # beadle binding
-github: mal                          # biff binding
-voice:                                # vox binding
+github: mal                            # biff binding
+voice:                                 # vox binding
   provider: elevenlabs
   voice_id: "..."
-agent: .claude/agents/mal.md         # claude code agent binding
-writing_style: |
-  Direct. Short sentences. Data over adjectives.
-personality: |
-  Principal engineer. Formal methods, accountability.
-skills:
+agent: .claude/agents/mal.md           # claude code agent binding
+writing_style: concise-quantified      # slug → writing-styles/concise-quantified.md
+personality: principal-engineer        # slug → personalities/principal-engineer.md
+skills:                                # slugs → skills/<slug>.md
   - formal-methods
   - product-strategy
 ```
