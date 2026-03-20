@@ -567,9 +567,9 @@ All ethos hooks now follow these rules:
 
 ---
 
-## DES-010: Rich identity attributes — markdown references (OPEN)
+## DES-010: Rich identity attributes — markdown references (SETTLED)
 
-**Status**: Open. Build plan at `docs/build-plan.md`.
+**Status**: Settled. Implemented in PR #47. Build plan at `docs/build-plan.md`.
 
 ### Problem
 
