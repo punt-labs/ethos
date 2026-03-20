@@ -1,0 +1,553 @@
+\documentclass[11pt,letterpaper]{article}
+
+% ── Geometry ──────────────────────────────────────────────────────────────────
+\usepackage[margin=1in]{geometry}
+
+% ── Pagination ────────────────────────────────────────────────────────────────
+\usepackage[all]{nowidow}    % Require ≥2 lines on each side of a page break
+\brokenpenalty=10000         % No hyphenated words across page breaks
+\raggedbottom                % Allow uneven page bottoms rather than stretching
+
+% ── Fonts ─────────────────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage{newpxtext}     % Palatino-based serif (TeX Gyre Pagella)
+\usepackage{newpxmath}     % Matching math font
+
+% ── Colors ────────────────────────────────────────────────────────────────────
+\usepackage[dvipsnames]{xcolor}
+\definecolor{SectionBlue}{HTML}{1B3A5C}
+\definecolor{AccentGray}{HTML}{4A4A4A}
+\definecolor{QuoteBorder}{HTML}{8B9DAF}
+\definecolor{RiskRed}{HTML}{C0392B}
+\definecolor{RiskAmber}{HTML}{E67E22}
+\definecolor{RiskGreen}{HTML}{27AE60}
+\definecolor{BoxBg}{HTML}{F7F8FA}
+
+% ── Tables ────────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{tabularx}
+
+% ── Boxes ─────────────────────────────────────────────────────────────────────
+\usepackage[framemethod=tikz]{mdframed}
+
+% ── Lists ─────────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+\usepackage{needspace}
+
+% ── Hyperlinks ────────────────────────────────────────────────────────────────
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=SectionBlue,
+  urlcolor=SectionBlue,
+  citecolor=SectionBlue,
+  pdfauthor={Jim Freeman},
+  pdftitle={PR/FAQ: ethos},
+  pdfsubject={Working Backwards --- Identity Binding for Humans and AI Agents},
+}
+
+% ── Bibliography ─────────────────────────────────────────────────────────────
+\usepackage[style=numeric,backend=biber,sorting=none]{biblatex}
+\addbibresource{prfaq.bib}
+
+% ── Section styling ───────────────────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}
+  {\needspace{6\baselineskip}\Large\bfseries\color{SectionBlue}}
+  {}
+  {0pt}
+  {}
+
+\titleformat{\subsection}
+  {\needspace{5\baselineskip}\large\bfseries\color{AccentGray}}
+  {}
+  {0pt}
+  {}
+
+\titleformat{\subsubsection}
+  {\normalsize\bfseries\color{AccentGray}}
+  {}
+  {0pt}
+  {}
+\titlespacing*{\subsubsection}{0pt}{1em}{0.5em}[0pt]
+
+% ── Document stage ───────────────────────────────────────────────────────────
+\newcommand{\prfaqstage}[1]{\def\theprfaqstage{#1}}
+\prfaqstage{hypothesis}
+
+% ── Document version ─────────────────────────────────────────────────────────
+\newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
+\prfaqversion{1}{4}
+
+% ── Header/footer ────────────────────────────────────────────────────────────
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\textcolor{AccentGray}{Stage: \theprfaqstage{} \enspace\textbar\enspace v\theprfaqmajor.\theprfaqminor}}
+\fancyhead[R]{\footnotesize\textcolor{AccentGray}{\thepage}}
+\renewcommand{\headrulewidth}{0pt}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Custom environments
+% ══════════════════════════════════════════════════════════════════════════════
+
+% ── \prsection{title} — styled press release section header ──────────────────
+\newcommand{\prsection}[1]{%
+  \vspace{1em}%
+  {\large\bfseries\color{SectionBlue}#1}%
+  \vspace{0.3em}\par%
+}
+
+% ── customerquote — indented, italic customer quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=QuoteBorder,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{customerquote}
+
+% ── spokespersonquote — indented spokesperson quote ──────────────────────────
+\newmdenv[
+  topline=false,
+  bottomline=false,
+  rightline=false,
+  linewidth=3pt,
+  linecolor=SectionBlue,
+  backgroundcolor=BoxBg,
+  innerleftmargin=12pt,
+  innerrightmargin=12pt,
+  innertopmargin=8pt,
+  innerbottommargin=8pt,
+  skipabove=\baselineskip,
+  skipbelow=\baselineskip,
+]{spokespersonquote}
+
+% ── faqpair — numbered Q&A pair with bold question ─────────────────────────
+\newcounter{faqnum}
+\newenvironment{faqpair}[1]{%
+  \needspace{4\baselineskip}%
+  \vspace{0.5em}%
+  \refstepcounter{faqnum}%
+  \noindent\textbf{\color{SectionBlue}Q\thefaqnum: #1}\par\nopagebreak[4]%
+  \vspace{0.2em}%
+  \begin{adjustwidth}{1em}{0pt}%
+  \setlength{\parindent}{0pt}%
+}{%
+  \end{adjustwidth}%
+  \vspace{0.5em}%
+}
+% ── \faqref{faq:slug} — clickable "FAQ 3" reference ──────────────────────────
+\newcommand{\faqref}[1]{\hyperref[#1]{FAQ~\ref*{#1}}}
+
+% ── \featureitem — numbered, referenceable feature entry ──────────────────────
+\newcounter{featurenum}
+\newcommand{\featureitem}[2]{%
+  \refstepcounter{featurenum}%
+  \item[\textbf{\color{SectionBlue}F\thefeaturenum.}]%
+  \textbf{#1} --- #2%
+}
+\newcommand{\featureref}[1]{\hyperref[#1]{Feature~\ref*{#1}}}
+
+% ── adjustwidth (for faqpair indentation) ────────────────────────────────────
+\usepackage{changepage}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% Document
+% ══════════════════════════════════════════════════════════════════════════════
+
+\begin{document}
+
+% ── Headline block ───────────────────────────────────────────────────────────
+\begin{center}
+  {\LARGE\bfseries\color{SectionBlue} Free Open-Source Tool Gives AI Agents and Humans\\Persistent Identity in Agentic Coding Sessions} \\[0.8em]
+  {\large\color{AccentGray} Punt Labs releases ethos, a Go tool that binds name, voice, email,} \\[0.3em]
+  {\large\color{AccentGray} GitHub handle, and personality into a single identity for both humans and agents---} \\[0.3em]
+  {\large\color{AccentGray} accessible via filesystem, CLI, or MCP server}
+\end{center}
+
+\vspace{0.5em}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% PRESS RELEASE
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Press Release}
+
+SAN FRANCISCO --- October 1, 2026 --- Punt Labs today announced ethos, a free, open-source identity binding tool that gives both humans and AI agents persistent, portable identity across agentic coding sessions. Unlike project-level context files such as CLAUDE.md or AGENTS.md, which describe project conventions but not people, ethos gives every participant---human or agent---a named persona with email, GitHub handle, voice, writing style, and extensible attributes that travel across sessions, tools, and repositories (see \faqref{faq:differentiation}).
+
+\prsection{Problem}
+
+Today, when a developer opens an agentic coding tool---Claude Code, OpenCode, Codex---the session starts anonymous in both directions. The agent does not greet the developer by name, does not know their communication style, has no personality, and has no way to reach them via email or GitHub. The developer cannot distinguish one agent session from another. Every session begins from scratch: the same blank context, the same lack of rapport, the same absence of continuity. When sub-agents spawn or agent teams coordinate, every participant is anonymous---there is no roster, no ``who is working on what,'' no way to say ``this agent prefers concise responses'' or ``this human writes in formal English'' (see \faqref{faq:customer-evidence}).
+
+Empirical studies confirm this is structural, not incidental. An analysis of 253 CLAUDE.md files found they are ``primarily optimized for efficient code execution''---not for encoding who the user is~\cite{arxiv2025agenticmanifests}. A larger study of 2,303 context files across 1,925 repositories found non-functional requirements rarely specified; agents routinely operate without identity context or organizational guardrails~\cite{arxiv2025agentreadmes}. Teams cope by embedding personal details into per-project instruction files, duplicating preferences across repositories, and manually configuring each tool's identity settings independently. Agent identity resets with every session. The result: agents that cannot adapt to the person they are working with, humans who cannot tell agents apart, and collaboration tools like messaging and presence systems that have no identity layer to build on~\cite{hopf2025groupmind}.
+
+\prsection{Solution}
+
+Ethos solves this with two pieces: an identity registry and automatic session management. A developer runs
+{\small\texttt{ethos create}} once to define their own persona---name, email, GitHub handle, voice, writing style, personality---and creates personas for their agents the same way
+({\small\texttt{kind: agent}} instead of
+{\small\texttt{kind: human}}). After that, hooks handle the rest. When a session starts, ethos automatically registers the human and the primary agent in a session roster. When sub-agents spawn, each one is added to the roster and auto-matched to a persona by agent type---create a
+{\small\texttt{code-reviewer}} persona once, and every code-reviewer sub-agent that spawns automatically gets that identity.
+
+The result is concrete: the agent greets the developer by name, adapts to their communication style, and has a distinct personality. Each sub-agent has its own persona---the code reviewer is formal and thorough, the test writer is terse. Combined with a voice tool like Vox, the agent gets a lifelike voice that matches its persona. Combined with an email tool like Beadle, the agent is reachable at its own address.
+
+Tools integrate at the level that fits: reading identity from the filesystem (zero dependency), calling the CLI from hooks and scripts, or connecting to the MCP server for structured operations (\featureref{feat:mcp}). The extension model lets any application attach additional attributes under a single identity without ethos knowing anything about those applications (\featureref{feat:extensions}).
+
+\prsection{Customer Quote}
+
+\begin{customerquote}
+\textit{``I have three Claude Code sessions running on different projects and an agent team with two sub-agents on a refactor. Before ethos, every session started from scratch---the agent didn't know my name, my coding style, or that I prefer terse responses. Now I create my personas once and every session just knows. The code reviewer sub-agent automatically picks up its formal persona, the test writer is terse, and the lead agent greets me by name. I didn't change my workflow---it's all hooks. It sounds small, but it changed how the whole team feels.''}
+
+\raggedleft --- \textbf{Priya Chakraborty}, Staff Engineer at a Series B startup
+\end{customerquote}
+
+\prsection{Getting Started}
+
+Getting started with ethos takes under two minutes. First, install the binary with a single curl command:
+{\small\texttt{curl -fsSL https://punt-labs.github.io/ethos/install.sh | sh}}.
+Second, create your persona:
+{\small\texttt{ethos create}}
+and answer four prompts (name, email, GitHub handle, writing style). Optionally, create personas for your agents the same way---a code reviewer, a test writer, whatever roles you use. That is it. Hooks handle session management automatically: when a session starts, ethos registers you and the agent; when sub-agents spawn, they are auto-matched to personas by agent type. There is no account to create, no cloud service to configure, and no per-session setup.
+
+\prsection{Spokesperson Quote}
+
+\begin{spokespersonquote}
+``We built ethos because every tool in an agentic coding stack needs to know who it is working with, and none of them agree on how to answer that question. A messaging tool reinvents usernames. A voice tool reinvents voice config. An email tool reinvents contact addresses. Each one solves a fragment of identity on its own, because no shared layer exists. Ethos is that layer---one YAML file per persona, accessible via filesystem, CLI, or MCP. Same schema for humans and agents, extensible by any application, and fast enough that you forget it is there.''
+
+\raggedleft --- \textbf{Jim Freeman}, Founder at Punt Labs
+\end{spokespersonquote}
+
+\prsection{Call to Action}
+
+Ethos is available now at
+\url{https://github.com/punt-labs/ethos}
+under the MIT license. It ships as a single Go binary with zero runtime dependencies.
+The Claude Code plugin is available in the Punt Labs plugin marketplace.
+Documentation and identity schema reference are at the project README.
+
+\newpage
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FREQUENTLY ASKED QUESTIONS
+% ══════════════════════════════════════════════════════════════════════════════
+
+\section*{Frequently Asked Questions}
+
+% ── External FAQs (Customer-facing) ──────────────────────────────────────────
+
+\subsection*{External FAQs}
+
+\begin{faqpair}{What is ethos and who is it for?}\label{faq:what}
+Ethos is a local identity binding tool for humans and AI agents working in agentic coding environments---Claude Code, OpenCode, Codex, or any tool that supports MCP. It gives every participant a persistent persona (name, email, GitHub handle, voice, writing style, personality, skills) stored as a YAML file on the local filesystem. Tools access identity through three integration patterns: reading the filesystem directly (zero dependency), calling the CLI from hooks and scripts, or connecting to the MCP server for structured operations. It is for developers who use AI coding assistants and want their tools to know who they are, and for teams that run multiple agents and want each agent to have a distinct, named identity.
+\end{faqpair}
+
+\begin{faqpair}{How is ethos different from CLAUDE.md or AGENTS.md?}\label{faq:differentiation}
+CLAUDE.md and AGENTS.md describe project conventions---coding standards, architecture decisions, tool preferences~\cite{claudemd2025pnote}. They are per-project, not per-person. Ethos describes people: who is this human, who is this agent, how do they communicate, how do they prefer to work. A project has one CLAUDE.md shared by everyone; each person and agent has their own ethos identity that travels across all projects. The two are complementary: CLAUDE.md says ``use ruff for linting,'' ethos says ``this person prefers terse code reviews and communicates via email at kai@example.com.''
+\end{faqpair}
+
+\begin{faqpair}{How do I get started?}
+Install the binary
+({\small\texttt{curl -fsSL .../install.sh | sh}}),
+run {\small\texttt{ethos create}} to define your persona, and
+{\small\texttt{ethos whoami <handle>}} to activate it.
+The entire process takes under two minutes. No account, no cloud service, no API key.
+\end{faqpair}
+
+\begin{faqpair}{How much does it cost?}
+Free and open-source under the MIT license. Ethos is infrastructure---it is designed to be adopted without friction, not monetized directly.
+\end{faqpair}
+
+\begin{faqpair}{What happens to my data?}\label{faq:data}
+All identity data is stored locally on your filesystem at
+{\small\texttt{\textasciitilde/.punt-labs/ethos/}}.
+Nothing is transmitted to any server. There is no telemetry, no analytics, no cloud sync. You control your identity files the same way you control your
+{\small\texttt{\textasciitilde/.gitconfig}}---they are plain YAML, human-readable, and editable with any text editor. This local-first design aligns with developer expectations: 90\% of organizations see local storage as inherently safer, and 64\% worry about sharing sensitive data with cloud GenAI tools~\cite{cisco2025privacy}.
+\end{faqpair}
+
+\begin{faqpair}{Can I use ethos for agent-only workflows (no humans)?}
+Yes. Ethos treats agents and humans with the same schema. A team of agents can each have distinct personas---a code reviewer, a test writer, a documentation agent---each with its own name, writing style, and personality. The {\small\texttt{kind}} field distinguishes human from agent, but the identity surface is identical.
+\end{faqpair}
+
+\begin{faqpair}{What tools integrate with ethos today?}\label{faq:integrations}
+Ethos provides three integration patterns, and tools choose the one that fits their architecture:
+
+\begin{itemize}[nosep]
+  \item \textbf{Filesystem (sidecar).} Tools read identity YAML from {\small\texttt{\textasciitilde/.punt-labs/ethos/}} without importing ethos or requiring the binary. Zero dependency. Best for tools that want optional identity enrichment without coupling.
+  \item \textbf{CLI.} Tools call {\small\texttt{ethos whoami}}, {\small\texttt{ethos show}}, or {\small\texttt{ethos session}} as shell commands---from hooks, scripts, or CI pipelines. Requires the binary on \texttt{PATH}. Best for automation and shell-based workflows.
+  \item \textbf{MCP server.} MCP-compatible clients connect to {\small\texttt{ethos serve}} for structured identity operations: query active persona, resolve identity, list session participants. Full integration for tools that already speak MCP.
+\end{itemize}
+
+Any tool can integrate with ethos using the pattern that fits its architecture. As examples: a messaging tool can read the bound name and GitHub handle to display real identities; a voice tool can read the configured voice profile; an email tool can route to the bound address. Three Punt Labs tools (Biff, Vox, Beadle) currently integrate this way---each works without ethos but gains richer identity context when it is present. The Claude Code plugin uses ethos via MCP, providing identity context to every Claude Code session. The integration surface is open to any third-party tool.
+\end{faqpair}
+
+% ── Internal FAQs (Business-facing) ──────────────────────────────────────────
+
+\newpage
+\subsection*{Internal FAQs}
+
+\subsubsection*{Value \& Market}
+
+\begin{faqpair}{What is the total addressable market?}\label{faq:tam}
+\textbf{Bottoms-up estimate.} The immediate addressable market is developers using terminal-based agentic coding tools that support MCP or filesystem-based configuration: Claude Code, OpenCode, Codex CLI. Claude Code had 115,000+ developers as of July 2025~\cite{claudecode2025stats}, with weekly active users doubling since January 2026. We infer 250,000--600,000 developers in the terminal-first agentic coding segment based on Claude Code's 115,000 floor plus growth trajectory and estimated Codex CLI/OpenCode populations. No primary source segments the terminal-first market separately---this is our inference, not a measured figure. Each user manages 1--5 identities (self + agent personas), yielding 250,000--3,000,000 persona files in year one.
+
+Ethos is free, so the value is adoption-driven: wider adoption increases the value of any tool built on the identity layer---messaging, voice, email, code review, or tools that do not yet exist.
+
+\textbf{Broader tailwinds.} The AI coding market is growing at 27\% CAGR, projected to reach \$24B by 2030~\cite{mordorintelligence2025}. GitHub Copilot reached 4.7M paid subscribers by late 2025 (75\% YoY growth)~\cite{githubcopilot2025stats}---the terminal-first segment is a fraction of this but growing faster as agentic workflows (Agent Teams, sub-agents, remote execution) shift usage from IDE-integrated copilots to autonomous terminal sessions. Stack Overflow's 2025 Developer Survey found 84\% of developers use or plan to use AI tools, with 23\% using AI agents weekly~\cite{stackoverflow2025survey}. Gartner projects 40\% of enterprise applications will embed AI agents by end of 2026~\cite{gartner2025multiagentsurge}. Capgemini predicts AI agents will act as team members in 38\% of organizations by 2028~\cite{capgemini2025agents}.
+
+\textbf{Assumption:} The terminal-first segment growth rate is not directly measured. The estimate assumes it grows faster than the broader coding AI market because multi-agent workflows (which drive identity need) are exclusively terminal-based today.
+\end{faqpair}
+
+\begin{faqpair}{What evidence do we have that customers want this?}\label{faq:customer-evidence}
+Evidence is inferred, not primary. No customer interviews have been conducted.
+
+\textbf{Structural evidence:}
+\begin{itemize}[nosep]
+  \item CLAUDE.md and AGENTS.md emerged as cross-tool conventions for project context~\cite{claudemd2025pnote}, but no equivalent convention exists for person context. The gap is visible: projects know their rules, but tools do not know who they are working with.
+  \item Claude Code Agent Teams~\cite{agentsteams2026marc0} creates ephemeral, anonymous agents with no persistent identity. When a session ends, the agent's identity disappears.
+  \item The A2A protocol~\cite{googlea2a2025spec} defines Agent Cards for agent discovery but has no human identity model and no persistent identity across sessions.
+  \item Academic research on human-agent teaming identifies the absence of shared identity as a barrier to effective collaboration~\cite{hopf2025groupmind}.
+  \item The OWASP Top 10 for Agentic AI (December 2025) identifies Identity and Privilege Abuse as a top risk, stating ``agents need their own identities with task-scoped, time-bound permissions and clear auditability''~\cite{owaspagentic2025}.
+  \item Internal observation: three independently developed tools (messaging, voice, email) each reinvented a fragment of identity---username, voice config, contact address---before a shared layer existed. The duplication pattern confirmed the gap.
+\end{itemize}
+
+\textbf{Validation plan:} Interview 10 developers who use Claude Code with sub-agents or Agent Teams. The discriminating question: is the identity gap painful enough right now to install a tool that fills it? Demo concrete UX---being greeted by name, agents with distinct personalities, voice and email bound to a persona---and measure whether developers would act today, not whether they agree the gap exists in principle.
+\end{faqpair}
+
+\begin{faqpair}{Who are the competitors and why will we win?}\label{faq:competitors}
+No direct competitor provides unified identity binding for both humans and agents in agentic coding tools. Adjacent tools occupy different layers:
+
+\begin{itemize}[nosep]
+  \item \textbf{CLAUDE.md / AGENTS.md}~\cite{claudemd2025pnote} --- per-project conventions, not per-person identity. Complementary, not competitive.
+  \item \textbf{SOUL.md / IDENTITY.md / USER.md}~\cite{blueoctopus2025soulmd} --- community workarounds for the identity gap. Not standardized, not natively supported by any tool, not portable across tools or machines. These files confirm the demand signal; ethos provides the structured, portable solution.
+  \item \textbf{Git config} ({\small\texttt{\textasciitilde/.gitconfig}}) --- name and email for commits, not extensible, not agent-aware.
+  \item \textbf{A2A Agent Cards}~\cite{googlea2a2025spec} --- agent-only discovery cards. No human model. No local storage. Cloud-native, not filesystem-native.
+  \item \textbf{SageOx}~\cite{sageox2026launch} --- team context and memory. No per-person identity schema.
+  \item \textbf{Entire.io}~\cite{entire2026techcrunch} --- code governance and audit. Checkpoints per commit, not identity per person.
+\end{itemize}
+
+Ethos wins by being the simplest thing that could work: a YAML file per persona, accessible via filesystem, CLI, or MCP, extensible by any tool, same schema for humans and agents. The structural advantage is that ethos is infrastructure---once identity is stored in one place, every tool accesses it through whichever integration pattern fits rather than maintaining its own copy.
+
+\textbf{Competitive response:} If Anthropic, OpenAI, or Google built identity into their agentic coding tools, it would be vendor-specific. Ethos is tool-agnostic---it works with Claude Code, OpenCode, Codex, or any MCP-compatible client. The cross-tool portability is the moat. However, if a single tool (e.g., Claude Code) dominates the market and ships native identity, the cross-tool portability value diminishes. The bet is that the agentic coding tool market remains fragmented---multiple credible tools exist today and new ones are launching quarterly. If the market consolidates around one vendor with built-in identity, ethos becomes less necessary as a standalone tool.
+
+\textbf{Enterprise security validation:} CrowdStrike launched ``the first unified solution protecting human, non-human, and AI agent identities'' in August 2025~\cite{crowdstrike2025identity}. This validates the principle of unified human-agent identity at the enterprise level, though CrowdStrike operates at the IAM/security layer, not the developer persona layer.
+\end{faqpair}
+
+\begin{faqpair}{What is your next step to validate your vision?}
+Interview 10 developers who actively use Claude Code with sub-agents or Agent Teams. The core discriminating question: \textbf{is the identity gap painful enough right now to install a tool that fills it?} Ethos is pragmatic gap-filling---if Claude Code ships native identity tomorrow, we would deprecate ethos and use it. The question is not ``would you still want ethos if Claude Code had identity'' (of course not), but ``is the absence painful enough today to act?''
+
+The interview protocol emphasizes concrete UX, not abstract architecture:
+
+\begin{enumerate}[nosep]
+  \item Do you configure personal preferences in each project's CLAUDE.md? How many repos do you duplicate this across?
+  \item When you start a new session, does it bother you that the agent doesn't know your name, your communication style, or how you prefer feedback?
+  \item \textbf{Demo:} Show a session where the agent greets the developer by name, adapts to their writing style, and has a distinct personality. Then show a second agent persona (``the reviewer is formal, the test writer is terse''). Show the same identity enabling a lifelike voice (Vox) and email reachability (Beadle).
+  \item After seeing this: is the gap painful enough right now that you would install a tool to fill it, knowing it takes under 2 minutes and stores everything locally?
+  \item If Claude Code added native identity next month, would you still want a cross-tool layer---or would you just use the native solution? (Expected answer: native. This confirms ethos is gap-filling, not permanent infrastructure.)
+\end{enumerate}
+
+Success threshold: 7 of 10 interviewees either (a) describe the identity gap as a daily friction unprompted, or (b) after seeing the concrete UX demo, say they would install ethos today. If most say ``it's nice but I'd wait for Claude Code to add it natively,'' the gap is real but the urgency is insufficient---and the standalone tool should be reconsidered.
+\end{faqpair}
+
+\subsubsection*{Technical}
+
+\begin{faqpair}{What are the major technical risks?}\label{faq:architecture}
+\textbf{Risk 1: Integration surface.} Ethos exposes identity through three interfaces: filesystem (YAML at a known path), CLI (shell commands), and MCP server (structured protocol). Tools that read the filesystem must know the path and schema. Mitigation: the path is a documented constant
+({\small\texttt{\textasciitilde/.punt-labs/ethos/}}),
+and the CLI and MCP server provide higher-level abstractions that insulate integrators from schema details. Tools choose the coupling level that fits---filesystem for zero dependency, CLI for scripting, MCP for full integration.
+
+\textbf{Risk 2: Schema evolution.} As tools attach extensions, the schema must evolve without breaking readers. Mitigation: core identity fields are fixed; extensions live in separate files per tool under
+{\small\texttt{identities/<persona>.ext/<tool>.yaml}}.
+Tools only read their own extension file.
+
+\textbf{Risk 3: PII exposure.} Identity files contain names, email addresses, and GitHub handles. Mitigation: all data is local-only, never transmitted. Ethos does not sync, does not phone home, and does not write to shared directories. The PII surface is equivalent to
+{\small\texttt{\textasciitilde/.gitconfig}},
+which developers already manage.
+
+\textbf{Risk 4: Session concurrency.} Multiple sessions may read/write identity state simultaneously. Mitigation: the session roster uses flock-based file locking. Identity files are read-mostly; writes are rare (initial create, occasional update).
+\end{faqpair}
+
+\begin{faqpair}{What dependencies exist on other teams or systems?}
+None. Ethos is a standalone Go binary with zero runtime dependencies. It does not depend on Biff, Vox, Beadle, or any external service. The reverse dependency is graduated: tools that read the filesystem have no binary dependency at all; tools that call the CLI or connect via MCP depend on the ethos binary being installed. In all cases, if ethos is not present, tools fall back to their own identity resolution (git config, environment variables, etc.).
+\end{faqpair}
+
+\begin{faqpair}{What is the estimated development timeline?}
+Ethos is feature-complete for its core scope. The current version (v0.4.0) ships:
+
+\begin{itemize}[nosep]
+  \item Identity CRUD (create, list, show, update)
+  \item Active identity management ({\small\texttt{whoami}})
+  \item CLI interface for hooks and scripting ({\small\texttt{ethos whoami}}, {\small\texttt{ethos show}}, {\small\texttt{ethos session}})
+  \item Session roster with flock-based concurrency
+  \item MCP server for structured tool integration ({\small\texttt{ethos serve}})
+  \item Extension model for per-tool attributes
+  \item Identity resolution chain (repo-local then global)
+  \item Doctor command for installation health checks
+\end{itemize}
+
+Remaining work is adoption-driven: integration guides for downstream tools, documentation for third-party integrators, and community engagement. No new core features are planned.
+\end{faqpair}
+
+\begin{faqpair}{What is the scaling story?}
+Ethos is a local tool. It does not have a server, a database, or a network layer. ``Scaling'' means the number of identities on one machine and the number of concurrent sessions reading them. At 100 identities and 50 concurrent sessions, the bottleneck is filesystem I/O for flock contention---which Go handles well with
+{\small\texttt{os.File}} locking.
+No user will realistically hit this limit. If ethos eventually supports remote identity resolution (e.g., team-wide identity directories), the scaling story changes, but that is a Won't Do for v1 (\featureref{feat:no-remote}).
+\end{faqpair}
+
+\subsubsection*{Business}
+
+\begin{faqpair}{What is the revenue model?}
+Ethos is free and open-source. It is not a revenue product. It is an identity layer that becomes more valuable as more tools build on it. When a developer installs ethos once, every tool that reads the identity state---messaging, voice, email, code review, or any future tool---gains richer context without reimplementing identity. This network effect drives adoption of the ecosystem of tools that can be monetized, including Punt Labs products (Biff, Vox, Beadle) and third-party tools.
+\end{faqpair}
+
+\begin{faqpair}{What does the P\&L look like at steady state?}\label{faq:pnl}
+Ethos is free and has no revenue line. The P\&L is a cost analysis: is the maintenance cost justified by strategic value to downstream products?
+
+\textbf{Costs (annual estimate):}
+\begin{itemize}[nosep]
+  \item Engineering maintenance: 40--80 hours/year (bug fixes, Go version upgrades, schema evolution, release management). At internal cost, this is equivalent to 1--2 weeks of one engineer's time.
+  \item CI/CD: GitHub Actions minutes for testing and releases. Negligible (\textless\$50/year).
+  \item No infrastructure cost (no servers, no databases, no cloud services).
+\end{itemize}
+
+\textbf{Strategic value (assumed, not measured):}
+\begin{itemize}[nosep]
+  \item Every tool that reads ethos state gains richer identity context without maintaining its own identity store. The assumed effect: higher-quality user experience leads to higher adoption and retention of tools built on the identity layer.
+  \item If any downstream tool (e.g., Biff) reaches 200 users and ethos contributes a 10\% retention improvement, the value exceeds the 40--80 hour maintenance cost. This threshold is testable once downstream tools have users.
+  \item Ethos adoption by third-party tools extends the strategic value beyond Punt Labs products.
+\end{itemize}
+
+\textbf{Decision threshold:} If after 12 months ethos is installed by fewer than 100 users and no measurable lift to downstream tool retention is observed, fold identity functionality into each consumer tool and deprecate the standalone binary.
+\end{faqpair}
+
+\begin{faqpair}{What is the customer acquisition strategy?}\label{faq:acquisition}
+Ethos is adopted through four channels, all organic:
+
+\begin{enumerate}[nosep]
+  \item \textbf{GitHub discovery.} Ethos is open-source, tagged for agentic coding and identity. Developers searching for agent identity, MCP tools, or multi-agent coordination find it through GitHub search, trending, and topic tags.
+  \item \textbf{Downstream tool recommendation.} Tools that integrate with ethos recommend it when identity state is not detected. For example, Punt Labs tools (Biff, Vox, Beadle) surface a one-line suggestion: ``Install ethos for richer identity context.'' Any third-party tool can do the same.
+  \item \textbf{Plugin marketplace.} The ethos Claude Code plugin appears in the Punt Labs plugin marketplace. Developers browsing the ecosystem discover ethos as the identity layer.
+  \item \textbf{README cross-references.} Projects that integrate with ethos link to it in their ``Identity'' or ``Configuration'' sections.
+\end{enumerate}
+
+No paid acquisition, no content marketing, no outbound sales. The primary bet is that developers who encounter the identity gap---through multi-agent sessions, tool fragmentation, or ecosystem discovery---will find ethos. If organic channels do not produce 500 installations in 6 months, the acquisition strategy needs revision---likely deeper integration (ethos bundled into downstream tools rather than recommended separately).
+\end{faqpair}
+
+\begin{faqpair}{What are the key metrics and how will we measure success?}
+\begin{enumerate}[nosep]
+  \item \textbf{Installations}: unique installs via the install script. Target: 500 in the first 6 months. Measured via GitHub release download counts.
+  \item \textbf{Identities created}: number of personas created across installations. Target: 3x installations (each user creates self + 2 agent personas). Measured via community survey.
+  \item \textbf{Tool integrations}: number of tools (first-party or third-party) reading ethos state. Target: 4 within 6 months. Measured by tracking published integrations and extension files.
+  \item \textbf{Third-party extensions}: number of tools outside Punt Labs using the extension model. Target: 1 within 12 months.
+\end{enumerate}
+
+Decision threshold: if installations are below 100 after 6 months despite integration with downstream tools, the identity layer is not a pull product and should be reconsidered as an embedded feature rather than a standalone tool.
+\end{faqpair}
+
+\begin{faqpair}{Why now? What has changed?}
+Three shifts converged:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Agentic coding went mainstream.} GitHub Copilot reached 4.7M paid subscribers~\cite{githubcopilot2025stats}. Claude Code, OpenCode, and Codex introduced terminal-first agentic sessions where AI writes code autonomously. These sessions need to know who is on the other side.
+  \item \textbf{Multi-agent sessions arrived.} Claude Code Agent Teams~\cite{agentsteams2026marc0}, sub-agents, and remote execution (Teleport) created scenarios with 3--10 agents running simultaneously. Anonymous agents are manageable one at a time; at scale, the lack of identity becomes a coordination problem.
+  \item \textbf{The ecosystem signaled demand.} Entire.io raised \$60M for agent-code governance~\cite{entire2026techcrunch}. SageOx launched team context for agent sessions~\cite{sageox2026launch}. Every tool in the agentic engineering stack assumed identity existed---but nobody was providing it.
+  \item \textbf{The community started building informal identity workarounds.} Developers created ad-hoc files---SOUL.md, IDENTITY.md, USER.md---to carry agent personality and user context alongside CLAUDE.md~\cite{blueoctopus2025soulmd}. None are standardized, none are natively supported by any tool, and none are portable across tools or machines. This is a direct demand signal for what ethos provides: a structured, portable identity layer. Ethos takes a more pragmatic approach---YAML files with a fixed schema, accessible via filesystem, CLI, or MCP---rather than competing with ad-hoc markdown conventions.
+\end{enumerate}
+\end{faqpair}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FOUR RISKS ASSESSMENT
+% ══════════════════════════════════════════════════════════════════════════════
+
+\newpage
+\section*{Risk Assessment}
+
+\renewcommand{\arraystretch}{1.6}
+\begin{tabularx}{\textwidth}{@{} l l X @{}}
+\toprule
+\textbf{\color{SectionBlue}Risk} & \textbf{\color{SectionBlue}Rating} & \textbf{\color{SectionBlue}Assessment} \\
+\midrule
+Value      & \textcolor{RiskAmber}{Medium} & The identity gap is structurally real---agentic coding tools have no convention for person context, and tools that need identity each reinvent it independently. But no primary customer evidence exists. The product may solve a problem developers tolerate rather than one they would adopt a tool to fix. The ``pull'' signal is untested: do developers want identity as a standalone layer, or do they expect it embedded in each tool? \\
+Usability  & \textcolor{RiskGreen}{Low} & Three commands (install, create, whoami). Two-minute setup. No account, no cloud, no API key. Identity files are plain YAML. The interaction model mirrors {\small\texttt{git config}}, which developers already understand. \\
+Feasibility & \textcolor{RiskGreen}{Low} & The product is built and shipped at v0.4.0. Core features are complete: identity CRUD, session roster, three integration surfaces (filesystem, CLI, MCP server), extension model, identity resolution. Written in Go with zero runtime dependencies. No unsolved technical problems remain. \\
+Viability  & \textcolor{RiskAmber}{Medium} & Ethos is free infrastructure whose viability depends on whether developers adopt the identity layer and whether downstream tools---first-party or third-party---build on it. The causal chain (ethos adopted, tools gain richer identity, ecosystem value increases) is untested. Maintenance cost is low (one Go binary, no operational overhead), but engineering time is not zero. If developers do not install ethos standalone, or if identity proves to be a feature they expect embedded in each tool rather than a shared layer, the maintenance cost is wasted. \\
+\bottomrule
+\end{tabularx}
+\renewcommand{\arraystretch}{1.0}
+
+\prsection{Pre-Mortem}
+
+Three scenarios would cause ethos to fail:
+
+\begin{enumerate}[nosep]
+  \item \textbf{A dominant tool ships native identity.} If Claude Code (or another tool that captures the majority of agentic coding sessions) builds persistent identity natively, the cross-tool layer becomes unnecessary. This scenario is explicitly acceptable to the team: if Anthropic ships native identity that meets developer needs, we would deprecate ethos and use the native solution. Ethos fills the gap \emph{now} rather than waiting for a vendor to solve it. The risk is that a native solution arrives before ethos has demonstrated enough value to inform what that solution should look like.
+  \item \textbf{Chicken-and-egg adoption failure.} Ethos needs downstream tools to demonstrate value (``install ethos and your agent greets you by name''), but tools need ethos adoption to justify integration. If neither side moves first, the identity layer sits unused. Mitigation: Punt Labs controls three downstream tools (Biff, Vox, Beadle) and can force the initial integration, but third-party adoption remains unproven.
+  \item \textbf{The benefit is too abstract to motivate installation.} Developers may understand ``persistent identity'' intellectually but not feel the pain strongly enough to install a tool. If the concrete UX improvements---being greeted by name, agents with distinct personalities, voice and email bound to a persona---do not resonate in validation interviews, the problem is real but not actionable.
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% FEATURE APPENDIX
+% ══════════════════════════════════════════════════════════════════════════════
+
+\newpage
+\section*{Feature Appendix}
+
+Defines the scope boundary for the product. Every feature is explicitly categorized to prevent scope creep and force prioritization decisions upfront.
+
+\subsection*{Must Do}
+
+Features that are essential for launch. Without these, the product does not solve the core problem.
+
+\begin{enumerate}[nosep,leftmargin=2.5em]
+  \featureitem{Identity CRUD}{create, read, update, delete personas with core fields (name, handle, email, GitHub, kind)}\label{feat:crud}
+  \featureitem{Active identity}{set and query the active persona for the current user via {\small\texttt{ethos whoami}}}\label{feat:whoami}
+  \featureitem{Same schema for humans and agents}{the {\small\texttt{kind}} field distinguishes human from agent, but the identity surface is identical}\label{feat:parity}
+  \featureitem{Filesystem publication}{identity state readable from a known path without importing ethos (sidecar pattern)}\label{feat:filesystem}
+  \featureitem{CLI interface}{{\small\texttt{ethos whoami}}, {\small\texttt{ethos show}}, {\small\texttt{ethos session}} callable from hooks, scripts, and CI pipelines}\label{feat:cli}
+  \featureitem{MCP server}{{\small\texttt{ethos serve}} exposes identity operations via Model Context Protocol for MCP-compatible clients}\label{feat:mcp}
+  \featureitem{Extension model}{per-tool attribute files under {\small\texttt{<persona>.ext/<tool>.yaml}} so any application can attach data}\label{feat:extensions}
+  \featureitem{Session roster}{track which personas are active in the current session with parent-child tree and flock-based concurrency}\label{feat:session}
+  \featureitem{Automatic session management via hooks}{SessionStart registers human and primary agent; SubagentStart/Stop adds and removes sub-agents; SessionEnd tears down the roster}\label{feat:hooks}
+  \featureitem{Persona auto-matching}{when a sub-agent spawns, the hook matches its agent type to an ethos identity by handle---create a {\small\texttt{code-reviewer}} persona once, every code-reviewer sub-agent gets it automatically}\label{feat:auto-match}
+  \featureitem{Repo-local identity overrides}{per-repo identity config at {\small\texttt{.punt-labs/ethos/config.yaml}} for project-specific persona selection}\label{feat:repo-local}
+  \featureitem{Agent definitions in repo}{{\small\texttt{.punt-labs/ethos/agents/<name>.yaml}} for version-controlled agent personas shared across the team}\label{feat:repo-agents}
+  \featureitem{Doctor command}{{\small\texttt{ethos doctor}} checks installation health, verifies paths, validates identity files}\label{feat:doctor}
+  \featureitem{Identity resolution chain}{resolve identity from repo-local config then global config, with clear precedence}\label{feat:resolution}
+\end{enumerate}
+
+\subsection*{Should Do}
+
+Features that meaningfully improve the product but are not launch-blocking. Candidates for fast follow-up.
+
+\begin{enumerate}[nosep,leftmargin=2.5em]
+  \featureitem{Consumer tool integration guides}{documentation and examples for third-party tools to read ethos identity state}\label{feat:integration-guides}
+  \featureitem{Identity import from git config}{seed a new persona from existing {\small\texttt{\textasciitilde/.gitconfig}} name and email to reduce setup friction}\label{feat:git-import}
+\end{enumerate}
+
+\subsection*{Won't Do}
+
+Features explicitly excluded. Naming what you won't build prevents scope creep and clarifies the product's identity.
+
+\begin{enumerate}[nosep,leftmargin=2.5em]
+  \featureitem{Cloud sync or remote identity directory}{ethos is local-only by design. Remote identity introduces trust, authentication, and privacy concerns that are out of scope. Tools that need team-wide identity directories should build on top of ethos, not inside it.}\label{feat:no-remote}
+  \featureitem{Authentication or authorization}{ethos provides identity (``who is this?''), not access control (``what can they do?''). AuthN/AuthZ is a different layer.}\label{feat:no-auth}
+  \featureitem{Consumer-specific fields}{ethos will never add fields specific to one consumer tool (e.g., a ``slack\_handle'' field). The extension model exists for this purpose.}\label{feat:no-consumer-fields}
+  \featureitem{Cross-machine identity sharing}{identity files live on one machine. Sharing across machines is the user's responsibility (dotfile management, git, rsync). Ethos does not build sync.}\label{feat:no-cross-machine}
+  \featureitem{Telemetry or analytics}{ethos collects no usage data. Success metrics are measured externally (GitHub download counts, community surveys).}\label{feat:no-telemetry}
+\end{enumerate}
+
+% ══════════════════════════════════════════════════════════════════════════════
+% REFERENCES
+% ══════════════════════════════════════════════════════════════════════════════
+
+\newpage
+\printbibliography[title={References}]
+
+\end{document}

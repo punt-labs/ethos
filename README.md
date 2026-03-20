@@ -2,16 +2,19 @@
 
 > Identity binding for humans and AI agents.
 
-[![Release](https://img.shields.io/github/v/release/punt-labs/ethos)](https://github.com/punt-labs/ethos/releases/latest)
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
+[![Release](https://img.shields.io/github/v/release/punt-labs/ethos)](https://github.com/punt-labs/ethos/releases/latest)
 [![Go Report Card](https://goreportcard.com/badge/github.com/punt-labs/ethos)](https://goreportcard.com/report/github.com/punt-labs/ethos)
+[![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Ethos gives humans and AI agents a shared identity model — name, voice,
-email, GitHub handle, writing style, personality, and skills — stored as
-YAML and readable by any tool in the Punt Labs ecosystem. Vox reads the
-voice binding, Beadle reads the email, Biff reads the GitHub handle.
-Everything works without ethos; ethos makes it richer.
+Ethos stores persistent identity for humans and AI agents — name, email,
+GitHub handle, voice, writing style, personality, and skills — as one YAML
+file per persona. Agentic coding tools (Claude Code, OpenCode, Codex) start
+each session without knowing who the user is or distinguishing one agent from
+another. Ethos provides that context. Any tool can read it via the filesystem,
+CLI, or MCP server. Same schema for humans and agents, extensible by any
+application.
 
 **Platforms:** macOS, Linux
 
@@ -46,12 +49,12 @@ sh install.sh
 
 ## Features
 
-- **Unified identity** --- one YAML file per human or agent, same schema for both
-- **Channel bindings** --- voice (Vox), email (Beadle), GitHub (Biff), Claude Code agent definition
-- **Sidecar architecture** --- publishes state to the filesystem; other tools read it optionally
-- **Session roster** --- tracks all participants (human + agents) in a session with parent-child tree
-- **Resolution chain** --- repo-local config overrides global active identity
-- **CLI + MCP + Plugin** --- accessible from terminal, AI agents, and Claude Code
+- **Same schema for humans and agents** — one YAML file per persona, `kind: human` or `kind: agent`
+- **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (structured protocol)
+- **Extensible** — any tool attaches its own attributes via `<persona>.ext/<tool>.yaml`
+- **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
+- **Resolution chain** — repo-local config overrides global active identity
+- **Channel bindings** — voice, email, GitHub handle, Claude Code agent definition
 
 ## What It Looks Like
 
@@ -110,9 +113,9 @@ Use `--` to stop flag parsing (e.g., `ethos create -f -- --json` treats
 name: Mal Reynolds
 handle: mal
 kind: human                    # or "agent"
-email: mal@serenity.ship        # beadle binding
-github: mal                  # biff binding
-voice:                         # vox binding
+email: mal@serenity.ship        # email binding
+github: mal                  # GitHub binding
+voice:                         # voice binding
   provider: elevenlabs
   voice_id: "abc123"
 agent: .claude/agents/mal.md # claude code agent binding
@@ -136,20 +139,24 @@ skills:
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
 
-## How Other Tools Use Ethos
+## Integration
 
-Ethos is a sidecar. Other tools read identity state at known paths and
-store tool-specific attributes via the extension mechanism. No import
-dependency exists.
+Tools integrate with ethos at whatever coupling level fits:
+
+| Pattern | How | Dependency |
+|---------|-----|------------|
+| **Filesystem** | Read YAML at `~/.punt-labs/ethos/identities/<handle>.yaml` | None |
+| **CLI** | Call `ethos whoami --json` or `ethos show <handle> --json` from hooks/scripts | Binary installed |
+| **MCP server** | Connect to `ethos serve` for structured identity operations | Binary installed |
 
 **Core identity fields** (owned by ethos): name, handle, kind, email,
 github, voice, agent, writing\_style, personality, skills.
 
 **Extensions** (owned by each tool): any tool can read/write namespaced
-key-value pairs in `<persona>.ext/<tool>.yaml`. For example, Beadle
-stores its GPG key ID, Biff stores a preferred TTY name, Vox stores a
-default mood. Ethos assembles the merged view when you load an identity
-but never interprets extension contents.
+key-value pairs in `<persona>.ext/<tool>.yaml`. A voice tool stores its
+voice ID, an email tool stores a GPG key, a messaging tool stores routing
+preferences. Ethos assembles the merged view but never interprets
+extension contents.
 
 ```bash
 ethos ext set mal beadle gpg_key_id 3AA5C34371567BD2
