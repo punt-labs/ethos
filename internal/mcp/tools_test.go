@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/session"
 
@@ -241,6 +242,14 @@ func TestHandleCreateIdentity_SetsActiveIfFirst(t *testing.T) {
 
 func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 	h := testHandler(t)
+
+	// Create skill attribute files that the identity will reference.
+	root := h.store.Root()
+	for _, slug := range []string{"go", "testing"} {
+		s := attribute.NewStore(root, attribute.Skills)
+		require.NoError(t, s.Save(&attribute.Attribute{Slug: slug, Content: "# " + slug + "\n"}))
+	}
+
 	result, err := h.handleCreateIdentity(context.Background(), callTool(map[string]interface{}{
 		"name":   "Alice",
 		"handle": "alice",
@@ -250,7 +259,7 @@ func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	loaded, err := h.store.Load("alice")
+	loaded, err := h.store.Load("alice", identity.Reference(true))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"go", "testing"}, loaded.Skills)
 }

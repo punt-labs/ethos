@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- First-class attribute management: `ethos skill`, `ethos personality`, `ethos writing-style` subcommands with create/list/show/add/remove/set
+- `internal/attribute` package — generic CRUD for named markdown files with path containment
+- Identity attributes (`writing_style`, `personality`, `skills`) now reference markdown files by slug instead of inline strings
+- `Store.Load()` resolves attribute content by default; `Reference(true)` option returns slugs only
+- `Store.Update()` for read-modify-write on existing identities
+- `Identity.Warnings` field for missing attribute file diagnostics
+- `Store.ValidateRefs()` rejects Save when referenced attribute files are missing
+- Interactive `ethos create` wizard with pick-from-list and create-new sub-flow for attributes
+- 13 new MCP tools: `create_skill`, `get_skill`, `list_skills`, `create_personality`, `get_personality`, `list_personalities`, `create_writing_style`, `get_writing_style`, `list_writing_styles`, `set_personality`, `set_writing_style`, `add_skill`, `remove_skill`
+- `reference` parameter on `get_identity` and `whoami` MCP tools
+- Installer creates `skills/`, `personalities/`, `writing-styles/` directories
+
+### Changed
+
+- `ethos show` displays resolved attribute content with slug headers
+- `ethos show --reference` returns slugs only
+- `ethos list` uses reference mode (no attribute file reads)
+- `ethos create` interactive prompts replaced with attribute picker wizard
+
 ## [0.4.0] - 2026-03-19
 
 ### Added

@@ -18,6 +18,19 @@ type Identity struct {
 	Personality  string   `yaml:"personality,omitempty" json:"personality,omitempty"`
 	Skills       []string `yaml:"skills,omitempty" json:"skills,omitempty"`
 
+	// Resolved content — populated by Store.Load, never persisted.
+	// Empty when loaded with Reference(true).
+	WritingStyleContent string   `yaml:"-" json:"writing_style_content,omitempty"`
+	PersonalityContent  string   `yaml:"-" json:"personality_content,omitempty"`
+	// SkillContents is positionally indexed: SkillContents[i] is the resolved
+	// content for Skills[i]. Empty string means the .md file was not found
+	// (check Warnings for details).
+	SkillContents []string `yaml:"-" json:"skill_contents,omitempty"`
+
+	// Warnings from attribute resolution (e.g., missing .md files).
+	// Populated by Store.Load, never persisted.
+	Warnings []string `yaml:"-" json:"warnings,omitempty"`
+
 	// Ext holds tool-scoped extension data, assembled on Load from
 	// <persona>.ext/<namespace>.yaml files. Never persisted to the
 	// core identity YAML. Keyed by namespace (tool name), then by key.

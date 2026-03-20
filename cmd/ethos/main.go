@@ -46,20 +46,23 @@ func main() {
 	}
 
 	commands := map[string]func([]string){
-		"version":   func([]string) { runVersion() },
-		"doctor":    func([]string) { runDoctor() },
-		"whoami":    runWhoami,
-		"serve":     func([]string) { runServe() },
-		"create":    runCreate,
-		"list":      func([]string) { runList() },
-		"show":      runShow,
-		"ext":       runExt,
-		"iam":       runIam,
-		"session":   runSession,
-		"uninstall": runUninstall,
-		"help":      func([]string) { printUsage() },
-		"-h":        func([]string) { printUsage() },
-		"--help":    func([]string) { printUsage() },
+		"version":       func([]string) { runVersion() },
+		"doctor":        func([]string) { runDoctor() },
+		"whoami":        runWhoami,
+		"serve":         func([]string) { runServe() },
+		"create":        runCreate,
+		"list":          func([]string) { runList() },
+		"show":          runShow,
+		"ext":           runExt,
+		"iam":           runIam,
+		"session":       runSession,
+		"skill":         runSkill,
+		"personality":   runPersonality,
+		"writing-style": runWritingStyle,
+		"uninstall":     runUninstall,
+		"help":          func([]string) { printUsage() },
+		"-h":            func([]string) { printUsage() },
+		"--help":        func([]string) { printUsage() },
 	}
 
 	if fn, ok := commands[cmd]; ok {
@@ -115,6 +118,12 @@ func printSubcommandHelp(cmd string) {
 		fmt.Print("Usage: ethos uninstall [--purge]\n\n  Remove the Claude Code plugin.\n  With --purge: also remove the binary and all identity data.\n")
 	case "session":
 		fmt.Print("Usage: ethos session [subcommand]\n\n  Manage session roster.\n\n  ethos session                                  Show current session participants\n  ethos session create --session ID --root-id X   Create a new session roster\n  ethos session join --agent-id X [...]            Add a participant\n  ethos session leave --agent-id X                 Remove a participant\n  ethos session purge                              Clean up stale sessions\n")
+	case "skill":
+		fmt.Print("Usage: ethos skill <subcommand>\n\n  Manage skills.\n\n  ethos skill create <slug>           Create a new skill\n  ethos skill list                    List all skills\n  ethos skill show <slug>             Show skill content\n  ethos skill add <handle> <slug>     Add skill to an identity\n  ethos skill remove <handle> <slug>  Remove skill from an identity\n")
+	case "personality":
+		fmt.Print("Usage: ethos personality <subcommand>\n\n  Manage personalities.\n\n  ethos personality create <slug>           Create a new personality\n  ethos personality list                    List all personalities\n  ethos personality show <slug>             Show personality content\n  ethos personality set <handle> <slug>     Set personality on an identity\n")
+	case "writing-style":
+		fmt.Print("Usage: ethos writing-style <subcommand>\n\n  Manage writing styles.\n\n  ethos writing-style create <slug>           Create a new writing style\n  ethos writing-style list                    List all writing styles\n  ethos writing-style show <slug>             Show writing style content\n  ethos writing-style set <handle> <slug>     Set writing style on an identity\n")
 	default:
 		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
 		printUsage()
@@ -131,6 +140,11 @@ Product commands:
   list              List all identities
   show <handle>     Show identity details
   ext               Manage tool-scoped extensions
+
+Attribute commands:
+  skill             Manage skills (create, list, show, add, remove)
+  personality       Manage personalities (create, list, show, set)
+  writing-style     Manage writing styles (create, list, show, set)
 
 Session commands:
   iam <persona>     Declare persona in current session
@@ -293,11 +307,27 @@ func runShow(args []string) {
 		fmt.Fprintln(os.Stderr, "ethos: show requires a handle argument")
 		os.Exit(1)
 	}
-	id, err := store().Load(args[0])
+
+	// Check for --reference flag.
+	handle := args[0]
+	var opts []identity.LoadOption
+	for _, a := range args[1:] {
+		if a == "--reference" {
+			opts = append(opts, identity.Reference(true))
+		}
+	}
+
+	id, err := store().Load(handle, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Print warnings to stderr.
+	for _, w := range id.Warnings {
+		fmt.Fprintf(os.Stderr, "ethos: warning: %s\n", w)
+	}
+
 	if jsonOutput {
 		printJSON(id)
 		return
@@ -309,9 +339,32 @@ func runShow(args []string) {
 	showField("GitHub", id.GitHub)
 	showField("Voice", voiceValue(id.Voice))
 	showField("Agent", id.Agent)
-	showField("Writing", oneLine(id.WritingStyle))
-	showField("Personality", oneLine(id.Personality))
-	showField("Skills", joinSkills(id.Skills))
+
+	// Show attribute slugs and resolved content.
+	if id.WritingStyle != "" {
+		showField("Writing", id.WritingStyle)
+		if id.WritingStyleContent != "" {
+			fmt.Println()
+			fmt.Print(id.WritingStyleContent)
+		}
+	}
+	if id.Personality != "" {
+		showField("Personality", id.Personality)
+		if id.PersonalityContent != "" {
+			fmt.Println()
+			fmt.Print(id.PersonalityContent)
+		}
+	}
+	if len(id.Skills) > 0 {
+		showField("Skills", joinSkills(id.Skills))
+		for i, slug := range id.Skills {
+			if i < len(id.SkillContents) && id.SkillContents[i] != "" {
+				fmt.Println()
+				fmt.Printf("--- %s ---\n", slug)
+				fmt.Print(id.SkillContents[i])
+			}
+		}
+	}
 	showExtensions(id.Ext)
 }
 
