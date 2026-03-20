@@ -296,7 +296,6 @@ func (s *Store) Update(handle string, mutate func(*Identity) error) error {
 		return fmt.Errorf("creating lock file: %w", err)
 	}
 	defer lockFile.Close()
-	defer os.Remove(lockPath)
 	if err := flock(lockFile); err != nil {
 		return fmt.Errorf("acquiring lock: %w", err)
 	}

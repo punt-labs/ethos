@@ -118,7 +118,7 @@ func runAttributeList(kind attribute.Kind) {
 		return
 	}
 	if len(result.Attributes) == 0 {
-		fmt.Printf("No %ss found. Run 'ethos %s create <slug>' to create one.\n", kind.DisplayName, kind.DirName)
+		fmt.Printf("No %s found. Run 'ethos %s create <slug>' to create one.\n", kind.PluralName, kind.CmdName)
 		return
 	}
 	for _, a := range result.Attributes {
@@ -147,7 +147,7 @@ func runAttributeShow(kind attribute.Kind, args []string) {
 // runAttributeAdd adds an attribute slug to an identity's skills list.
 // Only valid for skills (list field).
 func runAttributeAdd(kind attribute.Kind, args []string) {
-	if kind.DirName != "skills" {
+	if kind.CmdName != "skills" {
 		fmt.Fprintf(os.Stderr, "ethos %s add: use 'set' for single-value attributes\n", kind.DisplayName)
 		os.Exit(1)
 	}
@@ -183,7 +183,7 @@ func runAttributeAdd(kind attribute.Kind, args []string) {
 // runAttributeRemove removes an attribute slug from an identity's skills list.
 // Only valid for skills (list field).
 func runAttributeRemove(kind attribute.Kind, args []string) {
-	if kind.DirName != "skills" {
+	if kind.CmdName != "skills" {
 		fmt.Fprintf(os.Stderr, "ethos %s remove: use 'set' to change single-value attributes\n", kind.DisplayName)
 		os.Exit(1)
 	}
@@ -219,12 +219,12 @@ func runAttributeRemove(kind attribute.Kind, args []string) {
 // runAttributeSet sets a single-value attribute on an identity.
 // Valid for personality and writing-style.
 func runAttributeSet(kind attribute.Kind, args []string) {
-	if kind.DirName == "skills" {
+	if kind.CmdName == "skills" {
 		fmt.Fprintf(os.Stderr, "ethos skill set: use 'add' and 'remove' for list attributes\n")
 		os.Exit(1)
 	}
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: ethos %s set <handle> <slug>\n", kind.DirName)
+		fmt.Fprintf(os.Stderr, "Usage: ethos %s set <handle> <slug>\n", kind.CmdName)
 		os.Exit(1)
 	}
 	handle, slug := args[0], args[1]
@@ -233,13 +233,13 @@ func runAttributeSet(kind attribute.Kind, args []string) {
 	as := attributeStore(kind)
 	if !as.Exists(slug) {
 		fmt.Fprintf(os.Stderr, "ethos: %s %q not found — create it with 'ethos %s create %s'\n",
-			kind.DisplayName, slug, kind.DirName, slug)
+			kind.DisplayName, slug, kind.CmdName, slug)
 		os.Exit(1)
 	}
 
 	s := store()
 	if err := s.Update(handle, func(id *identity.Identity) error {
-		switch kind.DirName {
+		switch kind.CmdName {
 		case "personalities":
 			id.Personality = slug
 		case "writing-styles":
@@ -256,12 +256,12 @@ func runAttributeSet(kind attribute.Kind, args []string) {
 }
 
 func printAttributeUsage(kind attribute.Kind) {
-	fmt.Fprintf(os.Stderr, "Usage: ethos %s <subcommand>\n\n", kind.DirName)
+	fmt.Fprintf(os.Stderr, "Usage: ethos %s <subcommand>\n\n", kind.CmdName)
 	fmt.Fprintf(os.Stderr, "Subcommands:\n")
 	fmt.Fprintf(os.Stderr, "  create <slug>           Create a new %s\n", kind.DisplayName)
-	fmt.Fprintf(os.Stderr, "  list                    List all %ss\n", kind.DisplayName)
+	fmt.Fprintf(os.Stderr, "  list                    List all %s\n", kind.PluralName)
 	fmt.Fprintf(os.Stderr, "  show <slug>             Show %s content\n", kind.DisplayName)
-	if kind.DirName == "skills" {
+	if kind.CmdName == "skills" {
 		fmt.Fprintf(os.Stderr, "  add <handle> <slug>     Add %s to an identity\n", kind.DisplayName)
 		fmt.Fprintf(os.Stderr, "  remove <handle> <slug>  Remove %s from an identity\n", kind.DisplayName)
 	} else {
@@ -284,7 +284,7 @@ func editContent(kind attribute.Kind, slug string) (string, error) {
 		return "", fmt.Errorf("creating temp directory: %w", err)
 	}
 
-	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("%s-%s.md", kind.DirName, slug))
+	tmpFile := filepath.Join(tmpDir, fmt.Sprintf("%s-%s.md", kind.CmdName, slug))
 	// Write a starter template.
 	starter := fmt.Sprintf("# %s\n\n", slug)
 	if err := os.WriteFile(tmpFile, []byte(starter), 0o600); err != nil {

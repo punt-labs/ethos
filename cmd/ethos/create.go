@@ -122,7 +122,7 @@ func pickAttribute(reader *bufio.Reader, kind attribute.Kind) string {
 	s := attributeStore(kind)
 	result, err := s.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: warning: could not list %ss: %v\n", kind.DisplayName, err)
+		fmt.Fprintf(os.Stderr, "ethos: warning: could not list %s: %v\n", kind.PluralName, err)
 	}
 
 	fmt.Fprintf(os.Stderr, "\n%s:\n", capitalizeFirst(kind.DisplayName))
@@ -183,10 +183,10 @@ func pickMultiAttribute(reader *bufio.Reader, kind attribute.Kind) []string {
 	s := attributeStore(kind)
 	result, err := s.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: warning: could not list %ss: %v\n", kind.DisplayName, err)
+		fmt.Fprintf(os.Stderr, "ethos: warning: could not list %s: %v\n", kind.PluralName, err)
 	}
 
-	fmt.Fprintf(os.Stderr, "\n%ss (select multiple, comma-separated):\n", capitalizeFirst(kind.DisplayName))
+	fmt.Fprintf(os.Stderr, "\n%s (select multiple, comma-separated):\n", capitalizeFirst(kind.PluralName))
 	if result != nil && len(result.Attributes) > 0 {
 		for i, a := range result.Attributes {
 			fmt.Fprintf(os.Stderr, "  %d. %s\n", i+1, a.Slug)

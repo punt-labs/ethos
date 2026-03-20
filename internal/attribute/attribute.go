@@ -9,14 +9,16 @@ var validSlug = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 // Kind configures a Store for one attribute type.
 type Kind struct {
 	DirName     string // directory under ethos root: "skills", "personalities", "writing-styles"
-	DisplayName string // human-readable: "skill", "personality", "writing style"
+	CmdName     string // CLI command name: "skill", "personality", "writing-style"
+	DisplayName string // human-readable singular: "skill", "personality", "writing style"
+	PluralName  string // human-readable plural: "skills", "personalities", "writing styles"
 }
 
 // Pre-defined kinds.
 var (
-	Skills        = Kind{DirName: "skills", DisplayName: "skill"}
-	Personalities = Kind{DirName: "personalities", DisplayName: "personality"}
-	WritingStyles = Kind{DirName: "writing-styles", DisplayName: "writing style"}
+	Skills        = Kind{DirName: "skills", CmdName: "skill", DisplayName: "skill", PluralName: "skills"}
+	Personalities = Kind{DirName: "personalities", CmdName: "personality", DisplayName: "personality", PluralName: "personalities"}
+	WritingStyles = Kind{DirName: "writing-styles", CmdName: "writing-style", DisplayName: "writing style", PluralName: "writing styles"}
 )
 
 // Attribute is a named markdown document.
