@@ -564,3 +564,115 @@ All ethos hooks now follow these rules:
 - **`set -eo pipefail` (drop `-u`)** — unnecessary. The actual bug was `cat` blocking, not unbound variables. Biff uses `set -euo pipefail` and works fine.
 - **Downloading release binary via `go install`** — `go install` doesn't support `-ldflags`, producing `ethos dev`. Fix: download pre-built binary from GitHub releases. This was a separate installer bug discovered during the same cycle.
 - **`mktemp` in `/tmp`** — not atomic for `settings.json` updates. Use `mktemp "${SETTINGS}.tmp.XXXXXX"` on the same filesystem.
+
+---
+
+## DES-010: Rich identity attributes — markdown references (OPEN)
+
+**Status**: Open. Build plan at `docs/build-plan.md`.
+
+### Problem
+
+Identity attributes (`writing_style`, `personality`, `skills`) are inline
+strings — labels with no actionable content. A consumer reading the identity
+gets `"software engineer"` but not what that means: no standards, no
+anti-patterns, no tools. There is no reuse — if two identities share a
+skill, the description is duplicated or absent.
+
+### Decision
+
+Convert all three attribute fields from inline strings to relative paths
+pointing to markdown files. Each attribute type gets its own directory
+under the ethos root:
+
+```text
+~/.punt-labs/ethos/
+  skills/                         # shared skill definitions
+  personalities/                  # shared personality definitions
+  writing-styles/                 # shared writing style definitions
+```
+
+An identity becomes a unique combination of reusable `.md` files plus
+core identity fields (name, handle, kind, email, github, voice, agent).
+
+```yaml
+writing_style: writing-styles/concise-quantified.md
+personality: personalities/principal-engineer.md
+skills:
+  - skills/executive.md
+  - skills/software-engineering.md
+```
+
+Paths are relative to the ethos root (`~/.punt-labs/ethos/`). The `agent`
+field is the exception — it resolves relative to the repo root, not the
+ethos root, because agent `.md` files live in the project.
+
+### Resolution model
+
+`Load()` resolves all markdown references and returns content inline by
+default. This is the common case — most callers need the content.
+
+Callers that only need paths (performance optimization for display-only
+use cases like biff `/who`) pass `Reference(true)` to skip file reads.
+This follows the JSON API `include` convention: full content is the
+default, lightweight references are opt-in.
+
+The Identity struct carries both:
+
+- **Path fields** (`WritingStyle`, `Personality`, `Skills`) — always
+  populated from YAML, present in both modes
+- **Content fields** (`WritingStyleContent`, `PersonalityContent`,
+  `SkillsContent`) — populated by default, empty when `reference: true`
+
+`List()` always passes `Reference(true)` — listing all identities should
+not read every attribute file. Content resolution is for single-identity
+reads.
+
+MCP tools (`get_identity`, `whoami`) return full content by default.
+An optional `reference` boolean parameter returns paths only.
+
+### Missing file handling
+
+When `Load()` resolves an attribute and the `.md` file is missing, the
+content field is set to an empty string and a warning is added to
+`Identity.Warnings []string`. This matches the existing `ListResult.Warnings`
+pattern. Consumers can check `Warnings` to detect broken references.
+`Save()` validates that all referenced files exist and rejects the save
+if any are missing.
+
+### Path containment
+
+Attribute paths must resolve within the ethos root. Containment is
+verified using `filepath.Abs` + `filepath.Clean` + `strings.HasPrefix`,
+not `filepath.Rel` (which computes relative paths but does not verify
+containment). Symlinks are allowed — users may symlink attributes from
+a dotfiles repo. The containment check runs on the logical path before
+following symlinks.
+
+### Sidecar README deployment
+
+The repo `sidecar/` directory contains README.md files for each
+subdirectory of `~/.punt-labs/ethos/`. The installer copies these during
+installation so users and consuming tools have documentation of the file
+layout and sidecar contract. READMEs are deployed with `cp -n` (no
+clobber) to avoid overwriting user modifications.
+
+### Uniform for humans and agents
+
+A human's skill file describes their expertise and standards. An agent's
+skill file describes its capabilities and tools. Same format, same
+resolution, same reuse model. The `kind` field distinguishes human from
+agent — the attribute system does not.
+
+### Rejected alternatives
+
+- **Inline strings with optional file override** — two sources of truth,
+  unclear which wins. Clean break is simpler.
+- **Load returns paths, caller resolves** — pushes complexity onto every
+  consumer. Most callers need content, not paths.
+- **Cap resolved content at 64KB** — silent truncation is worse than
+  returning the full file. If a file is too large, the author splits it.
+- **Frontmatter in `.md` files for metadata** — unnecessary complexity.
+  The filename is the identifier, the content is the value. If metadata
+  is needed later, frontmatter can be added without breaking existing
+  files.
