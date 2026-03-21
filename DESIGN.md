@@ -430,9 +430,8 @@ mechanism.
 | `ethos session leave` | Remove a participant (called by hooks) |
 | `ethos session purge` | Clean up stale session rosters |
 
-`ethos iam <persona>` is the session-aware identity command. It differs
-from `ethos whoami` (which manages the global active identity in the
-registry). `iam` declares "I am this persona in this session." The
+`ethos iam <persona>` declares "I am this persona in this session."
+`ethos whoami` reads it back via the resolution chain (DES-011). The
 caller's `agent_id` is determined automatically (OS login, Claude PID
 walk, or subagent ID from context).
 
@@ -679,3 +678,143 @@ agent — the attribute system does not.
   The filename is the identifier, the content is the value. If metadata
   is needed later, frontmatter can be added without breaking existing
   files.
+
+---
+
+## DES-011: Identity resolution — humans from git/OS, agents from repo config (PROPOSED)
+
+### Problem
+
+The session start hook assigns personas to the human root and the primary
+agent. Both currently get the same persona — the "global active identity"
+read from `~/.punt-labs/ethos/active`. This has three problems:
+
+1. **Repos are multi-user.** A tracked `active:` field in repo config
+   makes no sense — the repo belongs to the whole team, not one person.
+   The human identity must come from an external source specific to the
+   current user.
+
+2. **Human and agent get the same persona.** The session roster shows the
+   same identity for both root and primary agent. They are different
+   participants and should have different identities.
+
+3. **The "global active identity" concept has no clear purpose.** If the
+   human is whoever git/OS says they are, and the agent is configured per
+   repo, there is nothing left for a global active file to do.
+
+### Design
+
+#### `whoami` resolution chain
+
+`ethos whoami` answers "who am I?" for any caller — human in a shell,
+primary agent in a Claude Code session, or sub-agent. Resolution tries
+each source in order, stopping at the first match:
+
+| Step | Source | Match field |
+|------|--------|-------------|
+| 1 | `iam` declaration (PID-keyed file) | Explicit persona set via `ethos iam` |
+| 2 | `git config user.name` | Identity `github` field |
+| 3 | `git config user.email` | Identity `email` field |
+| 4 | `$USER` (OS login) | Identity `handle` field |
+
+Step 1 checks for an explicit `iam` declaration. This uses the same
+PID-keyed file mechanism as Claude Code sessions
+(`~/.punt-labs/ethos/sessions/current/<PID>`). `ethos whoami` walks the
+process tree upward, checking for a `current/<PID>` file at each
+ancestor. This works identically for:
+
+- **Interactive shell**: `ethos iam jfreeman` writes to `current/$$`.
+  `ethos whoami` in the same shell (or a child process) finds it.
+- **Claude Code session**: the SessionStart hook writes to
+  `current/<claude-pid>`. MCP tools find it via process tree walk.
+
+The `iam` declaration lives as long as the process it's keyed to. When
+the shell exits or Claude Code terminates, the PID becomes stale.
+`ethos session purge` cleans up stale PID files by checking whether the
+process is alive.
+
+Steps 2–4 are the automatic resolution chain. Each step queries the
+identity store for an identity whose field value matches the source. If
+no identity matches any step, the caller has no ethos persona — the raw
+`$USER` value is used as a display name.
+
+**Rationale for field mapping:**
+
+- `git config user.name` is commonly set to a GitHub username (e.g.,
+  `jmf-pobox`), which matches the identity's `github` field.
+- `git config user.email` matches the identity's `email` field directly.
+- `$USER` is the OS login (e.g., `jfreeman`), which by convention matches
+  the identity's `handle`.
+
+These are three different fields on the identity schema, queried against
+three different environment sources. No new schema fields are needed.
+
+#### Agent resolution
+
+The primary agent identity is configured per repo in
+`.punt-labs/ethos/config.yaml`:
+
+```yaml
+agent: claude
+```
+
+This file is tracked in git — the whole team shares the same agent
+configuration. When `agent:` is unset, the primary agent has no ethos
+persona (undefined). It does **not** fall back to the human's persona —
+that would conflate two distinct session participants.
+
+#### Session binding
+
+Resolution feeds into the session lifecycle (DES-007):
+
+- **SessionStart hook**: resolves human via steps 2–4, resolves agent
+  from repo config, calls `iam` for both. After `iam`, subsequent
+  `whoami` calls hit step 1 (PID-keyed file) and return immediately.
+- **SubagentStart hook**: resolves sub-agent persona by `agent_type`
+  convention (DES-007 § Persona Default by Agent Type), calls `iam`.
+- **Interactive shell**: user calls `ethos iam <persona>` explicitly.
+  `ethos whoami` returns it for the life of that shell.
+- **`ethos whoami`**: read-only query. Runs the resolution chain
+  (steps 1–4). No write path.
+
+### Removed concepts
+
+- **`~/.punt-labs/ethos/active` file** — no longer needed. Human identity
+  comes from git/OS, not a manually-set pointer.
+- **`ethos whoami <handle>` (write path)** — no "set active" operation.
+  The human is whoever git/OS says they are.
+- **`active:` field in repo config** — repos are multi-user. The repo
+  does not configure who the human is.
+- **`resolve.Resolve()` repo-local-to-global chain for humans** — dead
+  code that was never wired in; replaced by the multi-field lookup.
+
+### Commands affected
+
+| Command | Before | After |
+|---------|--------|-------|
+| `ethos whoami` | Reads `~/.punt-labs/ethos/active` | Runs human resolution chain (git/OS → identity store) |
+| `ethos whoami <handle>` | Sets global active file | Removed |
+| `ethos doctor` | Checks global active file | Checks that git/OS resolves to a valid identity |
+
+### Identity store query
+
+The resolution chain requires looking up identities by non-handle fields
+(`github`, `email`). The identity store gains a `FindBy(field, value)`
+method that scans all identities and returns the first match. This is a
+linear scan over YAML files — acceptable given the small number of
+identities (typically < 20).
+
+### Rejected alternatives
+
+- **Global active file as the sole source** — ignores multi-user reality.
+  A repo checked out by two developers would show the same human persona
+  for both.
+- **Repo config `active:` field for humans** — same problem. Tracked
+  config is shared; human identity is per-user.
+- **Match `git config user.name` against identity `handle`** — fails when
+  git username differs from ethos handle (e.g., `jmf-pobox` vs
+  `jfreeman`). The `github` field is the correct match target.
+- **Agent falls back to human persona** — conflates two distinct session
+  participants. An unnamed agent is more honest than a mislabeled one.
+- **Require git for human resolution** — too rigid. `$USER` fallback
+  handles environments without git (containers, CI, non-repo dirs).

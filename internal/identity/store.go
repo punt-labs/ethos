@@ -1,7 +1,6 @@
 package identity
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,12 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ErrNoActive is returned when no active identity is configured.
-var ErrNoActive = errors.New("no active identity")
-
 // Store provides CRUD operations for identities on the filesystem.
 // Identities are stored as YAML files in the identities subdirectory.
-// The active identity handle is stored in an "active" file.
 type Store struct {
 	root string // e.g. ~/.punt-labs/ethos
 }
@@ -216,34 +211,38 @@ func (s *Store) List() (*ListResult, error) {
 	return result, nil
 }
 
-// Active returns the currently active identity (with resolved content).
-func (s *Store) Active(opts ...LoadOption) (*Identity, error) {
-	path := filepath.Join(s.root, "active")
-	data, err := os.ReadFile(path)
+// FindBy searches for an identity where the named field matches value.
+// Supported fields: "handle", "email", "github".
+// Returns nil, nil when no identity matches (not an error).
+// Returns an error for unsupported fields or store read failures.
+func (s *Store) FindBy(field, value string) (*Identity, error) {
+	switch field {
+	case "handle", "email", "github":
+	default:
+		return nil, fmt.Errorf("unsupported FindBy field: %q", field)
+	}
+	if value == "" {
+		return nil, nil
+	}
+	result, err := s.List()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, ErrNoActive
+		return nil, err
+	}
+	for _, id := range result.Identities {
+		var fieldValue string
+		switch field {
+		case "handle":
+			fieldValue = id.Handle
+		case "email":
+			fieldValue = id.Email
+		case "github":
+			fieldValue = id.GitHub
 		}
-		return nil, fmt.Errorf("reading active identity: %w", err)
+		if fieldValue == value {
+			return id, nil
+		}
 	}
-	handle := strings.TrimSpace(string(data))
-	if handle == "" {
-		return nil, ErrNoActive
-	}
-	return s.Load(handle, opts...)
-}
-
-// SetActive sets the active identity by handle. Returns an error if
-// the identity does not exist.
-func (s *Store) SetActive(handle string) error {
-	if _, err := s.Load(handle, Reference(true)); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(s.root, 0o700); err != nil {
-		return fmt.Errorf("creating config directory: %w", err)
-	}
-	path := filepath.Join(s.root, "active")
-	return os.WriteFile(path, []byte(handle+"\n"), 0o600)
+	return nil, nil
 }
 
 // Exists checks whether an identity file exists for the given handle.
