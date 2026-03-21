@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `/ethos:list-identities`, `/ethos:get-identity`, `/ethos:create-identity` slash commands
+
+### Changed
+
+- All slash commands namespaced under `/ethos:*` (DES-012) — no top-level deployment to `~/.claude/commands/`
+
+### Removed
+
+- Top-level command deployment from session-start hook (DES-013)
+- `jq` settings mutation from session-start hook (DES-013)
+- Users upgrading from v0.7.0 must manually delete ethos files from `~/.claude/commands/`
+
 ## [0.7.0] - 2026-03-21
 
 ## [0.6.0] - 2026-03-21
