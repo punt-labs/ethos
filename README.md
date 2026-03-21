@@ -271,24 +271,30 @@ an identity with a handle matching the agent type.
 | Skills | `~/.punt-labs/ethos/skills/<slug>.md` | No |
 | Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
 | Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
-| Active identity | `~/.punt-labs/ethos/active` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
 
-## Per-Project Identity
+## Identity Resolution
 
-Override the global active identity for a specific repo by creating
-`.punt-labs/ethos/config.yaml` in the repo root:
+Human and agent identities are resolved automatically — no manual
+"set active" step required.
+
+**Human resolution** (stops at first match):
+
+1. `iam` declaration — explicit persona set via `ethos iam`
+2. `git config user.name` — matched against identity `github` field
+3. `git config user.email` — matched against identity `email` field
+4. `$USER` — matched against identity `handle` field
+
+**Agent resolution** — per-repo `.punt-labs/ethos/config.yaml`:
 
 ```yaml
-active: claude
+agent: claude
 ```
 
-This pins the identity to `claude` in this repo regardless of the global
-`ethos whoami` setting. Tracked in git — the whole team shares the same
-project identity. Useful when a repo's agent should always use a specific
-persona (e.g., beadle always sends email as `claude`).
+Tracked in git — the whole team shares the same agent configuration.
+When the agent field is unset, the primary agent has no persona.
 
 ## Integration
 

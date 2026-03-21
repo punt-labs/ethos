@@ -118,30 +118,6 @@ func TestStore_ListNoDirectory(t *testing.T) {
 	assert.Empty(t, result.Identities)
 }
 
-func TestStore_ActiveAndSetActive(t *testing.T) {
-	s := testStore(t)
-	require.NoError(t, s.Save(&Identity{Name: "Alice", Handle: "alice", Kind: "human"}))
-
-	// No active identity initially.
-	_, err := s.Active()
-	require.Error(t, err)
-
-	// Set active.
-	require.NoError(t, s.SetActive("alice"))
-
-	// Verify.
-	active, err := s.Active()
-	require.NoError(t, err)
-	assert.Equal(t, "alice", active.Handle)
-}
-
-func TestStore_SetActiveNonexistent(t *testing.T) {
-	s := testStore(t)
-	err := s.SetActive("nonexistent")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-}
-
 func TestStore_Exists(t *testing.T) {
 	s := testStore(t)
 	assert.False(t, s.Exists("mal"))
@@ -276,6 +252,63 @@ func TestStore_Update(t *testing.T) {
 	loaded, err := s.Load("updatable", Reference(true))
 	require.NoError(t, err)
 	assert.Equal(t, "stern", loaded.Personality)
+}
+
+func TestStore_FindByGitHub(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Save(&Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human", GitHub: "mal-github",
+	}))
+	id, err := s.FindBy("github", "mal-github")
+	require.NoError(t, err)
+	require.NotNil(t, id)
+	assert.Equal(t, "mal", id.Handle)
+}
+
+func TestStore_FindByEmail(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Save(&Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human", Email: "mal@serenity.ship",
+	}))
+	id, err := s.FindBy("email", "mal@serenity.ship")
+	require.NoError(t, err)
+	require.NotNil(t, id)
+	assert.Equal(t, "mal", id.Handle)
+}
+
+func TestStore_FindByHandle(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Save(&Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
+	}))
+	id, err := s.FindBy("handle", "mal")
+	require.NoError(t, err)
+	require.NotNil(t, id)
+	assert.Equal(t, "mal", id.Handle)
+}
+
+func TestStore_FindByNoMatch(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Save(&Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
+	}))
+	id, err := s.FindBy("github", "nobody")
+	require.NoError(t, err)
+	assert.Nil(t, id)
+}
+
+func TestStore_FindByUnsupportedField(t *testing.T) {
+	s := testStore(t)
+	_, err := s.FindBy("name", "Mal")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported")
+}
+
+func TestStore_FindByEmptyValue(t *testing.T) {
+	s := testStore(t)
+	id, err := s.FindBy("github", "")
+	require.NoError(t, err)
+	assert.Nil(t, id)
 }
 
 func TestStore_FilePermissions(t *testing.T) {

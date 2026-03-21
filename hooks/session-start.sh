@@ -81,22 +81,28 @@ if command -v jq &>/dev/null && [[ -f "$SETTINGS" ]]; then
   fi
 fi
 
-# ── Resolve active identity ──────────────────────────────────────────
-IDENTITY_INFO=""
-ACTIVE_PERSONA=""
+# ── Resolve human and agent identities ───────────────────────────────
+HUMAN_INFO=""
+HUMAN_PERSONA=""
+AGENT_PERSONA=""
 if command -v ethos >/dev/null 2>&1; then
-  IDENTITY_INFO=$(ethos whoami 2>>"$ETHOS_LOG" || true)
-  ACTIVE_PERSONA=$(ethos whoami --json 2>>"$ETHOS_LOG" | grep -o '"handle" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+  WHOAMI_JSON=$(ethos whoami --json 2>>"$ETHOS_LOG" || true)
+  if [[ -n "$WHOAMI_JSON" ]]; then
+    HUMAN_PERSONA=$(echo "$WHOAMI_JSON" | grep -o '"handle" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+    HUMAN_NAME=$(echo "$WHOAMI_JSON" | grep -o '"name" *: *"[^"]*"' | head -1 | cut -d'"' -f4 || true)
+    HUMAN_INFO="${HUMAN_NAME} (${HUMAN_PERSONA})"
+  fi
+  AGENT_PERSONA=$(ethos resolve-agent 2>>"$ETHOS_LOG" || true)
 fi
 
-if [[ -n "$IDENTITY_INFO" ]]; then
-  ACTIONS+=("Active identity: ${IDENTITY_INFO}")
+if [[ -n "$HUMAN_INFO" ]]; then
+  ACTIONS+=("Active identity: ${HUMAN_INFO}")
 fi
 
 # ── Create session roster ────────────────────────────────────────────
 if [[ -n "$SESSION_ID" ]] && command -v ethos >/dev/null 2>&1; then
   USER_ID="${USER:-$(whoami)}"
-  USER_PERSONA="${ACTIVE_PERSONA:-$USER_ID}"
+  USER_PERSONA="${HUMAN_PERSONA:-$USER_ID}"
   CLAUDE_PID="${PPID}"
 
   if ethos session create \
@@ -104,7 +110,7 @@ if [[ -n "$SESSION_ID" ]] && command -v ethos >/dev/null 2>&1; then
     --root-id "$USER_ID" \
     --root-persona "$USER_PERSONA" \
     --primary-id "$CLAUDE_PID" \
-    --primary-persona "${ACTIVE_PERSONA:-agent}" 2>>"$ETHOS_LOG"; then
+    --primary-persona "$AGENT_PERSONA" 2>>"$ETHOS_LOG"; then
     ethos session write-current --pid "$CLAUDE_PID" --session "$SESSION_ID" 2>>"$ETHOS_LOG" || true
   fi
 fi

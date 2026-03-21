@@ -10,7 +10,6 @@ is the contract.
 ```text
 ~/.punt-labs/ethos/
   README.md                       # this file
-  active                          # plain text: handle of the active identity
   identities/                     # one YAML file per identity
     <handle>.yaml                 # core identity fields
     <handle>.ext/                 # tool-scoped extensions (key-value YAML per tool)

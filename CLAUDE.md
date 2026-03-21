@@ -22,8 +22,8 @@ make install                            # Build and install to ~/.local/bin
 make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, tests)
 ./ethos version                         # Print version
 ./ethos doctor                          # Check installation health
-./ethos whoami                          # Show active identity
-./ethos whoami <handle>                 # Set active identity
+./ethos whoami                          # Show caller's identity (iam/git/OS)
+./ethos resolve-agent                   # Show default agent from repo config
 ./ethos serve                           # Start MCP server (stdio transport)
 ./ethos iam <persona>                   # Declare persona in current session
 ./ethos session                         # Show current session participants
@@ -73,7 +73,6 @@ Expands to `make lint docs test`:
 | Skills | `~/.punt-labs/ethos/skills/<slug>.md` | No |
 | Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
 | Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
-| Active identity | `~/.punt-labs/ethos/active` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |

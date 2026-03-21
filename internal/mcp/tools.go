@@ -10,6 +10,7 @@ import (
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -71,10 +72,7 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 
 func (h *Handler) whoamiTool() mcplib.Tool {
 	return mcplib.NewTool("whoami",
-		mcplib.WithDescription("Show or set the active identity. Without a handle, returns the active identity with resolved attribute content. With a handle, sets it."),
-		mcplib.WithString("handle",
-			mcplib.Description("Handle to set as active identity. Omit to show current."),
-		),
+		mcplib.WithDescription("Show the caller's identity, resolved from iam declaration, git config, or OS user."),
 		mcplib.WithBoolean("reference",
 			mcplib.Description("If true, return attribute slugs only without resolving .md content."),
 		),
@@ -120,13 +118,9 @@ func (h *Handler) createIdentityTool() mcplib.Tool {
 // --- Tool Handlers ---
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	handle := stringArg(req, "handle", "")
-
-	if handle != "" {
-		if err := h.store.SetActive(handle); err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("failed to set active identity: %v", err)), nil
-		}
-		return mcplib.NewToolResultText(fmt.Sprintf("Active identity set to %q", handle)), nil
+	handle, err := resolve.Resolve(h.store, h.sessionStore)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("no identity resolved: %v", err)), nil
 	}
 
 	var opts []identity.LoadOption
@@ -134,9 +128,9 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 		opts = append(opts, identity.Reference(true))
 	}
 
-	id, err := h.store.Active(opts...)
-	if err != nil {
-		return mcplib.NewToolResultError("no active identity configured — run 'ethos create' first"), nil
+	id, loadErr := h.store.Load(handle, opts...)
+	if loadErr != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("identity %q not found: %v", handle, loadErr)), nil
 	}
 
 	return jsonResult(id)
@@ -155,19 +149,43 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 		Active bool   `json:"active"`
 	}
 
-	active, _ := h.store.Active()
+	// Mark session participants as active.
+	activeHandles := h.sessionParticipantHandles()
 	entries := make([]entry, 0, len(result.Identities))
 	for _, id := range result.Identities {
-		isActive := active != nil && active.Handle == id.Handle
 		entries = append(entries, entry{
 			Handle: id.Handle,
 			Name:   id.Name,
 			Kind:   id.Kind,
-			Active: isActive,
+			Active: activeHandles[id.Handle],
 		})
 	}
 
 	return jsonResult(entries)
+}
+
+// sessionParticipantHandles returns the set of persona handles that are
+// active in the current session. Returns an empty map if no session.
+func (h *Handler) sessionParticipantHandles() map[string]bool {
+	handles := make(map[string]bool)
+	if h.sessionStore == nil {
+		return handles
+	}
+	claudePID := process.FindClaudePID()
+	sessionID, err := h.sessionStore.ReadCurrentSession(claudePID)
+	if err != nil {
+		return handles
+	}
+	roster, err := h.sessionStore.Load(sessionID)
+	if err != nil {
+		return handles
+	}
+	for _, p := range roster.Participants {
+		if p.Persona != "" {
+			handles[p.Persona] = true
+		}
+	}
+	return handles
 }
 
 func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -217,13 +235,6 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	}
 	if err := h.store.Save(id); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to save: %v", err)), nil
-	}
-
-	// Set as active if it's the first identity.
-	// Best-effort: set as active if first identity.
-	listResult, listErr := h.store.List()
-	if listErr == nil && len(listResult.Identities) == 1 {
-		_ = h.store.SetActive(id.Handle)
 	}
 
 	return jsonResult(id)
