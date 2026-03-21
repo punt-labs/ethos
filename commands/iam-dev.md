@@ -1,11 +1,11 @@
 ---
 description: Declare persona in current session
 argument-hint: "<persona>"
-allowed-tools: ["mcp__plugin_ethos-dev_self__session_iam"]
+allowed-tools: ["mcp__plugin_ethos-dev_self__session"]
 ---
 
 # /iam-dev
 
-Call `mcp__plugin_ethos-dev_self__session_iam` with `persona` set to $ARGUMENTS.
+Call `mcp__plugin_ethos-dev_self__session` with `method` set to `"iam"` and `persona` set to $ARGUMENTS.
 
 If no argument provided, prompt the user for their persona handle.
