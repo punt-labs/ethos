@@ -11,93 +11,131 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 )
 
-// registerAttributeTools adds all attribute CRUD and binding tools.
+// registerAttributeTools adds consolidated attribute tools (one per resource).
 func (h *Handler) registerAttributeTools(s *mcpserver.MCPServer) {
-	// Skill CRUD
-	s.AddTool(h.createAttributeTool("create_skill", "skill"), h.handleCreateSkill)
-	s.AddTool(h.getAttributeTool("get_skill", "skill"), h.handleGetSkill)
-	s.AddTool(h.listAttributeTool("list_skills", "skills"), h.handleListSkills)
-	// Personality CRUD
-	s.AddTool(h.createAttributeTool("create_personality", "personality"), h.handleCreatePersonality)
-	s.AddTool(h.getAttributeTool("get_personality", "personality"), h.handleGetPersonality)
-	s.AddTool(h.listAttributeTool("list_personalities", "personalities"), h.handleListPersonalities)
-	// Writing style CRUD
-	s.AddTool(h.createAttributeTool("create_writing_style", "writing style"), h.handleCreateWritingStyle)
-	s.AddTool(h.getAttributeTool("get_writing_style", "writing style"), h.handleGetWritingStyle)
-	s.AddTool(h.listAttributeTool("list_writing_styles", "writing styles"), h.handleListWritingStyles)
-	// Binding tools
-	s.AddTool(h.setAttributeTool("set_personality", "personality"), h.handleSetPersonality)
-	s.AddTool(h.setAttributeTool("set_writing_style", "writing style"), h.handleSetWritingStyle)
-	s.AddTool(h.addSkillTool(), h.handleAddSkill)
-	s.AddTool(h.removeSkillTool(), h.handleRemoveSkill)
+	s.AddTool(h.skillTool(), h.handleSkill)
+	s.AddTool(h.personalityTool(), h.handlePersonality)
+	s.AddTool(h.writingStyleTool(), h.handleWritingStyle)
 }
 
 // --- Tool Definitions ---
 
-func (h *Handler) createAttributeTool(name, display string) mcplib.Tool {
-	return mcplib.NewTool(name,
-		mcplib.WithDescription(fmt.Sprintf("Create a new %s as a markdown document.", display)),
-		mcplib.WithString("slug", mcplib.Required(),
-			mcplib.Description("Unique slug (lowercase alphanumeric with hyphens)."),
+func (h *Handler) skillTool() mcplib.Tool {
+	return mcplib.NewTool("skill",
+		mcplib.WithDescription("Manage skills. Methods: create, list, show, delete, add (to identity), remove (from identity)."),
+		mcplib.WithString("method", mcplib.Required(),
+			mcplib.Enum("create", "list", "show", "delete", "add", "remove"),
+			mcplib.Description("Operation to perform."),
 		),
-		mcplib.WithString("content", mcplib.Required(),
-			mcplib.Description("Markdown content for the "+display+"."),
+		mcplib.WithString("slug",
+			mcplib.Description("Skill slug. Required for create, show, delete, add, remove."),
 		),
-	)
-}
-
-func (h *Handler) getAttributeTool(name, display string) mcplib.Tool {
-	return mcplib.NewTool(name,
-		mcplib.WithDescription(fmt.Sprintf("Get the content of a %s by slug.", display)),
-		mcplib.WithString("slug", mcplib.Required(),
-			mcplib.Description("The "+display+" slug to look up."),
+		mcplib.WithString("content",
+			mcplib.Description("Markdown content. Required for create."),
+		),
+		mcplib.WithString("handle",
+			mcplib.Description("Identity handle. Required for add, remove."),
 		),
 	)
 }
 
-func (h *Handler) listAttributeTool(name, display string) mcplib.Tool {
-	return mcplib.NewTool(name,
-		mcplib.WithDescription(fmt.Sprintf("List all available %s.", display)),
-	)
-}
-
-func (h *Handler) setAttributeTool(name, display string) mcplib.Tool {
-	return mcplib.NewTool(name,
-		mcplib.WithDescription(fmt.Sprintf("Set the %s on an identity.", display)),
-		mcplib.WithString("handle", mcplib.Required(),
-			mcplib.Description("Identity handle to update."),
+func (h *Handler) personalityTool() mcplib.Tool {
+	return mcplib.NewTool("personality",
+		mcplib.WithDescription("Manage personalities. Methods: create, list, show, delete, set (on identity)."),
+		mcplib.WithString("method", mcplib.Required(),
+			mcplib.Enum("create", "list", "show", "delete", "set"),
+			mcplib.Description("Operation to perform."),
 		),
-		mcplib.WithString("slug", mcplib.Required(),
-			mcplib.Description(fmt.Sprintf("The %s slug to set.", display)),
+		mcplib.WithString("slug",
+			mcplib.Description("Personality slug. Required for create, show, delete, set."),
 		),
-	)
-}
-
-func (h *Handler) addSkillTool() mcplib.Tool {
-	return mcplib.NewTool("add_skill",
-		mcplib.WithDescription("Add a skill to an identity's skill list."),
-		mcplib.WithString("handle", mcplib.Required(),
-			mcplib.Description("Identity handle to update."),
+		mcplib.WithString("content",
+			mcplib.Description("Markdown content. Required for create."),
 		),
-		mcplib.WithString("slug", mcplib.Required(),
-			mcplib.Description("The skill slug to add."),
+		mcplib.WithString("handle",
+			mcplib.Description("Identity handle. Required for set."),
 		),
 	)
 }
 
-func (h *Handler) removeSkillTool() mcplib.Tool {
-	return mcplib.NewTool("remove_skill",
-		mcplib.WithDescription("Remove a skill from an identity's skill list."),
-		mcplib.WithString("handle", mcplib.Required(),
-			mcplib.Description("Identity handle to update."),
+func (h *Handler) writingStyleTool() mcplib.Tool {
+	return mcplib.NewTool("writing_style",
+		mcplib.WithDescription("Manage writing styles. Methods: create, list, show, delete, set (on identity)."),
+		mcplib.WithString("method", mcplib.Required(),
+			mcplib.Enum("create", "list", "show", "delete", "set"),
+			mcplib.Description("Operation to perform."),
 		),
-		mcplib.WithString("slug", mcplib.Required(),
-			mcplib.Description("The skill slug to remove."),
+		mcplib.WithString("slug",
+			mcplib.Description("Writing style slug. Required for create, show, delete, set."),
+		),
+		mcplib.WithString("content",
+			mcplib.Description("Markdown content. Required for create."),
+		),
+		mcplib.WithString("handle",
+			mcplib.Description("Identity handle. Required for set."),
 		),
 	)
 }
 
 // --- Handlers ---
+
+func (h *Handler) handleSkill(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	method := stringArg(req, "method", "")
+	switch method {
+	case "create":
+		return h.handleCreateAttribute(h.skills, "skill", req)
+	case "list":
+		return h.handleListAttribute(h.skills, "skills")
+	case "show":
+		return h.handleGetAttribute(h.skills, "skill", req)
+	case "delete":
+		return h.handleDeleteAttribute(h.skills, "skill", req)
+	case "add":
+		return h.handleAddSkill(req)
+	case "remove":
+		return h.handleRemoveSkill(req)
+	default:
+		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
+	}
+}
+
+func (h *Handler) handlePersonality(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	method := stringArg(req, "method", "")
+	switch method {
+	case "create":
+		return h.handleCreateAttribute(h.personalities, "personality", req)
+	case "list":
+		return h.handleListAttribute(h.personalities, "personalities")
+	case "show":
+		return h.handleGetAttribute(h.personalities, "personality", req)
+	case "delete":
+		return h.handleDeleteAttribute(h.personalities, "personality", req)
+	case "set":
+		return h.handleSetAttribute(h.store, "personality", req)
+	default:
+		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
+	}
+}
+
+func (h *Handler) handleWritingStyle(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	method := stringArg(req, "method", "")
+	switch method {
+	case "create":
+		return h.handleCreateAttribute(h.writingStyles, "writing style", req)
+	case "list":
+		return h.handleListAttribute(h.writingStyles, "writing styles")
+	case "show":
+		return h.handleGetAttribute(h.writingStyles, "writing style", req)
+	case "delete":
+		return h.handleDeleteAttribute(h.writingStyles, "writing style", req)
+	case "set":
+		return h.handleSetAttribute(h.store, "writing style", req)
+	default:
+		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
+	}
+}
+
+// --- Shared Implementations ---
 
 func (h *Handler) handleCreateAttribute(store *attribute.Store, display string, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	slug := stringArg(req, "slug", "")
@@ -139,72 +177,40 @@ func (h *Handler) handleListAttribute(store *attribute.Store, display string) (*
 	return jsonResult(attrListResponse{Attributes: result.Attributes, Warnings: result.Warnings})
 }
 
-// Skill handlers
-func (h *Handler) handleCreateSkill(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleCreateAttribute(h.skills, "skill", req)
-}
-func (h *Handler) handleGetSkill(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleGetAttribute(h.skills, "skill", req)
-}
-func (h *Handler) handleListSkills(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleListAttribute(h.skills, "skills")
-}
-
-// Personality handlers
-func (h *Handler) handleCreatePersonality(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleCreateAttribute(h.personalities, "personality", req)
-}
-func (h *Handler) handleGetPersonality(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleGetAttribute(h.personalities, "personality", req)
-}
-func (h *Handler) handleListPersonalities(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleListAttribute(h.personalities, "personalities")
+func (h *Handler) handleDeleteAttribute(store *attribute.Store, display string, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	slug := stringArg(req, "slug", "")
+	if slug == "" {
+		return mcplib.NewToolResultError("slug is required"), nil
+	}
+	if err := store.Delete(slug); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to delete %s: %v", display, err)), nil
+	}
+	return mcplib.NewToolResultText(fmt.Sprintf("Deleted %s %q", display, slug)), nil
 }
 
-// Writing style handlers
-func (h *Handler) handleCreateWritingStyle(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleCreateAttribute(h.writingStyles, "writing style", req)
-}
-func (h *Handler) handleGetWritingStyle(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleGetAttribute(h.writingStyles, "writing style", req)
-}
-func (h *Handler) handleListWritingStyles(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	return h.handleListAttribute(h.writingStyles, "writing styles")
-}
-
-// Binding handlers
-
-func (h *Handler) handleSetPersonality(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleSetAttribute(store *identity.Store, display string, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")
 	slug := stringArg(req, "slug", "")
 	if handle == "" || slug == "" {
 		return mcplib.NewToolResultError("handle and slug are required"), nil
 	}
-	if err := h.store.Update(handle, func(id *identity.Identity) error {
-		id.Personality = slug
+	if err := store.Update(handle, func(id *identity.Identity) error {
+		switch display {
+		case "personality":
+			id.Personality = slug
+		case "writing style":
+			id.WritingStyle = slug
+		default:
+			return fmt.Errorf("unknown attribute type %q", display)
+		}
 		return nil
 	}); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to set personality: %v", err)), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to set %s: %v", display, err)), nil
 	}
-	return mcplib.NewToolResultText(fmt.Sprintf("Set personality %q on %q", slug, handle)), nil
+	return mcplib.NewToolResultText(fmt.Sprintf("Set %s %q on %q", display, slug, handle)), nil
 }
 
-func (h *Handler) handleSetWritingStyle(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	handle := stringArg(req, "handle", "")
-	slug := stringArg(req, "slug", "")
-	if handle == "" || slug == "" {
-		return mcplib.NewToolResultError("handle and slug are required"), nil
-	}
-	if err := h.store.Update(handle, func(id *identity.Identity) error {
-		id.WritingStyle = slug
-		return nil
-	}); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to set writing style: %v", err)), nil
-	}
-	return mcplib.NewToolResultText(fmt.Sprintf("Set writing style %q on %q", slug, handle)), nil
-}
-
-func (h *Handler) handleAddSkill(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleAddSkill(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")
 	slug := stringArg(req, "slug", "")
 	if handle == "" || slug == "" {
@@ -224,7 +230,7 @@ func (h *Handler) handleAddSkill(_ context.Context, req mcplib.CallToolRequest) 
 	return mcplib.NewToolResultText(fmt.Sprintf("Added skill %q to %q", slug, handle)), nil
 }
 
-func (h *Handler) handleRemoveSkill(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleRemoveSkill(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")
 	slug := stringArg(req, "slug", "")
 	if handle == "" || slug == "" {

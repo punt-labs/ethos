@@ -38,6 +38,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ErrNoActive` sentinel error
 - `RepoConfig.Active` field — repos are multi-user, human identity is per-user
 - `ps -eo pid=,ppid=,comm=` subprocess for process tree walking
+- 13 attribute MCP tools (`create_skill`, `get_skill`, etc.) replaced by 3 (`skill`, `personality`, `writing_style`) with `method` parameter
+- 4 ext MCP tools (`ext_get`, `ext_set`, etc.) replaced by 1 (`ext`) with `method` parameter
+- 4 session MCP tools (`session_iam`, `session_roster`, etc.) replaced by 1 (`session`) with `method` parameter
+
+### Added (slash commands)
+
+- `/ethos:skill` — create, list, show, delete, add, remove
+- `/ethos:personality` — create, list, show, delete, set
+- `/ethos:writing-style` — create, list, show, delete, set
+- `/ethos:ext` — get, set, del, list
+- `delete` method on all attribute tools (was not exposed via MCP)
 
 ## [0.5.0] - 2026-03-20
 

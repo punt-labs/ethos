@@ -1,21 +1,10 @@
 ---
-description: Show or set the active identity
+description: Show the caller's identity
 allowed-tools: ["mcp__plugin_ethos_self__whoami"]
 ---
 
 # /whoami
 
-Show or set the active identity for the current session.
+Call `mcp__plugin_ethos_self__whoami` with no arguments.
 
-## Usage
-
-- `/whoami` — display the active identity (name, handle, kind, bindings)
-- `/whoami <handle>` — switch the active identity
-
-When an identity is active, other tools can read it:
-
-- **Vox** reads the voice binding for speech synthesis
-- **Beadle** reads the email binding for sending mail
-- **Biff** reads the GitHub handle for presence
-
-If no identity is configured, prompt the user to create one with `ethos create`.
+Displays the caller's identity, resolved from iam declaration, git config, or OS user.

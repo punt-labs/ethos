@@ -241,6 +241,192 @@ func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 	assert.Equal(t, []string{"go", "testing"}, loaded.Skills)
 }
 
+// --- Attribute Tool Tests ---
+
+func TestHandleSkill_CreateAndShow(t *testing.T) {
+	h := testHandler(t)
+
+	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method":  "create",
+		"slug":    "go-dev",
+		"content": "# Go Development\nExpert in Go.",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "show",
+		"slug":   "go-dev",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "Go Development")
+}
+
+func TestHandleSkill_ListAndDelete(t *testing.T) {
+	h := testHandler(t)
+
+	_, _ = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "create", "slug": "a", "content": "# A\n",
+	}))
+	_, _ = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "create", "slug": "b", "content": "# B\n",
+	}))
+
+	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "list",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, resultText(t, result), "a")
+	assert.Contains(t, resultText(t, result), "b")
+
+	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "delete", "slug": "a",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+}
+
+func TestHandleSkill_AddAndRemove(t *testing.T) {
+	h := testHandler(t)
+	root := h.store.Root()
+	s := attribute.NewStore(root, attribute.Skills)
+	require.NoError(t, s.Save(&attribute.Attribute{Slug: "test-skill", Content: "# Test\n"}))
+
+	require.NoError(t, h.store.Save(&identity.Identity{
+		Name: "Alice", Handle: "alice", Kind: "human",
+	}))
+
+	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "add", "handle": "alice", "slug": "test-skill",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	// Duplicate add should error.
+	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "add", "handle": "alice", "slug": "test-skill",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+
+	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "remove", "handle": "alice", "slug": "test-skill",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	// Remove non-existent should error.
+	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "remove", "handle": "alice", "slug": "test-skill",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+}
+
+func TestHandlePersonality_SetOnIdentity(t *testing.T) {
+	h := testHandler(t)
+	root := h.store.Root()
+	ps := attribute.NewStore(root, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{Slug: "friendly", Content: "# Friendly\n"}))
+
+	require.NoError(t, h.store.Save(&identity.Identity{
+		Name: "Alice", Handle: "alice", Kind: "human",
+	}))
+
+	result, err := h.handlePersonality(context.Background(), callTool(map[string]interface{}{
+		"method": "set", "handle": "alice", "slug": "friendly",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	loaded, err := h.store.Load("alice", identity.Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "friendly", loaded.Personality)
+}
+
+func TestHandleWritingStyle_SetOnIdentity(t *testing.T) {
+	h := testHandler(t)
+	root := h.store.Root()
+	ws := attribute.NewStore(root, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{Slug: "concise", Content: "# Concise\n"}))
+
+	require.NoError(t, h.store.Save(&identity.Identity{
+		Name: "Alice", Handle: "alice", Kind: "human",
+	}))
+
+	result, err := h.handleWritingStyle(context.Background(), callTool(map[string]interface{}{
+		"method": "set", "handle": "alice", "slug": "concise",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	loaded, err := h.store.Load("alice", identity.Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "concise", loaded.WritingStyle)
+}
+
+func TestHandleSkill_MissingSlug(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "show",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "slug is required")
+}
+
+func TestHandleSkill_UnknownMethod(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+		"method": "bogus",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unknown method")
+}
+
+// --- Ext Tool Tests ---
+
+func TestHandleExt_SetAndGet(t *testing.T) {
+	h := testHandler(t)
+	require.NoError(t, h.store.Save(&identity.Identity{
+		Name: "Alice", Handle: "alice", Kind: "human",
+	}))
+
+	result, err := h.handleExt(context.Background(), callTool(map[string]interface{}{
+		"method": "set", "persona": "alice", "namespace": "biff", "key": "tty", "value": "s001",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	result, err = h.handleExt(context.Background(), callTool(map[string]interface{}{
+		"method": "get", "persona": "alice", "namespace": "biff",
+	}))
+	require.NoError(t, err)
+	assert.Contains(t, resultText(t, result), "tty")
+}
+
+func TestHandleExt_SetMissingNamespace(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleExt(context.Background(), callTool(map[string]interface{}{
+		"method": "set", "persona": "alice", "key": "x", "value": "y",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "namespace is required")
+}
+
+func TestHandleExt_SetMissingKey(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleExt(context.Background(), callTool(map[string]interface{}{
+		"method": "set", "persona": "alice", "namespace": "biff", "value": "y",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "key is required")
+}
+
 // --- Session Tool Tests ---
 
 func testHandlerWithSession(t *testing.T) *Handler {
@@ -251,26 +437,26 @@ func testHandlerWithSession(t *testing.T) *Handler {
 	return NewHandler(s, ss)
 }
 
-func TestHandleSessionRoster_NotFound(t *testing.T) {
+func TestHandleSession_RosterNotFound(t *testing.T) {
 	h := testHandlerWithSession(t)
-	result, err := h.handleSessionRoster(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "roster",
 		"session_id": "nonexistent",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 }
 
-func TestHandleSessionJoinAndRoster(t *testing.T) {
+func TestHandleSession_JoinAndRoster(t *testing.T) {
 	h := testHandlerWithSession(t)
 
-	// Create a session first.
 	require.NoError(t, h.sessionStore.Create("test-sess",
 		session.Participant{AgentID: "user1", Persona: "user1"},
 		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
 	))
 
-	// Join a subagent.
-	result, err := h.handleSessionJoin(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "join",
 		"session_id": "test-sess",
 		"agent_id":   "sub-1",
 		"persona":    "reviewer",
@@ -280,8 +466,8 @@ func TestHandleSessionJoinAndRoster(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	// Read roster.
-	result, err = h.handleSessionRoster(context.Background(), callTool(map[string]interface{}{
+	result, err = h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "roster",
 		"session_id": "test-sess",
 	}))
 	require.NoError(t, err)
@@ -294,7 +480,7 @@ func TestHandleSessionJoinAndRoster(t *testing.T) {
 	assert.Len(t, participants, 3)
 }
 
-func TestHandleSessionIam(t *testing.T) {
+func TestHandleSession_Iam(t *testing.T) {
 	h := testHandlerWithSession(t)
 
 	require.NoError(t, h.sessionStore.Create("test-iam",
@@ -302,7 +488,8 @@ func TestHandleSessionIam(t *testing.T) {
 		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
 	))
 
-	result, err := h.handleSessionIam(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "iam",
 		"session_id": "test-iam",
 		"agent_id":   "12345",
 		"persona":    "new-persona",
@@ -316,7 +503,7 @@ func TestHandleSessionIam(t *testing.T) {
 	assert.Equal(t, "new-persona", p.Persona)
 }
 
-func TestHandleSessionLeave(t *testing.T) {
+func TestHandleSession_Leave(t *testing.T) {
 	h := testHandlerWithSession(t)
 
 	require.NoError(t, h.sessionStore.Create("test-leave",
@@ -327,7 +514,8 @@ func TestHandleSessionLeave(t *testing.T) {
 		session.Participant{AgentID: "sub-1", Persona: "reviewer", Parent: "12345"},
 	))
 
-	result, err := h.handleSessionLeave(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "leave",
 		"session_id": "test-leave",
 		"agent_id":   "sub-1",
 	}))
@@ -341,7 +529,8 @@ func TestHandleSessionLeave(t *testing.T) {
 
 func TestHandleSession_NoStore(t *testing.T) {
 	h := testHandler(t) // No session store.
-	result, err := h.handleSessionRoster(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "roster",
 		"session_id": "any",
 	}))
 	require.NoError(t, err)
