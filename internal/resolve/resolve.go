@@ -34,7 +34,7 @@ type RepoConfig struct {
 func Resolve(store *identity.Store, ss *session.Store) (string, error) {
 	// Step 1: check for iam declaration via process tree.
 	if ss != nil {
-		sp := resolveFromSession(store, ss)
+		sp := resolveFromSession(ss)
 		if sp.found {
 			if sp.handle != "" {
 				return sp.handle, nil
@@ -95,7 +95,7 @@ type sessionPersona struct {
 // roster. Returns found=false if no session or no matching participant.
 // Returns found=true with empty handle if the participant exists but
 // has no persona configured — callers must not fall through to git/OS.
-func resolveFromSession(store *identity.Store, ss *session.Store) sessionPersona {
+func resolveFromSession(ss *session.Store) sessionPersona {
 	pid := process.FindClaudePID()
 	sessionID, err := ss.ReadCurrentSession(pid)
 	if err != nil {
@@ -114,10 +114,6 @@ func resolveFromSession(store *identity.Store, ss *session.Store) sessionPersona
 	if p.Persona == "" {
 		return sessionPersona{found: true}
 	}
-	// Verify the persona exists in the store. If it doesn't,
-	// return the handle anyway — the caller gets the configured
-	// persona even if the identity file is missing. Load() will
-	// produce the actual error with the handle name.
 	return sessionPersona{handle: p.Persona, found: true}
 }
 

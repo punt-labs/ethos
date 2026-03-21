@@ -63,9 +63,9 @@ func main() {
 		"writing-style": runWritingStyle,
 		"resolve-agent": func([]string) { runResolveAgent() },
 		"uninstall":     runUninstall,
-		"help":          func([]string) { printUsage() },
-		"-h":            func([]string) { printUsage() },
-		"--help":        func([]string) { printUsage() },
+		"help":          func([]string) { printUsageTo(os.Stdout) },
+		"-h":            func([]string) { printUsageTo(os.Stdout) },
+		"--help":        func([]string) { printUsageTo(os.Stdout) },
 	}
 
 	if fn, ok := commands[cmd]; ok {
@@ -134,8 +134,10 @@ func printSubcommandHelp(cmd string) {
 	}
 }
 
-func printUsage() {
-	fmt.Fprint(os.Stderr, `ethos: identity binding for humans and AI agents
+func printUsage() { printUsageTo(os.Stderr) }
+
+func printUsageTo(w *os.File) {
+	fmt.Fprint(w, `ethos: identity binding for humans and AI agents
 
 Product commands:
   whoami            Show the caller's identity
