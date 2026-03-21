@@ -54,17 +54,11 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	s.AddTool(h.listIdentitiesTool(), h.handleListIdentities)
 	s.AddTool(h.getIdentityTool(), h.handleGetIdentity)
 	s.AddTool(h.createIdentityTool(), h.handleCreateIdentity)
-	// Extension tools
-	s.AddTool(h.extGetTool(), h.handleExtGet)
-	s.AddTool(h.extSetTool(), h.handleExtSet)
-	s.AddTool(h.extDelTool(), h.handleExtDel)
-	s.AddTool(h.extListTool(), h.handleExtList)
-	// Session tools
-	s.AddTool(h.sessionIamTool(), h.handleSessionIam)
-	s.AddTool(h.sessionRosterTool(), h.handleSessionRoster)
-	s.AddTool(h.sessionJoinTool(), h.handleSessionJoin)
-	s.AddTool(h.sessionLeaveTool(), h.handleSessionLeave)
-	// Attribute tools
+	// Extension tool (consolidated)
+	s.AddTool(h.extTool(), h.handleExt)
+	// Session tool (consolidated)
+	s.AddTool(h.sessionTool(), h.handleSession)
+	// Attribute tools (consolidated)
 	h.registerAttributeTools(s)
 }
 
@@ -240,134 +234,109 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	return jsonResult(id)
 }
 
-// --- Extension Tool Definitions ---
+// --- Extension Tool (consolidated) ---
 
-func (h *Handler) extGetTool() mcplib.Tool {
-	return mcplib.NewTool("ext_get",
-		mcplib.WithDescription("Read extension key(s) for a persona. Returns all keys if key is omitted."),
-		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
-		mcplib.WithString("namespace", mcplib.Required(), mcplib.Description("Tool namespace (e.g. beadle, biff)")),
-		mcplib.WithString("key", mcplib.Description("Specific key to read. Omit to read all keys.")),
+func (h *Handler) extTool() mcplib.Tool {
+	return mcplib.NewTool("ext",
+		mcplib.WithDescription("Manage tool-scoped extensions on identities. Methods: get, set, del, list."),
+		mcplib.WithString("method", mcplib.Required(),
+			mcplib.Enum("get", "set", "del", "list"),
+			mcplib.Description("Operation to perform."),
+		),
+		mcplib.WithString("persona", mcplib.Required(),
+			mcplib.Description("Identity persona name."),
+		),
+		mcplib.WithString("namespace",
+			mcplib.Description("Tool namespace (e.g. beadle, biff). Required for get, set, del."),
+		),
+		mcplib.WithString("key",
+			mcplib.Description("Key name. Required for set. Optional for get (omit for all keys) and del (omit to delete namespace)."),
+		),
+		mcplib.WithString("value",
+			mcplib.Description("Value to store. Required for set."),
+		),
 	)
 }
 
-func (h *Handler) extSetTool() mcplib.Tool {
-	return mcplib.NewTool("ext_set",
-		mcplib.WithDescription("Write an extension key-value pair for a persona."),
-		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
-		mcplib.WithString("namespace", mcplib.Required(), mcplib.Description("Tool namespace (e.g. beadle, biff)")),
-		mcplib.WithString("key", mcplib.Required(), mcplib.Description("Key name")),
-		mcplib.WithString("value", mcplib.Required(), mcplib.Description("Value to store")),
-	)
-}
-
-func (h *Handler) extDelTool() mcplib.Tool {
-	return mcplib.NewTool("ext_del",
-		mcplib.WithDescription("Delete an extension key or entire namespace for a persona."),
-		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
-		mcplib.WithString("namespace", mcplib.Required(), mcplib.Description("Tool namespace")),
-		mcplib.WithString("key", mcplib.Description("Key to delete. Omit to delete entire namespace.")),
-	)
-}
-
-func (h *Handler) extListTool() mcplib.Tool {
-	return mcplib.NewTool("ext_list",
-		mcplib.WithDescription("List all extension namespaces for a persona."),
-		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Identity persona name")),
-	)
-}
-
-// --- Extension Tool Handlers ---
-
-func (h *Handler) handleExtGet(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	persona := stringArg(req, "persona", "")
-	namespace := stringArg(req, "namespace", "")
-	key := stringArg(req, "key", "")
-
-	m, err := h.store.ExtGet(persona, namespace, key)
-	if err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
-	}
-	return jsonResult(m)
-}
-
-func (h *Handler) handleExtSet(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleExt(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	method := stringArg(req, "method", "")
 	persona := stringArg(req, "persona", "")
 	namespace := stringArg(req, "namespace", "")
 	key := stringArg(req, "key", "")
 	value := stringArg(req, "value", "")
 
-	if err := h.store.ExtSet(persona, namespace, key, value); err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
+	switch method {
+	case "get":
+		if namespace == "" {
+			return mcplib.NewToolResultError("namespace is required for get"), nil
+		}
+		m, err := h.store.ExtGet(persona, namespace, key)
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		return jsonResult(m)
+	case "set":
+		if namespace == "" {
+			return mcplib.NewToolResultError("namespace is required for set"), nil
+		}
+		if key == "" {
+			return mcplib.NewToolResultError("key is required for set"), nil
+		}
+		if err := h.store.ExtSet(persona, namespace, key, value); err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("set %s/%s/%s", persona, namespace, key)), nil
+	case "del":
+		if namespace == "" {
+			return mcplib.NewToolResultError("namespace is required for del"), nil
+		}
+		if err := h.store.ExtDel(persona, namespace, key); err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if key == "" {
+			return mcplib.NewToolResultText(fmt.Sprintf("deleted namespace %s/%s", persona, namespace)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("deleted %s/%s/%s", persona, namespace, key)), nil
+	case "list":
+		namespaces, err := h.store.ExtList(persona)
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		if namespaces == nil {
+			namespaces = []string{}
+		}
+		return jsonResult(namespaces)
+	default:
+		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
-	return mcplib.NewToolResultText(fmt.Sprintf("set %s/%s/%s", persona, namespace, key)), nil
 }
 
-func (h *Handler) handleExtDel(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	persona := stringArg(req, "persona", "")
-	namespace := stringArg(req, "namespace", "")
-	key := stringArg(req, "key", "")
+// --- Session Tool (consolidated) ---
 
-	if err := h.store.ExtDel(persona, namespace, key); err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
-	}
-	if key == "" {
-		return mcplib.NewToolResultText(fmt.Sprintf("deleted namespace %s/%s", persona, namespace)), nil
-	}
-	return mcplib.NewToolResultText(fmt.Sprintf("deleted %s/%s/%s", persona, namespace, key)), nil
-}
-
-func (h *Handler) handleExtList(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	persona := stringArg(req, "persona", "")
-
-	namespaces, err := h.store.ExtList(persona)
-	if err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
-	}
-	if namespaces == nil {
-		namespaces = []string{}
-	}
-	return jsonResult(namespaces)
-}
-
-// --- Session Tool Definitions ---
-
-func (h *Handler) sessionIamTool() mcplib.Tool {
-	return mcplib.NewTool("session_iam",
-		mcplib.WithDescription("Declare persona for the current participant in a session. Session ID is auto-discovered if omitted."),
-		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
-		mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("Agent ID of the participant")),
-		mcplib.WithString("persona", mcplib.Required(), mcplib.Description("Persona handle to set")),
+func (h *Handler) sessionTool() mcplib.Tool {
+	return mcplib.NewTool("session",
+		mcplib.WithDescription("Manage session roster. Methods: iam, roster, join, leave. Session ID is auto-discovered if omitted."),
+		mcplib.WithString("method", mcplib.Required(),
+			mcplib.Enum("iam", "roster", "join", "leave"),
+			mcplib.Description("Operation to perform."),
+		),
+		mcplib.WithString("session_id",
+			mcplib.Description("Session ID. Required for iam. Omit for other methods to auto-discover via process tree."),
+		),
+		mcplib.WithString("agent_id",
+			mcplib.Description("Agent ID. Required for iam, join, leave."),
+		),
+		mcplib.WithString("persona",
+			mcplib.Description("Persona handle. Required for iam. Optional for join."),
+		),
+		mcplib.WithString("parent",
+			mcplib.Description("Parent agent ID. Optional for join."),
+		),
+		mcplib.WithString("agent_type",
+			mcplib.Description("Agent type (e.g. code-reviewer, Explore). Optional for join."),
+		),
 	)
 }
-
-func (h *Handler) sessionRosterTool() mcplib.Tool {
-	return mcplib.NewTool("session_roster",
-		mcplib.WithDescription("Return the full participant roster for the current session. Session ID is auto-discovered if omitted."),
-		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
-	)
-}
-
-func (h *Handler) sessionJoinTool() mcplib.Tool {
-	return mcplib.NewTool("session_join",
-		mcplib.WithDescription("Register a new participant in a session. Session ID is auto-discovered if omitted."),
-		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
-		mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("Unique agent ID")),
-		mcplib.WithString("persona", mcplib.Description("Persona handle")),
-		mcplib.WithString("parent", mcplib.Description("Parent agent ID")),
-		mcplib.WithString("agent_type", mcplib.Description("Agent type (e.g. code-reviewer, Explore)")),
-	)
-}
-
-func (h *Handler) sessionLeaveTool() mcplib.Tool {
-	return mcplib.NewTool("session_leave",
-		mcplib.WithDescription("Remove a participant from a session. Session ID is auto-discovered if omitted."),
-		mcplib.WithString("session_id", mcplib.Description("Session ID. Omit to auto-discover.")),
-		mcplib.WithString("agent_id", mcplib.Required(), mcplib.Description("Agent ID to remove")),
-	)
-}
-
-// --- Session Tool Handlers ---
 
 // resolveSessionID auto-discovers the session ID from the process tree
 // when not explicitly provided.
@@ -387,74 +356,69 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	return sid, nil
 }
 
-func (h *Handler) handleSessionIam(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	if h.sessionStore == nil {
 		return mcplib.NewToolResultError("session store not configured"), nil
 	}
+	method := stringArg(req, "method", "")
 	sessionID, err := h.resolveSessionID(req)
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
-	agentID := stringArg(req, "agent_id", "")
-	persona := stringArg(req, "persona", "")
 
-	if err := h.sessionStore.Join(sessionID, session.Participant{
-		AgentID: agentID,
-		Persona: persona,
-	}); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
-	}
-	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
-}
+	switch method {
+	case "iam":
+		agentID := stringArg(req, "agent_id", "")
+		persona := stringArg(req, "persona", "")
+		if agentID == "" {
+			return mcplib.NewToolResultError("agent_id is required for iam"), nil
+		}
+		if persona == "" {
+			return mcplib.NewToolResultError("persona is required for iam"), nil
+		}
+		if err := h.sessionStore.Join(sessionID, session.Participant{
+			AgentID: agentID,
+			Persona: persona,
+		}); err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
 
-func (h *Handler) handleSessionRoster(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	if h.sessionStore == nil {
-		return mcplib.NewToolResultError("session store not configured"), nil
-	}
-	sessionID, err := h.resolveSessionID(req)
-	if err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
-	}
-	roster, err := h.sessionStore.Load(sessionID)
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to load roster: %v", err)), nil
-	}
-	return jsonResult(roster)
-}
+	case "roster":
+		roster, err := h.sessionStore.Load(sessionID)
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("failed to load roster: %v", err)), nil
+		}
+		return jsonResult(roster)
 
-func (h *Handler) handleSessionJoin(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	if h.sessionStore == nil {
-		return mcplib.NewToolResultError("session store not configured"), nil
-	}
-	sessionID, err := h.resolveSessionID(req)
-	if err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
-	}
-	p := session.Participant{
-		AgentID:   stringArg(req, "agent_id", ""),
-		Persona:   stringArg(req, "persona", ""),
-		Parent:    stringArg(req, "parent", ""),
-		AgentType: stringArg(req, "agent_type", ""),
-	}
-	if err := h.sessionStore.Join(sessionID, p); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to join: %v", err)), nil
-	}
-	return jsonResult(p)
-}
+	case "join":
+		if stringArg(req, "agent_id", "") == "" {
+			return mcplib.NewToolResultError("agent_id is required for join"), nil
+		}
+		p := session.Participant{
+			AgentID:   stringArg(req, "agent_id", ""),
+			Persona:   stringArg(req, "persona", ""),
+			Parent:    stringArg(req, "parent", ""),
+			AgentType: stringArg(req, "agent_type", ""),
+		}
+		if err := h.sessionStore.Join(sessionID, p); err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("failed to join: %v", err)), nil
+		}
+		return jsonResult(p)
 
-func (h *Handler) handleSessionLeave(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	if h.sessionStore == nil {
-		return mcplib.NewToolResultError("session store not configured"), nil
+	case "leave":
+		agentID := stringArg(req, "agent_id", "")
+		if agentID == "" {
+			return mcplib.NewToolResultError("agent_id is required for leave"), nil
+		}
+		if err := h.sessionStore.Leave(sessionID, agentID); err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("failed to leave: %v", err)), nil
+		}
+		return mcplib.NewToolResultText(fmt.Sprintf("Removed %s from session %s", agentID, sessionID)), nil
+
+	default:
+		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
-	sessionID, err := h.resolveSessionID(req)
-	if err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
-	}
-	agentID := stringArg(req, "agent_id", "")
-	if err := h.sessionStore.Leave(sessionID, agentID); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to leave: %v", err)), nil
-	}
-	return mcplib.NewToolResultText(fmt.Sprintf("Removed %s from session %s", agentID, sessionID)), nil
 }
 
 // --- Helpers ---
