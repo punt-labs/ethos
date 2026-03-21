@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +40,32 @@ func setGitConfig(t *testing.T, name, email string) {
 }
 
 // --- Resolve tests ---
+
+func TestResolve_IamDeclaration(t *testing.T) {
+	setGitConfig(t, "unknown", "")
+	t.Setenv("USER", "nobody")
+
+	s := testStoreWithIdentity(t, &identity.Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
+	})
+
+	// Set up a session store with a roster containing our PID's persona.
+	root := t.TempDir()
+	ss := session.NewStore(root)
+
+	// Use FindClaudePID to get the PID that Resolve will look up.
+	pid := process.FindClaudePID()
+	sessionID := "test-iam-session"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: pid, Persona: "mal", Parent: "root"},
+	))
+	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
+
+	handle, err := Resolve(s, ss)
+	require.NoError(t, err)
+	assert.Equal(t, "mal", handle)
+}
 
 func TestResolve_GitNameMatchesGitHub(t *testing.T) {
 	setGitConfig(t, "mal-github", "")

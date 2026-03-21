@@ -114,11 +114,10 @@ func resolveFromSession(store *identity.Store, ss *session.Store) sessionPersona
 	if p.Persona == "" {
 		return sessionPersona{found: true}
 	}
-	// Verify the persona exists in the store.
-	id, err := store.FindBy("handle", p.Persona)
-	if err != nil || id == nil {
-		return sessionPersona{found: true}
-	}
+	// Verify the persona exists in the store. If it doesn't,
+	// return the handle anyway — the caller gets the configured
+	// persona even if the identity file is missing. Load() will
+	// produce the actual error with the handle name.
 	return sessionPersona{handle: p.Persona, found: true}
 }
 

@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build linux || darwin
 
 // Package process provides utilities for walking the process tree
 // using native OS interfaces (no subprocess spawning).

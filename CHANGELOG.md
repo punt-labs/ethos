@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Store.FindBy(field, value)` — lookup identities by `handle`, `email`, or `github` field
 - `resolve.Resolve(store, sessionStore)` — 4-step identity resolution chain: iam declaration → git user.name → git email → $USER
 - `resolve.ResolveAgent(repoRoot)` — reads agent handle from `.punt-labs/ethos/config.yaml`
-- `resolve.GitConfig(key)` — reads git config values without subprocess on the caller side
+- `resolve.GitConfig(key)` — reads git config values via `git config` subprocess
 - `ethos doctor` checks: "Human identity", "Default agent", "Duplicate fields"
 - Per-repo agent config via `.punt-labs/ethos/config.yaml` `agent:` field
 - Native process tree walking: `/proc/<pid>/stat` on Linux, `sysctl kern.proc.pid` on macOS (replaces `ps -eo` subprocess)
