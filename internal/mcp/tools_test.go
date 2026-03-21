@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -50,45 +51,40 @@ func TestRegisterTools(t *testing.T) {
 	// If this doesn't panic, tools were registered successfully.
 }
 
-func TestHandleWhoami_NoActive(t *testing.T) {
+func TestHandleWhoami_NoMatch(t *testing.T) {
+	// Isolate git config so resolve chain finds nothing.
+	tmp := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("USER", "nobody")
+	_ = os.WriteFile(tmp+"/empty.gitconfig", []byte(""), 0o644)
+
 	h := testHandler(t)
 	result, err := h.handleWhoami(context.Background(), callTool(nil))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 }
 
-func TestHandleWhoami_SetAndGet(t *testing.T) {
-	h := testHandler(t)
+func TestHandleWhoami_ResolvesFromOSUser(t *testing.T) {
+	// Isolate git config, set USER to match identity handle.
+	tmp := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("USER", "alice")
+	_ = os.WriteFile(tmp+"/empty.gitconfig", []byte(""), 0o644)
 
-	// Create an identity first.
+	h := testHandler(t)
 	require.NoError(t, h.store.Save(&identity.Identity{
 		Name: "Alice", Handle: "alice", Kind: "human",
 	}))
 
-	// Set active.
-	result, err := h.handleWhoami(context.Background(), callTool(map[string]interface{}{
-		"handle": "alice",
-	}))
+	result, err := h.handleWhoami(context.Background(), callTool(nil))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	text := resultText(t, result)
-	assert.Contains(t, text, "alice")
-
-	// Get active.
-	result, err = h.handleWhoami(context.Background(), callTool(nil))
-	require.NoError(t, err)
-	assert.False(t, result.IsError)
-	text = resultText(t, result)
 	assert.Contains(t, text, "Alice")
-}
-
-func TestHandleWhoami_SetNonexistent(t *testing.T) {
-	h := testHandler(t)
-	result, err := h.handleWhoami(context.Background(), callTool(map[string]interface{}{
-		"handle": "nobody",
-	}))
-	require.NoError(t, err)
-	assert.True(t, result.IsError)
 }
 
 func TestHandleListIdentities_Empty(t *testing.T) {
@@ -103,7 +99,7 @@ func TestHandleListIdentities_Empty(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
-func TestHandleListIdentities_WithActive(t *testing.T) {
+func TestHandleListIdentities_NoSession(t *testing.T) {
 	h := testHandler(t)
 	require.NoError(t, h.store.Save(&identity.Identity{
 		Name: "Alice", Handle: "alice", Kind: "human",
@@ -111,7 +107,6 @@ func TestHandleListIdentities_WithActive(t *testing.T) {
 	require.NoError(t, h.store.Save(&identity.Identity{
 		Name: "Bob", Handle: "bob", Kind: "agent",
 	}))
-	require.NoError(t, h.store.SetActive("alice"))
 
 	result, err := h.handleListIdentities(context.Background(), callTool(nil))
 	require.NoError(t, err)
@@ -121,13 +116,9 @@ func TestHandleListIdentities_WithActive(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(text), &entries))
 	assert.Len(t, entries, 2)
 
-	// Find alice and verify active.
+	// No session → no active markers.
 	for _, e := range entries {
-		if e["handle"] == "alice" {
-			assert.True(t, e["active"].(bool))
-		} else {
-			assert.False(t, e["active"].(bool))
-		}
+		assert.False(t, e["active"].(bool))
 	}
 }
 
@@ -224,20 +215,6 @@ func TestHandleCreateIdentity_WithVoice(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, loaded.Voice)
 	assert.Equal(t, "elevenlabs", loaded.Voice.Provider)
-}
-
-func TestHandleCreateIdentity_SetsActiveIfFirst(t *testing.T) {
-	h := testHandler(t)
-	_, err := h.handleCreateIdentity(context.Background(), callTool(map[string]interface{}{
-		"name":   "Alice",
-		"handle": "alice",
-		"kind":   "human",
-	}))
-	require.NoError(t, err)
-
-	active, err := h.store.Active()
-	require.NoError(t, err)
-	assert.Equal(t, "alice", active.Handle)
 }
 
 func TestHandleCreateIdentity_WithSkills(t *testing.T) {

@@ -27,6 +27,7 @@ build: ## Build binary
 
 install: build ## Build and install to ~/.local/bin
 	mkdir -p $(HOME)/.local/bin
+	rm -f $(HOME)/.local/bin/ethos
 	cp ethos $(HOME)/.local/bin/ethos
 
 clean: ## Remove build artifacts

@@ -1,12 +1,11 @@
 //go:build !windows
 
-// Package process provides utilities for walking the process tree.
+// Package process provides utilities for walking the process tree
+// using native OS interfaces (no subprocess spawning).
 package process
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,83 +25,33 @@ var (
 // The result is cached for the lifetime of the process (PIDs are stable
 // within a session). Falls back to os.Getppid() if no claude ancestor
 // is found or the process tree cannot be read.
+//
+// Uses native OS interfaces: /proc on Linux, sysctl on macOS.
 func FindClaudePID() string {
 	claudePIDOnce.Do(func() {
-		tree, err := parseProcessTree()
-		if err != nil {
-			claudePID = strconv.Itoa(os.Getppid())
-			return
-		}
-		claudePID = walkToClaudeAncestor(os.Getpid(), tree)
+		claudePID = walkToClaudeAncestor(os.Getpid())
 	})
 	return claudePID
 }
 
-// proc holds the parent PID and command name for a process.
-type proc struct {
-	ppid int
-	comm string
-}
-
-// parseProcessTree runs `ps -eo pid=,ppid=,comm=` and returns a map
-// from PID to proc.
-func parseProcessTree() (map[int]proc, error) {
-	out, err := exec.Command("ps", "-eo", "pid=,ppid=,comm=").Output()
-	if err != nil {
-		return nil, fmt.Errorf("ps: %w", err)
-	}
-	return parsePS(string(out))
-}
-
-// parsePS parses the output of `ps -eo pid=,ppid=,comm=` into a map.
-func parsePS(output string) (map[int]proc, error) {
-	tree := make(map[int]proc)
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil {
-			continue
-		}
-		ppid, err := strconv.Atoi(fields[1])
-		if err != nil {
-			continue
-		}
-		// comm may contain spaces (e.g. "Google Chrome"); use only the
-		// base name (first field after ppid) for matching.
-		comm := fields[2]
-		tree[pid] = proc{ppid: ppid, comm: comm}
-	}
-	if len(tree) == 0 {
-		return nil, fmt.Errorf("no processes parsed")
-	}
-	return tree, nil
-}
-
-// walkToClaudeAncestor walks the process tree from startPID upward,
-// returning the topmost ancestor whose basename is "claude". If none
-// is found, returns the string form of os.Getppid().
-func walkToClaudeAncestor(startPID int, tree map[int]proc) string {
+// walkToClaudeAncestor walks from startPID upward via readProc(),
+// returning the PID string of the topmost "claude" ancestor.
+// Falls back to os.Getppid() if no claude ancestor is found.
+func walkToClaudeAncestor(startPID int) string {
 	bestClaude := ""
 	pid := startPID
 	for i := 0; i < maxWalkDepth; i++ {
-		p, ok := tree[pid]
-		if !ok {
+		ppid, comm, err := readProc(pid)
+		if err != nil {
 			break
 		}
-		if isClaudeComm(p.comm) {
+		if isClaudeComm(comm) {
 			bestClaude = strconv.Itoa(pid)
 		}
-		if p.ppid == 0 || p.ppid == pid {
+		if ppid == 0 || ppid == pid {
 			break
 		}
-		pid = p.ppid
+		pid = ppid
 	}
 	if bestClaude != "" {
 		return bestClaude

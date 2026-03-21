@@ -5,100 +5,11 @@ package process
 import (
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func TestParsePS_BasicOutput(t *testing.T) {
-	output := `  100     1 launchd
-  200   100 bash
-  300   200 claude
-  400   300 go
-  500   400 ethos
-`
-	tree, err := parsePS(output)
-	require.NoError(t, err)
-	assert.Len(t, tree, 5)
-	assert.Equal(t, proc{ppid: 200, comm: "claude"}, tree[300])
-}
-
-func TestParsePS_EmptyOutput(t *testing.T) {
-	_, err := parsePS("")
-	require.Error(t, err)
-}
-
-func TestParsePS_MalformedLines(t *testing.T) {
-	output := `  abc   100 bash
-  200   def claude
-  300   200 go
-`
-	tree, err := parsePS(output)
-	require.NoError(t, err)
-	assert.Len(t, tree, 1)
-	assert.Equal(t, proc{ppid: 200, comm: "go"}, tree[300])
-}
-
-func TestWalkToClaudeAncestor_FindsTopmost(t *testing.T) {
-	tree := map[int]proc{
-		1:   {ppid: 0, comm: "launchd"},
-		100: {ppid: 1, comm: "claude"},
-		200: {ppid: 100, comm: "claude"},
-		300: {ppid: 200, comm: "go"},
-		400: {ppid: 300, comm: "ethos"},
-	}
-	// Walk from ethos (400) → go (300) → claude (200) → claude (100) → launchd (1)
-	// Topmost claude is 100.
-	result := walkToClaudeAncestor(400, tree)
-	assert.Equal(t, "100", result)
-}
-
-func TestWalkToClaudeAncestor_SingleClaude(t *testing.T) {
-	tree := map[int]proc{
-		1:   {ppid: 0, comm: "launchd"},
-		100: {ppid: 1, comm: "bash"},
-		200: {ppid: 100, comm: "claude"},
-		300: {ppid: 200, comm: "ethos"},
-	}
-	result := walkToClaudeAncestor(300, tree)
-	assert.Equal(t, "200", result)
-}
-
-func TestWalkToClaudeAncestor_NoClaude(t *testing.T) {
-	tree := map[int]proc{
-		1:   {ppid: 0, comm: "launchd"},
-		100: {ppid: 1, comm: "bash"},
-		200: {ppid: 100, comm: "node"},
-		300: {ppid: 200, comm: "ethos"},
-	}
-	result := walkToClaudeAncestor(300, tree)
-	assert.Equal(t, strconv.Itoa(os.Getppid()), result)
-}
-
-func TestWalkToClaudeAncestor_MaxDepth(t *testing.T) {
-	// Build a chain deeper than maxWalkDepth.
-	tree := make(map[int]proc)
-	for i := 1; i <= 15; i++ {
-		tree[i] = proc{ppid: i - 1, comm: "proc"}
-	}
-	tree[1] = proc{ppid: 0, comm: "claude"}
-	// Start at PID 15 — should not reach PID 1 (claude) beyond 10 levels.
-	result := walkToClaudeAncestor(15, tree)
-	// PID 15 is 14 hops from PID 1, but we cap at 10, so we walk
-	// 15→14→…→5 (10 iterations). PID 5's parent is 4, but we stop.
-	assert.Equal(t, strconv.Itoa(os.Getppid()), result)
-}
-
-func TestWalkToClaudeAncestor_PathContainingClaude(t *testing.T) {
-	tree := map[int]proc{
-		1:   {ppid: 0, comm: "launchd"},
-		100: {ppid: 1, comm: "/usr/local/bin/claude"},
-		200: {ppid: 100, comm: "ethos"},
-	}
-	result := walkToClaudeAncestor(200, tree)
-	assert.Equal(t, "100", result)
-}
 
 func TestIsClaudeComm(t *testing.T) {
 	tests := []struct {
@@ -118,3 +29,45 @@ func TestIsClaudeComm(t *testing.T) {
 		})
 	}
 }
+
+func TestReadProc_CurrentProcess(t *testing.T) {
+	// We can always read our own process info.
+	ppid, comm, err := readProc(os.Getpid())
+	if err != nil {
+		t.Fatalf("readProc(self): %v", err)
+	}
+	assert.Equal(t, os.Getppid(), ppid)
+	assert.NotEmpty(t, comm)
+}
+
+func TestReadProc_Init(t *testing.T) {
+	// PID 1 should always be readable.
+	ppid, comm, err := readProc(1)
+	if err != nil {
+		t.Skipf("cannot read PID 1: %v", err)
+	}
+	assert.Equal(t, 0, ppid)
+	assert.NotEmpty(t, comm)
+}
+
+func TestReadProc_Nonexistent(t *testing.T) {
+	_, _, err := readProc(999999999)
+	assert.Error(t, err)
+}
+
+func TestWalkToClaudeAncestor_ReturnsValidPID(t *testing.T) {
+	claudePIDOnce = syncOnceZero()
+	defer func() { claudePIDOnce = syncOnceZero() }()
+
+	result := walkToClaudeAncestor(os.Getpid())
+	// Must return a valid PID string — either a claude ancestor
+	// (when running inside Claude Code) or os.Getppid() (fallback).
+	pid, err := strconv.Atoi(result)
+	assert.NoError(t, err)
+	assert.Greater(t, pid, 0)
+}
+
+// syncOnceZero returns a zero-value sync.Once for test isolation.
+func syncOnceZero() syncOnce { return syncOnce{} }
+
+type syncOnce = sync.Once

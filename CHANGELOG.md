@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `ethos resolve-agent` command — prints the default agent handle from repo config
+- `Store.FindBy(field, value)` — lookup identities by `handle`, `email`, or `github` field
+- `resolve.Resolve(store, sessionStore)` — 4-step identity resolution chain: iam declaration → git user.name → git email → $USER
+- `resolve.ResolveAgent(repoRoot)` — reads agent handle from `.punt-labs/ethos/config.yaml`
+- `resolve.GitConfig(key)` — reads git config values without subprocess on the caller side
+- `ethos doctor` checks: "Human identity", "Default agent", "Duplicate fields"
+- Per-repo agent config via `.punt-labs/ethos/config.yaml` `agent:` field
+- Native process tree walking: `/proc/<pid>/stat` on Linux, `sysctl kern.proc.pid` on macOS (replaces `ps -eo` subprocess)
+
+### Changed
+
+- `ethos whoami` is now read-only — resolves identity from iam/git/OS instead of reading `~/.punt-labs/ethos/active`
+- `ethos list` marks all session participants with `*` (multiple markers possible)
+- `ethos create` no longer auto-sets first identity as active
+- MCP `whoami` tool uses `resolve.Resolve()` instead of `Store.Active()`
+- MCP `list_identities` marks session participants (multiple `"active": true` entries possible)
+- MCP `create_identity` no longer auto-activates first identity
+- Session start hook resolves human and agent personas separately
+- Usage text now writes to stderr (was stdout, caused garbage in shell captures)
+
+### Removed
+
+- `~/.punt-labs/ethos/active` file — human identity comes from git/OS
+- `ethos whoami <handle>` write path — no "set active" operation
+- `Store.Active()` method
+- `Store.SetActive()` method
+- `ErrNoActive` sentinel error
+- `RepoConfig.Active` field — repos are multi-user, human identity is per-user
+- `ps -eo pid=,ppid=,comm=` subprocess for process tree walking
+
 ## [0.5.0] - 2026-03-20
 
 ### Added

@@ -2,13 +2,15 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/session"
 )
 
 var version = "dev"
@@ -59,6 +61,7 @@ func main() {
 		"skill":         runSkill,
 		"personality":   runPersonality,
 		"writing-style": runWritingStyle,
+		"resolve-agent": func([]string) { runResolveAgent() },
 		"uninstall":     runUninstall,
 		"help":          func([]string) { printUsage() },
 		"-h":            func([]string) { printUsage() },
@@ -97,11 +100,11 @@ func printJSON(v any) {
 func printSubcommandHelp(cmd string) {
 	switch cmd {
 	case "whoami":
-		fmt.Print("Usage: ethos whoami [handle] [--json]\n\n  Show the active identity, or set it to <handle>.\n")
+		fmt.Print("Usage: ethos whoami [--json]\n\n  Show the caller's identity (resolved from iam, git, or OS).\n")
 	case "create":
 		fmt.Print("Usage: ethos create [-f|--file <path>]\n\n  Create a new identity interactively, or from a YAML file.\n")
 	case "list":
-		fmt.Print("Usage: ethos list [--json]\n\n  List all identities. Active identity is marked with *.\n")
+		fmt.Print("Usage: ethos list [--json]\n\n  List all identities. Session participants are marked with *.\n")
 	case "show":
 		fmt.Print("Usage: ethos show <handle> [--json]\n\n  Show full details for an identity.\n")
 	case "doctor":
@@ -132,10 +135,10 @@ func printSubcommandHelp(cmd string) {
 }
 
 func printUsage() {
-	fmt.Print(`ethos: identity binding for humans and AI agents
+	fmt.Fprint(os.Stderr, `ethos: identity binding for humans and AI agents
 
 Product commands:
-  whoami [name]     Show or set the active identity
+  whoami            Show the caller's identity
   create            Create a new identity
   list              List all identities
   show <handle>     Show identity details
@@ -172,6 +175,7 @@ func runVersion() {
 
 func runDoctor() {
 	s := store()
+	ss := sessionStore()
 
 	type checkResult struct {
 		Name   string `json:"name"`
@@ -181,16 +185,18 @@ func runDoctor() {
 
 	checks := []struct {
 		name string
-		fn   func(*identity.Store) (string, bool)
+		fn   func(*identity.Store, *session.Store) (string, bool)
 	}{
 		{"Identity directory", checkIdentityDir},
-		{"Active identity", checkActiveIdentity},
+		{"Human identity", checkHumanIdentity},
+		{"Default agent", checkDefaultAgent},
+		{"Duplicate fields", checkDuplicateFields},
 	}
 
 	allPassed := true
 	var results []checkResult
 	for _, c := range checks {
-		detail, ok := c.fn(s)
+		detail, ok := c.fn(s, ss)
 		status := "PASS"
 		if !ok {
 			status = "FAIL"
@@ -212,7 +218,7 @@ func runDoctor() {
 	}
 }
 
-func checkIdentityDir(s *identity.Store) (string, bool) {
+func checkIdentityDir(s *identity.Store, _ *session.Store) (string, bool) {
 	dir := s.IdentitiesDir()
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
@@ -223,42 +229,93 @@ func checkIdentityDir(s *identity.Store) (string, bool) {
 	return dir, true
 }
 
-func checkActiveIdentity(s *identity.Store) (string, bool) {
-	id, err := s.Active()
+func checkHumanIdentity(s *identity.Store, ss *session.Store) (string, bool) {
+	handle, err := resolve.Resolve(s, ss)
 	if err != nil {
-		if errors.Is(err, identity.ErrNoActive) {
-			return "none configured — run 'ethos create'", true
-		}
-		return fmt.Sprintf("error: %v", err), false
+		return fmt.Sprintf("no match — %v", err), false
 	}
-	return id.Name, true
+	id, err := s.Load(handle, identity.Reference(true))
+	if err != nil {
+		return fmt.Sprintf("handle %q not loadable: %v", handle, err), false
+	}
+	return fmt.Sprintf("%s (%s)", id.Name, id.Handle), true
 }
 
-func runWhoami(args []string) {
-	s := store()
-	if len(args) > 0 {
-		handle := args[0]
-		if err := s.SetActive(handle); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
-		}
-		if jsonOutput {
-			printJSON(map[string]string{"active": handle})
-		} else {
-			fmt.Printf("Active identity set to %q\n", handle)
-		}
-		return
+func checkDefaultAgent(s *identity.Store, _ *session.Store) (string, bool) {
+	repoRoot := resolve.FindRepoRoot()
+	if repoRoot == "" {
+		return "not in a git repo", true
 	}
+	handle := resolve.ResolveAgent(repoRoot)
+	if handle == "" {
+		return "not configured", true
+	}
+	return handle, true
+}
 
-	id, err := s.Active()
+func checkDuplicateFields(s *identity.Store, _ *session.Store) (string, bool) {
+	result, err := s.List()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "ethos: no active identity. Run 'ethos create' or 'ethos whoami <handle>'.")
+		return fmt.Sprintf("error: %v", err), false
+	}
+	var dupes []string
+	seen := map[string]map[string]string{
+		"github": {},
+		"email":  {},
+	}
+	for _, id := range result.Identities {
+		for field, values := range seen {
+			var val string
+			switch field {
+			case "github":
+				val = id.GitHub
+			case "email":
+				val = id.Email
+			}
+			if val == "" {
+				continue
+			}
+			if prev, ok := values[val]; ok {
+				dupes = append(dupes, fmt.Sprintf("%s %q: %s and %s", field, val, prev, id.Handle))
+			} else {
+				values[val] = id.Handle
+			}
+		}
+	}
+	if len(dupes) > 0 {
+		return "duplicates found: " + strings.Join(dupes, "; "), false
+	}
+	return "no duplicates", true
+}
+
+func runWhoami(_ []string) {
+	s := store()
+	ss := sessionStore()
+
+	handle, err := resolve.Resolve(s, ss)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
+
+	id, err := s.Load(handle)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: identity %q not found: %v\n", handle, err)
+		os.Exit(1)
+	}
+
 	if jsonOutput {
 		printJSON(id)
 	} else {
 		fmt.Printf("%s (%s)\n", id.Name, id.Handle)
+	}
+}
+
+func runResolveAgent() {
+	repoRoot := resolve.FindRepoRoot()
+	handle := resolve.ResolveAgent(repoRoot)
+	if handle != "" {
+		fmt.Println(handle)
 	}
 }
 
@@ -292,14 +349,38 @@ func runList() {
 		fmt.Println("No identities found. Run 'ethos create' to create one.")
 		return
 	}
-	active, _ := s.Active()
+
+	// Mark session participants with *.
+	activeHandles := sessionParticipantHandles()
 	for _, id := range result.Identities {
 		marker := "  "
-		if active != nil && active.Handle == id.Handle {
+		if activeHandles[id.Handle] {
 			marker = "* "
 		}
 		fmt.Printf("%s%-16s %s\n", marker, id.Handle, id.Name)
 	}
+}
+
+// sessionParticipantHandles returns the set of persona handles that are
+// active in the current session. Returns an empty map if no session.
+func sessionParticipantHandles() map[string]bool {
+	handles := make(map[string]bool)
+	ss := sessionStore()
+	pid := process.FindClaudePID()
+	sessionID, err := ss.ReadCurrentSession(pid)
+	if err != nil {
+		return handles
+	}
+	roster, err := ss.Load(sessionID)
+	if err != nil {
+		return handles
+	}
+	for _, p := range roster.Participants {
+		if p.Persona != "" {
+			handles[p.Persona] = true
+		}
+	}
+	return handles
 }
 
 func runShow(args []string) {
