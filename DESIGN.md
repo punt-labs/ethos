@@ -437,12 +437,12 @@ walk, or subagent ID from context).
 
 ### MCP Tools
 
-| Tool | Purpose |
-|------|---------|
-| `session_iam` | Declare persona for current participant |
-| `session_roster` | Return full participant list with tree |
-| `session_join` | Register a new participant |
-| `session_leave` | Deregister a participant |
+| Tool | Method | Purpose |
+|------|--------|---------|
+| `session` | `iam` | Declare persona for current participant |
+| `session` | `roster` | Return full participant list with tree |
+| `session` | `join` | Register a new participant |
+| `session` | `leave` | Deregister a participant |
 
 ### Resolved: Persona Default by Agent Type
 
@@ -681,7 +681,7 @@ agent — the attribute system does not.
 
 ---
 
-## DES-011: Identity resolution — humans from git/OS, agents from repo config (PROPOSED)
+## DES-011: Identity resolution — humans from git/OS, agents from repo config (SETTLED)
 
 ### Problem
 
