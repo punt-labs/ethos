@@ -34,8 +34,14 @@ type RepoConfig struct {
 func Resolve(store *identity.Store, ss *session.Store) (string, error) {
 	// Step 1: check for iam declaration via process tree.
 	if ss != nil {
-		if handle := resolveFromSession(store, ss); handle != "" {
-			return handle, nil
+		sp := resolveFromSession(store, ss)
+		if sp.found {
+			if sp.handle != "" {
+				return sp.handle, nil
+			}
+			// Participant exists but has no persona — do not fall
+			// through to git/OS. This is an explicit "no identity."
+			return "", fmt.Errorf("session participant found but no persona configured")
 		}
 	}
 
@@ -78,32 +84,42 @@ func Resolve(store *identity.Store, ss *session.Store) (string, error) {
 	return "", fmt.Errorf("no identity matches git user %q, email %q, or OS user %q", gitName, gitEmail, osUser)
 }
 
+// sessionPersona is the result of resolveFromSession.
+type sessionPersona struct {
+	handle string // persona handle, may be empty (explicitly no persona)
+	found  bool   // true if a session participant was found
+}
+
 // resolveFromSession uses FindClaudePID to locate the session via the
 // PID-keyed current file, then returns the caller's persona from the
-// roster. Returns empty string if no session or participant found.
-func resolveFromSession(store *identity.Store, ss *session.Store) string {
+// roster. Returns found=false if no session or no matching participant.
+// Returns found=true with empty handle if the participant exists but
+// has no persona configured — callers must not fall through to git/OS.
+func resolveFromSession(store *identity.Store, ss *session.Store) sessionPersona {
 	pid := process.FindClaudePID()
 	sessionID, err := ss.ReadCurrentSession(pid)
 	if err != nil {
-		return ""
+		return sessionPersona{}
 	}
 	roster, err := ss.Load(sessionID)
 	if err != nil {
-		return ""
+		return sessionPersona{}
 	}
-	// Try the claude PID first (primary agent), then fall back to
-	// checking all participants — the hook may have stored the PID
-	// under a different value than FindClaudePID returns.
 	p := roster.FindParticipant(pid)
-	if p == nil || p.Persona == "" {
-		return ""
+	if p == nil {
+		return sessionPersona{}
+	}
+	// Participant found. If persona is empty, that's an explicit
+	// "no persona configured" — not "try git/OS instead."
+	if p.Persona == "" {
+		return sessionPersona{found: true}
 	}
 	// Verify the persona exists in the store.
 	id, err := store.FindBy("handle", p.Persona)
 	if err != nil || id == nil {
-		return ""
+		return sessionPersona{found: true}
 	}
-	return p.Persona
+	return sessionPersona{handle: p.Persona, found: true}
 }
 
 // ResolveAgent returns the default agent identity handle for the repo.
