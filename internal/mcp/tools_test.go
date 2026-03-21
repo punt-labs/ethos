@@ -266,14 +266,19 @@ func TestHandleSkill_CreateAndShow(t *testing.T) {
 func TestHandleSkill_ListAndDelete(t *testing.T) {
 	h := testHandler(t)
 
-	_, _ = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
 		"method": "create", "slug": "a", "content": "# A\n",
 	}))
-	_, _ = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
 		"method": "create", "slug": "b", "content": "# B\n",
 	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
 
-	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
 		"method": "list",
 	}))
 	require.NoError(t, err)

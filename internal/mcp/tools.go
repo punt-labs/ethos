@@ -368,11 +368,14 @@ func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (
 
 	switch method {
 	case "iam":
-		if sessionID == "" {
-			return mcplib.NewToolResultError("session_id is required for iam"), nil
-		}
 		agentID := stringArg(req, "agent_id", "")
 		persona := stringArg(req, "persona", "")
+		if agentID == "" {
+			return mcplib.NewToolResultError("agent_id is required for iam"), nil
+		}
+		if persona == "" {
+			return mcplib.NewToolResultError("persona is required for iam"), nil
+		}
 		if err := h.sessionStore.Join(sessionID, session.Participant{
 			AgentID: agentID,
 			Persona: persona,
@@ -389,6 +392,9 @@ func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (
 		return jsonResult(roster)
 
 	case "join":
+		if stringArg(req, "agent_id", "") == "" {
+			return mcplib.NewToolResultError("agent_id is required for join"), nil
+		}
 		p := session.Participant{
 			AgentID:   stringArg(req, "agent_id", ""),
 			Persona:   stringArg(req, "persona", ""),
@@ -402,6 +408,9 @@ func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (
 
 	case "leave":
 		agentID := stringArg(req, "agent_id", "")
+		if agentID == "" {
+			return mcplib.NewToolResultError("agent_id is required for leave"), nil
+		}
 		if err := h.sessionStore.Leave(sessionID, agentID); err != nil {
 			return mcplib.NewToolResultError(fmt.Sprintf("failed to leave: %v", err)), nil
 		}
