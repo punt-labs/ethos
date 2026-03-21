@@ -2,7 +2,7 @@
 # Session-start hook for ethos plugin.
 #
 # IMPORTANT: This hook must NOT write to ~/.claude/ (DES-013).
-# Command deployment and permission setup belong in `ethos install`.
+# Command deployment and permission setup belong in the ethos installer (install.sh).
 [[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
 set -euo pipefail
 
