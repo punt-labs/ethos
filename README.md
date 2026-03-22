@@ -113,8 +113,7 @@ Systems design, correctness over speed...
 
 | Command | What it does |
 |---------|-------------|
-| `ethos whoami [--json]` | Show the active identity |
-| `ethos whoami <handle>` | Set the active identity |
+| `ethos whoami [--json]` | Show the caller's identity (resolved from iam/git/OS) |
 | `ethos create` | Create a new identity (interactive wizard) |
 | `ethos create -f <path>` | Create from a YAML file |
 | `ethos list [--json]` | List all identities |
@@ -167,55 +166,26 @@ Systems design, correctness over speed...
 
 `--json` is a global flag — valid before or after the subcommand.
 
-## MCP Tools (25)
+## MCP Tools
 
 When running as a Claude Code plugin, ethos registers an MCP server with
-25 tools. The plugin auto-allows `mcp__plugin_ethos_self__*` on first session.
+9 tools. The `skill`, `personality`, `writing_style`, `ext`, and `session`
+tools use a `method` parameter for verb dispatch; the others are single-action
+tools.
 
-### Identity tools
+All tools have corresponding slash commands under `/ethos:*`.
 
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `whoami` | optional `handle`, `reference` | Show or set active identity |
-| `list_identities` | — | List all identities |
-| `get_identity` | `handle`, optional `reference` | Full identity with resolved content |
-| `create_identity` | `name`, `handle`, `kind` + optional fields | Create a new identity |
-
-### Attribute tools
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `create_skill` | `slug`, `content` | Create a skill .md file |
-| `get_skill` | `slug` | Read skill content |
-| `list_skills` | — | List all skills |
-| `create_personality` | `slug`, `content` | Create a personality .md file |
-| `get_personality` | `slug` | Read personality content |
-| `list_personalities` | — | List all personalities |
-| `create_writing_style` | `slug`, `content` | Create a writing style .md file |
-| `get_writing_style` | `slug` | Read writing style content |
-| `list_writing_styles` | — | List all writing styles |
-| `set_personality` | `handle`, `slug` | Set personality on an identity |
-| `set_writing_style` | `handle`, `slug` | Set writing style on an identity |
-| `add_skill` | `handle`, `slug` | Add skill to an identity |
-| `remove_skill` | `handle`, `slug` | Remove skill from an identity |
-
-### Extension tools
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `ext_get` | `persona`, `namespace`, optional `key` | Read extension key(s) |
-| `ext_set` | `persona`, `namespace`, `key`, `value` | Write extension key |
-| `ext_del` | `persona`, `namespace`, optional `key` | Delete key or namespace |
-| `ext_list` | `persona` | List extension namespaces |
-
-### Session tools
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `session_iam` | `session_id`, `agent_id`, `persona` | Declare persona |
-| `session_roster` | `session_id` | Full participant roster |
-| `session_join` | `session_id`, `agent_id` + optional fields | Add participant |
-| `session_leave` | `session_id`, `agent_id` | Remove participant |
+| Tool | Methods | Slash command |
+|------|---------|---------------|
+| `whoami` | — | `/ethos:whoami` |
+| `list_identities` | — | `/ethos:list-identities` |
+| `get_identity` | — | `/ethos:get-identity` |
+| `create_identity` | — | `/ethos:create-identity` |
+| `skill` | create, list, show, delete, add, remove | `/ethos:skill` |
+| `personality` | create, list, show, delete, set | `/ethos:personality` |
+| `writing_style` | create, list, show, delete, set | `/ethos:writing-style` |
+| `ext` | get, set, del, list | `/ethos:ext` |
+| `session` | iam, roster, join, leave | `/ethos:session`, `/ethos:iam` |
 
 ## Identity Schema
 

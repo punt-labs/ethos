@@ -818,3 +818,208 @@ identities (typically < 20).
   participants. An unnamed agent is more honest than a mislabeled one.
 - **Require git for human resolution** — too rigid. `$USER` fallback
   handles environments without git (containers, CI, non-repo dirs).
+
+---
+
+## DES-012: Namespaced slash commands — no top-level deployment (SETTLED)
+
+### Decision
+
+All ethos slash commands use the plugin namespace (`/ethos:*`). No
+commands are deployed to `~/.claude/commands/`. Every MCP tool has a
+corresponding slash command.
+
+### Commands
+
+| Command | MCP Tool | Description |
+|---------|----------|-------------|
+| `/ethos:whoami` | `whoami` | Show the caller's identity |
+| `/ethos:list-identities` | `list_identities` | List all identities |
+| `/ethos:get-identity` | `get_identity` | Show identity details |
+| `/ethos:create-identity` | `create_identity` | Create a new identity |
+| `/ethos:skill` | `skill` | Manage skills (method dispatch) |
+| `/ethos:personality` | `personality` | Manage personalities (method dispatch) |
+| `/ethos:writing-style` | `writing_style` | Manage writing styles (method dispatch) |
+| `/ethos:ext` | `ext` | Manage extensions (method dispatch) |
+| `/ethos:session` | `session` | Manage session roster (method dispatch) |
+| `/ethos:iam` | `session` (method: iam) | Declare persona in current session |
+
+Dev variants use `/ethos-dev:*` automatically via the plugin name in
+`plugin.json`.
+
+### Rationale
+
+Top-level commands like `/skill`, `/session`, `/ext` occupy generic
+names that will conflict with Claude Code built-ins or other plugins.
+Plugin-namespaced commands (`/ethos:skill`) are collision-free and
+clearly attributed.
+
+The session-start hook previously copied command `.md` files to
+`~/.claude/commands/` for top-level access. This is removed — the
+plugin namespace is sufficient.
+
+### Rejected alternatives
+
+- **Top-level deployment** (`/skill`, `/personality`) — generic names
+  will conflict. Claude Code or another plugin will claim `/skill`.
+- **Prefix without namespace** (`/ethos-skill`) — inconsistent with
+  the plugin namespace convention (`plugin:command`).
+- **Selective top-level** (only deploy unique names) — still fragile.
+  Any new plugin or Claude Code feature could claim the name.
+
+## DES-013: Session-start hook must not write to shared directories (SETTLED)
+
+### Incident — 2026-03-21 (8 hours lost across 2 engineers + 1 agent)
+
+The ethos v0.7.0 session-start hook (`hooks/session-start.sh`) caused a
+complete failure of top-level slash command discovery on every machine
+where ethos was installed. All `/read`, `/who`, `/vox`, `/write`,
+`/find`, `/lux`, and other top-level commands from `~/.claude/commands/`
+disappeared. Two machines were affected. A third machine that never had
+ethos v0.7.0 was unaffected.
+
+### Root cause
+
+The v0.7.0 session-start hook performed two destructive operations on
+shared global state:
+
+**1. Copied command files to `~/.claude/commands/`.**
+
+```bash
+for cmd_file in "$PLUGIN_ROOT/commands/"*.md; do
+    dest="$COMMANDS_DIR/$name"
+    cp "$cmd_file" "$dest"
+done
+```
+
+This deployed 7 files (`ext.md`, `iam.md`, `personality.md`,
+`session.md`, `skill.md`, `whoami.md`, `writing-style.md`) into the
+shared `~/.claude/commands/` directory. Each file contained an
+`allowed-tools` frontmatter entry referencing `mcp__plugin_ethos_self__*`
+MCP tools.
+
+When the ethos MCP server was not running (ethos not installed, or
+installed but not active in the current repo), Claude Code's command
+parser encountered `allowed-tools` entries referencing non-existent MCP
+tools. Instead of skipping those individual files, the parser failed for
+the **entire** `~/.claude/commands/` directory — killing discovery of
+every top-level command from every plugin (biff, vox, quarry, beadle,
+lux, dungeon).
+
+This failure was **silent**. No error message. Commands simply
+disappeared from the skill list.
+
+The damage was **persistent**. Uninstalling the ethos plugin removed the
+registry entry and cache but left the 7 copied files in
+`~/.claude/commands/`. Every subsequent Claude Code session continued to
+fail on those orphaned files. The only fix was manually deleting the 7
+ethos files from `~/.claude/commands/`.
+
+**2. Mutated `~/.claude/settings.json` via `jq`.**
+
+```bash
+jq --arg g "$PROD_GLOB" \
+  '.permissions.allow = (.permissions.allow // []) + [$g]' \
+  "$SETTINGS" > "$TMPFILE"
+mv "$TMPFILE" "$SETTINGS"
+```
+
+This re-serialized the entire settings.json through `jq` to add a
+single permission entry. The `jq` round-trip is a secondary risk — it
+could re-order keys, normalize Unicode, or strip encoding details that
+Claude Code's parser depends on. In this incident, `jq` mutation was
+confirmed harmless (rewriting settings.json with identical content did
+not fix the issue), but it remains a fragile pattern.
+
+### Why diagnosis took 8 hours
+
+1. **Silent failure.** Claude Code gave no error — commands just
+   vanished. The failure mode (entire directory disabled) was
+   disproportionate to the cause (7 bad files out of 35).
+
+2. **Wrong initial hypothesis.** The first 4 hours were spent comparing
+   plugin directory structures, command frontmatter, MCP server
+   behavior, and plugin.json format between biff (working) and ethos
+   (not working). This was the wrong layer — the ethos agent was trying
+   to get `/ethos:whoami` to work when the actual damage was to
+   `~/.claude/commands/`.
+
+3. **Red herring: `jq` mutation.** 2 hours were spent investigating
+   whether `jq`'s re-serialization of settings.json was the corruption
+   vector. It was not.
+
+4. **Persistent damage after uninstall.** Uninstalling the ethos plugin
+   did not remove the copied command files, so the failure persisted
+   across restarts and reinstalls, making it appear version-independent.
+
+5. **Coincidence masking.** The ethos plugin installation, the
+   `~/.claude/commands/` breakage, and the ethos agent's separate
+   problem (plugin commands not appearing as namespaced skills) were
+   three different issues that occurred simultaneously, creating
+   confusion about which symptom belonged to which cause.
+
+### Decision
+
+**Deploy commands from an install script, not a session-start hook.**
+
+Biff, Vox, Lux, and Quarry all deploy top-level slash commands to
+`~/.claude/commands/` — and it works. The difference is **when** and
+**how**:
+
+| Project | Deploys commands via | Runs when | Guarantees |
+|---------|---------------------|-----------|------------|
+| Biff | `biff install` | Once, explicitly | Plugin installed first, MCP server registered |
+| Vox | `vox install` | Once, explicitly | Plugin installed first, MCP server registered |
+| Lux | `lux install` | Once, explicitly | Plugin installed first, MCP server registered |
+| Quarry | `quarry install` | Once, explicitly | Plugin installed first, MCP server registered |
+| **Ethos** | **session-start hook** | **Every session** | **None** |
+
+The install scripts ensure the plugin and MCP server are registered
+before deploying commands. By the time command files land in
+`~/.claude/commands/`, the `allowed-tools` entries they reference
+(`mcp__plugin_biff_tty__*`, etc.) resolve to real MCP tools.
+
+The ethos session-start hook had no such guarantee. It copied command
+files on every session start regardless of whether the ethos MCP server
+was active. When the MCP tools didn't resolve, Claude Code's command
+parser failed for the entire `~/.claude/commands/` directory.
+
+Specifically:
+
+1. **Command deployment belongs in `ethos install`, not in the
+   session-start hook.** Follow the established pattern from biff, vox,
+   lux, quarry: install script registers the plugin, deploys commands,
+   and sets permissions — once.
+
+2. **Do not mutate `~/.claude/settings.json` from a hook.** Permission
+   entries for plugin MCP tools should be set by the install script. A
+   hook that re-runs `jq` on settings.json every session is fragile
+   and unnecessary.
+
+3. **Session-start hooks may read global state but not write it.** A
+   plugin's session-start hook may read `settings.json`, read identity
+   files, set environment variables, and emit `hookSpecificOutput`. It
+   must not create, modify, or delete files outside `$PLUGIN_ROOT` or
+   the plugin's own data directory (`~/.punt-labs/ethos/`).
+
+### Fix applied
+
+1. Removed the 7 ethos command files from `~/.claude/commands/` on
+   affected machines.
+2. Removed the `jq` settings mutation from the session-start hook
+   (refactor/namespaced-commands branch).
+3. Removed the command-copy logic from the session-start hook
+   (refactor/namespaced-commands branch, DES-012).
+4. Ethos must implement `ethos install` following the biff/vox/lux/quarry
+   pattern before deploying top-level commands again.
+
+### Rules for session-start hooks
+
+| Allowed | Forbidden |
+|---------|-----------|
+| Read `~/.claude/settings.json` | Write `~/.claude/settings.json` |
+| Read `~/.claude/commands/*.md` | Create/delete files in `~/.claude/commands/` |
+| Write to `~/.punt-labs/ethos/` | Write to `~/.claude/` (any path) |
+| Emit `hookSpecificOutput` JSON | Run `jq` on shared config files |
+| Set environment variables | Modify `installed_plugins.json` |
+| Call `ethos` CLI subcommands | Call `claude plugin install/uninstall` |
