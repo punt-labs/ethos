@@ -51,7 +51,7 @@ func TestRegisterTools(t *testing.T) {
 	// If this doesn't panic, tools were registered successfully.
 }
 
-func TestHandleWhoami_NoMatch(t *testing.T) {
+func TestHandleIdentity_Whoami_NoMatch(t *testing.T) {
 	// Isolate git config so resolve chain finds nothing.
 	tmp := t.TempDir()
 	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
@@ -61,12 +61,14 @@ func TestHandleWhoami_NoMatch(t *testing.T) {
 	_ = os.WriteFile(tmp+"/empty.gitconfig", []byte(""), 0o644)
 
 	h := testHandler(t)
-	result, err := h.handleWhoami(context.Background(), callTool(nil))
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "whoami",
+	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 }
 
-func TestHandleWhoami_ResolvesFromOSUser(t *testing.T) {
+func TestHandleIdentity_Whoami_ResolvesFromOSUser(t *testing.T) {
 	// Isolate git config, set USER to match identity handle.
 	tmp := t.TempDir()
 	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
@@ -80,16 +82,20 @@ func TestHandleWhoami_ResolvesFromOSUser(t *testing.T) {
 		Name: "Alice", Handle: "alice", Kind: "human",
 	}))
 
-	result, err := h.handleWhoami(context.Background(), callTool(nil))
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "whoami",
+	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	text := resultText(t, result)
 	assert.Contains(t, text, "Alice")
 }
 
-func TestHandleListIdentities_Empty(t *testing.T) {
+func TestHandleIdentity_List_Empty(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleListIdentities(context.Background(), callTool(nil))
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "list",
+	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
@@ -99,7 +105,7 @@ func TestHandleListIdentities_Empty(t *testing.T) {
 	assert.Empty(t, entries)
 }
 
-func TestHandleListIdentities_NoSession(t *testing.T) {
+func TestHandleIdentity_List_NoSession(t *testing.T) {
 	h := testHandler(t)
 	require.NoError(t, h.store.Save(&identity.Identity{
 		Name: "Alice", Handle: "alice", Kind: "human",
@@ -108,7 +114,9 @@ func TestHandleListIdentities_NoSession(t *testing.T) {
 		Name: "Bob", Handle: "bob", Kind: "agent",
 	}))
 
-	result, err := h.handleListIdentities(context.Background(), callTool(nil))
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "list",
+	}))
 	require.NoError(t, err)
 
 	text := resultText(t, result)
@@ -122,13 +130,14 @@ func TestHandleListIdentities_NoSession(t *testing.T) {
 	}
 }
 
-func TestHandleGetIdentity_Found(t *testing.T) {
+func TestHandleIdentity_Get_Found(t *testing.T) {
 	h := testHandler(t)
 	require.NoError(t, h.store.Save(&identity.Identity{
 		Name: "Alice", Handle: "alice", Kind: "human", Email: "alice@example.com",
 	}))
 
-	result, err := h.handleGetIdentity(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "get",
 		"handle": "alice",
 	}))
 	require.NoError(t, err)
@@ -141,25 +150,29 @@ func TestHandleGetIdentity_Found(t *testing.T) {
 	assert.Equal(t, "alice@example.com", id["email"])
 }
 
-func TestHandleGetIdentity_NotFound(t *testing.T) {
+func TestHandleIdentity_Get_NotFound(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleGetIdentity(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "get",
 		"handle": "nobody",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 }
 
-func TestHandleGetIdentity_MissingHandle(t *testing.T) {
+func TestHandleIdentity_Get_MissingHandle(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleGetIdentity(context.Background(), callTool(nil))
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "get",
+	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 }
 
-func TestHandleCreateIdentity_Valid(t *testing.T) {
+func TestHandleIdentity_Create_Valid(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleCreateIdentity(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
 		"name":   "Alice",
 		"handle": "alice",
 		"kind":   "human",
@@ -174,9 +187,10 @@ func TestHandleCreateIdentity_Valid(t *testing.T) {
 	assert.Equal(t, "Alice", loaded.Name)
 }
 
-func TestHandleCreateIdentity_ValidationError(t *testing.T) {
+func TestHandleIdentity_Create_ValidationError(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleCreateIdentity(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
 		"name":   "Alice",
 		"handle": "INVALID",
 		"kind":   "human",
@@ -185,9 +199,10 @@ func TestHandleCreateIdentity_ValidationError(t *testing.T) {
 	assert.True(t, result.IsError)
 }
 
-func TestHandleCreateIdentity_VoiceIDWithoutProvider(t *testing.T) {
+func TestHandleIdentity_Create_VoiceIDWithoutProvider(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleCreateIdentity(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
 		"name":     "Alice",
 		"handle":   "alice",
 		"kind":     "human",
@@ -199,9 +214,10 @@ func TestHandleCreateIdentity_VoiceIDWithoutProvider(t *testing.T) {
 	assert.Contains(t, text, "voice_id requires voice_provider")
 }
 
-func TestHandleCreateIdentity_WithVoice(t *testing.T) {
+func TestHandleIdentity_Create_WithVoice(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleCreateIdentity(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method":         "create",
 		"name":           "Alice",
 		"handle":         "alice",
 		"kind":           "human",
@@ -217,7 +233,7 @@ func TestHandleCreateIdentity_WithVoice(t *testing.T) {
 	assert.Equal(t, "elevenlabs", loaded.Voice.Provider)
 }
 
-func TestHandleCreateIdentity_WithSkills(t *testing.T) {
+func TestHandleIdentity_Create_WithSkills(t *testing.T) {
 	h := testHandler(t)
 
 	// Create talent attribute files that the identity will reference.
@@ -227,10 +243,11 @@ func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 		require.NoError(t, s.Save(&attribute.Attribute{Slug: slug, Content: "# " + slug + "\n"}))
 	}
 
-	result, err := h.handleCreateIdentity(context.Background(), callTool(map[string]interface{}{
-		"name":   "Alice",
-		"handle": "alice",
-		"kind":   "human",
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method":  "create",
+		"name":    "Alice",
+		"handle":  "alice",
+		"kind":    "human",
 		"talents": []interface{}{"go", "testing"},
 	}))
 	require.NoError(t, err)
@@ -239,6 +256,39 @@ func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 	loaded, err := h.store.Load("alice", identity.Reference(true))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"go", "testing"}, loaded.Talents)
+}
+
+func TestHandleIdentity_UnknownMethod(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "bogus",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unknown method")
+}
+
+func TestHandleIdentity_Create_MissingRequired(t *testing.T) {
+	h := testHandler(t)
+
+	tests := []struct {
+		name string
+		args map[string]interface{}
+		want string
+	}{
+		{"missing name", map[string]interface{}{"method": "create", "handle": "alice", "kind": "human"}, "name is required"},
+		{"missing handle", map[string]interface{}{"method": "create", "name": "Alice", "kind": "human"}, "handle is required"},
+		{"missing kind", map[string]interface{}{"method": "create", "name": "Alice", "handle": "alice"}, "kind is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := h.handleIdentity(context.Background(), callTool(tt.args))
+			require.NoError(t, err)
+			assert.True(t, result.IsError)
+			assert.Contains(t, resultText(t, result), tt.want)
+		})
+	}
 }
 
 // --- Attribute Tool Tests ---

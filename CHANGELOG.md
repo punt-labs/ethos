@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidated `whoami`, `list_identities`, `get_identity`, `create_identity` into single `identity` MCP tool with `method` parameter
+- Refactored all 5 hook shell scripts to thin gates per punt-kit/standards/hooks.md (387 → 30 lines)
+- Moved hook business logic from shell to Go (`internal/hook/` package)
+- Fixed two-channel display for consolidated MCP tools (tool name mismatch)
+
+### Added
+
+- `ethos hook` CLI subcommand group (session-start, session-end, subagent-start, subagent-stop, format-output)
+- Non-blocking stdin reader with open-pipe-no-EOF safety (`internal/hook/stdin.go`)
+- `make dev` / `make undev` targets for plugin cache symlink during development (DES-015)
+- Delete method handlers for talent, personality, writing_style in two-channel display
+- Per-tool sentinel directory check in hook shell scripts
+
 ## [1.0.0] - 2026-03-21
 
 ### Changed
