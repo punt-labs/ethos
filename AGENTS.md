@@ -63,7 +63,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 **Example — read identity from MCP:**
 
 ```text
-Call mcp__plugin_ethos_self__get_identity with handle="mal"
+Call mcp__plugin_ethos_self__identity with method="get", handle="mal"
 ```
 
 Returns JSON with all core fields, resolved attribute content (`writing_style_content`, `personality_content`, `talent_contents`), and the `ext` map. Pass `reference: true` for slugs only.

@@ -49,11 +49,8 @@ func NewHandler(s *identity.Store, ss ...*session.Store) *Handler {
 
 // RegisterTools adds all ethos MCP tools to the given server.
 func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
-	// Identity tools
-	s.AddTool(h.whoamiTool(), h.handleWhoami)
-	s.AddTool(h.listIdentitiesTool(), h.handleListIdentities)
-	s.AddTool(h.getIdentityTool(), h.handleGetIdentity)
-	s.AddTool(h.createIdentityTool(), h.handleCreateIdentity)
+	// Identity tool (consolidated)
+	s.AddTool(h.identityTool(), h.handleIdentity)
 	// Extension tool (consolidated)
 	s.AddTool(h.extTool(), h.handleExt)
 	// Session tool (consolidated)
@@ -64,52 +61,49 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 
 // --- Tool Definitions ---
 
-func (h *Handler) whoamiTool() mcplib.Tool {
-	return mcplib.NewTool("whoami",
-		mcplib.WithDescription("Show the caller's identity, resolved from iam declaration, git config, or OS user."),
-		mcplib.WithBoolean("reference",
-			mcplib.Description("If true, return attribute slugs only without resolving .md content."),
+func (h *Handler) identityTool() mcplib.Tool {
+	return mcplib.NewTool("identity",
+		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create."),
+		mcplib.WithString("method", mcplib.Required(),
+			mcplib.Enum("whoami", "list", "get", "create"),
+			mcplib.Description("Operation to perform."),
 		),
-	)
-}
-
-func (h *Handler) listIdentitiesTool() mcplib.Tool {
-	return mcplib.NewTool("list_identities",
-		mcplib.WithDescription("List all available identities with handle, name, kind, and active status."),
-	)
-}
-
-func (h *Handler) getIdentityTool() mcplib.Tool {
-	return mcplib.NewTool("get_identity",
-		mcplib.WithDescription("Get full details of a specific identity by handle, with resolved attribute content by default."),
 		mcplib.WithString("handle",
-			mcplib.Required(),
-			mcplib.Description("The identity handle to look up."),
+			mcplib.Description("Identity handle. Required for get, create."),
 		),
 		mcplib.WithBoolean("reference",
-			mcplib.Description("If true, return attribute slugs only without resolving .md content."),
+			mcplib.Description("If true, return attribute slugs only without resolving .md content. For whoami, get."),
 		),
-	)
-}
-
-func (h *Handler) createIdentityTool() mcplib.Tool {
-	return mcplib.NewTool("create_identity",
-		mcplib.WithDescription("Create a new identity from provided fields."),
-		mcplib.WithString("name", mcplib.Required(), mcplib.Description("Display name")),
-		mcplib.WithString("handle", mcplib.Required(), mcplib.Description("Unique handle (lowercase, alphanumeric, hyphens)")),
-		mcplib.WithString("kind", mcplib.Required(), mcplib.Description("Either 'human' or 'agent'")),
-		mcplib.WithString("email", mcplib.Description("Email address (beadle binding)")),
-		mcplib.WithString("github", mcplib.Description("GitHub username (biff binding)")),
-		mcplib.WithString("voice_provider", mcplib.Description("Voice provider name (vox binding)")),
-		mcplib.WithString("voice_id", mcplib.Description("Voice ID for the provider")),
-		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file")),
-		mcplib.WithString("writing_style", mcplib.Description("Writing style description")),
-		mcplib.WithString("personality", mcplib.Description("Personality description")),
-		mcplib.WithArray("talents", mcplib.Description("List of talent slugs"), mcplib.WithStringItems()),
+		mcplib.WithString("name", mcplib.Description("Display name. Required for create.")),
+		mcplib.WithString("kind", mcplib.Description("Either 'human' or 'agent'. Required for create.")),
+		mcplib.WithString("email", mcplib.Description("Email address (beadle binding). For create.")),
+		mcplib.WithString("github", mcplib.Description("GitHub username (biff binding). For create.")),
+		mcplib.WithString("voice_provider", mcplib.Description("Voice provider name (vox binding). For create.")),
+		mcplib.WithString("voice_id", mcplib.Description("Voice ID for the provider. For create.")),
+		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file. For create.")),
+		mcplib.WithString("writing_style", mcplib.Description("Writing style slug. For create.")),
+		mcplib.WithString("personality", mcplib.Description("Personality slug. For create.")),
+		mcplib.WithArray("talents", mcplib.Description("List of talent slugs. For create."), mcplib.WithStringItems()),
 	)
 }
 
 // --- Tool Handlers ---
+
+func (h *Handler) handleIdentity(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	method := stringArg(req, "method", "")
+	switch method {
+	case "whoami":
+		return h.handleWhoami(ctx, req)
+	case "list":
+		return h.handleListIdentities(ctx, req)
+	case "get":
+		return h.handleGetIdentity(ctx, req)
+	case "create":
+		return h.handleCreateIdentity(ctx, req)
+	default:
+		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
+	}
+}
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle, err := resolve.Resolve(h.store, h.sessionStore)
@@ -202,6 +196,19 @@ func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolReques
 }
 
 func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	name := stringArg(req, "name", "")
+	if name == "" {
+		return mcplib.NewToolResultError("name is required for create"), nil
+	}
+	handle := stringArg(req, "handle", "")
+	if handle == "" {
+		return mcplib.NewToolResultError("handle is required for create"), nil
+	}
+	kind := stringArg(req, "kind", "")
+	if kind == "" {
+		return mcplib.NewToolResultError("kind is required for create"), nil
+	}
+
 	var voice *identity.Voice
 	provider := stringArg(req, "voice_provider", "")
 	voiceID := stringArg(req, "voice_id", "")
@@ -212,9 +219,9 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 	}
 
 	id := &identity.Identity{
-		Name:         stringArg(req, "name", ""),
-		Handle:       stringArg(req, "handle", ""),
-		Kind:         stringArg(req, "kind", ""),
+		Name:         name,
+		Handle:       handle,
+		Kind:         kind,
 		Email:        stringArg(req, "email", ""),
 		GitHub:       stringArg(req, "github", ""),
 		Voice:        voice,

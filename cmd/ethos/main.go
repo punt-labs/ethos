@@ -61,6 +61,7 @@ func main() {
 		"talent":        runTalent,
 		"personality":   runPersonality,
 		"writing-style": runWritingStyle,
+		"hook":          runHook,
 		"resolve-agent": func([]string) { runResolveAgent() },
 		"uninstall":     runUninstall,
 		"help":          func([]string) { printUsageTo(os.Stdout) },
@@ -127,6 +128,8 @@ func printSubcommandHelp(cmd string) {
 		fmt.Print("Usage: ethos personality <subcommand>\n\n  Manage personalities.\n\n  ethos personality create <slug>           Create a new personality\n  ethos personality list                    List all personalities\n  ethos personality show <slug>             Show personality content\n  ethos personality set <handle> <slug>     Set personality on an identity\n")
 	case "writing-style":
 		fmt.Print("Usage: ethos writing-style <subcommand>\n\n  Manage writing styles.\n\n  ethos writing-style create <slug>           Create a new writing style\n  ethos writing-style list                    List all writing styles\n  ethos writing-style show <slug>             Show writing style content\n  ethos writing-style set <handle> <slug>     Set writing style on an identity\n")
+	case "hook":
+		printHookUsage()
 	default:
 		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
 		printUsage()

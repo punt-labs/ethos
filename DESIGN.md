@@ -1065,3 +1065,167 @@ exist — this is acceptable.
   Code could reserve `skills` next.
 - **Use a different word only for the command file** — same split
   problem as option 1.
+
+## DES-015: Plugin development via cache symlink (PROPOSED)
+
+### Problem
+
+Claude Code plugins are loaded from a versioned cache directory at
+`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. During
+development, the cached snapshot is stale — changes to commands, hooks,
+skills, and agents in the working tree are not reflected until the
+plugin is re-published and re-fetched.
+
+The binary (Go/Python) can be rebuilt and installed independently
+(`make install`), but plugin prompt files (`.md` commands, hook shell
+scripts, skill definitions) are only read from the cache. This creates
+a two-speed problem: MCP tool changes take effect after `make install`
+and restart, but prompt changes require manually copying files into
+the cache or re-publishing.
+
+### Decision
+
+Add `make dev` and `make undev` targets to the Makefile:
+
+- `make dev` — builds and installs the binary, then replaces the
+  plugin cache version directory with a symlink to the working tree.
+  The original cache is preserved as `<version>.bak`.
+- `make undev` — removes the symlink and restores the original cache
+  from backup.
+
+```bash
+# Enter dev mode: binary installed, plugin cache → working tree
+make dev
+
+# Exit dev mode: restore original cache
+make undev
+```
+
+This makes all prompt files (commands, hooks, skills, agents) live-
+editable during development. Combined with `make install` for binary
+changes, the full development loop is:
+
+1. Edit Go code → `make dev` (rebuilds binary + ensures symlink)
+2. Edit prompt files → restart Claude (no build needed, symlink is live)
+3. Edit MCP tools → `make dev` + restart Claude
+
+### Scope
+
+This pattern applies to any Claude Code plugin that has a compiled
+binary alongside prompt files. It is not ethos-specific — biff, vox,
+quarry, lux, and z-spec all have the same two-speed problem.
+
+### Version resolution
+
+The symlink uses the latest version directory found in the cache
+(`ls -1 | sort -V | tail -1`). This matches the version Claude Code
+resolved from the marketplace registry. No synthetic "dev" version is
+used — Claude Code would not look for a version the registry doesn't
+advertise.
+
+### Rejected alternatives
+
+- **`--plugin-dir .`** — ephemeral (one session), must be passed every
+  time. `make dev` persists until `make undev`.
+- **Version bump to `n+1`** — Claude Code resolves versions from the
+  marketplace registry. A version the registry doesn't know about would
+  not be loaded.
+- **Copy files into cache on every build** — fragile, easy to forget,
+  and creates drift between source and cache. Symlink is atomic.
+- **Use `dev` as the version string** — same problem as `n+1`: Claude
+  Code won't look for it.
+
+## DES-016: Hook business logic in Go, not shell (SETTLED)
+
+### Problem
+
+Ethos hook shell scripts contained 387 lines of business logic:
+identity resolution, session roster management, JSON parsing via
+grep/cut, and per-tool output formatting. This violated
+punt-kit/standards/hooks.md §3 ("shell scripts are thin gates") and
+created 4 additional problems:
+
+1. `suppress-output.sh` (205 lines) checked old tool names after the
+   MCP tool consolidation — two-channel display was broken for all
+   consolidated tools.
+2. `session-start.sh` forked the ethos binary 3-4 times per session
+   start, adding cold-start latency.
+3. JSON extraction used brittle `grep -o | cut -d'"'` instead of
+   structured parsing.
+4. No per-tool sentinel check — hooks ran even when ethos was not
+   configured for the project.
+
+### Decision
+
+Move all hook business logic into Go (`internal/hook/` package) and
+reduce shell scripts to 6-line thin gates that check preconditions
+and delegate to `ethos hook <event>`.
+
+The Go handlers read JSON from stdin using a non-blocking reader with
+deadline-based timeout (avoiding the open-pipe-no-EOF hang), call
+identity/session/resolve packages directly (no binary forks), and
+emit structured JSON to stdout.
+
+### Result
+
+- Shell: 387 lines → 30 lines (5 scripts × 6 lines)
+- Binary forks per session-start: 4 → 0
+- Two-channel display: fixed for all 6 consolidated tools × 28 methods
+- Open-pipe regression test: included
+
+### Rejected alternatives
+
+- **Keep logic in shell, fix tool names only** — leaves grep/cut
+  parsing, multi-fork cold start, and missing sentinel check unfixed.
+- **Use jq for all JSON parsing in shell** — better than grep/cut but
+  still violates the "thin gate" standard. jq is also a runtime
+  dependency that may not be installed.
+- **Use a lightweight Go binary (`ethos-hook`)** — Go compiles to a
+  single binary. Adding a separate entry point creates two binaries
+  to install and version. The `ethos hook` subcommand achieves the
+  same isolation without the operational cost.
+
+## DES-017: Session PID keying via ancestor walk, not PPID (SETTLED)
+
+### Problem
+
+Session roster files are keyed by PID: `sessions/current/{pid}` maps
+a Claude Code process to its active session ID. The MCP server
+discovers its session by calling `process.FindClaudePID()`, which
+walks the process tree to find the topmost `claude` ancestor.
+
+The original shell hooks and the initial Go port both used
+`os.Getppid()` (the immediate parent PID) to key the current session
+file. This produces a different PID than `FindClaudePID()` because
+Claude Code interposes intermediate processes between the main
+process and hook/MCP subprocesses:
+
+```text
+Claude Code (PID 19147)        ← FindClaudePID() returns this
+├── shell (hook runner)
+│   └── ethos hook session-start   ← os.Getppid() returns shell PID
+└── claude (MCP manager)
+    └── ethos serve                ← FindClaudePID() returns 19147
+```
+
+The hook writes `sessions/current/{shell-PID}`, but the MCP server
+looks up `sessions/current/{19147}` — file not found, session tools
+fail with "no active session."
+
+This is the same issue biff documented in DES-011a: `os.getppid()` is
+not a stable session identifier when Claude Code's process tree has
+intermediate layers.
+
+### Decision
+
+Use `process.FindClaudePID()` in all hook handlers that read or write
+PID-keyed session state. This matches the MCP server's discovery
+mechanism and produces a consistent key regardless of how many
+intermediate processes exist.
+
+### Stale PID files
+
+The `sessions/current/` directory accumulates PID files from previous
+sessions that were not cleaned up (crashes, forced exits, sessions
+where the SessionEnd hook did not fire). Filed as ethos-dl9.
+`ethos session purge` can clean these up manually.
