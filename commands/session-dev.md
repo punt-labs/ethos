@@ -1,9 +1,17 @@
 ---
-description: Show current session participants
+description: Manage session roster — roster, join, leave
+argument-hint: "roster|join|leave [args]"
 allowed-tools: ["mcp__plugin_ethos-dev_self__session"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-Call `mcp__plugin_ethos-dev_self__session` with method set to "roster".
+Manage session roster via `mcp__plugin_ethos-dev_self__session`.
 
-Emit the tool output exactly as returned. Do not reformat, wrap in code fences, or add commentary.
+## Usage
+
+- `/ethos-dev:session` — show current session roster (default: roster)
+- `/ethos-dev:session roster` — show current session roster
+
+Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.
+
+If no argument is provided, default to `roster`.
