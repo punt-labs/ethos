@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-22
+
 ### Changed
 
 - Consolidated `whoami`, `list_identities`, `get_identity`, `create_identity` into single `identity` MCP tool with `method` parameter
