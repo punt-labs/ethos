@@ -5,9 +5,7 @@ allowed-tools: ["mcp__plugin_ethos-dev_self__writing_style"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-# /writing-style
-
-Manage writing styles via the `writing_style` MCP tool.
+Manage writing styles via `mcp__plugin_ethos-dev_self__writing_style`.
 
 ## Usage
 
