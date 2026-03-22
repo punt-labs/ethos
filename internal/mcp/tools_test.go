@@ -553,6 +553,20 @@ func TestHandleIdentity_Iam(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "new-persona")
+
+	// Verify the persona was actually set in the session store.
+	roster, err := h.sessionStore.Load("test-iam")
+	require.NoError(t, err)
+	// iam uses FindClaudePID() as agent_id, so look for any participant
+	// with the new persona.
+	found := false
+	for _, p := range roster.Participants {
+		if p.Persona == "new-persona" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "expected participant with persona 'new-persona' in roster")
 }
 
 func TestHandleSession_Leave(t *testing.T) {
