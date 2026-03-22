@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-03-21
+
 ### Changed
 
 - Renamed `skill` → `talent` system-wide (DES-014): MCP tool, CLI subcommand, identity YAML field, storage directory, all documentation
