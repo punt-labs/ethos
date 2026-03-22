@@ -16,7 +16,7 @@ another. Ethos provides that context. Any tool can read it via the filesystem,
 CLI, or MCP server. Same schema for humans and agents, extensible by any
 application.
 
-**Platforms:** macOS, Linux
+**Platforms:** macOS and Linux (amd64, arm64)
 
 ## Quick Start
 
