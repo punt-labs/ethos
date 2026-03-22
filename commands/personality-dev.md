@@ -9,10 +9,10 @@ Manage personalities via `mcp__plugin_ethos-dev_self__personality`.
 
 ## Usage
 
-- `/personality list` — list all personalities
-- `/personality show <slug>` — show personality content
-- `/personality create <slug>` — create a new personality (prompt for content)
-- `/personality delete <slug>` — delete a personality
-- `/personality set <handle> <slug>` — set personality on an identity
+- `/ethos-dev:personality list` — list all personalities
+- `/ethos-dev:personality show <slug>` — show personality content
+- `/ethos-dev:personality create <slug>` — create a new personality (prompt for content)
+- `/ethos-dev:personality delete <slug>` — delete a personality
+- `/ethos-dev:personality set <handle> <slug>` — set personality on an identity
 
 Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.

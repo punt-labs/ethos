@@ -220,10 +220,10 @@ func TestHandleCreateIdentity_WithVoice(t *testing.T) {
 func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 	h := testHandler(t)
 
-	// Create skill attribute files that the identity will reference.
+	// Create talent attribute files that the identity will reference.
 	root := h.store.Root()
 	for _, slug := range []string{"go", "testing"} {
-		s := attribute.NewStore(root, attribute.Skills)
+		s := attribute.NewStore(root, attribute.Talents)
 		require.NoError(t, s.Save(&attribute.Attribute{Slug: slug, Content: "# " + slug + "\n"}))
 	}
 
@@ -231,14 +231,14 @@ func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 		"name":   "Alice",
 		"handle": "alice",
 		"kind":   "human",
-		"skills": []interface{}{"go", "testing"},
+		"talents": []interface{}{"go", "testing"},
 	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
 	loaded, err := h.store.Load("alice", identity.Reference(true))
 	require.NoError(t, err)
-	assert.Equal(t, []string{"go", "testing"}, loaded.Skills)
+	assert.Equal(t, []string{"go", "testing"}, loaded.Talents)
 }
 
 // --- Attribute Tool Tests ---
@@ -246,7 +246,7 @@ func TestHandleCreateIdentity_WithSkills(t *testing.T) {
 func TestHandleSkill_CreateAndShow(t *testing.T) {
 	h := testHandler(t)
 
-	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method":  "create",
 		"slug":    "go-dev",
 		"content": "# Go Development\nExpert in Go.",
@@ -254,7 +254,7 @@ func TestHandleSkill_CreateAndShow(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err = h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method": "show",
 		"slug":   "go-dev",
 	}))
@@ -266,26 +266,26 @@ func TestHandleSkill_CreateAndShow(t *testing.T) {
 func TestHandleSkill_ListAndDelete(t *testing.T) {
 	h := testHandler(t)
 
-	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method": "create", "slug": "a", "content": "# A\n",
 	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err = h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method": "create", "slug": "b", "content": "# B\n",
 	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
-	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err = h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method": "list",
 	}))
 	require.NoError(t, err)
 	assert.Contains(t, resultText(t, result), "a")
 	assert.Contains(t, resultText(t, result), "b")
 
-	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err = h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method": "delete", "slug": "a",
 	}))
 	require.NoError(t, err)
@@ -295,35 +295,35 @@ func TestHandleSkill_ListAndDelete(t *testing.T) {
 func TestHandleSkill_AddAndRemove(t *testing.T) {
 	h := testHandler(t)
 	root := h.store.Root()
-	s := attribute.NewStore(root, attribute.Skills)
-	require.NoError(t, s.Save(&attribute.Attribute{Slug: "test-skill", Content: "# Test\n"}))
+	s := attribute.NewStore(root, attribute.Talents)
+	require.NoError(t, s.Save(&attribute.Attribute{Slug: "test-talent", Content: "# Test\n"}))
 
 	require.NoError(t, h.store.Save(&identity.Identity{
 		Name: "Alice", Handle: "alice", Kind: "human",
 	}))
 
-	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
-		"method": "add", "handle": "alice", "slug": "test-skill",
+	result, err := h.handleTalent(context.Background(), callTool(map[string]interface{}{
+		"method": "add", "handle": "alice", "slug": "test-talent",
 	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
 	// Duplicate add should error.
-	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
-		"method": "add", "handle": "alice", "slug": "test-skill",
+	result, err = h.handleTalent(context.Background(), callTool(map[string]interface{}{
+		"method": "add", "handle": "alice", "slug": "test-talent",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 
-	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
-		"method": "remove", "handle": "alice", "slug": "test-skill",
+	result, err = h.handleTalent(context.Background(), callTool(map[string]interface{}{
+		"method": "remove", "handle": "alice", "slug": "test-talent",
 	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
 	// Remove non-existent should error.
-	result, err = h.handleSkill(context.Background(), callTool(map[string]interface{}{
-		"method": "remove", "handle": "alice", "slug": "test-skill",
+	result, err = h.handleTalent(context.Background(), callTool(map[string]interface{}{
+		"method": "remove", "handle": "alice", "slug": "test-talent",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
@@ -373,7 +373,7 @@ func TestHandleWritingStyle_SetOnIdentity(t *testing.T) {
 
 func TestHandleSkill_MissingSlug(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method": "show",
 	}))
 	require.NoError(t, err)
@@ -383,7 +383,7 @@ func TestHandleSkill_MissingSlug(t *testing.T) {
 
 func TestHandleSkill_UnknownMethod(t *testing.T) {
 	h := testHandler(t)
-	result, err := h.handleSkill(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleTalent(context.Background(), callTool(map[string]interface{}{
 		"method": "bogus",
 	}))
 	require.NoError(t, err)
@@ -554,8 +554,8 @@ func TestStringArg(t *testing.T) {
 
 func TestStringArrayArg(t *testing.T) {
 	req := callTool(map[string]interface{}{
-		"skills": []interface{}{"go", "testing"},
+		"talents": []interface{}{"go", "testing"},
 	})
-	assert.Equal(t, []string{"go", "testing"}, stringArrayArg(req, "skills"))
+	assert.Equal(t, []string{"go", "testing"}, stringArrayArg(req, "talents"))
 	assert.Nil(t, stringArrayArg(req, "missing"))
 }

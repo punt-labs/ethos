@@ -73,7 +73,7 @@ func createInteractive() {
 	// Attribute selection with create-new option.
 	personality := pickAttribute(reader, attribute.Personalities)
 	writingStyle := pickAttribute(reader, attribute.WritingStyles)
-	skills := pickMultiAttribute(reader, attribute.Skills)
+	talents := pickMultiAttribute(reader, attribute.Talents)
 
 	var voice *identity.Voice
 	if voiceProvider != "" {
@@ -90,7 +90,7 @@ func createInteractive() {
 		Agent:        agent,
 		WritingStyle: writingStyle,
 		Personality:  personality,
-		Skills:       skills,
+		Talents:       talents,
 	}
 
 	if err := id.Validate(); err != nil {

@@ -9,7 +9,7 @@
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
 Ethos stores persistent identity for humans and AI agents — name, email,
-GitHub handle, voice, writing style, personality, and skills — as one YAML
+GitHub handle, voice, writing style, personality, and talents — as one YAML
 file per persona. Agentic coding tools (Claude Code, OpenCode, Codex) start
 each session without knowing who the user is or distinguishing one agent from
 another. Ethos provides that context. Any tool can read it via the filesystem,
@@ -50,12 +50,12 @@ sh install.sh
 ## Features
 
 - **Same schema for humans and agents** — one YAML file per persona, `kind: human` or `kind: agent`
-- **Composable attributes** — skills, personalities, and writing styles are reusable `.md` files referenced by slug
-- **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (25 tools)
+- **Composable attributes** — talents, personalities, and writing styles are reusable `.md` files referenced by slug
+- **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (identity, attributes, extensions, sessions)
 - **Extensible** — any tool attaches its own attributes via `<persona>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
 - **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
-- **Resolution chain** — repo-local config overrides global active identity
+- **Resolution chain** — identity resolved from iam declaration, git config, or OS user (DES-011)
 - **Channel bindings** — an identity *has* a voice the way it *has* an email: voice (Vox), email (Beadle), GitHub (Biff), Claude Code agent definition
 
 ## What It Looks Like
@@ -64,8 +64,8 @@ sh install.sh
 $ ethos personality create principal-engineer -f principal-engineer.md
 Created personality "principal-engineer"
 
-$ ethos skill create go-engineering -f go-engineering.md
-Created skill "go-engineering"
+$ ethos talent create go-engineering -f go-engineering.md
+Created talent "go-engineering"
 
 $ ethos create
 Name: Mal Reynolds
@@ -124,11 +124,11 @@ Systems design, correctness over speed...
 
 | Command | What it does |
 |---------|-------------|
-| `ethos skill create <slug>` | Create a skill (opens `$EDITOR` or `--file`) |
-| `ethos skill list` | List all skills |
-| `ethos skill show <slug>` | Show skill content |
-| `ethos skill add <handle> <slug>` | Add skill to an identity |
-| `ethos skill remove <handle> <slug>` | Remove skill from an identity |
+| `ethos talent create <slug>` | Create a talent (opens `$EDITOR` or `--file`) |
+| `ethos talent list` | List all talents |
+| `ethos talent show <slug>` | Show talent content |
+| `ethos talent add <handle> <slug>` | Add talent to an identity |
+| `ethos talent remove <handle> <slug>` | Remove talent from an identity |
 | `ethos personality create <slug>` | Create a personality |
 | `ethos personality list` | List all personalities |
 | `ethos personality show <slug>` | Show personality content |
@@ -169,7 +169,7 @@ Systems design, correctness over speed...
 ## MCP Tools
 
 When running as a Claude Code plugin, ethos registers an MCP server with
-9 tools. The `skill`, `personality`, `writing_style`, `ext`, and `session`
+9 tools. The `talent`, `personality`, `writing_style`, `ext`, and `session`
 tools use a `method` parameter for verb dispatch; the others are single-action
 tools.
 
@@ -181,7 +181,7 @@ All tools have corresponding slash commands under `/ethos:*`.
 | `list_identities` | — | `/ethos:list-identities` |
 | `get_identity` | — | `/ethos:get-identity` |
 | `create_identity` | — | `/ethos:create-identity` |
-| `skill` | create, list, show, delete, add, remove | `/ethos:skill` |
+| `talent` | create, list, show, delete, add, remove | `/ethos:talent` |
 | `personality` | create, list, show, delete, set | `/ethos:personality` |
 | `writing_style` | create, list, show, delete, set | `/ethos:writing-style` |
 | `ext` | get, set, del, list | `/ethos:ext` |
@@ -201,12 +201,12 @@ voice:                             # Vox binding
 agent: .claude/agents/mal.md       # Claude Code agent binding
 writing_style: concise-quantified  # slug → writing-styles/concise-quantified.md
 personality: principal-engineer    # slug → personalities/principal-engineer.md
-skills:                            # slugs → skills/<slug>.md
+talents:                            # slugs → talents/<slug>.md
   - go-engineering
   - product-strategy
 ```
 
-Attributes (`writing_style`, `personality`, `skills`) are slugs that reference
+Attributes (`writing_style`, `personality`, `talents`) are slugs that reference
 `.md` files in the attribute directories. `ethos show` resolves them to full
 content by default. Multiple identities can share the same attribute files.
 
@@ -217,14 +217,14 @@ name: Code Reviewer
 handle: code-reviewer
 kind: agent
 personality: principal-engineer
-skills:
+talents:
   - code-review
   - security-analysis
 agent: .claude/agents/code-reviewer.md
 ```
 
 When a `code-reviewer` subagent spawns, ethos auto-matches it to this
-persona by handle. The agent inherits the personality, skills, and
+persona by handle. The agent inherits the personality, talents, and
 channel bindings defined here.
 
 **Auto-matching convention:** the ethos handle must exactly match the
@@ -238,7 +238,7 @@ an identity with a handle matching the agent type.
 |-------|------|----------|
 | Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No (personal) |
 | Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
-| Skills | `~/.punt-labs/ethos/skills/<slug>.md` | No |
+| Skills | `~/.punt-labs/ethos/talents/<slug>.md` | No |
 | Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
 | Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
@@ -274,14 +274,14 @@ Tools integrate with ethos at whatever coupling level fits:
 |---------|-----|------------|
 | **Filesystem** | Read YAML at `~/.punt-labs/ethos/identities/<handle>.yaml` | None |
 | **CLI** | Call `ethos whoami --json` or `ethos show <handle> --json` from hooks/scripts | Binary installed |
-| **MCP server** | Connect to `ethos serve` for structured identity operations (25 tools) | Binary installed |
+| **MCP server** | Connect to `ethos serve` for identity CRUD, attribute management, extensions, and session roster | Binary installed |
 
 **Core identity fields** (owned by ethos): name, handle, kind, email,
-github, voice, agent, writing\_style, personality, skills.
+github, voice, agent, writing\_style, personality, talents.
 
-**Attributes** (reusable `.md` files): skills, personalities, and writing
+**Attributes** (reusable `.md` files): talents, personalities, and writing
 styles are plain markdown documents stored in dedicated directories. Any
-identity can reference them by slug. Create with `ethos skill create`,
+identity can reference them by slug. Create with `ethos talent create`,
 `ethos personality create`, or `ethos writing-style create`.
 
 **Extensions** (owned by each tool): any tool can read/write namespaced

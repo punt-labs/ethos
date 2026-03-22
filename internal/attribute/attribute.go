@@ -1,5 +1,5 @@
 // Package attribute provides CRUD for named markdown attribute files
-// (skills, personalities, writing styles).
+// (talents, personalities, writing styles).
 package attribute
 
 import "regexp"
@@ -8,15 +8,15 @@ var validSlug = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // Kind configures a Store for one attribute type.
 type Kind struct {
-	DirName     string // directory under ethos root: "skills", "personalities", "writing-styles"
-	CmdName     string // CLI command name: "skill", "personality", "writing-style"
-	DisplayName string // human-readable singular: "skill", "personality", "writing style"
-	PluralName  string // human-readable plural: "skills", "personalities", "writing styles"
+	DirName     string // directory under ethos root: "talents", "personalities", "writing-styles"
+	CmdName     string // CLI command name: "talent", "personality", "writing-style"
+	DisplayName string // human-readable singular: "talent", "personality", "writing style"
+	PluralName  string // human-readable plural: "talents", "personalities", "writing styles"
 }
 
 // Pre-defined kinds.
 var (
-	Skills        = Kind{DirName: "skills", CmdName: "skill", DisplayName: "skill", PluralName: "skills"}
+	Talents       = Kind{DirName: "talents", CmdName: "talent", DisplayName: "talent", PluralName: "talents"}
 	Personalities = Kind{DirName: "personalities", CmdName: "personality", DisplayName: "personality", PluralName: "personalities"}
 	WritingStyles = Kind{DirName: "writing-styles", CmdName: "writing-style", DisplayName: "writing style", PluralName: "writing styles"}
 )

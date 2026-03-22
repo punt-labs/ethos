@@ -13,16 +13,16 @@ import (
 
 // registerAttributeTools adds consolidated attribute tools (one per resource).
 func (h *Handler) registerAttributeTools(s *mcpserver.MCPServer) {
-	s.AddTool(h.skillTool(), h.handleSkill)
+	s.AddTool(h.talentTool(), h.handleTalent)
 	s.AddTool(h.personalityTool(), h.handlePersonality)
 	s.AddTool(h.writingStyleTool(), h.handleWritingStyle)
 }
 
 // --- Tool Definitions ---
 
-func (h *Handler) skillTool() mcplib.Tool {
-	return mcplib.NewTool("skill",
-		mcplib.WithDescription("Manage skills. Methods: create, list, show, delete, add (to identity), remove (from identity)."),
+func (h *Handler) talentTool() mcplib.Tool {
+	return mcplib.NewTool("talent",
+		mcplib.WithDescription("Manage talents. Methods: create, list, show, delete, add (to identity), remove (from identity)."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("create", "list", "show", "delete", "add", "remove"),
 			mcplib.Description("Operation to perform."),
@@ -79,21 +79,21 @@ func (h *Handler) writingStyleTool() mcplib.Tool {
 
 // --- Handlers ---
 
-func (h *Handler) handleSkill(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleTalent(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	method := stringArg(req, "method", "")
 	switch method {
 	case "create":
-		return h.handleCreateAttribute(h.skills, "skill", req)
+		return h.handleCreateAttribute(h.talents, "talent", req)
 	case "list":
-		return h.handleListAttribute(h.skills, "skills")
+		return h.handleListAttribute(h.talents, "talents")
 	case "show":
-		return h.handleGetAttribute(h.skills, "skill", req)
+		return h.handleGetAttribute(h.talents, "talent", req)
 	case "delete":
-		return h.handleDeleteAttribute(h.skills, "skill", req)
+		return h.handleDeleteAttribute(h.talents, "talent", req)
 	case "add":
-		return h.handleAddSkill(req)
+		return h.handleAddTalent(req)
 	case "remove":
-		return h.handleRemoveSkill(req)
+		return h.handleRemoveTalent(req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
@@ -210,27 +210,27 @@ func (h *Handler) handleSetAttribute(store *identity.Store, display string, req 
 	return mcplib.NewToolResultText(fmt.Sprintf("Set %s %q on %q", display, slug, handle)), nil
 }
 
-func (h *Handler) handleAddSkill(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleAddTalent(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")
 	slug := stringArg(req, "slug", "")
 	if handle == "" || slug == "" {
 		return mcplib.NewToolResultError("handle and slug are required"), nil
 	}
 	if err := h.store.Update(handle, func(id *identity.Identity) error {
-		for _, s := range id.Skills {
+		for _, s := range id.Talents {
 			if s == slug {
-				return fmt.Errorf("skill %q already on %q", slug, handle)
+				return fmt.Errorf("talent %q already on %q", slug, handle)
 			}
 		}
-		id.Skills = append(id.Skills, slug)
+		id.Talents = append(id.Talents, slug)
 		return nil
 	}); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to add skill: %v", err)), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to add talent: %v", err)), nil
 	}
-	return mcplib.NewToolResultText(fmt.Sprintf("Added skill %q to %q", slug, handle)), nil
+	return mcplib.NewToolResultText(fmt.Sprintf("Added talent %q to %q", slug, handle)), nil
 }
 
-func (h *Handler) handleRemoveSkill(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleRemoveTalent(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")
 	slug := stringArg(req, "slug", "")
 	if handle == "" || slug == "" {
@@ -238,8 +238,8 @@ func (h *Handler) handleRemoveSkill(req mcplib.CallToolRequest) (*mcplib.CallToo
 	}
 	if err := h.store.Update(handle, func(id *identity.Identity) error {
 		found := false
-		filtered := make([]string, 0, len(id.Skills))
-		for _, s := range id.Skills {
+		filtered := make([]string, 0, len(id.Talents))
+		for _, s := range id.Talents {
 			if s == slug {
 				found = true
 			} else {
@@ -247,12 +247,12 @@ func (h *Handler) handleRemoveSkill(req mcplib.CallToolRequest) (*mcplib.CallToo
 			}
 		}
 		if !found {
-			return fmt.Errorf("skill %q not found on %q", slug, handle)
+			return fmt.Errorf("talent %q not found on %q", slug, handle)
 		}
-		id.Skills = filtered
+		id.Talents = filtered
 		return nil
 	}); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to remove skill: %v", err)), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to remove talent: %v", err)), nil
 	}
-	return mcplib.NewToolResultText(fmt.Sprintf("Removed skill %q from %q", slug, handle)), nil
+	return mcplib.NewToolResultText(fmt.Sprintf("Removed talent %q from %q", slug, handle)), nil
 }

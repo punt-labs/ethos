@@ -21,7 +21,7 @@ import (
 type Handler struct {
 	store        *identity.Store
 	sessionStore *session.Store
-	skills       *attribute.Store
+	talents      *attribute.Store
 	personalities *attribute.Store
 	writingStyles *attribute.Store
 }
@@ -37,7 +37,7 @@ func NewHandler(s *identity.Store, ss ...*session.Store) *Handler {
 	root := s.Root()
 	h := &Handler{
 		store:         s,
-		skills:        attribute.NewStore(root, attribute.Skills),
+		talents:       attribute.NewStore(root, attribute.Talents),
 		personalities: attribute.NewStore(root, attribute.Personalities),
 		writingStyles: attribute.NewStore(root, attribute.WritingStyles),
 	}
@@ -105,7 +105,7 @@ func (h *Handler) createIdentityTool() mcplib.Tool {
 		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file")),
 		mcplib.WithString("writing_style", mcplib.Description("Writing style description")),
 		mcplib.WithString("personality", mcplib.Description("Personality description")),
-		mcplib.WithArray("skills", mcplib.Description("List of skill tags"), mcplib.WithStringItems()),
+		mcplib.WithArray("talents", mcplib.Description("List of talent slugs"), mcplib.WithStringItems()),
 	)
 }
 
@@ -221,7 +221,7 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 		Agent:        stringArg(req, "agent", ""),
 		WritingStyle: stringArg(req, "writing_style", ""),
 		Personality:  stringArg(req, "personality", ""),
-		Skills:       stringArrayArg(req, "skills"),
+		Talents:      stringArrayArg(req, "talents"),
 	}
 
 	if err := id.Validate(); err != nil {
