@@ -105,7 +105,7 @@ if [[ "$TOOL_NAME" == "whoami" ]]; then
       (if .github != null and .github != "" then ["GitHub: " + .github] else [] end) +
       (if .personality != null and .personality != "" then ["Personality: " + .personality] else [] end) +
       (if .writing_style != null and .writing_style != "" then ["Writing: " + .writing_style] else [] end) +
-      (if (.talents // [] | length) > 0 then ["Skills: " + (.talents | join(", "))] else [] end)
+      (if (.talents // [] | length) > 0 then ["Talents: " + (.talents | join(", "))] else [] end)
       | join("\n")
     ' 2>/dev/null)
     emit "$SUMMARY" "$RESULT"
@@ -132,7 +132,7 @@ if [[ "$TOOL_NAME" == "get_identity" ]]; then
     (if .voice != null and .voice.provider != null and .voice.provider != "" then ["Voice: " + .voice.provider + "/" + (.voice.voice_id // "")] else [] end) +
     (if .personality != null and .personality != "" then ["Personality: " + .personality] else [] end) +
     (if .writing_style != null and .writing_style != "" then ["Writing: " + .writing_style] else [] end) +
-    (if (.talents // [] | length) > 0 then ["Skills: " + (.talents | join(", "))] else [] end)
+    (if (.talents // [] | length) > 0 then ["Talents: " + (.talents | join(", "))] else [] end)
     | join("\n")
   ' 2>/dev/null)
   emit "$SUMMARY" "$RESULT"
