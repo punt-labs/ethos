@@ -1,10 +1,9 @@
 ---
-description: Show the caller's identity
+description: Show the caller's identity, resolved from iam declaration, git config, or OS user
 allowed-tools: ["mcp__plugin_ethos-dev_self__whoami"]
 ---
+<!-- markdownlint-disable MD041 -->
 
-# /whoami-dev
+# /whoami
 
-Call `mcp__plugin_ethos-dev_self__whoami` with no arguments.
-
-Displays the caller's identity, resolved from iam declaration, git config, or OS user.
+Call `whoami` with no arguments. Emit the result verbatim.

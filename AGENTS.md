@@ -31,7 +31,7 @@ ethos show mal --json                 # JSON output
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 25 tools. The plugin auto-allows `mcp__plugin_ethos_self__*` in `settings.json` on first session.
+When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 9 tools using method-dispatch.
 
 **Identity tools:**
 
@@ -266,7 +266,7 @@ Ethos registers 5 hooks in `hooks/hooks.json`:
 
 | Hook | Script | Purpose |
 |------|--------|---------|
-| `SessionStart` | `session-start.sh` | Create roster, deploy commands, auto-allow MCP tools, inject identity context |
+| `SessionStart` | `session-start.sh` | Create roster, inject identity context |
 | `SubagentStart` | `subagent-start.sh` | Add subagent to roster, auto-match persona |
 | `SubagentStop` | `subagent-stop.sh` | Remove subagent from roster |
 | `SessionEnd` | `session-end.sh` | Delete roster and PID-keyed session file |

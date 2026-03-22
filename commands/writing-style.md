@@ -1,12 +1,13 @@
 ---
-description: Manage writing styles
+description: Manage writing styles — create, list, show, delete, set on identity
 argument-hint: "create|list|show|delete|set [args]"
 allowed-tools: ["mcp__plugin_ethos_self__writing_style"]
 ---
+<!-- markdownlint-disable MD041 -->
 
 # /writing-style
 
-Manage writing styles via `mcp__plugin_ethos_self__writing_style`.
+Manage writing styles via the `writing_style` MCP tool.
 
 ## Usage
 
@@ -16,4 +17,4 @@ Manage writing styles via `mcp__plugin_ethos_self__writing_style`.
 - `/writing-style delete <slug>` — delete a writing style
 - `/writing-style set <handle> <slug>` — set writing style on an identity
 
-Parse $ARGUMENTS to determine the method and parameters. The first word is the method.
+Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.
