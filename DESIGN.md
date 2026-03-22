@@ -1134,3 +1134,53 @@ advertise.
   and creates drift between source and cache. Symlink is atomic.
 - **Use `dev` as the version string** — same problem as `n+1`: Claude
   Code won't look for it.
+
+## DES-016: Hook business logic in Go, not shell (SETTLED)
+
+### Problem
+
+Ethos hook shell scripts contained 387 lines of business logic:
+identity resolution, session roster management, JSON parsing via
+grep/cut, and per-tool output formatting. This violated
+punt-kit/standards/hooks.md §3 ("shell scripts are thin gates") and
+created 4 additional problems:
+
+1. `suppress-output.sh` (205 lines) checked old tool names after the
+   MCP tool consolidation — two-channel display was broken for all
+   consolidated tools.
+2. `session-start.sh` forked the ethos binary 3-4 times per session
+   start, adding cold-start latency.
+3. JSON extraction used brittle `grep -o | cut -d'"'` instead of
+   structured parsing.
+4. No per-tool sentinel check — hooks ran even when ethos was not
+   configured for the project.
+
+### Decision
+
+Move all hook business logic into Go (`internal/hook/` package) and
+reduce shell scripts to 6-line thin gates that check preconditions
+and delegate to `ethos hook <event>`.
+
+The Go handlers read JSON from stdin using a non-blocking reader with
+deadline-based timeout (avoiding the open-pipe-no-EOF hang), call
+identity/session/resolve packages directly (no binary forks), and
+emit structured JSON to stdout.
+
+### Result
+
+- Shell: 387 lines → 30 lines (5 scripts × 6 lines)
+- Binary forks per session-start: 4 → 0
+- Two-channel display: fixed for all 6 consolidated tools × 28 methods
+- Open-pipe regression test: included
+
+### Rejected alternatives
+
+- **Keep logic in shell, fix tool names only** — leaves grep/cut
+  parsing, multi-fork cold start, and missing sentinel check unfixed.
+- **Use jq for all JSON parsing in shell** — better than grep/cut but
+  still violates the "thin gate" standard. jq is also a runtime
+  dependency that may not be installed.
+- **Use a lightweight Go binary (`ethos-hook`)** — Go compiles to a
+  single binary. Adding a separate entry point creates two binaries
+  to install and version. The `ethos hook` subcommand achieves the
+  same isolation without the operational cost.
