@@ -9,9 +9,9 @@ Manage tool-scoped extensions via `mcp__plugin_ethos-dev_self__ext`.
 
 ## Usage
 
-- `/ext list <persona>` — list all extension namespaces
-- `/ext get <persona> <namespace> [key]` — read extension key(s)
-- `/ext set <persona> <namespace> <key> <value>` — write an extension key
-- `/ext del <persona> <namespace> [key]` — delete a key or namespace
+- `/ethos-dev:ext list <persona>` — list all extension namespaces
+- `/ethos-dev:ext get <persona> <namespace> [key]` — read extension key(s)
+- `/ethos-dev:ext set <persona> <namespace> <key> <value>` — write an extension key
+- `/ethos-dev:ext del <persona> <namespace> [key]` — delete a key or namespace
 
 Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.

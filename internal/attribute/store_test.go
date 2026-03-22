@@ -15,7 +15,7 @@ func testStore(t *testing.T, kind Kind) *Store {
 }
 
 func TestStore_SaveAndLoad(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	a := &Attribute{Slug: "formal-methods", Content: "# Formal Methods\n\nZ specs and proofs.\n"}
 	require.NoError(t, s.Save(a))
@@ -38,7 +38,7 @@ func TestStore_SaveDuplicate(t *testing.T) {
 }
 
 func TestStore_SaveEmptyContent(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	a := &Attribute{Slug: "empty", Content: ""}
 	err := s.Save(a)
@@ -49,7 +49,7 @@ func TestStore_SaveEmptyContent(t *testing.T) {
 }
 
 func TestStore_LoadNotFound(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	_, err := s.Load("nonexistent")
 	assert.Error(t, err)
@@ -75,7 +75,7 @@ func TestStore_List(t *testing.T) {
 }
 
 func TestStore_ListEmpty(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	result, err := s.List()
 	require.NoError(t, err)
@@ -83,13 +83,13 @@ func TestStore_ListEmpty(t *testing.T) {
 }
 
 func TestStore_ListSkipsREADME(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	require.NoError(t, s.Save(&Attribute{Slug: "go", Content: "# Go\n"}))
 
 	// Write a README.md that should be skipped
 	dir := s.Dir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Skills\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Talents\n"), 0o600))
 
 	result, err := s.List()
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestStore_ListSkipsREADME(t *testing.T) {
 }
 
 func TestStore_ListWarnsOnUnreadable(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	require.NoError(t, s.Save(&Attribute{Slug: "good", Content: "# Good\n"}))
 
@@ -115,7 +115,7 @@ func TestStore_ListWarnsOnUnreadable(t *testing.T) {
 }
 
 func TestStore_Exists(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	assert.False(t, s.Exists("nope"))
 
@@ -124,7 +124,7 @@ func TestStore_Exists(t *testing.T) {
 }
 
 func TestStore_Delete(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	require.NoError(t, s.Save(&Attribute{Slug: "go", Content: "# Go\n"}))
 	assert.True(t, s.Exists("go"))
@@ -134,7 +134,7 @@ func TestStore_Delete(t *testing.T) {
 }
 
 func TestStore_DeleteNotFound(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	err := s.Delete("nonexistent")
 	assert.Error(t, err)
@@ -142,7 +142,7 @@ func TestStore_DeleteNotFound(t *testing.T) {
 }
 
 func TestStore_PathTraversal(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	_, err := s.Path("../../etc/passwd")
 	assert.Error(t, err)
@@ -175,7 +175,7 @@ func TestStore_InvalidSlug(t *testing.T) {
 }
 
 func TestStore_FilePermissions(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	require.NoError(t, s.Save(&Attribute{Slug: "go", Content: "# Go\n"}))
 
@@ -193,7 +193,7 @@ func TestStore_FilePermissions(t *testing.T) {
 }
 
 func TestStore_TrailingNewline(t *testing.T) {
-	s := testStore(t, Skills)
+	s := testStore(t, Talents)
 
 	// Content without trailing newline should get one added
 	require.NoError(t, s.Save(&Attribute{Slug: "no-newline", Content: "# No newline"}))
@@ -207,7 +207,7 @@ func TestStore_TrailingNewline(t *testing.T) {
 func TestStore_AllKinds(t *testing.T) {
 	root := t.TempDir()
 
-	for _, kind := range []Kind{Skills, Personalities, WritingStyles} {
+	for _, kind := range []Kind{Talents, Personalities, WritingStyles} {
 		s := NewStore(root, kind)
 		require.NoError(t, s.Save(&Attribute{Slug: "test", Content: "# Test\n"}))
 		assert.True(t, s.Exists("test"))

@@ -70,7 +70,7 @@ Expands to `make lint docs test`:
 |-------|------|-------------|
 | Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No |
 | Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
-| Skills | `~/.punt-labs/ethos/skills/<slug>.md` | No |
+| Talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
 | Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
 | Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
@@ -91,7 +91,7 @@ voice:                                 # vox binding
 agent: .claude/agents/mal.md           # claude code agent binding
 writing_style: concise-quantified      # slug → writing-styles/concise-quantified.md
 personality: principal-engineer        # slug → personalities/principal-engineer.md
-skills:                                # slugs → skills/<slug>.md
+talents:                               # slugs → talents/<slug>.md
   - formal-methods
   - product-strategy
 ```

@@ -105,7 +105,7 @@ if [[ "$TOOL_NAME" == "whoami" ]]; then
       (if .github != null and .github != "" then ["GitHub: " + .github] else [] end) +
       (if .personality != null and .personality != "" then ["Personality: " + .personality] else [] end) +
       (if .writing_style != null and .writing_style != "" then ["Writing: " + .writing_style] else [] end) +
-      (if (.skills // [] | length) > 0 then ["Skills: " + (.skills | join(", "))] else [] end)
+      (if (.talents // [] | length) > 0 then ["Skills: " + (.talents | join(", "))] else [] end)
       | join("\n")
     ' 2>/dev/null)
     emit "$SUMMARY" "$RESULT"
@@ -132,7 +132,7 @@ if [[ "$TOOL_NAME" == "get_identity" ]]; then
     (if .voice != null and .voice.provider != null and .voice.provider != "" then ["Voice: " + .voice.provider + "/" + (.voice.voice_id // "")] else [] end) +
     (if .personality != null and .personality != "" then ["Personality: " + .personality] else [] end) +
     (if .writing_style != null and .writing_style != "" then ["Writing: " + .writing_style] else [] end) +
-    (if (.skills // [] | length) > 0 then ["Skills: " + (.skills | join(", "))] else [] end)
+    (if (.talents // [] | length) > 0 then ["Skills: " + (.talents | join(", "))] else [] end)
     | join("\n")
   ' 2>/dev/null)
   emit "$SUMMARY" "$RESULT"
@@ -147,31 +147,31 @@ if [[ "$TOOL_NAME" == "create_identity" ]]; then
   exit 0
 fi
 
-# ── list_skills / list_personalities / list_writing_styles ────────────
-if [[ "$TOOL_NAME" == "list_skills" || "$TOOL_NAME" == "list_personalities" || "$TOOL_NAME" == "list_writing_styles" ]]; then
+# ── list_talents / list_personalities / list_writing_styles ────────────
+if [[ "$TOOL_NAME" == "list_talents" || "$TOOL_NAME" == "list_personalities" || "$TOOL_NAME" == "list_writing_styles" ]]; then
   SLUGS=$(printf '%s' "$RESULT" | jq -r '[(.attributes // [])[].slug] | join(", ")' 2>/dev/null)
   [[ -z "$SLUGS" ]] && SLUGS="(none)"
   emit "$SLUGS" "$RESULT"
   exit 0
 fi
 
-# ── get_skill / get_personality / get_writing_style ───────────────────
-if [[ "$TOOL_NAME" == "get_skill" || "$TOOL_NAME" == "get_personality" || "$TOOL_NAME" == "get_writing_style" ]]; then
+# ── get_talent / get_personality / get_writing_style ───────────────────
+if [[ "$TOOL_NAME" == "get_talent" || "$TOOL_NAME" == "get_personality" || "$TOOL_NAME" == "get_writing_style" ]]; then
   CONTENT=$(printf '%s' "$RESULT" | jq -r '.content // empty' 2>/dev/null)
   emit "$CONTENT" "$RESULT"
   exit 0
 fi
 
-# ── create_skill / create_personality / create_writing_style ──────────
-if [[ "$TOOL_NAME" == "create_skill" || "$TOOL_NAME" == "create_personality" || "$TOOL_NAME" == "create_writing_style" ]]; then
+# ── create_talent / create_personality / create_writing_style ──────────
+if [[ "$TOOL_NAME" == "create_talent" || "$TOOL_NAME" == "create_personality" || "$TOOL_NAME" == "create_writing_style" ]]; then
   SLUG=$(printf '%s' "$RESULT" | jq -r '.slug // empty' 2>/dev/null)
   [[ -z "$SLUG" ]] && SLUG="attribute"
   emit "Created ${SLUG}" "$RESULT"
   exit 0
 fi
 
-# ── set_personality / set_writing_style / add_skill / remove_skill ────
-if [[ "$TOOL_NAME" == "set_personality" || "$TOOL_NAME" == "set_writing_style" || "$TOOL_NAME" == "add_skill" || "$TOOL_NAME" == "remove_skill" ]]; then
+# ── set_personality / set_writing_style / add_talent / remove_talent ────
+if [[ "$TOOL_NAME" == "set_personality" || "$TOOL_NAME" == "set_writing_style" || "$TOOL_NAME" == "add_talent" || "$TOOL_NAME" == "remove_talent" ]]; then
   emit_simple "$RESULT"
   exit 0
 fi

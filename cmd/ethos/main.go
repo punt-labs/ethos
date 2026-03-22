@@ -58,7 +58,7 @@ func main() {
 		"ext":           runExt,
 		"iam":           runIam,
 		"session":       runSession,
-		"skill":         runSkill,
+		"talent":        runTalent,
 		"personality":   runPersonality,
 		"writing-style": runWritingStyle,
 		"resolve-agent": func([]string) { runResolveAgent() },
@@ -121,8 +121,8 @@ func printSubcommandHelp(cmd string) {
 		fmt.Print("Usage: ethos uninstall [--purge]\n\n  Remove the Claude Code plugin.\n  With --purge: also remove the binary and all identity data.\n")
 	case "session":
 		fmt.Print("Usage: ethos session [subcommand]\n\n  Manage session roster.\n\n  ethos session                                  Show current session participants\n  ethos session create --session ID --root-id X   Create a new session roster\n  ethos session join --agent-id X [...]            Add a participant\n  ethos session leave --agent-id X                 Remove a participant\n  ethos session purge                              Clean up stale sessions\n")
-	case "skill":
-		fmt.Print("Usage: ethos skill <subcommand>\n\n  Manage skills.\n\n  ethos skill create <slug>           Create a new skill\n  ethos skill list                    List all skills\n  ethos skill show <slug>             Show skill content\n  ethos skill add <handle> <slug>     Add skill to an identity\n  ethos skill remove <handle> <slug>  Remove skill from an identity\n")
+	case "talent":
+		fmt.Print("Usage: ethos talent <subcommand>\n\n  Manage talents.\n\n  ethos talent create <slug>           Create a new talent\n  ethos talent list                    List all talents\n  ethos talent show <slug>             Show talent content\n  ethos talent add <handle> <slug>     Add talent to an identity\n  ethos talent remove <handle> <slug>  Remove talent from an identity\n")
 	case "personality":
 		fmt.Print("Usage: ethos personality <subcommand>\n\n  Manage personalities.\n\n  ethos personality create <slug>           Create a new personality\n  ethos personality list                    List all personalities\n  ethos personality show <slug>             Show personality content\n  ethos personality set <handle> <slug>     Set personality on an identity\n")
 	case "writing-style":
@@ -147,7 +147,7 @@ Product commands:
   ext               Manage tool-scoped extensions
 
 Attribute commands:
-  skill             Manage skills (create, list, show, add, remove)
+  talent            Manage talents (create, list, show, add, remove)
   personality       Manage personalities (create, list, show, set)
   writing-style     Manage writing styles (create, list, show, set)
 
@@ -438,13 +438,13 @@ func runShow(args []string) {
 			fmt.Print(id.PersonalityContent)
 		}
 	}
-	if len(id.Skills) > 0 {
-		showField("Skills", joinSkills(id.Skills))
-		for i, slug := range id.Skills {
-			if i < len(id.SkillContents) && id.SkillContents[i] != "" {
+	if len(id.Talents) > 0 {
+		showField("Talents", joinTalents(id.Talents))
+		for i, slug := range id.Talents {
+			if i < len(id.TalentContents) && id.TalentContents[i] != "" {
 				fmt.Println()
 				fmt.Printf("--- %s ---\n", slug)
-				fmt.Print(id.SkillContents[i])
+				fmt.Print(id.TalentContents[i])
 			}
 		}
 	}
@@ -462,10 +462,10 @@ func voiceValue(v *identity.Voice) string {
 	return v.Provider
 }
 
-// joinSkills formats a skills slice for display.
-func joinSkills(skills []string) string {
+// joinTalents formats a talents slice for display.
+func joinTalents(talents []string) string {
 	var filtered []string
-	for _, sk := range skills {
+	for _, sk := range talents {
 		if s := strings.TrimSpace(sk); s != "" {
 			filtered = append(filtered, s)
 		}
