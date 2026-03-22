@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-03-21
+
 ### Added
 
 - `/ethos:list-identities`, `/ethos:get-identity`, `/ethos:create-identity` slash commands
