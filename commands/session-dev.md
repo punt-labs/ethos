@@ -9,8 +9,8 @@ Manage session roster via `mcp__plugin_ethos-dev_self__session`.
 
 ## Usage
 
-- `/ethos:session` — show current session roster (default: roster)
-- `/ethos:session roster` — show current session roster
+- `/ethos-dev:session` — show current session roster (default: roster)
+- `/ethos-dev:session roster` — show current session roster
 
 Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.
 
