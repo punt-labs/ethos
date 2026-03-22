@@ -5,9 +5,7 @@ allowed-tools: ["mcp__plugin_ethos_self__ext"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-# /ext
-
-Manage tool-scoped extensions via the `ext` MCP tool.
+Manage tool-scoped extensions via `mcp__plugin_ethos_self__ext`.
 
 ## Usage
 

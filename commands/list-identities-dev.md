@@ -4,6 +4,6 @@ allowed-tools: ["mcp__plugin_ethos-dev_self__list_identities"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-# /list-identities
+Call `mcp__plugin_ethos-dev_self__list_identities` with no arguments.
 
-Call `list_identities` with no arguments. Emit the result verbatim.
+Emit the tool output exactly as returned. Do not reformat, wrap in code fences, or add commentary.
