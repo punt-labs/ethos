@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
 )
 
@@ -23,9 +24,9 @@ func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 		fmt.Fprintf(os.Stderr, "ethos: failed to delete session %s: %v\n", sessionID, err)
 	}
 
-	claudePID := fmt.Sprintf("%d", os.Getppid())
+	claudePID := process.FindClaudePID()
 	if err := ss.DeleteCurrentSession(claudePID); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: failed to delete current session file: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "ethos: failed to delete current session file: %v\n", err)
 	}
 
 	return nil

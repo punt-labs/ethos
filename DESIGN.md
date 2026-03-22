@@ -1184,3 +1184,48 @@ emit structured JSON to stdout.
   single binary. Adding a separate entry point creates two binaries
   to install and version. The `ethos hook` subcommand achieves the
   same isolation without the operational cost.
+
+## DES-017: Session PID keying via ancestor walk, not PPID (SETTLED)
+
+### Problem
+
+Session roster files are keyed by PID: `sessions/current/{pid}` maps
+a Claude Code process to its active session ID. The MCP server
+discovers its session by calling `process.FindClaudePID()`, which
+walks the process tree to find the topmost `claude` ancestor.
+
+The original shell hooks and the initial Go port both used
+`os.Getppid()` (the immediate parent PID) to key the current session
+file. This produces a different PID than `FindClaudePID()` because
+Claude Code interposes intermediate processes between the main
+process and hook/MCP subprocesses:
+
+```text
+Claude Code (PID 19147)        ← FindClaudePID() returns this
+├── shell (hook runner)
+│   └── ethos hook session-start   ← os.Getppid() returns shell PID
+└── claude (MCP manager)
+    └── ethos serve                ← FindClaudePID() returns 19147
+```
+
+The hook writes `sessions/current/{shell-PID}`, but the MCP server
+looks up `sessions/current/{19147}` — file not found, session tools
+fail with "no active session."
+
+This is the same issue biff documented in DES-011a: `os.getppid()` is
+not a stable session identifier when Claude Code's process tree has
+intermediate layers.
+
+### Decision
+
+Use `process.FindClaudePID()` in all hook handlers that read or write
+PID-keyed session state. This matches the MCP server's discovery
+mechanism and produces a consistent key regardless of how many
+intermediate processes exist.
+
+### Stale PID files
+
+The `sessions/current/` directory accumulates PID files from previous
+sessions that were not cleaned up (crashes, forced exits, sessions
+where the SessionEnd hook did not fire). Filed as ethos-dl9.
+`ethos session purge` can clean these up manually.
