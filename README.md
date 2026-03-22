@@ -51,11 +51,11 @@ sh install.sh
 
 - **Same schema for humans and agents** — one YAML file per persona, `kind: human` or `kind: agent`
 - **Composable attributes** — talents, personalities, and writing styles are reusable `.md` files referenced by slug
-- **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (25 tools)
+- **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (identity, attributes, extensions, sessions)
 - **Extensible** — any tool attaches its own attributes via `<persona>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
 - **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
-- **Resolution chain** — repo-local config overrides global active identity
+- **Resolution chain** — identity resolved from iam declaration, git config, or OS user (DES-011)
 - **Channel bindings** — an identity *has* a voice the way it *has* an email: voice (Vox), email (Beadle), GitHub (Biff), Claude Code agent definition
 
 ## What It Looks Like
@@ -274,7 +274,7 @@ Tools integrate with ethos at whatever coupling level fits:
 |---------|-----|------------|
 | **Filesystem** | Read YAML at `~/.punt-labs/ethos/identities/<handle>.yaml` | None |
 | **CLI** | Call `ethos whoami --json` or `ethos show <handle> --json` from hooks/scripts | Binary installed |
-| **MCP server** | Connect to `ethos serve` for structured identity operations (25 tools) | Binary installed |
+| **MCP server** | Connect to `ethos serve` for identity CRUD, attribute management, extensions, and session roster | Binary installed |
 
 **Core identity fields** (owned by ethos): name, handle, kind, email,
 github, voice, agent, writing\_style, personality, talents.
