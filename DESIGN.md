@@ -1065,3 +1065,72 @@ exist — this is acceptable.
   Code could reserve `skills` next.
 - **Use a different word only for the command file** — same split
   problem as option 1.
+
+## DES-015: Plugin development via cache symlink (PROPOSED)
+
+### Problem
+
+Claude Code plugins are loaded from a versioned cache directory at
+`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. During
+development, the cached snapshot is stale — changes to commands, hooks,
+skills, and agents in the working tree are not reflected until the
+plugin is re-published and re-fetched.
+
+The binary (Go/Python) can be rebuilt and installed independently
+(`make install`), but plugin prompt files (`.md` commands, hook shell
+scripts, skill definitions) are only read from the cache. This creates
+a two-speed problem: MCP tool changes take effect after `make install`
++ restart, but prompt changes require manually copying files into the
+cache or re-publishing.
+
+### Decision
+
+Add `make dev` and `make undev` targets to the Makefile:
+
+- `make dev` — builds and installs the binary, then replaces the
+  plugin cache version directory with a symlink to the working tree.
+  The original cache is preserved as `<version>.bak`.
+- `make undev` — removes the symlink and restores the original cache
+  from backup.
+
+```bash
+# Enter dev mode: binary installed, plugin cache → working tree
+make dev
+
+# Exit dev mode: restore original cache
+make undev
+```
+
+This makes all prompt files (commands, hooks, skills, agents) live-
+editable during development. Combined with `make install` for binary
+changes, the full development loop is:
+
+1. Edit Go code → `make dev` (rebuilds binary + ensures symlink)
+2. Edit prompt files → restart Claude (no build needed, symlink is live)
+3. Edit MCP tools → `make dev` + restart Claude
+
+### Scope
+
+This pattern applies to any Claude Code plugin that has a compiled
+binary alongside prompt files. It is not ethos-specific — biff, vox,
+quarry, lux, and z-spec all have the same two-speed problem.
+
+### Version resolution
+
+The symlink uses the latest version directory found in the cache
+(`ls -1 | sort -V | tail -1`). This matches the version Claude Code
+resolved from the marketplace registry. No synthetic "dev" version is
+used — Claude Code would not look for a version the registry doesn't
+advertise.
+
+### Rejected alternatives
+
+- **`--plugin-dir .`** — ephemeral (one session), must be passed every
+  time. `make dev` persists until `make undev`.
+- **Version bump to `n+1`** — Claude Code resolves versions from the
+  marketplace registry. A version the registry doesn't know about would
+  not be loaded.
+- **Copy files into cache on every build** — fragile, easy to forget,
+  and creates drift between source and cache. Symlink is atomic.
+- **Use `dev` as the version string** — same problem as `n+1`: Claude
+  Code won't look for it.
