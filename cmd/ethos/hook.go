@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/punt-labs/ethos/internal/hook"
 )
 
 // runHook dispatches to hook subcommands. These are internal commands
@@ -45,24 +47,36 @@ Subcommands:
 `)
 }
 
-// Stub handlers — will be implemented in subsequent steps.
-
 func runHookSessionStart() {
-	// TODO: Step 3
+	s := store()
+	ss := sessionStore()
+	if err := hook.HandleSessionStart(os.Stdin, s, ss); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook session-start: %v\n", err)
+	}
 }
 
 func runHookSessionEnd() {
-	// TODO: Step 4
+	ss := sessionStore()
+	if err := hook.HandleSessionEnd(os.Stdin, ss); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook session-end: %v\n", err)
+	}
 }
 
 func runHookSubagentStart() {
-	// TODO: Step 5
+	s := store()
+	ss := sessionStore()
+	if err := hook.HandleSubagentStart(os.Stdin, s, ss); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
+	}
 }
 
 func runHookSubagentStop() {
-	// TODO: Step 6
+	ss := sessionStore()
+	if err := hook.HandleSubagentStop(os.Stdin, ss); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook subagent-stop: %v\n", err)
+	}
 }
 
 func runHookFormatOutput() {
-	// TODO: Step 7
+	// TODO: Step 4 — format-output handler
 }
