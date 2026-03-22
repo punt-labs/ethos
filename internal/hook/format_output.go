@@ -80,6 +80,8 @@ func formatIdentity(method, result string) error {
 			name = "identity"
 		}
 		return emit("Created "+name, result)
+	case "iam":
+		return emitSimple(truncate(result, 200))
 	default:
 		return emitSimple(truncate(result, 200))
 	}

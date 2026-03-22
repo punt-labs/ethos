@@ -1,6 +1,6 @@
 ---
-description: Manage session roster — roster, iam, join, leave
-argument-hint: "roster|iam [args]"
+description: Manage session roster — roster, join, leave
+argument-hint: "roster|join|leave [args]"
 allowed-tools: ["mcp__plugin_ethos_self__session"]
 ---
 <!-- markdownlint-disable MD041 -->
@@ -11,7 +11,6 @@ Manage session roster via `mcp__plugin_ethos_self__session`.
 
 - `/ethos:session` — show current session roster (default: roster)
 - `/ethos:session roster` — show current session roster
-- `/ethos:session iam <persona>` — declare persona in current session
 
 Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.
 

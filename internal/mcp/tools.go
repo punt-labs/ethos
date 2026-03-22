@@ -63,13 +63,16 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 
 func (h *Handler) identityTool() mcplib.Tool {
 	return mcplib.NewTool("identity",
-		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create."),
+		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create, iam."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("whoami", "list", "get", "create"),
+			mcplib.Enum("whoami", "list", "get", "create", "iam"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("handle",
 			mcplib.Description("Identity handle. Required for get, create."),
+		),
+		mcplib.WithString("persona",
+			mcplib.Description("Persona handle. Required for iam."),
 		),
 		mcplib.WithBoolean("reference",
 			mcplib.Description("If true, return attribute slugs only without resolving .md content. For whoami, get."),
@@ -100,9 +103,37 @@ func (h *Handler) handleIdentity(ctx context.Context, req mcplib.CallToolRequest
 		return h.handleGetIdentity(ctx, req)
 	case "create":
 		return h.handleCreateIdentity(ctx, req)
+	case "iam":
+		return h.handleIam(ctx, req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
+}
+
+func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	if h.sessionStore == nil {
+		return mcplib.NewToolResultError("session store not configured"), nil
+	}
+	persona := stringArg(req, "persona", "")
+	if persona == "" {
+		return mcplib.NewToolResultError("persona is required for iam"), nil
+	}
+
+	sessionID, err := h.resolveSessionID(req)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+
+	// Use the Claude PID as the agent ID for iam declarations.
+	agentID := process.FindClaudePID()
+
+	if err := h.sessionStore.Join(sessionID, session.Participant{
+		AgentID: agentID,
+		Persona: persona,
+	}); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
+	}
+	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
 }
 
 func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -322,19 +353,19 @@ func (h *Handler) handleExt(_ context.Context, req mcplib.CallToolRequest) (*mcp
 
 func (h *Handler) sessionTool() mcplib.Tool {
 	return mcplib.NewTool("session",
-		mcplib.WithDescription("Manage session roster. Methods: iam, roster, join, leave. Session ID is auto-discovered if omitted."),
+		mcplib.WithDescription("Manage session roster. Methods: roster, join, leave. Session ID is auto-discovered if omitted."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("iam", "roster", "join", "leave"),
+			mcplib.Enum("roster", "join", "leave"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("session_id",
-			mcplib.Description("Session ID. Required for iam. Omit for other methods to auto-discover via process tree."),
+			mcplib.Description("Session ID. Omit to auto-discover via process tree."),
 		),
 		mcplib.WithString("agent_id",
-			mcplib.Description("Agent ID. Required for iam, join, leave."),
+			mcplib.Description("Agent ID. Required for join, leave."),
 		),
 		mcplib.WithString("persona",
-			mcplib.Description("Persona handle. Required for iam. Optional for join."),
+			mcplib.Description("Persona handle. Optional for join."),
 		),
 		mcplib.WithString("parent",
 			mcplib.Description("Parent agent ID. Optional for join."),
@@ -374,23 +405,6 @@ func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (
 	}
 
 	switch method {
-	case "iam":
-		agentID := stringArg(req, "agent_id", "")
-		persona := stringArg(req, "persona", "")
-		if agentID == "" {
-			return mcplib.NewToolResultError("agent_id is required for iam"), nil
-		}
-		if persona == "" {
-			return mcplib.NewToolResultError("persona is required for iam"), nil
-		}
-		if err := h.sessionStore.Join(sessionID, session.Participant{
-			AgentID: agentID,
-			Persona: persona,
-		}); err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
-		}
-		return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
-
 	case "roster":
 		roster, err := h.sessionStore.Load(sessionID)
 		if err != nil {
