@@ -160,13 +160,7 @@ func formatAttribute(tool, method, result string) error {
 			slug = tool
 		}
 		return emit("Created "+slug, result)
-	case "delete":
-		slug := jsonString(result, "slug")
-		if slug == "" {
-			slug = tool
-		}
-		return emitSimple("Deleted " + slug)
-	case "set", "add", "remove":
+	case "delete", "set", "add", "remove":
 		return emitSimple(truncate(result, 200))
 	default:
 		return emitSimple(truncate(result, 200))

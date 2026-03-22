@@ -147,7 +147,8 @@ func TestFormatOutput_Talent_Create(t *testing.T) {
 }
 
 func TestFormatOutput_Talent_Delete(t *testing.T) {
-	result := `{"slug":"go-dev"}`
+	// MCP delete returns plain text, not JSON.
+	result := `"Deleted talent \"go-dev\""`
 	payload := makeToolPayload("talent", "delete", result)
 
 	out := captureOutput(t, func() {
@@ -155,11 +156,12 @@ func TestFormatOutput_Talent_Delete(t *testing.T) {
 	})
 
 	r := parseFormatResult(t, out)
-	assert.Equal(t, "Deleted go-dev", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Deleted talent")
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "go-dev")
 }
 
 func TestFormatOutput_Personality_Delete(t *testing.T) {
-	result := `{"slug":"friendly"}`
+	result := `"Deleted personality \"friendly\""`
 	payload := makeToolPayload("personality", "delete", result)
 
 	out := captureOutput(t, func() {
@@ -167,11 +169,11 @@ func TestFormatOutput_Personality_Delete(t *testing.T) {
 	})
 
 	r := parseFormatResult(t, out)
-	assert.Equal(t, "Deleted friendly", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Deleted personality")
 }
 
 func TestFormatOutput_WritingStyle_Delete(t *testing.T) {
-	result := `{"slug":"concise"}`
+	result := `"Deleted writing style \"concise\""`
 	payload := makeToolPayload("writing_style", "delete", result)
 
 	out := captureOutput(t, func() {
@@ -179,7 +181,7 @@ func TestFormatOutput_WritingStyle_Delete(t *testing.T) {
 	})
 
 	r := parseFormatResult(t, out)
-	assert.Equal(t, "Deleted concise", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Deleted writing style")
 }
 
 func TestFormatOutput_Talent_Add(t *testing.T) {
