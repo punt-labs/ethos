@@ -78,5 +78,7 @@ func runHookSubagentStop() {
 }
 
 func runHookFormatOutput() {
-	// TODO: Step 4 — format-output handler
+	if err := hook.HandleFormatOutput(os.Stdin); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook format-output: %v\n", err)
+	}
 }
