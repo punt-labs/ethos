@@ -52,6 +52,7 @@ func runHookSessionStart() {
 	ss := sessionStore()
 	if err := hook.HandleSessionStart(os.Stdin, s, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook session-start: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -59,6 +60,7 @@ func runHookSessionEnd() {
 	ss := sessionStore()
 	if err := hook.HandleSessionEnd(os.Stdin, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook session-end: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -67,6 +69,7 @@ func runHookSubagentStart() {
 	ss := sessionStore()
 	if err := hook.HandleSubagentStart(os.Stdin, s, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
+		os.Exit(1)
 	}
 }
 
@@ -74,11 +77,13 @@ func runHookSubagentStop() {
 	ss := sessionStore()
 	if err := hook.HandleSubagentStop(os.Stdin, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook subagent-stop: %v\n", err)
+		os.Exit(1)
 	}
 }
 
 func runHookFormatOutput() {
 	if err := hook.HandleFormatOutput(os.Stdin); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook format-output: %v\n", err)
+		os.Exit(1)
 	}
 }

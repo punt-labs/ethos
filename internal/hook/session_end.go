@@ -19,10 +19,14 @@ func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 		return nil
 	}
 
-	_ = ss.Delete(sessionID)
+	if err := ss.Delete(sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: failed to delete session %s: %v\n", sessionID, err)
+	}
 
 	claudePID := fmt.Sprintf("%d", os.Getppid())
-	_ = ss.DeleteCurrentSession(claudePID)
+	if err := ss.DeleteCurrentSession(claudePID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: failed to delete current session file: %v\n", err)
+	}
 
 	return nil
 }

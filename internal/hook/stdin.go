@@ -33,7 +33,10 @@ func readDirect(r io.Reader) (map[string]any, error) {
 // readFromFile reads from an *os.File using SetReadDeadline to avoid
 // blocking forever when Claude Code leaves the pipe open.
 func readFromFile(f *os.File, timeout time.Duration) (map[string]any, error) {
-	_ = f.SetReadDeadline(time.Now().Add(timeout))
+	if err := f.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		// Deadline not supported on this fd; fall back to direct read.
+		return readDirect(f)
+	}
 	defer f.SetReadDeadline(time.Time{}) //nolint:errcheck
 
 	var buf []byte

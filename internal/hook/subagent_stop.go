@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -19,6 +20,8 @@ func HandleSubagentStop(r io.Reader, ss *session.Store) error {
 		return nil
 	}
 
-	_ = ss.Leave(sessionID, agentID)
+	if err := ss.Leave(sessionID, agentID); err != nil {
+		return fmt.Errorf("leave session %s: %w", sessionID, err)
+	}
 	return nil
 }

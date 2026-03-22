@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"fmt"
 	"io"
 	"time"
 
@@ -37,6 +38,8 @@ func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) 
 		AgentType: agentType,
 	}
 
-	_ = ss.Join(sessionID, p)
+	if err := ss.Join(sessionID, p); err != nil {
+		return fmt.Errorf("join session %s: %w", sessionID, err)
+	}
 	return nil
 }

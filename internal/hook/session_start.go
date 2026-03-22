@@ -31,9 +31,13 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 	handle, err := resolve.Resolve(store, ss)
 	humanName := ""
 	humanHandle := ""
-	if err == nil {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: identity resolution failed: %v (using OS username)\n", err)
+	} else {
 		id, loadErr := store.Load(handle, identity.Reference(true))
-		if loadErr == nil {
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: failed to load identity %q: %v\n", handle, loadErr)
+		} else {
 			humanName = id.Name
 			humanHandle = id.Handle
 		}
@@ -58,8 +62,10 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 		root := session.Participant{AgentID: userID, Persona: userPersona}
 		primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
 
-		if createErr := ss.Create(sessionID, root, primary); createErr == nil {
-			_ = ss.WriteCurrentSession(claudePID, sessionID)
+		if createErr := ss.Create(sessionID, root, primary); createErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", createErr)
+		} else if wcErr := ss.WriteCurrentSession(claudePID, sessionID); wcErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: failed to write current session: %v\n", wcErr)
 		}
 	}
 
