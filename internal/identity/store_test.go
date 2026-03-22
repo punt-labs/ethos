@@ -161,8 +161,8 @@ func TestStore_SaveWithAllFields(t *testing.T) {
 	// Create attribute files that the identity references.
 	createTestAttribute(t, s.Root(), attribute.WritingStyles, "terse", "# Terse\nDirect.")
 	createTestAttribute(t, s.Root(), attribute.Personalities, "analytical", "# Analytical\nData-driven.")
-	createTestAttribute(t, s.Root(), attribute.Skills, "go", "# Go\nSystems programming.")
-	createTestAttribute(t, s.Root(), attribute.Skills, "testing", "# Testing\nTDD.")
+	createTestAttribute(t, s.Root(), attribute.Talents, "go", "# Go\nSystems programming.")
+	createTestAttribute(t, s.Root(), attribute.Talents, "testing", "# Testing\nTDD.")
 
 	id := &Identity{
 		Name:         "Full Identity",
@@ -174,7 +174,7 @@ func TestStore_SaveWithAllFields(t *testing.T) {
 		Agent:        ".claude/agents/full.md",
 		WritingStyle: "terse",
 		Personality:  "analytical",
-		Skills:       []string{"go", "testing"},
+		Talents:       []string{"go", "testing"},
 	}
 	require.NoError(t, s.Save(id))
 
@@ -183,11 +183,11 @@ func TestStore_SaveWithAllFields(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "terse", loaded.WritingStyle)
 	assert.Equal(t, "analytical", loaded.Personality)
-	assert.Equal(t, []string{"go", "testing"}, loaded.Skills)
+	assert.Equal(t, []string{"go", "testing"}, loaded.Talents)
 	assert.Contains(t, loaded.PersonalityContent, "Analytical")
 	assert.Contains(t, loaded.WritingStyleContent, "Terse")
-	assert.Len(t, loaded.SkillContents, 2)
-	assert.Contains(t, loaded.SkillContents[0], "Go")
+	assert.Len(t, loaded.TalentContents, 2)
+	assert.Contains(t, loaded.TalentContents[0], "Go")
 	assert.Empty(t, loaded.Warnings)
 
 	// Load with Reference — content fields should be empty.
@@ -196,7 +196,7 @@ func TestStore_SaveWithAllFields(t *testing.T) {
 	assert.Equal(t, "terse", ref.WritingStyle)
 	assert.Empty(t, ref.WritingStyleContent)
 	assert.Empty(t, ref.PersonalityContent)
-	assert.Nil(t, ref.SkillContents)
+	assert.Nil(t, ref.TalentContents)
 }
 
 func TestStore_SaveRejectsMissingRef(t *testing.T) {

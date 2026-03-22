@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed `skill` → `talent` system-wide (DES-014): MCP tool, CLI subcommand, identity YAML field, storage directory, all documentation
+- Identity YAML field: `skills:` → `talents:` (breaking — update identity files manually)
+- Storage directory: `~/.punt-labs/ethos/skills/` → `~/.punt-labs/ethos/talents/`
+- CLI: `ethos skill` → `ethos talent`
+- MCP tool: `skill` → `talent`
+- Command: `/ethos:skill` → `/ethos:talent`
+
 ## [0.8.0] - 2026-03-21
 
 ### Added

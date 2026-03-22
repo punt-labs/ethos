@@ -1,12 +1,12 @@
 # Skills
 
-Shared skill definitions as plain markdown files. Referenced from identity
+Shared talent definitions as plain markdown files. Referenced from identity
 YAML via relative paths:
 
 ```yaml
 skills:
-  - skills/software-engineering.md
-  - skills/product-management.md
+  - talents/software-engineering.md
+  - talents/product-management.md
 ```
 
 Each file defines what an identity can do — domain expertise, standards,

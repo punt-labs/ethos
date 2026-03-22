@@ -55,7 +55,7 @@ The only structural difference is `kind: human` vs `kind: agent`, which
 determines whether the identity can be invoked as a subagent.
 
 **Reasoning**: An identity is an identity. It has a name, voice, email, GitHub
-handle, writing style, skills, personality. Whether a human or LLM inhabits it
+handle, writing style, talents, personality. Whether a human or LLM inhabits it
 is a property, not a type distinction.
 
 **Rejected alternatives**:
@@ -189,7 +189,7 @@ writing_style: |
   Direct. Short sentences. Data over adjectives.
 personality: |
   Principal engineer. Formal methods, accountability.
-skills:
+talents:
   - formal-methods
   - product-strategy
 ext:
@@ -572,11 +572,11 @@ All ethos hooks now follow these rules:
 
 ### Problem
 
-Identity attributes (`writing_style`, `personality`, `skills`) are inline
+Identity attributes (`writing_style`, `personality`, `talents`) are inline
 strings — labels with no actionable content. A consumer reading the identity
 gets `"software engineer"` but not what that means: no standards, no
 anti-patterns, no tools. There is no reuse — if two identities share a
-skill, the description is duplicated or absent.
+talent, the description is duplicated or absent.
 
 ### Decision
 
@@ -586,7 +586,7 @@ under the ethos root:
 
 ```text
 ~/.punt-labs/ethos/
-  skills/                         # shared skill definitions
+  talents/                        # shared talent definitions
   personalities/                  # shared personality definitions
   writing-styles/                 # shared writing style definitions
 ```
@@ -597,9 +597,9 @@ core identity fields (name, handle, kind, email, github, voice, agent).
 ```yaml
 writing_style: writing-styles/concise-quantified.md
 personality: personalities/principal-engineer.md
-skills:
-  - skills/executive.md
-  - skills/software-engineering.md
+talents:
+  - talents/executive.md
+  - talents/software-engineering.md
 ```
 
 Paths are relative to the ethos root (`~/.punt-labs/ethos/`). The `agent`
@@ -661,8 +661,8 @@ clobber) to avoid overwriting user modifications.
 
 ### Uniform for humans and agents
 
-A human's skill file describes their expertise and standards. An agent's
-skill file describes its capabilities and tools. Same format, same
+A human's talent file describes their expertise and standards. An agent's
+talent file describes its capabilities and tools. Same format, same
 resolution, same reuse model. The `kind` field distinguishes human from
 agent — the attribute system does not.
 
@@ -837,7 +837,7 @@ corresponding slash command.
 | `/ethos:list-identities` | `list_identities` | List all identities |
 | `/ethos:get-identity` | `get_identity` | Show identity details |
 | `/ethos:create-identity` | `create_identity` | Create a new identity |
-| `/ethos:skill` | `skill` | Manage skills (method dispatch) |
+| `/ethos:talent` | `talent` | Manage talents (method dispatch) |
 | `/ethos:personality` | `personality` | Manage personalities (method dispatch) |
 | `/ethos:writing-style` | `writing_style` | Manage writing styles (method dispatch) |
 | `/ethos:ext` | `ext` | Manage extensions (method dispatch) |
@@ -1023,3 +1023,45 @@ Specifically:
 | Emit `hookSpecificOutput` JSON | Run `jq` on shared config files |
 | Set environment variables | Modify `installed_plugins.json` |
 | Call `ethos` CLI subcommands | Call `claude plugin install/uninstall` |
+
+---
+
+## DES-014: Rename `skill` → `talent` system-wide (SETTLED)
+
+### Problem
+
+`skill` is a reserved name in Claude Code. When a plugin command file
+is named `skill.md`, Claude Code's command parser fails for the
+**entire** `commands/` directory — silently breaking all plugin commands
+from that plugin. This was discovered during DES-012 when
+`/ethos:skill` poisoned the autocomplete for all 10 ethos commands.
+
+### Decision
+
+Rename `skill` to `talent` everywhere:
+
+- MCP tool: `skill` → `talent`
+- CLI subcommand: `ethos skill` → `ethos talent`
+- Command file: `skill.md` → `talent.md`
+- Identity YAML field: `talents:` → `talents:`
+- Identity struct fields: `Skills` → `Talents`, `SkillContents` → `TalentContents`
+- Attribute Kind: `attribute.Skills` → `attribute.Talents`
+- Storage directory: `~/.punt-labs/ethos/skills/` → `~/.punt-labs/ethos/talents/`
+- Sidecar: `sidecar/skills/` → `sidecar/talents/`
+
+### Breaking change
+
+The identity YAML schema changes from `talents:` to `talents:`.
+Existing identity files must be updated manually. No external users
+exist — this is acceptable.
+
+### Rejected alternatives
+
+- **Keep `skill` internally, only rename the command file** — creates a
+  confusing split where the command is `/ethos:talent` but the MCP tool
+  is `skill`, the CLI is `ethos skill`, and the storage is `skills/`.
+- **Use `skills` (plural) for the command file** — might avoid the
+  reserved name conflict, but doesn't address the root issue. Claude
+  Code could reserve `skills` next.
+- **Use a different word only for the command file** — same split
+  problem as option 1.

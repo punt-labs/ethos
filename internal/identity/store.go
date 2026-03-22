@@ -60,7 +60,7 @@ func Reference(v bool) LoadOption {
 }
 
 // Load reads an identity YAML file by handle. By default, it resolves
-// attribute references (personality, writing_style, skills) to their
+// attribute references (personality, writing_style, talents) to their
 // markdown content. Pass Reference(true) to return slugs only.
 func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	var cfg loadConfig
@@ -93,7 +93,7 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 }
 
 // resolveAttributes reads .md files for personality, writing_style, and
-// skills slugs. Returns warnings for any files that could not be read.
+// talent slugs. Returns warnings for any files that could not be read.
 func (s *Store) resolveAttributes(id *Identity) []string {
 	var warnings []string
 
@@ -117,15 +117,15 @@ func (s *Store) resolveAttributes(id *Identity) []string {
 		}
 	}
 
-	if len(id.Skills) > 0 {
-		store := attribute.NewStore(s.root, attribute.Skills)
-		id.SkillContents = make([]string, len(id.Skills))
-		for i, slug := range id.Skills {
+	if len(id.Talents) > 0 {
+		store := attribute.NewStore(s.root, attribute.Talents)
+		id.TalentContents = make([]string, len(id.Talents))
+		for i, slug := range id.Talents {
 			a, err := store.Load(slug)
 			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("skill %q: %v", slug, err))
+				warnings = append(warnings, fmt.Sprintf("talent %q: %v", slug, err))
 			} else {
-				id.SkillContents[i] = a.Content
+				id.TalentContents[i] = a.Content
 			}
 		}
 	}
@@ -160,15 +160,15 @@ func (s *Store) ValidateRefs(id *Identity) error {
 			}
 		}
 	}
-	skillStore := attribute.NewStore(s.root, attribute.Skills)
-	for _, slug := range id.Skills {
+	talentStore := attribute.NewStore(s.root, attribute.Talents)
+	for _, slug := range id.Talents {
 		if err := attribute.ValidateSlug(slug); err != nil {
-			return &ValidationError{Field: "skills", Message: fmt.Sprintf("invalid slug %q: %v", slug, err)}
+			return &ValidationError{Field: "talents", Message: fmt.Sprintf("invalid slug %q: %v", slug, err)}
 		}
-		if !skillStore.Exists(slug) {
+		if !talentStore.Exists(slug) {
 			return &ValidationError{
-				Field:   "skills",
-				Message: fmt.Sprintf("%q not found — create it with 'ethos skill create %s'", slug, slug),
+				Field:   "talents",
+				Message: fmt.Sprintf("%q not found — create it with 'ethos talent create %s'", slug, slug),
 			}
 		}
 	}
@@ -284,7 +284,7 @@ func (s *Store) Save(id *Identity) error {
 
 // Update reads an existing identity, applies a mutation function, validates
 // the result, and writes it back. Uses flock for concurrency safety.
-// Used by attribute binding operations (set_personality, add_skill, etc.).
+// Used by attribute binding operations (set_personality, add_talent, etc.).
 func (s *Store) Update(handle string, mutate func(*Identity) error) error {
 	path := s.Path(handle)
 	lockPath := path + ".lock"

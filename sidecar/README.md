@@ -13,7 +13,7 @@ is the contract.
   identities/                     # one YAML file per identity
     <handle>.yaml                 # core identity fields
     <handle>.ext/                 # tool-scoped extensions (key-value YAML per tool)
-  skills/                         # shared skill definitions (markdown)
+  talents/                         # shared talent definitions (markdown)
   personalities/                  # shared personality definitions (markdown)
   writing-styles/                 # shared writing style definitions (markdown)
   sessions/                       # session rosters (ephemeral, auto-managed)
@@ -34,8 +34,8 @@ agent: .claude/agents/jfreeman.md
 writing_style: writing-styles/concise-quantified.md
 personality: personalities/principal-engineer.md
 skills:
-  - skills/executive.md
-  - skills/software-engineering.md
+  - talents/executive.md
+  - talents/software-engineering.md
 ```
 
 ## Path Resolution

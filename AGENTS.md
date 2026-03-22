@@ -46,9 +46,9 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `create_skill` | `slug`, `content` | Create a skill .md file |
-| `get_skill` | `slug` | Read skill content |
-| `list_skills` | — | List all skills |
+| `create_talent` | `slug`, `content` | Create a talent .md file |
+| `get_talent` | `slug` | Read talent content |
+| `list_talents` | — | List all talents |
 | `create_personality` | `slug`, `content` | Create a personality .md file |
 | `get_personality` | `slug` | Read personality content |
 | `list_personalities` | — | List all personalities |
@@ -57,8 +57,8 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 | `list_writing_styles` | — | List all writing styles |
 | `set_personality` | `handle`, `slug` | Set personality on an identity |
 | `set_writing_style` | `handle`, `slug` | Set writing style on an identity |
-| `add_skill` | `handle`, `slug` | Add skill to an identity |
-| `remove_skill` | `handle`, `slug` | Remove skill from an identity |
+| `add_talent` | `handle`, `slug` | Add talent to an identity |
+| `remove_talent` | `handle`, `slug` | Remove talent from an identity |
 
 **Example — read identity from MCP:**
 
@@ -66,7 +66,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 Call mcp__plugin_ethos_self__get_identity with handle="mal"
 ```
 
-Returns JSON with all core fields, resolved attribute content (`writing_style_content`, `personality_content`, `skill_contents`), and the `ext` map. Pass `reference: true` for slugs only.
+Returns JSON with all core fields, resolved attribute content (`writing_style_content`, `personality_content`, `talent_contents`), and the `ext` map. Pass `reference: true` for slugs only.
 
 ## Session Roster
 
@@ -296,7 +296,7 @@ voice:                                # vox channel binding
 agent: .claude/agents/mal.md          # claude code agent binding
 writing_style: concise-quantified     # slug → writing-styles/concise-quantified.md
 personality: principal-engineer       # slug → personalities/principal-engineer.md
-skills:                               # slugs → skills/<slug>.md
+talents:                               # slugs → talents/<slug>.md
   - formal-methods
   - product-strategy
 ```

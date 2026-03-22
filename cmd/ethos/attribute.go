@@ -144,51 +144,51 @@ func runAttributeShow(kind attribute.Kind, args []string) {
 	fmt.Print(a.Content)
 }
 
-// runAttributeAdd adds an attribute slug to an identity's skills list.
-// Only valid for skills (list field).
+// runAttributeAdd adds an attribute slug to an identity's talents list.
+// Only valid for talents (list field).
 func runAttributeAdd(kind attribute.Kind, args []string) {
-	if kind != attribute.Skills {
+	if kind != attribute.Talents {
 		fmt.Fprintf(os.Stderr, "ethos %s add: use 'set' for single-value attributes\n", kind.DisplayName)
 		os.Exit(1)
 	}
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: ethos skill add <handle> <slug>\n")
+		fmt.Fprintf(os.Stderr, "Usage: ethos talent add <handle> <slug>\n")
 		os.Exit(1)
 	}
 	handle, slug := args[0], args[1]
 
-	// Verify the skill exists.
+	// Verify the talent exists.
 	as := attributeStore(kind)
 	if !as.Exists(slug) {
-		fmt.Fprintf(os.Stderr, "ethos: skill %q not found — create it with 'ethos skill create %s'\n", slug, slug)
+		fmt.Fprintf(os.Stderr, "ethos: talent %q not found — create it with 'ethos talent create %s'\n", slug, slug)
 		os.Exit(1)
 	}
 
 	s := store()
 	if err := s.Update(handle, func(id *identity.Identity) error {
-		for _, existing := range id.Skills {
+		for _, existing := range id.Talents {
 			if existing == slug {
-				return fmt.Errorf("skill %q already on %q", slug, handle)
+				return fmt.Errorf("talent %q already on %q", slug, handle)
 			}
 		}
-		id.Skills = append(id.Skills, slug)
+		id.Talents = append(id.Talents, slug)
 		return nil
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Added skill %q to %q\n", slug, handle)
+	fmt.Printf("Added talent %q to %q\n", slug, handle)
 }
 
-// runAttributeRemove removes an attribute slug from an identity's skills list.
-// Only valid for skills (list field).
+// runAttributeRemove removes an attribute slug from an identity's talents list.
+// Only valid for talents (list field).
 func runAttributeRemove(kind attribute.Kind, args []string) {
-	if kind != attribute.Skills {
+	if kind != attribute.Talents {
 		fmt.Fprintf(os.Stderr, "ethos %s remove: use 'set' to change single-value attributes\n", kind.DisplayName)
 		os.Exit(1)
 	}
 	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: ethos skill remove <handle> <slug>\n")
+		fmt.Fprintf(os.Stderr, "Usage: ethos talent remove <handle> <slug>\n")
 		os.Exit(1)
 	}
 	handle, slug := args[0], args[1]
@@ -196,8 +196,8 @@ func runAttributeRemove(kind attribute.Kind, args []string) {
 	s := store()
 	if err := s.Update(handle, func(id *identity.Identity) error {
 		found := false
-		filtered := make([]string, 0, len(id.Skills))
-		for _, existing := range id.Skills {
+		filtered := make([]string, 0, len(id.Talents))
+		for _, existing := range id.Talents {
 			if existing == slug {
 				found = true
 			} else {
@@ -205,22 +205,22 @@ func runAttributeRemove(kind attribute.Kind, args []string) {
 			}
 		}
 		if !found {
-			return fmt.Errorf("skill %q not found on %q", slug, handle)
+			return fmt.Errorf("talent %q not found on %q", slug, handle)
 		}
-		id.Skills = filtered
+		id.Talents = filtered
 		return nil
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Removed skill %q from %q\n", slug, handle)
+	fmt.Printf("Removed talent %q from %q\n", slug, handle)
 }
 
 // runAttributeSet sets a single-value attribute on an identity.
 // Valid for personality and writing-style.
 func runAttributeSet(kind attribute.Kind, args []string) {
-	if kind == attribute.Skills {
-		fmt.Fprintf(os.Stderr, "ethos skill set: use 'add' and 'remove' for list attributes\n")
+	if kind == attribute.Talents {
+		fmt.Fprintf(os.Stderr, "ethos talent set: use 'add' and 'remove' for list attributes\n")
 		os.Exit(1)
 	}
 	if len(args) < 2 {
@@ -261,7 +261,7 @@ func printAttributeUsage(kind attribute.Kind) {
 	fmt.Fprintf(os.Stderr, "  create <slug>           Create a new %s\n", kind.DisplayName)
 	fmt.Fprintf(os.Stderr, "  list                    List all %s\n", kind.PluralName)
 	fmt.Fprintf(os.Stderr, "  show <slug>             Show %s content\n", kind.DisplayName)
-	if kind == attribute.Skills {
+	if kind == attribute.Talents {
 		fmt.Fprintf(os.Stderr, "  add <handle> <slug>     Add %s to an identity\n", kind.DisplayName)
 		fmt.Fprintf(os.Stderr, "  remove <handle> <slug>  Remove %s from an identity\n", kind.DisplayName)
 	} else {

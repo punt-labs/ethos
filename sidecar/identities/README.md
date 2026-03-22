@@ -25,4 +25,4 @@ ethos create -f mal.yaml  # from file
 | `agent` | No | Path to Claude Code agent `.md` file |
 | `writing_style` | No | Path to `.md` file, relative to ethos root (e.g., `writing-styles/concise.md`) |
 | `personality` | No | Path to `.md` file, relative to ethos root (e.g., `personalities/principal.md`) |
-| `skills` | No | List of paths to `.md` files, relative to ethos root (e.g., `skills/engineering.md`) |
+| `talents` | No | List of paths to `.md` files, relative to ethos root (e.g., `talents/engineering.md`) |
