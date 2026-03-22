@@ -1080,8 +1080,8 @@ The binary (Go/Python) can be rebuilt and installed independently
 (`make install`), but plugin prompt files (`.md` commands, hook shell
 scripts, skill definitions) are only read from the cache. This creates
 a two-speed problem: MCP tool changes take effect after `make install`
-+ restart, but prompt changes require manually copying files into the
-cache or re-publishing.
+and restart, but prompt changes require manually copying files into
+the cache or re-publishing.
 
 ### Decision
 
