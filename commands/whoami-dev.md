@@ -4,6 +4,6 @@ allowed-tools: ["mcp__plugin_ethos-dev_self__whoami"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-# /whoami
+Call `mcp__plugin_ethos-dev_self__whoami` with no arguments.
 
-Call `whoami` with no arguments. Emit the result verbatim.
+Emit the tool output exactly as returned. Do not reformat, wrap in code fences, or add commentary.

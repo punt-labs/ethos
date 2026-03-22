@@ -5,9 +5,7 @@ allowed-tools: ["mcp__plugin_ethos-dev_self__skill"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-# /skill
-
-Manage skills via the `skill` MCP tool.
+Manage skills via `mcp__plugin_ethos-dev_self__skill`.
 
 ## Usage
 

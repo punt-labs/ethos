@@ -5,9 +5,7 @@ allowed-tools: ["mcp__plugin_ethos_self__personality"]
 ---
 <!-- markdownlint-disable MD041 -->
 
-# /personality
-
-Manage personalities via the `personality` MCP tool.
+Manage personalities via `mcp__plugin_ethos_self__personality`.
 
 ## Usage
 
