@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
 )
 
@@ -34,7 +35,7 @@ func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) 
 	p := session.Participant{
 		AgentID:   agentID,
 		Persona:   persona,
-		Parent:    "", // Parent discovery happens at a higher level.
+		Parent:    process.FindClaudePID(),
 		AgentType: agentType,
 	}
 

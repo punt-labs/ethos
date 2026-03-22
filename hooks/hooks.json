@@ -25,8 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop.sh",
-            "async": true
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-stop.sh"
           }
         ]
       }
@@ -36,8 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh",
-            "async": true
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh"
           }
         ]
       }
