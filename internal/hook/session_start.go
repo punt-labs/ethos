@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 )
@@ -57,7 +58,7 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 		if userPersona == "" {
 			userPersona = userID
 		}
-		claudePID := fmt.Sprintf("%d", os.Getppid())
+		claudePID := process.FindClaudePID()
 
 		root := session.Participant{AgentID: userID, Persona: userPersona}
 		primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}

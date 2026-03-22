@@ -2,7 +2,7 @@ VERSION := $(or $(shell git describe --tags --always 2>/dev/null | sed 's/^v//')
 LDFLAGS := -X main.version=$(VERSION)
 
 PLUGIN_CACHE := $(HOME)/.claude/plugins/cache/punt-labs/ethos
-PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | sort -V | tail -1)
+PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | rg -v '\.bak$$' | sort -V | tail -1)
 
 .PHONY: help lint docs test check format build install dev clean dist cover tools doctor
 
