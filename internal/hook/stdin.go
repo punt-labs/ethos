@@ -42,9 +42,14 @@ func readFromFile(f *os.File, timeout time.Duration) (map[string]any, error) {
 		n, err := f.Read(chunk)
 		if n > 0 {
 			buf = append(buf, chunk[:n]...)
-			// Reset deadline after each successful read — give more
-			// time for multi-chunk payloads but still catch open pipes.
-			_ = f.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+			// Use a fraction of the initial timeout for inter-chunk
+			// gaps. Large enough for OS-level buffering delays, small
+			// enough to detect an open pipe without EOF promptly.
+			interChunk := timeout / 10
+			if interChunk < 20*time.Millisecond {
+				interChunk = 20 * time.Millisecond
+			}
+			_ = f.SetReadDeadline(time.Now().Add(interChunk))
 		}
 		if err != nil {
 			break // EOF, timeout, or error — all fine

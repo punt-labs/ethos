@@ -70,12 +70,10 @@ func HandleFormatOutput(r io.Reader) error {
 
 func formatIdentity(method, result string) error {
 	switch method {
-	case "whoami":
-		return formatWhoami(result)
+	case "whoami", "get":
+		return formatIdentityDetail(result)
 	case "list":
 		return formatIdentityList(result)
-	case "get":
-		return formatIdentityGet(result)
 	case "create":
 		name := jsonString(result, "name")
 		if name == "" {
@@ -87,7 +85,7 @@ func formatIdentity(method, result string) error {
 	}
 }
 
-func formatWhoami(result string) error {
+func formatIdentityDetail(result string) error {
 	name := jsonString(result, "name")
 	if name == "" {
 		return emitSimple(truncate(result, 200))
@@ -138,36 +136,6 @@ func formatIdentityList(result string) error {
 		return emit("(none)", result)
 	}
 	return emit(strings.Join(names, ", "), result)
-}
-
-func formatIdentityGet(result string) error {
-	name := jsonString(result, "name")
-	if name == "" {
-		return emitSimple(truncate(result, 200))
-	}
-
-	var lines []string
-	handle := jsonString(result, "handle")
-	kind := jsonString(result, "kind")
-	lines = append(lines, fmt.Sprintf("%s (%s) — %s", name, handle, kind))
-
-	if v := jsonString(result, "email"); v != "" {
-		lines = append(lines, "Email: "+v)
-	}
-	if v := jsonString(result, "github"); v != "" {
-		lines = append(lines, "GitHub: "+v)
-	}
-	if v := jsonString(result, "personality"); v != "" {
-		lines = append(lines, "Personality: "+v)
-	}
-	if v := jsonString(result, "writing_style"); v != "" {
-		lines = append(lines, "Writing: "+v)
-	}
-	if talents := jsonStringArray(result, "talents"); len(talents) > 0 {
-		lines = append(lines, "Talents: "+strings.Join(talents, ", "))
-	}
-
-	return emit(strings.Join(lines, "\n"), result)
 }
 
 // --- Attribute tool formatters ---
