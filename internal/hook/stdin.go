@@ -2,11 +2,11 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 )
 
@@ -74,13 +74,13 @@ func parseJSON(data []byte) (map[string]any, error) {
 	if len(data) == 0 {
 		return map[string]any{}, nil
 	}
-	trimmed := strings.TrimSpace(string(data))
-	if trimmed == "" {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
 		return map[string]any{}, nil
 	}
 
 	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
+	if err := json.Unmarshal(trimmed, &result); err != nil {
 		return map[string]any{}, fmt.Errorf("invalid JSON input (%d bytes): %w", len(data), err)
 	}
 	if result == nil {

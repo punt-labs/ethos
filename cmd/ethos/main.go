@@ -378,6 +378,7 @@ func sessionParticipantHandles() map[string]bool {
 	}
 	roster, err := ss.Load(sessionID)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: failed to load session %s for active handles: %v\n", sessionID, err)
 		return handles
 	}
 	for _, p := range roster.Participants {

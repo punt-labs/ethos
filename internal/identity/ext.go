@@ -195,25 +195,29 @@ func (s *Store) ExtList(persona string) ([]string, error) {
 }
 
 // loadExtensions reads all extension namespaces for a persona and returns
-// the merged map. Called by Store.Load to assemble the full identity view.
-func (s *Store) loadExtensions(persona string) map[string]map[string]string {
+// the merged map and any warnings for unreadable/corrupt files.
+// Called by Store.Load to assemble the full identity view.
+func (s *Store) loadExtensions(persona string) (map[string]map[string]string, []string) {
 	namespaces, err := s.ExtList(persona)
 	if err != nil || len(namespaces) == 0 {
-		return map[string]map[string]string{}
+		return map[string]map[string]string{}, nil
 	}
 	ext := make(map[string]map[string]string, len(namespaces))
+	var warnings []string
 	for _, ns := range namespaces {
 		data, err := os.ReadFile(s.extPath(persona, ns))
 		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("extension %s/%s: %v", persona, ns, err))
 			continue
 		}
 		var m map[string]string
 		if err := yaml.Unmarshal(data, &m); err != nil {
+			warnings = append(warnings, fmt.Sprintf("extension %s/%s: invalid YAML: %v", persona, ns, err))
 			continue
 		}
 		ext[ns] = m
 	}
-	return ext
+	return ext, warnings
 }
 
 func (s *Store) checkNamespaceLimit(persona string) error {
