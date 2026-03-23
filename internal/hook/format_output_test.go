@@ -3,28 +3,19 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
-	"io"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// captureOutput runs fn with stdout redirected and returns the output.
-func captureOutput(t *testing.T, fn func()) string {
+// runFormat calls HandleFormatOutput with the given payload and returns
+// the output written to the writer. Does not touch os.Stdout.
+func runFormat(t *testing.T, payload []byte) string {
 	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stdout = w
-
-	fn()
-
-	w.Close()
-	os.Stdout = old
-	out, _ := io.ReadAll(r)
-	return string(out)
+	var buf bytes.Buffer
+	_ = HandleFormatOutput(bytes.NewReader(payload), &buf)
+	return buf.String()
 }
 
 // makeToolPayload creates a PostToolUse hook JSON payload.
@@ -58,9 +49,7 @@ func TestFormatOutput_Identity_Whoami(t *testing.T) {
 	result := `{"name":"Alice","handle":"alice","kind":"human","email":"alice@example.com","github":"alice-gh","personality":"friendly","writing_style":"concise","talents":["go","testing"]}`
 	payload := makeToolPayload("identity", "whoami", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "PostToolUse", r.HookSpecificOutput.HookEventName)
@@ -74,9 +63,7 @@ func TestFormatOutput_Identity_List(t *testing.T) {
 	result := `[{"handle":"alice","name":"Alice","kind":"human","active":true},{"handle":"bob","name":"Bob","kind":"agent","active":false}]`
 	payload := makeToolPayload("identity", "list", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "* alice (Alice)")
@@ -87,9 +74,7 @@ func TestFormatOutput_Identity_Get(t *testing.T) {
 	result := `{"name":"Alice","handle":"alice","kind":"human","email":"alice@example.com"}`
 	payload := makeToolPayload("identity", "get", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Alice (alice)")
@@ -100,9 +85,7 @@ func TestFormatOutput_Identity_Create(t *testing.T) {
 	result := `{"name":"Bob","handle":"bob","kind":"agent"}`
 	payload := makeToolPayload("identity", "create", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "Created Bob", r.HookSpecificOutput.UpdatedMCPToolOutput)
@@ -114,9 +97,7 @@ func TestFormatOutput_Talent_List(t *testing.T) {
 	result := `{"attributes":[{"slug":"go"},{"slug":"testing"}]}`
 	payload := makeToolPayload("talent", "list", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "go, testing", r.HookSpecificOutput.UpdatedMCPToolOutput)
@@ -126,9 +107,7 @@ func TestFormatOutput_Talent_Show(t *testing.T) {
 	result := `{"slug":"go","content":"# Go Development\nExpert in Go."}`
 	payload := makeToolPayload("talent", "show", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "# Go Development")
@@ -138,9 +117,7 @@ func TestFormatOutput_Talent_Create(t *testing.T) {
 	result := `{"slug":"go-dev"}`
 	payload := makeToolPayload("talent", "create", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "Created go-dev", r.HookSpecificOutput.UpdatedMCPToolOutput)
@@ -151,9 +128,7 @@ func TestFormatOutput_Talent_Delete(t *testing.T) {
 	result := `"Deleted talent \"go-dev\""`
 	payload := makeToolPayload("talent", "delete", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Deleted talent")
@@ -164,9 +139,7 @@ func TestFormatOutput_Personality_Delete(t *testing.T) {
 	result := `"Deleted personality \"friendly\""`
 	payload := makeToolPayload("personality", "delete", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Deleted personality")
@@ -176,9 +149,7 @@ func TestFormatOutput_WritingStyle_Delete(t *testing.T) {
 	result := `"Deleted writing style \"concise\""`
 	payload := makeToolPayload("writing_style", "delete", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Deleted writing style")
@@ -188,9 +159,7 @@ func TestFormatOutput_Talent_Add(t *testing.T) {
 	result := `"Added talent go to alice"`
 	payload := makeToolPayload("talent", "add", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Added talent go to alice")
@@ -200,9 +169,7 @@ func TestFormatOutput_Personality_Set(t *testing.T) {
 	result := `"Set personality friendly on alice"`
 	payload := makeToolPayload("personality", "set", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Set personality friendly on alice")
@@ -214,22 +181,18 @@ func TestFormatOutput_Session_Roster(t *testing.T) {
 	result := `{"session":"abc","participants":[{"agent_id":"user1"}]}`
 	payload := makeToolPayload("session", "roster", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "Roster loaded", r.HookSpecificOutput.UpdatedMCPToolOutput)
 	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalContext)
 }
 
-func TestFormatOutput_Session_Iam(t *testing.T) {
+func TestFormatOutput_Identity_Iam(t *testing.T) {
 	result := `"Set persona claude for 12345 in session abc"`
-	payload := makeToolPayload("session", "iam", result)
+	payload := makeToolPayload("identity", "iam", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Set persona")
@@ -241,9 +204,7 @@ func TestFormatOutput_Ext_Get(t *testing.T) {
 	result := `{"tty":"s001"}`
 	payload := makeToolPayload("ext", "get", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "Extensions", r.HookSpecificOutput.UpdatedMCPToolOutput)
@@ -254,9 +215,7 @@ func TestFormatOutput_Ext_Set(t *testing.T) {
 	result := `"set alice/biff/tty"`
 	payload := makeToolPayload("ext", "set", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "set alice/biff/tty")
@@ -265,10 +224,9 @@ func TestFormatOutput_Ext_Set(t *testing.T) {
 // --- Edge cases ---
 
 func TestFormatOutput_EmptyInput(t *testing.T) {
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(nil))
-	})
-	assert.Empty(t, out)
+	var buf bytes.Buffer
+	_ = HandleFormatOutput(bytes.NewReader(nil), &buf)
+	assert.Empty(t, buf.String())
 }
 
 func TestFormatOutput_MCPError(t *testing.T) {
@@ -283,19 +241,16 @@ func TestFormatOutput_MCPError(t *testing.T) {
 	}
 	data, _ := json.Marshal(input)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(data))
-	})
-	assert.Empty(t, out) // MCP errors are passed through to Claude Code.
+	var buf bytes.Buffer
+	_ = HandleFormatOutput(bytes.NewReader(data), &buf)
+	assert.Empty(t, buf.String()) // MCP errors are passed through to Claude Code.
 }
 
 func TestFormatOutput_ResultError(t *testing.T) {
 	result := `{"error": "identity not found"}`
 	payload := makeToolPayload("identity", "get", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "error: identity not found", r.HookSpecificOutput.UpdatedMCPToolOutput)
@@ -305,9 +260,7 @@ func TestFormatOutput_UnknownTool(t *testing.T) {
 	result := `"some result"`
 	payload := makeToolPayload("unknown_tool", "", result)
 
-	out := captureOutput(t, func() {
-		_ = HandleFormatOutput(bytes.NewReader(payload))
-	})
+	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "some result")

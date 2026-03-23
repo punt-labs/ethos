@@ -24,7 +24,10 @@ type SessionStartResult struct {
 // HandleSessionStart reads the SessionStart hook payload from stdin,
 // resolves identity, creates a session roster, and emits context.
 func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) error {
-	input, _ := ReadInput(r, time.Second)
+	input, err := ReadInput(r, time.Second)
+	if err != nil {
+		return fmt.Errorf("session-start: %w", err)
+	}
 
 	sessionID, _ := input["session_id"].(string)
 

@@ -833,16 +833,12 @@ corresponding slash command.
 
 | Command | MCP Tool | Description |
 |---------|----------|-------------|
-| `/ethos:whoami` | `whoami` | Show the caller's identity |
-| `/ethos:list-identities` | `list_identities` | List all identities |
-| `/ethos:get-identity` | `get_identity` | Show identity details |
-| `/ethos:create-identity` | `create_identity` | Create a new identity |
-| `/ethos:talent` | `talent` | Manage talents (method dispatch) |
-| `/ethos:personality` | `personality` | Manage personalities (method dispatch) |
-| `/ethos:writing-style` | `writing_style` | Manage writing styles (method dispatch) |
-| `/ethos:ext` | `ext` | Manage extensions (method dispatch) |
-| `/ethos:session` | `session` | Manage session roster (method dispatch) |
-| `/ethos:iam` | `session` (method: iam) | Declare persona in current session |
+| `/ethos:identity` | `identity` | Manage identities (whoami, list, get, create, iam) |
+| `/ethos:talent` | `talent` | Manage talents (create, list, show, delete, add, remove) |
+| `/ethos:personality` | `personality` | Manage personalities (create, list, show, delete, set) |
+| `/ethos:writing-style` | `writing_style` | Manage writing styles (create, list, show, delete, set) |
+| `/ethos:ext` | `ext` | Manage extensions (get, set, del, list) |
+| `/ethos:session` | `session` | Manage session roster (roster, join, leave) |
 
 Dev variants use `/ethos-dev:*` automatically via the plugin name in
 `plugin.json`.

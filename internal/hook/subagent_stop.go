@@ -3,6 +3,7 @@ package hook
 import (
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/session"
@@ -11,7 +12,10 @@ import (
 // HandleSubagentStop reads the SubagentStop hook payload from stdin
 // and removes the subagent from the session roster.
 func HandleSubagentStop(r io.Reader, ss *session.Store) error {
-	input, _ := ReadInput(r, time.Second)
+	input, err := ReadInput(r, time.Second)
+	if err != nil {
+		return fmt.Errorf("subagent-stop: %w", err)
+	}
 
 	agentID, _ := input["agent_id"].(string)
 	sessionID, _ := input["session_id"].(string)
@@ -20,8 +24,8 @@ func HandleSubagentStop(r io.Reader, ss *session.Store) error {
 		return nil
 	}
 
-	if err := ss.Leave(sessionID, agentID); err != nil {
-		return fmt.Errorf("leave session %s: %w", sessionID, err)
+	if leaveErr := ss.Leave(sessionID, agentID); leaveErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: failed to leave session %s: %v\n", sessionID, leaveErr)
 	}
 	return nil
 }

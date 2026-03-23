@@ -28,7 +28,7 @@ func TestReadInput_EmptyInput(t *testing.T) {
 func TestReadInput_MalformedJSON(t *testing.T) {
 	r := bytes.NewReader([]byte(`{not json`))
 	data, err := ReadInput(r, 100*time.Millisecond)
-	require.NoError(t, err)
+	assert.Error(t, err, "malformed JSON should return an error")
 	assert.Empty(t, data)
 }
 
@@ -62,10 +62,10 @@ func TestReadInput_WhitespaceOnly(t *testing.T) {
 }
 
 func TestReadInput_JSONArray(t *testing.T) {
-	// Arrays are valid JSON but not maps — should return empty.
+	// Arrays are valid JSON but not maps — should return error.
 	r := bytes.NewReader([]byte(`[1, 2, 3]`))
 	data, err := ReadInput(r, 100*time.Millisecond)
-	require.NoError(t, err)
+	assert.Error(t, err, "JSON array should return an error (not a map)")
 	assert.Empty(t, data)
 }
 
