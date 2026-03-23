@@ -16,7 +16,7 @@ import (
 func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: subagent-start: %v\n", err)
+		return fmt.Errorf("subagent-start: %w", err)
 	}
 
 	agentID, _ := input["agent_id"].(string)

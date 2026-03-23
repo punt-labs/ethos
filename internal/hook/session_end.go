@@ -15,7 +15,7 @@ import (
 func HandleSessionEnd(r io.Reader, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-end: %v\n", err)
+		return fmt.Errorf("session-end: %w", err)
 	}
 
 	sessionID, _ := input["session_id"].(string)

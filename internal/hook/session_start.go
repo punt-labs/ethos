@@ -26,7 +26,7 @@ type SessionStartResult struct {
 func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: %v\n", err)
+		return fmt.Errorf("session-start: %w", err)
 	}
 
 	sessionID, _ := input["session_id"].(string)

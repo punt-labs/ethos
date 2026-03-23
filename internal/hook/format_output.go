@@ -24,7 +24,7 @@ type formatResult struct {
 func HandleFormatOutput(r io.Reader) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: format-output: %v\n", err)
+		return fmt.Errorf("format-output: %w", err)
 	}
 
 	// Extract tool name — strip the MCP namespace prefix.
