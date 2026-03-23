@@ -21,7 +21,7 @@ application.
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2b7f919/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/886debc/install.sh | sh
 ```
 
 <details>
@@ -39,7 +39,7 @@ ethos doctor
 <summary>Verify before running</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/2b7f919/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/886debc/install.sh -o install.sh
 shasum -a 256 install.sh
 cat install.sh
 sh install.sh
