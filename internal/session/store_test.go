@@ -96,15 +96,15 @@ func TestStore_Leave(t *testing.T) {
 	assert.Len(t, roster.Participants, 2)
 }
 
-func TestStore_LeaveNotFound(t *testing.T) {
+func TestStore_LeaveIdempotent(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
 	require.NoError(t, s.Create("sess-leave2", root, primary))
 
+	// Leaving a session you were never in is a no-op, not an error.
 	err := s.Leave("sess-leave2", "nonexistent")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	require.NoError(t, err)
 }
 
 func TestStore_Delete(t *testing.T) {

@@ -106,9 +106,9 @@ func (s *Store) Leave(sessionID string, agentID string) error {
 		if err != nil {
 			return err
 		}
-		if !roster.RemoveParticipant(agentID) {
-			return fmt.Errorf("participant %q not found in session %q", agentID, sessionID)
-		}
+		// Idempotent: leaving a session you were never in is a no-op.
+		// SubagentStop fires regardless of whether SubagentStart succeeded.
+		roster.RemoveParticipant(agentID)
 		return s.writeRoster(sessionID, roster)
 	})
 }

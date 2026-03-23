@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
 )
@@ -12,16 +11,16 @@ import (
 // formatResult is the JSON output of the format-output hook.
 type formatResult struct {
 	HookSpecificOutput struct {
-		HookEventName      string `json:"hookEventName"`
+		HookEventName        string `json:"hookEventName"`
 		UpdatedMCPToolOutput string `json:"updatedMCPToolOutput"`
-		AdditionalContext  string `json:"additionalContext,omitempty"`
+		AdditionalContext    string `json:"additionalContext,omitempty"`
 	} `json:"hookSpecificOutput"`
 }
 
 // HandleFormatOutput reads a PostToolUse hook payload from stdin and
-// emits two-channel display output: a compact summary in
+// emits two-channel display output to w: a compact summary in
 // updatedMCPToolOutput and full data in additionalContext.
-func HandleFormatOutput(r io.Reader) error {
+func HandleFormatOutput(r io.Reader, w io.Writer) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		return fmt.Errorf("format-output: %w", err)
@@ -48,7 +47,7 @@ func HandleFormatOutput(r io.Reader) error {
 
 	// Check for error in result.
 	if errMsg := jsonString(result, "error"); errMsg != "" {
-		return emitSimple("error: " + errMsg)
+		return emitSimple(w, "error: "+errMsg)
 	}
 
 	// Extract method for consolidated tools.
@@ -57,43 +56,43 @@ func HandleFormatOutput(r io.Reader) error {
 	// Dispatch to tool-specific formatter.
 	switch toolName {
 	case "identity":
-		return formatIdentity(method, result)
+		return formatIdentity(w, method, result)
 	case "talent", "personality", "writing_style":
-		return formatAttribute(toolName, method, result)
+		return formatAttribute(w, toolName, method, result)
 	case "session":
-		return formatSession(method, result)
+		return formatSession(w, method, result)
 	case "ext":
-		return formatExt(method, result)
+		return formatExt(w, method, result)
 	default:
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	}
 }
 
 // --- Identity tool formatters ---
 
-func formatIdentity(method, result string) error {
+func formatIdentity(w io.Writer, method, result string) error {
 	switch method {
 	case "whoami", "get":
-		return formatIdentityDetail(result)
+		return formatIdentityDetail(w, result)
 	case "list":
-		return formatIdentityList(result)
+		return formatIdentityList(w, result)
 	case "create":
 		name := jsonString(result, "name")
 		if name == "" {
 			name = "identity"
 		}
-		return emit("Created "+name, result)
+		return emit(w, "Created "+name, result)
 	case "iam":
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	default:
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	}
 }
 
-func formatIdentityDetail(result string) error {
+func formatIdentityDetail(w io.Writer, result string) error {
 	name := jsonString(result, "name")
 	if name == "" {
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	}
 
 	var lines []string
@@ -117,13 +116,13 @@ func formatIdentityDetail(result string) error {
 		lines = append(lines, "Talents: "+strings.Join(talents, ", "))
 	}
 
-	return emit(strings.Join(lines, "\n"), result)
+	return emit(w, strings.Join(lines, "\n"), result)
 }
 
-func formatIdentityList(result string) error {
+func formatIdentityList(w io.Writer, result string) error {
 	var entries []map[string]any
 	if err := json.Unmarshal([]byte(result), &entries); err != nil {
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	}
 
 	var names []string
@@ -138,77 +137,77 @@ func formatIdentityList(result string) error {
 		names = append(names, fmt.Sprintf("%s%s (%s)", prefix, handle, name))
 	}
 	if len(names) == 0 {
-		return emit("(none)", result)
+		return emit(w, "(none)", result)
 	}
-	return emit(strings.Join(names, ", "), result)
+	return emit(w, strings.Join(names, ", "), result)
 }
 
 // --- Attribute tool formatters ---
 
-func formatAttribute(tool, method, result string) error {
+func formatAttribute(w io.Writer, tool, method, result string) error {
 	switch method {
 	case "list":
 		slugs := jsonNestedStringArray(result, "attributes", "slug")
 		if len(slugs) == 0 {
-			return emit("(none)", result)
+			return emit(w, "(none)", result)
 		}
-		return emit(strings.Join(slugs, ", "), result)
+		return emit(w, strings.Join(slugs, ", "), result)
 	case "show":
 		content := jsonString(result, "content")
 		if content == "" {
 			content = truncate(result, 200)
 		}
-		return emit(content, result)
+		return emit(w, content, result)
 	case "create":
 		slug := jsonString(result, "slug")
 		if slug == "" {
 			slug = tool
 		}
-		return emit("Created "+slug, result)
+		return emit(w, "Created "+slug, result)
 	case "delete", "set", "add", "remove":
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	default:
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	}
 }
 
 // --- Session tool formatters ---
 
-func formatSession(method, result string) error {
+func formatSession(w io.Writer, method, result string) error {
 	switch method {
 	case "roster":
-		return emit("Roster loaded", result)
+		return emit(w, "Roster loaded", result)
 	default:
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	}
 }
 
 // --- Ext tool formatters ---
 
-func formatExt(method, result string) error {
+func formatExt(w io.Writer, method, result string) error {
 	switch method {
 	case "get", "list":
-		return emit("Extensions", result)
+		return emit(w, "Extensions", result)
 	default:
-		return emitSimple(truncate(result, 200))
+		return emitSimple(w, truncate(result, 200))
 	}
 }
 
 // --- Output helpers ---
 
-func emit(summary, ctx string) error {
+func emit(w io.Writer, summary, ctx string) error {
 	r := formatResult{}
 	r.HookSpecificOutput.HookEventName = "PostToolUse"
 	r.HookSpecificOutput.UpdatedMCPToolOutput = summary
 	r.HookSpecificOutput.AdditionalContext = ctx
-	return json.NewEncoder(os.Stdout).Encode(r)
+	return json.NewEncoder(w).Encode(r)
 }
 
-func emitSimple(summary string) error {
+func emitSimple(w io.Writer, summary string) error {
 	r := formatResult{}
 	r.HookSpecificOutput.HookEventName = "PostToolUse"
 	r.HookSpecificOutput.UpdatedMCPToolOutput = summary
-	return json.NewEncoder(os.Stdout).Encode(r)
+	return json.NewEncoder(w).Encode(r)
 }
 
 // --- JSON extraction helpers ---
