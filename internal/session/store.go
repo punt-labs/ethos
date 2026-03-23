@@ -106,8 +106,10 @@ func (s *Store) Leave(sessionID string, agentID string) error {
 		if err != nil {
 			return err
 		}
+		// Idempotent: leaving a session you were never in is a no-op.
+		// SubagentStop fires regardless of whether SubagentStart succeeded.
 		if !roster.RemoveParticipant(agentID) {
-			return fmt.Errorf("participant %q not found in session %q", agentID, sessionID)
+			return nil // Nothing to remove — skip the write.
 		}
 		return s.writeRoster(sessionID, roster)
 	})
@@ -166,7 +168,7 @@ func (s *Store) Purge() ([]string, error) {
 	var purged []string
 	for _, id := range ids {
 		didPurge := false
-		_ = s.withLock(id, func() error {
+		if lockErr := s.withLock(id, func() error {
 			roster, err := s.Load(id)
 			if err != nil {
 				// Corrupt roster — delete under lock.
@@ -181,7 +183,9 @@ func (s *Store) Purge() ([]string, error) {
 				}
 			}
 			return nil
-		})
+		}); lockErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: purge: failed to lock session %s: %v\n", id, lockErr)
+		}
 		if didPurge {
 			os.Remove(s.lockPath(id))
 			purged = append(purged, id)

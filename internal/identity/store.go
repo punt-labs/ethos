@@ -82,12 +82,14 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 		id.Voice = nil
 	}
 	// Assemble extension data from <persona>.ext/ directory.
-	id.Ext = s.loadExtensions(handle)
+	extData, extWarnings := s.loadExtensions(handle)
+	id.Ext = extData
 
 	// Resolve attribute content unless reference-only mode.
 	if !cfg.reference {
 		id.Warnings = s.resolveAttributes(&id)
 	}
+	id.Warnings = append(id.Warnings, extWarnings...)
 
 	return &id, nil
 }

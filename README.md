@@ -169,23 +169,18 @@ Systems design, correctness over speed...
 ## MCP Tools
 
 When running as a Claude Code plugin, ethos registers an MCP server with
-9 tools. The `talent`, `personality`, `writing_style`, `ext`, and `session`
-tools use a `method` parameter for verb dispatch; the others are single-action
-tools.
+6 tools. All tools use a `method` parameter for verb dispatch.
 
 All tools have corresponding slash commands under `/ethos:*`.
 
 | Tool | Methods | Slash command |
 |------|---------|---------------|
-| `whoami` | — | `/ethos:whoami` |
-| `list_identities` | — | `/ethos:list-identities` |
-| `get_identity` | — | `/ethos:get-identity` |
-| `create_identity` | — | `/ethos:create-identity` |
+| `identity` | whoami, list, get, create, iam | `/ethos:identity` |
 | `talent` | create, list, show, delete, add, remove | `/ethos:talent` |
 | `personality` | create, list, show, delete, set | `/ethos:personality` |
 | `writing_style` | create, list, show, delete, set | `/ethos:writing-style` |
 | `ext` | get, set, del, list | `/ethos:ext` |
-| `session` | iam, roster, join, leave | `/ethos:session`, `/ethos:iam` |
+| `session` | roster, join, leave | `/ethos:session` |
 
 ## Identity Schema
 

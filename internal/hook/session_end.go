@@ -13,7 +13,10 @@ import (
 // HandleSessionEnd reads the SessionEnd hook payload from stdin,
 // deletes the session roster, and cleans up the PID-keyed current file.
 func HandleSessionEnd(r io.Reader, ss *session.Store) error {
-	input, _ := ReadInput(r, time.Second)
+	input, err := ReadInput(r, time.Second)
+	if err != nil {
+		return fmt.Errorf("session-end: %w", err)
+	}
 
 	sessionID, _ := input["session_id"].(string)
 	if sessionID == "" {
