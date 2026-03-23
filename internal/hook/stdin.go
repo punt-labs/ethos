@@ -3,15 +3,18 @@ package hook
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 )
 
 // ReadInput reads a JSON object from r with a timeout. Returns an empty
-// map on empty input, malformed JSON, or timeout. Does not block when
-// the pipe remains open without EOF — uses poll-style reads with a
-// deadline to avoid the stdin hang that affects Claude Code hooks.
+// map on empty input or timeout. Returns an error on read failures or
+// malformed JSON (callers should log but continue — hooks must be
+// resilient). Does not block when the pipe remains open without EOF —
+// uses poll-style reads with a deadline.
 func ReadInput(r io.Reader, timeout time.Duration) (map[string]any, error) {
 	// For regular readers (bytes.Reader, strings.Reader), read directly.
 	// For pipes/files, use a deadline if available.
@@ -25,9 +28,9 @@ func ReadInput(r io.Reader, timeout time.Duration) (map[string]any, error) {
 func readDirect(r io.Reader) (map[string]any, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
-		return map[string]any{}, nil
+		return map[string]any{}, fmt.Errorf("reading input: %w", err)
 	}
-	return parseJSON(data), nil
+	return parseJSON(data)
 }
 
 // readFromFile reads from an *os.File using SetReadDeadline to avoid
@@ -52,29 +55,36 @@ func readFromFile(f *os.File, timeout time.Duration) (map[string]any, error) {
 			if interChunk < 20*time.Millisecond {
 				interChunk = 20 * time.Millisecond
 			}
-			_ = f.SetReadDeadline(time.Now().Add(interChunk))
+			if sdErr := f.SetReadDeadline(time.Now().Add(interChunk)); sdErr != nil {
+				break // stop reading rather than risk hanging
+			}
 		}
 		if err != nil {
 			break // EOF, timeout, or error — all fine
 		}
 	}
 
-	return parseJSON(buf), nil
+	return parseJSON(buf)
 }
 
 // parseJSON attempts to parse data as a JSON object. Returns an empty
-// map for empty input, whitespace, arrays, or malformed JSON.
-func parseJSON(data []byte) map[string]any {
+// map for empty input. Returns an error for malformed JSON or non-object
+// types (arrays, scalars).
+func parseJSON(data []byte) (map[string]any, error) {
 	if len(data) == 0 {
-		return map[string]any{}
+		return map[string]any{}, nil
+	}
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return map[string]any{}, nil
 	}
 
 	var result map[string]any
 	if err := json.Unmarshal(data, &result); err != nil {
-		return map[string]any{}
+		return map[string]any{}, fmt.Errorf("invalid JSON input (%d bytes): %w", len(data), err)
 	}
 	if result == nil {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
-	return result
+	return result, nil
 }

@@ -33,32 +33,16 @@ ethos show mal --json                 # JSON output
 
 When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 9 tools using method-dispatch.
 
-**Identity tools:**
+**All tools use a consolidated `method` parameter:**
 
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `whoami` | optional `handle`, `reference` | Show active identity (with resolved content), or set it |
-| `list_identities` | — | List all identities with active status |
-| `get_identity` | `handle`, optional `reference` | Full identity with resolved attribute content |
-| `create_identity` | `name`, `handle`, `kind` + optional fields | Create a new identity |
-
-**Attribute tools:**
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `create_talent` | `slug`, `content` | Create a talent .md file |
-| `get_talent` | `slug` | Read talent content |
-| `list_talents` | — | List all talents |
-| `create_personality` | `slug`, `content` | Create a personality .md file |
-| `get_personality` | `slug` | Read personality content |
-| `list_personalities` | — | List all personalities |
-| `create_writing_style` | `slug`, `content` | Create a writing style .md file |
-| `get_writing_style` | `slug` | Read writing style content |
-| `list_writing_styles` | — | List all writing styles |
-| `set_personality` | `handle`, `slug` | Set personality on an identity |
-| `set_writing_style` | `handle`, `slug` | Set writing style on an identity |
-| `add_talent` | `handle`, `slug` | Add talent to an identity |
-| `remove_talent` | `handle`, `slug` | Remove talent from an identity |
+| Tool | Methods | Key Parameters |
+|------|---------|----------------|
+| `identity` | whoami, list, get, create, iam | `handle`, `persona`, `reference` |
+| `talent` | create, list, show, delete, add, remove | `slug`, `content`, `handle` |
+| `personality` | create, list, show, delete, set | `slug`, `content`, `handle` |
+| `writing_style` | create, list, show, delete, set | `slug`, `content`, `handle` |
+| `session` | roster, join, leave | `session_id`, `agent_id`, `persona` |
+| `ext` | get, set, del, list | `persona`, `namespace`, `key`, `value` |
 
 **Example — read identity from MCP:**
 
@@ -91,21 +75,20 @@ ethos session purge                   # Clean up stale rosters
 
 ### MCP Tools
 
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `session_iam` | `session_id`, `agent_id`, `persona` | Declare persona for a participant |
-| `session_roster` | `session_id` | Return full roster with tree |
-| `session_join` | `session_id`, `agent_id` + optional `persona`, `parent`, `agent_type` | Add participant |
-| `session_leave` | `session_id`, `agent_id` | Remove participant |
+| Tool | Method | Parameters | Description |
+|------|--------|-----------|-------------|
+| `identity` | iam | `persona` | Declare persona in current session |
+| `session` | roster | `session_id` (optional) | Return full roster with tree |
+| `session` | join | `agent_id`, optional `persona`, `parent`, `agent_type` | Add participant |
+| `session` | leave | `agent_id` | Remove participant |
 
 ### Slash Commands
 
 | Command | Description |
 |---------|-------------|
-| `/whoami` | Show or set active identity |
-| `/whoami mal` | Switch to identity "mal" |
-| `/iam archie` | Declare persona in current session |
-| `/session` | Show session participants |
+| `/ethos:identity whoami` | Show active identity |
+| `/ethos:identity iam archie` | Declare persona in current session |
+| `/ethos:session` | Show session participants |
 
 ### Roster Structure
 

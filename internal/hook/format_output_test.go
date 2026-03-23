@@ -223,9 +223,9 @@ func TestFormatOutput_Session_Roster(t *testing.T) {
 	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalContext)
 }
 
-func TestFormatOutput_Session_Iam(t *testing.T) {
+func TestFormatOutput_Identity_Iam(t *testing.T) {
 	result := `"Set persona claude for 12345 in session abc"`
-	payload := makeToolPayload("session", "iam", result)
+	payload := makeToolPayload("identity", "iam", result)
 
 	out := captureOutput(t, func() {
 		_ = HandleFormatOutput(bytes.NewReader(payload))

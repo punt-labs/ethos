@@ -11,6 +11,8 @@ Manage session roster via `mcp__plugin_ethos_self__session`.
 
 - `/ethos:session` — show current session roster (default: roster)
 - `/ethos:session roster` — show current session roster
+- `/ethos:session join <agent_id>` — add a participant (optional: persona, parent, agent_type)
+- `/ethos:session leave <agent_id>` — remove a participant
 
 Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.
 

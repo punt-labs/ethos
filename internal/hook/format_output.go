@@ -22,7 +22,10 @@ type formatResult struct {
 // emits two-channel display output: a compact summary in
 // updatedMCPToolOutput and full data in additionalContext.
 func HandleFormatOutput(r io.Reader) error {
-	input, _ := ReadInput(r, time.Second)
+	input, err := ReadInput(r, time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: format-output: %v\n", err)
+	}
 
 	// Extract tool name — strip the MCP namespace prefix.
 	toolFull, _ := input["tool_name"].(string)

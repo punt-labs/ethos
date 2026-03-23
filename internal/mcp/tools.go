@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -200,6 +201,8 @@ func (h *Handler) sessionParticipantHandles() map[string]bool {
 	}
 	roster, err := h.sessionStore.Load(sessionID)
 	if err != nil {
+		// No session found is normal; corrupt roster is not.
+		fmt.Fprintf(os.Stderr, "ethos: failed to load session %s for active handles: %v\n", sessionID, err)
 		return handles
 	}
 	for _, p := range roster.Participants {
