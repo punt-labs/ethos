@@ -169,9 +169,7 @@ Systems design, correctness over speed...
 ## MCP Tools
 
 When running as a Claude Code plugin, ethos registers an MCP server with
-9 tools. The `talent`, `personality`, `writing_style`, `ext`, and `session`
-tools use a `method` parameter for verb dispatch; the others are single-action
-tools.
+6 tools. All tools use a `method` parameter for verb dispatch.
 
 All tools have corresponding slash commands under `/ethos:*`.
 

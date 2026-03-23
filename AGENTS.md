@@ -31,7 +31,7 @@ ethos show mal --json                 # JSON output
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 9 tools using method-dispatch.
+When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 6 tools using method-dispatch.
 
 **All tools use a consolidated `method` parameter:**
 
