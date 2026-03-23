@@ -108,7 +108,9 @@ func (s *Store) Leave(sessionID string, agentID string) error {
 		}
 		// Idempotent: leaving a session you were never in is a no-op.
 		// SubagentStop fires regardless of whether SubagentStart succeeded.
-		roster.RemoveParticipant(agentID)
+		if !roster.RemoveParticipant(agentID) {
+			return nil // Nothing to remove — skip the write.
+		}
 		return s.writeRoster(sessionID, roster)
 	})
 }

@@ -17,7 +17,7 @@ type formatResult struct {
 	} `json:"hookSpecificOutput"`
 }
 
-// HandleFormatOutput reads a PostToolUse hook payload from stdin and
+// HandleFormatOutput reads a PostToolUse hook payload from r and
 // emits two-channel display output to w: a compact summary in
 // updatedMCPToolOutput and full data in additionalContext.
 func HandleFormatOutput(r io.Reader, w io.Writer) error {

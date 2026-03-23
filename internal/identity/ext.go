@@ -199,7 +199,15 @@ func (s *Store) ExtList(persona string) ([]string, error) {
 // Called by Store.Load to assemble the full identity view.
 func (s *Store) loadExtensions(persona string) (map[string]map[string]string, []string) {
 	namespaces, err := s.ExtList(persona)
-	if err != nil || len(namespaces) == 0 {
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return map[string]map[string]string{}, []string{
+				fmt.Sprintf("extensions %s: %v", persona, err),
+			}
+		}
+		return map[string]map[string]string{}, nil
+	}
+	if len(namespaces) == 0 {
 		return map[string]map[string]string{}, nil
 	}
 	ext := make(map[string]map[string]string, len(namespaces))
