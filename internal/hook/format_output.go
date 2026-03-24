@@ -180,6 +180,8 @@ func FormatTable(headers []string, rows [][]string) string {
 	}
 
 	var buf strings.Builder
+	// Header row with ▶ prefix (matches biff /who style).
+	buf.WriteString("▶  ")
 	lastCol := len(headers) - 1
 	for i, h := range headers {
 		if i > 0 {
@@ -193,7 +195,7 @@ func FormatTable(headers []string, rows [][]string) string {
 	}
 
 	for _, row := range rows {
-		buf.WriteByte('\n')
+		buf.WriteString("\n   ") // 3-space indent to align with header
 		lastCol := len(row) - 1
 		for i, cell := range row {
 			if i > 0 {
