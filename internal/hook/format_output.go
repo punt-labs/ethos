@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 )
@@ -106,6 +107,9 @@ func formatIdentityDetail(w io.Writer, result string) error {
 	if v := jsonString(result, "github"); v != "" {
 		lines = append(lines, "GitHub: "+v)
 	}
+	if v := jsonString(result, "agent"); v != "" {
+		lines = append(lines, "Agent: "+v)
+	}
 	if v := jsonString(result, "personality"); v != "" {
 		lines = append(lines, "Personality: "+v)
 	}
@@ -116,7 +120,8 @@ func formatIdentityDetail(w io.Writer, result string) error {
 		lines = append(lines, "Talents: "+strings.Join(talents, ", "))
 	}
 
-	return emit(w, strings.Join(lines, "\n"), result)
+	summary := strings.Join(lines, "\n")
+	return emit(w, summary, summary)
 }
 
 func formatIdentityList(w io.Writer, result string) error {
@@ -173,7 +178,7 @@ func FormatTable(headers []string, rows [][]string) string {
 	}
 	for _, row := range rows {
 		for i, cell := range row {
-			if len(cell) > widths[i] {
+			if i < len(widths) && len(cell) > widths[i] {
 				widths[i] = len(cell)
 			}
 		}
@@ -196,15 +201,19 @@ func FormatTable(headers []string, rows [][]string) string {
 
 	for _, row := range rows {
 		buf.WriteString("\n   ") // 3-space indent to align with header
-		lastCol := len(row) - 1
-		for i, cell := range row {
+		n := len(row)
+		if n > len(headers) {
+			n = len(headers)
+		}
+		lastCol := n - 1
+		for i := 0; i < n; i++ {
 			if i > 0 {
 				buf.WriteString("  ")
 			}
 			if i == lastCol {
-				buf.WriteString(cell)
+				buf.WriteString(row[i])
 			} else {
-				buf.WriteString(fmt.Sprintf("%-*s", widths[i], cell))
+				buf.WriteString(fmt.Sprintf("%-*s", widths[i], row[i]))
 			}
 		}
 	}
@@ -214,14 +223,39 @@ func FormatTable(headers []string, rows [][]string) string {
 
 // --- Attribute tool formatters ---
 
+// toolNoun returns the human-readable noun for an attribute tool name.
+func toolNoun(tool string, count int) string {
+	var singular, plural string
+	switch tool {
+	case "talent":
+		singular, plural = "talent", "talents"
+	case "personality":
+		singular, plural = "personality", "personalities"
+	case "writing_style":
+		singular, plural = "writing style", "writing styles"
+	default:
+		singular, plural = tool, tool+"s"
+	}
+	if count == 1 {
+		return singular
+	}
+	return plural
+}
+
 func formatAttribute(w io.Writer, tool, method, result string) error {
 	switch method {
 	case "list":
 		slugs := jsonNestedStringArray(result, "attributes", "slug")
-		if len(slugs) == 0 {
-			return emit(w, "(none)", result)
+		n := len(slugs)
+		summary := fmt.Sprintf("%d %s", n, toolNoun(tool, n))
+		if n == 0 {
+			return emit(w, summary, "(none)")
 		}
-		return emit(w, strings.Join(slugs, ", "), result)
+		rows := make([][]string, n)
+		for i, s := range slugs {
+			rows[i] = []string{s}
+		}
+		return emit(w, summary, FormatTable([]string{"SLUG"}, rows))
 	case "show":
 		content := jsonString(result, "content")
 		if content == "" {
@@ -246,21 +280,128 @@ func formatAttribute(w io.Writer, tool, method, result string) error {
 func formatSession(w io.Writer, method, result string) error {
 	switch method {
 	case "roster":
-		return emit(w, "Roster loaded", result)
+		return formatSessionRoster(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
+}
+
+func formatSessionRoster(w io.Writer, result string) error {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(result), &m); err != nil {
+		return emit(w, "Roster loaded", result)
+	}
+
+	sessionID, _ := m["session"].(string)
+	arr, _ := m["participants"].([]any)
+	n := len(arr)
+
+	noun := "participants"
+	if n == 1 {
+		noun = "participant"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+	if sessionID != "" {
+		summary += fmt.Sprintf(" (session %s)", sessionID)
+	}
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	headers := []string{"AGENT_ID", "PERSONA", "PARENT", "TYPE"}
+	rows := make([][]string, n)
+	for i, v := range arr {
+		p, _ := v.(map[string]any)
+		agentID, _ := p["agent_id"].(string)
+		persona, _ := p["persona"].(string)
+		parent, _ := p["parent"].(string)
+		pType, _ := p["agent_type"].(string)
+		if agentID == "" {
+			agentID = "-"
+		}
+		if persona == "" {
+			persona = "-"
+		}
+		if parent == "" {
+			parent = "-"
+		}
+		if pType == "" {
+			pType = "-"
+		}
+		rows[i] = []string{agentID, persona, parent, pType}
+	}
+
+	return emit(w, summary, FormatTable(headers, rows))
 }
 
 // --- Ext tool formatters ---
 
 func formatExt(w io.Writer, method, result string) error {
 	switch method {
-	case "get", "list":
-		return emit(w, "Extensions", result)
+	case "list":
+		return formatExtList(w, result)
+	case "get":
+		return formatExtGet(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
+}
+
+func formatExtList(w io.Writer, result string) error {
+	var namespaces []string
+	if err := json.Unmarshal([]byte(result), &namespaces); err != nil {
+		return emit(w, "Extensions", result)
+	}
+
+	n := len(namespaces)
+	noun := "namespaces"
+	if n == 1 {
+		noun = "namespace"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	rows := make([][]string, n)
+	for i, ns := range namespaces {
+		rows[i] = []string{ns}
+	}
+	return emit(w, summary, FormatTable([]string{"NAMESPACE"}, rows))
+}
+
+func formatExtGet(w io.Writer, result string) error {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(result), &m); err != nil {
+		return emit(w, "Extensions", result)
+	}
+
+	n := len(m)
+	noun := "keys"
+	if n == 1 {
+		noun = "key"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	// Collect keys sorted for deterministic output.
+	keys := make([]string, 0, n)
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	rows := make([][]string, len(keys))
+	for i, k := range keys {
+		val := fmt.Sprintf("%v", m[k])
+		rows[i] = []string{k, val}
+	}
+	return emit(w, summary, FormatTable([]string{"KEY", "VALUE"}, rows))
 }
 
 // --- Output helpers ---

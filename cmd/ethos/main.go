@@ -428,30 +428,58 @@ func runShow(args []string) {
 		printJSON(id)
 		return
 	}
-	showField("Name", id.Name)
-	showField("Handle", id.Handle)
-	showField("Kind", id.Kind)
-	showField("Email", id.Email)
-	showField("GitHub", id.GitHub)
-	showField("Agent", id.Agent)
 
-	// Show attribute slugs and resolved content.
-	if id.WritingStyle != "" {
-		showField("Writing", id.WritingStyle)
-		if id.WritingStyleContent != "" {
-			fmt.Println()
-			fmt.Print(id.WritingStyleContent)
+	// Build summary table of identity fields.
+	type field struct{ label, value string }
+	fields := []field{
+		{"Name", id.Name},
+		{"Handle", id.Handle},
+		{"Kind", id.Kind},
+		{"Email", id.Email},
+		{"GitHub", id.GitHub},
+		{"Agent", id.Agent},
+		{"Personality", id.Personality},
+		{"Writing", id.WritingStyle},
+		{"Talents", joinTalents(id.Talents)},
+	}
+	// Collect extension fields.
+	nsNames := make([]string, 0, len(id.Ext))
+	for ns := range id.Ext {
+		nsNames = append(nsNames, ns)
+	}
+	sort.Strings(nsNames)
+	for _, ns := range nsNames {
+		keys := id.Ext[ns]
+		keyNames := make([]string, 0, len(keys))
+		for k := range keys {
+			keyNames = append(keyNames, k)
+		}
+		sort.Strings(keyNames)
+		for _, k := range keyNames {
+			fields = append(fields, field{"ext:" + ns + "." + k, keys[k]})
 		}
 	}
-	if id.Personality != "" {
-		showField("Personality", id.Personality)
-		if id.PersonalityContent != "" {
-			fmt.Println()
-			fmt.Print(id.PersonalityContent)
+
+	// Filter to non-empty values and build table rows.
+	headers := []string{"FIELD", "VALUE"}
+	var rows [][]string
+	for _, f := range fields {
+		if f.value != "" {
+			rows = append(rows, []string{f.label, f.value})
 		}
+	}
+	fmt.Println(hook.FormatTable(headers, rows))
+
+	// Show resolved attribute content below the table.
+	if id.WritingStyle != "" && id.WritingStyleContent != "" {
+		fmt.Println()
+		fmt.Print(id.WritingStyleContent)
+	}
+	if id.Personality != "" && id.PersonalityContent != "" {
+		fmt.Println()
+		fmt.Print(id.PersonalityContent)
 	}
 	if len(id.Talents) > 0 {
-		showField("Talents", joinTalents(id.Talents))
 		for i, slug := range id.Talents {
 			if i < len(id.TalentContents) && id.TalentContents[i] != "" {
 				fmt.Println()
@@ -460,7 +488,6 @@ func runShow(args []string) {
 			}
 		}
 	}
-	showExtensions(id.Ext)
 }
 
 // joinTalents formats a talents slice for display.
@@ -474,32 +501,6 @@ func joinTalents(talents []string) string {
 	return strings.Join(filtered, ", ")
 }
 
-// showExtensions prints sorted extension key-value pairs.
-func showExtensions(ext map[string]map[string]string) {
-	nsNames := make([]string, 0, len(ext))
-	for ns := range ext {
-		nsNames = append(nsNames, ns)
-	}
-	sort.Strings(nsNames)
-	for _, ns := range nsNames {
-		keys := ext[ns]
-		keyNames := make([]string, 0, len(keys))
-		for k := range keys {
-			keyNames = append(keyNames, k)
-		}
-		sort.Strings(keyNames)
-		for _, k := range keyNames {
-			showField("ext:"+ns+"."+k, keys[k])
-		}
-	}
-}
-
-// showField prints a labeled field if the value is non-empty.
-func showField(label, value string) {
-	if value != "" {
-		fmt.Printf("%-13s %s\n", label+":", value)
-	}
-}
 
 // oneLine collapses a multi-line string to a single line by joining
 // whitespace-separated fields with a single space.

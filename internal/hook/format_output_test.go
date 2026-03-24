@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,10 +44,96 @@ func parseFormatResult(t *testing.T, output string) formatResult {
 	return r
 }
 
+// --- FormatTable direct tests ---
+
+func TestFormatTable(t *testing.T) {
+	t.Run("header has arrow prefix", func(t *testing.T) {
+		got := FormatTable([]string{"A", "B"}, nil)
+		assert.True(t, strings.HasPrefix(got, "▶  "), "header must start with ▶ prefix")
+	})
+
+	t.Run("data rows have 3-space indent", func(t *testing.T) {
+		got := FormatTable([]string{"X"}, [][]string{{"val"}})
+		lines := strings.Split(got, "\n")
+		require.Equal(t, 2, len(lines))
+		assert.True(t, strings.HasPrefix(lines[1], "   "), "data row must have 3-space indent")
+	})
+
+	t.Run("column alignment and no trailing padding on last column", func(t *testing.T) {
+		headers := []string{"NAME", "AGE"}
+		rows := [][]string{
+			{"Alice", "30"},
+			{"Bo", "7"},
+		}
+		got := FormatTable(headers, rows)
+		lines := strings.Split(got, "\n")
+		require.Equal(t, 3, len(lines))
+		// Header: "▶  NAME   AGE" — NAME padded to 5 (max of "Alice"), AGE not padded.
+		assert.Equal(t, "▶  NAME   AGE", lines[0])
+		// Row 1: "   Alice  30" — Alice is 5 chars (matches width), no pad on last col.
+		assert.Equal(t, "   Alice  30", lines[1])
+		// Row 2: "   Bo     7" — Bo padded to 5, last col no pad.
+		assert.Equal(t, "   Bo     7", lines[2])
+	})
+
+	t.Run("zero rows", func(t *testing.T) {
+		got := FormatTable([]string{"COL"}, nil)
+		assert.Equal(t, "▶  COL", got)
+		assert.NotContains(t, got, "\n")
+	})
+
+	t.Run("zero rows empty slice", func(t *testing.T) {
+		got := FormatTable([]string{"COL"}, [][]string{})
+		assert.Equal(t, "▶  COL", got)
+	})
+
+	t.Run("one row", func(t *testing.T) {
+		got := FormatTable([]string{"K", "V"}, [][]string{{"foo", "bar"}})
+		lines := strings.Split(got, "\n")
+		require.Equal(t, 2, len(lines))
+		assert.Equal(t, "▶  K    V", lines[0])
+		assert.Equal(t, "   foo  bar", lines[1])
+	})
+
+	t.Run("multiple rows", func(t *testing.T) {
+		got := FormatTable([]string{"A", "B", "C"}, [][]string{
+			{"1", "22", "3"},
+			{"44", "5", "666"},
+		})
+		lines := strings.Split(got, "\n")
+		require.Equal(t, 3, len(lines))
+		// Widths: A=2(44), B=2(22), C=3(666). Last col not padded.
+		assert.Equal(t, "▶  A   B   C", lines[0])
+		assert.Equal(t, "   1   22  3", lines[1])
+		assert.Equal(t, "   44  5   666", lines[2])
+	})
+
+	t.Run("empty cells", func(t *testing.T) {
+		got := FormatTable([]string{"H1", "H2"}, [][]string{
+			{"", "val"},
+			{"x", ""},
+		})
+		lines := strings.Split(got, "\n")
+		require.Equal(t, 3, len(lines))
+		assert.Equal(t, "▶  H1  H2", lines[0])
+		assert.Equal(t, "       val", lines[1])
+		assert.Equal(t, "   x   ", lines[2])
+	})
+
+	t.Run("row longer than headers is clamped", func(t *testing.T) {
+		// Must not panic — extra cells are skipped.
+		got := FormatTable([]string{"A"}, [][]string{{"x", "extra", "more"}})
+		lines := strings.Split(got, "\n")
+		require.Equal(t, 2, len(lines))
+		assert.Equal(t, "▶  A", lines[0])
+		assert.Equal(t, "   x", lines[1])
+	})
+}
+
 // --- Identity tool tests ---
 
 func TestFormatOutput_Identity_Whoami(t *testing.T) {
-	result := `{"name":"Alice","handle":"alice","kind":"human","email":"alice@example.com","github":"alice-gh","personality":"friendly","writing_style":"concise","talents":["go","testing"]}`
+	result := `{"name":"Alice","handle":"alice","kind":"human","email":"alice@example.com","github":"alice-gh","agent":".claude/agents/alice.md","personality":"friendly","writing_style":"concise","talents":["go","testing"]}`
 	payload := makeToolPayload("identity", "whoami", result)
 
 	out := runFormat(t, payload)
@@ -56,7 +143,16 @@ func TestFormatOutput_Identity_Whoami(t *testing.T) {
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Alice (alice) — human")
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Email: alice@example.com")
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Talents: go, testing")
-	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalContext)
+	// Context should contain the same formatted field list, not raw JSON.
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Alice (alice) — human")
+	assert.Contains(t, ctx, "Email: alice@example.com")
+	assert.Contains(t, ctx, "GitHub: alice-gh")
+	assert.Contains(t, ctx, "Agent: .claude/agents/alice.md")
+	assert.Contains(t, ctx, "Personality: friendly")
+	assert.Contains(t, ctx, "Writing: concise")
+	assert.Contains(t, ctx, "Talents: go, testing")
+	assert.NotContains(t, ctx, `"name"`) // Must not be raw JSON
 }
 
 func TestFormatOutput_Identity_List(t *testing.T) {
@@ -114,7 +210,11 @@ func TestFormatOutput_Identity_Get(t *testing.T) {
 
 	r := parseFormatResult(t, out)
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "Alice (alice)")
-	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalContext)
+	// Context should be the formatted field list, not raw JSON.
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Alice (alice) — human")
+	assert.Contains(t, ctx, "Email: alice@example.com")
+	assert.NotContains(t, ctx, `"name"`)
 }
 
 func TestFormatOutput_Identity_Create(t *testing.T) {
@@ -136,7 +236,68 @@ func TestFormatOutput_Talent_List(t *testing.T) {
 	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
-	assert.Equal(t, "go, testing", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "2 talents", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "SLUG")
+	assert.Contains(t, ctx, "go")
+	assert.Contains(t, ctx, "testing")
+}
+
+func TestFormatOutput_Talent_List_Rich(t *testing.T) {
+	result := `{"attributes":[{"slug":"go"},{"slug":"testing"},{"slug":"design"}]}`
+	payload := makeToolPayload("talent", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "3 talents", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "▶")
+	assert.Contains(t, ctx, "SLUG")
+	assert.Contains(t, ctx, "go")
+	assert.Contains(t, ctx, "testing")
+	assert.Contains(t, ctx, "design")
+}
+
+func TestFormatOutput_Talent_List_Empty_Rich(t *testing.T) {
+	result := `{"attributes":[]}`
+	payload := makeToolPayload("talent", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 talents", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
+}
+
+func TestFormatOutput_Talent_List_Singular(t *testing.T) {
+	result := `{"attributes":[{"slug":"go"}]}`
+	payload := makeToolPayload("talent", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "1 talent", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_Personality_List_Noun(t *testing.T) {
+	result := `{"attributes":[{"slug":"friendly"},{"slug":"formal"}]}`
+	payload := makeToolPayload("personality", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "2 personalities", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_WritingStyle_List_Noun(t *testing.T) {
+	result := `{"attributes":[{"slug":"concise"}]}`
+	payload := makeToolPayload("writing_style", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "1 writing style", r.HookSpecificOutput.UpdatedMCPToolOutput)
 }
 
 func TestFormatOutput_Talent_Show(t *testing.T) {
@@ -220,8 +381,42 @@ func TestFormatOutput_Session_Roster(t *testing.T) {
 	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
-	assert.Equal(t, "Roster loaded", r.HookSpecificOutput.UpdatedMCPToolOutput)
-	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalContext)
+	assert.Equal(t, "1 participant (session abc)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "AGENT_ID")
+	assert.Contains(t, ctx, "user1")
+}
+
+func TestFormatOutput_Session_Roster_Rich(t *testing.T) {
+	result := `{"session":"abc123","participants":[{"agent_id":"jfreeman","persona":"jfreeman","agent_type":"human"},{"agent_id":"37569","persona":"claude","parent":"jfreeman","agent_type":"cli"}]}`
+	payload := makeToolPayload("session", "roster", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "2 participants (session abc123)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "▶")
+	assert.Contains(t, ctx, "AGENT_ID")
+	assert.Contains(t, ctx, "PERSONA")
+	assert.Contains(t, ctx, "PARENT")
+	assert.Contains(t, ctx, "TYPE")
+	assert.Contains(t, ctx, "jfreeman")
+	assert.Contains(t, ctx, "37569")
+	assert.Contains(t, ctx, "claude")
+	assert.Contains(t, ctx, "human")
+	assert.Contains(t, ctx, "cli")
+}
+
+func TestFormatOutput_Session_Roster_Empty(t *testing.T) {
+	result := `{"session":"abc","participants":[]}`
+	payload := makeToolPayload("session", "roster", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 participants (session abc)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
 }
 
 func TestFormatOutput_Identity_Iam(t *testing.T) {
@@ -243,8 +438,77 @@ func TestFormatOutput_Ext_Get(t *testing.T) {
 	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
-	assert.Equal(t, "Extensions", r.HookSpecificOutput.UpdatedMCPToolOutput)
-	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalContext)
+	assert.Equal(t, "1 key", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "KEY")
+	assert.Contains(t, ctx, "VALUE")
+	assert.Contains(t, ctx, "tty")
+	assert.Contains(t, ctx, "s001")
+}
+
+func TestFormatOutput_Ext_Get_Rich(t *testing.T) {
+	result := `{"provider":"elevenlabs","voice_id":"helmut"}`
+	payload := makeToolPayload("ext", "get", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "2 keys", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "▶")
+	assert.Contains(t, ctx, "KEY")
+	assert.Contains(t, ctx, "VALUE")
+	assert.Contains(t, ctx, "provider")
+	assert.Contains(t, ctx, "elevenlabs")
+	assert.Contains(t, ctx, "voice_id")
+	assert.Contains(t, ctx, "helmut")
+}
+
+func TestFormatOutput_Ext_Get_Empty(t *testing.T) {
+	result := `{}`
+	payload := makeToolPayload("ext", "get", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 keys", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
+}
+
+func TestFormatOutput_Ext_List_Rich(t *testing.T) {
+	result := `["biff","vox"]`
+	payload := makeToolPayload("ext", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "2 namespaces", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "▶")
+	assert.Contains(t, ctx, "NAMESPACE")
+	assert.Contains(t, ctx, "biff")
+	assert.Contains(t, ctx, "vox")
+}
+
+func TestFormatOutput_Ext_List_Empty(t *testing.T) {
+	result := `[]`
+	payload := makeToolPayload("ext", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 namespaces", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
+}
+
+func TestFormatOutput_Ext_List_Singular(t *testing.T) {
+	result := `["biff"]`
+	payload := makeToolPayload("ext", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "1 namespace", r.HookSpecificOutput.UpdatedMCPToolOutput)
 }
 
 func TestFormatOutput_Ext_Set(t *testing.T) {
