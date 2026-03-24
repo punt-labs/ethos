@@ -423,7 +423,6 @@ func runShow(args []string) {
 	showField("Kind", id.Kind)
 	showField("Email", id.Email)
 	showField("GitHub", id.GitHub)
-	showField("Voice", voiceValue(id.Voice))
 	showField("Agent", id.Agent)
 
 	// Show attribute slugs and resolved content.
@@ -452,17 +451,6 @@ func runShow(args []string) {
 		}
 	}
 	showExtensions(id.Ext)
-}
-
-// voiceValue formats a voice binding for display.
-func voiceValue(v *identity.Voice) string {
-	if v == nil || v.Provider == "" {
-		return ""
-	}
-	if v.VoiceID != "" {
-		return v.Provider + "/" + v.VoiceID
-	}
-	return v.Provider
 }
 
 // joinTalents formats a talents slice for display.

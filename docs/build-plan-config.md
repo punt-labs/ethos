@@ -94,6 +94,7 @@ layer has it owns it entirely.
 The `voice` field moves from identity YAML to `ext/vox`:
 
 **Before:**
+
 ```yaml
 # ~/.punt-labs/ethos/identities/claude.yaml
 name: Claude Agento
@@ -103,6 +104,7 @@ voice:
 ```
 
 **After:**
+
 ```yaml
 # .punt-labs/ethos/identities/claude.yaml (repo-local, git-tracked)
 name: Claude Agento

@@ -199,39 +199,6 @@ func TestHandleIdentity_Create_ValidationError(t *testing.T) {
 	assert.True(t, result.IsError)
 }
 
-func TestHandleIdentity_Create_VoiceIDWithoutProvider(t *testing.T) {
-	h := testHandler(t)
-	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
-		"method":   "create",
-		"name":     "Alice",
-		"handle":   "alice",
-		"kind":     "human",
-		"voice_id": "abc123",
-	}))
-	require.NoError(t, err)
-	assert.True(t, result.IsError)
-	text := resultText(t, result)
-	assert.Contains(t, text, "voice_id requires voice_provider")
-}
-
-func TestHandleIdentity_Create_WithVoice(t *testing.T) {
-	h := testHandler(t)
-	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
-		"method":         "create",
-		"name":           "Alice",
-		"handle":         "alice",
-		"kind":           "human",
-		"voice_provider": "elevenlabs",
-		"voice_id":       "v1",
-	}))
-	require.NoError(t, err)
-	assert.False(t, result.IsError)
-
-	loaded, err := h.store.Load("alice")
-	require.NoError(t, err)
-	require.NotNil(t, loaded.Voice)
-	assert.Equal(t, "elevenlabs", loaded.Voice.Provider)
-}
 
 func TestHandleIdentity_Create_WithSkills(t *testing.T) {
 	h := testHandler(t)

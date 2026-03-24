@@ -52,6 +52,25 @@ func createFromFile(path string) {
 		os.Exit(1)
 	}
 
+	// Extract voice data from raw YAML (Identity struct has no Voice field).
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err == nil {
+		if v, ok := raw["voice"]; ok {
+			if vm, ok := v.(map[string]interface{}); ok {
+				if provider, _ := vm["provider"].(string); provider != "" {
+					if err := s.ExtSet(id.Handle, "vox", "provider", provider); err != nil {
+						fmt.Fprintf(os.Stderr, "ethos: warning: failed to set voice provider: %v\n", err)
+					}
+				}
+				if voiceID, _ := vm["voice_id"].(string); voiceID != "" {
+					if err := s.ExtSet(id.Handle, "vox", "voice_id", voiceID); err != nil {
+						fmt.Fprintf(os.Stderr, "ethos: warning: failed to set voice id: %v\n", err)
+					}
+				}
+			}
+		}
+	}
+
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
 }
 
@@ -70,15 +89,11 @@ func createInteractive() {
 	}
 	agent := prompt(reader, "Agent definition path (optional, e.g. .claude/agents/name.md)", "")
 
+
 	// Attribute selection with create-new option.
 	personality := pickAttribute(reader, attribute.Personalities)
 	writingStyle := pickAttribute(reader, attribute.WritingStyles)
 	talents := pickMultiAttribute(reader, attribute.Talents)
-
-	var voice *identity.Voice
-	if voiceProvider != "" {
-		voice = &identity.Voice{Provider: voiceProvider, VoiceID: voiceID}
-	}
 
 	id := &identity.Identity{
 		Name:         name,
@@ -86,11 +101,10 @@ func createInteractive() {
 		Kind:         kind,
 		Email:        email,
 		GitHub:       github,
-		Voice:        voice,
 		Agent:        agent,
 		WritingStyle: writingStyle,
 		Personality:  personality,
-		Talents:       talents,
+		Talents:      talents,
 	}
 
 	if err := id.Validate(); err != nil {
@@ -101,6 +115,18 @@ func createInteractive() {
 	if err := s.Save(id); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Write voice to ext/vox if provided.
+	if voiceProvider != "" {
+		if err := s.ExtSet(handle, "vox", "provider", voiceProvider); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: warning: failed to set voice provider: %v\n", err)
+		}
+		if voiceID != "" {
+			if err := s.ExtSet(handle, "vox", "voice_id", voiceID); err != nil {
+				fmt.Fprintf(os.Stderr, "ethos: warning: failed to set voice id: %v\n", err)
+			}
+		}
 	}
 
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)

@@ -77,9 +77,9 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	if err := yaml.Unmarshal(data, &id); err != nil {
 		return nil, fmt.Errorf("invalid identity file %s: %w", path, err)
 	}
-	// Normalize empty Voice to nil for consistent omitempty behavior.
-	if id.Voice != nil && id.Voice.Provider == "" && id.Voice.VoiceID == "" {
-		id.Voice = nil
+	// Migrate legacy voice field to ext/vox.
+	if err := s.migrateVoice(handle, path, data); err != nil {
+		return nil, fmt.Errorf("migrating voice for %q: %w", handle, err)
 	}
 	// Assemble extension data from <persona>.ext/ directory.
 	extData, extWarnings := s.loadExtensions(handle)
@@ -92,6 +92,60 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	id.Warnings = append(id.Warnings, extWarnings...)
 
 	return &id, nil
+}
+
+// migrateVoice checks raw YAML for a legacy voice field and moves it to
+// ext/vox. Re-saves the identity without the voice key.
+func (s *Store) migrateVoice(handle, path string, data []byte) error {
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil // already validated above; skip migration
+	}
+	v, ok := raw["voice"]
+	if !ok {
+		return nil
+	}
+	vm, ok := v.(map[string]interface{})
+	if !ok {
+		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
+		return fmt.Errorf("voice field has unexpected type %T, stripped", v)
+	}
+	if len(vm) == 0 {
+		// Empty voice map — just strip the key and rewrite.
+		delete(raw, "voice")
+		return s.rewriteRaw(path, raw)
+	}
+	provider, _ := vm["provider"].(string)
+	voiceID, _ := vm["voice_id"].(string)
+	if provider == "" && voiceID == "" {
+		delete(raw, "voice")
+		return s.rewriteRaw(path, raw)
+	}
+
+	// Write to ext/vox.
+	if provider != "" {
+		if err := s.ExtSet(handle, "vox", "provider", provider); err != nil {
+			return fmt.Errorf("setting ext/vox/provider: %w", err)
+		}
+	}
+	if voiceID != "" {
+		if err := s.ExtSet(handle, "vox", "voice_id", voiceID); err != nil {
+			return fmt.Errorf("setting ext/vox/voice_id: %w", err)
+		}
+	}
+
+	// Strip voice from the identity YAML.
+	delete(raw, "voice")
+	return s.rewriteRaw(path, raw)
+}
+
+// rewriteRaw marshals a raw map back to the identity YAML file.
+func (s *Store) rewriteRaw(path string, raw map[string]interface{}) error {
+	out, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling identity: %w", err)
+	}
+	return os.WriteFile(path, out, 0o600)
 }
 
 // resolveAttributes reads .md files for personality, writing_style, and

@@ -84,8 +84,6 @@ func (h *Handler) identityTool() mcplib.Tool {
 		mcplib.WithString("kind", mcplib.Description("Either 'human' or 'agent'. Required for create.")),
 		mcplib.WithString("email", mcplib.Description("Email address (beadle binding). For create.")),
 		mcplib.WithString("github", mcplib.Description("GitHub username (biff binding). For create.")),
-		mcplib.WithString("voice_provider", mcplib.Description("Voice provider name (vox binding). For create.")),
-		mcplib.WithString("voice_id", mcplib.Description("Voice ID for the provider. For create.")),
 		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file. For create.")),
 		mcplib.WithString("writing_style", mcplib.Description("Writing style slug. For create.")),
 		mcplib.WithString("personality", mcplib.Description("Personality slug. For create.")),
@@ -243,22 +241,12 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 		return mcplib.NewToolResultError("kind is required for create"), nil
 	}
 
-	var voice *identity.Voice
-	provider := stringArg(req, "voice_provider", "")
-	voiceID := stringArg(req, "voice_id", "")
-	if provider != "" {
-		voice = &identity.Voice{Provider: provider, VoiceID: voiceID}
-	} else if voiceID != "" {
-		return mcplib.NewToolResultError("voice_id requires voice_provider"), nil
-	}
-
 	id := &identity.Identity{
 		Name:         name,
 		Handle:       handle,
 		Kind:         kind,
 		Email:        stringArg(req, "email", ""),
 		GitHub:       stringArg(req, "github", ""),
-		Voice:        voice,
 		Agent:        stringArg(req, "agent", ""),
 		WritingStyle: stringArg(req, "writing_style", ""),
 		Personality:  stringArg(req, "personality", ""),
