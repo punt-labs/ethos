@@ -381,6 +381,59 @@ func (s *Store) Update(handle string, mutate func(*Identity) error) error {
 	return nil
 }
 
+// loadNoMigrate reads an identity YAML without running voice migration.
+// Used by LayeredStore.loadRaw to avoid writing ext to the wrong store.
+func (s *Store) loadNoMigrate(handle string) (*Identity, error) {
+	path := s.Path(handle)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("identity %q not found: %w", handle, err)
+	}
+	var id Identity
+	if err := yaml.Unmarshal(data, &id); err != nil {
+		return nil, fmt.Errorf("invalid identity file %s: %w", path, err)
+	}
+	return &id, nil
+}
+
+// updateNoValidate is like Update but skips ValidateRefs. Used by
+// LayeredStore which runs its own cross-layer validation.
+func (s *Store) updateNoValidate(handle string, mutate func(*Identity) error) error {
+	path := s.Path(handle)
+	lockPath := path + ".lock"
+
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating lock file: %w", err)
+	}
+	defer lockFile.Close()
+	if err := flock(lockFile); err != nil {
+		return fmt.Errorf("acquiring lock: %w", err)
+	}
+	defer funlock(lockFile)
+
+	id, err := s.Load(handle, Reference(true))
+	if err != nil {
+		return err
+	}
+	if err := mutate(id); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(id)
+	if err != nil {
+		return fmt.Errorf("marshaling identity: %w", err)
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("writing identity: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("renaming identity: %w", err)
+	}
+	return nil
+}
+
 // IdentitiesDir returns the path to the identities subdirectory.
 func (s *Store) IdentitiesDir() string {
 	return s.identitiesDir()
