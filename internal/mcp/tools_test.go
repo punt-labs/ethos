@@ -170,8 +170,8 @@ func TestHandleIdentity_List_PersonalityWritingStyle(t *testing.T) {
 	// Build a lookup by handle.
 	byHandle := make(map[string]map[string]interface{})
 	for _, e := range entries {
-		h, _ := e["handle"].(string)
-		byHandle[h] = e
+		hdl, _ := e["handle"].(string)
+		byHandle[hdl] = e
 	}
 
 	// Carol has personality and writing_style.

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -372,46 +373,7 @@ func runList() {
 		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, marker}
 	}
 
-	// Compute column widths.
-	widths := make([]int, len(headers))
-	for i, h := range headers {
-		widths[i] = len(h)
-	}
-	for _, row := range rows {
-		for i, cell := range row {
-			if len(cell) > widths[i] {
-				widths[i] = len(cell)
-			}
-		}
-	}
-
-	// Print header.
-	for i, h := range headers {
-		if i > 0 {
-			fmt.Print("  ")
-		}
-		if i == len(headers)-1 {
-			fmt.Print(h)
-		} else {
-			fmt.Printf("%-*s", widths[i], h)
-		}
-	}
-	fmt.Println()
-
-	// Print rows.
-	for _, row := range rows {
-		for i, cell := range row {
-			if i > 0 {
-				fmt.Print("  ")
-			}
-			if i == len(row)-1 {
-				fmt.Print(cell)
-			} else {
-				fmt.Printf("%-*s", widths[i], cell)
-			}
-		}
-		fmt.Println()
-	}
+	fmt.Println(hook.FormatTable(headers, rows))
 }
 
 // sessionParticipantHandles returns the set of persona handles that are

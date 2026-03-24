@@ -84,6 +84,17 @@ func TestFormatOutput_Identity_List(t *testing.T) {
 	assert.Contains(t, ctx, "-")
 }
 
+func TestFormatOutput_Identity_List_Singular(t *testing.T) {
+	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly","active":true}]`
+	payload := makeToolPayload("identity", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 identity,")
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 active")
+}
+
 func TestFormatOutput_Identity_List_Empty(t *testing.T) {
 	result := `[]`
 	payload := makeToolPayload("identity", "list", result)

@@ -136,7 +136,11 @@ func formatIdentityList(w io.Writer, result string) error {
 			activeCount++
 		}
 	}
-	summary := fmt.Sprintf("%d identities, %d active", len(entries), activeCount)
+	noun := "identities"
+	if len(entries) == 1 {
+		noun = "identity"
+	}
+	summary := fmt.Sprintf("%d %s, %d active", len(entries), noun, activeCount)
 
 	// Build columnar table.
 	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "ACTIVE"}
@@ -157,7 +161,12 @@ func formatIdentityList(w io.Writer, result string) error {
 		rows[i] = []string{handle, name, kind, personality, marker}
 	}
 
-	// Compute column widths.
+	return emit(w, summary, FormatTable(headers, rows))
+}
+
+// FormatTable renders a columnar table with headers and rows.
+// The last column is not right-padded. Columns are separated by two spaces.
+func FormatTable(headers []string, rows [][]string) string {
 	widths := make([]int, len(headers))
 	for i, h := range headers {
 		widths[i] = len(h)
@@ -170,7 +179,6 @@ func formatIdentityList(w io.Writer, result string) error {
 		}
 	}
 
-	// Format header.
 	var buf strings.Builder
 	lastCol := len(headers) - 1
 	for i, h := range headers {
@@ -184,7 +192,6 @@ func formatIdentityList(w io.Writer, result string) error {
 		}
 	}
 
-	// Format rows.
 	for _, row := range rows {
 		buf.WriteByte('\n')
 		lastCol := len(row) - 1
@@ -200,7 +207,7 @@ func formatIdentityList(w io.Writer, result string) error {
 		}
 	}
 
-	return emit(w, summary, buf.String())
+	return buf.String()
 }
 
 // --- Attribute tool formatters ---
