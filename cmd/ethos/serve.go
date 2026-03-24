@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/mcp"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -16,7 +17,11 @@ func runServeImpl() {
 		server.WithToolCapabilities(true),
 	)
 
-	mcp.NewHandler(store(), sessionStore()).RegisterTools(s)
+	is := identityStore()
+	talents := layeredAttributeStore(is, attribute.Talents)
+	personalities := layeredAttributeStore(is, attribute.Personalities)
+	writingStyles := layeredAttributeStore(is, attribute.WritingStyles)
+	mcp.NewHandler(is, talents, personalities, writingStyles, sessionStore()).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: MCP server error: %v\n", err)

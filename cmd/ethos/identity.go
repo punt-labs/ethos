@@ -5,19 +5,32 @@ import (
 	"os"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 )
 
-// store returns the default identity store.
+// globalStore returns the user-global identity store (~/.punt-labs/ethos).
 // Exits the process on failure — acceptable at startup but not inside
-// request handlers. MCP handlers receive the Store via Handler injection.
-func store() *identity.Store {
+// request handlers.
+func globalStore() *identity.Store {
 	s, err := identity.DefaultStore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 	return s
+}
+
+// identityStore returns a layered identity store that checks repo-local
+// first, then user-global. Falls back to global-only when not inside a
+// git repo with a .punt-labs/ethos/ directory.
+func identityStore() identity.IdentityStore {
+	g := globalStore()
+	repoRoot := resolve.FindRepoEthosRoot()
+	if repoRoot == "" {
+		return g
+	}
+	return identity.NewLayeredStore(identity.NewStore(repoRoot), g)
 }
 
 // sessionStore returns the default session store rooted at the same

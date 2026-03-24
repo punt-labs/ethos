@@ -36,7 +36,7 @@ func runExtGet(args []string) {
 		fmt.Fprintln(os.Stderr, "Usage: ethos ext get <persona> <namespace> [key]")
 		os.Exit(1)
 	}
-	s := store()
+	s := globalStore()
 	persona := args[0]
 	namespace := args[1]
 	key := ""
@@ -64,7 +64,7 @@ func runExtSet(args []string) {
 		fmt.Fprintln(os.Stderr, "Usage: ethos ext set <persona> <namespace> <key> <value>")
 		os.Exit(1)
 	}
-	s := store()
+	s := globalStore()
 	value := strings.Join(args[3:], " ")
 	if err := s.ExtSet(args[0], args[1], args[2], value); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
@@ -77,7 +77,7 @@ func runExtDel(args []string) {
 		fmt.Fprintln(os.Stderr, "Usage: ethos ext del <persona> <namespace> [key]")
 		os.Exit(1)
 	}
-	s := store()
+	s := globalStore()
 	key := ""
 	if len(args) > 2 {
 		key = args[2]
@@ -93,7 +93,7 @@ func runExtList(args []string) {
 		fmt.Fprintln(os.Stderr, "Usage: ethos ext list <persona>")
 		os.Exit(1)
 	}
-	s := store()
+	s := globalStore()
 	if !s.Exists(args[0]) {
 		fmt.Fprintf(os.Stderr, "ethos: persona %q does not exist\n", args[0])
 		os.Exit(1)

@@ -8,9 +8,12 @@ import (
 )
 
 // Store provides CRUD for one category of attribute .md files.
+// When fallback is set (via NewLayeredStore), read operations check
+// the fallback store first, then this store. Writes go to this store.
 type Store struct {
-	root string // ethos root, e.g. ~/.punt-labs/ethos
-	kind Kind
+	root     string // ethos root, e.g. ~/.punt-labs/ethos
+	kind     Kind
+	fallback *Store // optional repo-layer store checked first for reads
 }
 
 // NewStore creates a Store for the given kind under root.
@@ -56,7 +59,11 @@ func (s *Store) Path(slug string) (string, error) {
 }
 
 // Exists checks whether an attribute file exists for the given slug.
+// When a fallback store is set, checks both layers.
 func (s *Store) Exists(slug string) bool {
+	if s.fallback != nil && s.fallback.Exists(slug) {
+		return true
+	}
 	p, err := s.Path(slug)
 	if err != nil {
 		return false
@@ -108,8 +115,21 @@ func (s *Store) Save(a *Attribute) error {
 	return nil
 }
 
-// Load reads an attribute .md file by slug.
+// Load reads an attribute .md file by slug. When a fallback store is
+// set, checks the fallback first before checking this store. Falls
+// through to this store only when the fallback returns not-found;
+// other errors (permission, I/O) are propagated.
 func (s *Store) Load(slug string) (*Attribute, error) {
+	if s.fallback != nil {
+		a, err := s.fallback.Load(slug)
+		if err == nil {
+			return a, nil
+		}
+		// Only fall through on not-found. Propagate real I/O errors.
+		if !s.fallback.isNotFound(slug, err) {
+			return nil, err
+		}
+	}
 	p, err := s.Path(slug)
 	if err != nil {
 		return nil, err
@@ -124,9 +144,40 @@ func (s *Store) Load(slug string) (*Attribute, error) {
 	return &Attribute{Slug: slug, Content: string(data)}, nil
 }
 
-// List returns all attributes in this store's directory.
-// Files that cannot be read are reported as warnings.
+// List returns all attributes in this store's directory. When a fallback
+// store is set, merges results from both layers (fallback wins on slug
+// collision). Files that cannot be read are reported as warnings.
 func (s *Store) List() (*ListResult, error) {
+	result, err := s.listLocal()
+	if err != nil {
+		return nil, err
+	}
+	if s.fallback == nil {
+		return result, nil
+	}
+	fbResult, err := s.fallback.listLocal()
+	if err != nil {
+		return nil, err
+	}
+	// Merge: fallback (repo) entries first, then global entries not in repo.
+	seen := make(map[string]bool, len(fbResult.Attributes))
+	merged := &ListResult{}
+	for _, a := range fbResult.Attributes {
+		seen[a.Slug] = true
+		merged.Attributes = append(merged.Attributes, a)
+	}
+	for _, a := range result.Attributes {
+		if !seen[a.Slug] {
+			merged.Attributes = append(merged.Attributes, a)
+		}
+	}
+	merged.Warnings = append(merged.Warnings, fbResult.Warnings...)
+	merged.Warnings = append(merged.Warnings, result.Warnings...)
+	return merged, nil
+}
+
+// listLocal lists attributes from this store only, without checking fallback.
+func (s *Store) listLocal() (*ListResult, error) {
 	dir := s.Dir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -145,14 +196,31 @@ func (s *Store) List() (*ListResult, error) {
 			continue
 		}
 		slug := strings.TrimSuffix(entry.Name(), ".md")
-		a, err := s.Load(slug)
-		if err != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), err))
+		// Use direct load (not through fallback) to get only local entries.
+		p, pErr := s.Path(slug)
+		if pErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), pErr))
 			continue
 		}
-		result.Attributes = append(result.Attributes, a)
+		data, rErr := os.ReadFile(p)
+		if rErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), rErr))
+			continue
+		}
+		result.Attributes = append(result.Attributes, &Attribute{Slug: slug, Content: string(data)})
 	}
 	return result, nil
+}
+
+// isNotFound returns true if the error indicates the attribute was not found
+// (as opposed to a permission or I/O error).
+func (s *Store) isNotFound(slug string, err error) bool {
+	p, pathErr := s.Path(slug)
+	if pathErr != nil {
+		return false
+	}
+	_, statErr := os.Stat(p)
+	return os.IsNotExist(statErr)
 }
 
 // Delete removes an attribute .md file.

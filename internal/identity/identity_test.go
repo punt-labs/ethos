@@ -98,26 +98,3 @@ func TestValidate_HandleFormat(t *testing.T) {
 	}
 }
 
-func TestValidate_VoiceRequiresProvider(t *testing.T) {
-	id := &Identity{
-		Name:   "Test",
-		Handle: "test",
-		Kind:   "human",
-		Voice:  &Voice{VoiceID: "abc123"},
-	}
-	err := id.Validate()
-	require.Error(t, err)
-	var ve *ValidationError
-	require.ErrorAs(t, err, &ve)
-	assert.Equal(t, "voice", ve.Field)
-}
-
-func TestValidate_VoiceWithProvider(t *testing.T) {
-	id := &Identity{
-		Name:   "Test",
-		Handle: "test",
-		Kind:   "human",
-		Voice:  &Voice{Provider: "elevenlabs", VoiceID: "abc123"},
-	}
-	assert.NoError(t, id.Validate())
-}

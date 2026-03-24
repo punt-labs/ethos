@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking**: Removed `voice` field from identity YAML — voice config now lives in `ext/vox` (DES-019). Auto-migration on Load handles existing files.
+- Identity resolution is now layered: repo-local (`.punt-labs/ethos/`) → user-global (`~/.punt-labs/ethos/`) (DES-018)
+- All CLI commands and MCP tools use layered resolution by default
+
+### Added
+
+- `LayeredStore` — two-layer identity store with repo-local priority
+- `IdentityStore` interface — enables layered and concrete stores interchangeably
+- `FindRepoEthosRoot()` — discovers `.punt-labs/ethos/` in the current git repo
+- Repo-local identity, talent, personality, and writing style files for the ethos team (claude, jfreeman, bwk)
+- `bwk` agent identity — Go specialist sub-agent based on Kernighan's principles
+
 ## [1.2.0] - 2026-03-23
 
 ## [1.1.0] - 2026-03-22

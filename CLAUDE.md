@@ -68,14 +68,18 @@ Expands to `make lint docs test`:
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No |
-| Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
-| Talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
-| Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
-| Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
-| Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
+| Repo identities | `.punt-labs/ethos/identities/<handle>.yaml` | Yes |
+| Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
+| Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
+| Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+| Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
+| Extensions (global) | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
+| Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
+| Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
+| Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
+| Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 
 ### Identity Schema
 
@@ -85,9 +89,6 @@ handle: mal
 kind: human                           # or "agent"
 email: mal@serenity.ship               # beadle binding
 github: mal                            # biff binding
-voice:                                 # vox binding
-  provider: elevenlabs
-  voice_id: "..."
 agent: .claude/agents/mal.md           # claude code agent binding
 writing_style: concise-quantified      # slug → writing-styles/concise-quantified.md
 personality: principal-engineer        # slug → personalities/principal-engineer.md
