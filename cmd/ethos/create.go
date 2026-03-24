@@ -46,7 +46,7 @@ func createFromFile(path string) {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	s := store()
+	s := identityStore()
 	if err := s.Save(&id); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
@@ -111,7 +111,7 @@ func createInteractive() {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	s := store()
+	s := identityStore()
 	if err := s.Save(id); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)

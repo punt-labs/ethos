@@ -179,7 +179,7 @@ func runVersion() {
 }
 
 func runDoctor() {
-	s := store()
+	s := globalStore()
 	ss := sessionStore()
 
 	type checkResult struct {
@@ -294,16 +294,16 @@ func checkDuplicateFields(s *identity.Store, _ *session.Store) (string, bool) {
 }
 
 func runWhoami(_ []string) {
-	s := store()
+	is := identityStore()
 	ss := sessionStore()
 
-	handle, err := resolve.Resolve(s, ss)
+	handle, err := resolve.Resolve(is, ss)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 
-	id, err := s.Load(handle)
+	id, err := is.Load(handle)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: identity %q not found: %v\n", handle, err)
 		os.Exit(1)
@@ -333,8 +333,8 @@ func runCreate(args []string) {
 }
 
 func runList() {
-	s := store()
-	result, err := s.List()
+	is := identityStore()
+	result, err := is.List()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
@@ -403,7 +403,7 @@ func runShow(args []string) {
 		}
 	}
 
-	id, err := store().Load(handle, opts...)
+	id, err := identityStore().Load(handle, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)

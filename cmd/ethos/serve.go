@@ -16,7 +16,7 @@ func runServeImpl() {
 		server.WithToolCapabilities(true),
 	)
 
-	mcp.NewHandler(store(), sessionStore()).RegisterTools(s)
+	mcp.NewHandler(identityStore(), sessionStore()).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: MCP server error: %v\n", err)

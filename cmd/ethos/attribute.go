@@ -14,8 +14,7 @@ import (
 // attributeStore returns an attribute.Store for the given kind using the
 // same root as the identity store.
 func attributeStore(kind attribute.Kind) *attribute.Store {
-	s := store()
-	return attribute.NewStore(s.Root(), kind)
+	return attribute.NewStore(identityStore().Root(), kind)
 }
 
 // runAttributeSubcmd dispatches create/list/show/add/remove/set for an attribute kind.
@@ -164,8 +163,8 @@ func runAttributeAdd(kind attribute.Kind, args []string) {
 		os.Exit(1)
 	}
 
-	s := store()
-	if err := s.Update(handle, func(id *identity.Identity) error {
+	is := identityStore()
+	if err := is.Update(handle, func(id *identity.Identity) error {
 		for _, existing := range id.Talents {
 			if existing == slug {
 				return fmt.Errorf("talent %q already on %q", slug, handle)
@@ -193,8 +192,8 @@ func runAttributeRemove(kind attribute.Kind, args []string) {
 	}
 	handle, slug := args[0], args[1]
 
-	s := store()
-	if err := s.Update(handle, func(id *identity.Identity) error {
+	is := identityStore()
+	if err := is.Update(handle, func(id *identity.Identity) error {
 		found := false
 		filtered := make([]string, 0, len(id.Talents))
 		for _, existing := range id.Talents {
@@ -237,8 +236,8 @@ func runAttributeSet(kind attribute.Kind, args []string) {
 		os.Exit(1)
 	}
 
-	s := store()
-	if err := s.Update(handle, func(id *identity.Identity) error {
+	is := identityStore()
+	if err := is.Update(handle, func(id *identity.Identity) error {
 		switch kind {
 		case attribute.Personalities:
 			id.Personality = slug
