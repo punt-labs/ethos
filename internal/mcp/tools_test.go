@@ -44,6 +44,13 @@ func TestNewHandler_NilPanics(t *testing.T) {
 	})
 }
 
+func TestNewHandler_TypedNilPanics(t *testing.T) {
+	assert.Panics(t, func() {
+		var s *identity.Store
+		NewHandler(s)
+	})
+}
+
 func TestRegisterTools(t *testing.T) {
 	h := testHandler(t)
 	s := server.NewMCPServer("test", "0.0.0", server.WithToolCapabilities(true))

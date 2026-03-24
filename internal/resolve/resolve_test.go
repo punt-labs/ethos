@@ -13,7 +13,7 @@ import (
 )
 
 // testStoreWithIdentity creates a store with a single identity.
-func testStoreWithIdentity(t *testing.T, id *identity.Identity) *identity.Store {
+func testStoreWithIdentity(t *testing.T, id *identity.Identity) identity.IdentityStore {
 	t.Helper()
 	s := identity.NewStore(t.TempDir())
 	require.NoError(t, s.Save(id))

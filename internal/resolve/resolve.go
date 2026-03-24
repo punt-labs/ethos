@@ -31,7 +31,7 @@ type RepoConfig struct {
 //  4. $USER — match identity handle field
 //
 // Returns an error when no step matches.
-func Resolve(store *identity.Store, ss *session.Store) (string, error) {
+func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 	// Step 1: check for iam declaration via process tree.
 	if ss != nil {
 		sp := resolveFromSession(ss)

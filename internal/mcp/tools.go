@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -19,9 +20,9 @@ import (
 
 // Handler groups MCP tool handlers with shared stores.
 type Handler struct {
-	store        *identity.Store
-	sessionStore *session.Store
-	talents      *attribute.Store
+	store         identity.IdentityStore
+	sessionStore  *session.Store
+	talents       *attribute.Store
 	personalities *attribute.Store
 	writingStyles *attribute.Store
 }
@@ -30,8 +31,8 @@ type Handler struct {
 // Panics if identity store is nil. Session store may be nil (session
 // tools will return errors if called without it). Attribute stores are
 // derived from the identity store's root.
-func NewHandler(s *identity.Store, ss ...*session.Store) *Handler {
-	if s == nil {
+func NewHandler(s identity.IdentityStore, ss ...*session.Store) *Handler {
+	if s == nil || reflect.ValueOf(s).IsNil() {
 		panic("mcp.NewHandler: store must not be nil")
 	}
 	root := s.Root()
