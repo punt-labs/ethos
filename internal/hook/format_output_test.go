@@ -60,14 +60,50 @@ func TestFormatOutput_Identity_Whoami(t *testing.T) {
 }
 
 func TestFormatOutput_Identity_List(t *testing.T) {
-	result := `[{"handle":"alice","name":"Alice","kind":"human","active":true},{"handle":"bob","name":"Bob","kind":"agent","active":false}]`
+	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly","active":true},{"handle":"bob","name":"Bob","kind":"agent","personality":"","active":false}]`
 	payload := makeToolPayload("identity", "list", result)
 
 	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
-	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "* alice (Alice)")
-	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "bob (Bob)")
+	// Panel: count summary.
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "2 identities")
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 active")
+	// Context: columnar table with headers.
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "HANDLE")
+	assert.Contains(t, ctx, "NAME")
+	assert.Contains(t, ctx, "KIND")
+	assert.Contains(t, ctx, "PERSONALITY")
+	assert.Contains(t, ctx, "ACTIVE")
+	// Data rows with alignment.
+	assert.Contains(t, ctx, "alice")
+	assert.Contains(t, ctx, "bob")
+	// Active markers.
+	assert.Contains(t, ctx, "*")
+	assert.Contains(t, ctx, "-")
+}
+
+func TestFormatOutput_Identity_List_Singular(t *testing.T) {
+	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly","active":true}]`
+	payload := makeToolPayload("identity", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 identity,")
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 active")
+}
+
+func TestFormatOutput_Identity_List_Empty(t *testing.T) {
+	result := `[]`
+	payload := makeToolPayload("identity", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 identities", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
 }
 
 func TestFormatOutput_Identity_Get(t *testing.T) {
