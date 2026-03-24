@@ -179,7 +179,7 @@ func runVersion() {
 }
 
 func runDoctor() {
-	s := globalStore()
+	is := identityStore()
 	ss := sessionStore()
 
 	type checkResult struct {
@@ -190,7 +190,7 @@ func runDoctor() {
 
 	checks := []struct {
 		name string
-		fn   func(*identity.Store, *session.Store) (string, bool)
+		fn   func(identity.IdentityStore, *session.Store) (string, bool)
 	}{
 		{"Identity directory", checkIdentityDir},
 		{"Human identity", checkHumanIdentity},
@@ -201,7 +201,7 @@ func runDoctor() {
 	allPassed := true
 	var results []checkResult
 	for _, c := range checks {
-		detail, ok := c.fn(s, ss)
+		detail, ok := c.fn(is, ss)
 		status := "PASS"
 		if !ok {
 			status = "FAIL"
@@ -223,7 +223,7 @@ func runDoctor() {
 	}
 }
 
-func checkIdentityDir(s *identity.Store, _ *session.Store) (string, bool) {
+func checkIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	dir := s.IdentitiesDir()
 	if _, err := os.Stat(dir); err != nil {
 		if os.IsNotExist(err) {
@@ -234,7 +234,7 @@ func checkIdentityDir(s *identity.Store, _ *session.Store) (string, bool) {
 	return dir, true
 }
 
-func checkHumanIdentity(s *identity.Store, ss *session.Store) (string, bool) {
+func checkHumanIdentity(s identity.IdentityStore, ss *session.Store) (string, bool) {
 	handle, err := resolve.Resolve(s, ss)
 	if err != nil {
 		return fmt.Sprintf("no match — %v", err), false
@@ -246,7 +246,7 @@ func checkHumanIdentity(s *identity.Store, ss *session.Store) (string, bool) {
 	return fmt.Sprintf("%s (%s)", id.Name, id.Handle), true
 }
 
-func checkDefaultAgent(s *identity.Store, _ *session.Store) (string, bool) {
+func checkDefaultAgent(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	repoRoot := resolve.FindRepoRoot()
 	if repoRoot == "" {
 		return "not in a git repo", true
@@ -258,7 +258,7 @@ func checkDefaultAgent(s *identity.Store, _ *session.Store) (string, bool) {
 	return handle, true
 }
 
-func checkDuplicateFields(s *identity.Store, _ *session.Store) (string, bool) {
+func checkDuplicateFields(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	result, err := s.List()
 	if err != nil {
 		return fmt.Sprintf("error: %v", err), false

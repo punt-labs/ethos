@@ -450,7 +450,7 @@ func TestLayered_UpdateRejectsMissingRef(t *testing.T) {
 	assert.Contains(t, err.Error(), "nonexistent")
 }
 
-func TestLayered_FindByFallsThroughOnRepoError(t *testing.T) {
+func TestLayered_FindByPropagatesRepoError(t *testing.T) {
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
 
@@ -468,9 +468,8 @@ func TestLayered_FindByFallsThroughOnRepoError(t *testing.T) {
 	require.NoError(t, os.Chmod(idDir, 0o000))
 	t.Cleanup(func() { os.Chmod(idDir, 0o700) })
 
-	// Should fall through to global despite repo error.
-	id, err := ls.FindBy("email", "zoe@serenity.ship")
-	require.NoError(t, err)
-	require.NotNil(t, id)
-	assert.Equal(t, "Zoe", id.Name)
+	// Repo I/O errors are propagated, not silently swallowed.
+	_, err := ls.FindBy("email", "zoe@serenity.ship")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "permission denied")
 }

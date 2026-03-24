@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -29,18 +28,18 @@ type Handler struct {
 
 // NewHandler creates a Handler with the given stores.
 // Panics if identity store is nil. Session store may be nil (session
-// tools will return errors if called without it). Attribute stores are
-// derived from the identity store's root.
-func NewHandler(s identity.IdentityStore, ss ...*session.Store) *Handler {
-	if s == nil || reflect.ValueOf(s).IsNil() {
+// tools will return errors if called without it). Attribute stores
+// must be provided by the caller to ensure both repo and global roots
+// are searched when a layered identity store is in use.
+func NewHandler(s identity.IdentityStore, talents, personalities, writingStyles *attribute.Store, ss ...*session.Store) *Handler {
+	if s == nil {
 		panic("mcp.NewHandler: store must not be nil")
 	}
-	root := s.Root()
 	h := &Handler{
 		store:         s,
-		talents:       attribute.NewStore(root, attribute.Talents),
-		personalities: attribute.NewStore(root, attribute.Personalities),
-		writingStyles: attribute.NewStore(root, attribute.WritingStyles),
+		talents:       talents,
+		personalities: personalities,
+		writingStyles: writingStyles,
 	}
 	if len(ss) > 0 {
 		h.sessionStore = ss[0]

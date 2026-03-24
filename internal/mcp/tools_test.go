@@ -19,7 +19,12 @@ import (
 func testHandler(t *testing.T) *Handler {
 	t.Helper()
 	s := identity.NewStore(t.TempDir())
-	return NewHandler(s)
+	root := s.Root()
+	return NewHandler(s,
+		attribute.NewStore(root, attribute.Talents),
+		attribute.NewStore(root, attribute.Personalities),
+		attribute.NewStore(root, attribute.WritingStyles),
+	)
 }
 
 func callTool(args map[string]interface{}) mcplib.CallToolRequest {
@@ -40,14 +45,7 @@ func resultText(t *testing.T, result *mcplib.CallToolResult) string {
 
 func TestNewHandler_NilPanics(t *testing.T) {
 	assert.Panics(t, func() {
-		NewHandler(nil)
-	})
-}
-
-func TestNewHandler_TypedNilPanics(t *testing.T) {
-	assert.Panics(t, func() {
-		var s *identity.Store
-		NewHandler(s)
+		NewHandler(nil, nil, nil, nil)
 	})
 }
 
@@ -463,7 +461,12 @@ func testHandlerWithSession(t *testing.T) *Handler {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	ss := session.NewStore(dir)
-	return NewHandler(s, ss)
+	return NewHandler(s,
+		attribute.NewStore(dir, attribute.Talents),
+		attribute.NewStore(dir, attribute.Personalities),
+		attribute.NewStore(dir, attribute.WritingStyles),
+		ss,
+	)
 }
 
 func TestHandleSession_RosterNotFound(t *testing.T) {

@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -35,9 +36,9 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 		o(&cfg)
 	}
 
-	id, source := ls.loadRaw(handle, opts...)
-	if id == nil {
-		return nil, fmt.Errorf("identity %q not found in repo or global store", handle)
+	id, source, err := ls.loadRaw(handle)
+	if err != nil {
+		return nil, fmt.Errorf("identity %q: %w", handle, err)
 	}
 
 	// Extensions always come from global.
@@ -54,57 +55,70 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 }
 
 // loadRaw loads the identity YAML without attribute resolution or ext.
-// Returns the identity and which store it came from ("repo" or "global").
-// Uses loadNoMigrate to avoid voice migration writing ext to the repo
-// store — extensions always belong in global.
-func (ls *LayeredStore) loadRaw(handle string, opts ...LoadOption) (*Identity, string) {
+// Returns the identity, which store it came from ("repo" or "global"),
+// and any error. Parse errors from the repo layer are surfaced (not
+// silently fallen through to global). File-not-found falls through.
+func (ls *LayeredStore) loadRaw(handle string) (*Identity, string, error) {
 	if ls.repo != nil {
 		id, err := ls.repo.loadNoMigrate(handle)
 		if err == nil {
-			ls.relocateRepoVoice(handle, id)
-			return id, "repo"
+			if err := ls.relocateRepoVoice(handle); err != nil {
+				return nil, "", fmt.Errorf("relocating voice for %q: %w", handle, err)
+			}
+			return id, "repo", nil
+		}
+		// Only fall through to global on file-not-found.
+		// Surface parse errors and other I/O failures.
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, "", err
 		}
 	}
 	id, err := ls.global.Load(handle, Reference(true))
 	if err == nil {
-		return id, "global"
+		return id, "global", nil
 	}
-	return nil, ""
+	return nil, "", err
 }
 
 // relocateRepoVoice migrates a legacy voice field from a repo identity
 // into the global ext store and strips the field from the YAML. This
 // ensures extensions always live in global, never in repo.
-func (ls *LayeredStore) relocateRepoVoice(handle string, id *Identity) {
+// Returns an error if ext writes or YAML rewrite fails.
+func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 	path := ls.repo.Path(handle)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return fmt.Errorf("reading repo identity %q: %w", handle, err)
 	}
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return
+		return fmt.Errorf("parsing repo identity %q: %w", handle, err)
 	}
 	v, ok := raw["voice"]
 	if !ok {
-		return
+		return nil
 	}
 	vm, ok := v.(map[string]interface{})
 	if !ok || len(vm) == 0 {
 		delete(raw, "voice")
-		_ = ls.repo.rewriteRaw(path, raw)
-		return
+		return ls.repo.rewriteRaw(path, raw)
 	}
 	provider, _ := vm["provider"].(string)
 	voiceID, _ := vm["voice_id"].(string)
+	// Write ext data before stripping the voice key. If ext writes fail,
+	// the voice key remains in the YAML so no data is lost.
 	if provider != "" {
-		_ = ls.global.ExtSet(handle, "vox", "provider", provider)
+		if err := ls.global.ExtSet(handle, "vox", "provider", provider); err != nil {
+			return fmt.Errorf("setting ext/vox/provider: %w", err)
+		}
 	}
 	if voiceID != "" {
-		_ = ls.global.ExtSet(handle, "vox", "voice_id", voiceID)
+		if err := ls.global.ExtSet(handle, "vox", "voice_id", voiceID); err != nil {
+			return fmt.Errorf("setting ext/vox/voice_id: %w", err)
+		}
 	}
 	delete(raw, "voice")
-	_ = ls.repo.rewriteRaw(path, raw)
+	return ls.repo.rewriteRaw(path, raw)
 }
 
 // resolveAttributesLayered resolves attribute content, trying the source
@@ -245,16 +259,17 @@ func (ls *LayeredStore) List() (*ListResult, error) {
 	return result, nil
 }
 
-// FindBy searches repo first, then global. If repo returns an error
-// but no identity (e.g., I/O failure reading the directory), falls
-// through to global rather than aborting.
+// FindBy searches repo first, then global. Propagates repo I/O errors.
+// Falls through to global only when repo returns no match (nil, nil).
 func (ls *LayeredStore) FindBy(field, value string) (*Identity, error) {
 	if ls.repo != nil {
 		id, err := ls.repo.FindBy(field, value)
-		if id != nil {
-			return id, err
+		if err != nil {
+			return nil, fmt.Errorf("repo FindBy: %w", err)
 		}
-		// repo had nothing or errored — fall through to global.
+		if id != nil {
+			return id, nil
+		}
 	}
 	return ls.global.FindBy(field, value)
 }
@@ -343,6 +358,20 @@ func (ls *LayeredStore) Root() string {
 		return ls.repo.Root()
 	}
 	return ls.global.Root()
+}
+
+// GlobalRoot returns the global store's root directory.
+func (ls *LayeredStore) GlobalRoot() string {
+	return ls.global.Root()
+}
+
+// RepoRoot returns the repo store's root directory, or empty string if
+// there is no repo layer.
+func (ls *LayeredStore) RepoRoot() string {
+	if ls.repo != nil {
+		return ls.repo.Root()
+	}
+	return ""
 }
 
 // IdentitiesDir returns the identities directory of the primary store.
