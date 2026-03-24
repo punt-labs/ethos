@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -355,15 +356,24 @@ func runList() {
 		return
 	}
 
-	// Mark session participants with *.
+	// Build columnar table: HANDLE, NAME, KIND, PERSONALITY, ACTIVE.
 	activeHandles := sessionParticipantHandles()
-	for _, id := range result.Identities {
-		marker := "  "
-		if activeHandles[id.Handle] {
-			marker = "* "
+
+	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "ACTIVE"}
+	rows := make([][]string, len(result.Identities))
+	for i, id := range result.Identities {
+		personality := id.Personality
+		if personality == "" {
+			personality = "-"
 		}
-		fmt.Printf("%s%-16s %s\n", marker, id.Handle, id.Name)
+		marker := "-"
+		if activeHandles[id.Handle] {
+			marker = "*"
+		}
+		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, marker}
 	}
+
+	fmt.Println(hook.FormatTable(headers, rows))
 }
 
 // sessionParticipantHandles returns the set of persona handles that are

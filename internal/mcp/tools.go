@@ -172,10 +172,12 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 	}
 
 	type entry struct {
-		Handle string `json:"handle"`
-		Name   string `json:"name"`
-		Kind   string `json:"kind"`
-		Active bool   `json:"active"`
+		Handle       string `json:"handle"`
+		Name         string `json:"name"`
+		Kind         string `json:"kind"`
+		Personality  string `json:"personality,omitempty"`
+		WritingStyle string `json:"writing_style,omitempty"`
+		Active       bool   `json:"active"`
 	}
 
 	// Mark session participants as active.
@@ -183,10 +185,12 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 	entries := make([]entry, 0, len(result.Identities))
 	for _, id := range result.Identities {
 		entries = append(entries, entry{
-			Handle: id.Handle,
-			Name:   id.Name,
-			Kind:   id.Kind,
-			Active: activeHandles[id.Handle],
+			Handle:       id.Handle,
+			Name:         id.Name,
+			Kind:         id.Kind,
+			Personality:  id.Personality,
+			WritingStyle: id.WritingStyle,
+			Active:       activeHandles[id.Handle],
 		})
 	}
 
