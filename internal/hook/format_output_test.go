@@ -133,7 +133,7 @@ func TestFormatTable(t *testing.T) {
 // --- Identity tool tests ---
 
 func TestFormatOutput_Identity_Whoami(t *testing.T) {
-	result := `{"name":"Alice","handle":"alice","kind":"human","email":"alice@example.com","github":"alice-gh","personality":"friendly","writing_style":"concise","talents":["go","testing"]}`
+	result := `{"name":"Alice","handle":"alice","kind":"human","email":"alice@example.com","github":"alice-gh","agent":".claude/agents/alice.md","personality":"friendly","writing_style":"concise","talents":["go","testing"]}`
 	payload := makeToolPayload("identity", "whoami", result)
 
 	out := runFormat(t, payload)
@@ -148,6 +148,7 @@ func TestFormatOutput_Identity_Whoami(t *testing.T) {
 	assert.Contains(t, ctx, "Alice (alice) — human")
 	assert.Contains(t, ctx, "Email: alice@example.com")
 	assert.Contains(t, ctx, "GitHub: alice-gh")
+	assert.Contains(t, ctx, "Agent: .claude/agents/alice.md")
 	assert.Contains(t, ctx, "Personality: friendly")
 	assert.Contains(t, ctx, "Writing: concise")
 	assert.Contains(t, ctx, "Talents: go, testing")
@@ -387,7 +388,7 @@ func TestFormatOutput_Session_Roster(t *testing.T) {
 }
 
 func TestFormatOutput_Session_Roster_Rich(t *testing.T) {
-	result := `{"session":"abc123","participants":[{"agent_id":"jfreeman","persona":"jfreeman"},{"agent_id":"37569","persona":"claude","parent":"jfreeman"}]}`
+	result := `{"session":"abc123","participants":[{"agent_id":"jfreeman","persona":"jfreeman","agent_type":"human"},{"agent_id":"37569","persona":"claude","parent":"jfreeman","agent_type":"cli"}]}`
 	payload := makeToolPayload("session", "roster", result)
 
 	out := runFormat(t, payload)
@@ -403,6 +404,8 @@ func TestFormatOutput_Session_Roster_Rich(t *testing.T) {
 	assert.Contains(t, ctx, "jfreeman")
 	assert.Contains(t, ctx, "37569")
 	assert.Contains(t, ctx, "claude")
+	assert.Contains(t, ctx, "human")
+	assert.Contains(t, ctx, "cli")
 }
 
 func TestFormatOutput_Session_Roster_Empty(t *testing.T) {

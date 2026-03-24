@@ -107,6 +107,9 @@ func formatIdentityDetail(w io.Writer, result string) error {
 	if v := jsonString(result, "github"); v != "" {
 		lines = append(lines, "GitHub: "+v)
 	}
+	if v := jsonString(result, "agent"); v != "" {
+		lines = append(lines, "Agent: "+v)
+	}
 	if v := jsonString(result, "personality"); v != "" {
 		lines = append(lines, "Personality: "+v)
 	}
@@ -313,7 +316,7 @@ func formatSessionRoster(w io.Writer, result string) error {
 		agentID, _ := p["agent_id"].(string)
 		persona, _ := p["persona"].(string)
 		parent, _ := p["parent"].(string)
-		pType, _ := p["type"].(string)
+		pType, _ := p["agent_type"].(string)
 		if agentID == "" {
 			agentID = "-"
 		}
