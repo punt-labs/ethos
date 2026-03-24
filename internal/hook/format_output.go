@@ -125,21 +125,82 @@ func formatIdentityList(w io.Writer, result string) error {
 		return emitSimple(w, truncate(result, 200))
 	}
 
-	var names []string
+	if len(entries) == 0 {
+		return emit(w, "0 identities", "(none)")
+	}
+
+	// Count active entries.
+	activeCount := 0
 	for _, e := range entries {
+		if active, _ := e["active"].(bool); active {
+			activeCount++
+		}
+	}
+	summary := fmt.Sprintf("%d identities, %d active", len(entries), activeCount)
+
+	// Build columnar table.
+	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "ACTIVE"}
+	rows := make([][]string, len(entries))
+	for i, e := range entries {
 		handle, _ := e["handle"].(string)
 		name, _ := e["name"].(string)
+		kind, _ := e["kind"].(string)
+		personality, _ := e["personality"].(string)
 		active, _ := e["active"].(bool)
-		prefix := ""
+		marker := "-"
 		if active {
-			prefix = "* "
+			marker = "*"
 		}
-		names = append(names, fmt.Sprintf("%s%s (%s)", prefix, handle, name))
+		if personality == "" {
+			personality = "-"
+		}
+		rows[i] = []string{handle, name, kind, personality, marker}
 	}
-	if len(names) == 0 {
-		return emit(w, "(none)", result)
+
+	// Compute column widths.
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
 	}
-	return emit(w, strings.Join(names, ", "), result)
+	for _, row := range rows {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	// Format header.
+	var buf strings.Builder
+	lastCol := len(headers) - 1
+	for i, h := range headers {
+		if i > 0 {
+			buf.WriteString("  ")
+		}
+		if i == lastCol {
+			buf.WriteString(h)
+		} else {
+			buf.WriteString(fmt.Sprintf("%-*s", widths[i], h))
+		}
+	}
+
+	// Format rows.
+	for _, row := range rows {
+		buf.WriteByte('\n')
+		lastCol := len(row) - 1
+		for i, cell := range row {
+			if i > 0 {
+				buf.WriteString("  ")
+			}
+			if i == lastCol {
+				buf.WriteString(cell)
+			} else {
+				buf.WriteString(fmt.Sprintf("%-*s", widths[i], cell))
+			}
+		}
+	}
+
+	return emit(w, summary, buf.String())
 }
 
 // --- Attribute tool formatters ---

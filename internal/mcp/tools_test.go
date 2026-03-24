@@ -135,6 +135,58 @@ func TestHandleIdentity_List_NoSession(t *testing.T) {
 	}
 }
 
+func TestHandleIdentity_List_PersonalityWritingStyle(t *testing.T) {
+	h := testHandler(t)
+
+	// Create the referenced attributes so Reference(true) validation passes.
+	require.NoError(t, h.personalities.Save(&attribute.Attribute{
+		Slug: "principal-engineer", Content: "test personality",
+	}))
+	require.NoError(t, h.writingStyles.Save(&attribute.Attribute{
+		Slug: "concise-quantified", Content: "test writing style",
+	}))
+
+	require.NoError(t, h.store.Save(&identity.Identity{
+		Name:         "Carol",
+		Handle:       "carol",
+		Kind:         "human",
+		Personality:  "principal-engineer",
+		WritingStyle: "concise-quantified",
+	}))
+	require.NoError(t, h.store.Save(&identity.Identity{
+		Name: "Dave", Handle: "dave", Kind: "agent",
+	}))
+
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "list",
+	}))
+	require.NoError(t, err)
+
+	text := resultText(t, result)
+	var entries []map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(text), &entries))
+	require.Len(t, entries, 2)
+
+	// Build a lookup by handle.
+	byHandle := make(map[string]map[string]interface{})
+	for _, e := range entries {
+		h, _ := e["handle"].(string)
+		byHandle[h] = e
+	}
+
+	// Carol has personality and writing_style.
+	carol := byHandle["carol"]
+	assert.Equal(t, "principal-engineer", carol["personality"])
+	assert.Equal(t, "concise-quantified", carol["writing_style"])
+
+	// Dave has neither.
+	dave := byHandle["dave"]
+	_, hasPers := dave["personality"]
+	_, hasWS := dave["writing_style"]
+	assert.False(t, hasPers, "dave should not have personality")
+	assert.False(t, hasWS, "dave should not have writing_style")
+}
+
 func TestHandleIdentity_Get_Found(t *testing.T) {
 	h := testHandler(t)
 	require.NoError(t, h.store.Save(&identity.Identity{

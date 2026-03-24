@@ -355,14 +355,62 @@ func runList() {
 		return
 	}
 
-	// Mark session participants with *.
+	// Build columnar table: HANDLE, NAME, KIND, PERSONALITY, ACTIVE.
 	activeHandles := sessionParticipantHandles()
-	for _, id := range result.Identities {
-		marker := "  "
-		if activeHandles[id.Handle] {
-			marker = "* "
+
+	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "ACTIVE"}
+	rows := make([][]string, len(result.Identities))
+	for i, id := range result.Identities {
+		personality := id.Personality
+		if personality == "" {
+			personality = "-"
 		}
-		fmt.Printf("%s%-16s %s\n", marker, id.Handle, id.Name)
+		marker := "-"
+		if activeHandles[id.Handle] {
+			marker = "*"
+		}
+		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, marker}
+	}
+
+	// Compute column widths.
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	// Print header.
+	for i, h := range headers {
+		if i > 0 {
+			fmt.Print("  ")
+		}
+		if i == len(headers)-1 {
+			fmt.Print(h)
+		} else {
+			fmt.Printf("%-*s", widths[i], h)
+		}
+	}
+	fmt.Println()
+
+	// Print rows.
+	for _, row := range rows {
+		for i, cell := range row {
+			if i > 0 {
+				fmt.Print("  ")
+			}
+			if i == len(row)-1 {
+				fmt.Print(cell)
+			} else {
+				fmt.Printf("%-*s", widths[i], cell)
+			}
+		}
+		fmt.Println()
 	}
 }
 
