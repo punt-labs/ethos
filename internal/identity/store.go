@@ -108,7 +108,8 @@ func (s *Store) migrateVoice(handle, path string, data []byte) error {
 	vm, ok := v.(map[string]interface{})
 	if !ok {
 		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
-		return fmt.Errorf("voice field has unexpected type %T, stripped", v)
+		// Leave the YAML untouched; manual fix required.
+		return fmt.Errorf("voice field has unexpected type %T; manual migration required", v)
 	}
 	if len(vm) == 0 {
 		// Empty voice map — just strip the key and rewrite.
@@ -412,7 +413,11 @@ func (s *Store) updateNoValidate(handle string, mutate func(*Identity) error) er
 	}
 	defer funlock(lockFile)
 
-	id, err := s.Load(handle, Reference(true))
+	// Use loadNoMigrate to avoid triggering voice migration as a side
+	// effect. LayeredStore.loadRaw handles migration through its own
+	// relocateRepoVoice path which writes ext to the correct (global)
+	// store.
+	id, err := s.loadNoMigrate(handle)
 	if err != nil {
 		return err
 	}

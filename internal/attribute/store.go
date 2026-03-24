@@ -116,12 +116,18 @@ func (s *Store) Save(a *Attribute) error {
 }
 
 // Load reads an attribute .md file by slug. When a fallback store is
-// set, checks the fallback first before checking this store.
+// set, checks the fallback first before checking this store. Falls
+// through to this store only when the fallback returns not-found;
+// other errors (permission, I/O) are propagated.
 func (s *Store) Load(slug string) (*Attribute, error) {
 	if s.fallback != nil {
 		a, err := s.fallback.Load(slug)
 		if err == nil {
 			return a, nil
+		}
+		// Only fall through on not-found. Propagate real I/O errors.
+		if !s.fallback.isNotFound(slug, err) {
+			return nil, err
 		}
 	}
 	p, err := s.Path(slug)
@@ -204,6 +210,17 @@ func (s *Store) listLocal() (*ListResult, error) {
 		result.Attributes = append(result.Attributes, &Attribute{Slug: slug, Content: string(data)})
 	}
 	return result, nil
+}
+
+// isNotFound returns true if the error indicates the attribute was not found
+// (as opposed to a permission or I/O error).
+func (s *Store) isNotFound(slug string, err error) bool {
+	p, pathErr := s.Path(slug)
+	if pathErr != nil {
+		return false
+	}
+	_, statErr := os.Stat(p)
+	return os.IsNotExist(statErr)
 }
 
 // Delete removes an attribute .md file.

@@ -35,6 +35,15 @@ func NewHandler(s identity.IdentityStore, talents, personalities, writingStyles 
 	if s == nil {
 		panic("mcp.NewHandler: store must not be nil")
 	}
+	if talents == nil {
+		panic("mcp.NewHandler: talents store must not be nil")
+	}
+	if personalities == nil {
+		panic("mcp.NewHandler: personalities store must not be nil")
+	}
+	if writingStyles == nil {
+		panic("mcp.NewHandler: writingStyles store must not be nil")
+	}
 	h := &Handler{
 		store:         s,
 		talents:       talents,

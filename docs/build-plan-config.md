@@ -164,8 +164,9 @@ include ext data, so Vox gets the voice binding through the same channel.
 
 Remove the `Voice` field from the `Identity` struct. Add a migration path:
 on Load, if `voice` field exists in YAML, auto-migrate to `ext/vox` and
-strip from identity. Update MCP `identity create` to accept `voice_provider`
-and `voice_id` as ext writes instead of core fields.
+strip from identity. Voice configuration is now stored exclusively under
+`ext/vox` and must be managed by clients or follow-on tooling rather than
+as core identity fields or MCP `identity create` arguments.
 
 **Breaking change**: `voice` field removed from identity YAML schema.
 Consumers must read from `ext/vox`. Only consumer is Vox — update its

@@ -99,7 +99,12 @@ func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 		return nil
 	}
 	vm, ok := v.(map[string]interface{})
-	if !ok || len(vm) == 0 {
+	if !ok {
+		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
+		// Leave the YAML untouched and surface the error.
+		return fmt.Errorf("voice field has unexpected type %T; manual migration required", v)
+	}
+	if len(vm) == 0 {
 		delete(raw, "voice")
 		return ls.repo.rewriteRaw(path, raw)
 	}
@@ -400,9 +405,14 @@ func (ls *LayeredStore) ExtGet(persona, namespace, key string) (map[string]strin
 	return ls.global.ExtGet(persona, namespace, key)
 }
 
-// ExtSet delegates to the global store.
+// ExtSet writes to the global store after checking persona existence
+// across both layers. Extensions always live in global, but the persona
+// may exist only in repo.
 func (ls *LayeredStore) ExtSet(persona, namespace, key, value string) error {
-	return ls.global.ExtSet(persona, namespace, key, value)
+	if !ls.Exists(persona) {
+		return fmt.Errorf("persona %q does not exist", persona)
+	}
+	return ls.global.extSetDirect(persona, namespace, key, value)
 }
 
 // ExtDel delegates to the global store.
