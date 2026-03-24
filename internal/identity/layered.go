@@ -220,7 +220,8 @@ func (ls *LayeredStore) Save(id *Identity) error {
 	if _, err = f.Write(data); err != nil {
 		return err
 	}
-	return os.MkdirAll(s.ExtDir(id.Handle), 0o700)
+	// Extensions always live in global, even when the identity is in repo.
+	return os.MkdirAll(ls.global.ExtDir(id.Handle), 0o700)
 }
 
 // List returns identities from both stores, deduplicated by handle.
@@ -231,7 +232,7 @@ func (ls *LayeredStore) List() (*ListResult, error) {
 	var repoResult *ListResult
 	if ls.repo != nil {
 		var err error
-		repoResult, err = ls.repo.List()
+		repoResult, err = ls.repo.listNoMigrate()
 		if err != nil {
 			return nil, fmt.Errorf("listing repo identities: %w", err)
 		}

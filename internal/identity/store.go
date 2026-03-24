@@ -243,6 +243,17 @@ type ListResult struct {
 // attribute content resolution). Files that cannot be loaded are
 // reported as warnings.
 func (s *Store) List() (*ListResult, error) {
+	return s.list(false)
+}
+
+// listNoMigrate lists identities without running voice migration.
+// Used by LayeredStore.List to avoid writing ext to the wrong store.
+func (s *Store) listNoMigrate() (*ListResult, error) {
+	return s.list(true)
+}
+
+// list is the shared implementation for List and listNoMigrate.
+func (s *Store) list(skipMigrate bool) (*ListResult, error) {
 	dir := s.identitiesDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -258,9 +269,15 @@ func (s *Store) List() (*ListResult, error) {
 			continue
 		}
 		handle := strings.TrimSuffix(entry.Name(), ".yaml")
-		id, err := s.Load(handle, Reference(true))
-		if err != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), err))
+		var id *Identity
+		var loadErr error
+		if skipMigrate {
+			id, loadErr = s.loadNoMigrate(handle)
+		} else {
+			id, loadErr = s.Load(handle, Reference(true))
+		}
+		if loadErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), loadErr))
 			continue
 		}
 		result.Identities = append(result.Identities, id)

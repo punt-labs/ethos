@@ -68,7 +68,6 @@ Expands to `make lint docs test`:
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No |
 | Repo identities | `.punt-labs/ethos/identities/<handle>.yaml` | Yes |
 | Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
 | Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
@@ -76,8 +75,10 @@ Expands to `make lint docs test`:
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
-| Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
+| Extensions (global) | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
+| Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
+| Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 
 ### Identity Schema
