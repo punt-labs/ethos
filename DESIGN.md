@@ -1225,3 +1225,62 @@ The `sessions/current/` directory accumulates PID files from previous
 sessions that were not cleaned up (crashes, forced exits, sessions
 where the SessionEnd hook did not fire). Filed as ethos-dl9.
 `ethos session purge` can clean these up manually.
+
+## DES-018: Repo-scoped identity configuration (SETTLED)
+
+### Problem
+
+All identity data lived in `~/.punt-labs/ethos/` — user-global and
+untracked. Team identities, talents, personalities, and writing styles
+were invisible to other team members, not version-controlled, and lost
+on reinstall. Different repos couldn't have different teams.
+
+### Decision
+
+Two-layer resolution: repo-local (`.punt-labs/ethos/`) → user-global
+(`~/.punt-labs/ethos/`). Identity YAML is atomic per layer — no
+field-level merging. Extensions always resolve from user-global.
+
+`LayeredStore` wraps two `Store` instances and implements the
+`IdentityStore` interface. Callers don't know about layers.
+
+| Layer | Location | Git-tracked | Contains |
+|-------|----------|-------------|----------|
+| Repo-local | `.punt-labs/ethos/` | Yes | Identities, talents, personalities, writing styles |
+| User-global | `~/.punt-labs/ethos/` | No | Extensions (PII/credentials), sessions, fallback identities |
+
+### Rejected alternatives
+
+- **Environment variable for root path** — doesn't solve layering.
+  User must choose one or the other, not both.
+- **Single store with search path list** — effectively what LayeredStore
+  is, but arbitrary paths are harder to reason about than explicit
+  repo/global semantics.
+- **PII overlay mechanism** — eliminated by DES-019 (voice as extension).
+
+## DES-019: Voice as extension, not core field (SETTLED)
+
+### Problem
+
+The `voice` field in identity YAML contained provider credentials
+(voice_id). This was the only PII in the identity schema, which
+complicated the repo-scoped design — identity files couldn't be
+committed without a field-level overlay mechanism.
+
+### Decision
+
+Move voice to `ext/vox`, same as GPG keys in `ext/beadle`. Identity
+YAML has zero PII. Extensions always live in user-global.
+
+Auto-migration: on Load, if a legacy `voice:` key exists in the YAML,
+its contents are written to `ext/vox` and stripped from the identity
+file. `LayeredStore` redirects repo-layer voice migrations to the
+global store.
+
+### Breaking change
+
+The `Voice` struct and field are removed from `Identity`. Consumers
+must read voice config from `ext/vox` via `ExtGet`. The MCP `identity`
+tool's responses include ext data, so consumers get voice bindings
+through the same channel. Vox does not yet use ethos — no external
+coordination needed.
