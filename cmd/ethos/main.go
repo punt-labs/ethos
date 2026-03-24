@@ -12,81 +12,67 @@ import (
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/spf13/cobra"
 )
 
 var version = "dev"
 
-// jsonOutput is set by the --json global flag.
+// jsonOutput is set by the --json persistent flag on rootCmd.
 var jsonOutput bool
 
 func main() {
-	// Extract global flags. --json is recognized anywhere except after "--".
-	var args []string
-	pastSeparator := false
-	for _, a := range os.Args[1:] {
-		if a == "--" {
-			pastSeparator = true
-			args = append(args, a)
-		} else if !pastSeparator && a == "--json" {
-			jsonOutput = true
-		} else {
-			args = append(args, a)
-		}
-	}
-
-	if len(args) == 0 {
-		printUsage()
-		os.Exit(1)
-	}
-
-	cmd := args[0]
-	cmdArgs := args[1:]
-
-	// Check for subcommand-level --help (skip if cmd is itself a help alias).
-	if cmd != "help" && cmd != "-h" && cmd != "--help" && hasHelpFlag(cmdArgs) {
-		printSubcommandHelp(cmd)
-		return
-	}
-
-	commands := map[string]func([]string){
-		"version":       func([]string) { runVersion() },
-		"doctor":        func([]string) { runDoctor() },
-		"whoami":        runWhoami,
-		"serve":         func([]string) { runServe() },
-		"create":        runCreate,
-		"list":          func([]string) { runList() },
-		"show":          runShow,
-		"ext":           runExt,
-		"iam":           runIam,
-		"session":       runSession,
-		"talent":        runTalent,
-		"personality":   runPersonality,
-		"writing-style": runWritingStyle,
-		"hook":          runHook,
-		"resolve-agent": func([]string) { runResolveAgent() },
-		"uninstall":     runUninstall,
-		"help":          func([]string) { printUsageTo(os.Stdout) },
-		"-h":            func([]string) { printUsageTo(os.Stdout) },
-		"--help":        func([]string) { printUsageTo(os.Stdout) },
-	}
-
-	if fn, ok := commands[cmd]; ok {
-		fn(cmdArgs)
-	} else {
-		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
-		printUsage()
+	registerLegacyCommands()
+	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-// hasHelpFlag returns true if args contains --help or -h.
-func hasHelpFlag(args []string) bool {
-	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			return true
-		}
+// registerLegacyCommands wires existing run functions into cobra commands.
+// This is temporary — each will be properly migrated in later phases.
+func registerLegacyCommands() {
+	cmds := []struct {
+		use    string
+		short  string
+		fn     func([]string)
+		hidden bool
+	}{
+		{"whoami", "Show the caller's identity", runWhoami, false},
+		{"show", "Show identity details", runShow, false},
+		{"list", "List all identities", func(_ []string) { runList() }, false},
+		{"ext", "Manage tool-scoped extensions", runExt, false},
+		{"iam", "Declare persona in current session", runIam, false},
+		{"session", "Manage session roster", runSession, false},
+		{"talent", "Manage talents", runTalent, false},
+		{"personality", "Manage personalities", runPersonality, false},
+		{"writing-style", "Manage writing styles", runWritingStyle, false},
+		{"hook", "Internal hook dispatcher", runHook, true},
+		{"resolve-agent", "Show default agent", func(_ []string) { runResolveAgent() }, false},
+		{"create", "Create a new identity", runCreate, false},
+		{"serve", "Start MCP server (stdio transport)", func(_ []string) { runServe() }, false},
+		{"uninstall", "Remove plugin", runUninstall, false},
 	}
-	return false
+
+	for _, c := range cmds {
+		fn := c.fn // capture
+		cmd := &cobra.Command{
+			Use:                c.use,
+			Short:              c.short,
+			DisableFlagParsing: true,
+			Run: func(cmd *cobra.Command, args []string) {
+				var filtered []string
+				for _, a := range args {
+					if a == "--json" {
+						jsonOutput = true
+					} else {
+						filtered = append(filtered, a)
+					}
+				}
+				fn(filtered)
+			},
+		}
+		cmd.Hidden = c.hidden
+		rootCmd.AddCommand(cmd)
+	}
 }
 
 // printJSON marshals v to stdout. Exits on error.
@@ -99,76 +85,15 @@ func printJSON(v any) {
 	fmt.Println(string(data))
 }
 
+// printSubcommandHelp prints usage for legacy commands that handle their own
+// flag parsing. Will be removed as commands migrate to native cobra.
 func printSubcommandHelp(cmd string) {
 	switch cmd {
-	case "whoami":
-		fmt.Print("Usage: ethos whoami [--json]\n\n  Show the caller's identity (resolved from iam, git, or OS).\n")
-	case "create":
-		fmt.Print("Usage: ethos create [-f|--file <path>]\n\n  Create a new identity interactively, or from a YAML file.\n")
-	case "list":
-		fmt.Print("Usage: ethos list [--json]\n\n  List all identities. Session participants are marked with *.\n")
-	case "show":
-		fmt.Print("Usage: ethos show <handle> [--json]\n\n  Show full details for an identity.\n")
-	case "doctor":
-		fmt.Print("Usage: ethos doctor [--json]\n\n  Check installation health.\n")
-	case "serve":
-		fmt.Print("Usage: ethos serve\n\n  Start MCP server (stdio transport).\n")
-	case "version":
-		fmt.Print("Usage: ethos version\n\n  Print version.\n")
 	case "ext":
 		fmt.Print("Usage: ethos ext <subcommand> [args]\n\n  Manage tool-scoped extensions on identities.\n\n  ethos ext get <persona> <namespace> [key]\n  ethos ext set <persona> <namespace> <key> <value>\n  ethos ext del <persona> <namespace> [key]\n  ethos ext list <persona>\n")
-	case "iam":
-		fmt.Print("Usage: ethos iam <persona>\n\n  Declare your persona in the current session.\n")
-	case "uninstall":
-		fmt.Print("Usage: ethos uninstall [--purge]\n\n  Remove the Claude Code plugin.\n  With --purge: also remove the binary and all identity data.\n")
 	case "session":
 		fmt.Print("Usage: ethos session [subcommand]\n\n  Manage session roster.\n\n  ethos session                                  Show current session participants\n  ethos session create --session ID --root-id X   Create a new session roster\n  ethos session join --agent-id X [...]            Add a participant\n  ethos session leave --agent-id X                 Remove a participant\n  ethos session purge                              Clean up stale sessions\n")
-	case "talent":
-		fmt.Print("Usage: ethos talent <subcommand>\n\n  Manage talents.\n\n  ethos talent create <slug>           Create a new talent\n  ethos talent list                    List all talents\n  ethos talent show <slug>             Show talent content\n  ethos talent add <handle> <slug>     Add talent to an identity\n  ethos talent remove <handle> <slug>  Remove talent from an identity\n")
-	case "personality":
-		fmt.Print("Usage: ethos personality <subcommand>\n\n  Manage personalities.\n\n  ethos personality create <slug>           Create a new personality\n  ethos personality list                    List all personalities\n  ethos personality show <slug>             Show personality content\n  ethos personality set <handle> <slug>     Set personality on an identity\n")
-	case "writing-style":
-		fmt.Print("Usage: ethos writing-style <subcommand>\n\n  Manage writing styles.\n\n  ethos writing-style create <slug>           Create a new writing style\n  ethos writing-style list                    List all writing styles\n  ethos writing-style show <slug>             Show writing style content\n  ethos writing-style set <handle> <slug>     Set writing style on an identity\n")
-	case "hook":
-		printHookUsage()
-	default:
-		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
-		printUsage()
-		os.Exit(1)
 	}
-}
-
-func printUsage() { printUsageTo(os.Stderr) }
-
-func printUsageTo(w *os.File) {
-	fmt.Fprint(w, `ethos: identity binding for humans and AI agents
-
-Product commands:
-  whoami            Show the caller's identity
-  create            Create a new identity
-  list              List all identities
-  show <handle>     Show identity details
-  ext               Manage tool-scoped extensions
-
-Attribute commands:
-  talent            Manage talents (create, list, show, add, remove)
-  personality       Manage personalities (create, list, show, set)
-  writing-style     Manage writing styles (create, list, show, set)
-
-Session commands:
-  iam <persona>     Declare persona in current session
-  session           Show or manage session roster
-
-Admin commands:
-  version           Print version
-  doctor            Check installation health
-  serve             Start MCP server (stdio transport)
-  uninstall         Remove plugin (--purge to remove binary + data)
-
-Flags:
-  --json            JSON output
-  --help, -h        Show this help
-`)
 }
 
 func runVersion() {
