@@ -188,7 +188,7 @@ func (h *Handler) handleDeleteAttribute(store *attribute.Store, display string, 
 	return mcplib.NewToolResultText(fmt.Sprintf("Deleted %s %q", display, slug)), nil
 }
 
-func (h *Handler) handleSetAttribute(store *identity.Store, display string, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleSetAttribute(store identity.IdentityStore, display string, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")
 	slug := stringArg(req, "slug", "")
 	if handle == "" || slug == "" {

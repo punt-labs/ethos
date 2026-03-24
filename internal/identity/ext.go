@@ -70,6 +70,17 @@ func (s *Store) ExtGet(persona, namespace, key string) (map[string]string, error
 
 // ExtSet writes a key-value pair to a namespace.
 func (s *Store) ExtSet(persona, namespace, key, value string) error {
+	// Ensure the persona exists in this store.
+	if !s.Exists(persona) {
+		return fmt.Errorf("persona %q does not exist", persona)
+	}
+	return s.extSetDirect(persona, namespace, key, value)
+}
+
+// extSetDirect writes a key-value pair to a namespace without checking
+// persona existence. Used by LayeredStore which performs its own
+// cross-layer existence check before delegating.
+func (s *Store) extSetDirect(persona, namespace, key, value string) error {
 	if err := validateNamespace(namespace); err != nil {
 		return err
 	}
@@ -78,11 +89,6 @@ func (s *Store) ExtSet(persona, namespace, key, value string) error {
 	}
 	if len(value) > MaxValueLen {
 		return fmt.Errorf("value exceeds maximum length of %d bytes", MaxValueLen)
-	}
-
-	// Ensure the persona exists.
-	if !s.Exists(persona) {
-		return fmt.Errorf("persona %q does not exist", persona)
 	}
 
 	// Check namespace count limit.

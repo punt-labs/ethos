@@ -31,7 +31,7 @@ type RepoConfig struct {
 //  4. $USER — match identity handle field
 //
 // Returns an error when no step matches.
-func Resolve(store *identity.Store, ss *session.Store) (string, error) {
+func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 	// Step 1: check for iam declaration via process tree.
 	if ss != nil {
 		sp := resolveFromSession(ss)
@@ -117,6 +117,20 @@ func resolveFromSession(ss *session.Store) sessionPersona {
 	return sessionPersona{handle: p.Persona, found: true}
 }
 
+// FindRepoEthosRoot returns the path to .punt-labs/ethos/ in the current
+// git repo, or empty string if not in a repo or the directory doesn't exist.
+func FindRepoEthosRoot() string {
+	repoRoot := FindRepoRoot()
+	if repoRoot == "" {
+		return ""
+	}
+	ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
+	if info, err := os.Stat(ethosRoot); err == nil && info.IsDir() {
+		return ethosRoot
+	}
+	return ""
+}
+
 // ResolveAgent returns the default agent identity handle for the repo.
 // Reads .punt-labs/ethos/config.yaml "agent:" field from the given repo
 // root. Returns empty string if not configured or not in a repo.
@@ -124,7 +138,8 @@ func ResolveAgent(repoRoot string) string {
 	if repoRoot == "" {
 		return ""
 	}
-	data, err := os.ReadFile(filepath.Join(repoRoot, ".punt-labs", "ethos", "config.yaml"))
+	ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
+	data, err := os.ReadFile(filepath.Join(ethosRoot, "config.yaml"))
 	if err != nil {
 		return ""
 	}

@@ -10,10 +10,9 @@ type Identity struct {
 	Name         string   `yaml:"name" json:"name"`
 	Handle       string   `yaml:"handle" json:"handle"`
 	Kind         string   `yaml:"kind" json:"kind"`
-	Email        string   `yaml:"email,omitempty" json:"email,omitempty"`
-	GitHub       string   `yaml:"github,omitempty" json:"github,omitempty"`
-	Voice        *Voice   `yaml:"voice,omitempty" json:"voice,omitempty"`
-	Agent        string   `yaml:"agent,omitempty" json:"agent,omitempty"`
+	Email  string `yaml:"email,omitempty" json:"email,omitempty"`
+	GitHub string `yaml:"github,omitempty" json:"github,omitempty"`
+	Agent  string `yaml:"agent,omitempty" json:"agent,omitempty"`
 	WritingStyle string   `yaml:"writing_style,omitempty" json:"writing_style,omitempty"`
 	Personality  string   `yaml:"personality,omitempty" json:"personality,omitempty"`
 	Talents      []string `yaml:"talents,omitempty" json:"talents,omitempty"`
@@ -37,12 +36,6 @@ type Identity struct {
 	Ext map[string]map[string]string `yaml:"-" json:"ext,omitempty"`
 }
 
-// Voice binds an identity to a Vox voice configuration.
-type Voice struct {
-	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
-	VoiceID  string `yaml:"voice_id,omitempty" json:"voice_id,omitempty"`
-}
-
 // Validate checks that required fields are present and valid.
 func (id *Identity) Validate() error {
 	if id.Name == "" {
@@ -56,9 +49,6 @@ func (id *Identity) Validate() error {
 	}
 	if id.Kind != "human" && id.Kind != "agent" {
 		return &ValidationError{Field: "kind", Message: "must be 'human' or 'agent'"}
-	}
-	if id.Voice != nil && id.Voice.VoiceID != "" && id.Voice.Provider == "" {
-		return &ValidationError{Field: "voice", Message: "voice_id requires voice_provider"}
 	}
 	return nil
 }

@@ -1,0 +1,2 @@
+# Extensions contain PII/credentials — never commit
+identities/*.ext/

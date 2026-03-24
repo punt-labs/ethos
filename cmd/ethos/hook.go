@@ -48,7 +48,7 @@ Subcommands:
 }
 
 func runHookSessionStart() {
-	s := store()
+	s := globalStore()
 	ss := sessionStore()
 	if err := hook.HandleSessionStart(os.Stdin, s, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook session-start: %v\n", err)
@@ -65,7 +65,7 @@ func runHookSessionEnd() {
 }
 
 func runHookSubagentStart() {
-	s := store()
+	s := globalStore()
 	ss := sessionStore()
 	if err := hook.HandleSubagentStart(os.Stdin, s, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)

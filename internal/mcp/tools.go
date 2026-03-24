@@ -19,27 +19,36 @@ import (
 
 // Handler groups MCP tool handlers with shared stores.
 type Handler struct {
-	store        *identity.Store
-	sessionStore *session.Store
-	talents      *attribute.Store
+	store         identity.IdentityStore
+	sessionStore  *session.Store
+	talents       *attribute.Store
 	personalities *attribute.Store
 	writingStyles *attribute.Store
 }
 
 // NewHandler creates a Handler with the given stores.
 // Panics if identity store is nil. Session store may be nil (session
-// tools will return errors if called without it). Attribute stores are
-// derived from the identity store's root.
-func NewHandler(s *identity.Store, ss ...*session.Store) *Handler {
+// tools will return errors if called without it). Attribute stores
+// must be provided by the caller to ensure both repo and global roots
+// are searched when a layered identity store is in use.
+func NewHandler(s identity.IdentityStore, talents, personalities, writingStyles *attribute.Store, ss ...*session.Store) *Handler {
 	if s == nil {
 		panic("mcp.NewHandler: store must not be nil")
 	}
-	root := s.Root()
+	if talents == nil {
+		panic("mcp.NewHandler: talents store must not be nil")
+	}
+	if personalities == nil {
+		panic("mcp.NewHandler: personalities store must not be nil")
+	}
+	if writingStyles == nil {
+		panic("mcp.NewHandler: writingStyles store must not be nil")
+	}
 	h := &Handler{
 		store:         s,
-		talents:       attribute.NewStore(root, attribute.Talents),
-		personalities: attribute.NewStore(root, attribute.Personalities),
-		writingStyles: attribute.NewStore(root, attribute.WritingStyles),
+		talents:       talents,
+		personalities: personalities,
+		writingStyles: writingStyles,
 	}
 	if len(ss) > 0 {
 		h.sessionStore = ss[0]
@@ -84,8 +93,6 @@ func (h *Handler) identityTool() mcplib.Tool {
 		mcplib.WithString("kind", mcplib.Description("Either 'human' or 'agent'. Required for create.")),
 		mcplib.WithString("email", mcplib.Description("Email address (beadle binding). For create.")),
 		mcplib.WithString("github", mcplib.Description("GitHub username (biff binding). For create.")),
-		mcplib.WithString("voice_provider", mcplib.Description("Voice provider name (vox binding). For create.")),
-		mcplib.WithString("voice_id", mcplib.Description("Voice ID for the provider. For create.")),
 		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file. For create.")),
 		mcplib.WithString("writing_style", mcplib.Description("Writing style slug. For create.")),
 		mcplib.WithString("personality", mcplib.Description("Personality slug. For create.")),
@@ -243,22 +250,12 @@ func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolReq
 		return mcplib.NewToolResultError("kind is required for create"), nil
 	}
 
-	var voice *identity.Voice
-	provider := stringArg(req, "voice_provider", "")
-	voiceID := stringArg(req, "voice_id", "")
-	if provider != "" {
-		voice = &identity.Voice{Provider: provider, VoiceID: voiceID}
-	} else if voiceID != "" {
-		return mcplib.NewToolResultError("voice_id requires voice_provider"), nil
-	}
-
 	id := &identity.Identity{
 		Name:         name,
 		Handle:       handle,
 		Kind:         kind,
 		Email:        stringArg(req, "email", ""),
 		GitHub:       stringArg(req, "github", ""),
-		Voice:        voice,
 		Agent:        stringArg(req, "agent", ""),
 		WritingStyle: stringArg(req, "writing_style", ""),
 		Personality:  stringArg(req, "personality", ""),

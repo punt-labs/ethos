@@ -77,9 +77,9 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	if err := yaml.Unmarshal(data, &id); err != nil {
 		return nil, fmt.Errorf("invalid identity file %s: %w", path, err)
 	}
-	// Normalize empty Voice to nil for consistent omitempty behavior.
-	if id.Voice != nil && id.Voice.Provider == "" && id.Voice.VoiceID == "" {
-		id.Voice = nil
+	// Migrate legacy voice field to ext/vox.
+	if err := s.migrateVoice(handle, path, data); err != nil {
+		return nil, fmt.Errorf("migrating voice for %q: %w", handle, err)
 	}
 	// Assemble extension data from <persona>.ext/ directory.
 	extData, extWarnings := s.loadExtensions(handle)
@@ -92,6 +92,61 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	id.Warnings = append(id.Warnings, extWarnings...)
 
 	return &id, nil
+}
+
+// migrateVoice checks raw YAML for a legacy voice field and moves it to
+// ext/vox. Re-saves the identity without the voice key.
+func (s *Store) migrateVoice(handle, path string, data []byte) error {
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return nil // already validated above; skip migration
+	}
+	v, ok := raw["voice"]
+	if !ok {
+		return nil
+	}
+	vm, ok := v.(map[string]interface{})
+	if !ok {
+		// Non-map voice value (e.g. "voice: elevenlabs") — cannot migrate.
+		// Leave the YAML untouched; manual fix required.
+		return fmt.Errorf("voice field has unexpected type %T; manual migration required", v)
+	}
+	if len(vm) == 0 {
+		// Empty voice map — just strip the key and rewrite.
+		delete(raw, "voice")
+		return s.rewriteRaw(path, raw)
+	}
+	provider, _ := vm["provider"].(string)
+	voiceID, _ := vm["voice_id"].(string)
+	if provider == "" && voiceID == "" {
+		delete(raw, "voice")
+		return s.rewriteRaw(path, raw)
+	}
+
+	// Write to ext/vox.
+	if provider != "" {
+		if err := s.ExtSet(handle, "vox", "provider", provider); err != nil {
+			return fmt.Errorf("setting ext/vox/provider: %w", err)
+		}
+	}
+	if voiceID != "" {
+		if err := s.ExtSet(handle, "vox", "voice_id", voiceID); err != nil {
+			return fmt.Errorf("setting ext/vox/voice_id: %w", err)
+		}
+	}
+
+	// Strip voice from the identity YAML.
+	delete(raw, "voice")
+	return s.rewriteRaw(path, raw)
+}
+
+// rewriteRaw marshals a raw map back to the identity YAML file.
+func (s *Store) rewriteRaw(path string, raw map[string]interface{}) error {
+	out, err := yaml.Marshal(raw)
+	if err != nil {
+		return fmt.Errorf("marshaling identity: %w", err)
+	}
+	return os.WriteFile(path, out, 0o600)
 }
 
 // resolveAttributes reads .md files for personality, writing_style, and
@@ -188,6 +243,17 @@ type ListResult struct {
 // attribute content resolution). Files that cannot be loaded are
 // reported as warnings.
 func (s *Store) List() (*ListResult, error) {
+	return s.list(false)
+}
+
+// listNoMigrate lists identities without running voice migration.
+// Used by LayeredStore.List to avoid writing ext to the wrong store.
+func (s *Store) listNoMigrate() (*ListResult, error) {
+	return s.list(true)
+}
+
+// list is the shared implementation for List and listNoMigrate.
+func (s *Store) list(skipMigrate bool) (*ListResult, error) {
 	dir := s.identitiesDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -203,9 +269,15 @@ func (s *Store) List() (*ListResult, error) {
 			continue
 		}
 		handle := strings.TrimSuffix(entry.Name(), ".yaml")
-		id, err := s.Load(handle, Reference(true))
-		if err != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), err))
+		var id *Identity
+		var loadErr error
+		if skipMigrate {
+			id, loadErr = s.loadNoMigrate(handle)
+		} else {
+			id, loadErr = s.Load(handle, Reference(true))
+		}
+		if loadErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("skipping %s: %v", entry.Name(), loadErr))
 			continue
 		}
 		result.Identities = append(result.Identities, id)
@@ -310,6 +382,63 @@ func (s *Store) Update(handle string, mutate func(*Identity) error) error {
 		return err
 	}
 	if err := s.ValidateRefs(id); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(id)
+	if err != nil {
+		return fmt.Errorf("marshaling identity: %w", err)
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("writing identity: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("renaming identity: %w", err)
+	}
+	return nil
+}
+
+// loadNoMigrate reads an identity YAML without running voice migration.
+// Used by LayeredStore.loadRaw to avoid writing ext to the wrong store.
+func (s *Store) loadNoMigrate(handle string) (*Identity, error) {
+	path := s.Path(handle)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("identity %q not found: %w", handle, err)
+	}
+	var id Identity
+	if err := yaml.Unmarshal(data, &id); err != nil {
+		return nil, fmt.Errorf("invalid identity file %s: %w", path, err)
+	}
+	return &id, nil
+}
+
+// updateNoValidate is like Update but skips ValidateRefs. Used by
+// LayeredStore which runs its own cross-layer validation.
+func (s *Store) updateNoValidate(handle string, mutate func(*Identity) error) error {
+	path := s.Path(handle)
+	lockPath := path + ".lock"
+
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating lock file: %w", err)
+	}
+	defer lockFile.Close()
+	if err := flock(lockFile); err != nil {
+		return fmt.Errorf("acquiring lock: %w", err)
+	}
+	defer funlock(lockFile)
+
+	// Use loadNoMigrate to avoid triggering voice migration as a side
+	// effect. LayeredStore.loadRaw handles migration through its own
+	// relocateRepoVoice path which writes ext to the correct (global)
+	// store.
+	id, err := s.loadNoMigrate(handle)
+	if err != nil {
+		return err
+	}
+	if err := mutate(id); err != nil {
 		return err
 	}
 	data, err := yaml.Marshal(id)

@@ -62,18 +62,25 @@ func TestStore_LoadNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "not found")
 }
 
-func TestStore_LoadNormalizesEmptyVoice(t *testing.T) {
+func TestStore_LoadStripsEmptyVoice(t *testing.T) {
 	s := testStore(t)
 
 	// Write a YAML file with an empty voice block directly.
 	dir := s.IdentitiesDir()
 	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "test.ext"), 0o700))
 	data := []byte("name: Test\nhandle: test\nkind: human\nvoice: {}\n")
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.yaml"), data, 0o600))
 
 	loaded, err := s.Load("test")
 	require.NoError(t, err)
-	assert.Nil(t, loaded.Voice, "empty voice should be normalized to nil")
+	// Empty voice should not create ext/vox.
+	_, ok := loaded.Ext["vox"]
+	assert.False(t, ok, "empty voice should not create ext/vox")
+	// Voice key should be stripped from YAML.
+	raw, err := os.ReadFile(filepath.Join(dir, "test.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "voice")
 }
 
 func TestStore_List(t *testing.T) {
@@ -138,21 +145,25 @@ func TestStore_PathTraversalPrevention(t *testing.T) {
 	assert.Equal(t, "/root/ethos/identities/passwd.yaml", path)
 }
 
-func TestStore_SaveWithVoice(t *testing.T) {
+func TestStore_VoiceViaExt(t *testing.T) {
 	s := testStore(t)
 	id := &Identity{
 		Name:   "Test",
 		Handle: "test",
 		Kind:   "human",
-		Voice:  &Voice{Provider: "elevenlabs", VoiceID: "abc123"},
 	}
 	require.NoError(t, s.Save(id))
 
+	// Write voice data via ext system.
+	require.NoError(t, s.ExtSet("test", "vox", "provider", "elevenlabs"))
+	require.NoError(t, s.ExtSet("test", "vox", "voice_id", "abc123"))
+
 	loaded, err := s.Load("test")
 	require.NoError(t, err)
-	require.NotNil(t, loaded.Voice)
-	assert.Equal(t, "elevenlabs", loaded.Voice.Provider)
-	assert.Equal(t, "abc123", loaded.Voice.VoiceID)
+	vox, ok := loaded.Ext["vox"]
+	require.True(t, ok)
+	assert.Equal(t, "elevenlabs", vox["provider"])
+	assert.Equal(t, "abc123", vox["voice_id"])
 }
 
 func TestStore_SaveWithAllFields(t *testing.T) {
@@ -170,11 +181,10 @@ func TestStore_SaveWithAllFields(t *testing.T) {
 		Kind:         "agent",
 		Email:        "full@example.com",
 		GitHub:       "fullgit",
-		Voice:        &Voice{Provider: "elevenlabs", VoiceID: "v1"},
 		Agent:        ".claude/agents/full.md",
 		WritingStyle: "terse",
 		Personality:  "analytical",
-		Talents:       []string{"go", "testing"},
+		Talents:      []string{"go", "testing"},
 	}
 	require.NoError(t, s.Save(id))
 
@@ -309,6 +319,99 @@ func TestStore_FindByEmptyValue(t *testing.T) {
 	id, err := s.FindBy("github", "")
 	require.NoError(t, err)
 	assert.Nil(t, id)
+}
+
+func TestStore_LoadMigratesVoiceToExt(t *testing.T) {
+	s := testStore(t)
+
+	// Write a YAML file with a voice block directly (legacy format).
+	dir := s.IdentitiesDir()
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	// Create ext dir so loadExtensions works.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "test.ext"), 0o700))
+	data := []byte("name: Test\nhandle: test\nkind: human\nvoice:\n  provider: elevenlabs\n  voice_id: abc123\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.yaml"), data, 0o600))
+
+	// First load should auto-migrate voice to ext/vox.
+	loaded, err := s.Load("test")
+	require.NoError(t, err)
+
+	// Voice field must no longer be on the struct.
+	// (Struct has no Voice field after migration, so we verify via ext.)
+	vox, ok := loaded.Ext["vox"]
+	require.True(t, ok, "expected ext/vox namespace after migration")
+	assert.Equal(t, "elevenlabs", vox["provider"])
+	assert.Equal(t, "abc123", vox["voice_id"])
+
+	// Re-read the YAML file to verify voice key was stripped.
+	raw, err := os.ReadFile(filepath.Join(dir, "test.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "voice")
+
+	// Second load should still have ext/vox data.
+	loaded2, err := s.Load("test")
+	require.NoError(t, err)
+	vox2, ok := loaded2.Ext["vox"]
+	require.True(t, ok)
+	assert.Equal(t, "elevenlabs", vox2["provider"])
+}
+
+func TestStore_LoadMigratesVoicePartial(t *testing.T) {
+	s := testStore(t)
+
+	// Write YAML with voice block containing only provider (no voice_id).
+	dir := s.IdentitiesDir()
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "test.ext"), 0o700))
+	data := []byte("name: Test\nhandle: test\nkind: human\nvoice:\n  provider: elevenlabs\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.yaml"), data, 0o600))
+
+	loaded, err := s.Load("test")
+	require.NoError(t, err)
+
+	vox, ok := loaded.Ext["vox"]
+	require.True(t, ok, "expected ext/vox after partial voice migration")
+	assert.Equal(t, "elevenlabs", vox["provider"])
+	_, hasVoiceID := vox["voice_id"]
+	assert.False(t, hasVoiceID, "voice_id should not be present when not in source")
+
+	// Voice key should be stripped from YAML.
+	raw, err := os.ReadFile(filepath.Join(dir, "test.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "voice")
+}
+
+func TestStore_LoadMigratesVoiceNonMapErrors(t *testing.T) {
+	s := testStore(t)
+
+	// Write YAML with voice as a plain string (not a map).
+	dir := s.IdentitiesDir()
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "test.ext"), 0o700))
+	data := []byte("name: Test\nhandle: test\nkind: human\nvoice: elevenlabs\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.yaml"), data, 0o600))
+
+	_, err := s.Load("test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unexpected type")
+}
+
+func TestStore_LoadMigratesEmptyVoiceNoOp(t *testing.T) {
+	s := testStore(t)
+
+	// Write a YAML file with an empty voice block.
+	dir := s.IdentitiesDir()
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "test.ext"), 0o700))
+	data := []byte("name: Test\nhandle: test\nkind: human\nvoice: {}\n")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "test.yaml"), data, 0o600))
+
+	loaded, err := s.Load("test")
+	require.NoError(t, err)
+
+	// Empty voice should not create a vox ext.
+	_, ok := loaded.Ext["vox"]
+	assert.False(t, ok, "empty voice should not create ext/vox")
 }
 
 func TestStore_FilePermissions(t *testing.T) {
