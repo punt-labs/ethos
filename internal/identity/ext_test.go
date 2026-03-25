@@ -138,9 +138,22 @@ func TestExtValidation_ValueTooLong(t *testing.T) {
 	assert.Error(t, s.ExtSet("test", "beadle", "key", string(long)))
 }
 
-func TestExtValidation_PersonaNotFound(t *testing.T) {
+func TestExtValidation_HandleNotFound(t *testing.T) {
 	s := NewStore(t.TempDir())
 	assert.Error(t, s.ExtSet("nonexistent", "beadle", "key", "val"))
+}
+
+func TestExtValidation_EmptyHandle(t *testing.T) {
+	s := NewStore(t.TempDir())
+
+	_, err := s.ExtGet("", "beadle", "key")
+	assert.EqualError(t, err, "handle is required")
+
+	assert.EqualError(t, s.ExtSet("", "beadle", "key", "val"), "handle is required")
+	assert.EqualError(t, s.ExtDel("", "beadle", "key"), "handle is required")
+
+	_, err = s.ExtList("")
+	assert.EqualError(t, err, "handle is required")
 }
 
 func TestExtDirCreatedOnSave(t *testing.T) {

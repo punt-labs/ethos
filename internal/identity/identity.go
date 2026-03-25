@@ -31,7 +31,7 @@ type Identity struct {
 	Warnings []string `yaml:"-" json:"warnings,omitempty"`
 
 	// Ext holds tool-scoped extension data, assembled on Load from
-	// <persona>.ext/<namespace>.yaml files. Never persisted to the
+	// <handle>.ext/<namespace>.yaml files. Never persisted to the
 	// core identity YAML. Keyed by namespace (tool name), then by key.
 	Ext map[string]map[string]string `yaml:"-" json:"ext,omitempty"`
 }

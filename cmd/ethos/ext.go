@@ -15,7 +15,7 @@ var extCmd = &cobra.Command{
 }
 
 var extGetCmd = &cobra.Command{
-	Use:   "get <persona> <namespace> [key]",
+	Use:   "get <handle> <namespace> [key]",
 	Short: "Get extension values",
 	Args:  cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -24,7 +24,7 @@ var extGetCmd = &cobra.Command{
 }
 
 var extSetCmd = &cobra.Command{
-	Use:   "set <persona> <namespace> <key> <value>...",
+	Use:   "set <handle> <namespace> <key> <value>...",
 	Short: "Set an extension value",
 	Args:  cobra.MinimumNArgs(4),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -33,7 +33,7 @@ var extSetCmd = &cobra.Command{
 }
 
 var extDelCmd = &cobra.Command{
-	Use:   "del <persona> <namespace> [key]",
+	Use:   "del <handle> <namespace> [key]",
 	Short: "Delete extension values",
 	Args:  cobra.RangeArgs(2, 3),
 	Run: func(cmd *cobra.Command, args []string) {
@@ -42,8 +42,8 @@ var extDelCmd = &cobra.Command{
 }
 
 var extListCmd = &cobra.Command{
-	Use:   "list <persona>",
-	Short: "List extension namespaces for a persona",
+	Use:   "list <handle>",
+	Short: "List extension namespaces for an identity",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runExtList(args)
@@ -57,14 +57,14 @@ func init() {
 
 func runExtGet(args []string) {
 	s := globalStore()
-	persona := args[0]
+	handle := args[0]
 	namespace := args[1]
 	key := ""
 	if len(args) > 2 {
 		key = args[2]
 	}
 
-	m, err := s.ExtGet(persona, namespace, key)
+	m, err := s.ExtGet(handle, namespace, key)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
@@ -103,7 +103,7 @@ func runExtDel(args []string) {
 func runExtList(args []string) {
 	s := globalStore()
 	if !s.Exists(args[0]) {
-		fmt.Fprintf(os.Stderr, "ethos: persona %q does not exist\n", args[0])
+		fmt.Fprintf(os.Stderr, "ethos: handle %q does not exist\n", args[0])
 		os.Exit(1)
 	}
 	namespaces, err := s.ExtList(args[0])

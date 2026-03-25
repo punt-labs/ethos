@@ -52,7 +52,7 @@ sh install.sh
 - **Same schema for humans and agents** — one YAML file per persona, `kind: human` or `kind: agent`
 - **Composable attributes** — talents, personalities, and writing styles are reusable `.md` files referenced by slug
 - **Three integration patterns** — filesystem (zero dependency), CLI (shell/hooks), MCP server (identity, attributes, extensions, sessions)
-- **Extensible** — any tool attaches its own attributes via `<persona>.ext/<tool>.yaml`
+- **Extensible** — any tool attaches its own attributes via `<handle>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
 - **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
 - **Layered resolution** — repo-local identities override global; resolved from iam declaration, git config, or OS user (DES-011, DES-018)
@@ -158,10 +158,10 @@ Systems design, correctness over speed...
 
 | Command | What it does |
 |---------|-------------|
-| `ethos ext set <persona> <ns> <key> <value>` | Write an extension key |
-| `ethos ext get <persona> <ns> [key]` | Read extension key(s) |
-| `ethos ext del <persona> <ns> [key]` | Delete key or namespace |
-| `ethos ext list <persona>` | List extension namespaces |
+| `ethos ext set <handle> <ns> <key> <value>` | Write an extension key |
+| `ethos ext get <handle> <ns> [key]` | Read extension key(s) |
+| `ethos ext del <handle> <ns> [key]` | Delete key or namespace |
+| `ethos ext list <handle>` | List extension namespaces |
 
 ### Admin
 
@@ -295,7 +295,7 @@ identity can reference them by slug. Create with `ethos talent create`,
 `ethos personality create`, or `ethos writing-style create`.
 
 **Extensions** (owned by each tool): any tool can read/write namespaced
-key-value pairs in `<persona>.ext/<tool>.yaml`. Vox stores voice config,
+key-value pairs in `<handle>.ext/<tool>.yaml`. Vox stores voice config,
 Beadle stores a GPG key, Biff stores routing preferences. Ethos assembles
 the merged view but never interprets extension contents.
 

@@ -13,11 +13,11 @@ type IdentityStore interface {
 	Root() string
 	IdentitiesDir() string
 	Path(handle string) string
-	ExtDir(persona string) string
-	ExtGet(persona, namespace, key string) (map[string]string, error)
-	ExtSet(persona, namespace, key, value string) error
-	ExtDel(persona, namespace, key string) error
-	ExtList(persona string) ([]string, error)
+	ExtDir(handle string) string
+	ExtGet(handle, namespace, key string) (map[string]string, error)
+	ExtSet(handle, namespace, key, value string) error
+	ExtDel(handle, namespace, key string) error
+	ExtList(handle string) ([]string, error)
 }
 
 // Compile-time check: *Store satisfies IdentityStore.

@@ -397,33 +397,33 @@ func (ls *LayeredStore) Path(handle string) string {
 }
 
 // ExtDir returns the extension directory from the global store.
-func (ls *LayeredStore) ExtDir(persona string) string {
-	return ls.global.ExtDir(persona)
+func (ls *LayeredStore) ExtDir(handle string) string {
+	return ls.global.ExtDir(handle)
 }
 
 // ExtGet delegates to the global store.
-func (ls *LayeredStore) ExtGet(persona, namespace, key string) (map[string]string, error) {
-	return ls.global.ExtGet(persona, namespace, key)
+func (ls *LayeredStore) ExtGet(handle, namespace, key string) (map[string]string, error) {
+	return ls.global.ExtGet(handle, namespace, key)
 }
 
-// ExtSet writes to the global store after checking persona existence
-// across both layers. Extensions always live in global, but the persona
+// ExtSet writes to the global store after checking handle existence
+// across both layers. Extensions always live in global, but the handle
 // may exist only in repo.
-func (ls *LayeredStore) ExtSet(persona, namespace, key, value string) error {
-	if !ls.Exists(persona) {
-		return fmt.Errorf("persona %q does not exist", persona)
+func (ls *LayeredStore) ExtSet(handle, namespace, key, value string) error {
+	if !ls.Exists(handle) {
+		return fmt.Errorf("handle %q does not exist", handle)
 	}
-	return ls.global.extSetDirect(persona, namespace, key, value)
+	return ls.global.extSetDirect(handle, namespace, key, value)
 }
 
 // ExtDel delegates to the global store.
-func (ls *LayeredStore) ExtDel(persona, namespace, key string) error {
-	return ls.global.ExtDel(persona, namespace, key)
+func (ls *LayeredStore) ExtDel(handle, namespace, key string) error {
+	return ls.global.ExtDel(handle, namespace, key)
 }
 
 // ExtList delegates to the global store.
-func (ls *LayeredStore) ExtList(persona string) ([]string, error) {
-	return ls.global.ExtList(persona)
+func (ls *LayeredStore) ExtList(handle string) ([]string, error) {
+	return ls.global.ExtList(handle)
 }
 
 // writeStore returns the store to write to: repo if available, else global.
