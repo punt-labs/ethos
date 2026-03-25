@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/spf13/cobra"
@@ -117,6 +118,39 @@ var sessionDeleteCurrentCmd = &cobra.Command{
 	},
 }
 
+// --- session list ---
+
+var sessionListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all sessions",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionList()
+	},
+}
+
+// --- session roster ---
+
+var sessionRosterCmd = &cobra.Command{
+	Use:   "roster",
+	Short: "Show current session roster (canonical verb for session show)",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionShow()
+	},
+}
+
+// --- session iam ---
+
+var sessionIamCmd = &cobra.Command{
+	Use:   "iam <persona>",
+	Short: "Declare persona in current session",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runIam(args[0])
+	},
+}
+
 // --- session purge ---
 
 var sessionPurgeCmd = &cobra.Command{
@@ -171,6 +205,9 @@ func init() {
 		sessionDeleteCmd,
 		sessionJoinCmd,
 		sessionLeaveCmd,
+		sessionIamCmd,
+		sessionListCmd,
+		sessionRosterCmd,
 		sessionWriteCurrentCmd,
 		sessionDeleteCurrentCmd,
 		sessionPurgeCmd,
@@ -297,6 +334,73 @@ func runSessionDeleteCurrent() {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runSessionList() {
+	ss := sessionStore()
+	ids, err := ss.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		os.Exit(1)
+	}
+
+	type sessionEntry struct {
+		Session      string `json:"session"`
+		Participants int    `json:"participants"`
+		Primary      string `json:"primary"`
+	}
+
+	var entries []sessionEntry
+	for _, id := range ids {
+		roster, loadErr := ss.Load(id)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: warning: session %s: %v\n", id, loadErr)
+			continue
+		}
+		// Primary agent is the first participant with a parent (i.e., not the root human).
+		// Fall back to the first participant if none has a parent.
+		primary := ""
+		for _, p := range roster.Participants {
+			if p.Parent != "" {
+				primary = p.Persona
+				if primary == "" {
+					primary = p.AgentID
+				}
+				break
+			}
+		}
+		if primary == "" && len(roster.Participants) > 0 {
+			primary = roster.Participants[0].Persona
+			if primary == "" {
+				primary = roster.Participants[0].AgentID
+			}
+		}
+		entries = append(entries, sessionEntry{
+			Session:      id,
+			Participants: len(roster.Participants),
+			Primary:      primary,
+		})
+	}
+
+	if jsonOutput {
+		if entries == nil {
+			entries = []sessionEntry{}
+		}
+		printJSON(entries)
+		return
+	}
+
+	if len(entries) == 0 {
+		fmt.Println("No sessions found.")
+		return
+	}
+
+	headers := []string{"SESSION", "PARTICIPANTS", "PRIMARY"}
+	rows := make([][]string, len(entries))
+	for i, e := range entries {
+		rows[i] = []string{e.Session, fmt.Sprintf("%d", e.Participants), e.Primary}
+	}
+	fmt.Println(hook.FormatTable(headers, rows))
 }
 
 func runSessionPurge() {

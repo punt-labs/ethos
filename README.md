@@ -9,9 +9,9 @@
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
 Ethos stores persistent identity for humans and AI agents — name, email,
-GitHub handle, voice, writing style, personality, and talents — as one YAML
-file per persona. Agentic coding tools (Claude Code, OpenCode, Codex) start
-each session without knowing who the user is or distinguishing one agent from
+GitHub handle, writing style, personality, and talents — as one YAML file per
+persona. Agentic coding tools (Claude Code, OpenCode, Codex) start each
+session without knowing who the user is or distinguishing one agent from
 another. Ethos provides that context. Any tool can read it via the filesystem,
 CLI, or MCP server. Same schema for humans and agents, extensible by any
 application.
@@ -55,8 +55,8 @@ sh install.sh
 - **Extensible** — any tool attaches its own attributes via `<persona>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
 - **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
-- **Resolution chain** — identity resolved from iam declaration, git config, or OS user (DES-011)
-- **Channel bindings** — an identity *has* a voice the way it *has* an email: voice (Vox), email (Beadle), GitHub (Biff), Claude Code agent definition
+- **Layered resolution** — repo-local identities override global; resolved from iam declaration, git config, or OS user (DES-011, DES-018)
+- **Channel bindings** — email (Beadle), GitHub (Biff), Claude Code agent definition; voice config lives in extensions (`ext/vox`)
 
 ## What It Looks Like
 
@@ -79,7 +79,7 @@ Personality:
   (empty to skip)
 Choice: 1
 
-Skills (select multiple, comma-separated):
+Talents (select multiple, comma-separated):
   1. go-engineering
   n. [create new]
   (empty to skip)
@@ -90,17 +90,17 @@ Created identity "mal" (Mal Reynolds)
 $ ethos whoami
 Mal Reynolds (mal)
 
-$ ethos show mal
-Name:         Mal Reynolds
-Handle:       mal
-Kind:         human
-Email:        mal@serenity.ship
-Personality:  principal-engineer
+$ ethos identity get mal
+▶ FIELD        VALUE
+  Name         Mal Reynolds
+  Handle       mal
+  Kind         human
+  Email        mal@serenity.ship
+  Personality  principal-engineer
+  Talents      go-engineering
 
 # Principal Engineer
 Direct, accountable, evidence-driven...
-
-Skills:       go-engineering
 
 --- go-engineering ---
 # Go Engineering
@@ -114,11 +114,12 @@ Systems design, correctness over speed...
 | Command | What it does |
 |---------|-------------|
 | `ethos whoami [--json]` | Show the caller's identity (resolved from iam/git/OS) |
-| `ethos create` | Create a new identity (interactive wizard) |
-| `ethos create -f <path>` | Create from a YAML file |
-| `ethos list [--json]` | List all identities |
-| `ethos show <handle> [--json]` | Show identity with resolved attribute content |
-| `ethos show <handle> --reference` | Show identity with attribute slugs only |
+| `ethos identity whoami` | Same as `ethos whoami` |
+| `ethos identity list [--json]` | List all identities |
+| `ethos identity get <handle> [--json]` | Show identity with resolved attribute content |
+| `ethos identity get <handle> --reference` | Show identity with attribute slugs only |
+| `ethos identity create` | Create a new identity (interactive wizard) |
+| `ethos identity create -f <path>` | Create from a YAML file |
 
 ### Attributes
 
@@ -127,24 +128,31 @@ Systems design, correctness over speed...
 | `ethos talent create <slug>` | Create a talent (opens `$EDITOR` or `--file`) |
 | `ethos talent list` | List all talents |
 | `ethos talent show <slug>` | Show talent content |
+| `ethos talent delete <slug>` | Delete a talent |
 | `ethos talent add <handle> <slug>` | Add talent to an identity |
 | `ethos talent remove <handle> <slug>` | Remove talent from an identity |
 | `ethos personality create <slug>` | Create a personality |
 | `ethos personality list` | List all personalities |
 | `ethos personality show <slug>` | Show personality content |
+| `ethos personality delete <slug>` | Delete a personality |
 | `ethos personality set <handle> <slug>` | Set personality on an identity |
 | `ethos writing-style create <slug>` | Create a writing style |
 | `ethos writing-style list` | List all writing styles |
 | `ethos writing-style show <slug>` | Show writing style content |
+| `ethos writing-style delete <slug>` | Delete a writing style |
 | `ethos writing-style set <handle> <slug>` | Set writing style on an identity |
 
 ### Session
 
 | Command | What it does |
 |---------|-------------|
-| `ethos iam <persona>` | Declare persona in current session |
 | `ethos session` | Show current session participants |
-| `ethos session purge` | Clean up stale session rosters |
+| `ethos session roster` | Same as `ethos session` |
+| `ethos session iam <persona>` | Declare persona in current session |
+| `ethos session list` | List all sessions |
+| `ethos session join --agent-id <id>` | Add a participant to the session |
+| `ethos session leave --agent-id <id>` | Remove a participant from the session |
+| `ethos session purge` | Clean up stale sessions and PID files |
 
 ### Extensions
 
@@ -162,6 +170,7 @@ Systems design, correctness over speed...
 | `ethos version [--json]` | Print version |
 | `ethos doctor [--json]` | Check installation health |
 | `ethos serve` | Start MCP server (stdio) |
+| `ethos completion <bash\|zsh\|fish>` | Generate shell completion script |
 | `ethos uninstall` | Remove plugin (`--purge` to remove binary + data) |
 
 `--json` is a global flag — valid before or after the subcommand.
@@ -169,18 +178,19 @@ Systems design, correctness over speed...
 ## MCP Tools
 
 When running as a Claude Code plugin, ethos registers an MCP server with
-6 tools. All tools use a `method` parameter for verb dispatch.
+7 tools. Tools with multiple verbs use a `method` parameter for dispatch.
 
 All tools have corresponding slash commands under `/ethos:*`.
 
 | Tool | Methods | Slash command |
 |------|---------|---------------|
-| `identity` | whoami, list, get, create, iam | `/ethos:identity` |
+| `identity` | whoami, list, get, create | `/ethos:identity` |
 | `talent` | create, list, show, delete, add, remove | `/ethos:talent` |
 | `personality` | create, list, show, delete, set | `/ethos:personality` |
 | `writing_style` | create, list, show, delete, set | `/ethos:writing-style` |
+| `session` | roster, iam, join, leave | `/ethos:session` |
 | `ext` | get, set, del, list | `/ethos:ext` |
-| `session` | roster, join, leave | `/ethos:session` |
+| `doctor` | *(standalone)* | — |
 
 ## Identity Schema
 
@@ -190,9 +200,6 @@ handle: mal
 kind: human                       # or "agent"
 email: mal@serenity.ship           # Beadle binding
 github: mal                        # Biff binding
-voice:                             # Vox binding
-  provider: elevenlabs
-  voice_id: "abc123"
 agent: .claude/agents/mal.md       # Claude Code agent binding
 writing_style: concise-quantified  # slug → writing-styles/concise-quantified.md
 personality: principal-engineer    # slug → personalities/principal-engineer.md
@@ -202,8 +209,8 @@ talents:                            # slugs → talents/<slug>.md
 ```
 
 Attributes (`writing_style`, `personality`, `talents`) are slugs that reference
-`.md` files in the attribute directories. `ethos show` resolves them to full
-content by default. Multiple identities can share the same attribute files.
+`.md` files in the attribute directories. `ethos identity get` resolves them to
+full content by default. Multiple identities can share the same attribute files.
 
 Same schema for agents — only `kind` differs:
 
@@ -229,16 +236,24 @@ an identity with a handle matching the agent type.
 
 ## Storage
 
+Identities and attributes resolve in two layers: **repo-local** (`.punt-labs/ethos/`)
+overrides **user-global** (`~/.punt-labs/ethos/`). Repo-local files are tracked in
+git; global files are personal.
+
 | Scope | Path | Tracked? |
 |-------|------|----------|
-| Identities | `~/.punt-labs/ethos/identities/<persona>.yaml` | No (personal) |
-| Extensions | `~/.punt-labs/ethos/identities/<persona>.ext/<tool>.yaml` | No |
-| Skills | `~/.punt-labs/ethos/talents/<slug>.md` | No |
-| Personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
-| Writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
-| Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
+| Repo identities | `.punt-labs/ethos/identities/<handle>.yaml` | Yes |
+| Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
+| Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
+| Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+| Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
+| Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
+| Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
+| Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
+| Extensions | `~/.punt-labs/ethos/identities/<handle>.ext/<tool>.yaml` | No |
+| Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
 
 ## Identity Resolution
 
@@ -247,7 +262,7 @@ Human and agent identities are resolved automatically — no manual
 
 **Human resolution** (stops at first match):
 
-1. `iam` declaration — explicit persona set via `ethos iam`
+1. `iam` declaration — explicit persona set via `ethos session iam`
 2. `git config user.name` — matched against identity `github` field
 3. `git config user.email` — matched against identity `email` field
 4. `$USER` — matched against identity `handle` field
@@ -268,11 +283,11 @@ Tools integrate with ethos at whatever coupling level fits:
 | Pattern | How | Dependency |
 |---------|-----|------------|
 | **Filesystem** | Read YAML at `~/.punt-labs/ethos/identities/<handle>.yaml` | None |
-| **CLI** | Call `ethos whoami --json` or `ethos show <handle> --json` from hooks/scripts | Binary installed |
+| **CLI** | Call `ethos whoami --json` or `ethos identity get <handle> --json` from hooks/scripts | Binary installed |
 | **MCP server** | Connect to `ethos serve` for identity CRUD, attribute management, extensions, and session roster | Binary installed |
 
 **Core identity fields** (owned by ethos): name, handle, kind, email,
-github, voice, agent, writing\_style, personality, talents.
+github, agent, writing\_style, personality, talents.
 
 **Attributes** (reusable `.md` files): talents, personalities, and writing
 styles are plain markdown documents stored in dedicated directories. Any
@@ -280,15 +295,14 @@ identity can reference them by slug. Create with `ethos talent create`,
 `ethos personality create`, or `ethos writing-style create`.
 
 **Extensions** (owned by each tool): any tool can read/write namespaced
-key-value pairs in `<persona>.ext/<tool>.yaml`. A voice tool stores its
-voice ID, an email tool stores a GPG key, a messaging tool stores routing
-preferences. Ethos assembles the merged view but never interprets
-extension contents.
+key-value pairs in `<persona>.ext/<tool>.yaml`. Vox stores voice config,
+Beadle stores a GPG key, Biff stores routing preferences. Ethos assembles
+the merged view but never interprets extension contents.
 
 ```bash
 ethos ext set mal beadle gpg_key_id 3AA5C34371567BD2
 ethos ext get mal beadle gpg_key_id
-ethos show mal   # includes ext map with all tool namespaces
+ethos identity get mal   # includes ext map with all tool namespaces
 ```
 
 ## Development
@@ -296,6 +310,9 @@ ethos show mal   # includes ext map with all tool namespaces
 ```bash
 make check    # All quality gates: vet + staticcheck + markdownlint + shellcheck + tests
 make build    # Build binary
+make install  # Build and install to ~/.local/bin
+make dev      # Install and symlink plugin cache for development
+make undev    # Restore plugin cache from backup
 make format   # Auto-format code
 make dist     # Cross-compile for all platforms
 make help     # List all targets

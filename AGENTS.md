@@ -31,18 +31,19 @@ ethos show mal --json                 # JSON output
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 6 tools using method-dispatch.
+When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 7 tools using method-dispatch.
 
 **All tools use a consolidated `method` parameter:**
 
 | Tool | Methods | Key Parameters |
 |------|---------|----------------|
-| `identity` | whoami, list, get, create, iam | `handle`, `persona`, `reference` |
+| `identity` | whoami, list, get, create | `handle`, `reference` |
+| `session` | roster, join, leave, iam | `session_id`, `agent_id`, `persona` |
 | `talent` | create, list, show, delete, add, remove | `slug`, `content`, `handle` |
 | `personality` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `writing_style` | create, list, show, delete, set | `slug`, `content`, `handle` |
-| `session` | roster, join, leave | `session_id`, `agent_id`, `persona` |
 | `ext` | get, set, del, list | `persona`, `namespace`, `key`, `value` |
+| `doctor` | *(none — standalone)* | *(none)* |
 
 **Example — read identity from MCP:**
 
@@ -77,7 +78,7 @@ ethos session purge                   # Clean up stale rosters
 
 | Tool | Method | Parameters | Description |
 |------|--------|-----------|-------------|
-| `identity` | iam | `persona` | Declare persona in current session |
+| `session` | iam | `persona` | Declare persona in current session |
 | `session` | roster | `session_id` (optional) | Return full roster with tree |
 | `session` | join | `agent_id`, optional `persona`, `parent`, `agent_type` | Add participant |
 | `session` | leave | `agent_id` | Remove participant |
@@ -86,9 +87,12 @@ ethos session purge                   # Clean up stale rosters
 
 | Command | Description |
 |---------|-------------|
-| `/ethos:identity whoami` | Show active identity |
-| `/ethos:identity iam archie` | Declare persona in current session |
-| `/ethos:session` | Show session participants |
+| `/ethos:identity` | Manage identities -- whoami, list, get, create |
+| `/ethos:session` | Manage session roster -- roster, join, leave, iam |
+| `/ethos:ext` | Manage tool-scoped extensions -- get, set, del, list |
+| `/ethos:talent` | Manage talents -- create, list, show, delete, add, remove |
+| `/ethos:personality` | Manage personalities -- create, list, show, delete, set |
+| `/ethos:writing-style` | Manage writing styles -- create, list, show, delete, set |
 
 ### Roster Structure
 
@@ -179,16 +183,16 @@ ethos ext del mal vox
 
 ### MCP Tools
 
-| Tool | Parameters | Description |
-|------|-----------|-------------|
-| `ext_get` | `persona`, `namespace`, optional `key` | Read one key or all keys |
-| `ext_set` | `persona`, `namespace`, `key`, `value` | Write a key-value pair |
-| `ext_del` | `persona`, `namespace`, optional `key` | Delete key or namespace |
-| `ext_list` | `persona` | List all namespaces |
+| Tool | Method | Parameters | Description |
+|------|--------|-----------|-------------|
+| `ext` | get | `persona`, `namespace`, optional `key` | Read one key or all keys |
+| `ext` | set | `persona`, `namespace`, `key`, `value` | Write a key-value pair |
+| `ext` | del | `persona`, `namespace`, optional `key` | Delete key or namespace |
+| `ext` | list | `persona` | List all namespaces |
 
 ### Merged View
 
-When you read an identity (via `ethos show`, `get_identity`, or `Load()`), extensions appear under the `ext` map:
+When you read an identity (via `ethos show`, `identity` method `get`, or `Load()`), extensions appear under the `ext` map:
 
 ```yaml
 name: Mal Reynolds
@@ -273,9 +277,6 @@ handle: mal                           # required, unique, used as filename
 kind: human                           # required: "human" or "agent"
 email: mal@serenity.ship              # beadle channel binding
 github: mal                           # biff channel binding
-voice:                                # vox channel binding
-  provider: elevenlabs
-  voice_id: "abc123def456"
 agent: .claude/agents/mal.md          # claude code agent binding
 writing_style: concise-quantified     # slug → writing-styles/concise-quantified.md
 personality: principal-engineer       # slug → personalities/principal-engineer.md
@@ -284,7 +285,7 @@ talents:                               # slugs → talents/<slug>.md
   - product-strategy
 ```
 
-The `agent` field is a channel binding — like voice or email. Ethos defines *who*. The agent `.md` file defines *what tools and workflow*.
+The `agent` field is a channel binding — like email or GitHub. Ethos defines *who*. The agent `.md` file defines *what tools and workflow*. Voice configuration lives in the `ext/vox` namespace, not as a core field.
 
 ## Storage Layout
 

@@ -64,6 +64,8 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return formatSession(w, method, result)
 	case "ext":
 		return formatExt(w, method, result)
+	case "doctor":
+		return formatDoctor(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -83,8 +85,6 @@ func formatIdentity(w io.Writer, method, result string) error {
 			name = "identity"
 		}
 		return emit(w, "Created "+name, result)
-	case "iam":
-		return emitSimple(w, truncate(result, 200))
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -148,13 +148,14 @@ func formatIdentityList(w io.Writer, result string) error {
 	summary := fmt.Sprintf("%d %s, %d active", len(entries), noun, activeCount)
 
 	// Build columnar table.
-	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "ACTIVE"}
+	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "WRITING", "ACTIVE"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
 		handle, _ := e["handle"].(string)
 		name, _ := e["name"].(string)
 		kind, _ := e["kind"].(string)
 		personality, _ := e["personality"].(string)
+		writing, _ := e["writing_style"].(string)
 		active, _ := e["active"].(bool)
 		marker := "-"
 		if active {
@@ -163,7 +164,10 @@ func formatIdentityList(w io.Writer, result string) error {
 		if personality == "" {
 			personality = "-"
 		}
-		rows[i] = []string{handle, name, kind, personality, marker}
+		if writing == "" {
+			writing = "-"
+		}
+		rows[i] = []string{handle, name, kind, personality, writing, marker}
 	}
 
 	return emit(w, summary, FormatTable(headers, rows))
@@ -281,6 +285,8 @@ func formatSession(w io.Writer, method, result string) error {
 	switch method {
 	case "roster":
 		return formatSessionRoster(w, result)
+	case "iam":
+		return emitSimple(w, truncate(result, 200))
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -419,6 +425,20 @@ func emitSimple(w io.Writer, summary string) error {
 	r.HookSpecificOutput.HookEventName = "PostToolUse"
 	r.HookSpecificOutput.UpdatedMCPToolOutput = summary
 	return json.NewEncoder(w).Encode(r)
+}
+
+// --- Doctor tool formatter ---
+
+// formatDoctor splits the doctor output into a summary panel and a check table context.
+// The doctor tool returns "N checks, M passed\n\n<table>".
+func formatDoctor(w io.Writer, result string) error {
+	parts := strings.SplitN(result, "\n\n", 2)
+	summary := parts[0]
+	ctx := result
+	if len(parts) == 2 {
+		ctx = parts[1]
+	}
+	return emit(w, summary, ctx)
 }
 
 // --- JSON extraction helpers ---
