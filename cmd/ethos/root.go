@@ -14,7 +14,7 @@ var rootCmd = &cobra.Command{
 
 Product commands:
   whoami            Show the caller's identity
-  identity          Manage identities (whoami, list, get, create, iam)
+  identity          Manage identities (whoami, list, get, create)
   ext               Manage tool-scoped extensions
 
 Attribute commands:

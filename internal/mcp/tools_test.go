@@ -564,7 +564,7 @@ func TestHandleSession_JoinAndRoster(t *testing.T) {
 	assert.Len(t, participants, 3)
 }
 
-func TestHandleIdentity_Iam(t *testing.T) {
+func TestHandleSession_Iam(t *testing.T) {
 	h := testHandlerWithSession(t)
 
 	require.NoError(t, h.sessionStore.Create("test-iam",
@@ -574,7 +574,7 @@ func TestHandleIdentity_Iam(t *testing.T) {
 
 	// iam uses resolveSessionID which needs session_id passed explicitly
 	// since FindClaudePID won't match the test PID.
-	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
 		"method":     "iam",
 		"session_id": "test-iam",
 		"persona":    "new-persona",

@@ -1,6 +1,6 @@
 ---
-description: Manage identities — whoami, list, get, create, iam
-argument-hint: "whoami|list|get|create|iam [args]"
+description: Manage identities — whoami, list, get, create
+argument-hint: "whoami|list|get|create [args]"
 allowed-tools: ["mcp__plugin_ethos-dev_self__identity"]
 ---
 <!-- markdownlint-disable MD041 -->
@@ -13,7 +13,6 @@ Manage identities via `mcp__plugin_ethos-dev_self__identity`.
 - `/ethos-dev:identity list` — list all identities with active session markers
 - `/ethos-dev:identity get <handle>` — show full details of an identity
 - `/ethos-dev:identity create` — create a new identity (prompt for fields)
-- `/ethos-dev:identity iam <persona>` — declare persona in current session
 
 Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.
 

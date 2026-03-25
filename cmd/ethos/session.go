@@ -140,6 +140,17 @@ var sessionRosterCmd = &cobra.Command{
 	},
 }
 
+// --- session iam ---
+
+var sessionIamCmd = &cobra.Command{
+	Use:   "iam <persona>",
+	Short: "Declare persona in current session",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runIam(args[0])
+	},
+}
+
 // --- session purge ---
 
 var sessionPurgeCmd = &cobra.Command{
@@ -194,6 +205,7 @@ func init() {
 		sessionDeleteCmd,
 		sessionJoinCmd,
 		sessionLeaveCmd,
+		sessionIamCmd,
 		sessionListCmd,
 		sessionRosterCmd,
 		sessionWriteCurrentCmd,

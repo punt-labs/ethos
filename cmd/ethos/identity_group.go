@@ -6,7 +6,7 @@ import (
 
 var identityCmd = &cobra.Command{
 	Use:   "identity <method>",
-	Short: "Manage identities (whoami, list, get, create, iam)",
+	Short: "Manage identities (whoami, list, get, create)",
 	Run: func(cmd *cobra.Command, args []string) {
 		runWhoami()
 	},
@@ -58,21 +58,11 @@ func init() {
 	}
 	identityCreateCmd.Flags().StringVarP(&identityCreateFile, "file", "f", "", "Create identity from YAML file")
 
-	identityIamCmd := &cobra.Command{
-		Use:   "iam <persona>",
-		Short: "Declare persona in current session",
-		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runIam(args[0])
-		},
-	}
-
 	identityCmd.AddCommand(
 		identityWhoamiCmd,
 		identityListCmd,
 		identityGetCmd,
 		identityCreateCmd,
-		identityIamCmd,
 	)
 
 	rootCmd.AddCommand(identityCmd)

@@ -85,8 +85,6 @@ func formatIdentity(w io.Writer, method, result string) error {
 			name = "identity"
 		}
 		return emit(w, "Created "+name, result)
-	case "iam":
-		return emitSimple(w, truncate(result, 200))
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -283,6 +281,8 @@ func formatSession(w io.Writer, method, result string) error {
 	switch method {
 	case "roster":
 		return formatSessionRoster(w, result)
+	case "iam":
+		return emitSimple(w, truncate(result, 200))
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}

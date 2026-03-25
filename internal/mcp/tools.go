@@ -75,19 +75,13 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 
 func (h *Handler) identityTool() mcplib.Tool {
 	return mcplib.NewTool("identity",
-		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create, iam."),
+		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("whoami", "list", "get", "create", "iam"),
+			mcplib.Enum("whoami", "list", "get", "create"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("handle",
 			mcplib.Description("Identity handle. Required for get, create."),
-		),
-		mcplib.WithString("persona",
-			mcplib.Description("Persona handle. Required for iam."),
-		),
-		mcplib.WithString("session_id",
-			mcplib.Description("Session ID. For iam. Omit to auto-discover via process tree."),
 		),
 		mcplib.WithBoolean("reference",
 			mcplib.Description("If true, return attribute slugs only without resolving .md content. For whoami, get."),
@@ -116,8 +110,6 @@ func (h *Handler) handleIdentity(ctx context.Context, req mcplib.CallToolRequest
 		return h.handleGetIdentity(ctx, req)
 	case "create":
 		return h.handleCreateIdentity(ctx, req)
-	case "iam":
-		return h.handleIam(ctx, req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
@@ -360,9 +352,9 @@ func (h *Handler) handleExt(_ context.Context, req mcplib.CallToolRequest) (*mcp
 
 func (h *Handler) sessionTool() mcplib.Tool {
 	return mcplib.NewTool("session",
-		mcplib.WithDescription("Manage session roster. Methods: roster, join, leave. Session ID is auto-discovered if omitted."),
+		mcplib.WithDescription("Manage session roster. Methods: roster, join, leave, iam. Session ID is auto-discovered if omitted."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("roster", "join", "leave"),
+			mcplib.Enum("roster", "join", "leave", "iam"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("session_id",
@@ -401,7 +393,7 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	return sid, nil
 }
 
-func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	if h.sessionStore == nil {
 		return mcplib.NewToolResultError("session store not configured"), nil
 	}
@@ -443,6 +435,9 @@ func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (
 			return mcplib.NewToolResultError(fmt.Sprintf("failed to leave: %v", err)), nil
 		}
 		return mcplib.NewToolResultText(fmt.Sprintf("Removed %s from session %s", agentID, sessionID)), nil
+
+	case "iam":
+		return h.handleIam(ctx, req)
 
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
