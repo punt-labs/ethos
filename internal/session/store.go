@@ -191,6 +191,42 @@ func (s *Store) Purge() ([]string, error) {
 			purged = append(purged, id)
 		}
 	}
+
+	return purged, nil
+}
+
+// PurgeCurrent removes PID files from sessions/current/ where the
+// process is no longer alive. Returns the list of removed PIDs.
+func (s *Store) PurgeCurrent() ([]string, error) {
+	dir := s.currentDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading current directory: %w", err)
+	}
+	var purged []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		pid, err := strconv.Atoi(name)
+		if err != nil {
+			continue // not a PID file
+		}
+		if !isProcessAlive(pid) {
+			path := filepath.Join(dir, name)
+			if removeErr := os.Remove(path); removeErr != nil {
+				if !os.IsNotExist(removeErr) {
+					fmt.Fprintf(os.Stderr, "ethos: PurgeCurrent: failed to remove %s: %v\n", path, removeErr)
+				}
+			} else {
+				purged = append(purged, name)
+			}
+		}
+	}
 	return purged, nil
 }
 
@@ -289,6 +325,15 @@ func isOlderThan(roster *Roster, ttl time.Duration) bool {
 
 // isProcessAlive checks if a process with the given PID exists.
 // Returns true for EPERM (process exists but not signalable).
+// isProcessAlive checks whether a process with the given PID is running.
+//
+// Limitations:
+//   - Zombie processes (exited but not yet waited on) still respond to
+//     signal 0, so this function returns true for zombies.
+//   - PID reuse is not addressed. If the original process exits and the OS
+//     assigns the same PID to an unrelated process, this returns a false
+//     positive. On modern Linux/macOS the PID space is large enough that
+//     reuse within a single session lifetime is unlikely but not impossible.
 func isProcessAlive(pid int) bool {
 	p, err := os.FindProcess(pid)
 	if err != nil {
