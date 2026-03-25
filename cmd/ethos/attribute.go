@@ -198,6 +198,10 @@ func runAttributeDelete(kind attribute.Kind, slug string) {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
+	if jsonOutput {
+		printJSON(map[string]string{"deleted": slug, "kind": kind.DisplayName})
+		return
+	}
 	fmt.Printf("Deleted %s %q\n", kind.DisplayName, slug)
 }
 

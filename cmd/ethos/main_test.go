@@ -55,11 +55,11 @@ func captureStdout(t *testing.T, fn func()) string {
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stdout = w
+	defer func() { os.Stdout = old }()
 
 	fn()
 
 	w.Close()
-	os.Stdout = old
 	var buf bytes.Buffer
 	_, err = io.Copy(&buf, r)
 	require.NoError(t, err)

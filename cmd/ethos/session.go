@@ -180,9 +180,9 @@ func init() {
 
 func runSessionShow() {
 	sessionID := os.Getenv("ETHOS_SESSION")
+	ss := sessionStore()
 	if sessionID == "" {
 		claudePID := process.FindClaudePID()
-		ss := sessionStore()
 		sid, err := ss.ReadCurrentSession(claudePID)
 		if err == nil {
 			sessionID = sid
@@ -192,7 +192,6 @@ func runSessionShow() {
 		fmt.Println("No active session.")
 		return
 	}
-	ss := sessionStore()
 	roster, err := ss.Load(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
