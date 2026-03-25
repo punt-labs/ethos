@@ -24,6 +24,7 @@ func init() {
 			runWhoami()
 		},
 	}
+	identityWhoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
 
 	identityListCmd := &cobra.Command{
 		Use:   "list",

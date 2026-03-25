@@ -354,6 +354,7 @@ func runSessionList() {
 	for _, id := range ids {
 		roster, loadErr := ss.Load(id)
 		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: warning: session %s: %v\n", id, loadErr)
 			continue
 		}
 		primary := ""

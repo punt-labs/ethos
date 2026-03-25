@@ -115,18 +115,10 @@ func (h *Handler) handleIdentity(ctx context.Context, req mcplib.CallToolRequest
 	}
 }
 
-func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	if h.sessionStore == nil {
-		return mcplib.NewToolResultError("session store not configured"), nil
-	}
+func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessionID string) (*mcplib.CallToolResult, error) {
 	persona := stringArg(req, "persona", "")
 	if persona == "" {
 		return mcplib.NewToolResultError("persona is required for iam"), nil
-	}
-
-	sessionID, err := h.resolveSessionID(req)
-	if err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
 	}
 
 	// Use the Claude PID as the agent ID for iam declarations.
@@ -437,7 +429,7 @@ func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest)
 		return mcplib.NewToolResultText(fmt.Sprintf("Removed %s from session %s", agentID, sessionID)), nil
 
 	case "iam":
-		return h.handleIam(ctx, req)
+		return h.handleIam(ctx, req, sessionID)
 
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
