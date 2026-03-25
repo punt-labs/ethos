@@ -138,7 +138,7 @@ func TestExtValidation_ValueTooLong(t *testing.T) {
 	assert.Error(t, s.ExtSet("test", "beadle", "key", string(long)))
 }
 
-func TestExtValidation_PersonaNotFound(t *testing.T) {
+func TestExtValidation_HandleNotFound(t *testing.T) {
 	s := NewStore(t.TempDir())
 	assert.Error(t, s.ExtSet("nonexistent", "beadle", "key", "val"))
 }

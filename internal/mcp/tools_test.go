@@ -473,13 +473,13 @@ func TestHandleExt_SetAndGet(t *testing.T) {
 	}))
 
 	result, err := h.handleExt(context.Background(), callTool(map[string]interface{}{
-		"method": "set", "persona": "alice", "namespace": "biff", "key": "tty", "value": "s001",
+		"method": "set", "handle": "alice", "namespace": "biff", "key": "tty", "value": "s001",
 	}))
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 
 	result, err = h.handleExt(context.Background(), callTool(map[string]interface{}{
-		"method": "get", "persona": "alice", "namespace": "biff",
+		"method": "get", "handle": "alice", "namespace": "biff",
 	}))
 	require.NoError(t, err)
 	assert.Contains(t, resultText(t, result), "tty")
@@ -488,7 +488,7 @@ func TestHandleExt_SetAndGet(t *testing.T) {
 func TestHandleExt_SetMissingNamespace(t *testing.T) {
 	h := testHandler(t)
 	result, err := h.handleExt(context.Background(), callTool(map[string]interface{}{
-		"method": "set", "persona": "alice", "key": "x", "value": "y",
+		"method": "set", "handle": "alice", "key": "x", "value": "y",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
@@ -498,7 +498,7 @@ func TestHandleExt_SetMissingNamespace(t *testing.T) {
 func TestHandleExt_SetMissingKey(t *testing.T) {
 	h := testHandler(t)
 	result, err := h.handleExt(context.Background(), callTool(map[string]interface{}{
-		"method": "set", "persona": "alice", "namespace": "biff", "value": "y",
+		"method": "set", "handle": "alice", "namespace": "biff", "value": "y",
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
