@@ -67,7 +67,16 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 		},
 	}
 
-	parent.AddCommand(createCmd, listCmd, showCmd)
+	deleteCmd := &cobra.Command{
+		Use:   "delete <slug>",
+		Short: fmt.Sprintf("Delete a %s", kind.DisplayName),
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			runAttributeDelete(kind, args[0])
+		},
+	}
+
+	parent.AddCommand(createCmd, listCmd, showCmd, deleteCmd)
 
 	if kind == attribute.Talents {
 		addCmd := &cobra.Command{
@@ -181,6 +190,15 @@ func runAttributeShow(kind attribute.Kind, slug string) {
 		return
 	}
 	fmt.Print(a.Content)
+}
+
+func runAttributeDelete(kind attribute.Kind, slug string) {
+	s := attributeStore(kind)
+	if err := s.Delete(slug); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Deleted %s %q\n", kind.DisplayName, slug)
 }
 
 // runAttributeAdd adds an attribute slug to an identity's talents list.

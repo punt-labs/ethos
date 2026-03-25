@@ -68,6 +68,7 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func TestVersionCommand(t *testing.T) {
 	jsonOutput = false
+	t.Cleanup(func() { jsonOutput = false })
 	rootCmd.SetArgs([]string{"version"})
 	out := captureStdout(t, func() {
 		err := rootCmd.Execute()
@@ -78,6 +79,7 @@ func TestVersionCommand(t *testing.T) {
 
 func TestVersionCommandJSON(t *testing.T) {
 	jsonOutput = false
+	t.Cleanup(func() { jsonOutput = false })
 	rootCmd.SetArgs([]string{"version", "--json"})
 	out := captureStdout(t, func() {
 		err := rootCmd.Execute()
@@ -92,6 +94,7 @@ func TestVersionCommandJSON(t *testing.T) {
 
 func TestResolveAgentJSONFlag(t *testing.T) {
 	jsonOutput = false
+	t.Cleanup(func() { jsonOutput = false })
 	// resolve-agent is a native cobra command; --json is a persistent flag
 	// that cobra parses automatically.
 	rootCmd.SetArgs([]string{"resolve-agent", "--json"})

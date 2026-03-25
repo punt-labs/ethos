@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -178,7 +179,19 @@ func init() {
 }
 
 func runSessionShow() {
-	sessionID, _ := resolveSessionContext()
+	sessionID := os.Getenv("ETHOS_SESSION")
+	if sessionID == "" {
+		claudePID := process.FindClaudePID()
+		ss := sessionStore()
+		sid, err := ss.ReadCurrentSession(claudePID)
+		if err == nil {
+			sessionID = sid
+		}
+	}
+	if sessionID == "" {
+		fmt.Println("No active session.")
+		return
+	}
 	ss := sessionStore()
 	roster, err := ss.Load(sessionID)
 	if err != nil {

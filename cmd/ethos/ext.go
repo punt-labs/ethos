@@ -23,7 +23,7 @@ var extGetCmd = &cobra.Command{
 }
 
 var extSetCmd = &cobra.Command{
-	Use:   "set <persona> <namespace> <key> <value>",
+	Use:   "set <persona> <namespace> <key> <value>...",
 	Short: "Set an extension value",
 	Args:  cobra.MinimumNArgs(4),
 	Run: func(cmd *cobra.Command, args []string) {
