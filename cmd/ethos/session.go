@@ -301,6 +301,13 @@ func runSessionDeleteCurrent() {
 
 func runSessionPurge() {
 	ss := sessionStore()
+
+	// Purge stale PID files first (independent of roster purge).
+	pidPurged, pidErr := ss.PurgeCurrent()
+	if pidErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: purging PID files: %v\n", pidErr)
+	}
+
 	purged, err := ss.Purge()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
@@ -310,14 +317,28 @@ func runSessionPurge() {
 		if purged == nil {
 			purged = []string{}
 		}
-		printJSON(purged)
-		return
-	}
-	if len(purged) == 0 {
-		fmt.Println("No stale sessions found.")
+		if pidPurged == nil {
+			pidPurged = []string{}
+		}
+		printJSON(map[string][]string{
+			"sessions":  purged,
+			"pid_files": pidPurged,
+		})
+		if pidErr != nil {
+			os.Exit(1)
+		}
 		return
 	}
 	for _, id := range purged {
 		fmt.Printf("Purged session %s\n", id)
+	}
+	for _, pid := range pidPurged {
+		fmt.Printf("Purged PID file %s\n", pid)
+	}
+	if pidErr != nil {
+		os.Exit(1)
+	}
+	if len(purged) == 0 && len(pidPurged) == 0 {
+		fmt.Println("No stale sessions found.")
 	}
 }

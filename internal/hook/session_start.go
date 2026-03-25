@@ -47,6 +47,13 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 		}
 	}
 
+	// Clean stale PID files from previous sessions (fire-and-forget).
+	if purged, purgeErr := ss.PurgeCurrent(); purgeErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to purge stale PID files: %v\n", purgeErr)
+	} else if len(purged) > 0 {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: cleaned %d stale PID file(s)\n", len(purged))
+	}
+
 	// Resolve agent persona from repo config.
 	repoRoot := resolve.FindRepoRoot()
 	agentPersona := resolve.ResolveAgent(repoRoot)
