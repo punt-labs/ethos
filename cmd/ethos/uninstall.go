@@ -17,9 +17,10 @@ const pluginID = "ethos@punt-labs"
 var uninstallPurge bool
 
 var uninstallCmd = &cobra.Command{
-	Use:   "uninstall",
-	Short: "Remove plugin (--purge to remove binary + data)",
-	Args:  cobra.NoArgs,
+	Use:     "uninstall",
+	Short:   "Remove plugin (--purge to remove binary + data)",
+	GroupID: "admin",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runUninstall()
 	},

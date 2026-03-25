@@ -33,8 +33,9 @@ func layeredAttributeStore(is identity.IdentityStore, kind attribute.Kind) *attr
 // subcommands for an attribute kind. For Talents, adds add/remove. For others, adds set.
 func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, short string) {
 	parent := &cobra.Command{
-		Use:   use,
-		Short: short,
+		Use:     use,
+		Short:   short,
+		GroupID: "attributes",
 	}
 
 	var createFile string

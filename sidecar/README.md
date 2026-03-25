@@ -27,9 +27,6 @@ handle: jfreeman
 kind: human                       # or "agent"
 email: jim@punt-labs.com
 github: jmf-pobox
-voice:
-  provider: elevenlabs
-  voice_id: charlie
 agent: .claude/agents/jfreeman.md
 writing_style: writing-styles/concise-quantified.md
 personality: personalities/principal-engineer.md
