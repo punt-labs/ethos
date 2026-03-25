@@ -12,81 +12,18 @@ import (
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/spf13/cobra"
 )
 
 var version = "dev"
 
-// jsonOutput is set by the --json global flag.
+// jsonOutput is set by the --json persistent flag on rootCmd.
 var jsonOutput bool
 
 func main() {
-	// Extract global flags. --json is recognized anywhere except after "--".
-	var args []string
-	pastSeparator := false
-	for _, a := range os.Args[1:] {
-		if a == "--" {
-			pastSeparator = true
-			args = append(args, a)
-		} else if !pastSeparator && a == "--json" {
-			jsonOutput = true
-		} else {
-			args = append(args, a)
-		}
-	}
-
-	if len(args) == 0 {
-		printUsage()
+	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
-
-	cmd := args[0]
-	cmdArgs := args[1:]
-
-	// Check for subcommand-level --help (skip if cmd is itself a help alias).
-	if cmd != "help" && cmd != "-h" && cmd != "--help" && hasHelpFlag(cmdArgs) {
-		printSubcommandHelp(cmd)
-		return
-	}
-
-	commands := map[string]func([]string){
-		"version":       func([]string) { runVersion() },
-		"doctor":        func([]string) { runDoctor() },
-		"whoami":        runWhoami,
-		"serve":         func([]string) { runServe() },
-		"create":        runCreate,
-		"list":          func([]string) { runList() },
-		"show":          runShow,
-		"ext":           runExt,
-		"iam":           runIam,
-		"session":       runSession,
-		"talent":        runTalent,
-		"personality":   runPersonality,
-		"writing-style": runWritingStyle,
-		"hook":          runHook,
-		"resolve-agent": func([]string) { runResolveAgent() },
-		"uninstall":     runUninstall,
-		"help":          func([]string) { printUsageTo(os.Stdout) },
-		"-h":            func([]string) { printUsageTo(os.Stdout) },
-		"--help":        func([]string) { printUsageTo(os.Stdout) },
-	}
-
-	if fn, ok := commands[cmd]; ok {
-		fn(cmdArgs)
-	} else {
-		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
-		printUsage()
-		os.Exit(1)
-	}
-}
-
-// hasHelpFlag returns true if args contains --help or -h.
-func hasHelpFlag(args []string) bool {
-	for _, a := range args {
-		if a == "--help" || a == "-h" {
-			return true
-		}
-	}
-	return false
 }
 
 // printJSON marshals v to stdout. Exits on error.
@@ -99,84 +36,114 @@ func printJSON(v any) {
 	fmt.Println(string(data))
 }
 
-func printSubcommandHelp(cmd string) {
-	switch cmd {
-	case "whoami":
-		fmt.Print("Usage: ethos whoami [--json]\n\n  Show the caller's identity (resolved from iam, git, or OS).\n")
-	case "create":
-		fmt.Print("Usage: ethos create [-f|--file <path>]\n\n  Create a new identity interactively, or from a YAML file.\n")
-	case "list":
-		fmt.Print("Usage: ethos list [--json]\n\n  List all identities. Session participants are marked with *.\n")
-	case "show":
-		fmt.Print("Usage: ethos show <handle> [--json]\n\n  Show full details for an identity.\n")
-	case "doctor":
-		fmt.Print("Usage: ethos doctor [--json]\n\n  Check installation health.\n")
-	case "serve":
-		fmt.Print("Usage: ethos serve\n\n  Start MCP server (stdio transport).\n")
-	case "version":
-		fmt.Print("Usage: ethos version\n\n  Print version.\n")
-	case "ext":
-		fmt.Print("Usage: ethos ext <subcommand> [args]\n\n  Manage tool-scoped extensions on identities.\n\n  ethos ext get <persona> <namespace> [key]\n  ethos ext set <persona> <namespace> <key> <value>\n  ethos ext del <persona> <namespace> [key]\n  ethos ext list <persona>\n")
-	case "iam":
-		fmt.Print("Usage: ethos iam <persona>\n\n  Declare your persona in the current session.\n")
-	case "uninstall":
-		fmt.Print("Usage: ethos uninstall [--purge]\n\n  Remove the Claude Code plugin.\n  With --purge: also remove the binary and all identity data.\n")
-	case "session":
-		fmt.Print("Usage: ethos session [subcommand]\n\n  Manage session roster.\n\n  ethos session                                  Show current session participants\n  ethos session create --session ID --root-id X   Create a new session roster\n  ethos session join --agent-id X [...]            Add a participant\n  ethos session leave --agent-id X                 Remove a participant\n  ethos session purge                              Clean up stale sessions\n")
-	case "talent":
-		fmt.Print("Usage: ethos talent <subcommand>\n\n  Manage talents.\n\n  ethos talent create <slug>           Create a new talent\n  ethos talent list                    List all talents\n  ethos talent show <slug>             Show talent content\n  ethos talent add <handle> <slug>     Add talent to an identity\n  ethos talent remove <handle> <slug>  Remove talent from an identity\n")
-	case "personality":
-		fmt.Print("Usage: ethos personality <subcommand>\n\n  Manage personalities.\n\n  ethos personality create <slug>           Create a new personality\n  ethos personality list                    List all personalities\n  ethos personality show <slug>             Show personality content\n  ethos personality set <handle> <slug>     Set personality on an identity\n")
-	case "writing-style":
-		fmt.Print("Usage: ethos writing-style <subcommand>\n\n  Manage writing styles.\n\n  ethos writing-style create <slug>           Create a new writing style\n  ethos writing-style list                    List all writing styles\n  ethos writing-style show <slug>             Show writing style content\n  ethos writing-style set <handle> <slug>     Set writing style on an identity\n")
-	case "hook":
-		printHookUsage()
-	default:
-		fmt.Fprintf(os.Stderr, "ethos: unknown command %q\n", cmd)
-		printUsage()
-		os.Exit(1)
-	}
+// --- version ---
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if jsonOutput {
+			printJSON(map[string]string{"version": version})
+		} else {
+			fmt.Printf("ethos %s\n", version)
+		}
+	},
 }
 
-func printUsage() { printUsageTo(os.Stderr) }
+// --- doctor ---
 
-func printUsageTo(w *os.File) {
-	fmt.Fprint(w, `ethos: identity binding for humans and AI agents
-
-Product commands:
-  whoami            Show the caller's identity
-  create            Create a new identity
-  list              List all identities
-  show <handle>     Show identity details
-  ext               Manage tool-scoped extensions
-
-Attribute commands:
-  talent            Manage talents (create, list, show, add, remove)
-  personality       Manage personalities (create, list, show, set)
-  writing-style     Manage writing styles (create, list, show, set)
-
-Session commands:
-  iam <persona>     Declare persona in current session
-  session           Show or manage session roster
-
-Admin commands:
-  version           Print version
-  doctor            Check installation health
-  serve             Start MCP server (stdio transport)
-  uninstall         Remove plugin (--purge to remove binary + data)
-
-Flags:
-  --json            JSON output
-  --help, -h        Show this help
-`)
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Check installation health",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runDoctor()
+	},
 }
 
-func runVersion() {
-	if jsonOutput {
-		printJSON(map[string]string{"version": version})
-	} else {
-		fmt.Printf("ethos %s\n", version)
-	}
+// --- whoami ---
+
+var whoamiCmd = &cobra.Command{
+	Use:   "whoami",
+	Short: "Show the caller's identity",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runWhoami()
+	},
+}
+
+// --- show ---
+
+var showReference bool
+
+var showCmd = &cobra.Command{
+	Use:   "show <handle>",
+	Short: "Show identity details",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runShow(args[0], showReference)
+	},
+}
+
+// --- list ---
+
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all identities",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runList()
+	},
+}
+
+// --- resolve-agent ---
+
+var resolveAgentCmd = &cobra.Command{
+	Use:    "resolve-agent",
+	Short:  "Show default agent from repo config",
+	Args:   cobra.NoArgs,
+	Hidden: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		runResolveAgent()
+	},
+}
+
+// --- iam ---
+
+var iamCmd = &cobra.Command{
+	Use:   "iam <persona>",
+	Short: "Declare persona in current session",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runIam(args[0])
+	},
+}
+
+// --- serve ---
+
+var serveCmd = &cobra.Command{
+	Use:   "serve",
+	Short: "Start MCP server (stdio transport)",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runServeImpl()
+	},
+}
+
+func init() {
+	showCmd.Flags().BoolVar(&showReference, "reference", false, "Include reference identity data")
+
+	rootCmd.AddCommand(
+		versionCmd,
+		doctorCmd,
+		whoamiCmd,
+		showCmd,
+		listCmd,
+		resolveAgentCmd,
+		iamCmd,
+		serveCmd,
+	)
 }
 
 func runDoctor() {
@@ -294,7 +261,7 @@ func checkDuplicateFields(s identity.IdentityStore, _ *session.Store) (string, b
 	return "no duplicates", true
 }
 
-func runWhoami(_ []string) {
+func runWhoami() {
 	is := identityStore()
 	ss := sessionStore()
 
@@ -323,14 +290,6 @@ func runResolveAgent() {
 	if handle != "" {
 		fmt.Println(handle)
 	}
-}
-
-func runServe() {
-	runServeImpl()
-}
-
-func runCreate(args []string) {
-	runCreateImpl(args)
 }
 
 func runList() {
@@ -398,19 +357,10 @@ func sessionParticipantHandles() map[string]bool {
 	return handles
 }
 
-func runShow(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "ethos: show requires a handle argument")
-		os.Exit(1)
-	}
-
-	// Check for --reference flag.
-	handle := args[0]
+func runShow(handle string, reference bool) {
 	var opts []identity.LoadOption
-	for _, a := range args[1:] {
-		if a == "--reference" {
-			opts = append(opts, identity.Reference(true))
-		}
+	if reference {
+		opts = append(opts, identity.Reference(true))
 	}
 
 	id, err := identityStore().Load(handle, opts...)
@@ -500,7 +450,6 @@ func joinTalents(talents []string) string {
 	}
 	return strings.Join(filtered, ", ")
 }
-
 
 // oneLine collapses a multi-line string to a single line by joining
 // whitespace-separated fields with a single space.
