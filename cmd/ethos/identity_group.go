@@ -5,7 +5,7 @@ import (
 )
 
 var identityCmd = &cobra.Command{
-	Use:   "identity <method>",
+	Use:   "identity",
 	Short: "Manage identities (whoami, list, get, create)",
 	Run: func(cmd *cobra.Command, args []string) {
 		runWhoami()

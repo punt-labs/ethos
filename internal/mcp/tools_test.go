@@ -633,6 +633,33 @@ func TestHandleSession_NoStore(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "not configured")
 }
 
+// --- Doctor Tool Tests ---
+
+func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
+	// Isolate git config so resolve chain is deterministic.
+	tmp := t.TempDir()
+	t.Setenv("GIT_CONFIG_GLOBAL", tmp+"/empty.gitconfig")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	_ = os.WriteFile(tmp+"/empty.gitconfig", []byte(""), 0o644)
+
+	h := testHandler(t)
+	result, err := h.handleDoctor(context.Background(), callTool(map[string]interface{}{}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	text := resultText(t, result)
+	// Summary line should contain check count.
+	assert.Contains(t, text, "4 checks")
+	// Table should contain check names.
+	assert.Contains(t, text, "Identity directory")
+	assert.Contains(t, text, "Human identity")
+	assert.Contains(t, text, "Default agent")
+	assert.Contains(t, text, "Duplicate fields")
+	// Table should contain status values.
+	assert.Contains(t, text, "PASS")
+}
+
 func TestStringArg(t *testing.T) {
 	req := callTool(map[string]interface{}{
 		"name": "Alice",

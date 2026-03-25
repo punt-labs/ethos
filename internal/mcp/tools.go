@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -483,7 +484,7 @@ func (h *Handler) handleDoctor(_ context.Context, _ mcplib.CallToolRequest) (*mc
 	}
 
 	summary := fmt.Sprintf("%d checks, %d passed", len(results), passed)
-	table := formatTable(headers, rows)
+	table := hook.FormatTable(headers, rows)
 	return mcplib.NewToolResultText(summary + "\n\n" + table), nil
 }
 
@@ -555,54 +556,6 @@ func (h *Handler) checkDuplicateFields() (string, bool) {
 		return "duplicates found: " + strings.Join(dupes, "; "), false
 	}
 	return "no duplicates", true
-}
-
-// formatTable renders a columnar table for MCP tool output.
-// Similar to hook.FormatTable but without the external dependency.
-func formatTable(headers []string, rows [][]string) string {
-	widths := make([]int, len(headers))
-	for i, h := range headers {
-		widths[i] = len(h)
-	}
-	for _, row := range rows {
-		for i, cell := range row {
-			if i < len(widths) && len(cell) > widths[i] {
-				widths[i] = len(cell)
-			}
-		}
-	}
-
-	var buf strings.Builder
-	lastCol := len(headers) - 1
-	for i, h := range headers {
-		if i > 0 {
-			buf.WriteString("  ")
-		}
-		if i == lastCol {
-			buf.WriteString(h)
-		} else {
-			buf.WriteString(fmt.Sprintf("%-*s", widths[i], h))
-		}
-	}
-	for _, row := range rows {
-		buf.WriteString("\n")
-		n := len(row)
-		if n > len(headers) {
-			n = len(headers)
-		}
-		lastCol := n - 1
-		for i := 0; i < n; i++ {
-			if i > 0 {
-				buf.WriteString("  ")
-			}
-			if i == lastCol {
-				buf.WriteString(row[i])
-			} else {
-				buf.WriteString(fmt.Sprintf("%-*s", widths[i], row[i]))
-			}
-		}
-	}
-	return buf.String()
 }
 
 // --- Helpers ---

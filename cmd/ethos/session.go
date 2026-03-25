@@ -357,8 +357,19 @@ func runSessionList() {
 			fmt.Fprintf(os.Stderr, "ethos: warning: session %s: %v\n", id, loadErr)
 			continue
 		}
+		// Primary agent is the first participant with a parent (i.e., not the root human).
+		// Fall back to the first participant if none has a parent.
 		primary := ""
-		if len(roster.Participants) > 0 {
+		for _, p := range roster.Participants {
+			if p.Parent != "" {
+				primary = p.Persona
+				if primary == "" {
+					primary = p.AgentID
+				}
+				break
+			}
+		}
+		if primary == "" && len(roster.Participants) > 0 {
 			primary = roster.Participants[0].Persona
 			if primary == "" {
 				primary = roster.Participants[0].AgentID

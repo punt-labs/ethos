@@ -148,13 +148,14 @@ func formatIdentityList(w io.Writer, result string) error {
 	summary := fmt.Sprintf("%d %s, %d active", len(entries), noun, activeCount)
 
 	// Build columnar table.
-	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "ACTIVE"}
+	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "WRITING", "ACTIVE"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
 		handle, _ := e["handle"].(string)
 		name, _ := e["name"].(string)
 		kind, _ := e["kind"].(string)
 		personality, _ := e["personality"].(string)
+		writing, _ := e["writing_style"].(string)
 		active, _ := e["active"].(bool)
 		marker := "-"
 		if active {
@@ -163,7 +164,10 @@ func formatIdentityList(w io.Writer, result string) error {
 		if personality == "" {
 			personality = "-"
 		}
-		rows[i] = []string{handle, name, kind, personality, marker}
+		if writing == "" {
+			writing = "-"
+		}
+		rows[i] = []string{handle, name, kind, personality, writing, marker}
 	}
 
 	return emit(w, summary, FormatTable(headers, rows))
