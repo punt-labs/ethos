@@ -21,57 +21,8 @@ var version = "dev"
 var jsonOutput bool
 
 func main() {
-	registerLegacyCommands()
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
-	}
-}
-
-// registerLegacyCommands wires existing run functions into cobra commands.
-// This is temporary — each will be properly migrated in later phases.
-func registerLegacyCommands() {
-	cmds := []struct {
-		use    string
-		short  string
-		fn     func([]string)
-		hidden bool
-	}{
-		{"whoami", "Show the caller's identity", runWhoami, false},
-		{"show", "Show identity details", runShow, false},
-		{"list", "List all identities", func(_ []string) { runList() }, false},
-		{"ext", "Manage tool-scoped extensions", runExt, false},
-		{"iam", "Declare persona in current session", runIam, false},
-		{"session", "Manage session roster", runSession, false},
-		{"talent", "Manage talents", runTalent, false},
-		{"personality", "Manage personalities", runPersonality, false},
-		{"writing-style", "Manage writing styles", runWritingStyle, false},
-		{"hook", "Internal hook dispatcher", runHook, true},
-		{"resolve-agent", "Show default agent", func(_ []string) { runResolveAgent() }, false},
-		{"create", "Create a new identity", runCreate, false},
-		{"serve", "Start MCP server (stdio transport)", func(_ []string) { runServe() }, false},
-		{"uninstall", "Remove plugin", runUninstall, false},
-	}
-
-	for _, c := range cmds {
-		fn := c.fn // capture
-		cmd := &cobra.Command{
-			Use:                c.use,
-			Short:              c.short,
-			DisableFlagParsing: true,
-			Run: func(cmd *cobra.Command, args []string) {
-				var filtered []string
-				for _, a := range args {
-					if a == "--json" {
-						jsonOutput = true
-					} else {
-						filtered = append(filtered, a)
-					}
-				}
-				fn(filtered)
-			},
-		}
-		cmd.Hidden = c.hidden
-		rootCmd.AddCommand(cmd)
 	}
 }
 
@@ -85,23 +36,114 @@ func printJSON(v any) {
 	fmt.Println(string(data))
 }
 
-// printSubcommandHelp prints usage for legacy commands that handle their own
-// flag parsing. Will be removed as commands migrate to native cobra.
-func printSubcommandHelp(cmd string) {
-	switch cmd {
-	case "ext":
-		fmt.Print("Usage: ethos ext <subcommand> [args]\n\n  Manage tool-scoped extensions on identities.\n\n  ethos ext get <persona> <namespace> [key]\n  ethos ext set <persona> <namespace> <key> <value>\n  ethos ext del <persona> <namespace> [key]\n  ethos ext list <persona>\n")
-	case "session":
-		fmt.Print("Usage: ethos session [subcommand]\n\n  Manage session roster.\n\n  ethos session                                  Show current session participants\n  ethos session create --session ID --root-id X   Create a new session roster\n  ethos session join --agent-id X [...]            Add a participant\n  ethos session leave --agent-id X                 Remove a participant\n  ethos session purge                              Clean up stale sessions\n")
-	}
+// --- version ---
+
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print version",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if jsonOutput {
+			printJSON(map[string]string{"version": version})
+		} else {
+			fmt.Printf("ethos %s\n", version)
+		}
+	},
 }
 
-func runVersion() {
-	if jsonOutput {
-		printJSON(map[string]string{"version": version})
-	} else {
-		fmt.Printf("ethos %s\n", version)
-	}
+// --- doctor ---
+
+var doctorCmd = &cobra.Command{
+	Use:   "doctor",
+	Short: "Check installation health",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runDoctor()
+	},
+}
+
+// --- whoami ---
+
+var whoamiCmd = &cobra.Command{
+	Use:   "whoami",
+	Short: "Show the caller's identity",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runWhoami()
+	},
+}
+
+// --- show ---
+
+var showReference bool
+
+var showCmd = &cobra.Command{
+	Use:   "show <handle>",
+	Short: "Show identity details",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runShow(args[0], showReference)
+	},
+}
+
+// --- list ---
+
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List all identities",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runList()
+	},
+}
+
+// --- resolve-agent ---
+
+var resolveAgentCmd = &cobra.Command{
+	Use:    "resolve-agent",
+	Short:  "Show default agent from repo config",
+	Args:   cobra.NoArgs,
+	Hidden: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		runResolveAgent()
+	},
+}
+
+// --- iam ---
+
+var iamCmd = &cobra.Command{
+	Use:   "iam <persona>",
+	Short: "Declare persona in current session",
+	Args:  cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runIam(args[0])
+	},
+}
+
+// --- serve ---
+
+var serveCmd = &cobra.Command{
+	Use:   "serve",
+	Short: "Start MCP server (stdio transport)",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runServeImpl()
+	},
+}
+
+func init() {
+	showCmd.Flags().BoolVar(&showReference, "reference", false, "Include reference identity data")
+
+	rootCmd.AddCommand(
+		versionCmd,
+		doctorCmd,
+		whoamiCmd,
+		showCmd,
+		listCmd,
+		resolveAgentCmd,
+		iamCmd,
+		serveCmd,
+	)
 }
 
 func runDoctor() {
@@ -219,7 +261,7 @@ func checkDuplicateFields(s identity.IdentityStore, _ *session.Store) (string, b
 	return "no duplicates", true
 }
 
-func runWhoami(_ []string) {
+func runWhoami() {
 	is := identityStore()
 	ss := sessionStore()
 
@@ -248,14 +290,6 @@ func runResolveAgent() {
 	if handle != "" {
 		fmt.Println(handle)
 	}
-}
-
-func runServe() {
-	runServeImpl()
-}
-
-func runCreate(args []string) {
-	runCreateImpl(args)
 }
 
 func runList() {
@@ -323,19 +357,10 @@ func sessionParticipantHandles() map[string]bool {
 	return handles
 }
 
-func runShow(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "ethos: show requires a handle argument")
-		os.Exit(1)
-	}
-
-	// Check for --reference flag.
-	handle := args[0]
+func runShow(handle string, reference bool) {
 	var opts []identity.LoadOption
-	for _, a := range args[1:] {
-		if a == "--reference" {
-			opts = append(opts, identity.Reference(true))
-		}
+	if reference {
+		opts = append(opts, identity.Reference(true))
 	}
 
 	id, err := identityStore().Load(handle, opts...)
@@ -425,7 +450,6 @@ func joinTalents(talents []string) string {
 	}
 	return strings.Join(filtered, ", ")
 }
-
 
 // oneLine collapses a multi-line string to a single line by joining
 // whitespace-separated fields with a single space.

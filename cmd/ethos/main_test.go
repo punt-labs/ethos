@@ -90,14 +90,13 @@ func TestVersionCommandJSON(t *testing.T) {
 	assert.Equal(t, version, parsed["version"])
 }
 
-func TestLegacyBridgeJSONFlag(t *testing.T) {
+func TestResolveAgentJSONFlag(t *testing.T) {
 	jsonOutput = false
-	registerLegacyCommands()
-	// Use "resolve-agent" as a lightweight legacy bridge command that
-	// does not require identity store setup.
+	// resolve-agent is a native cobra command; --json is a persistent flag
+	// that cobra parses automatically.
 	rootCmd.SetArgs([]string{"resolve-agent", "--json"})
 	// Execute may fail (no git repo) — that's fine; we only care that
-	// jsonOutput was set during arg parsing.
+	// jsonOutput was set during flag parsing.
 	_ = rootCmd.Execute()
-	assert.True(t, jsonOutput, "--json in legacy bridge command should set jsonOutput")
+	assert.True(t, jsonOutput, "--json flag should set jsonOutput via persistent flag")
 }

@@ -6,49 +6,175 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/spf13/cobra"
 )
 
-// nextArg advances i and returns the flag value. Exits with an error
-// if no value follows the flag.
-func nextArg(args []string, i *int, flag string) string {
-	*i++
-	if *i >= len(args) {
-		fmt.Fprintf(os.Stderr, "ethos: %s requires a value\n", flag)
-		os.Exit(1)
-	}
-	return args[*i]
+var sessionCmd = &cobra.Command{
+	Use:   "session",
+	Short: "Manage session roster",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionShow()
+	},
 }
 
-func runSession(args []string) {
-	if len(args) == 0 {
-		// Default: show current session roster.
-		runSessionShow()
-		return
-	}
+// --- session create ---
 
-	sub := args[0]
-	subArgs := args[1:]
+var (
+	sessionCreateSession        string
+	sessionCreateRootID         string
+	sessionCreateRootPersona    string
+	sessionCreatePrimaryID      string
+	sessionCreatePrimaryPersona string
+)
 
-	switch sub {
-	case "create":
-		runSessionCreate(subArgs)
-	case "delete":
-		runSessionDelete(subArgs)
-	case "join":
-		runSessionJoin(subArgs)
-	case "leave":
-		runSessionLeave(subArgs)
-	case "write-current":
-		runSessionWriteCurrent(subArgs)
-	case "delete-current":
-		runSessionDeleteCurrent(subArgs)
-	case "purge":
+var sessionCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a new session roster",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionCreate()
+	},
+}
+
+// --- session delete ---
+
+var sessionDeleteSession string
+
+var sessionDeleteCmd = &cobra.Command{
+	Use:   "delete",
+	Short: "Delete a session roster",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionDelete()
+	},
+}
+
+// --- session join ---
+
+var (
+	sessionJoinAgentID   string
+	sessionJoinPersona   string
+	sessionJoinParent    string
+	sessionJoinAgentType string
+	sessionJoinSession   string
+)
+
+var sessionJoinCmd = &cobra.Command{
+	Use:   "join",
+	Short: "Add a participant to the session",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionJoin()
+	},
+}
+
+// --- session leave ---
+
+var (
+	sessionLeaveAgentID string
+	sessionLeaveSession string
+)
+
+var sessionLeaveCmd = &cobra.Command{
+	Use:   "leave",
+	Short: "Remove a participant from the session",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionLeave()
+	},
+}
+
+// --- session write-current ---
+
+var (
+	sessionWriteCurrentPID     string
+	sessionWriteCurrentSession string
+)
+
+var sessionWriteCurrentCmd = &cobra.Command{
+	Use:    "write-current",
+	Short:  "Write PID-to-session mapping",
+	Args:   cobra.NoArgs,
+	Hidden: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionWriteCurrent()
+	},
+}
+
+// --- session delete-current ---
+
+var sessionDeleteCurrentPID string
+
+var sessionDeleteCurrentCmd = &cobra.Command{
+	Use:    "delete-current",
+	Short:  "Delete PID-to-session mapping",
+	Args:   cobra.NoArgs,
+	Hidden: true,
+	Run: func(cmd *cobra.Command, args []string) {
+		runSessionDeleteCurrent()
+	},
+}
+
+// --- session purge ---
+
+var sessionPurgeCmd = &cobra.Command{
+	Use:   "purge",
+	Short: "Clean up stale sessions",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
 		runSessionPurge()
-	default:
-		fmt.Fprintf(os.Stderr, "ethos session: unknown subcommand %q\n", sub)
-		printSubcommandHelp("session")
-		os.Exit(1)
-	}
+	},
+}
+
+func init() {
+	// session create flags
+	sessionCreateCmd.Flags().StringVar(&sessionCreateSession, "session", "", "Session ID (required)")
+	sessionCreateCmd.Flags().StringVar(&sessionCreateRootID, "root-id", "", "Root agent ID (required)")
+	sessionCreateCmd.Flags().StringVar(&sessionCreateRootPersona, "root-persona", "", "Root agent persona")
+	sessionCreateCmd.Flags().StringVar(&sessionCreatePrimaryID, "primary-id", "", "Primary agent ID (required)")
+	sessionCreateCmd.Flags().StringVar(&sessionCreatePrimaryPersona, "primary-persona", "", "Primary agent persona")
+	_ = sessionCreateCmd.MarkFlagRequired("session")
+	_ = sessionCreateCmd.MarkFlagRequired("root-id")
+	_ = sessionCreateCmd.MarkFlagRequired("primary-id")
+
+	// session delete flags
+	sessionDeleteCmd.Flags().StringVar(&sessionDeleteSession, "session", "", "Session ID (required)")
+	_ = sessionDeleteCmd.MarkFlagRequired("session")
+
+	// session join flags
+	sessionJoinCmd.Flags().StringVar(&sessionJoinAgentID, "agent-id", "", "Agent ID (required)")
+	sessionJoinCmd.Flags().StringVar(&sessionJoinPersona, "persona", "", "Persona handle")
+	sessionJoinCmd.Flags().StringVar(&sessionJoinParent, "parent", "", "Parent agent ID")
+	sessionJoinCmd.Flags().StringVar(&sessionJoinAgentType, "agent-type", "", "Agent type")
+	sessionJoinCmd.Flags().StringVar(&sessionJoinSession, "session", "", "Session ID (auto-detected if omitted)")
+	_ = sessionJoinCmd.MarkFlagRequired("agent-id")
+
+	// session leave flags
+	sessionLeaveCmd.Flags().StringVar(&sessionLeaveAgentID, "agent-id", "", "Agent ID (required)")
+	sessionLeaveCmd.Flags().StringVar(&sessionLeaveSession, "session", "", "Session ID (auto-detected if omitted)")
+	_ = sessionLeaveCmd.MarkFlagRequired("agent-id")
+
+	// session write-current flags
+	sessionWriteCurrentCmd.Flags().StringVar(&sessionWriteCurrentPID, "pid", "", "Claude PID (required)")
+	sessionWriteCurrentCmd.Flags().StringVar(&sessionWriteCurrentSession, "session", "", "Session ID (required)")
+	_ = sessionWriteCurrentCmd.MarkFlagRequired("pid")
+	_ = sessionWriteCurrentCmd.MarkFlagRequired("session")
+
+	// session delete-current flags
+	sessionDeleteCurrentCmd.Flags().StringVar(&sessionDeleteCurrentPID, "pid", "", "Claude PID (required)")
+	_ = sessionDeleteCurrentCmd.MarkFlagRequired("pid")
+
+	sessionCmd.AddCommand(
+		sessionCreateCmd,
+		sessionDeleteCmd,
+		sessionJoinCmd,
+		sessionLeaveCmd,
+		sessionWriteCurrentCmd,
+		sessionDeleteCurrentCmd,
+		sessionPurgeCmd,
+	)
+	rootCmd.AddCommand(sessionCmd)
 }
 
 func runSessionShow() {
@@ -89,94 +215,41 @@ func runSessionShow() {
 	}
 }
 
-func runSessionCreate(args []string) {
-	var sessionID, rootID, rootPersona, primaryID, primaryPersona string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--session":
-			sessionID = nextArg(args, &i, "--session")
-		case "--root-id":
-			rootID = nextArg(args, &i, "--root-id")
-		case "--root-persona":
-			rootPersona = nextArg(args, &i, "--root-persona")
-		case "--primary-id":
-			primaryID = nextArg(args, &i, "--primary-id")
-		case "--primary-persona":
-			primaryPersona = nextArg(args, &i, "--primary-persona")
-		}
-	}
-
-	if sessionID == "" || rootID == "" || primaryID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ethos session create --session ID --root-id X --root-persona Y --primary-id Z --primary-persona W")
-		os.Exit(1)
-	}
-
+func runSessionCreate() {
 	ss := sessionStore()
-	root := session.Participant{AgentID: rootID, Persona: rootPersona}
-	primary := session.Participant{AgentID: primaryID, Persona: primaryPersona, Parent: rootID}
-	if err := ss.Create(sessionID, root, primary); err != nil {
+	root := session.Participant{AgentID: sessionCreateRootID, Persona: sessionCreateRootPersona}
+	primary := session.Participant{AgentID: sessionCreatePrimaryID, Persona: sessionCreatePrimaryPersona, Parent: sessionCreateRootID}
+	if err := ss.Create(sessionCreateSession, root, primary); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 	if jsonOutput {
-		printJSON(map[string]string{"session": sessionID})
+		printJSON(map[string]string{"session": sessionCreateSession})
 	}
 }
 
-func runSessionDelete(args []string) {
-	var sessionID string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--session" {
-			sessionID = nextArg(args, &i, "--session")
-		}
-	}
-	if sessionID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ethos session delete --session ID")
-		os.Exit(1)
-	}
+func runSessionDelete() {
 	ss := sessionStore()
-	if err := ss.Delete(sessionID); err != nil {
+	if err := ss.Delete(sessionDeleteSession); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runSessionJoin(args []string) {
-	var agentID, persona, parent, agentType, sessionID string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--agent-id":
-			agentID = nextArg(args, &i, "--agent-id")
-		case "--persona":
-			persona = nextArg(args, &i, "--persona")
-		case "--parent":
-			parent = nextArg(args, &i, "--parent")
-		case "--agent-type":
-			agentType = nextArg(args, &i, "--agent-type")
-		case "--session":
-			sessionID = nextArg(args, &i, "--session")
-		}
-	}
-
-	if agentID == "" {
-		fmt.Fprintln(os.Stderr, "ethos session join: --agent-id is required")
-		os.Exit(1)
-	}
-
-	if sessionID == "" {
-		sessionID, _ = resolveSessionContext()
+func runSessionJoin() {
+	sid := sessionJoinSession
+	if sid == "" {
+		sid, _ = resolveSessionContext()
 	}
 
 	ss := sessionStore()
 	p := session.Participant{
-		AgentID:   agentID,
-		Persona:   persona,
-		AgentType: agentType,
-		Parent:    parent,
+		AgentID:   sessionJoinAgentID,
+		Persona:   sessionJoinPersona,
+		AgentType: sessionJoinAgentType,
+		Parent:    sessionJoinParent,
 	}
-	if err := ss.Join(sessionID, p); err != nil {
+	if err := ss.Join(sid, p); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
@@ -185,68 +258,30 @@ func runSessionJoin(args []string) {
 	}
 }
 
-func runSessionLeave(args []string) {
-	var agentID, sessionID string
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--agent-id":
-			agentID = nextArg(args, &i, "--agent-id")
-		case "--session":
-			sessionID = nextArg(args, &i, "--session")
-		}
-	}
-
-	if agentID == "" {
-		fmt.Fprintln(os.Stderr, "ethos session leave: --agent-id is required")
-		os.Exit(1)
-	}
-
-	if sessionID == "" {
-		sessionID, _ = resolveSessionContext()
+func runSessionLeave() {
+	sid := sessionLeaveSession
+	if sid == "" {
+		sid, _ = resolveSessionContext()
 	}
 
 	ss := sessionStore()
-	if err := ss.Leave(sessionID, agentID); err != nil {
+	if err := ss.Leave(sid, sessionLeaveAgentID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runSessionWriteCurrent(args []string) {
-	var claudePID, sessionID string
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--pid":
-			claudePID = nextArg(args, &i, "--pid")
-		case "--session":
-			sessionID = nextArg(args, &i, "--session")
-		}
-	}
-	if claudePID == "" || sessionID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ethos session write-current --pid PID --session ID")
-		os.Exit(1)
-	}
+func runSessionWriteCurrent() {
 	ss := sessionStore()
-	if err := ss.WriteCurrentSession(claudePID, sessionID); err != nil {
+	if err := ss.WriteCurrentSession(sessionWriteCurrentPID, sessionWriteCurrentSession); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func runSessionDeleteCurrent(args []string) {
-	var claudePID string
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--pid" {
-			claudePID = nextArg(args, &i, "--pid")
-		}
-	}
-	if claudePID == "" {
-		fmt.Fprintln(os.Stderr, "Usage: ethos session delete-current --pid PID")
-		os.Exit(1)
-	}
+func runSessionDeleteCurrent() {
 	ss := sessionStore()
-	if err := ss.DeleteCurrentSession(claudePID); err != nil {
+	if err := ss.DeleteCurrentSession(sessionDeleteCurrentPID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}

@@ -7,19 +7,30 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/spf13/cobra"
 )
 
 // pluginID matches the install.sh PLUGIN_NAME@MARKETPLACE_NAME and --scope user.
 const pluginID = "ethos@punt-labs"
 
-func runUninstall(args []string) {
-	purge := false
-	for _, a := range args {
-		if a == "--purge" {
-			purge = true
-		}
-	}
+var uninstallPurge bool
 
+var uninstallCmd = &cobra.Command{
+	Use:   "uninstall",
+	Short: "Remove plugin (--purge to remove binary + data)",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runUninstall()
+	},
+}
+
+func init() {
+	uninstallCmd.Flags().BoolVar(&uninstallPurge, "purge", false, "Remove binary and all identity data")
+	rootCmd.AddCommand(uninstallCmd)
+}
+
+func runUninstall() {
 	hadError := false
 
 	// Step 1: Remove Claude Code plugin.
@@ -38,7 +49,7 @@ func runUninstall(args []string) {
 		}
 	}
 
-	if !purge {
+	if !uninstallPurge {
 		if claude != "" && !hadError {
 			fmt.Println("\nPlugin removed. Binary and identity data are still present.")
 		} else if claude == "" {

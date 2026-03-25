@@ -8,27 +8,28 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
 
-// runCreateImpl implements both interactive and declarative identity creation.
-// Declarative: ethos create --file <path>
-// Interactive: ethos create (prompts for each field)
-func runCreateImpl(args []string) {
-	// Check for --file flag (declarative mode)
-	for i, arg := range args {
-		if arg == "--file" || arg == "-f" {
-			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "ethos: --file requires a path argument")
-				os.Exit(1)
-			}
-			createFromFile(args[i+1])
-			return
-		}
-	}
+var createFile string
 
-	// Interactive mode
-	createInteractive()
+var createCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create a new identity",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		if createFile != "" {
+			createFromFile(createFile)
+		} else {
+			createInteractive()
+		}
+	},
+}
+
+func init() {
+	createCmd.Flags().StringVarP(&createFile, "file", "f", "", "Create identity from YAML file")
+	rootCmd.AddCommand(createCmd)
 }
 
 func createFromFile(path string) {
@@ -88,7 +89,6 @@ func createInteractive() {
 		voiceID = prompt(reader, "Voice ID", "")
 	}
 	agent := prompt(reader, "Agent definition path (optional, e.g. .claude/agents/name.md)", "")
-
 
 	// Attribute selection with create-new option.
 	personality := pickAttribute(reader, attribute.Personalities)
@@ -298,4 +298,3 @@ func slugify(name string) string {
 	}
 	return b.String()
 }
-
