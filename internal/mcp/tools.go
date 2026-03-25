@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -64,6 +65,8 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	s.AddTool(h.extTool(), h.handleExt)
 	// Session tool (consolidated)
 	s.AddTool(h.sessionTool(), h.handleSession)
+	// Doctor tool (standalone admin tool)
+	s.AddTool(h.doctorTool(), h.handleDoctor)
 	// Attribute tools (consolidated)
 	h.registerAttributeTools(s)
 }
@@ -444,6 +447,175 @@ func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
+}
+
+// --- Doctor Tool (standalone admin) ---
+
+func (h *Handler) doctorTool() mcplib.Tool {
+	return mcplib.NewTool("doctor",
+		mcplib.WithDescription("Check installation health: identity directory, human identity, default agent, duplicate fields."),
+	)
+}
+
+// doctorCheck holds one health check result.
+type doctorCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail"`
+}
+
+func (h *Handler) handleDoctor(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	checks := []struct {
+		name string
+		fn   func() (string, bool)
+	}{
+		{"Identity directory", h.checkIdentityDir},
+		{"Human identity", h.checkHumanIdentity},
+		{"Default agent", h.checkDefaultAgent},
+		{"Duplicate fields", h.checkDuplicateFields},
+	}
+
+	var results []doctorCheck
+	passed := 0
+	for _, c := range checks {
+		detail, ok := c.fn()
+		status := "PASS"
+		if ok {
+			passed++
+		} else {
+			status = "FAIL"
+		}
+		results = append(results, doctorCheck{Name: c.name, Status: status, Detail: detail})
+	}
+
+	// Format as table text per DES-020.
+	headers := []string{"NAME", "STATUS", "DETAIL"}
+	rows := make([][]string, len(results))
+	for i, r := range results {
+		rows[i] = []string{r.Name, r.Status, r.Detail}
+	}
+
+	summary := fmt.Sprintf("%d checks, %d passed", len(results), passed)
+	table := formatTable(headers, rows)
+	return mcplib.NewToolResultText(summary + "\n\n" + table), nil
+}
+
+func (h *Handler) checkIdentityDir() (string, bool) {
+	dir := h.store.IdentitiesDir()
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Sprintf("not found: %s", dir), false
+		}
+		return fmt.Sprintf("error: %v", err), false
+	}
+	return dir, true
+}
+
+func (h *Handler) checkHumanIdentity() (string, bool) {
+	handle, err := resolve.Resolve(h.store, h.sessionStore)
+	if err != nil {
+		return fmt.Sprintf("no match — %v", err), false
+	}
+	id, err := h.store.Load(handle, identity.Reference(true))
+	if err != nil {
+		return fmt.Sprintf("handle %q not loadable: %v", handle, err), false
+	}
+	return fmt.Sprintf("%s (%s)", id.Name, id.Handle), true
+}
+
+func (h *Handler) checkDefaultAgent() (string, bool) {
+	repoRoot := resolve.FindRepoRoot()
+	if repoRoot == "" {
+		return "not in a git repo", true
+	}
+	handle := resolve.ResolveAgent(repoRoot)
+	if handle == "" {
+		return "not configured", true
+	}
+	return handle, true
+}
+
+func (h *Handler) checkDuplicateFields() (string, bool) {
+	result, err := h.store.List()
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), false
+	}
+	var dupes []string
+	seen := map[string]map[string]string{
+		"github": {},
+		"email":  {},
+	}
+	for _, id := range result.Identities {
+		for field, values := range seen {
+			var val string
+			switch field {
+			case "github":
+				val = id.GitHub
+			case "email":
+				val = id.Email
+			}
+			if val == "" {
+				continue
+			}
+			if prev, ok := values[val]; ok {
+				dupes = append(dupes, fmt.Sprintf("%s %q: %s and %s", field, val, prev, id.Handle))
+			} else {
+				values[val] = id.Handle
+			}
+		}
+	}
+	if len(dupes) > 0 {
+		return "duplicates found: " + strings.Join(dupes, "; "), false
+	}
+	return "no duplicates", true
+}
+
+// formatTable renders a columnar table for MCP tool output.
+// Similar to hook.FormatTable but without the external dependency.
+func formatTable(headers []string, rows [][]string) string {
+	widths := make([]int, len(headers))
+	for i, h := range headers {
+		widths[i] = len(h)
+	}
+	for _, row := range rows {
+		for i, cell := range row {
+			if i < len(widths) && len(cell) > widths[i] {
+				widths[i] = len(cell)
+			}
+		}
+	}
+
+	var buf strings.Builder
+	lastCol := len(headers) - 1
+	for i, h := range headers {
+		if i > 0 {
+			buf.WriteString("  ")
+		}
+		if i == lastCol {
+			buf.WriteString(h)
+		} else {
+			buf.WriteString(fmt.Sprintf("%-*s", widths[i], h))
+		}
+	}
+	for _, row := range rows {
+		buf.WriteString("\n")
+		n := len(row)
+		if n > len(headers) {
+			n = len(headers)
+		}
+		lastCol := n - 1
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				buf.WriteString("  ")
+			}
+			if i == lastCol {
+				buf.WriteString(row[i])
+			} else {
+				buf.WriteString(fmt.Sprintf("%-*s", widths[i], row[i]))
+			}
+		}
+	}
+	return buf.String()
 }
 
 // --- Helpers ---
