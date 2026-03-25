@@ -256,7 +256,6 @@ func TestHandleIdentity_Create_ValidationError(t *testing.T) {
 	assert.True(t, result.IsError)
 }
 
-
 func TestHandleIdentity_Create_WithSkills(t *testing.T) {
 	h := testHandler(t)
 

@@ -9,8 +9,9 @@ import (
 )
 
 var extCmd = &cobra.Command{
-	Use:   "ext",
-	Short: "Manage tool-scoped extensions on identities",
+	Use:     "ext",
+	Short:   "Manage tool-scoped extensions on identities",
+	GroupID: "identity",
 }
 
 var extGetCmd = &cobra.Command{

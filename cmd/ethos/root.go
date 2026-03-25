@@ -10,38 +10,30 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "ethos",
 	Short: "Identity binding for humans and AI agents",
-	Long: `ethos: identity binding for humans and AI agents
+	Long: `Identity binding for humans and AI agents.
 
-Product commands:
-  whoami            Show the caller's identity
-  identity          Manage identities (whoami, list, get, create)
-  ext               Manage tool-scoped extensions
-
-Attribute commands:
-  talent            Manage talents (create, list, show, add, remove)
-  personality       Manage personalities (create, list, show, set)
-  writing-style     Manage writing styles (create, list, show, set)
-
-Session commands:
-  session           Show or manage session roster
-
-Admin commands:
-  version           Print version
-  doctor            Check installation health
-  serve             Start MCP server (stdio transport)
-  uninstall         Remove plugin (--purge to remove binary + data)
-  completion        Generate shell completion script`,
+Unifies name, email, GitHub handle, writing style, personality, and
+talents into a single identity that other tools read. Same schema for
+humans and agents. Repo-scoped team identities are git-tracked.`,
 }
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "JSON output")
+
+	rootCmd.AddGroup(
+		&cobra.Group{ID: "identity", Title: "Identity:"},
+		&cobra.Group{ID: "attributes", Title: "Attributes:"},
+		&cobra.Group{ID: "session", Title: "Session:"},
+		&cobra.Group{ID: "admin", Title: "Admin:"},
+	)
 }
 
 // completionCmd generates shell completion scripts.
 var completionCmd = &cobra.Command{
-	Use:   "completion <bash|zsh|fish>",
-	Short: "Generate shell completion script",
-	Args:  cobra.ExactArgs(1),
+	Use:     "completion <bash|zsh|fish>",
+	Short:   "Generate shell completion script",
+	GroupID: "admin",
+	Args:    cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		switch args[0] {
 		case "bash":
