@@ -64,6 +64,8 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return formatSession(w, method, result)
 	case "ext":
 		return formatExt(w, method, result)
+	case "doctor":
+		return formatDoctor(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -419,6 +421,20 @@ func emitSimple(w io.Writer, summary string) error {
 	r.HookSpecificOutput.HookEventName = "PostToolUse"
 	r.HookSpecificOutput.UpdatedMCPToolOutput = summary
 	return json.NewEncoder(w).Encode(r)
+}
+
+// --- Doctor tool formatter ---
+
+// formatDoctor splits the doctor output into a summary panel and a check table context.
+// The doctor tool returns "N checks, M passed\n\n<table>".
+func formatDoctor(w io.Writer, result string) error {
+	parts := strings.SplitN(result, "\n\n", 2)
+	summary := parts[0]
+	ctx := result
+	if len(parts) == 2 {
+		ctx = parts[1]
+	}
+	return emit(w, summary, ctx)
 }
 
 // --- JSON extraction helpers ---

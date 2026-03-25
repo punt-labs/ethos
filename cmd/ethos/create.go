@@ -15,9 +15,10 @@ import (
 var createFile string
 
 var createCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new identity",
-	Args:  cobra.NoArgs,
+	Use:    "create",
+	Short:  "Create a new identity",
+	Hidden: true,
+	Args:   cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		if createFile != "" {
 			createFromFile(createFile)
