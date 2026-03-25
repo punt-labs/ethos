@@ -76,6 +76,9 @@ func (s *Store) ExtGet(handle, namespace, key string) (map[string]string, error)
 
 // ExtSet writes a key-value pair to a namespace.
 func (s *Store) ExtSet(handle, namespace, key, value string) error {
+	if handle == "" {
+		return fmt.Errorf("handle is required")
+	}
 	// Ensure the handle exists in this store.
 	if !s.Exists(handle) {
 		return fmt.Errorf("handle %q does not exist", handle)

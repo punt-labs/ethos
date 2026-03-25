@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking**: Renamed `persona` parameter to `handle` in all ext commands (CLI and MCP) for consistency with other identity commands
+- **Breaking**: Renamed `persona` parameter to `handle` in all ext commands (CLI, MCP, and Go API `IdentityStore` `Ext*` methods) for consistency with other identity commands
 - **Breaking**: Removed `voice` field from identity YAML — voice config now lives in `ext/vox` (DES-019). Auto-migration on Load handles existing files.
 - Identity resolution is now layered: repo-local (`.punt-labs/ethos/`) → user-global (`~/.punt-labs/ethos/`) (DES-018)
 - All CLI commands and MCP tools use layered resolution by default
