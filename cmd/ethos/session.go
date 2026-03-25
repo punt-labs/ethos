@@ -32,9 +32,10 @@ var (
 )
 
 var sessionCreateCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new session roster",
-	Args:  cobra.NoArgs,
+	Use:    "create",
+	Short:  "Create a new session roster",
+	Hidden: true,
+	Args:   cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runSessionCreate()
 	},
@@ -45,9 +46,10 @@ var sessionCreateCmd = &cobra.Command{
 var sessionDeleteSession string
 
 var sessionDeleteCmd = &cobra.Command{
-	Use:   "delete",
-	Short: "Delete a session roster",
-	Args:  cobra.NoArgs,
+	Use:    "delete",
+	Short:  "Delete a session roster",
+	Hidden: true,
+	Args:   cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runSessionDelete()
 	},
