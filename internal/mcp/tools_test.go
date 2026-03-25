@@ -505,6 +505,16 @@ func TestHandleExt_SetMissingKey(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "key is required")
 }
 
+func TestHandleExt_MissingHandle(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleExt(context.Background(), callTool(map[string]interface{}{
+		"method": "get", "namespace": "biff",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "handle is required")
+}
+
 // --- Session Tool Tests ---
 
 func testHandlerWithSession(t *testing.T) *Handler {
