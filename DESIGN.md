@@ -1284,3 +1284,57 @@ must read voice config from `ext/vox` via `ExtGet`. The MCP `identity`
 tool's responses include ext data, so consumers get voice bindings
 through the same channel. Vox does not yet use ethos — no external
 coordination needed.
+
+## DES-020: MCP tool results as formatted text, not raw JSON (SETTLED)
+
+### Problem
+
+MCP tool results were returned as raw JSON in `additionalContext`. This
+wastes LLM context tokens — the model receives serialized JSON with
+structural overhead (braces, quotes, escaped characters) that it must
+parse mentally to extract the relevant information. In multi-step
+workflows touching several tools, raw JSON responses can consume
+50-150K tokens the model never needed to see.
+
+### Decision
+
+MCP tool results return **formatted text** (field lists, columnar tables,
+markdown) as the primary content. Raw JSON is never sent to
+`additionalContext`. The PostToolUse hook formats all output for LLM
+consumption.
+
+Two-channel display pattern:
+
+- **Panel** (`updatedMCPToolOutput`): count summary or compact display
+- **Context** (`additionalContext`): formatted text — same field list,
+  table, or markdown the panel shows, but potentially with more detail
+
+This matches biff's approach, which returns pre-formatted plain text
+with unicode alignment characters. The model reads it directly without
+parsing overhead.
+
+### Evidence
+
+- [MCP GitHub Discussion #529](https://github.com/orgs/modelcontextprotocol/discussions/529):
+  MCP maintainers advise against JSON for most LLM tasks. Text is "more
+  conducive to model understanding, has a lower probability of error."
+- [Context window analysis](https://www.apideck.com/blog/mcp-server-eating-context-window-cli-alternative):
+  raw JSON from multi-step MCP workflows consumes 50-150K tokens the
+  model never needed to see.
+- Biff's production experience: pre-formatted text with unicode columns
+  works well — agents read it accurately without JSON parsing confusion.
+
+### When raw JSON is appropriate
+
+- `--json` flag on CLI commands (human or script consuming structured data)
+- MCP `structuredContent` field (host application processing before inference)
+- Direct API consumption by other programs (Go library)
+
+### Rejected alternatives
+
+- **Always return JSON, let the model parse it** — wastes context tokens,
+  increases error rate. The model is reading text, not executing code.
+- **Return both JSON and text** — doubles the response size. The
+  PostToolUse hook already has access to the raw JSON if needed.
+- **Let each tool decide** — inconsistency across tools. The standard
+  must be uniform: all tools return formatted text through the hook.

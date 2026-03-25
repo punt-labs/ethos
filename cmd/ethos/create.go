@@ -15,9 +15,10 @@ import (
 var createFile string
 
 var createCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new identity",
-	Args:  cobra.NoArgs,
+	Use:    "create",
+	Short:  "Create a new identity",
+	Hidden: true,
+	Args:   cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		if createFile != "" {
 			createFromFile(createFile)
@@ -53,7 +54,10 @@ func createFromFile(path string) {
 		os.Exit(1)
 	}
 
-	// Extract voice data from raw YAML (Identity struct has no Voice field).
+	// Legacy: extract voice data from raw YAML and write to ext/vox.
+	// The Identity struct has no Voice field (DES-019), so Save drops it.
+	// This preserves voice config from old-format YAML files during create.
+	// TODO: remove when round-trip YAML preservation is implemented.
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err == nil {
 		if v, ok := raw["voice"]; ok {
@@ -83,11 +87,6 @@ func createInteractive() {
 	kind := prompt(reader, "Kind (human/agent)", "human")
 	email := prompt(reader, "Email (optional)", "")
 	github := prompt(reader, "GitHub username (optional)", "")
-	voiceProvider := prompt(reader, "Voice provider (optional, e.g. elevenlabs)", "")
-	voiceID := ""
-	if voiceProvider != "" {
-		voiceID = prompt(reader, "Voice ID", "")
-	}
 	agent := prompt(reader, "Agent definition path (optional, e.g. .claude/agents/name.md)", "")
 
 	// Attribute selection with create-new option.
@@ -115,18 +114,6 @@ func createInteractive() {
 	if err := s.Save(id); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
-	}
-
-	// Write voice to ext/vox if provided.
-	if voiceProvider != "" {
-		if err := s.ExtSet(handle, "vox", "provider", voiceProvider); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: warning: failed to set voice provider: %v\n", err)
-		}
-		if voiceID != "" {
-			if err := s.ExtSet(handle, "vox", "voice_id", voiceID); err != nil {
-				fmt.Fprintf(os.Stderr, "ethos: warning: failed to set voice id: %v\n", err)
-			}
-		}
 	}
 
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)

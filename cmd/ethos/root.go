@@ -14,9 +14,7 @@ var rootCmd = &cobra.Command{
 
 Product commands:
   whoami            Show the caller's identity
-  create            Create a new identity
-  list              List all identities
-  show <handle>     Show identity details
+  identity          Manage identities (whoami, list, get, create)
   ext               Manage tool-scoped extensions
 
 Attribute commands:
@@ -25,7 +23,6 @@ Attribute commands:
   writing-style     Manage writing styles (create, list, show, set)
 
 Session commands:
-  iam <persona>     Declare persona in current session
   session           Show or manage session roster
 
 Admin commands:

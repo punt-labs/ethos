@@ -28,7 +28,7 @@ func (h *Handler) talentTool() mcplib.Tool {
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("slug",
-			mcplib.Description("Skill slug. Required for create, show, delete, add, remove."),
+			mcplib.Description("Talent slug. Required for create, show, delete, add, remove."),
 		),
 		mcplib.WithString("content",
 			mcplib.Description("Markdown content. Required for create."),

@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/doctor"
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -64,6 +66,8 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	s.AddTool(h.extTool(), h.handleExt)
 	// Session tool (consolidated)
 	s.AddTool(h.sessionTool(), h.handleSession)
+	// Doctor tool (standalone admin tool)
+	s.AddTool(h.doctorTool(), h.handleDoctor)
 	// Attribute tools (consolidated)
 	h.registerAttributeTools(s)
 }
@@ -72,19 +76,13 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 
 func (h *Handler) identityTool() mcplib.Tool {
 	return mcplib.NewTool("identity",
-		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create, iam."),
+		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("whoami", "list", "get", "create", "iam"),
+			mcplib.Enum("whoami", "list", "get", "create"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("handle",
 			mcplib.Description("Identity handle. Required for get, create."),
-		),
-		mcplib.WithString("persona",
-			mcplib.Description("Persona handle. Required for iam."),
-		),
-		mcplib.WithString("session_id",
-			mcplib.Description("Session ID. For iam. Omit to auto-discover via process tree."),
 		),
 		mcplib.WithBoolean("reference",
 			mcplib.Description("If true, return attribute slugs only without resolving .md content. For whoami, get."),
@@ -113,25 +111,15 @@ func (h *Handler) handleIdentity(ctx context.Context, req mcplib.CallToolRequest
 		return h.handleGetIdentity(ctx, req)
 	case "create":
 		return h.handleCreateIdentity(ctx, req)
-	case "iam":
-		return h.handleIam(ctx, req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
 }
 
-func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	if h.sessionStore == nil {
-		return mcplib.NewToolResultError("session store not configured"), nil
-	}
+func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessionID string) (*mcplib.CallToolResult, error) {
 	persona := stringArg(req, "persona", "")
 	if persona == "" {
 		return mcplib.NewToolResultError("persona is required for iam"), nil
-	}
-
-	sessionID, err := h.resolveSessionID(req)
-	if err != nil {
-		return mcplib.NewToolResultError(err.Error()), nil
 	}
 
 	// Use the Claude PID as the agent ID for iam declarations.
@@ -357,9 +345,9 @@ func (h *Handler) handleExt(_ context.Context, req mcplib.CallToolRequest) (*mcp
 
 func (h *Handler) sessionTool() mcplib.Tool {
 	return mcplib.NewTool("session",
-		mcplib.WithDescription("Manage session roster. Methods: roster, join, leave. Session ID is auto-discovered if omitted."),
+		mcplib.WithDescription("Manage session roster. Methods: roster, join, leave, iam. Session ID is auto-discovered if omitted."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("roster", "join", "leave"),
+			mcplib.Enum("roster", "join", "leave", "iam"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("session_id",
@@ -398,7 +386,7 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	return sid, nil
 }
 
-func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	if h.sessionStore == nil {
 		return mcplib.NewToolResultError("session store not configured"), nil
 	}
@@ -441,9 +429,35 @@ func (h *Handler) handleSession(_ context.Context, req mcplib.CallToolRequest) (
 		}
 		return mcplib.NewToolResultText(fmt.Sprintf("Removed %s from session %s", agentID, sessionID)), nil
 
+	case "iam":
+		return h.handleIam(ctx, req, sessionID)
+
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
+}
+
+// --- Doctor Tool (standalone admin) ---
+
+func (h *Handler) doctorTool() mcplib.Tool {
+	return mcplib.NewTool("doctor",
+		mcplib.WithDescription("Check installation health: identity directory, human identity, default agent, duplicate fields."),
+	)
+}
+
+func (h *Handler) handleDoctor(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	results := doctor.RunAll(h.store, h.sessionStore)
+
+	// Format as table text per DES-020.
+	headers := []string{"NAME", "STATUS", "DETAIL"}
+	rows := make([][]string, len(results))
+	for i, r := range results {
+		rows[i] = []string{r.Name, r.Status, r.Detail}
+	}
+
+	summary := fmt.Sprintf("%d checks, %d passed", len(results), doctor.PassedCount(results))
+	table := hook.FormatTable(headers, rows)
+	return mcplib.NewToolResultText(summary + "\n\n" + table), nil
 }
 
 // --- Helpers ---
