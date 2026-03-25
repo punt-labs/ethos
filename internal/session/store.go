@@ -216,11 +216,14 @@ func (s *Store) PurgeCurrent() ([]string, error) {
 		if err != nil {
 			continue // not a PID file
 		}
+		if pid <= 0 {
+			continue // invalid PID
+		}
 		if !isProcessAlive(pid) {
 			path := filepath.Join(dir, name)
 			if removeErr := os.Remove(path); removeErr != nil {
 				if !os.IsNotExist(removeErr) {
-					fmt.Fprintf(os.Stderr, "ethos: PurgeCurrent: failed to remove %s: %v\n", path, removeErr)
+					fmt.Fprintf(os.Stderr, "ethos: failed to remove PID file %s: %v\n", path, removeErr)
 				}
 			} else {
 				purged = append(purged, name)
@@ -323,8 +326,6 @@ func isOlderThan(roster *Roster, ttl time.Duration) bool {
 	return time.Since(started) > ttl
 }
 
-// isProcessAlive checks if a process with the given PID exists.
-// Returns true for EPERM (process exists but not signalable).
 // isProcessAlive checks whether a process with the given PID is running.
 //
 // Limitations:

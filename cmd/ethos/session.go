@@ -324,10 +324,9 @@ func runSessionPurge() {
 			"sessions":  purged,
 			"pid_files": pidPurged,
 		})
-		return
-	}
-	if len(purged) == 0 && len(pidPurged) == 0 {
-		fmt.Println("No stale sessions found.")
+		if pidErr != nil {
+			os.Exit(1)
+		}
 		return
 	}
 	for _, id := range purged {
@@ -335,5 +334,11 @@ func runSessionPurge() {
 	}
 	for _, pid := range pidPurged {
 		fmt.Printf("Purged PID file %s\n", pid)
+	}
+	if pidErr != nil {
+		os.Exit(1)
+	}
+	if len(purged) == 0 && len(pidPurged) == 0 {
+		fmt.Println("No stale sessions found.")
 	}
 }
