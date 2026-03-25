@@ -116,9 +116,9 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 }
 
 func init() {
-	registerAttributeCommands(rootCmd, attribute.Talents, "talent", "Manage talents (create, list, show, add, remove)")
-	registerAttributeCommands(rootCmd, attribute.Personalities, "personality", "Manage personalities (create, list, show, set)")
-	registerAttributeCommands(rootCmd, attribute.WritingStyles, "writing-style", "Manage writing styles (create, list, show, set)")
+	registerAttributeCommands(rootCmd, attribute.Talents, "talent", "Manage talents (create, list, show, delete, add, remove)")
+	registerAttributeCommands(rootCmd, attribute.Personalities, "personality", "Manage personalities (create, list, show, delete, set)")
+	registerAttributeCommands(rootCmd, attribute.WritingStyles, "writing-style", "Manage writing styles (create, list, show, delete, set)")
 }
 
 func runAttributeCreate(kind attribute.Kind, slug string, file string) {
