@@ -64,6 +64,8 @@ var doctorCmd = &cobra.Command{
 
 // --- whoami ---
 
+var whoamiReference bool
+
 var whoamiCmd = &cobra.Command{
 	Use:   "whoami",
 	Short: "Show the caller's identity",
@@ -78,9 +80,10 @@ var whoamiCmd = &cobra.Command{
 var showReference bool
 
 var showCmd = &cobra.Command{
-	Use:   "show <handle>",
-	Short: "Show identity details",
-	Args:  cobra.ExactArgs(1),
+	Use:    "show <handle>",
+	Short:  "Show identity details",
+	Hidden: true,
+	Args:   cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runShow(args[0], showReference)
 	},
@@ -89,9 +92,10 @@ var showCmd = &cobra.Command{
 // --- list ---
 
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all identities",
-	Args:  cobra.NoArgs,
+	Use:    "list",
+	Short:  "List all identities",
+	Hidden: true,
+	Args:   cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runList()
 	},
@@ -112,9 +116,10 @@ var resolveAgentCmd = &cobra.Command{
 // --- iam ---
 
 var iamCmd = &cobra.Command{
-	Use:   "iam <persona>",
-	Short: "Declare persona in current session",
-	Args:  cobra.ExactArgs(1),
+	Use:    "iam <persona>",
+	Short:  "Declare persona in current session",
+	Hidden: true,
+	Args:   cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runIam(args[0])
 	},
@@ -133,6 +138,7 @@ var serveCmd = &cobra.Command{
 
 func init() {
 	showCmd.Flags().BoolVar(&showReference, "reference", false, "Include reference identity data")
+	whoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
 
 	rootCmd.AddCommand(
 		versionCmd,
@@ -271,7 +277,12 @@ func runWhoami() {
 		os.Exit(1)
 	}
 
-	id, err := is.Load(handle)
+	var opts []identity.LoadOption
+	if whoamiReference {
+		opts = append(opts, identity.Reference(true))
+	}
+
+	id, err := is.Load(handle, opts...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: identity %q not found: %v\n", handle, err)
 		os.Exit(1)
@@ -318,18 +329,22 @@ func runList() {
 	// Build columnar table: HANDLE, NAME, KIND, PERSONALITY, ACTIVE.
 	activeHandles := sessionParticipantHandles()
 
-	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "ACTIVE"}
+	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "WRITING", "ACTIVE"}
 	rows := make([][]string, len(result.Identities))
 	for i, id := range result.Identities {
 		personality := id.Personality
 		if personality == "" {
 			personality = "-"
 		}
+		writing := id.WritingStyle
+		if writing == "" {
+			writing = "-"
+		}
 		marker := "-"
 		if activeHandles[id.Handle] {
 			marker = "*"
 		}
-		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, marker}
+		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, writing, marker}
 	}
 
 	fmt.Println(hook.FormatTable(headers, rows))

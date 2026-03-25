@@ -43,20 +43,24 @@ Hide old top-level shortcuts except `whoami`.
 `iam` calls `session.Store.Join()` — it belongs on the session tool.
 
 MCP changes:
+
 - Add `iam` method to `session` tool enum
 - Move `handleIam` from identity handler to session handler
 - Remove `iam` from `identity` tool enum
 - Add `persona` and `session_id` params to session tool (if not already)
 
 CLI changes:
+
 - `ethos session iam <persona>` — canonical form
 - `ethos iam <persona>` — hidden shortcut (backward compat)
 
 Slash command changes:
+
 - Remove `iam` from identity command docs
 - Add `iam` to session command docs (both prod + dev variants)
 
 Hook formatter changes:
+
 - Move `iam` case from `formatIdentity` to `formatSession` in
   `format_output.go`
 
@@ -69,11 +73,13 @@ Hook formatter changes:
 Two independent features that add missing surface coverage.
 
 **Session list** (`ethos session list`):
+
 - Show summary per session: ID, participant count, primary persona
 - Load each session with `session.Store.Load()` for detail
 - `--json` output
 
 **Doctor MCP tool**:
+
 - Standalone MCP tool (not method-dispatched — admin, not resource)
 - Returns formatted text (DES-020): check name, status, detail per line
 - PostToolUse formatter: panel = pass/fail count, context = check table
@@ -120,6 +126,7 @@ Single PR for all 5 beads. Each bead is one commit.
 ## Reviewer Summary
 
 All changes incorporate findings from:
+
 - mdm surface audit (9 inconsistencies)
 - bwk Go review (3 errors, 4 misleading items)
 - Architect review (5 concerns, 3 gaps)
