@@ -273,8 +273,8 @@ func (h *Handler) extTool() mcplib.Tool {
 			mcplib.Enum("get", "set", "del", "list"),
 			mcplib.Description("Operation to perform."),
 		),
-		mcplib.WithString("persona", mcplib.Required(),
-			mcplib.Description("Identity persona name."),
+		mcplib.WithString("handle", mcplib.Required(),
+			mcplib.Description("Identity handle."),
 		),
 		mcplib.WithString("namespace",
 			mcplib.Description("Tool namespace (e.g. beadle, biff). Required for get, set, del."),
@@ -290,17 +290,21 @@ func (h *Handler) extTool() mcplib.Tool {
 
 func (h *Handler) handleExt(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	method := stringArg(req, "method", "")
-	persona := stringArg(req, "persona", "")
+	handle := stringArg(req, "handle", "")
 	namespace := stringArg(req, "namespace", "")
 	key := stringArg(req, "key", "")
 	value := stringArg(req, "value", "")
+
+	if handle == "" {
+		return mcplib.NewToolResultError("handle is required"), nil
+	}
 
 	switch method {
 	case "get":
 		if namespace == "" {
 			return mcplib.NewToolResultError("namespace is required for get"), nil
 		}
-		m, err := h.store.ExtGet(persona, namespace, key)
+		m, err := h.store.ExtGet(handle, namespace, key)
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
@@ -312,23 +316,26 @@ func (h *Handler) handleExt(_ context.Context, req mcplib.CallToolRequest) (*mcp
 		if key == "" {
 			return mcplib.NewToolResultError("key is required for set"), nil
 		}
-		if err := h.store.ExtSet(persona, namespace, key, value); err != nil {
+		if _, ok := req.GetArguments()["value"]; !ok {
+			return mcplib.NewToolResultError("value is required for set"), nil
+		}
+		if err := h.store.ExtSet(handle, namespace, key, value); err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
-		return mcplib.NewToolResultText(fmt.Sprintf("set %s/%s/%s", persona, namespace, key)), nil
+		return mcplib.NewToolResultText(fmt.Sprintf("set %s/%s/%s", handle, namespace, key)), nil
 	case "del":
 		if namespace == "" {
 			return mcplib.NewToolResultError("namespace is required for del"), nil
 		}
-		if err := h.store.ExtDel(persona, namespace, key); err != nil {
+		if err := h.store.ExtDel(handle, namespace, key); err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
 		if key == "" {
-			return mcplib.NewToolResultText(fmt.Sprintf("deleted namespace %s/%s", persona, namespace)), nil
+			return mcplib.NewToolResultText(fmt.Sprintf("deleted namespace %s/%s", handle, namespace)), nil
 		}
-		return mcplib.NewToolResultText(fmt.Sprintf("deleted %s/%s/%s", persona, namespace, key)), nil
+		return mcplib.NewToolResultText(fmt.Sprintf("deleted %s/%s/%s", handle, namespace, key)), nil
 	case "list":
-		namespaces, err := h.store.ExtList(persona)
+		namespaces, err := h.store.ExtList(handle)
 		if err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}

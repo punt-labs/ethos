@@ -81,7 +81,7 @@ func (s *Store) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	if err := s.migrateVoice(handle, path, data); err != nil {
 		return nil, fmt.Errorf("migrating voice for %q: %w", handle, err)
 	}
-	// Assemble extension data from <persona>.ext/ directory.
+	// Assemble extension data from <handle>.ext/ directory.
 	extData, extWarnings := s.loadExtensions(handle)
 	id.Ext = extData
 

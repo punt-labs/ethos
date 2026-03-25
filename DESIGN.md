@@ -161,7 +161,7 @@ preferred_tty: tty1
 
 **Ownership rules:**
 
-- Ethos creates the `<persona>.ext/` directory when the identity is
+- Ethos creates the `<handle>.ext/` directory when the identity is
   created.
 - Each tool manages its own `<namespace>.yaml` file inside the directory.
 - Tools may read/write their namespace file directly (sidecar contract)
@@ -225,10 +225,10 @@ persona level and ephemeral session state at the participant level.
 ### CLI Commands
 
 ```text
-ethos ext get <persona> <namespace> [key]     Read one key or all keys
-ethos ext set <persona> <namespace> <key> <value>   Write a key
-ethos ext del <persona> <namespace> [key]     Delete one key or entire namespace
-ethos ext list <persona>                       List all namespaces
+ethos ext get <handle> <namespace> [key]     Read one key or all keys
+ethos ext set <handle> <namespace> <key> <value>   Write a key
+ethos ext del <handle> <namespace> [key]     Delete one key or entire namespace
+ethos ext list <handle>                       List all namespaces
 ```
 
 ### MCP Tools
@@ -277,7 +277,7 @@ Files-per-namespace means:
 The sidecar contract extends to extensions. The file format is the
 contract:
 
-- Path: `~/.punt-labs/ethos/identities/<persona>.ext/<namespace>.yaml`
+- Path: `~/.punt-labs/ethos/identities/<handle>.ext/<namespace>.yaml`
 - Format: flat YAML map (string keys, scalar values)
 - Any tool can read any namespace file directly without importing ethos
 
