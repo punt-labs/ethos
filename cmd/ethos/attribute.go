@@ -9,6 +9,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/spf13/cobra"
 )
 
 // attributeStore returns an attribute.Store for the given kind that searches
@@ -28,67 +29,108 @@ func layeredAttributeStore(is identity.IdentityStore, kind attribute.Kind) *attr
 	return attribute.NewStore(is.Root(), kind)
 }
 
-// runAttributeSubcmd dispatches create/list/show/add/remove/set for an attribute kind.
-func runAttributeSubcmd(kind attribute.Kind, args []string) {
-	if len(args) == 0 {
-		printAttributeUsage(kind)
-		os.Exit(1)
+// registerAttributeCommands registers a parent command with create/list/show/delete
+// subcommands for an attribute kind. For Talents, adds add/remove. For others, adds set.
+func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, short string) {
+	parent := &cobra.Command{
+		Use:   use,
+		Short: short,
 	}
 
-	sub := args[0]
-	subArgs := args[1:]
+	var createFile string
 
-	switch sub {
-	case "create":
-		runAttributeCreate(kind, subArgs)
-	case "list":
-		runAttributeList(kind)
-	case "show":
-		runAttributeShow(kind, subArgs)
-	case "add":
-		runAttributeAdd(kind, subArgs)
-	case "remove":
-		runAttributeRemove(kind, subArgs)
-	case "set":
-		runAttributeSet(kind, subArgs)
-	case "help", "-h", "--help":
-		printAttributeUsage(kind)
-	default:
-		fmt.Fprintf(os.Stderr, "ethos %s: unknown subcommand %q\n", kind.DisplayName, sub)
-		printAttributeUsage(kind)
-		os.Exit(1)
+	createCmd := &cobra.Command{
+		Use:   "create <slug>",
+		Short: fmt.Sprintf("Create a new %s", kind.DisplayName),
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			runAttributeCreate(kind, args[0], createFile)
+		},
 	}
+	createCmd.Flags().StringVarP(&createFile, "file", "f", "", "Read content from file")
+
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: fmt.Sprintf("List all %s", kind.PluralName),
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			runAttributeList(kind)
+		},
+	}
+
+	showCmd := &cobra.Command{
+		Use:   "show <slug>",
+		Short: fmt.Sprintf("Show %s content", kind.DisplayName),
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			runAttributeShow(kind, args[0])
+		},
+	}
+
+	deleteCmd := &cobra.Command{
+		Use:   "delete <slug>",
+		Short: fmt.Sprintf("Delete a %s", kind.DisplayName),
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			runAttributeDelete(kind, args[0])
+		},
+	}
+
+	parent.AddCommand(createCmd, listCmd, showCmd, deleteCmd)
+
+	if kind == attribute.Talents {
+		addCmd := &cobra.Command{
+			Use:   "add <handle> <slug>",
+			Short: fmt.Sprintf("Add %s to an identity", kind.DisplayName),
+			Args:  cobra.ExactArgs(2),
+			Run: func(cmd *cobra.Command, args []string) {
+				runAttributeAdd(kind, args[0], args[1])
+			},
+		}
+
+		removeCmd := &cobra.Command{
+			Use:   "remove <handle> <slug>",
+			Short: fmt.Sprintf("Remove %s from an identity", kind.DisplayName),
+			Args:  cobra.ExactArgs(2),
+			Run: func(cmd *cobra.Command, args []string) {
+				runAttributeRemove(args[0], args[1])
+			},
+		}
+
+		parent.AddCommand(addCmd, removeCmd)
+	} else {
+		setCmd := &cobra.Command{
+			Use:   "set <handle> <slug>",
+			Short: fmt.Sprintf("Set %s on an identity", kind.DisplayName),
+			Args:  cobra.ExactArgs(2),
+			Run: func(cmd *cobra.Command, args []string) {
+				runAttributeSet(kind, args[0], args[1])
+			},
+		}
+
+		parent.AddCommand(setCmd)
+	}
+
+	root.AddCommand(parent)
 }
 
-func runAttributeCreate(kind attribute.Kind, args []string) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "ethos %s create: slug required\n", kind.DisplayName)
-		os.Exit(1)
-	}
-	slug := args[0]
-	remaining := args[1:]
+func init() {
+	registerAttributeCommands(rootCmd, attribute.Talents, "talent", "Manage talents (create, list, show, add, remove)")
+	registerAttributeCommands(rootCmd, attribute.Personalities, "personality", "Manage personalities (create, list, show, set)")
+	registerAttributeCommands(rootCmd, attribute.WritingStyles, "writing-style", "Manage writing styles (create, list, show, set)")
+}
 
+func runAttributeCreate(kind attribute.Kind, slug string, file string) {
 	var content string
 
-	// Check for --file flag.
-	for i, arg := range remaining {
-		if arg == "--file" || arg == "-f" {
-			if i+1 >= len(remaining) {
-				fmt.Fprintf(os.Stderr, "ethos %s create: --file requires a path\n", kind.DisplayName)
-				os.Exit(1)
-			}
-			data, err := os.ReadFile(remaining[i+1])
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-				os.Exit(1)
-			}
-			content = string(data)
-			break
+	if file != "" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			os.Exit(1)
 		}
-	}
-
-	// If no --file, open $EDITOR.
-	if content == "" {
+		content = string(data)
+	} else {
 		var err error
 		content, err = editContent(kind, slug)
 		if err != nil {
@@ -136,13 +178,9 @@ func runAttributeList(kind attribute.Kind) {
 	}
 }
 
-func runAttributeShow(kind attribute.Kind, args []string) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "ethos %s show: slug required\n", kind.DisplayName)
-		os.Exit(1)
-	}
+func runAttributeShow(kind attribute.Kind, slug string) {
 	s := attributeStore(kind)
-	a, err := s.Load(args[0])
+	a, err := s.Load(slug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
@@ -154,18 +192,25 @@ func runAttributeShow(kind attribute.Kind, args []string) {
 	fmt.Print(a.Content)
 }
 
+func runAttributeDelete(kind attribute.Kind, slug string) {
+	s := attributeStore(kind)
+	if err := s.Delete(slug); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOutput {
+		printJSON(map[string]string{"deleted": slug, "kind": kind.DisplayName})
+		return
+	}
+	fmt.Printf("Deleted %s %q\n", kind.DisplayName, slug)
+}
+
 // runAttributeAdd adds an attribute slug to an identity's talents list.
-// Only valid for talents (list field).
-func runAttributeAdd(kind attribute.Kind, args []string) {
+func runAttributeAdd(kind attribute.Kind, handle, slug string) {
 	if kind != attribute.Talents {
 		fmt.Fprintf(os.Stderr, "ethos %s add: use 'set' for single-value attributes\n", kind.DisplayName)
 		os.Exit(1)
 	}
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: ethos talent add <handle> <slug>\n")
-		os.Exit(1)
-	}
-	handle, slug := args[0], args[1]
 
 	// Verify the talent exists.
 	as := attributeStore(kind)
@@ -190,19 +235,8 @@ func runAttributeAdd(kind attribute.Kind, args []string) {
 	fmt.Printf("Added talent %q to %q\n", slug, handle)
 }
 
-// runAttributeRemove removes an attribute slug from an identity's talents list.
-// Only valid for talents (list field).
-func runAttributeRemove(kind attribute.Kind, args []string) {
-	if kind != attribute.Talents {
-		fmt.Fprintf(os.Stderr, "ethos %s remove: use 'set' to change single-value attributes\n", kind.DisplayName)
-		os.Exit(1)
-	}
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: ethos talent remove <handle> <slug>\n")
-		os.Exit(1)
-	}
-	handle, slug := args[0], args[1]
-
+// runAttributeRemove removes a talent slug from an identity.
+func runAttributeRemove(handle, slug string) {
 	is := identityStore()
 	if err := is.Update(handle, func(id *identity.Identity) error {
 		found := false
@@ -227,17 +261,11 @@ func runAttributeRemove(kind attribute.Kind, args []string) {
 }
 
 // runAttributeSet sets a single-value attribute on an identity.
-// Valid for personality and writing-style.
-func runAttributeSet(kind attribute.Kind, args []string) {
+func runAttributeSet(kind attribute.Kind, handle, slug string) {
 	if kind == attribute.Talents {
 		fmt.Fprintf(os.Stderr, "ethos talent set: use 'add' and 'remove' for list attributes\n")
 		os.Exit(1)
 	}
-	if len(args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: ethos %s set <handle> <slug>\n", kind.CmdName)
-		os.Exit(1)
-	}
-	handle, slug := args[0], args[1]
 
 	// Verify the attribute exists.
 	as := attributeStore(kind)
@@ -263,20 +291,6 @@ func runAttributeSet(kind attribute.Kind, args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("Set %s %q on %q\n", kind.DisplayName, slug, handle)
-}
-
-func printAttributeUsage(kind attribute.Kind) {
-	fmt.Fprintf(os.Stderr, "Usage: ethos %s <subcommand>\n\n", kind.CmdName)
-	fmt.Fprintf(os.Stderr, "Subcommands:\n")
-	fmt.Fprintf(os.Stderr, "  create <slug>           Create a new %s\n", kind.DisplayName)
-	fmt.Fprintf(os.Stderr, "  list                    List all %s\n", kind.PluralName)
-	fmt.Fprintf(os.Stderr, "  show <slug>             Show %s content\n", kind.DisplayName)
-	if kind == attribute.Talents {
-		fmt.Fprintf(os.Stderr, "  add <handle> <slug>     Add %s to an identity\n", kind.DisplayName)
-		fmt.Fprintf(os.Stderr, "  remove <handle> <slug>  Remove %s from an identity\n", kind.DisplayName)
-	} else {
-		fmt.Fprintf(os.Stderr, "  set <handle> <slug>     Set %s on an identity\n", kind.DisplayName)
-	}
 }
 
 // editContent opens $EDITOR for the user to write attribute content.

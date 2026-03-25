@@ -8,13 +8,7 @@ import (
 	"github.com/punt-labs/ethos/internal/session"
 )
 
-func runIam(args []string) {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: ethos iam <persona>")
-		os.Exit(1)
-	}
-	persona := args[0]
-
+func runIam(persona string) {
 	sessionID, agentID := resolveSessionContext()
 	ss := sessionStore()
 	if err := ss.Join(sessionID, session.Participant{

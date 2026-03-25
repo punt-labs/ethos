@@ -5,46 +5,69 @@ import (
 	"os"
 
 	"github.com/punt-labs/ethos/internal/hook"
+	"github.com/spf13/cobra"
 )
 
-// runHook dispatches to hook subcommands. These are internal commands
-// called by Claude Code hook shell scripts — not for direct user use.
-func runHook(args []string) {
-	if len(args) == 0 {
-		printHookUsage()
-		os.Exit(1)
-	}
-
-	sub := args[0]
-	subcommands := map[string]func(){
-		"session-start":  runHookSessionStart,
-		"session-end":    runHookSessionEnd,
-		"subagent-start": runHookSubagentStart,
-		"subagent-stop":  runHookSubagentStop,
-		"format-output":  runHookFormatOutput,
-	}
-
-	if fn, ok := subcommands[sub]; ok {
-		fn()
-	} else {
-		fmt.Fprintf(os.Stderr, "ethos hook: unknown subcommand %q\n", sub)
-		printHookUsage()
-		os.Exit(1)
-	}
+var hookCmd = &cobra.Command{
+	Use:    "hook",
+	Short:  "Internal hook dispatcher (not for direct use)",
+	Hidden: true,
 }
 
-func printHookUsage() {
-	fmt.Fprint(os.Stderr, `Usage: ethos hook <subcommand>
+var hookSessionStartCmd = &cobra.Command{
+	Use:   "session-start",
+	Short: "SessionStart hook handler",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runHookSessionStart()
+	},
+}
 
-Internal commands called by Claude Code hooks. Not for direct use.
+var hookSessionEndCmd = &cobra.Command{
+	Use:   "session-end",
+	Short: "SessionEnd hook handler",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runHookSessionEnd()
+	},
+}
 
-Subcommands:
-  session-start   SessionStart hook handler
-  session-end     SessionEnd hook handler
-  subagent-start  SubagentStart hook handler
-  subagent-stop   SubagentStop hook handler
-  format-output   PostToolUse output formatter
-`)
+var hookSubagentStartCmd = &cobra.Command{
+	Use:   "subagent-start",
+	Short: "SubagentStart hook handler",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runHookSubagentStart()
+	},
+}
+
+var hookSubagentStopCmd = &cobra.Command{
+	Use:   "subagent-stop",
+	Short: "SubagentStop hook handler",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runHookSubagentStop()
+	},
+}
+
+var hookFormatOutputCmd = &cobra.Command{
+	Use:   "format-output",
+	Short: "PostToolUse output formatter",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runHookFormatOutput()
+	},
+}
+
+func init() {
+	hookCmd.AddCommand(
+		hookSessionStartCmd,
+		hookSessionEndCmd,
+		hookSubagentStartCmd,
+		hookSubagentStopCmd,
+		hookFormatOutputCmd,
+	)
+	rootCmd.AddCommand(hookCmd)
 }
 
 func runHookSessionStart() {
