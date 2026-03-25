@@ -26,6 +26,9 @@ var (
 
 // ExtDir returns the extension directory path for the given handle.
 func (s *Store) ExtDir(handle string) string {
+	if handle == "" {
+		return filepath.Join(s.identitiesDir(), ".ext")
+	}
 	return filepath.Join(s.identitiesDir(), filepath.Base(handle)+".ext")
 }
 
@@ -36,6 +39,9 @@ func (s *Store) extPath(handle, namespace string) string {
 
 // ExtGet reads a single key from a namespace, or all keys if key is empty.
 func (s *Store) ExtGet(handle, namespace, key string) (map[string]string, error) {
+	if handle == "" {
+		return nil, fmt.Errorf("handle is required")
+	}
 	if err := validateNamespace(namespace); err != nil {
 		return nil, err
 	}
@@ -133,6 +139,9 @@ func (s *Store) extSetDirect(handle, namespace, key, value string) error {
 
 // ExtDel deletes a key from a namespace, or the entire namespace if key is empty.
 func (s *Store) ExtDel(handle, namespace, key string) error {
+	if handle == "" {
+		return fmt.Errorf("handle is required")
+	}
 	if err := validateNamespace(namespace); err != nil {
 		return err
 	}
@@ -182,6 +191,9 @@ func (s *Store) ExtDel(handle, namespace, key string) error {
 
 // ExtList returns all namespace names for a handle.
 func (s *Store) ExtList(handle string) ([]string, error) {
+	if handle == "" {
+		return nil, fmt.Errorf("handle is required")
+	}
 	dir := s.ExtDir(handle)
 	entries, err := os.ReadDir(dir)
 	if err != nil {

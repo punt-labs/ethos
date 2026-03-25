@@ -316,6 +316,9 @@ func (h *Handler) handleExt(_ context.Context, req mcplib.CallToolRequest) (*mcp
 		if key == "" {
 			return mcplib.NewToolResultError("key is required for set"), nil
 		}
+		if _, ok := req.GetArguments()["value"]; !ok {
+			return mcplib.NewToolResultError("value is required for set"), nil
+		}
 		if err := h.store.ExtSet(handle, namespace, key, value); err != nil {
 			return mcplib.NewToolResultError(err.Error()), nil
 		}
