@@ -21,7 +21,6 @@ ethos create -f mal.yaml  # from file
 | `kind` | Yes | `human` or `agent` |
 | `email` | No | Email address (Beadle binding) |
 | `github` | No | GitHub handle (Biff binding) |
-| `voice` | No | `provider` + `voice_id` (Vox binding) |
 | `agent` | No | Path to Claude Code agent `.md` file |
 | `writing_style` | No | Path to `.md` file, relative to ethos root (e.g., `writing-styles/concise.md`) |
 | `personality` | No | Path to `.md` file, relative to ethos root (e.g., `personalities/principal.md`) |

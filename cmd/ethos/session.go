@@ -12,9 +12,10 @@ import (
 )
 
 var sessionCmd = &cobra.Command{
-	Use:   "session",
-	Short: "Manage session roster",
-	Args:  cobra.NoArgs,
+	Use:     "session",
+	Short:   "Manage session roster",
+	GroupID: "session",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runSessionShow()
 	},

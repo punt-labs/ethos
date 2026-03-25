@@ -5,8 +5,9 @@ import (
 )
 
 var identityCmd = &cobra.Command{
-	Use:   "identity",
-	Short: "Manage identities (whoami, list, get, create)",
+	Use:     "identity",
+	Short:   "Manage identities (whoami, list, get, create)",
+	GroupID: "identity",
 	Run: func(cmd *cobra.Command, args []string) {
 		runWhoami()
 	},

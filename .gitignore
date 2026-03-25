@@ -16,9 +16,11 @@ coverage.out
 # MCP (project-local, not part of plugin distribution)
 .mcp.json
 
-# TTS ephemeral audio
-.tts/
+# Vox ephemeral audio
 .vox/
+
+# Lux config
+Lux.ini
 
 # Biff local
 .biff.local

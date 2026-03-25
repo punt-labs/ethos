@@ -10,17 +10,17 @@ type Identity struct {
 	Name         string   `yaml:"name" json:"name"`
 	Handle       string   `yaml:"handle" json:"handle"`
 	Kind         string   `yaml:"kind" json:"kind"`
-	Email  string `yaml:"email,omitempty" json:"email,omitempty"`
-	GitHub string `yaml:"github,omitempty" json:"github,omitempty"`
-	Agent  string `yaml:"agent,omitempty" json:"agent,omitempty"`
+	Email        string   `yaml:"email,omitempty" json:"email,omitempty"`
+	GitHub       string   `yaml:"github,omitempty" json:"github,omitempty"`
+	Agent        string   `yaml:"agent,omitempty" json:"agent,omitempty"`
 	WritingStyle string   `yaml:"writing_style,omitempty" json:"writing_style,omitempty"`
 	Personality  string   `yaml:"personality,omitempty" json:"personality,omitempty"`
 	Talents      []string `yaml:"talents,omitempty" json:"talents,omitempty"`
 
 	// Resolved content — populated by Store.Load, never persisted.
 	// Empty when loaded with Reference(true).
-	WritingStyleContent string   `yaml:"-" json:"writing_style_content,omitempty"`
-	PersonalityContent  string   `yaml:"-" json:"personality_content,omitempty"`
+	WritingStyleContent string `yaml:"-" json:"writing_style_content,omitempty"`
+	PersonalityContent  string `yaml:"-" json:"personality_content,omitempty"`
 	// TalentContents is positionally indexed: TalentContents[i] is the resolved
 	// content for Talents[i]. Empty string means the .md file was not found
 	// (check Warnings for details).

@@ -9,7 +9,7 @@ writing_style: writing-styles/concise-quantified.md
 
 Each file defines written communication patterns — sentence structure,
 vocabulary, formatting preferences, anti-patterns. Separate from
-personality (how you think/act) and voice (how you sound when speaking).
+personality (how you think/act). Voice configuration lives in `ext/vox`.
 
 Multiple identities can share a writing style.
 

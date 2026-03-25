@@ -97,4 +97,3 @@ func TestValidate_HandleFormat(t *testing.T) {
 		})
 	}
 }
-

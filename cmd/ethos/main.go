@@ -39,9 +39,10 @@ func printJSON(v any) {
 // --- version ---
 
 var versionCmd = &cobra.Command{
-	Use:   "version",
-	Short: "Print version",
-	Args:  cobra.NoArgs,
+	Use:     "version",
+	Short:   "Print version",
+	GroupID: "admin",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		if jsonOutput {
 			printJSON(map[string]string{"version": version})
@@ -54,9 +55,10 @@ var versionCmd = &cobra.Command{
 // --- doctor ---
 
 var doctorCmd = &cobra.Command{
-	Use:   "doctor",
-	Short: "Check installation health",
-	Args:  cobra.NoArgs,
+	Use:     "doctor",
+	Short:   "Check installation health",
+	GroupID: "admin",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runDoctor()
 	},
@@ -67,9 +69,10 @@ var doctorCmd = &cobra.Command{
 var whoamiReference bool
 
 var whoamiCmd = &cobra.Command{
-	Use:   "whoami",
-	Short: "Show the caller's identity",
-	Args:  cobra.NoArgs,
+	Use:     "whoami",
+	Short:   "Show the caller's identity",
+	GroupID: "identity",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runWhoami()
 	},
@@ -128,9 +131,10 @@ var iamCmd = &cobra.Command{
 // --- serve ---
 
 var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start MCP server (stdio transport)",
-	Args:  cobra.NoArgs,
+	Use:     "serve",
+	Short:   "Start MCP server (stdio transport)",
+	GroupID: "admin",
+	Args:    cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runServeImpl()
 	},
