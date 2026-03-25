@@ -103,15 +103,9 @@ talents:                               # slugs → talents/<slug>.md
 - **Same schema for humans and agents.** The `kind` field is the only structural difference.
 - **Agent definition is a channel binding.** Like voice or email — the `.md` file defines tools and workflow, ethos defines who.
 
-## Go Coding Standards
+## Go Standards
 
-- **Go 1.26+**. Module path: `github.com/punt-labs/ethos`.
-- **`internal/` for everything.** Nothing is exported outside the module.
-- **No `interface{}` or `any`** unless unavoidable.
-- **Errors are values, not strings.** Wrap with `fmt.Errorf("context: %w", err)`.
-- **No panics in library code.** Panics are for programmer bugs only.
-- **Table-driven tests** with `testify/assert` and `testify/require`.
-- **`-race` mandatory** for all test runs.
+This project follows [Go standards](https://github.com/punt-labs/punt-kit/blob/main/standards/go.md). Module path: `github.com/punt-labs/ethos`.
 
 ## Development Workflow
 
