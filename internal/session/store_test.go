@@ -204,6 +204,69 @@ func TestStore_CurrentSession(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestStore_PurgeCurrentFiles(t *testing.T) {
+	s := testStore(t)
+
+	// Write PID files: one for our own PID (alive), one for a dead PID.
+	alivePID := fmt.Sprintf("%d", os.Getpid())
+	deadPID := "99999999"
+
+	require.NoError(t, s.WriteCurrentSession(alivePID, "sess-alive"))
+	require.NoError(t, s.WriteCurrentSession(deadPID, "sess-dead"))
+
+	purged, err := s.PurgeCurrent()
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{deadPID}, purged)
+
+	// Alive PID file still exists.
+	sid, err := s.ReadCurrentSession(alivePID)
+	require.NoError(t, err)
+	assert.Equal(t, "sess-alive", sid)
+
+	// Dead PID file is gone.
+	_, err = s.ReadCurrentSession(deadPID)
+	require.Error(t, err)
+}
+
+func TestStore_PurgeCurrentNoDirectory(t *testing.T) {
+	s := NewStore(filepath.Join(t.TempDir(), "nonexistent"))
+	purged, err := s.PurgeCurrent()
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+}
+
+func TestStore_PurgeCleansBothRostersAndPIDFiles(t *testing.T) {
+	s := testStore(t)
+
+	deadPID := "99999999"
+
+	// Create a roster with a dead PID as primary.
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: deadPID, Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-both", root, primary))
+
+	// Write a PID file for the same dead PID.
+	require.NoError(t, s.WriteCurrentSession(deadPID, "sess-both"))
+
+	purged, err := s.Purge()
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-both")
+
+	// Roster is gone.
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+
+	// PurgeCurrent is now called separately (CLI orchestrates both).
+	pidPurged, pidErr := s.PurgeCurrent()
+	require.NoError(t, pidErr)
+	assert.ElementsMatch(t, []string{deadPID}, pidPurged)
+
+	// PID file is also gone.
+	_, err = s.ReadCurrentSession(deadPID)
+	require.Error(t, err)
+}
+
 func TestStore_ReadCurrentSessionNotFound(t *testing.T) {
 	s := testStore(t)
 	_, err := s.ReadCurrentSession("nonexistent")
