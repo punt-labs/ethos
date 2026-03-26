@@ -13,7 +13,9 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/team"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -26,6 +28,26 @@ type Handler struct {
 	talents       *attribute.Store
 	personalities *attribute.Store
 	writingStyles *attribute.Store
+	roles         *role.LayeredStore
+	teams         *team.LayeredStore
+}
+
+// Option configures optional Handler fields.
+type Option func(*Handler)
+
+// WithSessionStore sets the session store on the handler.
+func WithSessionStore(ss *session.Store) Option {
+	return func(h *Handler) { h.sessionStore = ss }
+}
+
+// WithRoleStore sets the role store on the handler.
+func WithRoleStore(rs *role.LayeredStore) Option {
+	return func(h *Handler) { h.roles = rs }
+}
+
+// WithTeamStore sets the team store on the handler.
+func WithTeamStore(ts *team.LayeredStore) Option {
+	return func(h *Handler) { h.teams = ts }
 }
 
 // NewHandler creates a Handler with the given stores.
@@ -58,6 +80,32 @@ func NewHandler(s identity.IdentityStore, talents, personalities, writingStyles 
 	return h
 }
 
+// NewHandlerWithOptions creates a Handler with required stores and options.
+func NewHandlerWithOptions(s identity.IdentityStore, talents, personalities, writingStyles *attribute.Store, opts ...Option) *Handler {
+	if s == nil {
+		panic("mcp.NewHandlerWithOptions: store must not be nil")
+	}
+	if talents == nil {
+		panic("mcp.NewHandlerWithOptions: talents store must not be nil")
+	}
+	if personalities == nil {
+		panic("mcp.NewHandlerWithOptions: personalities store must not be nil")
+	}
+	if writingStyles == nil {
+		panic("mcp.NewHandlerWithOptions: writingStyles store must not be nil")
+	}
+	h := &Handler{
+		store:         s,
+		talents:       talents,
+		personalities: personalities,
+		writingStyles: writingStyles,
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
 // RegisterTools adds all ethos MCP tools to the given server.
 func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// Identity tool (consolidated)
@@ -70,6 +118,14 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	s.AddTool(h.doctorTool(), h.handleDoctor)
 	// Attribute tools (consolidated)
 	h.registerAttributeTools(s)
+	// Role tool (if store configured)
+	if h.roles != nil {
+		s.AddTool(h.roleTool(), h.handleRole)
+	}
+	// Team tool (if store configured)
+	if h.teams != nil {
+		s.AddTool(h.teamTool(), h.handleTeam)
+	}
 }
 
 // --- Tool Definitions ---

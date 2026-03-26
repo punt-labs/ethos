@@ -1,0 +1,394 @@
+%
+% teams.tex
+%
+% Z Specification for Ethos Teams, Roles, and Identities
+% Formal model of organizational structure for human and AI agent teams
+%
+% Type-check: fuzz -t teams.tex
+% Animate:    probcli teams.tex -init -animate 10 -p MAXINT 5 -p DEFAULT_SETSIZE 3
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\begin{document}
+
+\title{Ethos Teams: A Z Specification}
+\author{Formal Model of Identity, Role, and Team Composition}
+\date{March 2026}
+\hypersetup{
+  pdftitle={Ethos Teams: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+
+Ethos manages identity for humans and AI agents. This specification
+models the organizational layer: how identities are assigned to roles,
+how roles form teams, and how teams are scoped to repositories.
+
+An \emph{identity} is a person or agent with stable attributes ---
+personality, writing style, talents. An identity exists independently
+of any team.
+
+A \emph{role} is a function within an organization --- COO, Go
+Specialist, Security Engineer. Roles have responsibilities and
+collaboration relationships with other roles.
+
+A \emph{team} is a named collection that binds identities to roles for
+a set of repositories. The same identity can hold different roles on
+different teams. The same role type can be filled by multiple
+identities on the same team.
+
+\section{Basic Types}
+
+\begin{zed}
+  [HANDLE, NAME, SLUG, REPOPATH]
+\end{zed}
+
+$HANDLE$ identifies an identity uniquely (e.g., ``claude'', ``bwk'').
+$NAME$ is a display name or role name. $SLUG$ references attribute
+files (personalities, writing styles, talents). $REPOPATH$ identifies
+a repository.
+
+\section{Free Types}
+
+\begin{zed}
+  Kind ::= human | agent
+\end{zed}
+
+\begin{zed}
+  CollabType ::= reportsto | collabswith | delegatesto
+\end{zed}
+
+$CollabType$ describes the nature of a collaboration relationship
+between two roles: hierarchical reporting, peer collaboration, or
+delegation of work.
+
+\section{Global Constants}
+
+\begin{axdef}
+  maxIdent : \nat \\
+  maxRoles : \nat \\
+  maxTeams : \nat \\
+  maxMembers : \nat \\
+  maxCollabs : \nat \\
+  maxTalents : \nat \\
+  maxRepos : \nat
+\where
+  maxIdent = 3 \\
+  maxRoles = 3 \\
+  maxTeams = 2 \\
+  maxMembers = 5 \\
+  maxCollabs = 3 \\
+  maxTalents = 3 \\
+  maxRepos = 3
+\end{axdef}
+
+\section{Assignment and Collaboration Schemas}
+
+An assignment binds an identity to a role on a team.
+
+\begin{schema}{Assignment}
+  aTeam : NAME \\
+  aHandle : HANDLE \\
+  aRole : NAME
+\end{schema}
+
+A collaboration is a directed relationship between two roles on
+the same team.
+
+\begin{schema}{Collab}
+  cTeam : NAME \\
+  cFrom : NAME \\
+  cTo : NAME \\
+  cType : CollabType
+\where
+  cFrom \neq cTo
+\end{schema}
+
+A role cannot collaborate with itself.
+
+\section{System State}
+
+The system state holds all identities, roles, teams, and their
+relationships.
+
+\begin{schema}{EthosOrg}
+  known\_handles : \finset HANDLE \\
+  id\_name : HANDLE \pfun NAME \\
+  id\_kind : HANDLE \pfun Kind \\
+  id\_personality : HANDLE \pfun SLUG \\
+  id\_writing\_style : HANDLE \pfun SLUG \\
+  known\_roles : \finset NAME \\
+  team\_names : \finset NAME \\
+  team\_repos : NAME \pfun \finset REPOPATH \\
+  members : \finset Assignment \\
+  collabs : \finset Collab
+\where
+  \# known\_handles \leq maxIdent \\
+  \# known\_roles \leq maxRoles \\
+  \# team\_names \leq maxTeams \\
+  \# members \leq maxMembers \\
+  \# collabs \leq maxCollabs \\
+  \forall tn : team\_names @ \# (team\_repos~tn) \leq maxRepos \\
+  \dom id\_name = known\_handles \\
+  \dom id\_kind = known\_handles \\
+  \dom id\_personality = known\_handles \\
+  \dom id\_writing\_style = known\_handles \\
+  \dom team\_repos = team\_names \\
+  \forall m : members @ \\
+  \quad m.aTeam \in team\_names \land \\
+  \quad m.aHandle \in known\_handles \land \\
+  \quad m.aRole \in known\_roles \\
+  \forall c : collabs @ \\
+  \quad c.cTeam \in team\_names \land \\
+  \quad c.cFrom \in known\_roles \land \\
+  \quad c.cTo \in known\_roles \land \\
+  \quad (\exists m1 : members @ m1.aTeam = c.cTeam \land m1.aRole = c.cFrom) \land \\
+  \quad (\exists m2 : members @ m2.aTeam = c.cTeam \land m2.aRole = c.cTo) \\
+  \forall tn : team\_names @ \\
+  \quad (\exists m : members @ m.aTeam = tn)
+\end{schema}
+
+Key invariants:
+\begin{enumerate}
+  \item Handle uniqueness: $known\_handles$ is a set, maps are keyed by handle.
+  \item Role name uniqueness: $known\_roles$ is a set.
+  \item Referential integrity: every assignment references a valid
+    team name, identity handle, and role name.
+  \item Non-empty teams: every team name has at least one member.
+  \item Collaboration validity: both roles in a collaboration are
+    filled by members on that team.
+  \item No self-collaboration: $cFrom \neq cTo$ (schema invariant).
+  \item Bounded cardinality: all collections bounded by global constants.
+\end{enumerate}
+
+\section{Initialization}
+
+\begin{schema}{Init}
+  EthosOrg'
+\where
+  known\_handles' = \emptyset \\
+  id\_name' = \emptyset \\
+  id\_kind' = \emptyset \\
+  id\_personality' = \emptyset \\
+  id\_writing\_style' = \emptyset \\
+  known\_roles' = \emptyset \\
+  team\_names' = \emptyset \\
+  team\_repos' = \emptyset \\
+  members' = \emptyset \\
+  collabs' = \emptyset
+\end{schema}
+
+\section{Operations}
+
+\subsection{Create Identity}
+
+\begin{schema}{CreateIdentity}
+  \Delta EthosOrg \\
+  h? : HANDLE \\
+  n? : NAME \\
+  k? : Kind \\
+  p? : SLUG \\
+  ws? : SLUG
+\where
+  h? \notin known\_handles \\
+  \# known\_handles < maxIdent \\
+  known\_handles' = known\_handles \cup \{ h? \} \\
+  id\_name' = id\_name \cup \{ h? \mapsto n? \} \\
+  id\_kind' = id\_kind \cup \{ h? \mapsto k? \} \\
+  id\_personality' = id\_personality \cup \{ h? \mapsto p? \} \\
+  id\_writing\_style' = id\_writing\_style \cup \{ h? \mapsto ws? \} \\
+  known\_roles' = known\_roles \\
+  team\_names' = team\_names \\
+  team\_repos' = team\_repos \\
+  members' = members \\
+  collabs' = collabs
+\end{schema}
+
+\subsection{Create Role}
+
+\begin{schema}{CreateRole}
+  \Delta EthosOrg \\
+  rn? : NAME
+\where
+  rn? \notin known\_roles \\
+  \# known\_roles < maxRoles \\
+  known\_roles' = known\_roles \cup \{ rn? \} \\
+  known\_handles' = known\_handles \\
+  id\_name' = id\_name \\
+  id\_kind' = id\_kind \\
+  id\_personality' = id\_personality \\
+  id\_writing\_style' = id\_writing\_style \\
+  team\_names' = team\_names \\
+  team\_repos' = team\_repos \\
+  members' = members \\
+  collabs' = collabs
+\end{schema}
+
+\subsection{Create Team}
+
+A team is created with a name, a set of repositories, and a first
+member (maintaining the non-empty invariant).
+
+\begin{schema}{CreateTeam}
+  \Delta EthosOrg \\
+  tn? : NAME \\
+  repos? : \finset REPOPATH \\
+  fh? : HANDLE \\
+  fr? : NAME
+\where
+  tn? \notin team\_names \\
+  \# team\_names < maxTeams \\
+  \# repos? \leq maxRepos \\
+  fh? \in known\_handles \\
+  fr? \in known\_roles \\
+  team\_names' = team\_names \cup \{ tn? \} \\
+  team\_repos' = team\_repos \cup \{ tn? \mapsto repos? \} \\
+  members' = members \cup \{ (\mu Assignment | \\
+  \quad aTeam = tn? \land aHandle = fh? \land aRole = fr?) \} \\
+  known\_handles' = known\_handles \\
+  id\_name' = id\_name \\
+  id\_kind' = id\_kind \\
+  id\_personality' = id\_personality \\
+  id\_writing\_style' = id\_writing\_style \\
+  known\_roles' = known\_roles \\
+  collabs' = collabs
+\end{schema}
+
+\subsection{Add Member}
+
+\begin{schema}{AddMember}
+  \Delta EthosOrg \\
+  tn? : NAME \\
+  h? : HANDLE \\
+  rn? : NAME
+\where
+  tn? \in team\_names \\
+  h? \in known\_handles \\
+  rn? \in known\_roles \\
+  \# members < maxMembers \\
+  \lnot (\exists m : members @ \\
+  \quad m.aTeam = tn? \land m.aHandle = h? \land m.aRole = rn?) \\
+  members' = members \cup \{ (\mu Assignment | \\
+  \quad aTeam = tn? \land aHandle = h? \land aRole = rn?) \} \\
+  known\_handles' = known\_handles \\
+  id\_name' = id\_name \\
+  id\_kind' = id\_kind \\
+  id\_personality' = id\_personality \\
+  id\_writing\_style' = id\_writing\_style \\
+  known\_roles' = known\_roles \\
+  team\_names' = team\_names \\
+  team\_repos' = team\_repos \\
+  collabs' = collabs
+\end{schema}
+
+\subsection{Remove Member}
+
+\begin{schema}{RemoveMember}
+  \Delta EthosOrg \\
+  tn? : NAME \\
+  h? : HANDLE \\
+  rn? : NAME
+\where
+  tn? \in team\_names \\
+  (\exists m : members @ \\
+  \quad m.aTeam = tn? \land m.aHandle = h? \land m.aRole = rn?) \\
+  \# \{ m : members | m.aTeam = tn? \} > 1 \\
+  members' = \{ m : members | \\
+  \quad \lnot (m.aTeam = tn? \land m.aHandle = h? \land m.aRole = rn?) \} \\
+  collabs' = \{ c : collabs | \\
+  \quad \lnot (c.cTeam = tn? \land (c.cFrom = rn? \lor c.cTo = rn?)) \} \\
+  known\_handles' = known\_handles \\
+  id\_name' = id\_name \\
+  id\_kind' = id\_kind \\
+  id\_personality' = id\_personality \\
+  id\_writing\_style' = id\_writing\_style \\
+  known\_roles' = known\_roles \\
+  team\_names' = team\_names \\
+  team\_repos' = team\_repos
+\end{schema}
+
+Cannot remove the last member. Removing a member also removes any
+collaborations involving their role on this team.
+
+\subsection{Add Collaboration}
+
+\begin{schema}{AddCollaboration}
+  \Delta EthosOrg \\
+  tn? : NAME \\
+  from? : NAME \\
+  to? : NAME \\
+  ct? : CollabType
+\where
+  tn? \in team\_names \\
+  from? \neq to? \\
+  from? \in known\_roles \\
+  to? \in known\_roles \\
+  \# collabs < maxCollabs \\
+  (\exists m1 : members @ m1.aTeam = tn? \land m1.aRole = from?) \\
+  (\exists m2 : members @ m2.aTeam = tn? \land m2.aRole = to?) \\
+  collabs' = collabs \cup \{ (\mu Collab | \\
+  \quad cTeam = tn? \land cFrom = from? \land cTo = to? \land cType = ct?) \} \\
+  known\_handles' = known\_handles \\
+  id\_name' = id\_name \\
+  id\_kind' = id\_kind \\
+  id\_personality' = id\_personality \\
+  id\_writing\_style' = id\_writing\_style \\
+  known\_roles' = known\_roles \\
+  team\_names' = team\_names \\
+  team\_repos' = team\_repos \\
+  members' = members
+\end{schema}
+
+Both roles must be filled by members on the team.
+
+\subsection{Add Repository to Team}
+
+\begin{schema}{AddRepository}
+  \Delta EthosOrg \\
+  tn? : NAME \\
+  repo? : REPOPATH
+\where
+  tn? \in team\_names \\
+  \# (team\_repos~tn?) < maxRepos \\
+  team\_repos' = team\_repos \oplus \\
+  \quad \{ tn? \mapsto (team\_repos~tn?) \cup \{ repo? \} \} \\
+  known\_handles' = known\_handles \\
+  id\_name' = id\_name \\
+  id\_kind' = id\_kind \\
+  id\_personality' = id\_personality \\
+  id\_writing\_style' = id\_writing\_style \\
+  known\_roles' = known\_roles \\
+  team\_names' = team\_names \\
+  members' = members \\
+  collabs' = collabs
+\end{schema}
+
+\section{System Invariants Summary}
+
+\begin{enumerate}
+  \item Handle uniqueness: $known\_handles$ is a set, identity maps
+    are keyed by handle.
+  \item Role name uniqueness: $known\_roles$ is a set.
+  \item Team name uniqueness: $team\_names$ is a set, $team\_repos$
+    maps each name to its repos.
+  \item Referential integrity: every assignment references a valid
+    team name, identity handle, and role name.
+  \item Non-empty teams: every team name has at least one member.
+  \item Collaboration validity: both roles in a collaboration are
+    filled by members on that team.
+  \item No self-collaboration: $cFrom \neq cTo$.
+  \item Bounded cardinality: all collections bounded by global constants.
+\end{enumerate}
+
+\end{document}
