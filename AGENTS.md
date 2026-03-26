@@ -42,7 +42,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 | `talent` | create, list, show, delete, add, remove | `slug`, `content`, `handle` |
 | `personality` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `writing_style` | create, list, show, delete, set | `slug`, `content`, `handle` |
-| `ext` | get, set, del, list | `persona`, `namespace`, `key`, `value` |
+| `ext` | get, set, del, list | `handle`, `namespace`, `key`, `value` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
 **Example — read identity from MCP:**
@@ -185,10 +185,10 @@ ethos ext del mal vox
 
 | Tool | Method | Parameters | Description |
 |------|--------|-----------|-------------|
-| `ext` | get | `persona`, `namespace`, optional `key` | Read one key or all keys |
-| `ext` | set | `persona`, `namespace`, `key`, `value` | Write a key-value pair |
-| `ext` | del | `persona`, `namespace`, optional `key` | Delete key or namespace |
-| `ext` | list | `persona` | List all namespaces |
+| `ext` | get | `handle`, `namespace`, optional `key` | Read one key or all keys |
+| `ext` | set | `handle`, `namespace`, `key`, `value` | Write a key-value pair |
+| `ext` | del | `handle`, `namespace`, optional `key` | Delete key or namespace |
+| `ext` | list | `handle` | List all namespaces |
 
 ### Merged View
 
@@ -253,8 +253,9 @@ Ethos registers 5 hooks in `hooks/hooks.json`:
 
 | Hook | Script | Purpose |
 |------|--------|---------|
-| `SessionStart` | `session-start.sh` | Create roster, inject identity context |
-| `SubagentStart` | `subagent-start.sh` | Add subagent to roster, auto-match persona |
+| `SessionStart` | `session-start.sh` | Create roster, inject identity context and persona (personality + writing style + talents) |
+| `PreCompact` | `pre-compact.sh` | Re-inject condensed persona before context compression |
+| `SubagentStart` | `subagent-start.sh` | Add subagent to roster, auto-match and inject persona |
 | `SubagentStop` | `subagent-stop.sh` | Remove subagent from roster |
 | `SessionEnd` | `session-end.sh` | Delete roster and PID-keyed session file |
 | `PostToolUse` | `suppress-output.sh` | Suppress raw MCP tool output (matched to `mcp__plugin_ethos(-dev)?_self__.*`) |
@@ -268,6 +269,54 @@ Hooks receive `session_id` on stdin. Non-hook callers (Biff, Vox) discover the s
 ```
 
 The `SessionStart` hook writes this file. Any descendant process walks the process tree to the topmost `claude` ancestor PID, reads this file, and gets the session ID.
+
+## Persona Animation
+
+Claude Code agent definitions (`.claude/agents/<handle>.md`) define *what* the agent does — tools, scope, principles. Ethos identities define *who* the agent is — personality, writing style, temperament. They complement each other. Persona animation connects the two: ethos hooks inject behavioral content from the identity into the agent's context at lifecycle events.
+
+### How It Works
+
+Three hooks inject persona content automatically:
+
+1. **SessionStart** — loads the primary agent's identity and injects full personality content, writing style content, and talent slugs into the session context. This replaces the old one-line identity confirmation with a structured persona block.
+
+2. **PreCompact** — re-injects a condensed persona before context compression. Without this, the personality and writing style from SessionStart get summarized away during compaction, causing behavioral drift in long sessions.
+
+3. **SubagentStart** — when a subagent spawns, ethos auto-matches its `agent_type` to an identity handle. If a match is found, the subagent's personality and writing style content are injected into its context at spawn time.
+
+Talent slugs are listed but not expanded inline — full talent content is available on demand via `/ethos:talent show <slug>`.
+
+### Creating an Agent with Persona
+
+1. **Create the ethos identity** with personality and writing style:
+
+   ```yaml
+   # .punt-labs/ethos/identities/bwk.yaml
+   name: Brian K
+   handle: bwk
+   kind: agent
+   personality: kernighan
+   writing_style: kernighan-prose
+   talents:
+     - engineering
+   ```
+
+2. **Create the Claude Code agent definition** at `.claude/agents/bwk.md`. This file defines tools, scope, and working principles — the operational spec.
+
+3. **Match the names.** The agent definition's `name:` in frontmatter must match the ethos identity's `handle:`. This is how SubagentStart finds the persona.
+
+4. **On spawn**, ethos hooks inject the personality and writing style content into the agent's context automatically. The agent .md file does not need to call `ethos show` — the identity is already present.
+
+### What Goes Where
+
+| File | Defines | Example content |
+|------|---------|----------------|
+| `.claude/agents/bwk.md` | What the agent does | Tools, principles, working style, scope |
+| `.punt-labs/ethos/identities/bwk.yaml` | Who the agent is | Personality slug, writing style slug, talents |
+| `personalities/kernighan.md` | How the agent thinks | Temperament, design principles, debugging approach |
+| `writing-styles/kernighan-prose.md` | How the agent writes | Sentence structure, naming conventions, comment style |
+
+See [docs/persona-animation.md](docs/persona-animation.md) for the full design.
 
 ## Identity Schema Reference
 
