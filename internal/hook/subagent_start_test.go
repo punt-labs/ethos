@@ -21,6 +21,11 @@ func captureSubagentStartOutput(t *testing.T, input string, s *identity.Store, s
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		w.Close()
+		r.Close()
+	})
 	os.Stdout = w
 
 	in := bytes.NewReader([]byte(input))

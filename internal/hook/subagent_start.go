@@ -40,10 +40,8 @@ func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) 
 	// Resolve persona: if an identity exists with the same handle as
 	// agent_type, use it as the persona.
 	persona := ""
-	if agentType != "" {
-		if _, err := store.Load(agentType, identity.Reference(true)); err == nil {
-			persona = agentType
-		}
+	if agentType != "" && store.Exists(agentType) {
+		persona = agentType
 	}
 
 	p := session.Participant{

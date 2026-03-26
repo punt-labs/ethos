@@ -22,7 +22,7 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	// Opening line: "You are Name (handle), <first meaningful line of personality>."
 	first := firstContentLine(id.PersonalityContent)
 	if first != "" {
-		fmt.Fprintf(&b, "You are %s (%s), %s", id.Name, id.Handle, first)
+		fmt.Fprintf(&b, "You are %s (%s), %s.", id.Name, id.Handle, first)
 	} else {
 		fmt.Fprintf(&b, "You are %s (%s).", id.Name, id.Handle)
 	}

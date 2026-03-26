@@ -67,10 +67,15 @@ func isolateGitConfig(t *testing.T, user string) {
 func captureSessionStartOutput(t *testing.T, input string, s *identity.Store, ss *session.Store) string {
 	t.Helper()
 
-	// Capture stdout.
+	// Capture stdout with cleanup to prevent leaks on early exit.
 	oldStdout := os.Stdout
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		w.Close()
+		r.Close()
+	})
 	os.Stdout = w
 
 	in := bytes.NewReader([]byte(input))
