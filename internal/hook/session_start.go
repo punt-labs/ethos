@@ -84,15 +84,41 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 		}
 	}
 
-	// Emit context if we resolved an identity.
-	if resolvedID == nil {
+	// Emit the agent's persona block (not the human's).
+	// The agent persona comes from repo config (.punt-labs/ethos/config.yaml).
+	if agentPersona == "" {
+		// No agent persona configured — fall back to human identity one-liner.
+		if resolvedID != nil {
+			msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
+			result := SessionStartResult{}
+			result.HookSpecificOutput.HookEventName = "SessionStart"
+			result.HookSpecificOutput.AdditionalContext = msg
+			return json.NewEncoder(os.Stdout).Encode(result)
+		}
 		return nil
 	}
 
+	agentID, agentLoadErr := store.Load(agentPersona)
+	if agentLoadErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to load agent identity %q: %v\n", agentPersona, agentLoadErr)
+		// Fall back to human identity one-liner.
+		if resolvedID != nil {
+			msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
+			result := SessionStartResult{}
+			result.HookSpecificOutput.HookEventName = "SessionStart"
+			result.HookSpecificOutput.AdditionalContext = msg
+			return json.NewEncoder(os.Stdout).Encode(result)
+		}
+		return nil
+	}
+	for _, w := range agentID.Warnings {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: agent identity %q: %s\n", agentPersona, w)
+	}
+
 	// Try full persona block; fall back to one-line if no content.
-	msg := BuildPersonaBlock(resolvedID)
+	msg := BuildPersonaBlock(agentID)
 	if msg == "" {
-		msg = fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
+		msg = fmt.Sprintf("Ethos session started. Active identity: %s (%s).", agentID.Name, agentID.Handle)
 	}
 
 	result := SessionStartResult{}

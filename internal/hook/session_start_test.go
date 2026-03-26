@@ -91,10 +91,18 @@ func captureSessionStartOutput(t *testing.T, input string, s *identity.Store, ss
 }
 
 func TestHandleSessionStart_PersonaBlock(t *testing.T) {
-	id := &identity.Identity{
-		Name:         "Alice",
-		Handle:       "alice",
-		Kind:         "human",
+	// The human identity — used for roster creation.
+	humanID := &identity.Identity{
+		Name:   "Alice",
+		Handle: "alice",
+		Kind:   "human",
+	}
+	// The agent identity — used for persona injection.
+	// resolve.ResolveAgent reads from the real repo config and returns "claude".
+	agentID := &identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
 		Personality:  "calm-engineer",
 		WritingStyle: "concise-quant",
 		Talents:      []string{"engineering"},
@@ -102,7 +110,8 @@ func TestHandleSessionStart_PersonaBlock(t *testing.T) {
 	personality := "# Calm Engineer\n\nA calm and methodical engineer.\n\n- Stay focused\n- Data over adjectives"
 	writingStyle := "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words\n- Lead with numbers"
 
-	s, ss := setupIdentityWithAttributes(t, id, personality, writingStyle)
+	s, ss := setupIdentityWithAttributes(t, agentID, personality, writingStyle)
+	require.NoError(t, s.Save(humanID))
 	isolateGitConfig(t, "alice")
 
 	out := captureSessionStartOutput(t, `{"session_id": "s1"}`, s, ss)
@@ -111,7 +120,7 @@ func TestHandleSessionStart_PersonaBlock(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
 
 	ctx := result.HookSpecificOutput.AdditionalContext
-	assert.Contains(t, ctx, "You are Alice (alice)")
+	assert.Contains(t, ctx, "You are Claude Agento (claude)")
 	assert.Contains(t, ctx, "A calm and methodical engineer.")
 	assert.Contains(t, ctx, "## Personality")
 	assert.Contains(t, ctx, "Stay focused")
@@ -156,15 +165,18 @@ func TestHandleSessionStart_NoIdentity_NoOutput(t *testing.T) {
 }
 
 func TestHandleSessionStart_PersonalityOnly(t *testing.T) {
-	id := &identity.Identity{
-		Name:        "Carol",
-		Handle:      "carol",
+	// Agent identity with personality but no writing style.
+	agentID := &identity.Identity{
+		Name:        "Claude Agento",
+		Handle:      "claude",
 		Kind:        "agent",
 		Personality: "methodical",
 	}
 	personality := "# Methodical\n\nQuiet and patient.\n\n- Think before acting\n- Simplicity first"
 
-	s, ss := setupIdentityWithAttributes(t, id, personality, "")
+	humanID := &identity.Identity{Name: "Carol", Handle: "carol", Kind: "human"}
+	s, ss := setupIdentityWithAttributes(t, agentID, personality, "")
+	require.NoError(t, s.Save(humanID))
 	isolateGitConfig(t, "carol")
 
 	out := captureSessionStartOutput(t, `{"session_id": "s4"}`, s, ss)
@@ -173,7 +185,7 @@ func TestHandleSessionStart_PersonalityOnly(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
 
 	ctx := result.HookSpecificOutput.AdditionalContext
-	assert.Contains(t, ctx, "You are Carol (carol)")
+	assert.Contains(t, ctx, "You are Claude Agento (claude)")
 	assert.Contains(t, ctx, "## Personality")
 	assert.Contains(t, ctx, "Think before acting")
 	assert.NotContains(t, ctx, "## Writing Style")
