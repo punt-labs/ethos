@@ -55,7 +55,8 @@ func Validate(t *Team, identityExists func(string) bool, roleExists func(string)
 		return fmt.Errorf("team %q must have at least one member", t.Name)
 	}
 
-	// Check each member references a valid identity and role.
+	// Check each member references a valid identity and role, no duplicates.
+	seen := make(map[string]bool)
 	for i, m := range t.Members {
 		if m.Identity == "" {
 			return fmt.Errorf("member %d: identity is required", i)
@@ -63,6 +64,11 @@ func Validate(t *Team, identityExists func(string) bool, roleExists func(string)
 		if m.Role == "" {
 			return fmt.Errorf("member %d: role is required", i)
 		}
+		key := m.Identity + "/" + m.Role
+		if seen[key] {
+			return fmt.Errorf("member %d: duplicate assignment (%s, %s)", i, m.Identity, m.Role)
+		}
+		seen[key] = true
 		if !identityExists(m.Identity) {
 			return fmt.Errorf("member %d: identity %q not found", i, m.Identity)
 		}

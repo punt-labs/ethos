@@ -110,10 +110,11 @@ func (ls *LayeredStore) AddCollaboration(teamName string, c Collaboration) error
 	return ls.global.AddCollaboration(teamName, c)
 }
 
-// checkNotRepoOnly returns an error if the team exists only in the repo layer.
+// checkNotRepoOnly returns an error if the team exists in the repo layer.
+// Repo-layer teams are git-tracked and read-only via CLI/MCP.
 func (ls *LayeredStore) checkNotRepoOnly(teamName string) error {
-	if ls.repo != nil && ls.repo.Exists(teamName) && !ls.global.Exists(teamName) {
-		return fmt.Errorf("team %q is repo-local (git-tracked) and cannot be modified via CLI; edit the YAML directly", teamName)
+	if ls.repo != nil && ls.repo.Exists(teamName) {
+		return fmt.Errorf("team %q is repo-tracked (git-tracked) and cannot be modified via CLI; edit the YAML directly", teamName)
 	}
 	return nil
 }

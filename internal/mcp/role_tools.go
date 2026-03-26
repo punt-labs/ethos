@@ -82,7 +82,7 @@ func (h *Handler) handleShowRole(req mcplib.CallToolRequest) (*mcplib.CallToolRe
 	}
 	r, err := h.roles.Load(name)
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("role not found: %v", err)), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to load role: %v", err)), nil
 	}
 	return jsonResult(r)
 }

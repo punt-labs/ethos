@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strings"
@@ -163,12 +164,18 @@ func runRoleShow(name string) {
 func runRoleDelete(name string) {
 	s := roleStore()
 	// Check referential integrity: no team should reference this role.
+	// Fail closed — if we can't check, don't delete.
 	ts := teamStore()
-	teamNames, _ := ts.List()
+	teamNames, err := ts.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: cannot verify references for role %q: %v\n", name, err)
+		os.Exit(1)
+	}
 	for _, tn := range teamNames {
 		t, err := ts.Load(tn)
 		if err != nil {
-			continue
+			fmt.Fprintf(os.Stderr, "ethos: cannot verify references for role %q: failed to load team %q: %v\n", name, tn, err)
+			os.Exit(1)
 		}
 		for _, m := range t.Members {
 			if m.Role == name {
@@ -190,11 +197,11 @@ func runRoleDelete(name string) {
 
 // readLines reads lines from stdin until an empty line.
 func readLines() []string {
+	scanner := bufio.NewScanner(os.Stdin)
 	var lines []string
-	var line string
-	for {
-		_, err := fmt.Scanln(&line)
-		if err != nil || strings.TrimSpace(line) == "" {
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
 			break
 		}
 		lines = append(lines, line)

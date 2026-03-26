@@ -114,7 +114,7 @@ func (h *Handler) handleShowTeam(req mcplib.CallToolRequest) (*mcplib.CallToolRe
 	}
 	t, err := h.teams.Load(name)
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("team not found: %v", err)), nil
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to load team: %v", err)), nil
 	}
 	return jsonResult(t)
 }
