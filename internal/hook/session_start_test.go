@@ -63,6 +63,27 @@ func isolateGitConfig(t *testing.T, user string) {
 	require.NoError(t, os.WriteFile(filepath.Join(tmp, "empty.gitconfig"), []byte(""), 0o644))
 }
 
+// setupRepoWithAgent creates a fake repo root with .git/ and a
+// .punt-labs/ethos/config.yaml that sets the agent to the given handle.
+// It chdir's into the repo root so resolve.FindRepoRoot works.
+func setupRepoWithAgent(t *testing.T, agentHandle string) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+
+	ethosDir := filepath.Join(repoRoot, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(ethosDir, 0o755))
+	cfg := "agent: " + agentHandle + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "config.yaml"), []byte(cfg), 0o644))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	return repoRoot
+}
+
 // captureSessionStartOutput runs HandleSessionStart and captures stdout.
 func captureSessionStartOutput(t *testing.T, input string, s *identity.Store, ss *session.Store) string {
 	t.Helper()
@@ -98,7 +119,6 @@ func TestHandleSessionStart_PersonaBlock(t *testing.T) {
 		Kind:   "human",
 	}
 	// The agent identity — used for persona injection.
-	// resolve.ResolveAgent reads from the real repo config and returns "claude".
 	agentID := &identity.Identity{
 		Name:         "Claude Agento",
 		Handle:       "claude",
@@ -113,6 +133,7 @@ func TestHandleSessionStart_PersonaBlock(t *testing.T) {
 	s, ss := setupIdentityWithAttributes(t, agentID, personality, writingStyle)
 	require.NoError(t, s.Save(humanID))
 	isolateGitConfig(t, "alice")
+	setupRepoWithAgent(t, "claude")
 
 	out := captureSessionStartOutput(t, `{"session_id": "s1"}`, s, ss)
 
@@ -178,6 +199,7 @@ func TestHandleSessionStart_PersonalityOnly(t *testing.T) {
 	s, ss := setupIdentityWithAttributes(t, agentID, personality, "")
 	require.NoError(t, s.Save(humanID))
 	isolateGitConfig(t, "carol")
+	setupRepoWithAgent(t, "claude")
 
 	out := captureSessionStartOutput(t, `{"session_id": "s4"}`, s, ss)
 
