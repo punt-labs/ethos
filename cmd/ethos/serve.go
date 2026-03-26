@@ -21,7 +21,13 @@ func runServeImpl() {
 	talents := layeredAttributeStore(is, attribute.Talents)
 	personalities := layeredAttributeStore(is, attribute.Personalities)
 	writingStyles := layeredAttributeStore(is, attribute.WritingStyles)
-	mcp.NewHandler(is, talents, personalities, writingStyles, sessionStore()).RegisterTools(s)
+	roles := layeredRoleStore(is)
+	teams := layeredTeamStore(is)
+	mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles,
+		mcp.WithSessionStore(sessionStore()),
+		mcp.WithRoleStore(roles),
+		mcp.WithTeamStore(teams),
+	).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: MCP server error: %v\n", err)

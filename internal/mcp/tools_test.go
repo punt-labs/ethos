@@ -8,6 +8,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/session"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -684,4 +685,126 @@ func TestStringArrayArg(t *testing.T) {
 	})
 	assert.Equal(t, []string{"go", "testing"}, stringArrayArg(req, "talents"))
 	assert.Nil(t, stringArrayArg(req, "missing"))
+}
+
+// --- Role Tool Tests ---
+
+func testHandlerWithRoles(t *testing.T) *Handler {
+	t.Helper()
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	root := s.Root()
+	rs := role.NewLayeredStore("", root)
+	return NewHandlerWithOptions(s,
+		attribute.NewStore(root, attribute.Talents),
+		attribute.NewStore(root, attribute.Personalities),
+		attribute.NewStore(root, attribute.WritingStyles),
+		WithRoleStore(rs),
+	)
+}
+
+func TestHandleRole_CreateAndShow(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method":           "create",
+		"name":             "coo",
+		"responsibilities": []interface{}{"execution quality"},
+		"permissions":      []interface{}{"approve-merges"},
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "coo")
+	assert.Contains(t, text, "execution quality")
+
+	result, err = h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "show",
+		"name":   "coo",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "approve-merges")
+}
+
+func TestHandleRole_ListAndDelete(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	_, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create", "name": "role-a",
+	}))
+	require.NoError(t, err)
+
+	_, err = h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create", "name": "role-b",
+	}))
+	require.NoError(t, err)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "list",
+	}))
+	require.NoError(t, err)
+	text := resultText(t, result)
+	assert.Contains(t, text, "role-a")
+	assert.Contains(t, text, "role-b")
+
+	result, err = h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "delete", "name": "role-a",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	result, err = h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "list",
+	}))
+	require.NoError(t, err)
+	text = resultText(t, result)
+	assert.NotContains(t, text, "role-a")
+	assert.Contains(t, text, "role-b")
+}
+
+func TestHandleRole_CreateMissingName(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "name is required")
+}
+
+func TestHandleRole_ShowNotFound(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "show",
+		"name":   "nonexistent",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "not found")
+}
+
+func TestHandleRole_UnknownMethod(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "bogus",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unknown method")
+}
+
+func TestHandleRole_InvalidName(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "INVALID",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
 }
