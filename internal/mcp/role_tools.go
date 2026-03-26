@@ -92,6 +92,22 @@ func (h *Handler) handleDeleteRole(req mcplib.CallToolRequest) (*mcplib.CallTool
 	if name == "" {
 		return mcplib.NewToolResultError("name is required for delete"), nil
 	}
+	// Check referential integrity: no team should reference this role.
+	if h.teams != nil {
+		teamNames, _ := h.teams.List()
+		for _, tn := range teamNames {
+			t, err := h.teams.Load(tn)
+			if err != nil {
+				continue
+			}
+			for _, m := range t.Members {
+				if m.Role == name {
+					return mcplib.NewToolResultError(fmt.Sprintf(
+						"cannot delete role %q: referenced by team %q (member %s)", name, tn, m.Identity)), nil
+				}
+			}
+		}
+	}
 	if err := h.roles.Delete(name); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to delete role: %v", err)), nil
 	}

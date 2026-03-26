@@ -267,6 +267,13 @@ func (s *Store) AddCollaboration(teamName string, c Collaboration) error {
 		return fmt.Errorf("role %q not filled by any member", c.To)
 	}
 
+	// Check for duplicates.
+	for _, existing := range t.Collaborations {
+		if existing.From == c.From && existing.To == c.To && existing.Type == c.Type {
+			return fmt.Errorf("collaboration %s -> %s (%s) already exists on team %q", c.From, c.To, c.Type, teamName)
+		}
+	}
+
 	t.Collaborations = append(t.Collaborations, c)
 	return s.save(t)
 }

@@ -203,9 +203,13 @@ func (h *Handler) handleTeamAddCollab(req mcplib.CallToolRequest) (*mcplib.CallT
 // Expects an array of objects with "identity" and "role" string fields.
 func parseMembersArg(req mcplib.CallToolRequest) ([]team.Member, error) {
 	args := req.GetArguments()
-	raw, ok := args["members"].([]interface{})
-	if !ok {
+	rawVal, exists := args["members"]
+	if !exists {
 		return nil, nil
+	}
+	raw, ok := rawVal.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("members must be an array, got %T", rawVal)
 	}
 	var members []team.Member
 	for i, v := range raw {

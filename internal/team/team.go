@@ -45,6 +45,9 @@ var validCollabTypes = map[string]bool{
 // The identityExists and roleExists callbacks check referential integrity
 // without importing other packages.
 func Validate(t *Team, identityExists func(string) bool, roleExists func(string) bool) error {
+	if identityExists == nil || roleExists == nil {
+		return fmt.Errorf("identityExists and roleExists callbacks must not be nil")
+	}
 	if err := ValidateName(t.Name); err != nil {
 		return fmt.Errorf("invalid team name: %w", err)
 	}
