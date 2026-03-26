@@ -1,3 +1,3 @@
 {
-  "ignores": [".beads/", ".claude/", ".venv/", ".tmp/", ".worktrees/"]
+  "ignores": [".beads/", ".claude/", ".venv/", ".tmp/", ".worktrees/", ".punt-labs/ethos/agents/"]
 }
