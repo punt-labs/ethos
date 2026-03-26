@@ -31,19 +31,20 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 
 	sessionID, _ := input["session_id"].(string)
 
-	// Resolve human identity.
+	// Resolve human identity with full attribute content.
 	handle, err := resolve.Resolve(store, ss)
-	humanName := ""
-	humanHandle := ""
+	var resolvedID *identity.Identity
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: identity resolution failed: %v (using OS username)\n", err)
 	} else {
-		id, loadErr := store.Load(handle, identity.Reference(true))
+		id, loadErr := store.Load(handle)
 		if loadErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: failed to load identity %q: %v\n", handle, loadErr)
 		} else {
-			humanName = id.Name
-			humanHandle = id.Handle
+			for _, w := range id.Warnings {
+				fmt.Fprintf(os.Stderr, "ethos: session-start: identity %q: %s\n", handle, w)
+			}
+			resolvedID = id
 		}
 	}
 
@@ -64,7 +65,10 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 		if userID == "" {
 			userID = "unknown"
 		}
-		userPersona := humanHandle
+		userPersona := ""
+		if resolvedID != nil {
+			userPersona = resolvedID.Handle
+		}
 		if userPersona == "" {
 			userPersona = userID
 		}
@@ -81,13 +85,18 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 	}
 
 	// Emit context if we resolved an identity.
-	if humanName != "" {
-		msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", humanName, humanHandle)
-		result := SessionStartResult{}
-		result.HookSpecificOutput.HookEventName = "SessionStart"
-		result.HookSpecificOutput.AdditionalContext = msg
-		return json.NewEncoder(os.Stdout).Encode(result)
+	if resolvedID == nil {
+		return nil
 	}
 
-	return nil
+	// Try full persona block; fall back to one-line if no content.
+	msg := BuildPersonaBlock(resolvedID)
+	if msg == "" {
+		msg = fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
+	}
+
+	result := SessionStartResult{}
+	result.HookSpecificOutput.HookEventName = "SessionStart"
+	result.HookSpecificOutput.AdditionalContext = msg
+	return json.NewEncoder(os.Stdout).Encode(result)
 }
