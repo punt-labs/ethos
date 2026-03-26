@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Persona animation**: SessionStart hook injects full personality, writing style, and talent slugs into session context
+- **PreCompact hook**: re-injects condensed persona block before context compression so behavioral instructions survive compaction
+- **SubagentStart persona injection**: subagents with matched identities (e.g., bwk, mdm) get their persona injected automatically at spawn
+- Shared persona builder (`BuildPersonaBlock`, `BuildCondensedPersona`) for consistent formatting across all hooks
+- Attribute resolution warnings logged to stderr in all hook handlers
+
+### Changed
+
+- Agent definitions (bwk.md, mdm.md) no longer need manual `ethos show` instructions — persona is injected by hooks
+
 ## [2.0.0] - 2026-03-25
 
 ### Changed

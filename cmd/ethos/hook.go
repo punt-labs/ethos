@@ -50,6 +50,15 @@ var hookSubagentStopCmd = &cobra.Command{
 	},
 }
 
+var hookPreCompactCmd = &cobra.Command{
+	Use:   "pre-compact",
+	Short: "PreCompact hook handler",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runHookPreCompact()
+	},
+}
+
 var hookFormatOutputCmd = &cobra.Command{
 	Use:   "format-output",
 	Short: "PostToolUse output formatter",
@@ -65,6 +74,7 @@ func init() {
 		hookSessionEndCmd,
 		hookSubagentStartCmd,
 		hookSubagentStopCmd,
+		hookPreCompactCmd,
 		hookFormatOutputCmd,
 	)
 	rootCmd.AddCommand(hookCmd)
@@ -100,6 +110,15 @@ func runHookSubagentStop() {
 	ss := sessionStore()
 	if err := hook.HandleSubagentStop(os.Stdin, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook subagent-stop: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runHookPreCompact() {
+	s := globalStore()
+	ss := sessionStore()
+	if err := hook.HandlePreCompact(os.Stdin, s, ss); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook pre-compact: %v\n", err)
 		os.Exit(1)
 	}
 }

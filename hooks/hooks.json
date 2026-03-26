@@ -40,6 +40,16 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact.sh"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "mcp__plugin_ethos(-dev)?_self__.*",
