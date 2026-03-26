@@ -55,6 +55,7 @@ sh install.sh
 - **Extensible** — any tool attaches its own attributes via `<handle>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
 - **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
+- **Persona animation** — SessionStart, PreCompact, and SubagentStart hooks inject personality, writing style, and talent content into agent context automatically
 - **Layered resolution** — repo-local identities override global; resolved from iam declaration, git config, or OS user (DES-011, DES-018)
 - **Channel bindings** — email (Beadle), GitHub (Biff), Claude Code agent definition; voice config lives in extensions (`ext/vox`)
 
@@ -233,6 +234,12 @@ channel bindings defined here.
 agent type string (case-sensitive, lowercase). Handles are restricted to
 `[a-z0-9-]`. If a subagent doesn't get a persona, check that you created
 an identity with a handle matching the agent type.
+
+## Persona Animation
+
+Ethos hooks inject behavioral content — personality, writing style, and talent slugs — into agent context at session lifecycle events. SessionStart injects the full persona for the primary agent. PreCompact re-injects a condensed persona before context compression to prevent behavioral drift. SubagentStart injects the matched persona when a subagent spawns.
+
+The agent definition (`.claude/agents/<handle>.md`) defines what the agent does. The ethos identity defines who the agent is. Hooks connect the two automatically. See [AGENTS.md](AGENTS.md#persona-animation) for setup details and [docs/persona-animation.md](docs/persona-animation.md) for the full design.
 
 ## Storage
 

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Agent definitions (bwk.md, mdm.md) no longer need manual `ethos show` instructions — persona is injected by hooks
+- CLAUDE.md Go standards section replaced with reference to org-wide `punt-kit/standards/go.md`
 
 ## [2.0.0] - 2026-03-25
 
