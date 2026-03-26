@@ -93,12 +93,16 @@ func (h *Handler) handleDeleteRole(req mcplib.CallToolRequest) (*mcplib.CallTool
 		return mcplib.NewToolResultError("name is required for delete"), nil
 	}
 	// Check referential integrity: no team should reference this role.
+	// Fail closed — if we can't verify, don't delete.
 	if h.teams != nil {
-		teamNames, _ := h.teams.List()
+		teamNames, err := h.teams.List()
+		if err != nil {
+			return mcplib.NewToolResultError(fmt.Sprintf("cannot verify role %q is unused: %v", name, err)), nil
+		}
 		for _, tn := range teamNames {
 			t, err := h.teams.Load(tn)
 			if err != nil {
-				continue
+				return mcplib.NewToolResultError(fmt.Sprintf("cannot verify role %q is unused: failed to load team %q: %v", name, tn, err)), nil
 			}
 			for _, m := range t.Members {
 				if m.Role == name {
