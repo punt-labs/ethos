@@ -115,6 +115,18 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 		fmt.Fprintf(os.Stderr, "ethos: session-start: agent identity %q: %s\n", agentPersona, w)
 	}
 
+	// Install agent definitions from ethos agents dir into .claude/agents/.
+	ethosRoot := resolve.FindRepoEthosRoot()
+	if ethosRoot != "" {
+		deployed, installErr := InstallAgentDefinitions(ethosRoot)
+		if installErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: session-start: agent install failed: %v\n", installErr)
+		}
+		for _, name := range deployed {
+			fmt.Fprintf(os.Stderr, "ethos: session-start: deployed agent definition %s\n", name)
+		}
+	}
+
 	// Try full persona block; fall back to one-line if no content.
 	msg := BuildPersonaBlock(agentID)
 	if msg == "" {
