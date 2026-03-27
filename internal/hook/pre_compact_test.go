@@ -34,15 +34,22 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	})
 	os.Stdout = w
 
+	// Drain the pipe in a goroutine to avoid deadlock if output
+	// exceeds the OS pipe buffer (~64KB).
+	var buf bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		_, readErr := buf.ReadFrom(r)
+		done <- readErr
+	}()
+
 	in := bytes.NewReader([]byte(input))
 	require.NoError(t, HandlePreCompact(in, deps))
 
 	w.Close()
 	os.Stdout = oldStdout
 
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(r)
-	require.NoError(t, err)
+	require.NoError(t, <-done)
 	return buf.String()
 }
 
@@ -125,10 +132,9 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 		Kind:   "human",
 	}))
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:               "Claude Agento",
-		Handle:             "claude",
-		Kind:               "agent",
-		PersonalityContent: "# Friendly Direct\n\nCOO / VP Engineering.\n\n- Direct but warm",
+		Name:   "Claude Agento",
+		Handle: "claude",
+		Kind:   "agent",
 	}))
 
 	// Create roles.

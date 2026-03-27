@@ -90,7 +90,7 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 		// Load identity for display name.
 		name := m.Identity
 		if identities != nil {
-			if id, err := identities.Load(m.Identity); err == nil {
+			if id, err := identities.Load(m.Identity, identity.Reference(true)); err == nil {
 				name = fmt.Sprintf("%s (%s)", id.Name, id.Handle)
 			} else {
 				fmt.Fprintf(os.Stderr, "ethos: team context: failed to load identity %q: %v\n", m.Identity, err)
