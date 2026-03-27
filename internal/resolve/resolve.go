@@ -226,7 +226,12 @@ func RepoName() string {
 		}
 		return ""
 	}
-	return parseRepoName(strings.TrimSpace(string(out)))
+	url := strings.TrimSpace(string(out))
+	name := parseRepoName(url)
+	if name == "" {
+		fmt.Fprintf(os.Stderr, "ethos: could not parse repo name from remote URL %q\n", url)
+	}
+	return name
 }
 
 // parseRepoName extracts "owner/repo" from a remote URL.
