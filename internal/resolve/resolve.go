@@ -4,6 +4,7 @@
 package resolve
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,6 +21,7 @@ import (
 // RepoConfig holds the repo-local ethos configuration.
 type RepoConfig struct {
 	Agent string `yaml:"agent,omitempty"` // default agent identity handle
+	Team  string `yaml:"team,omitempty"`  // team that owns this repo
 }
 
 // Resolve returns the identity handle for the current caller.
@@ -131,23 +133,66 @@ func FindRepoEthosRoot() string {
 	return ""
 }
 
+// LoadRepoConfig reads repo-local ethos configuration. Tries
+// .punt-labs/ethos.yaml first, falls back to the legacy path
+// .punt-labs/ethos/config.yaml. Returns nil, nil when neither exists.
+func LoadRepoConfig(repoRoot string) (*RepoConfig, error) {
+	newPath := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
+	data, err := os.ReadFile(newPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("reading %s: %w", newPath, err)
+		}
+		// New path not found — try legacy path.
+		oldPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "config.yaml")
+		data, err = os.ReadFile(oldPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("reading %s: %w", oldPath, err)
+		}
+	}
+	var cfg RepoConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing repo config: %w", err)
+	}
+	return &cfg, nil
+}
+
 // ResolveAgent returns the default agent identity handle for the repo.
-// Reads .punt-labs/ethos/config.yaml "agent:" field from the given repo
-// root. Returns empty string if not configured or not in a repo.
+// Reads .punt-labs/ethos.yaml first, falls back to legacy
+// .punt-labs/ethos/config.yaml. Returns empty string if not configured.
 func ResolveAgent(repoRoot string) string {
 	if repoRoot == "" {
 		return ""
 	}
-	ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
-	data, err := os.ReadFile(filepath.Join(ethosRoot, "config.yaml"))
+	cfg, err := LoadRepoConfig(repoRoot)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: loading repo config: %v\n", err)
 		return ""
 	}
-	var cfg RepoConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if cfg == nil {
 		return ""
 	}
 	return cfg.Agent
+}
+
+// ResolveTeam returns the team name from repo config. Returns empty
+// string if not configured or on error.
+func ResolveTeam(repoRoot string) string {
+	if repoRoot == "" {
+		return ""
+	}
+	cfg, err := LoadRepoConfig(repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: loading repo config: %v\n", err)
+		return ""
+	}
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Team
 }
 
 // FindRepoRoot walks from the current working directory upward looking
@@ -167,6 +212,40 @@ func FindRepoRoot() string {
 		}
 		dir = parent
 	}
+}
+
+// RepoName returns the repository name (e.g. "punt-labs/ethos") for the
+// current working directory. Parses the "origin" remote URL.
+// Returns empty string if not in a git repo or no origin remote is set.
+func RepoName() string {
+	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			fmt.Fprintf(os.Stderr, "ethos: git remote get-url: %v\n", err)
+		}
+		return ""
+	}
+	return parseRepoName(strings.TrimSpace(string(out)))
+}
+
+// parseRepoName extracts "owner/repo" from a remote URL.
+// Supports HTTPS (https://github.com/owner/repo.git) and
+// SSH (git@github.com:owner/repo.git) formats.
+func parseRepoName(url string) string {
+	url = strings.TrimSuffix(url, ".git")
+
+	// SSH format: git@github.com:owner/repo
+	if i := strings.Index(url, ":"); i >= 0 && !strings.Contains(url[:i], "/") {
+		return url[i+1:]
+	}
+
+	// HTTPS format: https://github.com/owner/repo
+	parts := strings.Split(url, "/")
+	if len(parts) >= 2 {
+		return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+	}
+	return url
 }
 
 // GitConfig reads a single git config value. Returns empty string if

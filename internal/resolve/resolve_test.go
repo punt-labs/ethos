@@ -133,19 +133,140 @@ func TestResolve_PriorityOrder(t *testing.T) {
 	assert.Equal(t, "mal", handle)
 }
 
+// --- LoadRepoConfig tests ---
+
+func TestLoadRepoConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, root string)
+		wantAgent string
+		wantTeam  string
+		wantNil   bool
+		wantErr   bool
+	}{
+		{
+			name: "new path only",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				dir := filepath.Join(root, ".punt-labs")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "ethos.yaml"),
+					[]byte("agent: claude\nteam: engineering\n"), 0o644))
+			},
+			wantAgent: "claude",
+			wantTeam:  "engineering",
+		},
+		{
+			name: "old path only",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				dir := filepath.Join(root, ".punt-labs", "ethos")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "config.yaml"),
+					[]byte("agent: legacy-agent\n"), 0o644))
+			},
+			wantAgent: "legacy-agent",
+		},
+		{
+			name: "both present new wins",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				puntDir := filepath.Join(root, ".punt-labs")
+				require.NoError(t, os.MkdirAll(puntDir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(puntDir, "ethos.yaml"),
+					[]byte("agent: new-agent\n"), 0o644))
+				ethosDir := filepath.Join(puntDir, "ethos")
+				require.NoError(t, os.MkdirAll(ethosDir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(ethosDir, "config.yaml"),
+					[]byte("agent: old-agent\n"), 0o644))
+			},
+			wantAgent: "new-agent",
+		},
+		{
+			name:    "neither present",
+			setup:   func(t *testing.T, root string) { t.Helper() },
+			wantNil: true,
+		},
+		{
+			name: "invalid yaml",
+			setup: func(t *testing.T, root string) {
+				t.Helper()
+				dir := filepath.Join(root, ".punt-labs")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "ethos.yaml"),
+					[]byte(":\n  :\n    - [invalid"), 0o644))
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			tt.setup(t, root)
+
+			cfg, err := LoadRepoConfig(root)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantNil {
+				assert.Nil(t, cfg)
+				return
+			}
+			require.NotNil(t, cfg)
+			assert.Equal(t, tt.wantAgent, cfg.Agent)
+			assert.Equal(t, tt.wantTeam, cfg.Team)
+		})
+	}
+}
+
+func TestLoadRepoConfig_PermissionError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("cannot test permission errors as root")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	f := filepath.Join(dir, "ethos.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("agent: x\n"), 0o644))
+	require.NoError(t, os.Chmod(f, 0o000))
+	t.Cleanup(func() { os.Chmod(f, 0o644) }) //nolint:errcheck
+
+	cfg, err := LoadRepoConfig(root)
+	require.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "reading")
+}
+
 // --- ResolveAgent tests ---
 
 func TestResolveAgent_ConfigSet(t *testing.T) {
 	root := t.TempDir()
-	configDir := filepath.Join(root, ".punt-labs", "ethos")
-	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(configDir, "config.yaml"),
-		[]byte("agent: claude\n"),
-		0o644,
-	))
+		filepath.Join(dir, "ethos.yaml"),
+		[]byte("agent: claude\n"), 0o644))
 
 	assert.Equal(t, "claude", ResolveAgent(root))
+}
+
+func TestResolveAgent_LegacyFallback(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "config.yaml"),
+		[]byte("agent: legacy\n"), 0o644))
+
+	assert.Equal(t, "legacy", ResolveAgent(root))
 }
 
 func TestResolveAgent_NoConfig(t *testing.T) {
@@ -158,15 +279,47 @@ func TestResolveAgent_EmptyRoot(t *testing.T) {
 
 func TestResolveAgent_NoAgentField(t *testing.T) {
 	root := t.TempDir()
-	configDir := filepath.Join(root, ".punt-labs", "ethos")
-	require.NoError(t, os.MkdirAll(configDir, 0o755))
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(configDir, "config.yaml"),
-		[]byte("# empty config\n"),
-		0o644,
-	))
+		filepath.Join(dir, "ethos.yaml"),
+		[]byte("# empty config\n"), 0o644))
 
 	assert.Equal(t, "", ResolveAgent(root))
+}
+
+// --- ResolveTeam tests ---
+
+func TestResolveTeam(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		wantTeam string
+	}{
+		{"set", "team: engineering\n", "engineering"},
+		{"empty", "agent: claude\n", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, ".punt-labs")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dir, "ethos.yaml"),
+				[]byte(tt.yaml), 0o644))
+
+			assert.Equal(t, tt.wantTeam, ResolveTeam(root))
+		})
+	}
+}
+
+func TestResolveTeam_MissingConfig(t *testing.T) {
+	assert.Equal(t, "", ResolveTeam(t.TempDir()))
+}
+
+func TestResolveTeam_EmptyRoot(t *testing.T) {
+	assert.Equal(t, "", ResolveTeam(""))
 }
 
 // --- FindRepoRoot tests ---

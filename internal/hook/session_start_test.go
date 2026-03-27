@@ -64,9 +64,32 @@ func isolateGitConfig(t *testing.T, user string) {
 }
 
 // setupRepoWithAgent creates a fake repo root with .git/ and a
-// .punt-labs/ethos/config.yaml that sets the agent to the given handle.
+// .punt-labs/ethos.yaml that sets the agent to the given handle.
 // It chdir's into the repo root so resolve.FindRepoRoot works.
 func setupRepoWithAgent(t *testing.T, agentHandle string) string {
+	t.Helper()
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	cfg := "agent: " + agentHandle + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(puntDir, "ethos.yaml"), []byte(cfg), 0o644))
+
+	// Create the ethos subdir so FindRepoEthosRoot finds it.
+	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	return repoRoot
+}
+
+// setupRepoWithAgentLegacy creates a fake repo root using the legacy
+// config path .punt-labs/ethos/config.yaml for fallback testing.
+func setupRepoWithAgentLegacy(t *testing.T, agentHandle string) string {
 	t.Helper()
 	repoRoot := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
@@ -211,4 +234,26 @@ func TestHandleSessionStart_PersonalityOnly(t *testing.T) {
 	assert.Contains(t, ctx, "## Personality")
 	assert.Contains(t, ctx, "Think before acting")
 	assert.NotContains(t, ctx, "## Writing Style")
+}
+
+func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {
+	agentID := &identity.Identity{
+		Name:   "Claude Agento",
+		Handle: "claude",
+		Kind:   "agent",
+	}
+	humanID := &identity.Identity{Name: "Dave", Handle: "dave", Kind: "human"}
+
+	s, ss := setupIdentityWithAttributes(t, agentID, "", "")
+	require.NoError(t, s.Save(humanID))
+	isolateGitConfig(t, "dave")
+	setupRepoWithAgentLegacy(t, "claude")
+
+	out := captureSessionStartOutput(t, `{"session_id": "s5"}`, s, ss)
+
+	var result SessionStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Active identity: Claude Agento (claude)")
 }
