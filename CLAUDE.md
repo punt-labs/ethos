@@ -62,7 +62,7 @@ Expands to `make lint docs test`:
 | `internal/process/` | Process tree walker: find topmost Claude ancestor PID |
 | `internal/session/` | Session roster model, store with flock-based concurrency |
 | `internal/resolve/` | Identity resolution chain: repo-local → global → error |
-| `internal/mcp/` | MCP tool definitions and handlers (6 tools) |
+| `internal/mcp/` | MCP tool definitions and handlers (7 tools) |
 
 ### Storage Layout
 
@@ -72,7 +72,7 @@ Expands to `make lint docs test`:
 | Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
 | Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
 | Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
-| Repo config | `.punt-labs/ethos/config.yaml` | Yes |
+| Repo config | `.punt-labs/ethos.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Extensions (global) | `~/.punt-labs/ethos/identities/<handle>.ext/<tool>.yaml` | No |
