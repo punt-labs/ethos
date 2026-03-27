@@ -250,8 +250,8 @@ func runTeamForRepo(repo string) {
 	}
 
 	if len(teams) == 0 {
-		fmt.Fprintf(os.Stderr, "ethos: no team found for %s\n", repo)
-		os.Exit(1)
+		fmt.Printf("no team found for %s\n", repo)
+		return
 	}
 
 	for i, t := range teams {
