@@ -85,7 +85,7 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 	}
 
 	// Emit the agent's persona block (not the human's).
-	// The agent persona comes from repo config (.punt-labs/ethos/config.yaml).
+	// The agent persona comes from repo config (.punt-labs/ethos.yaml).
 	if agentPersona == "" {
 		// No agent persona configured — fall back to human identity one-liner.
 		if resolvedID != nil {

@@ -1338,3 +1338,25 @@ parsing overhead.
   PostToolUse hook already has access to the raw JSON if needed.
 - **Let each tool decide** — inconsistency across tools. The standard
   must be uniform: all tools return formatted text through the hook.
+
+## DES-019: Repo config at .punt-labs/ethos.yaml (SETTLED)
+
+**Decision**: Repo-level ethos config lives at `.punt-labs/ethos.yaml`, next to
+the `.punt-labs/ethos/` directory (which may be a submodule or local data).
+
+**Reasoning**: The team submodule at `.punt-labs/ethos/` contains shared identity
+data (identities, personalities, writing styles, talents, roles, teams). Repo-
+specific config (`agent: claude`, `team: engineering`) cannot live inside the
+submodule — submodule contents are controlled by the upstream repo, not the
+consumer. Moving config to a sibling file decouples it from the submodule.
+
+**Rejected alternatives**:
+
+- **Per-repo config files inside the team repo** (e.g., `ethos-config.yaml`,
+  `biff-config.yaml` committed to `punt-labs/team`) — centralizes config
+  management but couples all repos to a single commit cycle. Viable for
+  org-wide defaults but doesn't support repo-specific overrides.
+- **Config outside .punt-labs/** (e.g., `.ethos.yaml` at repo root) — pollutes
+  the repo root with tool-specific dotfiles.
+- **Single .punt-labs/config.yaml with sections** — cleaner for multi-tool config
+  but introduces a shared file that multiple tools must coordinate on.

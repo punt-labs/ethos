@@ -7,6 +7,9 @@ import (
 	"github.com/punt-labs/ethos/internal/attribute"
 )
 
+// ErrNotFound is returned when a team is not found.
+var ErrNotFound = fmt.Errorf("team not found")
+
 // Member binds an identity to a role on a team.
 type Member struct {
 	Identity string `yaml:"identity" json:"identity"`
