@@ -569,7 +569,7 @@ func formatTeamForRepo(w io.Writer, result string) error {
 		return emit(w, "no teams found", "(none)")
 	}
 
-	noun := "team(s)"
+	noun := "teams"
 	if n == 1 {
 		noun = "team"
 	}
