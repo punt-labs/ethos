@@ -21,8 +21,8 @@ code to spec and do not make architectural decisions.
 Every implementation task follows this loop:
 
 ```text
+0. Standards → COO consults punt-kit/standards/* for the work type
 1. Spec    → COO writes detailed spec with acceptance criteria
-2. Delegate → COO launches specialist agent with the spec
 3. Implement → Agent writes tests first, then code, runs make check
 4. Review   → COO launches code-reviewer agent on the output
 5. Fix      → If findings: COO writes fix spec, delegates back to agent
@@ -34,6 +34,10 @@ Every implementation task follows this loop:
 
 The spec is the most important artifact. A good spec eliminates
 review-fix cycles. A bad spec causes 3+ rounds of fixes.
+
+Before writing any spec, the COO must consult the relevant
+punt-kit/standards/* documents. Standards violations that reach
+review are a COO failure, not a reviewer catch.
 
 A spec must include:
 
