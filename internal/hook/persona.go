@@ -25,8 +25,8 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	// Opening line: "You are Name (handle), <first meaningful line of personality>."
 	first := firstContentSentence(id.PersonalityContent)
 	if first != "" {
-		// Strip trailing period — we add our own.
-		first = strings.TrimRight(first, ".")
+		// Strip a single trailing period — we add our own.
+		first = strings.TrimSuffix(first, ".")
 		fmt.Fprintf(&b, "You are %s (%s), %s.", id.Name, id.Handle, first)
 	} else {
 		fmt.Fprintf(&b, "You are %s (%s).", id.Name, id.Handle)
@@ -35,7 +35,7 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	if id.PersonalityContent != "" {
 		// Skip the first content paragraph since it's already in the
 		// opening line — avoids redundant repetition.
-		trimmed := stripLeadingHeading(skipFirstParagraph(id.PersonalityContent))
+		trimmed := strings.TrimRight(stripLeadingHeading(skipFirstParagraph(id.PersonalityContent)), "\n")
 		if trimmed != "" {
 			// If remaining content already has its own sub-headings,
 			// don't add a redundant ## Personality wrapper.
@@ -49,13 +49,9 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	}
 
 	if id.WritingStyleContent != "" {
-		trimmed := stripLeadingHeading(id.WritingStyleContent)
+		trimmed := strings.TrimRight(stripLeadingHeading(id.WritingStyleContent), "\n")
 		if trimmed != "" {
-			if strings.HasPrefix(strings.TrimSpace(trimmed), "##") {
-				b.WriteString("\n\n")
-			} else {
-				b.WriteString("\n\n## Writing Style\n\n")
-			}
+			b.WriteString("\n\n## Writing Style\n\n")
 			b.WriteString(trimmed)
 		}
 	}
@@ -111,12 +107,15 @@ func skipFirstParagraph(content string) string {
 		}
 		i++
 	}
+	// If no prose paragraph exists, preserve the original content
+	// (headings and bullets are still meaningful).
 	if i >= len(lines) {
-		return ""
+		return content
 	}
-	// Phase 2: skip the first prose paragraph (contiguous non-blank lines).
+	// Phase 2: skip the first prose paragraph. Stop at blank lines
+	// or non-prose lines (bullets, headings) — only consume prose.
 	for i < len(lines) {
-		if strings.TrimSpace(lines[i]) == "" {
+		if strings.TrimSpace(lines[i]) == "" || isNonProse(lines[i]) {
 			break
 		}
 		i++
@@ -178,6 +177,18 @@ func firstContentSentence(content string) string {
 	return strings.Join(parts, " ")
 }
 
+// truncateFirstSentence returns the text up to and including the first
+// sentence-ending period: a "." followed by a space and an uppercase letter.
+// Used for team context summaries where brevity matters.
+func truncateFirstSentence(s string) string {
+	for i := 0; i < len(s)-2; i++ {
+		if s[i] == '.' && s[i+1] == ' ' && s[i+2] >= 'A' && s[i+2] <= 'Z' {
+			return s[:i+1]
+		}
+	}
+	return s
+}
+
 // BuildTeamContext assembles a team context block from a team definition,
 // loading role responsibilities for each member. Returns empty string if
 // the team is nil or has no members.
@@ -209,14 +220,14 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 		// Emit personality summary: first sentence gives working style.
 		if id != nil && id.PersonalityContent != "" {
 			if summary := firstContentSentence(id.PersonalityContent); summary != "" {
-				fmt.Fprintf(&b, "%s\n", summary)
+				fmt.Fprintf(&b, "%s\n", truncateFirstSentence(summary))
 			}
 		}
 
 		// Emit writing style summary if available.
 		if id != nil && id.WritingStyleContent != "" {
 			if ws := firstContentSentence(id.WritingStyleContent); ws != "" {
-				fmt.Fprintf(&b, "Writing style: %s\n", ws)
+				fmt.Fprintf(&b, "Writing style: %s\n", truncateFirstSentence(ws))
 			}
 		}
 

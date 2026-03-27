@@ -303,9 +303,9 @@ func TestSkipFirstParagraph(t *testing.T) {
 			want:    "## Next\n\n- Item",
 		},
 		{
-			name:    "heading only",
+			name:    "heading only — preserved for downstream stripping",
 			content: "# Just a heading",
-			want:    "",
+			want:    "# Just a heading",
 		},
 		{
 			name:    "heading + paragraph only",
@@ -317,11 +317,35 @@ func TestSkipFirstParagraph(t *testing.T) {
 			content: "First paragraph.\n\n## Section\n\n- Item",
 			want:    "## Section\n\n- Item",
 		},
+		{
+			name:    "all bullets — no prose paragraph to skip",
+			content: "# Style\n\n- Rule one\n- Rule two",
+			want:    "# Style\n\n- Rule one\n- Rule two",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := skipFirstParagraph(tt.content)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTruncateFirstSentence(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		{"single sentence", "Direct and quantitative.", "Direct and quantitative."},
+		{"two sentences", "Primarily English. Occasional Esperanto.", "Primarily English."},
+		{"no period", "Just a phrase", "Just a phrase"},
+		{"period mid lowercase", "Uses e.g. examples often.", "Uses e.g. examples often."},
+		{"short string", "Hi.", "Hi."},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateFirstSentence(tt.input)
 			assert.Equal(t, tt.want, got)
 		})
 	}
