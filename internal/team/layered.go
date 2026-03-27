@@ -1,6 +1,9 @@
 package team
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // LayeredStore reads from both repo and global team stores.
 // The repo store is checked first for Load and Exists.
@@ -36,7 +39,7 @@ func (ls *LayeredStore) Load(name string) (*Team, error) {
 		if err == nil {
 			return t, nil
 		}
-		if !ls.repo.Exists(name) {
+		if errors.Is(err, ErrNotFound) {
 			return ls.global.Load(name)
 		}
 		return nil, err
@@ -83,6 +86,39 @@ func (ls *LayeredStore) Exists(name string) bool {
 		return true
 	}
 	return ls.global.Exists(name)
+}
+
+// FindByRepo returns all teams whose Repositories list contains repo.
+// Merges results from both layers, deduplicating by name (repo wins).
+// Returns an empty (non-nil) slice when no teams match.
+func (ls *LayeredStore) FindByRepo(repo string) ([]*Team, error) {
+	globalTeams, err := ls.global.FindByRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	if ls.repo == nil {
+		return globalTeams, nil
+	}
+	repoTeams, err := ls.repo.FindByRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(repoTeams))
+	var merged []*Team
+	for _, t := range repoTeams {
+		seen[t.Name] = true
+		merged = append(merged, t)
+	}
+	for _, t := range globalTeams {
+		if !seen[t.Name] {
+			merged = append(merged, t)
+		}
+	}
+	if merged == nil {
+		merged = []*Team{}
+	}
+	return merged, nil
 }
 
 // AddMember adds a member to a team. If the team is in the repo layer
