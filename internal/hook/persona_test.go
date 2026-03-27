@@ -332,26 +332,6 @@ func TestSkipFirstParagraph(t *testing.T) {
 	}
 }
 
-func TestTruncateFirstSentence(t *testing.T) {
-	tests := []struct {
-		name, input, want string
-	}{
-		{"single sentence", "Direct and quantitative.", "Direct and quantitative."},
-		{"long two sentences", strings.Repeat("x", 90) + ". Occasional Esperanto.", strings.Repeat("x", 90) + "."},
-		{"short two sentences preserved", "Primarily English. Occasional Esperanto.", "Primarily English. Occasional Esperanto."},
-		{"no period", "Just a phrase", "Just a phrase"},
-		{"abbreviation preserved", "Dr. Smith wrote the spec and implemented it.", "Dr. Smith wrote the spec and implemented it."},
-		{"short string", "Hi.", "Hi."},
-		{"empty", "", ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := truncateFirstSentence(tt.input)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 func TestBuildTeamContext_Full(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
@@ -431,15 +411,21 @@ func TestBuildTeamContext_Full(t *testing.T) {
 	assert.Contains(t, got, "Jim Freeman (jfreeman) — ceo")
 	assert.Contains(t, got, "Claude Agento (claude) — coo")
 
-	// Personality summaries.
+	// Full personality content (heading stripped, everything else preserved).
 	assert.Contains(t, got, "Direct and quantitative.")
+	assert.Contains(t, got, "Replace adjectives with numbers")
 	assert.Contains(t, got, "COO / VP Engineering for Punt Labs.")
+	assert.Contains(t, got, "Takes ownership of everything downstream")
 
-	// Writing style summaries.
-	assert.Contains(t, got, "Writing style: Short and data-driven.")
-	assert.Contains(t, got, "Writing style: Lead with the answer, occasional humor.")
+	// Full writing style content.
+	assert.Contains(t, got, "#### Writing Style")
+	assert.Contains(t, got, "Short and data-driven.")
+	assert.Contains(t, got, "Under 30 words")
+	assert.Contains(t, got, "Lead with the answer, occasional humor.")
+	assert.Contains(t, got, "Facts first")
 
 	// Role responsibilities.
+	assert.Contains(t, got, "#### Responsibilities")
 	assert.Contains(t, got, "Sets strategic direction")
 	assert.Contains(t, got, "Makes go/no-go decisions")
 	assert.Contains(t, got, "Execution quality and velocity")

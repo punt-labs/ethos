@@ -177,22 +177,6 @@ func firstContentSentence(content string) string {
 	return strings.Join(parts, " ")
 }
 
-// truncateFirstSentence returns the text up to and including the first
-// sentence-ending period: a "." followed by a space and an uppercase letter.
-// Only applies to strings longer than 100 characters — short descriptions
-// are returned as-is to avoid false splits on abbreviations (Dr., Mr., St.).
-func truncateFirstSentence(s string) string {
-	if len(s) <= 100 {
-		return s
-	}
-	for i := 0; i < len(s)-2; i++ {
-		if s[i] == '.' && s[i+1] == ' ' && s[i+2] >= 'A' && s[i+2] <= 'Z' {
-			return s[:i+1]
-		}
-	}
-	return s
-}
-
 // BuildTeamContext assembles a team context block from a team definition,
 // loading role responsibilities for each member. Returns empty string if
 // the team is nil or has no members.
@@ -221,23 +205,26 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 
 		fmt.Fprintf(&b, "\n### %s — %s\n", name, m.Role)
 
-		// Emit personality summary: first sentence gives working style.
+		// Full personality content — strip the top-level heading only.
 		if id != nil && id.PersonalityContent != "" {
-			if summary := firstContentSentence(id.PersonalityContent); summary != "" {
-				fmt.Fprintf(&b, "%s\n", truncateFirstSentence(summary))
+			content := strings.TrimRight(stripLeadingHeading(id.PersonalityContent), "\n")
+			if content != "" {
+				fmt.Fprintf(&b, "%s\n", content)
 			}
 		}
 
-		// Emit writing style summary if available.
+		// Full writing style content.
 		if id != nil && id.WritingStyleContent != "" {
-			if ws := firstContentSentence(id.WritingStyleContent); ws != "" {
-				fmt.Fprintf(&b, "Writing style: %s\n", truncateFirstSentence(ws))
+			content := strings.TrimRight(stripLeadingHeading(id.WritingStyleContent), "\n")
+			if content != "" {
+				fmt.Fprintf(&b, "\n#### Writing Style\n%s\n", content)
 			}
 		}
 
-		// Load role responsibilities.
+		// Role responsibilities.
 		if roles != nil {
 			if r, err := roles.Load(m.Role); err == nil && len(r.Responsibilities) > 0 {
+				fmt.Fprintf(&b, "\n#### Responsibilities\n")
 				for _, resp := range r.Responsibilities {
 					fmt.Fprintf(&b, "- %s\n", resp)
 				}
@@ -246,7 +233,7 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 			}
 		}
 
-		// Emit talents as compact list.
+		// Talents.
 		if id != nil && len(id.Talents) > 0 {
 			fmt.Fprintf(&b, "Talents: %s\n", strings.Join(id.Talents, ", "))
 		}
