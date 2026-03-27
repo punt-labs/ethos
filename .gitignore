@@ -9,6 +9,8 @@ coverage.out
 # Claude local settings
 .claude/settings.local.json
 .claude/*.local.md
+.claude/agents/
+.claude/scheduled_tasks.lock
 
 # direnv
 .envrc
@@ -35,6 +37,13 @@ Lux.ini
 *.run.xml
 *.synctex.gz
 *.toc
+
+# Z-spec / fuzz build artifacts
+docs/*.mf
+docs/*.sty
+docs/*.fuzz
+docs/*.pdf
+.orphaned_at
 
 # IDE
 .idea/
