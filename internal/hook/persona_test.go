@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/team"
@@ -197,17 +198,30 @@ func TestBuildTeamContext_Full(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	rs := role.NewLayeredStore("", dir)
+	ps := attribute.NewStore(dir, attribute.Personalities)
 
-	// Create identities.
+	// Create personality files so Load resolves PersonalityContent.
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "data-driven",
+		Content: "# Data Driven\n\nDirect and quantitative.\n\n- Replace adjectives with numbers",
+	}))
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "friendly-direct",
+		Content: "# Friendly Direct\n\nCOO / VP Engineering for Punt Labs.\n\n- Takes ownership of everything downstream",
+	}))
+
+	// Create identities with personality slugs.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
-		Kind:   "human",
+		Name:        "Jim Freeman",
+		Handle:      "jfreeman",
+		Kind:        "human",
+		Personality: "data-driven",
 	}))
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Claude Agento",
-		Handle: "claude",
-		Kind:   "agent",
+		Name:        "Claude Agento",
+		Handle:      "claude",
+		Kind:        "agent",
+		Personality: "friendly-direct",
 	}))
 
 	// Create roles.
@@ -235,9 +249,11 @@ func TestBuildTeamContext_Full(t *testing.T) {
 
 	assert.Contains(t, got, "## Team: punt-labs")
 	assert.Contains(t, got, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, got, "Direct and quantitative.")
 	assert.Contains(t, got, "Sets strategic direction")
 	assert.Contains(t, got, "Makes go/no-go decisions")
 	assert.Contains(t, got, "Claude Agento (claude) — coo")
+	assert.Contains(t, got, "COO / VP Engineering for Punt Labs.")
 	assert.Contains(t, got, "Execution quality and velocity")
 	assert.Contains(t, got, "### Collaborations")
 	assert.Contains(t, got, "coo → ceo (reports_to)")
