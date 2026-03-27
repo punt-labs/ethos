@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-03-26
+
 ### Added
 
 - **Repo-level config**: `.punt-labs/ethos.yaml` for repo-specific identity config (agent, team bindings). Decoupled from the team submodule path. Backward-compatible fallback to old `.punt-labs/ethos/config.yaml`
