@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **PreCompact hook schema**: use top-level `systemMessage` instead of unsupported `hookSpecificOutput` for PreCompact events — fixes validation errors during context compaction
+
 ## [2.2.0] - 2026-03-26
 
 ### Added
