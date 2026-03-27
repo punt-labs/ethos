@@ -29,7 +29,6 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		os.Stdout = oldStdout
-		_ = w.Close()
 		_ = r.Close()
 	})
 	os.Stdout = w
@@ -46,7 +45,7 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	in := bytes.NewReader([]byte(input))
 	require.NoError(t, HandlePreCompact(in, deps))
 
-	w.Close()
+	w.Close() // unblocks the reader goroutine
 	os.Stdout = oldStdout
 
 	require.NoError(t, <-done)
