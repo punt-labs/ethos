@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **PreCompact hook**: emit full persona block + team context instead of condensed 4-line summary — personality, writing style, role, team members with responsibilities, and collaboration graph all survive context compaction
+- **PreCompact handler**: refactored to accept `PreCompactDeps` struct with identity, session, team, and role stores
+
+### Added
+
+- `BuildTeamContext` function — assembles team context block with member names, roles, responsibilities, and collaborations
+- Repo config `team:` field — links `.punt-labs/ethos.yaml` to a team definition for automatic team context in hooks
+
 ## [2.2.1] - 2026-03-26
 
 ### Fixed

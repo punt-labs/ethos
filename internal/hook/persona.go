@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/team"
 )
 
 // BuildPersonaBlock assembles a full persona block from a resolved identity.
@@ -47,44 +49,6 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	return b.String()
 }
 
-// BuildCondensedPersona assembles a compact persona summary for PreCompact.
-// Returns empty string if id is nil or has no personality/writing style content.
-func BuildCondensedPersona(id *identity.Identity) string {
-	if id == nil {
-		return ""
-	}
-	if id.PersonalityContent == "" && id.WritingStyleContent == "" {
-		return ""
-	}
-
-	var lines []string
-	lines = append(lines, fmt.Sprintf("Active persona: %s (%s)", id.Name, id.Handle))
-
-	if id.Personality != "" && id.PersonalityContent != "" {
-		rules := extractRules(id.PersonalityContent, 3)
-		if rules != "" {
-			lines = append(lines, fmt.Sprintf("Personality: %s -- %s", id.Personality, rules))
-		} else {
-			lines = append(lines, fmt.Sprintf("Personality: %s", id.Personality))
-		}
-	}
-
-	if id.WritingStyle != "" && id.WritingStyleContent != "" {
-		rules := extractRules(id.WritingStyleContent, 3)
-		if rules != "" {
-			lines = append(lines, fmt.Sprintf("Writing: %s -- %s", id.WritingStyle, rules))
-		} else {
-			lines = append(lines, fmt.Sprintf("Writing: %s", id.WritingStyle))
-		}
-	}
-
-	if len(id.Talents) > 0 {
-		lines = append(lines, fmt.Sprintf("Talents: %s", strings.Join(id.Talents, ", ")))
-	}
-
-	return strings.Join(lines, "\n")
-}
-
 // firstContentSentence returns the first sentence from markdown content,
 // skipping headings and blank lines. Collects continuation lines until a
 // blank line or a line ending with a period. Returns empty string if no
@@ -110,19 +74,45 @@ func firstContentSentence(content string) string {
 	return strings.Join(parts, " ")
 }
 
-// extractRules pulls up to n list-item lines ("- ...") from markdown
-// content, joining them with "; ". Returns empty string if none found.
-func extractRules(content string, n int) string {
-	var rules []string
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "- ") {
-			continue
+// BuildTeamContext assembles a team context block from a team definition,
+// loading role responsibilities for each member. Returns empty string if
+// the team is nil or has no members.
+func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identity.IdentityStore) string {
+	if t == nil || len(t.Members) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "## Team: %s\n", t.Name)
+
+	for _, m := range t.Members {
+		// Load identity for display name.
+		name := m.Identity
+		if identities != nil {
+			if id, err := identities.Load(m.Identity); err == nil {
+				name = fmt.Sprintf("%s (%s)", id.Name, id.Handle)
+			}
 		}
-		rules = append(rules, strings.TrimPrefix(trimmed, "- "))
-		if len(rules) >= n {
-			break
+
+		fmt.Fprintf(&b, "\n### %s — %s\n", name, m.Role)
+
+		// Load role responsibilities.
+		if roles != nil {
+			if r, err := roles.Load(m.Role); err == nil && len(r.Responsibilities) > 0 {
+				for _, resp := range r.Responsibilities {
+					fmt.Fprintf(&b, "- %s\n", resp)
+				}
+			}
 		}
 	}
-	return strings.Join(rules, "; ")
+
+	// Emit collaborations as a compact summary.
+	if len(t.Collaborations) > 0 {
+		b.WriteString("\n### Collaborations\n")
+		for _, c := range t.Collaborations {
+			fmt.Fprintf(&b, "- %s → %s (%s)\n", c.From, c.To, c.Type)
+		}
+	}
+
+	return b.String()
 }
