@@ -29,8 +29,7 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		os.Stdout = oldStdout
-		w.Close()
-		r.Close()
+		_ = r.Close()
 	})
 	os.Stdout = w
 
@@ -46,7 +45,7 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	in := bytes.NewReader([]byte(input))
 	require.NoError(t, HandlePreCompact(in, deps))
 
-	w.Close()
+	w.Close() // unblocks the reader goroutine
 	os.Stdout = oldStdout
 
 	require.NoError(t, <-done)
@@ -105,11 +104,13 @@ func TestHandlePreCompact_FullPersona(t *testing.T) {
 
 	ctx := result.SystemMessage
 	// Full persona block — not condensed.
-	assert.Contains(t, ctx, "You are Claude Agento (claude)")
+	assert.Contains(t, ctx, "You are Claude Agento (claude), Strategic and thorough.")
+	assert.NotContains(t, ctx, "thorough..") // No double period.
 	assert.Contains(t, ctx, "## Personality")
 	assert.Contains(t, ctx, "Think before acting")
 	assert.Contains(t, ctx, "Data over adjectives")
 	assert.Contains(t, ctx, "Simplicity first")
+	// First paragraph is deduplicated — should not repeat in personality section.
 	assert.Contains(t, ctx, "## Writing Style")
 	assert.Contains(t, ctx, "Under 30 words")
 	assert.Contains(t, ctx, "Lead with numbers")
