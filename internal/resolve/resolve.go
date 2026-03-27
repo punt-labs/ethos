@@ -235,17 +235,25 @@ func RepoName() string {
 func parseRepoName(url string) string {
 	url = strings.TrimSuffix(url, ".git")
 
+	var name string
+
 	// SSH format: git@github.com:owner/repo
-	if i := strings.Index(url, ":"); i >= 0 && !strings.Contains(url[:i], "/") {
-		return url[i+1:]
+	// Exclude URLs with "://" (HTTPS, etc.).
+	if i := strings.Index(url, ":"); i >= 0 && !strings.Contains(url, "://") {
+		name = url[i+1:]
+	} else {
+		// HTTPS format: https://github.com/owner/repo
+		parts := strings.Split(url, "/")
+		if len(parts) >= 2 {
+			name = parts[len(parts)-2] + "/" + parts[len(parts)-1]
+		}
 	}
 
-	// HTTPS format: https://github.com/owner/repo
-	parts := strings.Split(url, "/")
-	if len(parts) >= 2 {
-		return parts[len(parts)-2] + "/" + parts[len(parts)-1]
+	// Reject malformed URLs where the result has no owner/repo separator.
+	if !strings.Contains(name, "/") {
+		return ""
 	}
-	return url
+	return name
 }
 
 // GitConfig reads a single git config value. Returns empty string if

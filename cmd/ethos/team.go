@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/team"
 
 	"github.com/spf13/cobra"
@@ -107,10 +108,23 @@ var teamAddCollabCmd = &cobra.Command{
 	},
 }
 
+var teamForRepoCmd = &cobra.Command{
+	Use:   "for-repo [repo]",
+	Short: "Show team(s) for a repository",
+	Args:  cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		var repo string
+		if len(args) > 0 {
+			repo = args[0]
+		}
+		runTeamForRepo(repo)
+	},
+}
+
 func init() {
 	teamCreateCmd.Flags().StringVarP(&teamCreateFile, "file", "f", "", "Read team definition from YAML file")
 	teamCmd.AddCommand(teamCreateCmd, teamListCmd, teamShowCmd, teamDeleteCmd,
-		teamAddMemberCmd, teamRemoveMemberCmd, teamAddCollabCmd)
+		teamAddMemberCmd, teamRemoveMemberCmd, teamAddCollabCmd, teamForRepoCmd)
 	rootCmd.AddCommand(teamCmd)
 }
 
@@ -190,6 +204,11 @@ func runTeamShow(name string) {
 		printJSON(t)
 		return
 	}
+	printTeam(t)
+}
+
+// printTeam displays a team in human-readable text format.
+func printTeam(t *team.Team) {
 	fmt.Printf("Name: %s\n", t.Name)
 	if len(t.Repositories) > 0 {
 		fmt.Println("Repositories:")
@@ -206,6 +225,40 @@ func runTeamShow(name string) {
 		for _, c := range t.Collaborations {
 			fmt.Printf("  - %s -> %s (%s)\n", c.From, c.To, c.Type)
 		}
+	}
+}
+
+func runTeamForRepo(repo string) {
+	if repo == "" {
+		repo = resolve.RepoName()
+	}
+	if repo == "" {
+		fmt.Fprintf(os.Stderr, "ethos: could not determine repo name (no argument and no git remote)\n")
+		os.Exit(1)
+	}
+
+	s := teamStore()
+	teams, err := s.FindByRepo(repo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		os.Exit(1)
+	}
+
+	if jsonOutput {
+		printJSON(teams)
+		return
+	}
+
+	if len(teams) == 0 {
+		fmt.Fprintf(os.Stderr, "ethos: no team found for %s\n", repo)
+		os.Exit(1)
+	}
+
+	for i, t := range teams {
+		if i > 0 {
+			fmt.Println()
+		}
+		printTeam(t)
 	}
 }
 
