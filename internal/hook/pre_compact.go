@@ -82,7 +82,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	}
 
 	// Build team context from repo config.
-	if teamCtx := buildTeamSection(deps); teamCtx != "" {
+	if teamCtx := buildTeamSection(deps, agentPersona); teamCtx != "" {
 		sections = append(sections, teamCtx)
 	}
 
@@ -99,7 +99,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 
 // buildTeamSection resolves the team from repo config and builds
 // the team context block. Returns empty string on any error.
-func buildTeamSection(deps PreCompactDeps) string {
+func buildTeamSection(deps PreCompactDeps, selfHandle string) string {
 	if deps.Teams == nil {
 		return ""
 	}
@@ -116,5 +116,5 @@ func buildTeamSection(deps PreCompactDeps) string {
 		return ""
 	}
 
-	return BuildTeamContext(t, deps.Roles, deps.Identities)
+	return BuildTeamContext(t, deps.Roles, deps.Identities, selfHandle)
 }
