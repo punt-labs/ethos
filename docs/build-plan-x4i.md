@@ -102,15 +102,14 @@ list contains `repo`.
 ## Phase 4: CLI command
 
 `ethos team for-repo [repo]` prints the team(s) for a repo. When `repo`
-is omitted, derives the repo name from the current git remote or
-directory name.
+is omitted, derives the repo name from the current git remote.
 
 ### Changes
 
 | File | Change |
 |------|--------|
 | `cmd/ethos/team.go` | Add `teamForRepoCmd` cobra command. Register in `init()`. Implement `runTeamForRepo(repo string)`. Uses `FindByRepo` on layered store. |
-| `internal/resolve/resolve.go` | Add `RepoName() string` — parses `origin` remote URL or falls back to directory basename. |
+| `internal/resolve/resolve.go` | Add `RepoName() string` — parses `origin` remote URL. Returns empty string if no remote. |
 | `internal/resolve/resolve_test.go` | Tests for `RepoName`: create a temp dir with `.git/config` setting `remote.origin.url` to a controlled value, chdir into it, and restore on cleanup. Follows the existing pattern at `resolve_test.go:180-185`. |
 
 ### Output

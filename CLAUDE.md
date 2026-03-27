@@ -62,7 +62,7 @@ Expands to `make lint docs test`:
 | `internal/process/` | Process tree walker: find topmost Claude ancestor PID |
 | `internal/session/` | Session roster model, store with flock-based concurrency |
 | `internal/resolve/` | Identity resolution chain: repo-local → global → error |
-| `internal/mcp/` | MCP tool definitions and handlers (7 tools) |
+| `internal/mcp/` | MCP tool definitions and handlers (9 tools) |
 
 ### Storage Layout
 
