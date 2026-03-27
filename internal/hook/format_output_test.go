@@ -521,6 +521,117 @@ func TestFormatOutput_Ext_Set(t *testing.T) {
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "set alice/biff/tty")
 }
 
+// --- Team tool tests ---
+
+func TestFormatOutput_Team_List(t *testing.T) {
+	result := `["engineering","website"]`
+	payload := makeToolPayload("team", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "2 teams", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "TEAM")
+	assert.Contains(t, ctx, "engineering")
+	assert.Contains(t, ctx, "website")
+}
+
+func TestFormatOutput_Team_List_Empty(t *testing.T) {
+	result := `[]`
+	payload := makeToolPayload("team", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 teams", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
+}
+
+func TestFormatOutput_Team_Show(t *testing.T) {
+	result := `{"name":"engineering","repositories":["punt-labs/ethos","punt-labs/biff"],"members":[{"identity":"alice","role":"lead-engineer"},{"identity":"claude","role":"engineer"}],"collaborations":[{"from":"engineer","to":"lead-engineer","type":"reports_to"}]}`
+	payload := makeToolPayload("team", "show", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "engineering (2 members)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Name: engineering")
+	assert.Contains(t, ctx, "Repositories: punt-labs/ethos, punt-labs/biff")
+	assert.Contains(t, ctx, "IDENTITY")
+	assert.Contains(t, ctx, "ROLE")
+	assert.Contains(t, ctx, "alice")
+	assert.Contains(t, ctx, "lead-engineer")
+	assert.Contains(t, ctx, "claude")
+	assert.Contains(t, ctx, "engineer")
+	assert.Contains(t, ctx, "FROM")
+	assert.Contains(t, ctx, "TO")
+	assert.Contains(t, ctx, "TYPE")
+	assert.Contains(t, ctx, "reports_to")
+}
+
+func TestFormatOutput_Team_ForRepo(t *testing.T) {
+	result := `[{"name":"engineering","repositories":["punt-labs/ethos"],"members":[{"identity":"alice","role":"lead"}]}]`
+	payload := makeToolPayload("team", "for_repo", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "1 team for repo", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Name: engineering")
+	assert.Contains(t, ctx, "Repositories: punt-labs/ethos")
+	assert.Contains(t, ctx, "alice")
+	assert.Contains(t, ctx, "lead")
+}
+
+func TestFormatOutput_Team_ForRepo_Empty(t *testing.T) {
+	result := `[]`
+	payload := makeToolPayload("team", "for_repo", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "no teams found", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
+}
+
+// --- Role tool tests ---
+
+func TestFormatOutput_Role_List(t *testing.T) {
+	result := `["engineer","lead-engineer","product-manager"]`
+	payload := makeToolPayload("role", "list", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "3 roles", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "ROLE")
+	assert.Contains(t, ctx, "engineer")
+	assert.Contains(t, ctx, "lead-engineer")
+	assert.Contains(t, ctx, "product-manager")
+}
+
+func TestFormatOutput_Role_Show(t *testing.T) {
+	result := `{"name":"lead-engineer","responsibilities":["code review","architecture decisions"],"permissions":["merge","deploy"]}`
+	payload := makeToolPayload("role", "show", result)
+
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "lead-engineer", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Name: lead-engineer")
+	assert.Contains(t, ctx, "Responsibilities:")
+	assert.Contains(t, ctx, "- code review")
+	assert.Contains(t, ctx, "- architecture decisions")
+	assert.Contains(t, ctx, "Permissions:")
+	assert.Contains(t, ctx, "- merge")
+	assert.Contains(t, ctx, "- deploy")
+}
+
 // --- Edge cases ---
 
 func TestFormatOutput_EmptyInput(t *testing.T) {

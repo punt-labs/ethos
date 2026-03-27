@@ -66,6 +66,10 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return formatExt(w, method, result)
 	case "doctor":
 		return formatDoctor(w, result)
+	case "team":
+		return formatTeam(w, method, result)
+	case "role":
+		return formatRole(w, method, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -439,6 +443,241 @@ func formatDoctor(w io.Writer, result string) error {
 		ctx = parts[1]
 	}
 	return emit(w, summary, ctx)
+}
+
+// --- Team tool formatters ---
+
+func formatTeam(w io.Writer, method, result string) error {
+	switch method {
+	case "list":
+		return formatTeamList(w, result)
+	case "show":
+		return formatTeamShow(w, result)
+	case "create":
+		name := jsonString(result, "name")
+		if name == "" {
+			name = "team"
+		}
+		return emit(w, "Created "+name, result)
+	case "delete":
+		return emitSimple(w, truncate(result, 200))
+	case "add_member":
+		return emitSimple(w, truncate(result, 200))
+	case "remove_member":
+		return emitSimple(w, truncate(result, 200))
+	case "add_collab":
+		return emitSimple(w, truncate(result, 200))
+	case "for_repo":
+		return formatTeamForRepo(w, result)
+	default:
+		return emitSimple(w, truncate(result, 200))
+	}
+}
+
+func formatTeamList(w io.Writer, result string) error {
+	var names []string
+	if err := json.Unmarshal([]byte(result), &names); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	n := len(names)
+	noun := "teams"
+	if n == 1 {
+		noun = "team"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	rows := make([][]string, n)
+	for i, name := range names {
+		rows[i] = []string{name}
+	}
+	return emit(w, summary, FormatTable([]string{"TEAM"}, rows))
+}
+
+func formatTeamShow(w io.Writer, result string) error {
+	name := jsonString(result, "name")
+	if name == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	// Parse the full team object.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(result), &m); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	// Count members for summary.
+	members, _ := m["members"].([]any)
+	noun := "members"
+	if len(members) == 1 {
+		noun = "member"
+	}
+	summary := fmt.Sprintf("%s (%d %s)", name, len(members), noun)
+
+	// Build context.
+	var ctx strings.Builder
+	ctx.WriteString("Name: " + name)
+
+	// Repositories.
+	if repos := jsonStringArray(result, "repositories"); len(repos) > 0 {
+		ctx.WriteString("\nRepositories: " + strings.Join(repos, ", "))
+	}
+
+	// Members table.
+	if len(members) > 0 {
+		ctx.WriteString("\n\n")
+		rows := make([][]string, len(members))
+		for i, v := range members {
+			p, _ := v.(map[string]any)
+			ident, _ := p["identity"].(string)
+			role, _ := p["role"].(string)
+			rows[i] = []string{ident, role}
+		}
+		ctx.WriteString(FormatTable([]string{"IDENTITY", "ROLE"}, rows))
+	}
+
+	// Collaborations table.
+	collabs, _ := m["collaborations"].([]any)
+	if len(collabs) > 0 {
+		ctx.WriteString("\n\n")
+		rows := make([][]string, len(collabs))
+		for i, v := range collabs {
+			c, _ := v.(map[string]any)
+			from, _ := c["from"].(string)
+			to, _ := c["to"].(string)
+			ctype, _ := c["type"].(string)
+			rows[i] = []string{from, to, ctype}
+		}
+		ctx.WriteString(FormatTable([]string{"FROM", "TO", "TYPE"}, rows))
+	}
+
+	return emit(w, summary, ctx.String())
+}
+
+func formatTeamForRepo(w io.Writer, result string) error {
+	var teams []map[string]any
+	if err := json.Unmarshal([]byte(result), &teams); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	n := len(teams)
+	if n == 0 {
+		return emit(w, "no teams found", "(none)")
+	}
+
+	noun := "team(s)"
+	if n == 1 {
+		noun = "team"
+	}
+	summary := fmt.Sprintf("%d %s for repo", n, noun)
+
+	var ctx strings.Builder
+	for i, t := range teams {
+		if i > 0 {
+			ctx.WriteString("\n\n")
+		}
+		name, _ := t["name"].(string)
+		ctx.WriteString("Name: " + name)
+
+		if repoArr, ok := t["repositories"].([]any); ok && len(repoArr) > 0 {
+			var rs []string
+			for _, r := range repoArr {
+				if s, ok := r.(string); ok {
+					rs = append(rs, s)
+				}
+			}
+			ctx.WriteString("\nRepositories: " + strings.Join(rs, ", "))
+		}
+
+		if members, ok := t["members"].([]any); ok && len(members) > 0 {
+			ctx.WriteString("\n")
+			rows := make([][]string, len(members))
+			for j, v := range members {
+				p, _ := v.(map[string]any)
+				ident, _ := p["identity"].(string)
+				role, _ := p["role"].(string)
+				rows[j] = []string{ident, role}
+			}
+			ctx.WriteString(FormatTable([]string{"IDENTITY", "ROLE"}, rows))
+		}
+	}
+
+	return emit(w, summary, ctx.String())
+}
+
+// --- Role tool formatters ---
+
+func formatRole(w io.Writer, method, result string) error {
+	switch method {
+	case "list":
+		return formatRoleList(w, result)
+	case "show":
+		return formatRoleShow(w, result)
+	case "create":
+		name := jsonString(result, "name")
+		if name == "" {
+			name = "role"
+		}
+		return emit(w, "Created "+name, result)
+	case "delete":
+		return emitSimple(w, truncate(result, 200))
+	default:
+		return emitSimple(w, truncate(result, 200))
+	}
+}
+
+func formatRoleList(w io.Writer, result string) error {
+	var names []string
+	if err := json.Unmarshal([]byte(result), &names); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	n := len(names)
+	noun := "roles"
+	if n == 1 {
+		noun = "role"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	rows := make([][]string, n)
+	for i, name := range names {
+		rows[i] = []string{name}
+	}
+	return emit(w, summary, FormatTable([]string{"ROLE"}, rows))
+}
+
+func formatRoleShow(w io.Writer, result string) error {
+	name := jsonString(result, "name")
+	if name == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	var ctx strings.Builder
+	ctx.WriteString("Name: " + name)
+
+	if resps := jsonStringArray(result, "responsibilities"); len(resps) > 0 {
+		ctx.WriteString("\nResponsibilities:")
+		for _, r := range resps {
+			ctx.WriteString("\n  - " + r)
+		}
+	}
+
+	if perms := jsonStringArray(result, "permissions"); len(perms) > 0 {
+		ctx.WriteString("\nPermissions:")
+		for _, p := range perms {
+			ctx.WriteString("\n  - " + p)
+		}
+	}
+
+	return emit(w, name, ctx.String())
 }
 
 // --- JSON extraction helpers ---
