@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -367,4 +368,78 @@ func TestGitConfig_ReadsValue(t *testing.T) {
 func TestGitConfig_MissingKey(t *testing.T) {
 	setGitConfig(t, "", "")
 	assert.Equal(t, "", GitConfig("user.name"))
+}
+
+// --- parseRepoName tests ---
+
+func TestParseRepoName(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"HTTPS", "https://github.com/punt-labs/ethos.git", "punt-labs/ethos"},
+		{"HTTPS no .git", "https://github.com/punt-labs/ethos", "punt-labs/ethos"},
+		{"SSH", "git@github.com:punt-labs/ethos.git", "punt-labs/ethos"},
+		{"SSH no .git", "git@github.com:punt-labs/ethos", "punt-labs/ethos"},
+		{"malformed SSH no slash", "git@github.com:bareword", ""},
+		{"bare name", "bareword", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, parseRepoName(tt.url))
+		})
+	}
+}
+
+// --- RepoName tests ---
+
+func TestRepoName(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"HTTPS URL", "https://github.com/punt-labs/ethos.git", "punt-labs/ethos"},
+		{"SSH URL", "git@github.com:punt-labs/ethos.git", "punt-labs/ethos"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			origDir, err := os.Getwd()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = os.Chdir(origDir) })
+			require.NoError(t, os.Chdir(dir))
+
+			// Isolate git config.
+			setGitConfig(t, "", "")
+
+			runGit(t, dir, "init")
+			runGit(t, dir, "remote", "add", "origin", tt.url)
+
+			assert.Equal(t, tt.want, RepoName())
+		})
+	}
+}
+
+func TestRepoName_NoRemote(t *testing.T) {
+	dir := t.TempDir()
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(dir))
+
+	setGitConfig(t, "", "")
+	runGit(t, dir, "init")
+
+	assert.Equal(t, "", RepoName())
+}
+
+// runGit runs a git command in the given directory.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %v: %s", args, out)
 }
