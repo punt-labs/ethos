@@ -24,12 +24,24 @@ func TestBuildPersonaBlock_Full(t *testing.T) {
 
 	got := BuildPersonaBlock(id)
 
-	assert.Contains(t, got, "You are Claude Agento (claude)")
-	assert.Contains(t, got, "COO / VP Engineering for Punt Labs.")
-	assert.Contains(t, got, "## Personality")
+	// Opening line uses first sentence without double period.
+	assert.Contains(t, got, "You are Claude Agento (claude), COO / VP Engineering for Punt Labs.")
+	assert.NotContains(t, got, "Punt Labs..")
+
+	// First paragraph is deduplicated — remaining content starts with
+	// ## Core Traits sub-heading, so no wrapper ## Personality emitted.
+	assert.Contains(t, got, "## Core Traits")
 	assert.Contains(t, got, "Direct but warm")
-	assert.Contains(t, got, "## Writing Style")
+	assert.Contains(t, got, "Data over adjectives")
+	// The opening sentence should NOT appear again.
+	assert.Equal(t, 1, strings.Count(got, "COO / VP Engineering for Punt Labs"))
+	// Top-level heading stripped.
+	assert.NotContains(t, got, "# Friendly Direct")
+
+	// Writing style has sub-headings, so ## Rules sub-heading preserved.
+	assert.Contains(t, got, "## Rules")
 	assert.Contains(t, got, "Keep sentences under 30 words")
+	assert.NotContains(t, got, "# Direct With Quips")
 	assert.Contains(t, got, "## Talents")
 	assert.Contains(t, got, "product-strategy, formal-methods")
 }
@@ -47,7 +59,9 @@ func TestBuildPersonaBlock_NoPersonality(t *testing.T) {
 
 	assert.Contains(t, got, "You are Alice (alice).")
 	assert.NotContains(t, got, "## Personality")
+	// Content after heading has no sub-headings, so ## Writing Style wrapper.
 	assert.Contains(t, got, "## Writing Style")
+	assert.NotContains(t, got, "# Concise") // Top-level heading stripped.
 	assert.Contains(t, got, "No wasted words")
 	assert.Contains(t, got, "## Talents")
 	assert.Contains(t, got, "engineering")
@@ -84,6 +98,23 @@ func TestBuildPersonaBlock_NoTalents(t *testing.T) {
 	assert.Contains(t, got, "You are Carol (carol)")
 	assert.Contains(t, got, "## Personality")
 	assert.NotContains(t, got, "## Talents")
+}
+
+func TestBuildPersonaBlock_HeadingOnlyWritingStyle(t *testing.T) {
+	id := &identity.Identity{
+		Name:                "Dave",
+		Handle:              "dave",
+		Kind:                "agent",
+		PersonalityContent:  "# Calm\n\nCalm engineer.\n\n- Stay focused",
+		WritingStyleContent: "# Just a title",
+	}
+
+	got := BuildPersonaBlock(id)
+
+	// Heading-only writing style should not produce empty section.
+	assert.NotContains(t, got, "## Writing Style")
+	assert.Contains(t, got, "## Personality")
+	assert.Contains(t, got, "Stay focused")
 }
 
 func TestBuildPersonaBlock_EmptyContent(t *testing.T) {
@@ -184,6 +215,31 @@ func TestFirstContentSentence(t *testing.T) {
 			content: "# Title\n\nDr. Smith wrote the spec and\nimplemented it.\n\nMore text.",
 			want:    "Dr. Smith wrote the spec and implemented it.",
 		},
+		{
+			name:    "bullets only after heading",
+			content: "# Style\n\n## Section\n\n- Rule one\n- Rule two",
+			want:    "",
+		},
+		{
+			name:    "paragraph then bullets",
+			content: "# Style\n\nShort and clear.\n\n- Rule one",
+			want:    "Short and clear.",
+		},
+		{
+			name:    "indented continuation after bullet",
+			content: "# Style\n\n## Reporting\n\n- Lead with the answer: yes, no, or \"I don't know\" — then\n  context\n- Data over adjectives",
+			want:    "",
+		},
+		{
+			name:    "star bullets skipped",
+			content: "# Title\n\n* Star bullet\n* Another",
+			want:    "",
+		},
+		{
+			name:    "plus bullets skipped",
+			content: "# Title\n\n+ Plus bullet\n\nProse here.",
+			want:    "Prose here.",
+		},
 	}
 
 	for _, tt := range tests {
@@ -194,11 +250,114 @@ func TestFirstContentSentence(t *testing.T) {
 	}
 }
 
+func TestStripLeadingHeading(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "top-level heading",
+			content: "# Friendly Direct\n\n## Role\n\n- Something",
+			want:    "## Role\n\n- Something",
+		},
+		{
+			name:    "sub-heading preserved",
+			content: "## Role\n\n- Something",
+			want:    "## Role\n\n- Something",
+		},
+		{
+			name:    "no heading",
+			content: "Some text here.\n\n- Item",
+			want:    "Some text here.\n\n- Item",
+		},
+		{
+			name:    "heading only",
+			content: "# Just a title",
+			want:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripLeadingHeading(tt.content)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestSkipFirstParagraph(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "heading + paragraph + more content",
+			content: "# Friendly Direct\n\nCOO / VP Engineering for Punt Labs.\n\n## Core Traits\n\n- Direct but warm",
+			want:    "## Core Traits\n\n- Direct but warm",
+		},
+		{
+			name:    "multi-line first paragraph",
+			content: "# Title\n\nFirst line\nsecond line.\n\n## Next\n\n- Item",
+			want:    "## Next\n\n- Item",
+		},
+		{
+			name:    "heading only — preserved for downstream stripping",
+			content: "# Just a heading",
+			want:    "# Just a heading",
+		},
+		{
+			name:    "heading + paragraph only",
+			content: "# Title\n\nOnly paragraph.",
+			want:    "",
+		},
+		{
+			name:    "no heading",
+			content: "First paragraph.\n\n## Section\n\n- Item",
+			want:    "## Section\n\n- Item",
+		},
+		{
+			name:    "all bullets — no prose paragraph to skip",
+			content: "# Style\n\n- Rule one\n- Rule two",
+			want:    "# Style\n\n- Rule one\n- Rule two",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := skipFirstParagraph(tt.content)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestTruncateFirstSentence(t *testing.T) {
+	tests := []struct {
+		name, input, want string
+	}{
+		{"single sentence", "Direct and quantitative.", "Direct and quantitative."},
+		{"long two sentences", strings.Repeat("x", 90) + ". Occasional Esperanto.", strings.Repeat("x", 90) + "."},
+		{"short two sentences preserved", "Primarily English. Occasional Esperanto.", "Primarily English. Occasional Esperanto."},
+		{"no period", "Just a phrase", "Just a phrase"},
+		{"abbreviation preserved", "Dr. Smith wrote the spec and implemented it.", "Dr. Smith wrote the spec and implemented it."},
+		{"short string", "Hi.", "Hi."},
+		{"empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateFirstSentence(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestBuildTeamContext_Full(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	rs := role.NewLayeredStore("", dir)
 	ps := attribute.NewStore(dir, attribute.Personalities)
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
 
 	// Create personality files so Load resolves PersonalityContent.
 	require.NoError(t, ps.Save(&attribute.Attribute{
@@ -210,18 +369,38 @@ func TestBuildTeamContext_Full(t *testing.T) {
 		Content: "# Friendly Direct\n\nCOO / VP Engineering for Punt Labs.\n\n- Takes ownership of everything downstream",
 	}))
 
-	// Create identities with personality slugs.
+	// Create writing style files.
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "concise-quantified",
+		Content: "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words",
+	}))
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "direct-with-quips",
+		Content: "# Direct With Quips\n\nLead with the answer, occasional humor.\n\n- Facts first",
+	}))
+
+	// Create talent files so identity validation passes.
+	ts := attribute.NewStore(dir, attribute.Talents)
+	require.NoError(t, ts.Save(&attribute.Attribute{Slug: "product-strategy", Content: "# Product Strategy\n\nMarket analysis and roadmaps."}))
+	require.NoError(t, ts.Save(&attribute.Attribute{Slug: "management", Content: "# Management\n\nTeam leadership and delegation."}))
+	require.NoError(t, ts.Save(&attribute.Attribute{Slug: "engineering", Content: "# Engineering\n\nSoftware design and implementation."}))
+
+	// Create identities with personality, writing style, and talents.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:        "Jim Freeman",
-		Handle:      "jfreeman",
-		Kind:        "human",
-		Personality: "data-driven",
+		Name:         "Jim Freeman",
+		Handle:       "jfreeman",
+		Kind:         "human",
+		Personality:  "data-driven",
+		WritingStyle: "concise-quantified",
+		Talents:      []string{"product-strategy"},
 	}))
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:        "Claude Agento",
-		Handle:      "claude",
-		Kind:        "agent",
-		Personality: "friendly-direct",
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "friendly-direct",
+		WritingStyle: "direct-with-quips",
+		Talents:      []string{"management", "engineering"},
 	}))
 
 	// Create roles.
@@ -247,14 +426,29 @@ func TestBuildTeamContext_Full(t *testing.T) {
 
 	got := BuildTeamContext(tm, rs, s)
 
+	// Team header and member names.
 	assert.Contains(t, got, "## Team: punt-labs")
 	assert.Contains(t, got, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, got, "Claude Agento (claude) — coo")
+
+	// Personality summaries.
 	assert.Contains(t, got, "Direct and quantitative.")
+	assert.Contains(t, got, "COO / VP Engineering for Punt Labs.")
+
+	// Writing style summaries.
+	assert.Contains(t, got, "Writing style: Short and data-driven.")
+	assert.Contains(t, got, "Writing style: Lead with the answer, occasional humor.")
+
+	// Role responsibilities.
 	assert.Contains(t, got, "Sets strategic direction")
 	assert.Contains(t, got, "Makes go/no-go decisions")
-	assert.Contains(t, got, "Claude Agento (claude) — coo")
-	assert.Contains(t, got, "COO / VP Engineering for Punt Labs.")
 	assert.Contains(t, got, "Execution quality and velocity")
+
+	// Talents.
+	assert.Contains(t, got, "Talents: product-strategy")
+	assert.Contains(t, got, "Talents: management, engineering")
+
+	// Collaborations.
 	assert.Contains(t, got, "### Collaborations")
 	assert.Contains(t, got, "coo → ceo (reports_to)")
 }
