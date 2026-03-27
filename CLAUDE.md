@@ -14,6 +14,19 @@ Ethos is a sidecar — it publishes identity state to a known filesystem locatio
 
 This project follows [Punt Labs standards](https://github.com/punt-labs/punt-kit). When this CLAUDE.md conflicts with punt-kit standards, this file wins (most specific wins).
 
+### Standards-First Workflow
+
+Before specifying any work for the team, the COO must consult the relevant punt-kit standards. This is not optional — it is a blocking prerequisite for writing specs.
+
+- **New MCP tool** → check DES-018 (PostToolUse formatted output, not raw JSON). Every tool needs a formatter in `format_output.go` before shipping.
+- **New CLI command** → check [cli standard](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md). Exit codes, help text, output format.
+- **New hook** → check [hooks standard](https://github.com/punt-labs/punt-kit/blob/main/standards/hooks.md). Shell gate pattern, error handling.
+- **New slash command** → check existing command files for pattern. Both `name.md` and `name-dev.md` variants required.
+- **Any Go code** → check [go standard](https://github.com/punt-labs/punt-kit/blob/main/standards/go.md). Error wrapping, naming, test patterns.
+- **Release work** → check [release-process standard](https://github.com/punt-labs/punt-kit/blob/main/standards/release-process.md).
+
+Failure to consult standards before specifying work is a process failure, not a coding error. The COO is accountable for knowing and applying all standards to every piece of work delegated to the team.
+
 ## Build & Run
 
 ```bash
