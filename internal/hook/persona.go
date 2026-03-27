@@ -87,8 +87,8 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 	fmt.Fprintf(&b, "## Team: %s\n", t.Name)
 
 	for _, m := range t.Members {
-		// Load full identity — personality and writing style are needed
-		// so we know how to work with each team member after compaction.
+		// Load full identity — personality is needed so we know how to
+		// work with each team member after compaction (via a summary).
 		name := m.Identity
 		var id *identity.Identity
 		if identities != nil {
