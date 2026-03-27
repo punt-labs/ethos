@@ -144,6 +144,52 @@ func TestBuildPersonaBlock_FirstLineExtraction(t *testing.T) {
 	}
 }
 
+func TestFirstContentSentence(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "single line opening",
+			content: "# Friendly\n\nCOO / VP Engineering for Punt Labs.\n\n## Core\n\n- Rule one",
+			want:    "COO / VP Engineering for Punt Labs.",
+		},
+		{
+			name:    "multi-line wrapping before period",
+			content: "# McIlroy\n\nCLI specialist sub-agent. Principles from the Unix philosophy and\nMcIlroy's work on software componentization.\n\n## Core\n\n- Rule one",
+			want:    "CLI specialist sub-agent. Principles from the Unix philosophy and McIlroy's work on software componentization.",
+		},
+		{
+			name:    "stops at blank line",
+			content: "# Heading\n\nFirst paragraph line one\nline two\n\nSecond paragraph.",
+			want:    "First paragraph line one line two",
+		},
+		{
+			name:    "heading only",
+			content: "# Heading",
+			want:    "",
+		},
+		{
+			name:    "empty content",
+			content: "",
+			want:    "",
+		},
+		{
+			name:    "period mid-sentence continues to end",
+			content: "# Title\n\nDr. Smith wrote the spec and\nimplemented it.\n\nMore text.",
+			want:    "Dr. Smith wrote the spec and implemented it.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := firstContentSentence(tt.content)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestBuildCondensedPersona_Full(t *testing.T) {
 	id := &identity.Identity{
 		Name:                "Claude Agento",
