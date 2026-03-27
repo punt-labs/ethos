@@ -37,8 +37,8 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		return fmt.Errorf("pre-compact: %w", err)
 	}
 
-	sessionID, _ := input["session_id"].(string)
-	if sessionID == "" {
+	sessionID, ok := input["session_id"].(string)
+	if !ok || sessionID == "" {
 		return nil
 	}
 
