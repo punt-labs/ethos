@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildPersonaBlock_Full(t *testing.T) {
@@ -190,54 +193,72 @@ func TestFirstContentSentence(t *testing.T) {
 	}
 }
 
-func TestBuildCondensedPersona_Full(t *testing.T) {
-	id := &identity.Identity{
-		Name:                "Claude Agento",
-		Handle:              "claude",
-		Kind:                "agent",
-		Personality:         "friendly-direct",
-		WritingStyle:        "direct-with-quips",
-		PersonalityContent:  "# Friendly Direct\n\nCOO / VP Engineering.\n\n## Core\n\n- Direct but warm\n- Data over adjectives\n- Short answers\n- Ask clarifying questions\n- No hedge stacking",
-		WritingStyleContent: "# Direct With Quips\n\nWriting rules.\n\n## Rules\n\n- Under 30 words\n- Lead with answer\n- Replace adjectives with data\n- No filler transitions\n- Concrete over abstract",
-		Talents:             []string{"product-strategy", "formal-methods"},
-	}
+func TestBuildTeamContext_Full(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
 
-	got := BuildCondensedPersona(id)
-
-	assert.Contains(t, got, "Active persona: Claude Agento (claude)")
-	assert.Contains(t, got, "Personality: friendly-direct")
-	assert.Contains(t, got, "Writing: direct-with-quips")
-	assert.Contains(t, got, "Talents: product-strategy, formal-methods")
-}
-
-func TestBuildCondensedPersona_NoPersonality(t *testing.T) {
-	id := &identity.Identity{
-		Name:                "Alice",
-		Handle:              "alice",
-		Kind:                "human",
-		WritingStyle:        "concise",
-		WritingStyleContent: "# Concise\n\nShort.\n\n- No wasted words\n- Data first\n- Active voice",
-	}
-
-	got := BuildCondensedPersona(id)
-
-	assert.Contains(t, got, "Active persona: Alice (alice)")
-	assert.NotContains(t, got, "Personality:")
-	assert.Contains(t, got, "Writing: concise")
-}
-
-func TestBuildCondensedPersona_Empty(t *testing.T) {
-	id := &identity.Identity{
-		Name:   "Empty",
-		Handle: "empty",
+	// Create identities.
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Jim Freeman",
+		Handle: "jfreeman",
+		Kind:   "human",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Claude Agento",
+		Handle: "claude",
 		Kind:   "agent",
+	}))
+
+	// Create roles.
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "ceo",
+		Responsibilities: []string{"Sets strategic direction", "Makes go/no-go decisions"},
+	}))
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "coo",
+		Responsibilities: []string{"Execution quality and velocity"},
+	}))
+
+	tm := &team.Team{
+		Name: "punt-labs",
+		Members: []team.Member{
+			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "claude", Role: "coo"},
+		},
+		Collaborations: []team.Collaboration{
+			{From: "coo", To: "ceo", Type: "reports_to"},
+		},
 	}
 
-	got := BuildCondensedPersona(id)
+	got := BuildTeamContext(tm, rs, s)
+
+	assert.Contains(t, got, "## Team: punt-labs")
+	assert.Contains(t, got, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, got, "Sets strategic direction")
+	assert.Contains(t, got, "Makes go/no-go decisions")
+	assert.Contains(t, got, "Claude Agento (claude) — coo")
+	assert.Contains(t, got, "Execution quality and velocity")
+	assert.Contains(t, got, "### Collaborations")
+	assert.Contains(t, got, "coo → ceo (reports_to)")
+}
+
+func TestBuildTeamContext_NilTeam(t *testing.T) {
+	got := BuildTeamContext(nil, nil, nil)
 	assert.Equal(t, "", got)
 }
 
-func TestBuildCondensedPersona_Nil(t *testing.T) {
-	got := BuildCondensedPersona(nil)
-	assert.Equal(t, "", got)
+func TestBuildTeamContext_NoRoles(t *testing.T) {
+	tm := &team.Team{
+		Name: "test-team",
+		Members: []team.Member{
+			{Identity: "alice", Role: "dev"},
+		},
+	}
+
+	// No role store — should still emit member name.
+	got := BuildTeamContext(tm, nil, nil)
+
+	assert.Contains(t, got, "## Team: test-team")
+	assert.Contains(t, got, "alice — dev")
 }

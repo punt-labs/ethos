@@ -115,9 +115,14 @@ func runHookSubagentStop() {
 }
 
 func runHookPreCompact() {
-	s := globalStore()
-	ss := sessionStore()
-	if err := hook.HandlePreCompact(os.Stdin, s, ss); err != nil {
+	is := identityStore()
+	deps := hook.PreCompactDeps{
+		Identities: is,
+		Sessions:   sessionStore(),
+		Teams:      layeredTeamStore(is),
+		Roles:      layeredRoleStore(is),
+	}
+	if err := hook.HandlePreCompact(os.Stdin, deps); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook pre-compact: %v\n", err)
 		os.Exit(1)
 	}
