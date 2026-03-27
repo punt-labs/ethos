@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -14,11 +15,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// PreCompactResult mirrors the JSON structure emitted by HandlePreCompact.
-type PreCompactResult struct {
-	SystemMessage string `json:"systemMessage"`
-}
 
 // capturePreCompactOutput runs HandlePreCompact and captures stdout.
 func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) string {
@@ -97,26 +93,24 @@ func TestHandlePreCompact_FullPersona(t *testing.T) {
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session"})
 	require.NoError(t, err)
 
-	out := capturePreCompactOutput(t, string(payload), makeDeps(s, ss))
+	out := strings.TrimRight(capturePreCompactOutput(t, string(payload), makeDeps(s, ss)), "\n")
 
-	var result PreCompactResult
-	require.NoError(t, json.Unmarshal([]byte(out), &result))
-
-	ctx := result.SystemMessage
-	// Full persona block — not condensed.
-	assert.Contains(t, ctx, "You are Claude Agento (claude), Strategic and thorough.")
-	assert.NotContains(t, ctx, "thorough..") // No double period.
-	assert.Contains(t, ctx, "## Personality")
-	assert.Contains(t, ctx, "Think before acting")
-	assert.Contains(t, ctx, "Data over adjectives")
-	assert.Contains(t, ctx, "Simplicity first")
+	// Full persona block — not condensed, plain text (not JSON).
+	assert.Contains(t, out, "You are Claude Agento (claude), Strategic and thorough.")
+	assert.NotContains(t, out, "thorough..") // No double period.
+	assert.Contains(t, out, "## Personality")
+	assert.Contains(t, out, "Think before acting")
+	assert.Contains(t, out, "Data over adjectives")
+	assert.Contains(t, out, "Simplicity first")
 	// First paragraph is deduplicated — should not repeat in personality section.
-	assert.Contains(t, ctx, "## Writing Style")
-	assert.Contains(t, ctx, "Under 30 words")
-	assert.Contains(t, ctx, "Lead with numbers")
-	assert.Contains(t, ctx, "No weasel words")
-	assert.Contains(t, ctx, "## Talents")
-	assert.Contains(t, ctx, "formal-methods, product-strategy")
+	assert.Contains(t, out, "## Writing Style")
+	assert.Contains(t, out, "Under 30 words")
+	assert.Contains(t, out, "Lead with numbers")
+	assert.Contains(t, out, "No weasel words")
+	assert.Contains(t, out, "## Talents")
+	assert.Contains(t, out, "formal-methods, product-strategy")
+	// Must not be JSON-wrapped.
+	assert.False(t, strings.HasPrefix(out, "{"), "output should be plain text, not JSON")
 }
 
 func TestHandlePreCompact_WithTeamContext(t *testing.T) {
@@ -181,16 +175,12 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 	}
 	out := capturePreCompactOutput(t, string(payload), deps)
 
-	var result PreCompactResult
-	require.NoError(t, json.Unmarshal([]byte(out), &result))
-
-	ctx := result.SystemMessage
-	assert.Contains(t, ctx, "## Team: test-eng")
-	assert.Contains(t, ctx, "Jim Freeman (jfreeman) — ceo")
-	assert.Contains(t, ctx, "Claude Agento (claude) — coo")
-	assert.Contains(t, ctx, "Sets strategic direction")
-	assert.Contains(t, ctx, "Execution quality and velocity")
-	assert.Contains(t, ctx, "coo → ceo (reports_to)")
+	assert.Contains(t, out, "## Team: test-eng")
+	assert.Contains(t, out, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, out, "Claude Agento (claude) — coo")
+	assert.Contains(t, out, "Sets strategic direction")
+	assert.Contains(t, out, "Execution quality and velocity")
+	assert.Contains(t, out, "coo → ceo (reports_to)")
 }
 
 func TestHandlePreCompact_NoSession_NoOutput(t *testing.T) {
