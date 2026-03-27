@@ -87,10 +87,14 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 	fmt.Fprintf(&b, "## Team: %s\n", t.Name)
 
 	for _, m := range t.Members {
-		// Load identity for display name.
+		// Load full identity — personality and writing style are needed
+		// so we know how to work with each team member after compaction.
 		name := m.Identity
+		var id *identity.Identity
 		if identities != nil {
-			if id, err := identities.Load(m.Identity, identity.Reference(true)); err == nil {
+			var err error
+			id, err = identities.Load(m.Identity)
+			if err == nil {
 				name = fmt.Sprintf("%s (%s)", id.Name, id.Handle)
 			} else {
 				fmt.Fprintf(os.Stderr, "ethos: team context: failed to load identity %q: %v\n", m.Identity, err)
@@ -98,6 +102,13 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 		}
 
 		fmt.Fprintf(&b, "\n### %s — %s\n", name, m.Role)
+
+		// Emit personality summary: first sentence gives working style.
+		if id != nil && id.PersonalityContent != "" {
+			if summary := firstContentSentence(id.PersonalityContent); summary != "" {
+				fmt.Fprintf(&b, "%s\n", summary)
+			}
+		}
 
 		// Load role responsibilities.
 		if roles != nil {
