@@ -20,7 +20,7 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	var b strings.Builder
 
 	// Opening line: "You are Name (handle), <first meaningful line of personality>."
-	first := firstContentLine(id.PersonalityContent)
+	first := firstContentSentence(id.PersonalityContent)
 	if first != "" {
 		fmt.Fprintf(&b, "You are %s (%s), %s.", id.Name, id.Handle, first)
 	} else {
@@ -85,20 +85,29 @@ func BuildCondensedPersona(id *identity.Identity) string {
 	return strings.Join(lines, "\n")
 }
 
-// firstContentLine returns the first non-heading, non-blank line from
-// markdown content. Returns empty string if no such line exists.
-func firstContentLine(content string) string {
+// firstContentSentence returns the first sentence from markdown content,
+// skipping headings and blank lines. Collects continuation lines until a
+// blank line or a line ending with a period. Returns empty string if no
+// content line exists.
+func firstContentSentence(content string) string {
+	var parts []string
+	collecting := false
 	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+		trimmed := strings.TrimSpace(line)
+		if !collecting {
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+			collecting = true
+		} else if trimmed == "" {
+			break
 		}
-		if strings.HasPrefix(line, "#") {
-			continue
+		parts = append(parts, trimmed)
+		if strings.HasSuffix(trimmed, ".") {
+			break
 		}
-		return line
 	}
-	return ""
+	return strings.Join(parts, " ")
 }
 
 // extractRules pulls up to n list-item lines ("- ...") from markdown
