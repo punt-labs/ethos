@@ -163,7 +163,7 @@ func (s *Store) Exists(name string) bool {
 func (s *Store) FindByRepo(repo string) ([]*Team, error) {
 	names, err := s.List()
 	if err != nil {
-		return []*Team{}, err
+		return nil, fmt.Errorf("listing teams: %w", err)
 	}
 	var result []*Team
 	for _, name := range names {
