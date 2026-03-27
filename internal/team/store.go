@@ -102,7 +102,7 @@ func (s *Store) Load(name string) (*Team, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("team %q not found", name)
+			return nil, fmt.Errorf("team %q: %w", name, ErrNotFound)
 		}
 		return nil, fmt.Errorf("reading team: %w", err)
 	}
@@ -156,6 +156,32 @@ func (s *Store) Exists(name string) bool {
 	}
 	_, err = os.Stat(p)
 	return err == nil
+}
+
+// FindByRepo returns all teams whose Repositories list contains repo.
+// Returns an empty (non-nil) slice when no teams match.
+func (s *Store) FindByRepo(repo string) ([]*Team, error) {
+	names, err := s.List()
+	if err != nil {
+		return []*Team{}, err
+	}
+	var result []*Team
+	for _, name := range names {
+		t, err := s.Load(name)
+		if err != nil {
+			return nil, fmt.Errorf("loading team %q: %w", name, err)
+		}
+		for _, r := range t.Repositories {
+			if r == repo {
+				result = append(result, t)
+				break
+			}
+		}
+	}
+	if result == nil {
+		result = []*Team{}
+	}
+	return result, nil
 }
 
 // AddMember adds a member to an existing team. Validates that the identity

@@ -1,6 +1,7 @@
 package team
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -537,4 +538,77 @@ func TestStore_RemoveMember_DanglingCollabs(t *testing.T) {
 	assert.Len(t, loaded.Collaborations, 1)
 	assert.Equal(t, "dev", loaded.Collaborations[0].From)
 	assert.Equal(t, "qa", loaded.Collaborations[0].To)
+}
+
+func TestStore_LoadNotFound_Sentinel(t *testing.T) {
+	s := testStore(t)
+
+	_, err := s.Load("nonexistent")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrNotFound))
+}
+
+func TestStore_FindByRepo(t *testing.T) {
+	tests := []struct {
+		name      string
+		teams     []*Team
+		repo      string
+		wantNames []string
+	}{
+		{
+			name: "matches one team",
+			teams: []*Team{
+				{Name: "eng", Repositories: []string{"punt-labs/ethos"}, Members: []Member{{Identity: "a", Role: "r"}}},
+				{Name: "ops", Repositories: []string{"punt-labs/infra"}, Members: []Member{{Identity: "b", Role: "r"}}},
+			},
+			repo:      "punt-labs/ethos",
+			wantNames: []string{"eng"},
+		},
+		{
+			name: "matches multiple teams",
+			teams: []*Team{
+				{Name: "eng", Repositories: []string{"punt-labs/ethos"}, Members: []Member{{Identity: "a", Role: "r"}}},
+				{Name: "platform", Repositories: []string{"punt-labs/ethos", "punt-labs/infra"}, Members: []Member{{Identity: "b", Role: "r"}}},
+			},
+			repo:      "punt-labs/ethos",
+			wantNames: []string{"eng", "platform"},
+		},
+		{
+			name: "matches none",
+			teams: []*Team{
+				{Name: "eng", Repositories: []string{"punt-labs/ethos"}, Members: []Member{{Identity: "a", Role: "r"}}},
+			},
+			repo:      "punt-labs/other",
+			wantNames: nil,
+		},
+		{
+			name:      "no teams directory",
+			teams:     nil,
+			repo:      "punt-labs/ethos",
+			wantNames: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := testStore(t)
+			for _, team := range tt.teams {
+				require.NoError(t, s.Save(team, alwaysTrue, alwaysTrue))
+			}
+
+			got, err := s.FindByRepo(tt.repo)
+			require.NoError(t, err)
+			require.NotNil(t, got, "FindByRepo must return non-nil slice")
+
+			var gotNames []string
+			for _, team := range got {
+				gotNames = append(gotNames, team.Name)
+			}
+			if tt.wantNames == nil {
+				assert.Empty(t, got)
+			} else {
+				assert.ElementsMatch(t, tt.wantNames, gotNames)
+			}
+		})
+	}
 }
