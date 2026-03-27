@@ -93,7 +93,7 @@ func TestHandlePreCompact_FullPersona(t *testing.T) {
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session"})
 	require.NoError(t, err)
 
-	out := strings.TrimRight(capturePreCompactOutput(t, string(payload), makeDeps(s, ss)), "\n")
+	out := capturePreCompactOutput(t, string(payload), makeDeps(s, ss))
 
 	// Full persona block — not condensed, plain text (not JSON).
 	assert.Contains(t, out, "You are Claude Agento (claude), Strategic and thorough.")

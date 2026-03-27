@@ -90,7 +90,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		return nil
 	}
 
-	_, err = fmt.Fprintln(os.Stdout, msg)
+	_, err = fmt.Fprint(os.Stdout, msg)
 	return err
 }
 
