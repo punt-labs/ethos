@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/team"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
@@ -11,9 +12,9 @@ import (
 
 func (h *Handler) teamTool() mcplib.Tool {
 	return mcplib.NewTool("team",
-		mcplib.WithDescription("Manage teams. Methods: create, list, show, delete, add_member, remove_member, add_collab."),
+		mcplib.WithDescription("Manage teams. Methods: create, list, show, delete, add_member, remove_member, add_collab, for_repo."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("create", "list", "show", "delete", "add_member", "remove_member", "add_collab"),
+			mcplib.Enum("create", "list", "show", "delete", "add_member", "remove_member", "add_collab", "for_repo"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("name",
@@ -41,6 +42,9 @@ func (h *Handler) teamTool() mcplib.Tool {
 		mcplib.WithArray("members",
 			mcplib.Description("List of {identity, role} objects. Required for create."),
 		),
+		mcplib.WithString("repo",
+			mcplib.Description("Repository name (org/repo). Required for for_repo. Defaults to current repo."),
+		),
 	)
 }
 
@@ -61,6 +65,8 @@ func (h *Handler) handleTeam(_ context.Context, req mcplib.CallToolRequest) (*mc
 		return h.handleTeamRemoveMember(req)
 	case "add_collab":
 		return h.handleTeamAddCollab(req)
+	case "for_repo":
+		return h.handleTeamForRepo(req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
@@ -197,6 +203,21 @@ func (h *Handler) handleTeamAddCollab(req mcplib.CallToolRequest) (*mcplib.CallT
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to add collaboration: %v", err)), nil
 	}
 	return jsonResult(c)
+}
+
+func (h *Handler) handleTeamForRepo(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	repo := stringArg(req, "repo", "")
+	if repo == "" {
+		repo = resolve.RepoName()
+	}
+	if repo == "" {
+		return mcplib.NewToolResultError("repo is required for for_repo (could not detect from git remote)"), nil
+	}
+	teams, err := h.teams.FindByRepo(repo)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to find teams: %v", err)), nil
+	}
+	return jsonResult(teams)
 }
 
 // parseMembersArg extracts members from the raw "members" argument.

@@ -9,8 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Repo-level config**: `.punt-labs/ethos.yaml` for repo-specific identity config (agent, team bindings). Decoupled from the team submodule path. Backward-compatible fallback to old `.punt-labs/ethos/config.yaml`
+- **Team-by-repo lookup**: `ethos team for-repo [repo]` CLI command and `for_repo` MCP method — query which team works on a given repository
+- `FindByRepo` on team Store and LayeredStore
+- `RepoName()` helper — parses org/repo from git remote URL
+- `LoadRepoConfig` and `ResolveTeam` in resolve package
 - **Role** as first-class concept: `internal/role/` package, `ethos role` CLI, `role` MCP tool, LayeredStore
-- **Team** as first-class concept: `internal/team/` package, `ethos team` CLI with add-member/remove-member/add-collab, `team` MCP tool with 7 methods, Z-spec invariant enforcement (referential integrity, non-empty teams, no self-collaboration, dangling collab cleanup)
+- **Team** as first-class concept: `internal/team/` package, `ethos team` CLI with add-member/remove-member/add-collab, `team` MCP tool with 8 methods, Z-spec invariant enforcement (referential integrity, non-empty teams, no self-collaboration, dangling collab cleanup)
+
+### Fixed
+
+- `attribute.Store.isNotFound` TOCTOU race — replaced redundant `os.Stat` with `errors.Is`
+- `team.LayeredStore.Load` redundant `Exists` call — replaced with `ErrNotFound` sentinel
 - Referential integrity check on role deletion — cannot delete a role referenced by a team
 - Z specification for teams/roles/identities domain (`docs/teams.tex`) — type-checks with fuzz, animates with probcli
 

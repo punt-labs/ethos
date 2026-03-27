@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -278,6 +279,69 @@ func TestHandleTeam_UnknownMethod(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "unknown method")
+}
+
+func TestHandleTeam_ForRepo(t *testing.T) {
+	h := testHandlerWithTeams(t)
+
+	// Create a team with a repository.
+	_, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method":       "create",
+		"name":         "eng",
+		"repositories": []interface{}{"punt-labs/ethos"},
+		"members": []interface{}{
+			map[string]interface{}{"identity": "alice", "role": "dev"},
+		},
+	}))
+	require.NoError(t, err)
+
+	result, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method": "for_repo",
+		"repo":   "punt-labs/ethos",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	text := resultText(t, result)
+	assert.Contains(t, text, "eng")
+	assert.Contains(t, text, "alice")
+}
+
+func TestHandleTeam_ForRepo_NoMatch(t *testing.T) {
+	h := testHandlerWithTeams(t)
+
+	result, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method": "for_repo",
+		"repo":   "punt-labs/nonexistent",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "[]")
+}
+
+func TestHandleTeam_ForRepo_NoRepoArg(t *testing.T) {
+	// Outside any git repo, for_repo with no repo arg should fail gracefully.
+	// Use the system temp dir (not TMPDIR which may point inside a repo).
+	t.Setenv("TMPDIR", "")
+	tmp, err := os.MkdirTemp("", "ethos-no-git-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(tmp))
+
+	// Prevent git from finding a repo above the temp dir.
+	t.Setenv("GIT_CEILING_DIRECTORIES", tmp)
+
+	h := testHandlerWithTeams(t)
+	result, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method": "for_repo",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "repo is required")
 }
 
 func TestHandleTeam_ShowNotFound(t *testing.T) {
