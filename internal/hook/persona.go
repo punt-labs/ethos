@@ -178,9 +178,11 @@ func firstContentSentence(content string) string {
 }
 
 // BuildTeamContext assembles a team context block from a team definition,
-// loading role responsibilities for each member. Returns empty string if
-// the team is nil or has no members.
-func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identity.IdentityStore) string {
+// loading role responsibilities for each member. selfHandle is the current
+// agent's handle — that member gets a compact entry (role + responsibilities
+// only) since the full persona block is already emitted above. Returns
+// empty string if the team is nil or has no members.
+func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identity.IdentityStore, selfHandle string) string {
 	if t == nil || len(t.Members) == 0 {
 		return ""
 	}
@@ -205,26 +207,33 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 
 		fmt.Fprintf(&b, "\n### %s — %s\n", name, m.Role)
 
-		// Full personality content — strip the top-level heading only.
-		if id != nil && id.PersonalityContent != "" {
-			content := strings.TrimRight(stripLeadingHeading(id.PersonalityContent), "\n")
-			if content != "" {
-				fmt.Fprintf(&b, "%s\n", content)
-			}
-		}
+		// Skip full content for self — already emitted in persona block.
+		isSelf := selfHandle != "" && m.Identity == selfHandle
 
-		// Full writing style content.
-		if id != nil && id.WritingStyleContent != "" {
-			content := strings.TrimRight(stripLeadingHeading(id.WritingStyleContent), "\n")
-			if content != "" {
-				fmt.Fprintf(&b, "\n#### Writing Style\n%s\n", content)
+		if !isSelf {
+			// Full personality content — strip the top-level heading only.
+			if id != nil && id.PersonalityContent != "" {
+				content := strings.TrimRight(stripLeadingHeading(id.PersonalityContent), "\n")
+				if content != "" {
+					fmt.Fprintf(&b, "%s\n", content)
+				}
+			}
+
+			// Full writing style content.
+			if id != nil && id.WritingStyleContent != "" {
+				content := strings.TrimRight(stripLeadingHeading(id.WritingStyleContent), "\n")
+				if content != "" {
+					fmt.Fprintf(&b, "\n#### Writing Style\n%s\n", content)
+				}
 			}
 		}
 
 		// Role responsibilities.
 		if roles != nil {
 			if r, err := roles.Load(m.Role); err == nil && len(r.Responsibilities) > 0 {
-				fmt.Fprintf(&b, "\n#### Responsibilities\n")
+				if !isSelf {
+					fmt.Fprintf(&b, "\n#### Responsibilities\n")
+				}
 				for _, resp := range r.Responsibilities {
 					fmt.Fprintf(&b, "- %s\n", resp)
 				}
@@ -234,7 +243,7 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 		}
 
 		// Talents.
-		if id != nil && len(id.Talents) > 0 {
+		if !isSelf && id != nil && len(id.Talents) > 0 {
 			fmt.Fprintf(&b, "Talents: %s\n", strings.Join(id.Talents, ", "))
 		}
 	}

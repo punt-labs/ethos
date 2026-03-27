@@ -404,35 +404,34 @@ func TestBuildTeamContext_Full(t *testing.T) {
 		},
 	}
 
-	got := BuildTeamContext(tm, rs, s)
+	got := BuildTeamContext(tm, rs, s, "claude")
 
 	// Team header and member names.
 	assert.Contains(t, got, "## Team: punt-labs")
 	assert.Contains(t, got, "Jim Freeman (jfreeman) — ceo")
 	assert.Contains(t, got, "Claude Agento (claude) — coo")
 
-	// Full personality content (heading stripped, everything else preserved).
+	// Non-self member: full personality content.
 	assert.Contains(t, got, "Direct and quantitative.")
 	assert.Contains(t, got, "Replace adjectives with numbers")
-	assert.Contains(t, got, "COO / VP Engineering for Punt Labs.")
-	assert.Contains(t, got, "Takes ownership of everything downstream")
 
-	// Full writing style content.
+	// Non-self member: full writing style content.
 	assert.Contains(t, got, "#### Writing Style")
 	assert.Contains(t, got, "Short and data-driven.")
 	assert.Contains(t, got, "Under 30 words")
-	assert.Contains(t, got, "Lead with the answer, occasional humor.")
-	assert.Contains(t, got, "Facts first")
 
-	// Role responsibilities.
+	// Non-self member: talents.
+	assert.Contains(t, got, "Talents: product-strategy")
+
+	// Self member (claude): only role responsibilities, no personality/writing style/talents.
+	assert.Contains(t, got, "Execution quality and velocity")
+	assert.NotContains(t, got, "Takes ownership of everything downstream")
+	assert.NotContains(t, got, "Talents: management, engineering")
+
+	// Role responsibilities for non-self.
 	assert.Contains(t, got, "#### Responsibilities")
 	assert.Contains(t, got, "Sets strategic direction")
 	assert.Contains(t, got, "Makes go/no-go decisions")
-	assert.Contains(t, got, "Execution quality and velocity")
-
-	// Talents.
-	assert.Contains(t, got, "Talents: product-strategy")
-	assert.Contains(t, got, "Talents: management, engineering")
 
 	// Collaborations.
 	assert.Contains(t, got, "### Collaborations")
@@ -440,7 +439,7 @@ func TestBuildTeamContext_Full(t *testing.T) {
 }
 
 func TestBuildTeamContext_NilTeam(t *testing.T) {
-	got := BuildTeamContext(nil, nil, nil)
+	got := BuildTeamContext(nil, nil, nil, "")
 	assert.Equal(t, "", got)
 }
 
@@ -453,7 +452,7 @@ func TestBuildTeamContext_NoRoles(t *testing.T) {
 	}
 
 	// No role store — should still emit member name.
-	got := BuildTeamContext(tm, nil, nil)
+	got := BuildTeamContext(tm, nil, nil, "")
 
 	assert.Contains(t, got, "## Team: test-team")
 	assert.Contains(t, got, "alice — dev")
