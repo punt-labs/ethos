@@ -1,7 +1,6 @@
 package hook
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -24,8 +23,8 @@ type PreCompactDeps struct {
 }
 
 // HandlePreCompact reads the PreCompact hook payload from stdin,
-// finds the current session's primary agent participant, and emits
-// the full persona block plus team context as systemMessage so
+// finds the current session's primary agent participant, and prints
+// the full persona block plus team context as plain text so
 // behavioral instructions survive context compaction.
 func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	if deps.Identities == nil || deps.Sessions == nil {
@@ -91,10 +90,8 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		return nil
 	}
 
-	result := struct {
-		SystemMessage string `json:"systemMessage"`
-	}{SystemMessage: msg}
-	return json.NewEncoder(os.Stdout).Encode(result)
+	_, err = fmt.Fprint(os.Stdout, msg)
+	return err
 }
 
 // buildTeamSection resolves the team from repo config and builds
