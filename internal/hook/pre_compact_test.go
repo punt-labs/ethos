@@ -14,10 +14,7 @@ import (
 
 // PreCompactResult mirrors the JSON structure emitted by HandlePreCompact.
 type PreCompactResult struct {
-	HookSpecificOutput struct {
-		HookEventName     string `json:"hookEventName"`
-		AdditionalContext string `json:"additionalContext,omitempty"`
-	} `json:"hookSpecificOutput"`
+	SystemMessage string `json:"systemMessage"`
 }
 
 // capturePreCompactOutput runs HandlePreCompact and captures stdout.
@@ -73,9 +70,7 @@ func TestHandlePreCompact_ValidSession_CondensedPersona(t *testing.T) {
 	var result PreCompactResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
 
-	assert.Equal(t, "PreCompact", result.HookSpecificOutput.HookEventName)
-
-	ctx := result.HookSpecificOutput.AdditionalContext
+	ctx := result.SystemMessage
 	assert.Contains(t, ctx, "Active persona: Claude Agento (claude)")
 	assert.Contains(t, ctx, "Personality: principal-engineer")
 	assert.Contains(t, ctx, "Think before acting")
