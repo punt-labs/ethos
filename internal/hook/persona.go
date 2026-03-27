@@ -2,6 +2,7 @@ package hook
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -91,6 +92,8 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 		if identities != nil {
 			if id, err := identities.Load(m.Identity); err == nil {
 				name = fmt.Sprintf("%s (%s)", id.Name, id.Handle)
+			} else {
+				fmt.Fprintf(os.Stderr, "ethos: team context: failed to load identity %q: %v\n", m.Identity, err)
 			}
 		}
 
@@ -102,6 +105,8 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 				for _, resp := range r.Responsibilities {
 					fmt.Fprintf(&b, "- %s\n", resp)
 				}
+			} else if err != nil {
+				fmt.Fprintf(os.Stderr, "ethos: team context: failed to load role %q: %v\n", m.Role, err)
 			}
 		}
 	}

@@ -28,6 +28,10 @@ type PreCompactDeps struct {
 // the full persona block plus team context as systemMessage so
 // behavioral instructions survive context compaction.
 func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
+	if deps.Identities == nil || deps.Sessions == nil {
+		return fmt.Errorf("pre-compact: Identities and Sessions stores are required")
+	}
+
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		return fmt.Errorf("pre-compact: %w", err)
