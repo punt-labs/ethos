@@ -1,6 +1,7 @@
 package attribute
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -137,7 +138,7 @@ func (s *Store) Load(slug string) (*Attribute, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("%s %q not found", s.kind.DisplayName, slug)
+			return nil, fmt.Errorf("%s %q not found: %w", s.kind.DisplayName, slug, err)
 		}
 		return nil, fmt.Errorf("reading %s: %w", s.kind.DisplayName, err)
 	}
@@ -214,13 +215,8 @@ func (s *Store) listLocal() (*ListResult, error) {
 
 // isNotFound returns true if the error indicates the attribute was not found
 // (as opposed to a permission or I/O error).
-func (s *Store) isNotFound(slug string, err error) bool {
-	p, pathErr := s.Path(slug)
-	if pathErr != nil {
-		return false
-	}
-	_, statErr := os.Stat(p)
-	return os.IsNotExist(statErr)
+func (s *Store) isNotFound(_ string, err error) bool {
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // Delete removes an attribute .md file.
