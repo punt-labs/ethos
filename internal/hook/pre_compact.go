@@ -13,7 +13,7 @@ import (
 
 // HandlePreCompact reads the PreCompact hook payload from stdin,
 // finds the current session's primary agent participant, and emits
-// a condensed persona block as additionalContext so behavioral
+// a condensed persona block as systemMessage so behavioral
 // instructions survive context compaction.
 func HandlePreCompact(r io.Reader, store *identity.Store, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
@@ -28,8 +28,8 @@ func HandlePreCompact(r io.Reader, store *identity.Store, ss *session.Store) err
 
 	roster, err := ss.Load(sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: pre-compact: session %q not found: %v\n", sessionID, err)
-		return nil
+		fmt.Fprintf(os.Stderr, "ethos: pre-compact: failed to load session %q: %v\n", sessionID, err)
+		return nil // sidecar: don't block compaction
 	}
 
 	// Find the primary agent: the participant whose Parent is the
@@ -53,7 +53,7 @@ func HandlePreCompact(r io.Reader, store *identity.Store, ss *session.Store) err
 	id, err := store.Load(agentPersona)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: failed to load identity %q: %v\n", agentPersona, err)
-		return nil
+		return nil // sidecar: don't block compaction
 	}
 	for _, w := range id.Warnings {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: identity %q: %s\n", agentPersona, w)
@@ -65,12 +65,7 @@ func HandlePreCompact(r io.Reader, store *identity.Store, ss *session.Store) err
 	}
 
 	result := struct {
-		HookSpecificOutput struct {
-			HookEventName     string `json:"hookEventName"`
-			AdditionalContext string `json:"additionalContext,omitempty"`
-		} `json:"hookSpecificOutput"`
-	}{}
-	result.HookSpecificOutput.HookEventName = "PreCompact"
-	result.HookSpecificOutput.AdditionalContext = msg
+		SystemMessage string `json:"systemMessage"`
+	}{SystemMessage: msg}
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
