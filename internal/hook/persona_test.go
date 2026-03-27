@@ -337,9 +337,10 @@ func TestTruncateFirstSentence(t *testing.T) {
 		name, input, want string
 	}{
 		{"single sentence", "Direct and quantitative.", "Direct and quantitative."},
-		{"two sentences", "Primarily English. Occasional Esperanto.", "Primarily English."},
+		{"long two sentences", strings.Repeat("x", 90) + ". Occasional Esperanto.", strings.Repeat("x", 90) + "."},
+		{"short two sentences preserved", "Primarily English. Occasional Esperanto.", "Primarily English. Occasional Esperanto."},
 		{"no period", "Just a phrase", "Just a phrase"},
-		{"period mid lowercase", "Uses e.g. examples often.", "Uses e.g. examples often."},
+		{"abbreviation preserved", "Dr. Smith wrote the spec and implemented it.", "Dr. Smith wrote the spec and implemented it."},
 		{"short string", "Hi.", "Hi."},
 		{"empty", "", ""},
 	}

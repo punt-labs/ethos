@@ -29,7 +29,8 @@ func capturePreCompactOutput(t *testing.T, input string, deps PreCompactDeps) st
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		os.Stdout = oldStdout
-		r.Close()
+		_ = w.Close()
+		_ = r.Close()
 	})
 	os.Stdout = w
 

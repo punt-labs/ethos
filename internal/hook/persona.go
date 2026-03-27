@@ -179,8 +179,12 @@ func firstContentSentence(content string) string {
 
 // truncateFirstSentence returns the text up to and including the first
 // sentence-ending period: a "." followed by a space and an uppercase letter.
-// Used for team context summaries where brevity matters.
+// Only applies to strings longer than 100 characters — short descriptions
+// are returned as-is to avoid false splits on abbreviations (Dr., Mr., St.).
 func truncateFirstSentence(s string) string {
+	if len(s) <= 100 {
+		return s
+	}
 	for i := 0; i < len(s)-2; i++ {
 		if s[i] == '.' && s[i+1] == ' ' && s[i+2] >= 'A' && s[i+2] <= 'Z' {
 			return s[:i+1]
