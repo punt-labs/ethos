@@ -10,7 +10,7 @@ When this CLAUDE.md conflicts with punt-kit standards, this file wins.
 
 Before specifying work, check the relevant standard:
 
-- **New MCP tool** → DES-018: every tool needs a formatter in `format_output.go` before shipping
+- **New MCP tool** → DES-020: every tool needs a formatter in `format_output.go` before shipping
 - **New CLI command** → [cli standard](https://github.com/punt-labs/punt-kit/blob/main/standards/cli.md)
 - **New hook** → [hooks standard](https://github.com/punt-labs/punt-kit/blob/main/standards/hooks.md)
 - **New slash command** → existing command files for pattern; both `name.md` and `name-dev.md` required
@@ -94,11 +94,11 @@ talents:                               # slugs → talents/<slug>.md
 
 ### Design Invariants
 
-- **Multiple integration surfaces.** Other tools can use ethos as a CLI tool, via MCP, or by reading its filesystem state directly. Does not require consumers to import it as a library — but does not prohibit it either.
+- **Multiple integration surfaces.** Other tools integrate with ethos via its CLI, via MCP, or by reading its filesystem state directly. Ethos is consumed through these surfaces, not as a Go library API.
 - **Same schema for humans and agents.** The `kind` field is the only structural difference.
 - **Agent definition is a channel binding.** Like voice or email — the `.md` file defines tools and workflow, ethos defines who.
 - **No consumer-specific fields.** Never add fields for a specific consumer (Beadle, Biff, Vox). Use the generic extension mechanism — any tool can read/write arbitrary key-value pairs scoped to a namespace. Ethos validates constraints but does not know what the keys mean.
-- **No truncation of identity content.** Never truncate, summarize, or abbreviate personality, writing style, or talent content in hooks, team context, or persona blocks. Source `.md` files are the authority on length. The code emits everything verbatim.
+- **Preserve identity content.** Source `.md` files are the authority on personality, writing style, and talent content. Hooks and persona blocks may restructure (strip leading headings, fold the first paragraph into the opening line, list talents as slugs) but must not discard or summarize the underlying meaning.
 
 ## Go Standards
 
