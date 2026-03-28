@@ -236,6 +236,38 @@ func TestHandleSessionStart_PersonalityOnly(t *testing.T) {
 	assert.NotContains(t, ctx, "## Writing Style")
 }
 
+func TestHandleSessionStart_WithMemorySection(t *testing.T) {
+	agentID := &identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "calm-engineer",
+		WritingStyle: "concise-quant",
+	}
+	personality := "# Calm Engineer\n\nA calm and methodical engineer.\n\n- Stay focused"
+	writingStyle := "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words"
+
+	s, ss := setupIdentityWithAttributes(t, agentID, personality, writingStyle)
+
+	// Set quarry extension with memory_collection on the agent identity.
+	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-memory"))
+
+	humanID := &identity.Identity{Name: "Eve", Handle: "eve", Kind: "human"}
+	require.NoError(t, s.Save(humanID))
+	isolateGitConfig(t, "eve")
+	setupRepoWithAgent(t, "claude")
+
+	out := captureSessionStartOutput(t, `{"session_id": "s-mem"}`, s, ss)
+
+	var result SessionStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "## Memory")
+	assert.Contains(t, ctx, "claude-memory")
+	assert.Contains(t, ctx, "## Personality", "persona block should still be present")
+}
+
 func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {
 	agentID := &identity.Identity{
 		Name:   "Claude Agento",
