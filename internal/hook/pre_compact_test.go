@@ -183,7 +183,7 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 	assert.Contains(t, out, "coo → ceo (reports_to)")
 }
 
-func TestHandlePreCompact_WithMemorySection(t *testing.T) {
+func TestHandlePreCompact_WithExtensionContext(t *testing.T) {
 	id := &identity.Identity{
 		Name:         "Claude Agento",
 		Handle:       "claude",
@@ -196,20 +196,20 @@ func TestHandlePreCompact_WithMemorySection(t *testing.T) {
 
 	s, ss := setupIdentityWithAttributes(t, id, personality, writingStyle)
 
-	// Set quarry extension with memory_collection.
-	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-mem"))
+	// Set quarry extension with session_context.
+	require.NoError(t, s.ExtSet("claude", "quarry", "session_context", "## Memory\n\nYou have memory. Collection: claude-mem"))
 
 	// Create a session with a root human and a primary agent.
 	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
 	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session-mem", root, primary))
+	require.NoError(t, ss.Create("test-session-ext", root, primary))
 
-	payload, err := json.Marshal(map[string]string{"session_id": "test-session-mem"})
+	payload, err := json.Marshal(map[string]string{"session_id": "test-session-ext"})
 	require.NoError(t, err)
 
 	out := capturePreCompactOutput(t, string(payload), makeDeps(s, ss))
 
-	// Memory section should appear.
+	// Extension context should appear.
 	assert.Contains(t, out, "## Memory")
 	assert.Contains(t, out, "claude-mem")
 	// Persona block should still be present.
@@ -217,7 +217,7 @@ func TestHandlePreCompact_WithMemorySection(t *testing.T) {
 	assert.Contains(t, out, "Think before acting")
 }
 
-func TestHandlePreCompact_WithMemoryAndTeam(t *testing.T) {
+func TestHandlePreCompact_WithExtensionContextAndTeam(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	ss := session.NewStore(dir)
@@ -236,8 +236,8 @@ func TestHandlePreCompact_WithMemoryAndTeam(t *testing.T) {
 		Kind:   "agent",
 	}))
 
-	// Set quarry extension on claude.
-	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-team-mem"))
+	// Set quarry extension with session_context on claude.
+	require.NoError(t, s.ExtSet("claude", "quarry", "session_context", "## Memory\n\nYou have memory. Collection: claude-team-mem"))
 
 	// Create roles.
 	require.NoError(t, rs.Save(&role.Role{
@@ -269,9 +269,9 @@ func TestHandlePreCompact_WithMemoryAndTeam(t *testing.T) {
 	// Create session.
 	root := session.Participant{AgentID: "jfreeman", Persona: "jfreeman"}
 	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session-mem-team", root, primary))
+	require.NoError(t, ss.Create("test-session-ext-team", root, primary))
 
-	payload, err := json.Marshal(map[string]string{"session_id": "test-session-mem-team"})
+	payload, err := json.Marshal(map[string]string{"session_id": "test-session-ext-team"})
 	require.NoError(t, err)
 
 	deps := PreCompactDeps{
@@ -282,15 +282,15 @@ func TestHandlePreCompact_WithMemoryAndTeam(t *testing.T) {
 	}
 	out := capturePreCompactOutput(t, string(payload), deps)
 
-	// Memory section should appear between persona and team.
+	// Extension context should appear between persona and team.
 	assert.Contains(t, out, "## Memory")
 	assert.Contains(t, out, "claude-team-mem")
 	assert.Contains(t, out, "## Team: test-eng")
 
-	// Verify ordering: Memory before Team.
+	// Verify ordering: extension context before Team.
 	memIdx := strings.Index(out, "## Memory")
 	teamIdx := strings.Index(out, "## Team: test-eng")
-	assert.Greater(t, teamIdx, memIdx, "memory section should appear before team section")
+	assert.Greater(t, teamIdx, memIdx, "extension context should appear before team section")
 }
 
 func TestHandlePreCompact_NoSession_NoOutput(t *testing.T) {

@@ -81,8 +81,8 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	if persona := BuildPersonaBlock(id); persona != "" {
 		sections = append(sections, persona)
 	}
-	if mem := BuildMemorySection(id.Ext, id.Handle); mem != "" {
-		sections = append(sections, mem)
+	if extCtx := BuildExtensionContext(id.Ext); extCtx != "" {
+		sections = append(sections, extCtx)
 	}
 
 	// Build team context from repo config.
