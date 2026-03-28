@@ -15,6 +15,7 @@ registry.
 | bwk | Brian K | Go specialist | Implement Go code and tests per spec |
 | mdm | Doug M | CLI specialist | CLI design, help text, composability, output formatting |
 | rmh | Raymond H | Python specialist | Implement Python code and tests per spec |
+| kpz | Andrej K | ML specialist | ML inference, hardware abstraction, ONNX, benchmarks |
 | djb | Dan B | Security engineer | Threat modeling, credential audit, input validation |
 | adt | Alan T | PM (grounding) | Product roadmap for Z Spec, PR/FAQ, Use Cases, Refactory |
 | ghr | Grace H | PM (building blocks) | Product roadmap for Quarry, Biff, Vox, Lux, Tally |
@@ -30,6 +31,7 @@ jfreeman (CEO)
   │    ├─ bwk (Go specialist)
   │    ├─ mdm (CLI specialist)
   │    ├─ rmh (Python specialist)
+  │    ├─ kpz (ML specialist)
   │    ├─ djb (Security engineer)
   │    └─ adb (Infra engineer)
   ├─ adt (PM grounding)
@@ -52,8 +54,8 @@ automatically at lifecycle events:
 
 1. **SessionStart** — injects the primary agent's full personality and
    writing style into session context
-2. **PreCompact** — re-injects a condensed persona before context
-   compression (prevents behavioral drift in long sessions)
+2. **PreCompact** — re-injects the full persona block + team context
+   before context compression (prevents behavioral drift in long sessions)
 3. **SubagentStart** — injects the matched subagent's persona at spawn
    (bwk gets Kernighan personality, mdm gets McIlroy, etc.)
 
@@ -61,7 +63,9 @@ Agent definitions (`.claude/agents/*.md`) define *what* the agent does.
 Ethos identities define *who* the agent is. The SessionStart hook also
 installs agent definitions from the team submodule into `.claude/agents/`.
 
-See [docs/persona-animation.md](persona-animation.md) for the design.
+See [docs/persona-animation.md](persona-animation.md) for the design and
+[docs/agent-teams.md](agent-teams.md) for how agent teams integrate with
+ethos sessions and persona injection.
 
 ## Teams and Roles
 

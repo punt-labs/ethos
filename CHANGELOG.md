@@ -7,18 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agent team PID discovery**: `FindClaudePID()` failed for agent team teammates because Claude Code's version-named binary (e.g., `~/.local/share/claude/versions/2.1.86`) has a version string as its filename. `readProc` on macOS now recognizes paths containing `/claude/versions/` and normalizes the comm to `claude`. Teammates now get working ethos sessions with full persona injection.
+
 ### Changed
 
 - **PreCompact hook**: emit full persona block + team context instead of condensed 4-line summary — personality, writing style, role, team members with responsibilities, and collaboration graph all survive context compaction
 - **PreCompact handler**: refactored to accept `PreCompactDeps` struct with identity, session, team, and role stores
 - **PreCompact formatting**: deduplicate opening sentence from personality section, strip redundant top-level headings, skip bullet-only/indented content in sentence extraction
 - **Team context**: include writing style summary and talent slugs for each team member
+- **CLAUDE.md**: added delegation discipline, collaboration model (Agent Teams + Biff), and workflow tiers (T1/T2/T3)
 
 ### Added
 
 - `BuildTeamContext` function — assembles team context block with member names, roles, responsibilities, and collaborations
 - Repo config `team:` field — links `.punt-labs/ethos.yaml` to a team definition for automatic team context in hooks
 - `skipFirstParagraph`, `stripLeadingHeading`, `isNonProse` helpers for clean markdown processing in PreCompact output
+- `docs/agent-teams.md` — comprehensive documentation of Claude Code agent teams: process model, communication, task list format, team config, hook behavior, PID discovery, session behavior, and lifecycle
 
 ## [2.2.1] - 2026-03-26
 
