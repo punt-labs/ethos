@@ -132,6 +132,9 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 	if msg == "" {
 		msg = fmt.Sprintf("Ethos session started. Active identity: %s (%s).", agentID.Name, agentID.Handle)
 	}
+	if mem := BuildMemorySection(agentID.Ext, agentID.Handle); mem != "" {
+		msg += "\n\n" + mem
+	}
 
 	result := SessionStartResult{}
 	result.HookSpecificOutput.HookEventName = "SessionStart"
