@@ -22,6 +22,7 @@ func TestIsClaudeComm(t *testing.T) {
 		{"not-claude", false},
 		{"bash", false},
 		{"", false},
+		{"2.1.86", false}, // version string alone is not claude (normalization is in readProc)
 	}
 	for _, tt := range tests {
 		t.Run(tt.comm, func(t *testing.T) {

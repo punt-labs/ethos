@@ -25,6 +25,11 @@ func readProc(pid int) (ppid int, comm string, err error) {
 	// real binary name even when P_comm is truncated or shows a version
 	// string (e.g., Claude Code reports "2.1.81" in P_comm).
 	if path := execPath(pid); path != "" {
+		// Claude Code's version-named binary (e.g., ~/.local/share/claude/versions/2.1.86)
+		// has a version string as its filename. Normalize to "claude" so isClaudeComm matches.
+		if strings.Contains(path, "/claude/versions/") {
+			return ppid, "claude", nil
+		}
 		return ppid, filepath.Base(path), nil
 	}
 
