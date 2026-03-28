@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-03-28
+
 ### Fixed
 
 - **Agent team PID discovery**: `FindClaudePID()` failed for agent team teammates because Claude Code's version-named binary (e.g., `~/.local/share/claude/versions/2.1.86`) has a version string as its filename. PID discovery on macOS (`kern.procargs2`) and Linux (`/proc/<pid>/exe`) now normalizes versioned Claude binaries to the `claude` comm. Teammates now get working ethos sessions with full persona injection.
