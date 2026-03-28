@@ -51,3 +51,4 @@ docs/*.pdf
 # Worktrees
 .worktrees/
 
+.envrc.local
