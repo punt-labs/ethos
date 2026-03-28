@@ -1339,7 +1339,7 @@ parsing overhead.
 - **Let each tool decide** — inconsistency across tools. The standard
   must be uniform: all tools return formatted text through the hook.
 
-## DES-019: Repo config at .punt-labs/ethos.yaml (SETTLED)
+## DES-021: Repo config at .punt-labs/ethos.yaml (SETTLED)
 
 **Decision**: Repo-level ethos config lives at `.punt-labs/ethos.yaml`, next to
 the `.punt-labs/ethos/` directory (which may be a submodule or local data).
@@ -1360,3 +1360,163 @@ consumer. Moving config to a sibling file decouples it from the submodule.
   the repo root with tool-specific dotfiles.
 - **Single .punt-labs/config.yaml with sections** — cleaner for multi-tool config
   but introduces a shared file that multiple tools must coordinate on.
+
+## DES-022: Extension-provided session context (PROPOSED)
+
+**Status**: Proposed.
+
+### Problem
+
+`BuildMemorySection` in `internal/hook/memory.go` hardcodes quarry-specific
+knowledge: collection names, memory types (fact, observation, procedure,
+opinion), slash commands (`/find`, `/remember`), and MCP tool parameters.
+This violates DES-008's principle that ethos must not know about its
+consumers.
+
+The same problem will recur for every consumer that wants session context.
+Beadle would need `BuildEmailSection`. Biff would need `BuildMessagingSection`.
+Each adds consumer-specific Go code to ethos — exactly the coupling DES-008
+was designed to prevent.
+
+### Context
+
+Quarry works without ethos. It indexes files, answers semantic queries, and
+manages collections independently. When combined with ethos, quarry gains
+one capability it cannot provide alone: **persistent agent memory**. Ethos
+tells quarry *who* the agent is; quarry gives the agent memories and expertise
+scoped to that identity. Without ethos, quarry is a search engine. With
+ethos, quarry becomes an agent's personal knowledge base.
+
+The current implementation works — agents get memory instructions at session
+start and after compaction. But ethos achieves this by knowing what quarry is,
+how its collections work, and what slash commands it exposes. That knowledge
+belongs to quarry, not ethos.
+
+### Design
+
+Each extension can provide a `session_context` field containing markdown
+instructions that ethos emits verbatim at session start and before context
+compaction. Ethos iterates over all extensions, collects `session_context`
+values, and appends them after the persona block. No parsing, no
+interpretation, no consumer-specific code.
+
+**Extension with session context:**
+
+```yaml
+# claude.ext/quarry.yaml
+memory_collection: memory-claude
+session_context: |
+  ## Memory
+
+  You have persistent memory stored in quarry, a local semantic
+  search engine. Your memories survive across sessions and machines.
+
+  ### Working Memory
+
+  Collection: "memory-claude"
+
+  To recall prior knowledge:
+    /find <query>
+
+  To persist something you learned:
+    /remember <content>
+
+  Memory types:
+  - fact: objective, verifiable information
+  - observation: neutral summary of an entity or system
+  - procedure: how-to knowledge
+  - opinion: subjective assessment with confidence
+```
+
+```yaml
+# claude.ext/beadle.yaml
+email: claude@punt-labs.com
+session_context: |
+  ## Email
+
+  You have email via beadle. Your address is claude@punt-labs.com.
+  Send recap emails to jim@punt-labs.com after merging PRs.
+  Check inbox: /inbox
+  Send mail: /mail <recipient> <subject>
+```
+
+```yaml
+# claude.ext/biff.yaml
+handle: claude-puntlabs
+session_context: |
+  ## Messaging
+
+  You have team messaging via biff.
+  Start every session with /loop 2m /biff:read.
+  Use /who, /finger, /write, /wall for coordination.
+```
+
+**Hook behavior change:**
+
+Replace `BuildMemorySection(ext, handle)` with `BuildExtensionContext(ext)`:
+
+```go
+func BuildExtensionContext(ext map[string]map[string]string) string {
+    var sections []string
+    for _, ns := range sortedKeys(ext) {
+        if ctx, ok := ext[ns]["session_context"]; ok && ctx != "" {
+            sections = append(sections, strings.TrimRight(ctx, "\n"))
+        }
+    }
+    return strings.Join(sections, "\n\n")
+}
+```
+
+Ethos reads `session_context` from every extension namespace, emits them
+in sorted order, and moves on. The function is ~10 lines and has zero
+knowledge of any consumer.
+
+### What Each Side Owns
+
+| Concern | Owner |
+|---------|-------|
+| Identity (who the agent is) | Ethos |
+| Extension storage and iteration | Ethos |
+| Session context content | Each consumer |
+| Collection binding, memory types, slash commands | Quarry |
+| Email address, sending protocol | Beadle |
+| TTY names, messaging commands | Biff |
+
+### What This Eliminates
+
+- `internal/hook/memory.go` — entire file replaced by generic iteration
+- All future `Build*Section` functions — never written
+- The DES-008 violation in the current quarry integration
+
+### What This Preserves
+
+- Quarry works without ethos (no change)
+- Quarry + ethos gives agents persistent memory (no change in capability)
+- Extension schema (DES-008) unchanged — `session_context` is just another key
+- Validation constraints apply: max 4096 bytes per value
+
+### Migration
+
+1. Move quarry instruction text from `memory.go` into `ext/quarry.yaml`
+   `session_context` field for each agent identity that has quarry configured.
+2. Replace `BuildMemorySection` calls with `BuildExtensionContext` in
+   `session_start.go` and `pre_compact.go`.
+3. Delete `internal/hook/memory.go` and its tests.
+4. Update quarry-integration.md to reflect the new ownership boundary.
+
+### Rejected Alternatives
+
+- **Keep `BuildMemorySection` and add `Build*Section` per consumer** —
+  scales linearly with consumers, each adding ethos code and releases.
+  Violates DES-008.
+- **Extension provides a script/command that ethos executes to generate
+  context** — over-engineered. Static markdown covers all known use cases.
+  If dynamic generation is needed later, a tool can write its
+  `session_context` at session start via `ethos ext set`.
+- **Separate `session_start_context` and `compact_context` fields** —
+  the content is identical in both hooks today. If they diverge, a single
+  `session_context` field with an optional `compact_context` override is
+  simpler than two required fields.
+- **Raise the 4096-byte value limit for `session_context`** — the current
+  quarry instructions are ~600 bytes. If a consumer needs more, we can
+  revisit the limit or design additional mechanisms at that time. Don't pre-solve.

@@ -239,7 +239,7 @@ func TestHandleSessionStart_PersonalityOnly(t *testing.T) {
 	assert.NotContains(t, ctx, "## Writing Style")
 }
 
-func TestHandleSessionStart_WithMemorySection(t *testing.T) {
+func TestHandleSessionStart_WithExtensionContext(t *testing.T) {
 	agentID := &identity.Identity{
 		Name:         "Claude Agento",
 		Handle:       "claude",
@@ -252,21 +252,20 @@ func TestHandleSessionStart_WithMemorySection(t *testing.T) {
 
 	s, ss := setupIdentityWithAttributes(t, agentID, personality, writingStyle)
 
-	// Set quarry extension with memory_collection on the agent identity.
-	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-memory"))
+	// Set quarry extension with session_context on the agent identity.
+	require.NoError(t, s.ExtSet("claude", "quarry", "session_context", "You have memory via quarry. Collection: claude-memory"))
 
 	humanID := &identity.Identity{Name: "Eve", Handle: "eve", Kind: "human"}
 	require.NoError(t, s.Save(humanID))
 	isolateGitConfig(t, "eve")
 	setupRepoWithAgent(t, "claude")
 
-	out := captureSessionStartOutput(t, `{"session_id": "s-mem"}`, SessionStartDeps{Store: s, Sessions: ss})
+	out := captureSessionStartOutput(t, `{"session_id": "s-ext"}`, SessionStartDeps{Store: s, Sessions: ss})
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
 
 	ctx := result.HookSpecificOutput.AdditionalContext
-	assert.Contains(t, ctx, "## Memory")
 	assert.Contains(t, ctx, "claude-memory")
 	assert.Contains(t, ctx, "## Personality", "persona block should still be present")
 }
@@ -352,7 +351,7 @@ func TestHandleSessionStart_WithTeamContext(t *testing.T) {
 	assert.Contains(t, ctx, "You are Claude Agento (claude)")
 }
 
-func TestHandleSessionStart_WithMemoryAndTeam(t *testing.T) {
+func TestHandleSessionStart_WithExtensionContextAndTeam(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	ss := session.NewStore(dir)
@@ -384,8 +383,8 @@ func TestHandleSessionStart_WithMemoryAndTeam(t *testing.T) {
 	}))
 	require.NoError(t, s.Save(agentID))
 
-	// Set quarry extension.
-	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-team-mem"))
+	// Set quarry extension with session_context.
+	require.NoError(t, s.ExtSet("claude", "quarry", "session_context", "## Memory\n\nYou have memory. Collection: claude-team-mem"))
 
 	// Create roles.
 	require.NoError(t, rs.Save(&role.Role{
@@ -420,7 +419,7 @@ func TestHandleSessionStart_WithMemoryAndTeam(t *testing.T) {
 		Teams:    ts,
 		Roles:    rs,
 	}
-	out := captureSessionStartOutput(t, `{"session_id": "s-mem-team"}`, deps)
+	out := captureSessionStartOutput(t, `{"session_id": "s-ext-team"}`, deps)
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
@@ -432,10 +431,10 @@ func TestHandleSessionStart_WithMemoryAndTeam(t *testing.T) {
 	assert.Contains(t, ctx, "claude-team-mem")
 	assert.Contains(t, ctx, "## Team: test-eng")
 
-	// Verify ordering: Memory before Team.
+	// Verify ordering: extension context before Team.
 	memIdx := strings.Index(ctx, "## Memory")
 	teamIdx := strings.Index(ctx, "## Team: test-eng")
-	assert.Greater(t, teamIdx, memIdx, "memory section should appear before team section")
+	assert.Greater(t, teamIdx, memIdx, "extension context should appear before team section")
 }
 
 func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {

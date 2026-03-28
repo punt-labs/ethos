@@ -144,15 +144,15 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		}
 	}
 
-	// Build sections: persona, memory, team — same as PreCompact.
+	// Build sections: persona, extension context, team — same as PreCompact.
 	var sections []string
 	if persona := BuildPersonaBlock(agentID); persona != "" {
 		sections = append(sections, persona)
 	} else {
 		sections = append(sections, fmt.Sprintf("Ethos session started. Active identity: %s (%s).", agentID.Name, agentID.Handle))
 	}
-	if mem := BuildMemorySection(agentID.Ext, agentID.Handle); mem != "" {
-		sections = append(sections, mem)
+	if extCtx := BuildExtensionContext(agentID.Ext); extCtx != "" {
+		sections = append(sections, extCtx)
 	}
 	if teamCtx := BuildTeamSection(deps.Teams, deps.Roles, store, agentPersona); teamCtx != "" {
 		sections = append(sections, teamCtx)
