@@ -5,6 +5,7 @@ package process
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -35,5 +36,19 @@ func readProc(pid int) (ppid int, comm string, err error) {
 	if err != nil {
 		return 0, "", fmt.Errorf("bad ppid in /proc/%d/stat: %w", pid, err)
 	}
+	// /proc/pid/stat comm is the basename (max 15 chars). For Claude Code's
+	// version-named binary (e.g., 2.1.86), check the symlink at /proc/pid/exe
+	// for the full path containing "/claude/versions/".
+	if !isClaudeComm(comm) {
+		if exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); err == nil {
+			if strings.Contains(exe, "/claude/versions/") {
+				comm = filepath.Base(exe)
+				if !isClaudeComm(comm) {
+					comm = "claude"
+				}
+			}
+		}
+	}
+
 	return ppid, comm, nil
 }
