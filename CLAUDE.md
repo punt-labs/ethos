@@ -141,6 +141,66 @@ One logical change per commit. Quality gates pass before every commit.
 
 Format: `type(scope): description`
 
+### Delegation Discipline
+
+The COO does not write code. All code changes — initial implementation, review-cycle fixes, lint fixes, test updates — are delegated to specialist agents:
+
+| Specialist | Agent | Domain |
+|-----------|-------|--------|
+| Brian K | `bwk` | Go implementation |
+| Andrej K | `kpz` | ML inference, hardware abstraction, ONNX |
+| Doug M | `mdm` | CLI design |
+| Dan B | `djb` | Security review |
+
+**Workflow**: spec → delegate → review → fix-spec → delegate → review → ship.
+
+- Write detailed specs: files to read, files to modify, acceptance criteria.
+- After code review agents report findings, consolidate into a fix spec and send back to the implementation agent. Do not apply fixes yourself.
+- There is no threshold below which a code change is "too small to delegate."
+- The only files the COO edits directly: `CHANGELOG.md`, `CLAUDE.md`, `DESIGN.md`, `README.md`, memory files, plan files.
+
+### Collaboration Model
+
+Two collaboration mechanisms, used for different scopes:
+
+| Mechanism | Scope | When to use |
+|-----------|-------|-------------|
+| **Agent Teams** | Within this repo | Spawn teammates for parallel work on implementation, review, testing. Each teammate is a full Claude Code session with its own context, MCP servers, and tools. Use `TeamCreate` to create a team, `TaskCreate` for work items. |
+| **Biff** | Across repos | Coordinate with agents working in other repos (quarry, punt-kit, etc.). Use `/write` to send messages, `/read` to check inbox, `/who` to see active teammates. |
+
+**Agent Teams** (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`):
+
+- Team lead (COO) creates the team, spawns teammates, coordinates work
+- Teammates load CLAUDE.md, MCP servers, and skills independently — they do NOT inherit conversation history
+- Shared task list with automatic dependency resolution
+- Teammates can work in plan mode (read-only until lead approves)
+- Quality gates via `TeammateIdle` and `TaskCompleted` hooks
+
+**Biff** (cross-repo):
+
+- Start every session with `/loop 2m /biff:read` to poll for incoming messages
+- Async messaging — messages queue until the recipient reads them
+- Use for design reviews, status updates, and coordination across repos
+- Never ignore biff messages — check `/read` when prompted by hooks
+
+### Workflow Tiers
+
+Match the workflow to the bead's scope. The deciding factor is **design ambiguity**, not size.
+
+| Tier | Tool | When | Tracking |
+|------|------|------|----------|
+| **T1: Feature Dev** | `/feature-dev` | Epics, cross-cutting work, competing design approaches | Beads with dependencies |
+| **T2: Feature Dev** | `/feature-dev` | Features, multi-file, clear goal but needs exploration | Beads + TodoWrite |
+| **T3: Direct** | Plan mode or manual | Tasks, bugs, obvious implementation path | Beads |
+
+**Decision flow:**
+
+1. Is there design ambiguity needing multi-perspective input? → **T1: Feature Dev**
+2. Does it touch multiple files and benefit from codebase exploration? → **T2: Feature Dev**
+3. Otherwise → **T3: Direct** (plan mode if >3 files, manual if fewer)
+
+**Escalation only goes up.** If T3 reveals unexpected scope, escalate to T2. If T2 reveals competing design approaches, escalate to T1. Never demote mid-flight.
+
 ### Code Review
 
 1. **Create PR** via `mcp__github__create_pull_request`.
