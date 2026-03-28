@@ -26,7 +26,7 @@ type SessionStartResult struct {
 
 // SessionStartDeps holds the stores needed by the SessionStart hook.
 type SessionStartDeps struct {
-	Store    *identity.Store
+	Store    identity.IdentityStore
 	Sessions *session.Store
 	Teams    *team.LayeredStore
 	Roles    *role.LayeredStore
@@ -35,6 +35,10 @@ type SessionStartDeps struct {
 // HandleSessionStart reads the SessionStart hook payload from stdin,
 // resolves identity, creates a session roster, and emits context.
 func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
+	if deps.Store == nil || deps.Sessions == nil {
+		return fmt.Errorf("session-start: Store and Sessions stores are required")
+	}
+
 	store := deps.Store
 	ss := deps.Sessions
 	input, err := ReadInput(r, time.Second)

@@ -81,10 +81,9 @@ func init() {
 }
 
 func runHookSessionStart() {
-	s := globalStore()
 	is := identityStore()
 	deps := hook.SessionStartDeps{
-		Store:    s,
+		Store:    is,
 		Sessions: sessionStore(),
 		Teams:    layeredTeamStore(is),
 		Roles:    layeredRoleStore(is),
