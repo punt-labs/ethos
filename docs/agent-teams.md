@@ -167,7 +167,7 @@ Ethos uses `FindClaudePID()` to walk the process tree and find the topmost `clau
 
 **Problem (fixed in v2.2.2):** The lead's claude process is launched via the `~/.local/bin/claude` symlink, so `ps -o comm` shows `claude`. Teammates are spawned directly by the binary at `~/.local/share/claude/versions/2.1.86`, so `ps -o comm` shows `2.1.86`. The `isClaudeComm` function only matched `claude`, causing `FindClaudePID` to fail for teammates.
 
-**Fix:** `readProc` on macOS checks if the executable path contains `/claude/versions/` and normalizes the comm to `claude`. This allows `FindClaudePID` to find the teammate's claude ancestor regardless of how it was launched.
+**Fix:** On macOS, `readProc` checks if the executable path (from `kern.procargs2`) contains `/claude/versions/` and normalizes the comm to `claude`. On Linux, `readProc` inspects `/proc/<pid>/exe` for the same pattern. This allows `FindClaudePID` to find the teammate's claude ancestor regardless of how it was launched.
 
 ## Ethos Session Behavior
 

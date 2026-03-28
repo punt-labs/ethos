@@ -31,6 +31,27 @@ func TestIsClaudeComm(t *testing.T) {
 	}
 }
 
+func TestNormalizeClaudeComm(t *testing.T) {
+	tests := []struct {
+		name    string
+		comm    string
+		exePath string
+		want    string
+	}{
+		{"already claude", "claude", "/usr/local/bin/claude", "claude"},
+		{"version-named binary", "2.1.86", "/Users/x/.local/share/claude/versions/2.1.86", "claude"},
+		{"version-named other version", "2.1.81", "/home/user/.local/share/claude/versions/2.1.81", "claude"},
+		{"non-claude binary", "node", "/usr/local/bin/node", "node"},
+		{"non-claude with versions in path", "myapp", "/some/versions/myapp", "myapp"},
+		{"empty exe path", "2.1.86", "", "2.1.86"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, normalizeClaudeComm(tt.comm, tt.exePath))
+		})
+	}
+}
+
 func TestReadProc_CurrentProcess(t *testing.T) {
 	// We can always read our own process info.
 	ppid, comm, err := readProc(os.Getpid())

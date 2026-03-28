@@ -68,3 +68,17 @@ func isClaudeComm(comm string) bool {
 	}
 	return base == "claude"
 }
+
+// normalizeClaudeComm normalizes the command name for Claude Code binaries
+// that are version-named under a /claude/versions/ directory (e.g.,
+// ~/.local/share/claude/versions/2.1.86). Returns "claude" when the
+// executable path matches, otherwise returns comm unchanged.
+func normalizeClaudeComm(comm, exePath string) string {
+	if isClaudeComm(comm) {
+		return comm
+	}
+	if strings.Contains(exePath, "/claude/versions/") {
+		return "claude"
+	}
+	return comm
+}
