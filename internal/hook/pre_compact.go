@@ -38,6 +38,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 
 	sessionID, ok := input["session_id"].(string)
 	if !ok || sessionID == "" {
+		fmt.Fprintf(os.Stderr, "ethos: pre-compact: no session_id in payload, skipping context injection\n")
 		return nil
 	}
 
@@ -61,6 +62,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 		}
 	}
 	if agentPersona == "" {
+		fmt.Fprintf(os.Stderr, "ethos: pre-compact: no agent persona found in session %q roster\n", sessionID)
 		return nil
 	}
 
@@ -78,6 +80,9 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 	var sections []string
 	if persona := BuildPersonaBlock(id); persona != "" {
 		sections = append(sections, persona)
+	}
+	if mem := BuildMemorySection(id.Ext, id.Handle); mem != "" {
+		sections = append(sections, mem)
 	}
 
 	// Build team context from repo config.
