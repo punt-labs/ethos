@@ -1518,5 +1518,5 @@ knowledge of any consumer.
   `session_context` field with an optional `compact_context` override is
   simpler than two required fields.
 - **Raise the 4096-byte value limit for `session_context`** — the current
-  quarry instructions are ~600 bytes. If a consumer needs more, they can
-  split across multiple keys or we revisit the limit. Don't pre-solve.
+  quarry instructions are ~600 bytes. If a consumer needs more, we can
+  revisit the limit or design additional mechanisms at that time. Don't pre-solve.
