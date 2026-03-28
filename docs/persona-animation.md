@@ -28,27 +28,22 @@ files on disk.
 
 ## Current State
 
-### What exists
+All three core layers are implemented and working:
 
-| Surface | What ethos does | Gap |
-|---------|----------------|-----|
-| SessionStart hook | Resolves identity, creates session roster, emits name + handle | Does not inject personality, writing style, or talent content |
-| SubagentStart hook | Joins subagent to roster, auto-matches persona by agent_type | Does not inject persona content into the subagent's context |
-| Agent definitions (.claude/agents/*.md) | Reference ethos identity, contain principles and working style | Must manually call `ethos show <handle> --json` to load identity |
-| MCP tools | Expose identity data (get, whoami, list) | Read-only — no mechanism to inject into session context |
-| CLAUDE.md | Contains communication rules that overlap with writing style | Hardcoded, not derived from ethos identity |
+| Surface | What ethos does |
+|---------|----------------|
+| SessionStart hook | Resolves identity, creates session roster, injects full persona block (personality, writing style, talents, role, team context) |
+| PreCompact hook | Re-injects full persona block + team context as plain text before compaction — prevents behavioral drift |
+| SubagentStart hook | Joins subagent to roster, auto-matches persona by agent_type, injects persona content |
+| Agent definitions (.claude/agents/*.md) | Installed from team submodule by SessionStart hook — define *what* the agent does |
+| MCP tools | Expose identity data (get, whoami, list), extensions, sessions, teams, roles |
+| Agent Teams | Teammates are separate Claude Code processes. All hooks fire independently. Each gets its own ethos session with full persona injection. |
 
-### What doesn't exist
+### What doesn't exist yet
 
-1. **Persona injection** — loading personality + writing style + talent content
-   into the session as behavioral instructions
-2. **Compaction survival** — re-injecting persona context when the context window
-   is compressed
-3. **Subagent persona injection** — giving subagents their behavioral context
-   at spawn time
-4. **Cross-surface consistency** — ensuring CLI output, MCP responses, spoken
+1. **Cross-surface consistency** — ensuring CLI output, MCP responses, spoken
    output, and written messages all reflect the same persona
-5. **Persona verification** — a way to check whether the agent is actually
+2. **Persona verification** — a way to check whether the agent is actually
    following its persona
 
 ## Design
@@ -113,9 +108,11 @@ context, preserving the behavioral instructions.
 The hook calls `ethos hook pre-compact`, which resolves the current session's
 primary agent persona and emits the same persona block as SessionStart.
 
-**Key constraint:** PreCompact context should be concise. If the full persona
-block is too large, emit a condensed version: personality name + 3-5 key
-behavioral rules + writing style name + 3-5 key writing rules.
+**Design decision (settled):** The full persona block is emitted, not a condensed
+version. Truncation was tried and rejected — source files are the authority on
+content length. The full block is ~600 lines including team context; this fits
+within PreCompact budget and prevents behavioral drift that condensed versions
+caused.
 
 ### Layer 3: Delegation (SubagentStart)
 
@@ -189,16 +186,16 @@ verification is already working.
 
 ## Implementation Sequence
 
-| Phase | What | Hook | Priority |
-|-------|------|------|----------|
-| 1 | Inject full persona at SessionStart | SessionStart | High — most impact |
-| 2 | Re-inject persona at compaction | PreCompact | High — prevents drift |
-| 3 | Inject subagent persona at spawn | SubagentStart | Medium — improves delegation |
-| 4 | Remove manual `ethos show` from agent definitions | Agent .md files | Low — cleanup |
-| 5 | Active persona verification | PostToolUse / Stop | Future |
+| Phase | What | Hook | Status |
+|-------|------|------|--------|
+| 1 | Inject full persona at SessionStart | SessionStart | Done (v2.1.0) |
+| 2 | Re-inject persona at compaction | PreCompact | Done (v2.2.0) — full block, plain text |
+| 3 | Inject subagent persona at spawn | SubagentStart | Done (v2.1.0) |
+| 4 | Remove manual `ethos show` from agent definitions | Agent .md files | Done — agent definitions no longer need identity loading |
+| 5 | Agent teams support | SessionStart | Done (v2.2.2) — PID fix for version-named binaries |
+| 6 | Active persona verification | PostToolUse / Stop | Future |
 
-Phases 1-3 are the core mechanism. Phase 4 is cleanup. Phase 5 is a future
-enhancement that depends on observing whether phases 1-3 are sufficient.
+Phases 1-5 are complete. Phase 6 is a future enhancement.
 
 ## What This Does NOT Do
 
