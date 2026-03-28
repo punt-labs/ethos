@@ -82,8 +82,14 @@ func init() {
 
 func runHookSessionStart() {
 	s := globalStore()
-	ss := sessionStore()
-	if err := hook.HandleSessionStart(os.Stdin, s, ss); err != nil {
+	is := identityStore()
+	deps := hook.SessionStartDeps{
+		Store:    s,
+		Sessions: sessionStore(),
+		Teams:    layeredTeamStore(is),
+		Roles:    layeredRoleStore(is),
+	}
+	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook session-start: %v\n", err)
 		os.Exit(1)
 	}

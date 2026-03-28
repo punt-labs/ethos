@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,7 +111,7 @@ func setupRepoWithAgentLegacy(t *testing.T, agentHandle string) string {
 }
 
 // captureSessionStartOutput runs HandleSessionStart and captures stdout.
-func captureSessionStartOutput(t *testing.T, input string, s *identity.Store, ss *session.Store) string {
+func captureSessionStartOutput(t *testing.T, input string, deps SessionStartDeps) string {
 	t.Helper()
 
 	// Capture stdout with cleanup to prevent leaks on early exit.
@@ -123,7 +126,7 @@ func captureSessionStartOutput(t *testing.T, input string, s *identity.Store, ss
 	os.Stdout = w
 
 	in := bytes.NewReader([]byte(input))
-	require.NoError(t, HandleSessionStart(in, s, ss))
+	require.NoError(t, HandleSessionStart(in, deps))
 
 	w.Close()
 	os.Stdout = oldStdout
@@ -158,7 +161,7 @@ func TestHandleSessionStart_PersonaBlock(t *testing.T) {
 	isolateGitConfig(t, "alice")
 	setupRepoWithAgent(t, "claude")
 
-	out := captureSessionStartOutput(t, `{"session_id": "s1"}`, s, ss)
+	out := captureSessionStartOutput(t, `{"session_id": "s1"}`, SessionStartDeps{Store: s, Sessions: ss})
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
@@ -184,7 +187,7 @@ func TestHandleSessionStart_NoPersonality_FallsBack(t *testing.T) {
 	s, ss := setupIdentityWithAttributes(t, id, "", "")
 	isolateGitConfig(t, "bob")
 
-	out := captureSessionStartOutput(t, `{"session_id": "s2"}`, s, ss)
+	out := captureSessionStartOutput(t, `{"session_id": "s2"}`, SessionStartDeps{Store: s, Sessions: ss})
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
@@ -202,7 +205,7 @@ func TestHandleSessionStart_NoIdentity_NoOutput(t *testing.T) {
 
 	isolateGitConfig(t, "nobody")
 
-	out := captureSessionStartOutput(t, `{"session_id": "s3"}`, s, ss)
+	out := captureSessionStartOutput(t, `{"session_id": "s3"}`, SessionStartDeps{Store: s, Sessions: ss})
 
 	// No identity resolved -- should produce no output.
 	assert.Equal(t, "", out)
@@ -224,7 +227,7 @@ func TestHandleSessionStart_PersonalityOnly(t *testing.T) {
 	isolateGitConfig(t, "carol")
 	setupRepoWithAgent(t, "claude")
 
-	out := captureSessionStartOutput(t, `{"session_id": "s4"}`, s, ss)
+	out := captureSessionStartOutput(t, `{"session_id": "s4"}`, SessionStartDeps{Store: s, Sessions: ss})
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
@@ -257,7 +260,7 @@ func TestHandleSessionStart_WithMemorySection(t *testing.T) {
 	isolateGitConfig(t, "eve")
 	setupRepoWithAgent(t, "claude")
 
-	out := captureSessionStartOutput(t, `{"session_id": "s-mem"}`, s, ss)
+	out := captureSessionStartOutput(t, `{"session_id": "s-mem"}`, SessionStartDeps{Store: s, Sessions: ss})
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
@@ -266,6 +269,173 @@ func TestHandleSessionStart_WithMemorySection(t *testing.T) {
 	assert.Contains(t, ctx, "## Memory")
 	assert.Contains(t, ctx, "claude-memory")
 	assert.Contains(t, ctx, "## Personality", "persona block should still be present")
+}
+
+func TestHandleSessionStart_WithTeamContext(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	// Create identities.
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Jim Freeman",
+		Handle: "jfreeman",
+		Kind:   "human",
+	}))
+	agentID := &identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "calm-engineer",
+		WritingStyle: "concise-quant",
+	}
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "calm-engineer",
+		Content: "# Calm Engineer\n\nA calm and methodical engineer.\n\n- Stay focused",
+	}))
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "concise-quant",
+		Content: "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words",
+	}))
+	require.NoError(t, s.Save(agentID))
+
+	// Create roles.
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "ceo",
+		Responsibilities: []string{"Sets strategic direction"},
+	}))
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "coo",
+		Responsibilities: []string{"Execution quality"},
+	}))
+
+	// Create team.
+	identityExists := func(handle string) bool { return s.Exists(handle) }
+	roleExists := func(name string) bool { return rs.Exists(name) }
+	require.NoError(t, ts.Save(&team.Team{
+		Name: "test-eng",
+		Members: []team.Member{
+			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "claude", Role: "coo"},
+		},
+		Collaborations: []team.Collaboration{
+			{From: "coo", To: "ceo", Type: "reports_to"},
+		},
+	}, identityExists, roleExists))
+
+	isolateGitConfig(t, "jfreeman")
+	setupRepoWithTeam(t, "claude", "test-eng")
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    rs,
+	}
+	out := captureSessionStartOutput(t, `{"session_id": "s-team"}`, deps)
+
+	var result SessionStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "## Team: test-eng")
+	assert.Contains(t, ctx, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, ctx, "Claude Agento (claude) — coo")
+	assert.Contains(t, ctx, "Sets strategic direction")
+	assert.Contains(t, ctx, "Execution quality")
+	assert.Contains(t, ctx, "coo → ceo (reports_to)")
+	// Persona block should still be present.
+	assert.Contains(t, ctx, "You are Claude Agento (claude)")
+}
+
+func TestHandleSessionStart_WithMemoryAndTeam(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	// Create identities.
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Jim Freeman",
+		Handle: "jfreeman",
+		Kind:   "human",
+	}))
+	agentID := &identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "calm-engineer",
+		WritingStyle: "concise-quant",
+	}
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "calm-engineer",
+		Content: "# Calm Engineer\n\nA calm and methodical engineer.\n\n- Stay focused",
+	}))
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "concise-quant",
+		Content: "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words",
+	}))
+	require.NoError(t, s.Save(agentID))
+
+	// Set quarry extension.
+	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-team-mem"))
+
+	// Create roles.
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "ceo",
+		Responsibilities: []string{"Sets strategic direction"},
+	}))
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "coo",
+		Responsibilities: []string{"Execution quality"},
+	}))
+
+	// Create team.
+	identityExists := func(handle string) bool { return s.Exists(handle) }
+	roleExists := func(name string) bool { return rs.Exists(name) }
+	require.NoError(t, ts.Save(&team.Team{
+		Name: "test-eng",
+		Members: []team.Member{
+			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "claude", Role: "coo"},
+		},
+		Collaborations: []team.Collaboration{
+			{From: "coo", To: "ceo", Type: "reports_to"},
+		},
+	}, identityExists, roleExists))
+
+	isolateGitConfig(t, "jfreeman")
+	setupRepoWithTeam(t, "claude", "test-eng")
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    rs,
+	}
+	out := captureSessionStartOutput(t, `{"session_id": "s-mem-team"}`, deps)
+
+	var result SessionStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	ctx := result.HookSpecificOutput.AdditionalContext
+	// All three sections present.
+	assert.Contains(t, ctx, "You are Claude Agento (claude)")
+	assert.Contains(t, ctx, "## Memory")
+	assert.Contains(t, ctx, "claude-team-mem")
+	assert.Contains(t, ctx, "## Team: test-eng")
+
+	// Verify ordering: Memory before Team.
+	memIdx := strings.Index(ctx, "## Memory")
+	teamIdx := strings.Index(ctx, "## Team: test-eng")
+	assert.Greater(t, teamIdx, memIdx, "memory section should appear before team section")
 }
 
 func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {
@@ -281,7 +451,7 @@ func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {
 	isolateGitConfig(t, "dave")
 	setupRepoWithAgentLegacy(t, "claude")
 
-	out := captureSessionStartOutput(t, `{"session_id": "s5"}`, s, ss)
+	out := captureSessionStartOutput(t, `{"session_id": "s5"}`, SessionStartDeps{Store: s, Sessions: ss})
 
 	var result SessionStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))

@@ -102,7 +102,14 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 // buildTeamSection resolves the team from repo config and builds
 // the team context block. Returns empty string on any error.
 func buildTeamSection(deps PreCompactDeps, selfHandle string) string {
-	if deps.Teams == nil {
+	return BuildTeamSection(deps.Teams, deps.Roles, deps.Identities, selfHandle)
+}
+
+// BuildTeamSection resolves the team from repo config and builds the team
+// context block. Returns empty string if teams is nil, no team is configured,
+// or on any load error.
+func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identities identity.IdentityStore, selfHandle string) string {
+	if teams == nil {
 		return ""
 	}
 
@@ -112,11 +119,11 @@ func buildTeamSection(deps PreCompactDeps, selfHandle string) string {
 		return ""
 	}
 
-	t, err := deps.Teams.Load(teamName)
+	t, err := teams.Load(teamName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: pre-compact: failed to load team %q: %v\n", teamName, err)
+		fmt.Fprintf(os.Stderr, "ethos: failed to load team %q: %v\n", teamName, err)
 		return ""
 	}
 
-	return BuildTeamContext(t, deps.Roles, deps.Identities, selfHandle)
+	return BuildTeamContext(t, roles, identities, selfHandle)
 }
