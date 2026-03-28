@@ -1361,9 +1361,9 @@ consumer. Moving config to a sibling file decouples it from the submodule.
 - **Single .punt-labs/config.yaml with sections** — cleaner for multi-tool config
   but introduces a shared file that multiple tools must coordinate on.
 
-## DES-022: Extension-provided session context (PROPOSED)
+## DES-022: Extension-provided session context
 
-**Status**: Proposed.
+**Status**: Settled. Implemented in PR #135.
 
 ### Problem
 
