@@ -183,6 +183,116 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 	assert.Contains(t, out, "coo → ceo (reports_to)")
 }
 
+func TestHandlePreCompact_WithMemorySection(t *testing.T) {
+	id := &identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "principal-engineer",
+		WritingStyle: "concise-quantified",
+	}
+	personality := "# Principal Engineer\n\nStrategic and thorough.\n\n- Think before acting"
+	writingStyle := "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words"
+
+	s, ss := setupIdentityWithAttributes(t, id, personality, writingStyle)
+
+	// Set quarry extension with memory_collection.
+	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-mem"))
+
+	// Create a session with a root human and a primary agent.
+	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
+	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
+	require.NoError(t, ss.Create("test-session-mem", root, primary))
+
+	payload, err := json.Marshal(map[string]string{"session_id": "test-session-mem"})
+	require.NoError(t, err)
+
+	out := capturePreCompactOutput(t, string(payload), makeDeps(s, ss))
+
+	// Memory section should appear.
+	assert.Contains(t, out, "## Memory")
+	assert.Contains(t, out, "claude-mem")
+	// Persona block should still be present.
+	assert.Contains(t, out, "## Personality")
+	assert.Contains(t, out, "Think before acting")
+}
+
+func TestHandlePreCompact_WithMemoryAndTeam(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	// Create identities.
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Jim Freeman",
+		Handle: "jfreeman",
+		Kind:   "human",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Claude Agento",
+		Handle: "claude",
+		Kind:   "agent",
+	}))
+
+	// Set quarry extension on claude.
+	require.NoError(t, s.ExtSet("claude", "quarry", "memory_collection", "claude-team-mem"))
+
+	// Create roles.
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "ceo",
+		Responsibilities: []string{"Sets strategic direction"},
+	}))
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "coo",
+		Responsibilities: []string{"Execution quality"},
+	}))
+
+	// Create team.
+	identityExists := func(handle string) bool { return s.Exists(handle) }
+	roleExists := func(name string) bool { return rs.Exists(name) }
+	require.NoError(t, ts.Save(&team.Team{
+		Name: "test-eng",
+		Members: []team.Member{
+			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "claude", Role: "coo"},
+		},
+		Collaborations: []team.Collaboration{
+			{From: "coo", To: "ceo", Type: "reports_to"},
+		},
+	}, identityExists, roleExists))
+
+	// Hermetic repo root with team config.
+	setupRepoWithTeam(t, "claude", "test-eng")
+
+	// Create session.
+	root := session.Participant{AgentID: "jfreeman", Persona: "jfreeman"}
+	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
+	require.NoError(t, ss.Create("test-session-mem-team", root, primary))
+
+	payload, err := json.Marshal(map[string]string{"session_id": "test-session-mem-team"})
+	require.NoError(t, err)
+
+	deps := PreCompactDeps{
+		Identities: s,
+		Sessions:   ss,
+		Teams:      ts,
+		Roles:      rs,
+	}
+	out := capturePreCompactOutput(t, string(payload), deps)
+
+	// Memory section should appear between persona and team.
+	assert.Contains(t, out, "## Memory")
+	assert.Contains(t, out, "claude-team-mem")
+	assert.Contains(t, out, "## Team: test-eng")
+
+	// Verify ordering: Memory before Team.
+	memIdx := strings.Index(out, "## Memory")
+	teamIdx := strings.Index(out, "## Team: test-eng")
+	assert.Greater(t, teamIdx, memIdx, "memory section should appear before team section")
+}
+
 func TestHandlePreCompact_NoSession_NoOutput(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)

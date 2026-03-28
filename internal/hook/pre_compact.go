@@ -38,7 +38,7 @@ func HandlePreCompact(r io.Reader, deps PreCompactDeps) error {
 
 	sessionID, ok := input["session_id"].(string)
 	if !ok || sessionID == "" {
-		fmt.Fprintf(os.Stderr, "ethos: pre-compact: no session_id in payload, skipping persona injection\n")
+		fmt.Fprintf(os.Stderr, "ethos: pre-compact: no session_id in payload, skipping context injection\n")
 		return nil
 	}
 

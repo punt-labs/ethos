@@ -23,7 +23,7 @@ use them.
 
 ### 1. New file: `internal/hook/memory.go`
 
-New function `BuildMemorySection(ext map[string]map[string]string) string`.
+New function `BuildMemorySection(ext map[string]map[string]string, handle string) string`.
 
 Reads the `quarry` namespace from the identity's ext map. If
 `memory_collection` key exists, builds and returns a memory section.
