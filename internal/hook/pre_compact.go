@@ -121,7 +121,7 @@ func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identi
 
 	t, err := teams.Load(teamName)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: failed to load team %q: %v\n", teamName, err)
+		fmt.Fprintf(os.Stderr, "ethos: team context: failed to load team %q: %v\n", teamName, err)
 		return ""
 	}
 
