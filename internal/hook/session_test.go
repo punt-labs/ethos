@@ -35,7 +35,7 @@ func TestHandleSessionStart_CreatesRoster(t *testing.T) {
 	}))
 
 	input := bytes.NewReader([]byte(`{"session_id": "test-session-1"}`))
-	err := HandleSessionStart(input, s, ss)
+	err := HandleSessionStart(input, SessionStartDeps{Store: s, Sessions: ss})
 	require.NoError(t, err)
 
 	// Verify roster was created.
@@ -50,7 +50,7 @@ func TestHandleSessionStart_NoSessionID(t *testing.T) {
 
 	// No session_id → no roster, no error.
 	input := bytes.NewReader([]byte(`{}`))
-	err := HandleSessionStart(input, s, ss)
+	err := HandleSessionStart(input, SessionStartDeps{Store: s, Sessions: ss})
 	require.NoError(t, err)
 
 	sessions, err := ss.List()
