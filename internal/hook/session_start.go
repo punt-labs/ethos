@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/team"
 )
 
 // SessionStartResult is the JSON output of the session-start hook.
@@ -21,9 +24,19 @@ type SessionStartResult struct {
 	} `json:"hookSpecificOutput"`
 }
 
+// SessionStartDeps holds the stores needed by the SessionStart hook.
+type SessionStartDeps struct {
+	Store    *identity.Store
+	Sessions *session.Store
+	Teams    *team.LayeredStore
+	Roles    *role.LayeredStore
+}
+
 // HandleSessionStart reads the SessionStart hook payload from stdin,
 // resolves identity, creates a session roster, and emits context.
-func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) error {
+func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
+	store := deps.Store
+	ss := deps.Sessions
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		return fmt.Errorf("session-start: %w", err)
@@ -127,17 +140,22 @@ func HandleSessionStart(r io.Reader, store *identity.Store, ss *session.Store) e
 		}
 	}
 
-	// Try full persona block; fall back to one-line if no content.
-	msg := BuildPersonaBlock(agentID)
-	if msg == "" {
-		msg = fmt.Sprintf("Ethos session started. Active identity: %s (%s).", agentID.Name, agentID.Handle)
+	// Build sections: persona, memory, team — same as PreCompact.
+	var sections []string
+	if persona := BuildPersonaBlock(agentID); persona != "" {
+		sections = append(sections, persona)
+	} else {
+		sections = append(sections, fmt.Sprintf("Ethos session started. Active identity: %s (%s).", agentID.Name, agentID.Handle))
 	}
 	if mem := BuildMemorySection(agentID.Ext, agentID.Handle); mem != "" {
-		msg += "\n\n" + mem
+		sections = append(sections, mem)
+	}
+	if teamCtx := BuildTeamSection(deps.Teams, deps.Roles, store, agentPersona); teamCtx != "" {
+		sections = append(sections, teamCtx)
 	}
 
 	result := SessionStartResult{}
 	result.HookSpecificOutput.HookEventName = "SessionStart"
-	result.HookSpecificOutput.AdditionalContext = msg
+	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
