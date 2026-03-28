@@ -26,7 +26,7 @@ files on disk.
 | Different tools produce different voices | CLI output follows CLAUDE.md, spoken output follows vox config, neither reads ethos personality |
 | Agent can't recall its own talents | Talent content never loaded into context — only slugs are in YAML |
 
-## Current State (as of v2.2.1)
+## Current State
 
 All three core layers are implemented and working:
 

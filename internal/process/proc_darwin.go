@@ -13,7 +13,9 @@ import (
 // readProc returns the parent PID and command name for the given PID
 // using the sysctl kern.proc.pid interface. The comm value is the
 // basename of the executable path (from kern.procargs2), falling back
-// to kinfo_proc P_comm when the path is unavailable.
+// to kinfo_proc P_comm when the path is unavailable. Claude Code's
+// version-named binaries (e.g., ~/.local/share/claude/versions/2.1.86)
+// are normalized to "claude" so FindClaudePID matches them.
 func readProc(pid int) (ppid int, comm string, err error) {
 	kp, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if err != nil {
