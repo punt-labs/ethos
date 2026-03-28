@@ -144,7 +144,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		}
 	}
 
-	// Build sections: persona, memory, team — same as PreCompact.
+	// Build sections: persona, extension context, team — same as PreCompact.
 	var sections []string
 	if persona := BuildPersonaBlock(agentID); persona != "" {
 		sections = append(sections, persona)

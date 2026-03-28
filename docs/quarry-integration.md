@@ -80,7 +80,7 @@ agent doesn't lose access to its memories.
 |-----|----------|-------------|
 | `memory_collection` | Yes | Quarry collection name for this agent's working memory |
 | `expertise_collections` | No | Comma-separated collection names for deep domain knowledge |
-| `session_context` | Yes | Markdown instructions emitted at session start and compaction |
+| `session_context` | No | Markdown instructions emitted at session start and compaction |
 
 If `session_context` is absent, no memory instructions are emitted.
 The `memory_collection` and `expertise_collections` keys are consumed
