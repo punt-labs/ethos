@@ -319,11 +319,11 @@ func inferRole(index int, parent string) string {
 	if index == 0 {
 		return "root"
 	}
-	if parent == "" {
-		return "-"
-	}
 	if index == 1 {
 		return "primary"
+	}
+	if parent == "" {
+		return "-"
 	}
 	return "teammate"
 }
@@ -426,6 +426,7 @@ func runSessionList() {
 		Session      string `json:"session"`
 		Started      string `json:"started"`
 		Repo         string `json:"repo,omitempty"`
+		Host         string `json:"host,omitempty"`
 		Participants int    `json:"participants"`
 	}
 
@@ -440,6 +441,7 @@ func runSessionList() {
 			Session:      id,
 			Started:      roster.Started,
 			Repo:         roster.Repo,
+			Host:         roster.Host,
 			Participants: len(roster.Participants),
 		})
 	}

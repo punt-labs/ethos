@@ -18,6 +18,9 @@ func ParseGitRemote(url string) string {
 	if i := strings.Index(url, ":"); i >= 0 && !strings.Contains(url, "://") {
 		url = url[i+1:]
 		url = strings.TrimSuffix(url, ".git")
+		if !strings.Contains(url, "/") {
+			return ""
+		}
 		return url
 	}
 
@@ -32,6 +35,9 @@ func ParseGitRemote(url string) string {
 			return ""
 		}
 		url = strings.TrimSuffix(url, ".git")
+		if !strings.Contains(url, "/") {
+			return ""
+		}
 		return url
 	}
 
