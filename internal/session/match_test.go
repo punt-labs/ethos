@@ -17,6 +17,8 @@ func TestStore_MatchByPrefix(t *testing.T) {
 	require.NoError(t, s.Create("abc-1234-5678", root, primary))
 	require.NoError(t, s.Create("abc-1234-9999", root, primary))
 	require.NoError(t, s.Create("def-5678-0000", root, primary))
+	require.NoError(t, s.Create("abc", root, primary))
+	require.NoError(t, s.Create("abc-def-1234", root, primary))
 
 	tests := []struct {
 		name    string
@@ -36,7 +38,7 @@ func TestStore_MatchByPrefix(t *testing.T) {
 		},
 		{
 			name:    "ambiguous prefix",
-			prefix:  "abc",
+			prefix:  "abc-1234",
 			wantErr: "ambiguous prefix",
 		},
 		{
@@ -46,8 +48,8 @@ func TestStore_MatchByPrefix(t *testing.T) {
 		},
 		{
 			name:   "exact match wins over prefix",
-			prefix: "abc-1234-5678",
-			want:   "abc-1234-5678",
+			prefix: "abc",
+			want:   "abc",
 		},
 	}
 

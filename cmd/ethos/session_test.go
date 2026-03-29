@@ -1,25 +1,29 @@
 package main
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestShortID(t *testing.T) {
 	tests := []struct {
+		name  string
 		input string
 		want  string
 	}{
-		{"abcdefgh-1234-5678-9abc-def012345678", "abcdefgh"},
-		{"abcdefgh", "abcdefgh"},
-		{"short", "short"},
-		{"12345678", "12345678"},
-		{"", ""},
-		{"abc", "abc"},
+		{"uuid", "abcdefgh-1234-5678-9abc-def012345678", "abcdefgh"},
+		{"first segment only", "abcdefgh", "abcdefgh"},
+		{"short string", "short", "short"},
+		{"eight chars", "12345678", "12345678"},
+		{"empty", "", ""},
+		{"three chars", "abc", "abc"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, shortID(tt.input))
 		})
 	}
@@ -35,9 +39,12 @@ func TestFormatStarted(t *testing.T) {
 			name:  "valid RFC3339",
 			input: "2026-03-29T14:22:00Z",
 			check: func(t *testing.T, got string) {
-				// Should contain day-of-week, month, day, and time.
-				assert.Contains(t, got, "Mar")
-				assert.Contains(t, got, "29")
+				// Compute expected in local timezone to avoid day-shift failures.
+				ts, err := time.Parse(time.RFC3339, "2026-03-29T14:22:00Z")
+				require.NoError(t, err)
+				local := ts.Local()
+				assert.Contains(t, got, local.Format("Jan"))
+				assert.Contains(t, got, fmt.Sprintf("%d", local.Day()))
 				assert.Regexp(t, `\d{2}:\d{2}`, got)
 			},
 		},

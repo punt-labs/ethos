@@ -5,8 +5,9 @@ package session
 import "fmt"
 
 // MatchByPrefix finds a session ID from a prefix string. If the prefix
-// matches exactly one session, that ID is returned. Returns an error
-// when zero or multiple sessions match.
+// exactly matches a session ID, that ID is returned. Otherwise, if the
+// prefix matches exactly one session, that ID is returned; an error is
+// returned when zero or multiple sessions match.
 func (s *Store) MatchByPrefix(prefix string) (string, error) {
 	ids, err := s.List()
 	if err != nil {
