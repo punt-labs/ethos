@@ -67,6 +67,26 @@ func TestParseGitRemote(t *testing.T) {
 			url:  "https://github.com/punt-labs",
 			want: "",
 		},
+		{
+			name: "ssh scheme with .git",
+			url:  "ssh://git@github.com/punt-labs/ethos.git",
+			want: "punt-labs/ethos",
+		},
+		{
+			name: "ssh scheme without .git",
+			url:  "ssh://git@github.com/punt-labs/ethos",
+			want: "punt-labs/ethos",
+		},
+		{
+			name: "https too many segments",
+			url:  "https://github.com/org/name/extra.git",
+			want: "",
+		},
+		{
+			name: "ssh scp too many segments",
+			url:  "git@github.com:org/name/extra.git",
+			want: "",
+		},
 	}
 
 	for _, tt := range tests {
