@@ -148,6 +148,13 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		}
 	}
 
+	// Generate .claude/agents/<handle>.md from ethos identity data.
+	if repoRoot != "" {
+		if genErr := GenerateAgentFiles(repoRoot, store, deps.Teams, deps.Roles); genErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: session-start: agent generation failed: %v\n", genErr)
+		}
+	}
+
 	// Build sections: persona, extension context, team — same as PreCompact.
 	var sections []string
 	if persona := BuildPersonaBlock(agentID); persona != "" {
