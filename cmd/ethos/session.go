@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/process"
@@ -132,18 +132,40 @@ var sessionListCmd = &cobra.Command{
 	},
 }
 
-// --- session roster ---
+// --- session show ---
+
+var sessionShowCmd = &cobra.Command{
+	Use:   "show [session-id]",
+	Short: "Show session roster",
+	Args:  cobra.MaximumNArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		if len(args) == 1 {
+			runSessionShowByID(args[0])
+		} else {
+			runSessionShow()
+		}
+	},
+}
+
+// --- session roster (hidden alias) ---
 
 var sessionRosterCmd = &cobra.Command{
-	Use:   "roster",
-	Short: "Show current session roster (canonical verb for session show)",
-	Args:  cobra.NoArgs,
+	Use:    "roster [session-id]",
+	Short:  "Show session roster (alias for show)",
+	Hidden: true,
+	Args:   cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		runSessionShow()
+		if len(args) == 1 {
+			runSessionShowByID(args[0])
+		} else {
+			runSessionShow()
+		}
 	},
 }
 
 // --- session iam ---
+
+var sessionIamSession string
 
 var sessionIamCmd = &cobra.Command{
 	Use:   "iam <persona>",
@@ -193,6 +215,9 @@ func init() {
 	sessionLeaveCmd.Flags().StringVar(&sessionLeaveSession, "session", "", "Session ID (auto-detected if omitted)")
 	_ = sessionLeaveCmd.MarkFlagRequired("agent-id")
 
+	// session iam flags
+	sessionIamCmd.Flags().StringVar(&sessionIamSession, "session", "", "Session ID (full or prefix)")
+
 	// session write-current flags
 	sessionWriteCurrentCmd.Flags().StringVar(&sessionWriteCurrentPID, "pid", "", "Claude PID (required)")
 	sessionWriteCurrentCmd.Flags().StringVar(&sessionWriteCurrentSession, "session", "", "Session ID (required)")
@@ -210,6 +235,7 @@ func init() {
 		sessionLeaveCmd,
 		sessionIamCmd,
 		sessionListCmd,
+		sessionShowCmd,
 		sessionRosterCmd,
 		sessionWriteCurrentCmd,
 		sessionDeleteCurrentCmd,
@@ -232,6 +258,20 @@ func runSessionShow() {
 		fmt.Println("No active session.")
 		return
 	}
+	printRoster(ss, sessionID)
+}
+
+func runSessionShowByID(idOrPrefix string) {
+	ss := sessionStore()
+	sessionID, err := ss.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		os.Exit(1)
+	}
+	printRoster(ss, sessionID)
+}
+
+func printRoster(ss *session.Store, sessionID string) {
 	roster, err := ss.Load(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
@@ -244,27 +284,27 @@ func runSessionShow() {
 	}
 
 	fmt.Printf("Session: %s\n", roster.Session)
-	fmt.Printf("Started: %s\n", roster.Started)
+	fmt.Printf("Started: %s\n", formatStarted(roster.Started))
 	fmt.Println()
-	for _, p := range roster.Participants {
+
+	headers := []string{"AGENT_ID", "PERSONA", "ROLE", "PARENT"}
+	rows := make([][]string, len(roster.Participants))
+	for i, p := range roster.Participants {
 		persona := p.Persona
 		if persona == "" {
-			persona = "(none)"
+			persona = "-"
 		}
 		parent := p.Parent
 		if parent == "" {
-			parent = "(root)"
+			parent = "-"
 		}
-		parts := []string{
-			fmt.Sprintf("%-16s", p.AgentID),
-			fmt.Sprintf("persona=%-16s", persona),
-			fmt.Sprintf("parent=%s", parent),
+		agentType := p.AgentType
+		if agentType == "" {
+			agentType = "-"
 		}
-		if p.AgentType != "" {
-			parts = append(parts, fmt.Sprintf("type=%s", p.AgentType))
-		}
-		fmt.Println("  " + strings.Join(parts, "  "))
+		rows[i] = []string{p.AgentID, persona, agentType, parent}
 	}
+	fmt.Println(hook.FormatTable(headers, rows))
 }
 
 func runSessionCreate() {
@@ -289,12 +329,19 @@ func runSessionDelete() {
 }
 
 func runSessionJoin() {
+	ss := sessionStore()
 	sid := sessionJoinSession
 	if sid == "" {
 		sid, _ = resolveSessionContext()
+	} else {
+		resolved, err := ss.MatchByPrefix(sid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			os.Exit(1)
+		}
+		sid = resolved
 	}
 
-	ss := sessionStore()
 	p := session.Participant{
 		AgentID:   sessionJoinAgentID,
 		Persona:   sessionJoinPersona,
@@ -311,12 +358,19 @@ func runSessionJoin() {
 }
 
 func runSessionLeave() {
+	ss := sessionStore()
 	sid := sessionLeaveSession
 	if sid == "" {
 		sid, _ = resolveSessionContext()
+	} else {
+		resolved, err := ss.MatchByPrefix(sid)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			os.Exit(1)
+		}
+		sid = resolved
 	}
 
-	ss := sessionStore()
 	if err := ss.Leave(sid, sessionLeaveAgentID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
@@ -349,6 +403,7 @@ func runSessionList() {
 
 	type sessionEntry struct {
 		Session      string `json:"session"`
+		Started      string `json:"started"`
 		Participants int    `json:"participants"`
 		Primary      string `json:"primary"`
 	}
@@ -380,6 +435,7 @@ func runSessionList() {
 		}
 		entries = append(entries, sessionEntry{
 			Session:      id,
+			Started:      roster.Started,
 			Participants: len(roster.Participants),
 			Primary:      primary,
 		})
@@ -398,12 +454,35 @@ func runSessionList() {
 		return
 	}
 
-	headers := []string{"SESSION", "PARTICIPANTS", "PRIMARY"}
+	headers := []string{"SESSION", "STARTED", "PARTICIPANTS", "PRIMARY"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
-		rows[i] = []string{e.Session, fmt.Sprintf("%d", e.Participants), e.Primary}
+		rows[i] = []string{
+			shortID(e.Session),
+			formatStarted(e.Started),
+			fmt.Sprintf("%d", e.Participants),
+			e.Primary,
+		}
 	}
 	fmt.Println(hook.FormatTable(headers, rows))
+}
+
+// shortID truncates a session ID to its first 8 characters for display.
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+// formatStarted converts an RFC3339 timestamp to a human-readable format.
+// Returns the raw string if parsing fails.
+func formatStarted(raw string) string {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	return t.Local().Format("Mon Jan _2 15:04")
 }
 
 func runSessionPurge() {

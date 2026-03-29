@@ -142,6 +142,8 @@ var serveCmd = &cobra.Command{
 func init() {
 	showCmd.Flags().BoolVar(&showReference, "reference", false, "Include reference identity data")
 	whoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
+	iamCmd.Flags().StringVar(&sessionIamSession, "session", "", "Session ID (full or prefix)")
+
 
 	rootCmd.AddCommand(
 		versionCmd,
