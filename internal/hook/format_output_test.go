@@ -156,7 +156,7 @@ func TestFormatOutput_Identity_Whoami(t *testing.T) {
 }
 
 func TestFormatOutput_Identity_List(t *testing.T) {
-	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly","active":true},{"handle":"bob","name":"Bob","kind":"agent","personality":"","active":false}]`
+	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly"},{"handle":"bob","name":"Bob","kind":"agent","personality":""}]`
 	payload := makeToolPayload("identity", "list", result)
 
 	out := runFormat(t, payload)
@@ -164,31 +164,26 @@ func TestFormatOutput_Identity_List(t *testing.T) {
 	r := parseFormatResult(t, out)
 	// Panel: count summary.
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "2 identities")
-	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 active")
 	// Context: columnar table with headers.
 	ctx := r.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, "HANDLE")
 	assert.Contains(t, ctx, "NAME")
 	assert.Contains(t, ctx, "KIND")
 	assert.Contains(t, ctx, "PERSONALITY")
-	assert.Contains(t, ctx, "ACTIVE")
+	assert.NotContains(t, ctx, "ACTIVE")
 	// Data rows with alignment.
 	assert.Contains(t, ctx, "alice")
 	assert.Contains(t, ctx, "bob")
-	// Active markers.
-	assert.Contains(t, ctx, "*")
-	assert.Contains(t, ctx, "-")
 }
 
 func TestFormatOutput_Identity_List_Singular(t *testing.T) {
-	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly","active":true}]`
+	result := `[{"handle":"alice","name":"Alice","kind":"human","personality":"friendly"}]`
 	payload := makeToolPayload("identity", "list", result)
 
 	out := runFormat(t, payload)
 
 	r := parseFormatResult(t, out)
-	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 identity,")
-	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 active")
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "1 identity")
 }
 
 func TestFormatOutput_Identity_List_Empty(t *testing.T) {

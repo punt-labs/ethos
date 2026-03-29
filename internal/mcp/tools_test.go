@@ -129,11 +129,6 @@ func TestHandleIdentity_List_NoSession(t *testing.T) {
 	var entries []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(text), &entries))
 	assert.Len(t, entries, 2)
-
-	// No session → no active markers.
-	for _, e := range entries {
-		assert.False(t, e["active"].(bool))
-	}
 }
 
 func TestHandleIdentity_List_PersonalityWritingStyle(t *testing.T) {
