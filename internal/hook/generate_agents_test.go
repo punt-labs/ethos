@@ -133,7 +133,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				content := string(data)
 				// Frontmatter checks.
 				assert.Contains(t, content, "name: bwk")
-				assert.Contains(t, content, "description: Go specialist sub-agent.")
+				assert.Contains(t, content, `description: "Go specialist sub-agent."`)
 				assert.Contains(t, content, "  - Read")
 				assert.Contains(t, content, "  - Bash")
 
@@ -301,10 +301,55 @@ func TestExtractDescription(t *testing.T) {
 			content: "# Title\n\n- Rule one\n\nActual description here.\n",
 			want:    "Actual description here.",
 		},
+		{
+			name:    "description with hash character",
+			content: "# Rules\n\nRule #1: be clear.\n",
+			want:    "Rule #1: be clear.",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := extractDescription(tt.content)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestYamlQuote(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "plain string",
+			in:   "Go specialist sub-agent.",
+			want: `"Go specialist sub-agent."`,
+		},
+		{
+			name: "string with hash",
+			in:   "Rule #1: be clear.",
+			want: `"Rule #1: be clear."`,
+		},
+		{
+			name: "string with double quote",
+			in:   `Says "hello" often.`,
+			want: `"Says \"hello\" often."`,
+		},
+		{
+			name: "string with backslash",
+			in:   `Path is C:\Users.`,
+			want: `"Path is C:\\Users."`,
+		},
+		{
+			name: "empty string",
+			in:   "",
+			want: `""`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := yamlQuote(tt.in)
 			assert.Equal(t, tt.want, got)
 		})
 	}

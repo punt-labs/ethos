@@ -114,7 +114,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 	// Frontmatter.
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "name: %s\n", id.Handle)
-	fmt.Fprintf(&b, "description: %s\n", desc)
+	fmt.Fprintf(&b, "description: %s\n", yamlQuote(desc))
 	b.WriteString("tools:\n")
 	for _, t := range r.Tools {
 		fmt.Fprintf(&b, "  - %s\n", t)
@@ -175,4 +175,13 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 // headings, bullets, and other non-prose lines.
 func extractDescription(content string) string {
 	return firstContentSentence(content)
+}
+
+// yamlQuote wraps s in double quotes, escaping internal backslashes
+// and double quotes. This prevents YAML-significant characters like
+// # and : from corrupting frontmatter values.
+func yamlQuote(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return `"` + s + `"`
 }
