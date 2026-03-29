@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-03-29
+
 ### Added
 
 - `repo` and `host` fields on session roster — populated at session creation from git remote and hostname
