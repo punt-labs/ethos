@@ -1626,3 +1626,49 @@ identities active on other machines.
 information. `ethos identity list` shows identity definitions —
 static data, not runtime state. Mixing the two produced a column
 that was wrong most of the time.
+
+## DES-026: Generate agent definitions from identity data (PROPOSED)
+
+**Status**: Proposed. Implementation in progress.
+
+### Decision
+
+The SessionStart hook generates `.claude/agents/<handle>.md` for every
+agent team member from ethos component data (identity, personality,
+writing-style, role). The main session agent (from `ethos.yaml` config)
+and human identities are skipped.
+
+### Reasoning
+
+Agent definition files were hand-written copies of ethos identity data.
+When ethos data changed (personality update, role change, new talent),
+the agent files went stale silently. Only automation is reliable.
+
+The SessionStart hook already assembles the primary agent's identity from
+these components for context injection. Generating sub-agent files uses
+the same data through the same path — one source of truth, no drift.
+
+### Key design points
+
+- **Tools come from the role.** Each role YAML defines a `tools` list
+  that maps to the agent frontmatter. Implementation roles get
+  Read/Write/Edit/Bash/Grep/Glob. Review roles get Read/Grep/Glob/Bash.
+- **Idempotent writes.** Content is compared before writing. Identical
+  files are not rewritten, preserving mtime.
+- **Non-blocking.** Generation failure logs to stderr and does not block
+  the session. But total failure (zero of N agents generated) returns an
+  error so the caller can surface it.
+- **No staleness by mod time.** Earlier designs checked file timestamps.
+  The simpler approach is content comparison — if the content matches,
+  skip the write. This avoids clock skew and filesystem granularity issues.
+
+### Rejected alternatives
+
+- **Copy from `.punt-labs/ethos/agents/*.md`** — still requires hand-written
+  source files. Solves the copy problem but not the drift problem.
+- **Generate at install time** — `make install` runs once; identity data
+  changes between installs. SessionStart runs every session, guaranteeing
+  freshness.
+- **Staleness by mtime comparison** — fragile across filesystems and git
+  operations that reset timestamps. Content comparison is simpler and
+  correct.

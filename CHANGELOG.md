@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- SessionStart hook generates `.claude/agents/<handle>.md` from ethos identity, personality, writing-style, and role data — agent definitions stay in sync with ethos source automatically
+- `tools` field on role YAML schema — source of truth for sub-agent tool restrictions
+
 ## [2.5.0] - 2026-03-29
 
 ### Added
