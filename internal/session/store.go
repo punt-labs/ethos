@@ -43,14 +43,24 @@ func (s *Store) currentDir() string {
 }
 
 // Create creates a new session roster with root and primary participants.
-func (s *Store) Create(sessionID string, root, primary Participant) error {
+func (s *Store) Create(sessionID string, root, primary Participant, repo, host string) error {
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
 	}
 
+	now := time.Now().UTC().Format(time.RFC3339)
+	if root.Joined == "" {
+		root.Joined = now
+	}
+	if primary.Joined == "" {
+		primary.Joined = now
+	}
+
 	roster := &Roster{
 		Session:      sessionID,
-		Started:      time.Now().UTC().Format(time.RFC3339),
+		Started:      now,
+		Repo:         repo,
+		Host:         host,
 		Participants: []Participant{root, primary},
 	}
 
@@ -93,6 +103,9 @@ func (s *Store) Join(sessionID string, p Participant) error {
 				existing.Ext = p.Ext
 			}
 		} else {
+			if p.Joined == "" {
+				p.Joined = time.Now().UTC().Format(time.RFC3339)
+			}
 			roster.Participants = append(roster.Participants, p)
 		}
 		return s.writeRoster(sessionID, roster)

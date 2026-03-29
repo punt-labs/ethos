@@ -542,6 +542,7 @@ func TestHandleSession_JoinAndRoster(t *testing.T) {
 	require.NoError(t, h.sessionStore.Create("test-sess",
 		session.Participant{AgentID: "user1", Persona: "user1"},
 		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
+		"", "",
 	))
 
 	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
@@ -575,6 +576,7 @@ func TestHandleSession_Iam(t *testing.T) {
 	require.NoError(t, h.sessionStore.Create("test-iam",
 		session.Participant{AgentID: "user1", Persona: "user1"},
 		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
+		"", "",
 	))
 
 	// iam uses resolveSessionID which needs session_id passed explicitly
@@ -609,6 +611,7 @@ func TestHandleSession_Leave(t *testing.T) {
 	require.NoError(t, h.sessionStore.Create("test-leave",
 		session.Participant{AgentID: "user1", Persona: "user1"},
 		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
+		"", "",
 	))
 	require.NoError(t, h.sessionStore.Join("test-leave",
 		session.Participant{AgentID: "sub-1", Persona: "reviewer", Parent: "12345"},

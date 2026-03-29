@@ -65,6 +65,7 @@ func TestHandleSessionEnd_DeletesRoster(t *testing.T) {
 	require.NoError(t, ss.Create("test-end-1",
 		session.Participant{AgentID: "user1", Persona: "alice"},
 		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
 	))
 
 	input := bytes.NewReader([]byte(`{"session_id": "test-end-1"}`))
@@ -91,6 +92,7 @@ func TestHandleSubagentStart_JoinsRoster(t *testing.T) {
 	require.NoError(t, ss.Create("test-sub-1",
 		session.Participant{AgentID: "user1", Persona: "alice"},
 		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
 	))
 
 	input := bytes.NewReader([]byte(`{
@@ -120,6 +122,7 @@ func TestHandleSubagentStop_LeavesRoster(t *testing.T) {
 	require.NoError(t, ss.Create("test-stop-1",
 		session.Participant{AgentID: "user1", Persona: "alice"},
 		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
 	))
 	require.NoError(t, ss.Join("test-stop-1",
 		session.Participant{AgentID: "sub-1", Persona: "reviewer"},

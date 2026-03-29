@@ -84,6 +84,7 @@ func TestHandleSubagentStart_PersonaBlock(t *testing.T) {
 	require.NoError(t, ss.Create("sub-test-1",
 		session.Participant{AgentID: "user1", Persona: "jim"},
 		session.Participant{AgentID: claudePID, Persona: "claude"},
+		"", "",
 	))
 
 	payload := `{
@@ -119,6 +120,7 @@ func TestHandleSubagentStart_NoMatchingPersona_NoOutput(t *testing.T) {
 	require.NoError(t, ss.Create("sub-test-2",
 		session.Participant{AgentID: "user1", Persona: "jim"},
 		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
 	))
 
 	payload := `{
@@ -146,6 +148,7 @@ func TestHandleSubagentStart_PersonaNoPersonality_GracefulFallback(t *testing.T)
 	require.NoError(t, ss.Create("sub-test-3",
 		session.Participant{AgentID: "user1", Persona: "jim"},
 		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
 	))
 
 	payload := `{

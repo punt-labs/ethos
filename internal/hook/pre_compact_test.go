@@ -88,7 +88,7 @@ func TestHandlePreCompact_FullPersona(t *testing.T) {
 	// Create a session with a root human and a primary agent.
 	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
 	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session", root, primary))
+	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session"})
 	require.NoError(t, err)
@@ -162,7 +162,7 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 	// Create session.
 	root := session.Participant{AgentID: "jfreeman", Persona: "jfreeman"}
 	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session", root, primary))
+	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session"})
 	require.NoError(t, err)
@@ -202,7 +202,7 @@ func TestHandlePreCompact_WithExtensionContext(t *testing.T) {
 	// Create a session with a root human and a primary agent.
 	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
 	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session-ext", root, primary))
+	require.NoError(t, ss.Create("test-session-ext", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session-ext"})
 	require.NoError(t, err)
@@ -269,7 +269,7 @@ func TestHandlePreCompact_WithExtensionContextAndTeam(t *testing.T) {
 	// Create session.
 	root := session.Participant{AgentID: "jfreeman", Persona: "jfreeman"}
 	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session-ext-team", root, primary))
+	require.NoError(t, ss.Create("test-session-ext-team", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session-ext-team"})
 	require.NoError(t, err)
@@ -318,7 +318,7 @@ func TestHandlePreCompact_NoPersonaOnAgent_NoOutput(t *testing.T) {
 
 	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
 	primary := session.Participant{AgentID: "99999", Persona: "", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session", root, primary))
+	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	out := capturePreCompactOutput(t, `{"session_id": "test-session"}`, makeDeps(s, ss))
 	assert.Equal(t, "", out)
@@ -331,7 +331,7 @@ func TestHandlePreCompact_PersonaIdentityNotFound_NoOutput(t *testing.T) {
 
 	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
 	primary := session.Participant{AgentID: "99999", Persona: "ghost", Parent: "jfreeman"}
-	require.NoError(t, ss.Create("test-session", root, primary))
+	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	out := capturePreCompactOutput(t, `{"session_id": "test-session"}`, makeDeps(s, ss))
 	assert.Equal(t, "", out)

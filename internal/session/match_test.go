@@ -14,11 +14,11 @@ func TestStore_MatchByPrefix(t *testing.T) {
 
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("abc-1234-5678", root, primary))
-	require.NoError(t, s.Create("abc-1234-9999", root, primary))
-	require.NoError(t, s.Create("def-5678-0000", root, primary))
-	require.NoError(t, s.Create("abc", root, primary))
-	require.NoError(t, s.Create("abc-def-1234", root, primary))
+	require.NoError(t, s.Create("abc-1234-5678", root, primary, "", ""))
+	require.NoError(t, s.Create("abc-1234-9999", root, primary, "", ""))
+	require.NoError(t, s.Create("def-5678-0000", root, primary, "", ""))
+	require.NoError(t, s.Create("abc", root, primary, "", ""))
+	require.NoError(t, s.Create("abc-def-1234", root, primary, "", ""))
 
 	tests := []struct {
 		name    string
