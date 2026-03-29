@@ -1520,3 +1520,109 @@ knowledge of any consumer.
 - **Raise the 4096-byte value limit for `session_context`** — the current
   quarry instructions are ~600 bytes. If a consumer needs more, we can
   revisit the limit or design additional mechanisms at that time. Don't pre-solve.
+
+## DES-023: Sessions are local-only — no cross-machine state (SETTLED)
+
+**Status**: Settled.
+
+### Decision
+
+Ethos sessions track participants on a single machine. Cross-machine
+presence and routing is biff's responsibility. Ethos does not attempt
+to aggregate, synchronize, or display session state across hosts.
+
+### What ethos provides across machines
+
+Identity definitions travel via git (repo-local identities in
+`.punt-labs/ethos/identities/`) or the global filesystem
+(`~/.punt-labs/ethos/identities/`). Teams, personalities, writing
+styles, and talents are shared the same way. This is reuse of
+definitions, not replication of runtime state.
+
+### What ethos does not provide across machines
+
+- Who is active where (biff `who`)
+- Message routing between agents (biff `write`)
+- Presence and idle tracking across hosts (biff `finger`)
+- Session roster aggregation across machines
+
+### Reasoning
+
+The ACTIVE column in `ethos identity list` was removed because it
+only showed local session state, missing identities active on other
+hosts. Attempting to bridge this gap would duplicate biff's
+functionality. The two systems have clear boundaries: ethos owns
+identity (who someone is), biff owns presence (where someone is now).
+
+### Rejected alternatives
+
+- **Ethos aggregates sessions across machines** — requires a
+  transport layer (network, shared filesystem, or relay). Biff
+  already has this. Building a second one violates separation of
+  concerns.
+- **Ethos sessions become the source biff reads** — interesting
+  future direction, but creates a dependency from biff to ethos.
+  Current design keeps them independent (DES-001 sidecar principle).
+
+## DES-024: Session schema — repo, host, and participant join time (PROPOSED)
+
+**Status**: Proposed. Tracked in ethos-y1r.
+
+### Decision
+
+Extend the session roster schema with three fields:
+
+1. `repo` on Roster — `<org>/<name>` from git remote, written once at
+   session creation by the SessionStart hook.
+2. `host` on Roster — short hostname, written once at session creation.
+3. `joined` on Participant — ISO timestamp, written when the participant
+   joins via `iam` or `join`.
+
+### Reasoning
+
+`ethos session list` currently shows UUIDs, a participant count, and a
+primary name. Adding `repo` makes the list actionable for debugging
+("which session is in ethos?"). Adding `host` aligns with biff's data
+model and prepares for a future where session files could be shared.
+Adding `joined` per participant enables per-persona LOGIN times,
+matching biff's `last` output format.
+
+Display alignment (date formatting, short session IDs, table style)
+is a prerequisite tracked in ethos-ns1.
+
+### Format alignment with biff
+
+Ethos and biff are designed by the same team. Where concepts are
+identical (repo, host, timestamps, table layout), the display format
+must match. Timestamps display as `Sun Mar 29 14:22` (biff LOGIN
+format), not ISO. Duration is computed at display time, not stored.
+
+### Rejected alternatives
+
+- **Store duration instead of computing it** — duration changes every
+  second for active sessions. Computing from `started` (or `joined`)
+  is simpler and always accurate.
+- **Store repo as full path** — `<org>/<name>` is portable and matches
+  biff. Full paths are machine-specific and leak filesystem layout.
+
+## DES-025: Remove ACTIVE column from identity list (SETTLED)
+
+**Status**: Settled. Implemented in PR #140.
+
+### Decision
+
+Remove the ACTIVE column from `ethos identity list` (CLI, MCP, and
+hook output). Do not replace it.
+
+### Reasoning
+
+The column used `process.FindClaudePID()` to check the current
+session's roster. This failed in three ways: (1) returned nothing
+when run outside Claude Code, (2) only showed participants of the
+current session, not all local sessions, (3) could never show
+identities active on other machines.
+
+`ethos session list` is the correct place for session-level
+information. `ethos identity list` shows identity definitions —
+static data, not runtime state. Mixing the two produced a column
+that was wrong most of the time.

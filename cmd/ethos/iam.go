@@ -31,25 +31,40 @@ func runIam(persona string) {
 }
 
 // resolveSessionContext determines the session ID and agent ID from
-// the environment. Session ID comes from ETHOS_SESSION or the PID-keyed
-// current file. Agent ID comes from ETHOS_AGENT_ID or Claude PID walk.
+// the environment and flags. Resolution order:
+//  1. --session flag (full or prefix match)
+//  2. ETHOS_SESSION env var
+//  3. PID tree lookup via FindClaudePID
+//
 // Exits the process if session ID cannot be determined.
 func resolveSessionContext() (sessionID, agentID string) {
-	sessionID = os.Getenv("ETHOS_SESSION")
 	agentID = os.Getenv("ETHOS_AGENT_ID")
+	ss := sessionStore()
 
-	if sessionID == "" {
-		claudePID := process.FindClaudePID()
-		ss := sessionStore()
-		sid, err := ss.ReadCurrentSession(claudePID)
-		if err == nil {
-			sessionID = sid
+	// 1. --session flag from the iam subcommand.
+	if sessionIamSession != "" {
+		sid, err := ss.MatchByPrefix(sessionIamSession)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			os.Exit(1)
 		}
+		sessionID = sid
 	}
 
+	// 2. ETHOS_SESSION env var.
 	if sessionID == "" {
-		fmt.Fprintln(os.Stderr, "ethos: cannot determine session ID — set ETHOS_SESSION or start a Claude session")
-		os.Exit(1)
+		sessionID = os.Getenv("ETHOS_SESSION")
+	}
+
+	// 3. PID tree lookup.
+	if sessionID == "" {
+		claudePID := process.FindClaudePID()
+		sid, err := ss.ReadCurrentSession(claudePID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ethos: no session found in process tree. Use --session to specify one.")
+			os.Exit(1)
+		}
+		sessionID = sid
 	}
 
 	if agentID == "" {
