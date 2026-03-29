@@ -149,7 +149,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 
 	// Generate .claude/agents/<handle>.md from ethos identity data.
-	if repoRoot != "" {
+	if repoRoot != "" && deps.Teams != nil && deps.Roles != nil {
 		if genErr := GenerateAgentFiles(repoRoot, store, deps.Teams, deps.Roles); genErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: session-start: agent generation failed: %v\n", genErr)
 		}

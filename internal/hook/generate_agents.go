@@ -18,21 +18,21 @@ import (
 // files are only written when content differs.
 func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) error {
 	if teams == nil || roles == nil {
-		return fmt.Errorf("teams or roles store is nil")
+		return nil // not configured — nothing to generate
 	}
 
 	cfg, err := resolve.LoadRepoConfig(repoRoot)
 	if err != nil {
-		return fmt.Errorf("loading repo config: %w", err)
+		return nil // no repo config — nothing to generate
 	}
 	if cfg == nil {
-		return fmt.Errorf("no repo config found")
+		return nil
 	}
 
 	mainAgent := cfg.Agent
 	teamName := cfg.Team
 	if teamName == "" {
-		return fmt.Errorf("no team configured in repo config")
+		return nil // no team configured — nothing to generate
 	}
 
 	t, err := teams.Load(teamName)
