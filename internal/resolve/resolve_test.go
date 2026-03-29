@@ -60,6 +60,7 @@ func TestResolve_IamDeclaration(t *testing.T) {
 	require.NoError(t, ss.Create(sessionID,
 		session.Participant{AgentID: "root", Persona: "root"},
 		session.Participant{AgentID: pid, Persona: "mal", Parent: "root"},
+		"", "",
 	))
 	require.NoError(t, ss.WriteCurrentSession(pid, sessionID))
 

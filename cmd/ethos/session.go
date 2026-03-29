@@ -284,10 +284,16 @@ func printRoster(ss *session.Store, sessionID string) {
 	}
 
 	fmt.Printf("Session: %s\n", roster.Session)
+	if roster.Repo != "" {
+		fmt.Printf("Repo:    %s\n", roster.Repo)
+	}
+	if roster.Host != "" {
+		fmt.Printf("Host:    %s\n", roster.Host)
+	}
 	fmt.Printf("Started: %s\n", formatStarted(roster.Started))
 	fmt.Println()
 
-	headers := []string{"AGENT_ID", "PERSONA", "ROLE", "PARENT"}
+	headers := []string{"AGENT_ID", "PERSONA", "ROLE", "PARENT", "JOINED"}
 	rows := make([][]string, len(roster.Participants))
 	for i, p := range roster.Participants {
 		persona := p.Persona
@@ -298,8 +304,12 @@ func printRoster(ss *session.Store, sessionID string) {
 		if parent == "" {
 			parent = "-"
 		}
+		joined := formatStarted(p.Joined)
+		if joined == "" {
+			joined = "-"
+		}
 		role := inferRole(i, p.Parent)
-		rows[i] = []string{p.AgentID, persona, role, parent}
+		rows[i] = []string{p.AgentID, persona, role, parent, joined}
 	}
 	fmt.Println(hook.FormatTable(headers, rows))
 }
@@ -322,7 +332,7 @@ func runSessionCreate() {
 	ss := sessionStore()
 	root := session.Participant{AgentID: sessionCreateRootID, Persona: sessionCreateRootPersona}
 	primary := session.Participant{AgentID: sessionCreatePrimaryID, Persona: sessionCreatePrimaryPersona, Parent: sessionCreateRootID}
-	if err := ss.Create(sessionCreateSession, root, primary); err != nil {
+	if err := ss.Create(sessionCreateSession, root, primary, "", ""); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
@@ -415,6 +425,7 @@ func runSessionList() {
 	type sessionEntry struct {
 		Session      string `json:"session"`
 		Started      string `json:"started"`
+		Repo         string `json:"repo,omitempty"`
 		Participants int    `json:"participants"`
 	}
 
@@ -428,6 +439,7 @@ func runSessionList() {
 		entries = append(entries, sessionEntry{
 			Session:      id,
 			Started:      roster.Started,
+			Repo:         roster.Repo,
 			Participants: len(roster.Participants),
 		})
 	}
@@ -445,12 +457,17 @@ func runSessionList() {
 		return
 	}
 
-	headers := []string{"SESSION", "PARTICIPANTS", "STARTED"}
+	headers := []string{"SESSION", "PARTICIPANTS", "REPO", "STARTED"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
+		repo := e.Repo
+		if repo == "" {
+			repo = "-"
+		}
 		rows[i] = []string{
 			shortID(e.Session),
 			fmt.Sprintf("%d", e.Participants),
+			repo,
 			formatStarted(e.Started),
 		}
 	}

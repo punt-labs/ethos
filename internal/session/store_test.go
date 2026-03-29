@@ -22,7 +22,7 @@ func TestStore_CreateAndLoad(t *testing.T) {
 
 	root := Participant{AgentID: "mal", Persona: "mal"}
 	primary := Participant{AgentID: "12345", Persona: "archie", Parent: "mal"}
-	require.NoError(t, s.Create("session-1", root, primary))
+	require.NoError(t, s.Create("session-1", root, primary, "", ""))
 
 	roster, err := s.Load("session-1")
 	require.NoError(t, err)
@@ -45,7 +45,7 @@ func TestStore_Join(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-join", root, primary))
+	require.NoError(t, s.Create("sess-join", root, primary, "", ""))
 
 	sub := Participant{
 		AgentID:   "sub-1",
@@ -66,7 +66,7 @@ func TestStore_JoinIdempotent(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-idem", root, primary))
+	require.NoError(t, s.Create("sess-idem", root, primary, "", ""))
 
 	sub := Participant{AgentID: "sub-1", Persona: "reviewer", Parent: "99999"}
 	require.NoError(t, s.Join("sess-idem", sub))
@@ -85,7 +85,7 @@ func TestStore_Leave(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-leave", root, primary))
+	require.NoError(t, s.Create("sess-leave", root, primary, "", ""))
 
 	sub := Participant{AgentID: "sub-1", Persona: "reviewer", Parent: "99999"}
 	require.NoError(t, s.Join("sess-leave", sub))
@@ -100,7 +100,7 @@ func TestStore_LeaveIdempotent(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-leave2", root, primary))
+	require.NoError(t, s.Create("sess-leave2", root, primary, "", ""))
 
 	// Leaving a session you were never in is a no-op, not an error.
 	err := s.Leave("sess-leave2", "nonexistent")
@@ -111,7 +111,7 @@ func TestStore_Delete(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-del", root, primary))
+	require.NoError(t, s.Create("sess-del", root, primary, "", ""))
 
 	require.NoError(t, s.Delete("sess-del"))
 
@@ -134,8 +134,8 @@ func TestStore_List(t *testing.T) {
 
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-a", root, primary))
-	require.NoError(t, s.Create("sess-b", root, primary))
+	require.NoError(t, s.Create("sess-a", root, primary, "", ""))
+	require.NoError(t, s.Create("sess-b", root, primary, "", ""))
 
 	ids, err = s.List()
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestStore_Purge(t *testing.T) {
 	// Create a roster with a dead PID as primary agent.
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "9999999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-stale", root, primary))
+	require.NoError(t, s.Create("sess-stale", root, primary, "", ""))
 
 	purged, err := s.Purge()
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestStore_PurgeKeepsLive(t *testing.T) {
 		Persona: "agent",
 		Parent:  "user1",
 	}
-	require.NoError(t, s.Create("sess-live", root, primary))
+	require.NoError(t, s.Create("sess-live", root, primary, "", ""))
 
 	purged, err := s.Purge()
 	require.NoError(t, err)
@@ -243,7 +243,7 @@ func TestStore_PurgeCleansBothRostersAndPIDFiles(t *testing.T) {
 	// Create a roster with a dead PID as primary.
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: deadPID, Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-both", root, primary))
+	require.NoError(t, s.Create("sess-both", root, primary, "", ""))
 
 	// Write a PID file for the same dead PID.
 	require.NoError(t, s.WriteCurrentSession(deadPID, "sess-both"))
@@ -277,7 +277,7 @@ func TestStore_FilePermissions(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-perms", root, primary))
+	require.NoError(t, s.Create("sess-perms", root, primary, "", ""))
 
 	info, err := os.Stat(filepath.Join(s.sessionsDir(), "sess-perms.yaml"))
 	require.NoError(t, err)
@@ -312,7 +312,7 @@ func TestStore_JoinWithExt(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}
 	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
-	require.NoError(t, s.Create("sess-ext", root, primary))
+	require.NoError(t, s.Create("sess-ext", root, primary, "", ""))
 
 	sub := Participant{
 		AgentID: "sub-1",
@@ -332,4 +332,93 @@ func TestStore_JoinWithExt(t *testing.T) {
 	biffMap, ok := biff.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "s004", biffMap["tty"])
+}
+
+func TestStore_CreateWithRepoAndHost(t *testing.T) {
+	s := testStore(t)
+
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-repo", root, primary, "punt-labs/ethos", "m2-mb-air"))
+
+	roster, err := s.Load("sess-repo")
+	require.NoError(t, err)
+	assert.Equal(t, "punt-labs/ethos", roster.Repo)
+	assert.Equal(t, "m2-mb-air", roster.Host)
+	assert.NotEmpty(t, roster.Participants[0].Joined)
+	assert.NotEmpty(t, roster.Participants[1].Joined)
+}
+
+func TestStore_CreateSetsJoinedOnParticipants(t *testing.T) {
+	s := testStore(t)
+
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-joined", root, primary, "", ""))
+
+	roster, err := s.Load("sess-joined")
+	require.NoError(t, err)
+	assert.NotEmpty(t, roster.Participants[0].Joined)
+	assert.NotEmpty(t, roster.Participants[1].Joined)
+}
+
+func TestStore_JoinSetsJoined(t *testing.T) {
+	s := testStore(t)
+
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-join-ts", root, primary, "", ""))
+
+	sub := Participant{AgentID: "sub-1", Persona: "reviewer", Parent: "99999"}
+	require.NoError(t, s.Join("sess-join-ts", sub))
+
+	roster, err := s.Load("sess-join-ts")
+	require.NoError(t, err)
+	p := roster.FindParticipant("sub-1")
+	require.NotNil(t, p)
+	assert.NotEmpty(t, p.Joined)
+}
+
+func TestStore_BackwardCompatibility_NoRepoHostJoined(t *testing.T) {
+	s := testStore(t)
+
+	// Write a roster in the old format (no repo, host, or joined fields).
+	require.NoError(t, os.MkdirAll(s.sessionsDir(), 0o700))
+	oldYAML := `session: sess-old
+started: "2025-01-01T00:00:00Z"
+participants:
+  - agent_id: user1
+    persona: user1
+  - agent_id: "12345"
+    persona: agent
+    parent: user1
+`
+	require.NoError(t, os.WriteFile(
+		filepath.Join(s.sessionsDir(), "sess-old.yaml"),
+		[]byte(oldYAML), 0o600,
+	))
+
+	roster, err := s.Load("sess-old")
+	require.NoError(t, err)
+	assert.Equal(t, "sess-old", roster.Session)
+	assert.Equal(t, "", roster.Repo)
+	assert.Equal(t, "", roster.Host)
+	assert.Len(t, roster.Participants, 2)
+	assert.Equal(t, "", roster.Participants[0].Joined)
+	assert.Equal(t, "", roster.Participants[1].Joined)
+}
+
+func TestStore_CreatePreservesExplicitJoined(t *testing.T) {
+	s := testStore(t)
+
+	// If Joined is already set, Create should not overwrite it.
+	root := Participant{AgentID: "user1", Persona: "user1", Joined: "2025-01-01T00:00:00Z"}
+	primary := Participant{AgentID: "99999", Persona: "agent", Parent: "user1"}
+	require.NoError(t, s.Create("sess-preserve", root, primary, "", ""))
+
+	roster, err := s.Load("sess-preserve")
+	require.NoError(t, err)
+	assert.Equal(t, "2025-01-01T00:00:00Z", roster.Participants[0].Joined)
+	assert.NotEmpty(t, roster.Participants[1].Joined)
+	assert.NotEqual(t, "2025-01-01T00:00:00Z", roster.Participants[1].Joined)
 }
