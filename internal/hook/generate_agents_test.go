@@ -232,10 +232,10 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.NoError(t, os.Remove(filepath.Join(ethosDir, "personalities", "kernighan.md")))
 			},
 			check: func(t *testing.T, root string, err error) {
-				// bwk is the only agent with tools; missing personality means
-				// 0 of 1 expected agent files generated.
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "generated 0 of 1 expected agent files")
+				// bwk is the only agent with tools; missing personality
+				// means it's skipped before incrementing expected, so no
+				// error is returned.
+				require.NoError(t, err)
 
 				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
 				_, readErr := os.ReadFile(agentPath)
@@ -290,6 +290,16 @@ func TestExtractDescription(t *testing.T) {
 			name:    "heading only",
 			content: "# Title\n",
 			want:    "",
+		},
+		{
+			name:    "headings and bullets only",
+			content: "# Rules\n\n- Rule one\n- Rule two\n",
+			want:    "",
+		},
+		{
+			name:    "bullet then prose",
+			content: "# Title\n\n- Rule one\n\nActual description here.\n",
+			want:    "Actual description here.",
 		},
 	}
 	for _, tt := range tests {

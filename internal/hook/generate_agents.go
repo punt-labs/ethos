@@ -58,8 +58,6 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 			continue
 		}
 
-		expected++
-
 		r, err := roles.Load(m.Role)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: role %q: %v\n", m.Identity, m.Role, err)
@@ -74,6 +72,8 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 			continue
 		}
 
+		expected++
+
 		content := buildAgentFile(id, r)
 
 		destPath := filepath.Join(destDir, id.Handle+".md")
@@ -85,10 +85,12 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 		}
 
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			return fmt.Errorf("creating agents dir: %w", err)
+			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: creating agents dir: %v\n", m.Identity, err)
+			continue
 		}
 		if err := os.WriteFile(destPath, []byte(content), 0o644); err != nil {
-			return fmt.Errorf("writing agent file %s: %w", destPath, err)
+			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: writing agent file: %v\n", m.Identity, err)
+			continue
 		}
 		fmt.Fprintf(os.Stderr, "ethos: generate-agents: wrote %s\n", destPath)
 		generated++
@@ -125,7 +127,11 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 	// Opening line.
 	firstLine := firstContentSentence(id.PersonalityContent)
 	firstLine = strings.TrimSuffix(firstLine, ".")
-	fmt.Fprintf(&b, "\nYou are %s (%s), %s.\n", id.Name, id.Handle, firstLine)
+	if firstLine == "" {
+		fmt.Fprintf(&b, "\nYou are %s (%s).\n", id.Name, id.Handle)
+	} else {
+		fmt.Fprintf(&b, "\nYou are %s (%s), %s.\n", id.Name, id.Handle, firstLine)
+	}
 	fmt.Fprintf(&b, "You report to Claude Agento (COO/VP Engineering).\n")
 
 	// Personality content (after first paragraph, since opening line uses it).
@@ -164,15 +170,9 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 	return b.String()
 }
 
-// extractDescription returns the first non-heading, non-blank line
-// from markdown content, suitable for the frontmatter description field.
+// extractDescription returns the first prose sentence from markdown
+// content, suitable for the frontmatter description field. Skips
+// headings, bullets, and other non-prose lines.
 func extractDescription(content string) string {
-	for _, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			continue
-		}
-		return trimmed
-	}
-	return ""
+	return firstContentSentence(content)
 }
