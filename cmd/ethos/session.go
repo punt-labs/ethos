@@ -416,7 +416,6 @@ func runSessionList() {
 		Session      string `json:"session"`
 		Started      string `json:"started"`
 		Participants int    `json:"participants"`
-		Primary      string `json:"primary"`
 	}
 
 	var entries []sessionEntry
@@ -426,29 +425,10 @@ func runSessionList() {
 			fmt.Fprintf(os.Stderr, "ethos: warning: session %s: %v\n", id, loadErr)
 			continue
 		}
-		// Primary agent is the first participant with a parent (i.e., not the root human).
-		// Fall back to the first participant if none has a parent.
-		primary := ""
-		for _, p := range roster.Participants {
-			if p.Parent != "" {
-				primary = p.Persona
-				if primary == "" {
-					primary = p.AgentID
-				}
-				break
-			}
-		}
-		if primary == "" && len(roster.Participants) > 0 {
-			primary = roster.Participants[0].Persona
-			if primary == "" {
-				primary = roster.Participants[0].AgentID
-			}
-		}
 		entries = append(entries, sessionEntry{
 			Session:      id,
 			Started:      roster.Started,
 			Participants: len(roster.Participants),
-			Primary:      primary,
 		})
 	}
 
@@ -465,14 +445,13 @@ func runSessionList() {
 		return
 	}
 
-	headers := []string{"SESSION", "STARTED", "PARTICIPANTS", "PRIMARY"}
+	headers := []string{"SESSION", "PARTICIPANTS", "STARTED"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
 		rows[i] = []string{
 			shortID(e.Session),
-			formatStarted(e.Started),
 			fmt.Sprintf("%d", e.Participants),
-			e.Primary,
+			formatStarted(e.Started),
 		}
 	}
 	fmt.Println(hook.FormatTable(headers, rows))
