@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `session list`: short session IDs (8 chars), human-readable timestamps (`Sun Mar 29 14:22`)
+- `session show` replaces `session roster` as canonical verb (`roster` kept as hidden alias)
+- `session show`: accepts session ID argument (full or prefix), infers role (root/primary/teammate)
+- `session iam`: requires `--session` when no Claude Code process tree found
+
 ### Removed
 
 - ACTIVE column from `ethos identity list`, MCP identity list, and hook output — only showed local session state, missed identities active on other hosts
