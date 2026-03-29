@@ -221,11 +221,8 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 		Kind         string `json:"kind"`
 		Personality  string `json:"personality,omitempty"`
 		WritingStyle string `json:"writing_style,omitempty"`
-		Active       bool   `json:"active"`
 	}
 
-	// Mark session participants as active.
-	activeHandles := h.sessionParticipantHandles()
 	entries := make([]entry, 0, len(result.Identities))
 	for _, id := range result.Identities {
 		entries = append(entries, entry{
@@ -234,36 +231,12 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 			Kind:         id.Kind,
 			Personality:  id.Personality,
 			WritingStyle: id.WritingStyle,
-			Active:       activeHandles[id.Handle],
 		})
 	}
 
 	return jsonResult(entries)
 }
 
-// sessionParticipantHandles returns the set of persona handles that are
-// active in the current session. Returns an empty map if no session.
-func (h *Handler) sessionParticipantHandles() map[string]bool {
-	handles := make(map[string]bool)
-	if h.sessionStore == nil {
-		return handles
-	}
-	claudePID := process.FindClaudePID()
-	sessionID, err := h.sessionStore.ReadCurrentSession(claudePID)
-	if err != nil {
-		return handles
-	}
-	roster, err := h.sessionStore.Load(sessionID)
-	if err != nil {
-		return handles
-	}
-	for _, p := range roster.Participants {
-		if p.Persona != "" {
-			handles[p.Persona] = true
-		}
-	}
-	return handles
-}
 
 func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")

@@ -10,7 +10,6 @@ import (
 	"github.com/punt-labs/ethos/internal/doctor"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
 )
@@ -233,10 +232,8 @@ func runList() {
 		return
 	}
 
-	// Build columnar table: HANDLE, NAME, KIND, PERSONALITY, ACTIVE.
-	activeHandles := sessionParticipantHandles()
-
-	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "WRITING", "ACTIVE"}
+	// Build columnar table.
+	headers := []string{"HANDLE", "NAME", "KIND", "PERSONALITY", "WRITING"}
 	rows := make([][]string, len(result.Identities))
 	for i, id := range result.Identities {
 		personality := id.Personality
@@ -247,37 +244,12 @@ func runList() {
 		if writing == "" {
 			writing = "-"
 		}
-		marker := "-"
-		if activeHandles[id.Handle] {
-			marker = "*"
-		}
-		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, writing, marker}
+		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, writing}
 	}
 
 	fmt.Println(hook.FormatTable(headers, rows))
 }
 
-// sessionParticipantHandles returns the set of persona handles that are
-// active in the current session. Returns an empty map if no session.
-func sessionParticipantHandles() map[string]bool {
-	handles := make(map[string]bool)
-	ss := sessionStore()
-	pid := process.FindClaudePID()
-	sessionID, err := ss.ReadCurrentSession(pid)
-	if err != nil {
-		return handles
-	}
-	roster, err := ss.Load(sessionID)
-	if err != nil {
-		return handles
-	}
-	for _, p := range roster.Participants {
-		if p.Persona != "" {
-			handles[p.Persona] = true
-		}
-	}
-	return handles
-}
 
 func runShow(handle string, reference bool) {
 	var opts []identity.LoadOption
