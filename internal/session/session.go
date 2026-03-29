@@ -8,6 +8,7 @@ type Participant struct {
 	Persona   string         `yaml:"persona,omitempty" json:"persona,omitempty"`
 	AgentType string         `yaml:"agent_type,omitempty" json:"agent_type,omitempty"`
 	Parent    string         `yaml:"parent,omitempty" json:"parent,omitempty"`
+	Joined    string         `yaml:"joined,omitempty" json:"joined,omitempty"`
 	Ext       map[string]any `yaml:"ext,omitempty" json:"ext,omitempty"`
 }
 
@@ -15,6 +16,8 @@ type Participant struct {
 type Roster struct {
 	Session      string        `yaml:"session" json:"session"`
 	Started      string        `yaml:"started" json:"started"`
+	Repo         string        `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Host         string        `yaml:"host,omitempty" json:"host,omitempty"`
 	Participants []Participant `yaml:"participants" json:"participants"`
 }
 

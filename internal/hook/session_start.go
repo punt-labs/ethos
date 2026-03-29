@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -94,7 +95,10 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		root := session.Participant{AgentID: userID, Persona: userPersona}
 		primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
 
-		if createErr := ss.Create(sessionID, root, primary); createErr != nil {
+		repo := resolveRepo()
+		host := resolveHost()
+
+		if createErr := ss.Create(sessionID, root, primary, repo, host); createErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", createErr)
 		} else if wcErr := ss.WriteCurrentSession(claudePID, sessionID); wcErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: failed to write current session: %v\n", wcErr)
@@ -162,4 +166,27 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	result.HookSpecificOutput.HookEventName = "SessionStart"
 	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
 	return json.NewEncoder(os.Stdout).Encode(result)
+}
+
+// resolveRepo extracts org/name from the git remote of the working directory.
+func resolveRepo() string {
+	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: could not resolve repo from git remote: %v\n", err)
+		return ""
+	}
+	return ParseGitRemote(string(out))
+}
+
+// resolveHost returns the short hostname (no domain).
+func resolveHost() string {
+	name, err := os.Hostname()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: could not resolve hostname: %v\n", err)
+		return ""
+	}
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		name = name[:i]
+	}
+	return name
 }

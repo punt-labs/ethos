@@ -1564,9 +1564,9 @@ identity (who someone is), biff owns presence (where someone is now).
   future direction, but creates a dependency from biff to ethos.
   Current design keeps them independent (DES-001 sidecar principle).
 
-## DES-024: Session schema — repo, host, and participant join time (PROPOSED)
+## DES-024: Session schema — repo, host, and participant join time (SETTLED)
 
-**Status**: Proposed. Tracked in ethos-y1r.
+**Status**: Settled. Implemented in ethos-y1r.
 
 ### Decision
 

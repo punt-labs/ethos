@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `repo` and `host` fields on session roster — populated at session creation from git remote and hostname
+- `joined` timestamp on each participant — set when joining via `iam` or `join`
+- `session list` shows REPO column
+- `session show` shows JOINED column and repo/host in header
+
 ### Changed
 
 - `session list`: short session IDs (8 chars), human-readable timestamps (`Sun Mar 29 14:22`)
