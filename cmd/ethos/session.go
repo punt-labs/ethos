@@ -298,13 +298,24 @@ func printRoster(ss *session.Store, sessionID string) {
 		if parent == "" {
 			parent = "-"
 		}
-		agentType := p.AgentType
-		if agentType == "" {
-			agentType = "-"
-		}
-		rows[i] = []string{p.AgentID, persona, agentType, parent}
+		role := inferRole(i, p.Parent)
+		rows[i] = []string{p.AgentID, persona, role, parent}
 	}
 	fmt.Println(hook.FormatTable(headers, rows))
+}
+
+// inferRole derives a display role from a participant's position and parentage.
+func inferRole(index int, parent string) string {
+	if index == 0 {
+		return "root"
+	}
+	if parent == "" {
+		return "-"
+	}
+	if index == 1 {
+		return "primary"
+	}
+	return "teammate"
 }
 
 func runSessionCreate() {
