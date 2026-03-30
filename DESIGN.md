@@ -1627,9 +1627,9 @@ information. `ethos identity list` shows identity definitions —
 static data, not runtime state. Mixing the two produced a column
 that was wrong most of the time.
 
-## DES-026: Generate agent definitions from identity data (PROPOSED)
+## DES-026: Generate agent definitions from identity data (SETTLED)
 
-**Status**: Proposed. Implementation in progress.
+**Status**: Settled. Implemented in PR #146.
 
 ### Decision
 
