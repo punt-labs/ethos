@@ -150,7 +150,7 @@ Systems design, correctness over speed...
 |---------|-------------|
 | `ethos session list` | List all sessions (short IDs, REPO column, human-readable dates) |
 | `ethos session show [id]` | Show session details — participants, roles, repo, host, joined times |
-| `ethos session iam <persona> --session <id>` | Declare persona in a session (auto-detected inside Claude Code) |
+| `ethos session iam <persona> [--session <id>]` | Declare persona in current or specified session (auto-detected inside Claude Code) |
 | `ethos session join --agent-id <id>` | Add a participant to the session |
 | `ethos session leave --agent-id <id>` | Remove a participant from the session |
 | `ethos session purge` | Clean up stale sessions and PID files |
