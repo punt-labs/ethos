@@ -55,6 +55,7 @@ sh install.sh
 - **Extensible** — any tool attaches its own attributes via `<handle>.ext/<tool>.yaml`
 - **Session roster** — tracks all participants (human + agents) in a session with parent-child tree
 - **Persona auto-matching** — subagents get personas automatically when the handle matches the agent type
+- **Agent file generation** — SessionStart generates `.claude/agents/<handle>.md` from identity, personality, writing-style, and role data — agent definitions stay in sync automatically
 - **Persona animation** — SessionStart, PreCompact, and SubagentStart hooks inject personality, writing style, and talent content into agent context automatically
 - **Layered resolution** — repo-local identities override global; resolved from iam declaration, git config, or OS user (DES-011, DES-018)
 - **Channel bindings** — email (Beadle), GitHub (Biff), Claude Code agent definition; voice config lives in extensions (`ext/vox`)
@@ -147,10 +148,9 @@ Systems design, correctness over speed...
 
 | Command | What it does |
 |---------|-------------|
-| `ethos session` | Show current session participants |
-| `ethos session roster` | Same as `ethos session` |
-| `ethos session iam <persona>` | Declare persona in current session |
-| `ethos session list` | List all sessions |
+| `ethos session list` | List all sessions (short IDs, REPO column, human-readable dates) |
+| `ethos session show [id]` | Show session details — participants, roles, repo, host, joined times |
+| `ethos session iam <persona> --session <id>` | Declare persona in a session (auto-detected inside Claude Code) |
 | `ethos session join --agent-id <id>` | Add a participant to the session |
 | `ethos session leave --agent-id <id>` | Remove a participant from the session |
 | `ethos session purge` | Clean up stale sessions and PID files |
