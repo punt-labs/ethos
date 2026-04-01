@@ -23,7 +23,7 @@ type SubagentStartResult struct {
 // HandleSubagentStart reads the SubagentStart hook payload from stdin,
 // joins the subagent to the session roster, and emits persona context
 // if the subagent matches an ethos identity.
-func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) error {
+func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		return fmt.Errorf("subagent-start: %w", err)
@@ -81,6 +81,10 @@ func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) 
 		block = insertAfterFirstLine(block, parentLine)
 	}
 
+	if extCtx := BuildExtensionContext(id.Ext); extCtx != "" {
+		block = block + "\n\n" + extCtx
+	}
+
 	result := SubagentStartResult{}
 	result.HookSpecificOutput.HookEventName = "SubagentStart"
 	result.HookSpecificOutput.AdditionalContext = block
@@ -91,7 +95,7 @@ func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) 
 // and returns a "You report to Name (handle)." line. The primary agent
 // is identified as the participant whose AgentID matches the subagent's
 // Parent field (the Claude PID). Returns "" if the parent cannot be resolved.
-func resolveParentLine(ss *session.Store, sessionID, parentID string, store *identity.Store) string {
+func resolveParentLine(ss *session.Store, sessionID, parentID string, store identity.IdentityStore) string {
 	if parentID == "" {
 		return ""
 	}

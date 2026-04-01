@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- SubagentStart hook now injects extension session_context (quarry memory, vox voice, etc.) into sub-agent context
+
 ## [2.6.0] - 2026-03-29
 
 ### Added

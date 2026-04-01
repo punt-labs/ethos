@@ -103,7 +103,7 @@ func runHookSessionEnd() {
 }
 
 func runHookSubagentStart() {
-	s := globalStore()
+	s := identityStore()
 	ss := sessionStore()
 	if err := hook.HandleSubagentStart(os.Stdin, s, ss); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
