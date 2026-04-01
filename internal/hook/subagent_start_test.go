@@ -141,7 +141,7 @@ func TestHandleSubagentStart_WithExtensions(t *testing.T) {
 	claudePID := process.FindClaudePID()
 	require.NoError(t, ss.Create("ext-test-1",
 		session.Participant{AgentID: "user1", Persona: "jim"},
-		session.Participant{AgentID: claudePID, Persona: "claude"},
+		session.Participant{AgentID: claudePID, Persona: ""},
 		"", "",
 	))
 
@@ -191,7 +191,7 @@ func TestHandleSubagentStart_NoExtensions(t *testing.T) {
 	claudePID := process.FindClaudePID()
 	require.NoError(t, ss.Create("noext-test-1",
 		session.Participant{AgentID: "user1", Persona: "jim"},
-		session.Participant{AgentID: claudePID, Persona: "claude"},
+		session.Participant{AgentID: claudePID, Persona: ""},
 		"", "",
 	))
 
@@ -242,7 +242,7 @@ func TestHandleSubagentStart_ExtensionWithoutSessionContext(t *testing.T) {
 	claudePID := process.FindClaudePID()
 	require.NoError(t, ss.Create("extnosc-test-1",
 		session.Participant{AgentID: "user1", Persona: "jim"},
-		session.Participant{AgentID: claudePID, Persona: "claude"},
+		session.Participant{AgentID: claudePID, Persona: ""},
 		"", "",
 	))
 
