@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -23,7 +24,7 @@ type SubagentStartResult struct {
 // HandleSubagentStart reads the SubagentStart hook payload from stdin,
 // joins the subagent to the session roster, and emits persona context
 // if the subagent matches an ethos identity.
-func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) error {
+func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.Store) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		return fmt.Errorf("subagent-start: %w", err)
@@ -70,20 +71,29 @@ func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) 
 		fmt.Fprintf(os.Stderr, "ethos: subagent-start: identity %q: %s\n", persona, w)
 	}
 
+	var sections []string
+
 	block := BuildPersonaBlock(id)
-	if block == "" {
-		return nil
+	if block != "" {
+		// Prepend parent context if we can resolve the parent from the roster.
+		parentLine := resolveParentLine(ss, sessionID, p.Parent, store)
+		if parentLine != "" {
+			block = insertAfterFirstLine(block, parentLine)
+		}
+		sections = append(sections, block)
 	}
 
-	// Prepend parent context if we can resolve the parent from the roster.
-	parentLine := resolveParentLine(ss, sessionID, p.Parent, store)
-	if parentLine != "" {
-		block = insertAfterFirstLine(block, parentLine)
+	if extCtx := BuildExtensionContext(id.Ext); extCtx != "" {
+		sections = append(sections, extCtx)
+	}
+
+	if len(sections) == 0 {
+		return nil
 	}
 
 	result := SubagentStartResult{}
 	result.HookSpecificOutput.HookEventName = "SubagentStart"
-	result.HookSpecificOutput.AdditionalContext = block
+	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
@@ -91,7 +101,7 @@ func HandleSubagentStart(r io.Reader, store *identity.Store, ss *session.Store) 
 // and returns a "You report to Name (handle)." line. The primary agent
 // is identified as the participant whose AgentID matches the subagent's
 // Parent field (the Claude PID). Returns "" if the parent cannot be resolved.
-func resolveParentLine(ss *session.Store, sessionID, parentID string, store *identity.Store) string {
+func resolveParentLine(ss *session.Store, sessionID, parentID string, store identity.IdentityStore) string {
 	if parentID == "" {
 		return ""
 	}

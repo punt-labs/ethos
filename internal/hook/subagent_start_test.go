@@ -15,7 +15,7 @@ import (
 )
 
 // captureSubagentStartOutput runs HandleSubagentStart and captures stdout.
-func captureSubagentStartOutput(t *testing.T, input string, s *identity.Store, ss *session.Store) string {
+func captureSubagentStartOutput(t *testing.T, input string, s identity.IdentityStore, ss *session.Store) string {
 	t.Helper()
 
 	oldStdout := os.Stdout
@@ -109,6 +109,158 @@ func TestHandleSubagentStart_PersonaBlock(t *testing.T) {
 	assert.Contains(t, ctx, "go-specialist")
 	assert.Contains(t, ctx, "You report to Claude Agento (claude).")
 	assert.Equal(t, "SubagentStart", result.HookSpecificOutput.HookEventName)
+}
+
+func TestHandleSubagentStart_WithExtensions(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n\n- Simplicity first",
+	}))
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "kernighan-prose",
+		Content: "# Kernighan Prose\n\nShort declarative sentences.",
+	}))
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:         "Brian K",
+		Handle:       "bwk",
+		Kind:         "agent",
+		Personality:  "kernighan",
+		WritingStyle: "kernighan-prose",
+	}))
+
+	// Write extension with session_context.
+	require.NoError(t, s.ExtSet("bwk", "quarry", "session_context", "memory instructions here"))
+
+	claudePID := process.FindClaudePID()
+	require.NoError(t, ss.Create("ext-test-1",
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: claudePID, Persona: ""},
+		"", "",
+	))
+
+	payload := `{
+		"agent_id": "sub-ext-1",
+		"agent_type": "bwk",
+		"session_id": "ext-test-1"
+	}`
+
+	out := captureSubagentStartOutput(t, payload, s, ss)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "You are Brian K (bwk)")
+	assert.Contains(t, ctx, "A methodical systems programmer.")
+	assert.Contains(t, ctx, "memory instructions here")
+}
+
+func TestHandleSubagentStart_NoExtensions(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n\n- Simplicity first",
+	}))
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "kernighan-prose",
+		Content: "# Kernighan Prose\n\nShort declarative sentences.",
+	}))
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:         "Brian K",
+		Handle:       "bwk",
+		Kind:         "agent",
+		Personality:  "kernighan",
+		WritingStyle: "kernighan-prose",
+	}))
+
+	// No extensions written -- bwk.ext/ does not exist.
+
+	claudePID := process.FindClaudePID()
+	require.NoError(t, ss.Create("noext-test-1",
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: claudePID, Persona: ""},
+		"", "",
+	))
+
+	payload := `{
+		"agent_id": "sub-noext-1",
+		"agent_type": "bwk",
+		"session_id": "noext-test-1"
+	}`
+
+	out := captureSubagentStartOutput(t, payload, s, ss)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "You are Brian K (bwk)")
+	assert.Contains(t, ctx, "A methodical systems programmer.")
+	assert.NotContains(t, ctx, "memory instructions")
+}
+
+func TestHandleSubagentStart_ExtensionWithoutSessionContext(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n\n- Simplicity first",
+	}))
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "kernighan-prose",
+		Content: "# Kernighan Prose\n\nShort declarative sentences.",
+	}))
+
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:         "Brian K",
+		Handle:       "bwk",
+		Kind:         "agent",
+		Personality:  "kernighan",
+		WritingStyle: "kernighan-prose",
+	}))
+
+	// Write extension with a key other than session_context.
+	require.NoError(t, s.ExtSet("bwk", "quarry", "provider", "some-value"))
+
+	claudePID := process.FindClaudePID()
+	require.NoError(t, ss.Create("extnosc-test-1",
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: claudePID, Persona: ""},
+		"", "",
+	))
+
+	payload := `{
+		"agent_id": "sub-extnosc-1",
+		"agent_type": "bwk",
+		"session_id": "extnosc-test-1"
+	}`
+
+	out := captureSubagentStartOutput(t, payload, s, ss)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "You are Brian K (bwk)")
+	assert.Contains(t, ctx, "A methodical systems programmer.")
+	assert.NotContains(t, ctx, "some-value")
 }
 
 func TestHandleSubagentStart_NoMatchingPersona_NoOutput(t *testing.T) {
