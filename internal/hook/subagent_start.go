@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -70,24 +71,29 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 		fmt.Fprintf(os.Stderr, "ethos: subagent-start: identity %q: %s\n", persona, w)
 	}
 
-	block := BuildPersonaBlock(id)
-	if block == "" {
-		return nil
-	}
+	var sections []string
 
-	// Prepend parent context if we can resolve the parent from the roster.
-	parentLine := resolveParentLine(ss, sessionID, p.Parent, store)
-	if parentLine != "" {
-		block = insertAfterFirstLine(block, parentLine)
+	block := BuildPersonaBlock(id)
+	if block != "" {
+		// Prepend parent context if we can resolve the parent from the roster.
+		parentLine := resolveParentLine(ss, sessionID, p.Parent, store)
+		if parentLine != "" {
+			block = insertAfterFirstLine(block, parentLine)
+		}
+		sections = append(sections, block)
 	}
 
 	if extCtx := BuildExtensionContext(id.Ext); extCtx != "" {
-		block = block + "\n\n" + extCtx
+		sections = append(sections, extCtx)
+	}
+
+	if len(sections) == 0 {
+		return nil
 	}
 
 	result := SubagentStartResult{}
 	result.HookSpecificOutput.HookEventName = "SubagentStart"
-	result.HookSpecificOutput.AdditionalContext = block
+	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
