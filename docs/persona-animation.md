@@ -35,16 +35,20 @@ All three core layers are implemented and working:
 | SessionStart hook | Resolves identity, creates session roster, injects full persona block (personality, writing style, talents, role, team context) |
 | PreCompact hook | Re-injects full persona block + team context as plain text before compaction — prevents behavioral drift |
 | SubagentStart hook | Joins subagent to roster, auto-matches persona by agent_type, injects persona content |
-| Agent definitions (.claude/agents/*.md) | Installed from team submodule by SessionStart hook — define *what* the agent does |
+| Agent definitions (.claude/agents/*.md) | Generated from identity, personality, writing-style, and role data by SessionStart hook (DES-026) — define *what* the agent does |
 | MCP tools | Expose identity data (get, whoami, list), extensions, sessions, teams, roles |
 | Agent Teams | Teammates are separate Claude Code processes. All hooks fire independently. Each gets its own ethos session with full persona injection. |
 
 ### What doesn't exist yet
 
-1. **Cross-surface consistency** — ensuring CLI output, MCP responses, spoken
-   output, and written messages all reflect the same persona
-2. **Persona verification** — a way to check whether the agent is actually
-   following its persona
+1. **Persona verification** — a way to check whether the agent is actually
+   following its persona (active verification via PostToolUse or Stop hook)
+
+Cross-surface consistency is partially solved by DES-022: each tool
+(quarry, beadle, biff, vox) provides its own `session_context` in its
+extension YAML. Ethos emits all session contexts at SessionStart and
+PreCompact, giving the agent consistent behavioral instructions across
+all tool surfaces without ethos knowing about any specific consumer.
 
 ## Design
 
@@ -192,10 +196,12 @@ verification is already working.
 | 2 | Re-inject persona at compaction | PreCompact | Done (v2.2.0) — full block, plain text |
 | 3 | Inject subagent persona at spawn | SubagentStart | Done (v2.1.0) |
 | 4 | Remove manual `ethos show` from agent definitions | Agent .md files | Done — agent definitions no longer need identity loading |
-| 5 | Agent teams support | SessionStart | Done (v2.2.2) — PID fix for version-named binaries |
-| 6 | Active persona verification | PostToolUse / Stop | Future |
+| 5 | Agent teams support | SessionStart | Done (v2.3.0) — PID fix for version-named binaries |
+| 6 | Extension session context (DES-022) | SessionStart, PreCompact | Done (v2.6.1) — tools provide their own context |
+| 7 | Agent file generation (DES-026) | SessionStart | Done (v2.6.0) — generate .claude/agents/ from identity data |
+| 8 | Active persona verification | PostToolUse / Stop | Future |
 
-Phases 1-5 are complete. Phase 6 is a future enhancement.
+Phases 1-7 are complete. Phase 8 is a future enhancement.
 
 ## What This Does NOT Do
 

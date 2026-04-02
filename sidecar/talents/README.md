@@ -1,19 +1,19 @@
-# Skills
+# Talents
 
 Shared talent definitions as plain markdown files. Referenced from identity
-YAML via relative paths:
+YAML by slug:
 
 ```yaml
-skills:
-  - talents/software-engineering.md
-  - talents/product-management.md
+talents:
+  - software-engineering
+  - product-management
 ```
 
 Each file defines what an identity can do — domain expertise, standards,
-tools, approach. The same file for humans and agents: a human's skill
+tools, approach. The same file for humans and agents: a human's talent
 describes their expertise; an agent's describes its capabilities.
 
-Multiple identities can reference the same skill file.
+Multiple identities can reference the same talent file.
 
 ## Example
 

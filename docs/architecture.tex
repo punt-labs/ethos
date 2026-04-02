@@ -39,7 +39,7 @@
 
 \title{Ethos: Technical Architecture Specification}
 \author{Identity Binding for Humans and AI Agents}
-\date{March 2026 --- v0.3.3}
+\date{April 2026 --- v2.6.1}
 \hypersetup{
   pdftitle={Ethos: Technical Architecture Specification},
   pdfauthor={Punt Labs},
@@ -55,27 +55,38 @@
 \section{Overview}
 % ===================================================================
 
-Ethos unifies a name, voice, email, GitHub handle, writing style,
-personality, and skills into a single identity that other tools
+Ethos unifies a name, email, GitHub handle, writing style,
+personality, and talents into a single identity that other tools
 optionally read.  It is written in Go and ships as a CLI binary plus
 a Claude Code plugin with an MCP server.
 
-The system serves two roles:
+Identity data lives in two layers: repo-local (git-tracked via the
+\fpath{.punt-labs/ethos/} submodule) and user-global
+(\fpath{\~{}/.punt-labs/ethos/}).  The repo layer takes priority for
+identity lookup; extensions always resolve from the global layer.
+
+The system serves three roles:
 
 \begin{enumerate}
   \item \textbf{Identity registry} --- CRUD operations on identity
-    YAML files stored at \fpath{\~{}/.punt-labs/ethos/identities/}.
-    Humans and agents share the same schema.
+    YAML files with layered resolution across repo-local and global
+    stores.  Humans and agents share the same schema.
   \item \textbf{Session roster} --- multi-participant awareness for
     Claude Code sessions.  Tracks who is present (human, primary
     agent, subagents), their personas, and parent-child relationships.
+  \item \textbf{Persona animation} --- hooks inject personality,
+    writing style, team context, and extension data into Claude Code
+    sessions at start, before context compaction, and when subagents
+    spawn.  Agent definition files are generated from identity data.
 \end{enumerate}
 
 Ethos is a \emph{sidecar}, not a dependency.  Other tools (Vox,
 Beadle, Biff) read ethos state from known filesystem paths.  They do
 not import ethos.  The file format is the contract.
 
-\subsection{Design Principles}
+% ===================================================================
+\section{Design Principles}
+% ===================================================================
 
 \begin{enumerate}[label=\textbf{P\arabic*}.]
   \item \textbf{Sidecar, not dependency.}  Consumers read files at
@@ -95,6 +106,12 @@ not import ethos.  The file format is the contract.
     session start, on every \cmd{/who}, and before every TTS call.
   \item \textbf{No daemon.}  All concurrency uses \texttt{flock}
     on lock files.  No background process, no database.
+  \item \textbf{Preserve identity content.}  Source \texttt{.md}
+    files are the authority on personality, writing style, and talent
+    content.  Hooks and persona blocks may restructure (strip leading
+    headings, fold the first paragraph into the opening line, list
+    talents as slugs) but must not discard or summarize the underlying
+    meaning.
 \end{enumerate}
 
 % ===================================================================
@@ -106,7 +123,7 @@ CLI entry point lives in \pkg{cmd/ethos}.  Module path:
 \texttt{github.com/punt-labs/ethos}.
 
 \begin{center}
-\begin{longtable}{@{}lp{8cm}@{}}
+\begin{longtable}{@{}lp{7.5cm}@{}}
 \toprule
 \textbf{Package} & \textbf{Responsibility} \\
 \midrule
@@ -115,22 +132,55 @@ CLI entry point lives in \pkg{cmd/ethos}.  Module path:
 \textbf{Package} & \textbf{Responsibility} \\
 \midrule
 \endhead
-\pkg{cmd/ethos/}        & CLI entry point: subcommand dispatch, global
-                          \cmd{--json} flag, interactive identity creation \\
-\pkg{internal/identity/} & Core identity model (\texttt{Identity} struct),
-                          validation, CRUD via \texttt{Store}, extension
-                          I/O \\
+\pkg{cmd/ethos/}        & CLI entry point: identity, attribute,
+                          session, role, team, hook, and admin
+                          subcommands; global \cmd{--json} flag \\
+\pkg{internal/identity/} & Core identity model (\texttt{Identity}
+                          struct), validation, CRUD via \texttt{Store},
+                          \texttt{LayeredStore} (repo + global),
+                          \texttt{IdentityStore} interface,
+                          extension I/O \\
+\pkg{internal/attribute/} & Generic CRUD for named markdown files
+                          (talents, personalities, writing styles);
+                          \texttt{Kind} struct, \texttt{Store} with
+                          layered fallback, slug validation \\
 \pkg{internal/session/}  & Session roster model (\texttt{Roster},
                           \texttt{Participant}), \texttt{flock}-based
-                          concurrent store, PID-keyed session discovery,
-                          staleness detection and purge \\
-\pkg{internal/process/}  & Process tree walker: find topmost \texttt{claude}
-                          ancestor PID via \texttt{ps}; result cached for
-                          process lifetime \\
-\pkg{internal/resolve/}  & Identity resolution chain: repo-local config
-                          $\to$ global active identity $\to$ error \\
-\pkg{internal/mcp/}      & MCP tool definitions and handlers (12~tools);
-                          \texttt{Handler} struct with injected stores \\
+                          concurrent store, PID-keyed session
+                          discovery, staleness detection and purge,
+                          prefix matching \\
+\pkg{internal/process/}  & Process tree walker: find topmost
+                          \texttt{claude} ancestor PID via
+                          \texttt{/proc} (Linux) and \texttt{sysctl}
+                          (macOS); result cached via
+                          \texttt{sync.Once} \\
+\pkg{internal/resolve/}  & 4-step human resolution chain (iam
+                          $\to$ git user.name $\to$ git user.email
+                          $\to$ \$USER) plus agent resolution from
+                          repo config \\
+\pkg{internal/hook/}     & 6~hook handlers (\texttt{SessionStart},
+                          \texttt{PreCompact},
+                          \texttt{SubagentStart/Stop},
+                          \texttt{SessionEnd},
+                          \texttt{FormatOutput}); persona builder,
+                          team context, extension context, agent
+                          file generation, agent definition
+                          installation \\
+\pkg{internal/mcp/}      & MCP tool definitions and handlers
+                          (9~tools via method dispatch);
+                          \texttt{Handler} struct with injected
+                          identity, session, attribute, role, and
+                          team stores \\
+\pkg{internal/doctor/}   & Installation health checks: identity
+                          directory, human identity, default agent,
+                          duplicate fields \\
+\pkg{internal/role/}     & Role model (\texttt{Role} struct), CRUD
+                          via \texttt{Store}, \texttt{LayeredStore}
+                          (repo + global) \\
+\pkg{internal/team/}     & Team model (\texttt{Team} struct), CRUD
+                          via \texttt{Store}, \texttt{LayeredStore}
+                          (repo + global), Z-spec referential
+                          integrity validation \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -141,19 +191,29 @@ Dependencies flow strictly downward.  No package imports a package
 above it in this ordering.
 
 \begin{verbatim}
-          cmd/ethos
-        /   |   |   \       \
-       /    |   |    \       \
-    mcp  resolve process identity session
-   /   \
-identity session
+                       cmd/ethos
+           /    /    |    |    \    \    \
+          /    /     |    |     \    \    \
+       mcp  hook  resolve doctor role team attribute
+       / \   |  \    |
+      /   \  |   \   |
+  identity session process
+      |
+  attribute
 \end{verbatim}
 
-\pkg{cmd/ethos} imports all five internal packages directly.
-\pkg{internal/mcp} depends on \pkg{identity} and \pkg{session}.
-\pkg{internal/identity} and \pkg{internal/session} are independent ---
-neither imports the other.  \pkg{internal/process} and
-\pkg{internal/resolve} are leaf packages with no internal dependencies.
+\pkg{cmd/ethos} imports all internal packages directly.
+\pkg{internal/mcp} depends on \pkg{identity}, \pkg{session},
+\pkg{attribute}, \pkg{role}, \pkg{team}, \pkg{resolve},
+\pkg{doctor}, \pkg{hook}, and \pkg{process}.
+\pkg{internal/hook} depends on \pkg{identity}, \pkg{session},
+\pkg{resolve}, \pkg{process}, \pkg{role}, and \pkg{team}.
+\pkg{internal/identity} depends on \pkg{attribute} for slug
+validation and content resolution.
+\pkg{internal/resolve} depends on \pkg{identity}, \pkg{session},
+and \pkg{process}.  \pkg{internal/session}, \pkg{internal/process},
+\pkg{internal/role}, and \pkg{internal/team} are leaf or near-leaf
+packages.
 
 % ===================================================================
 \section{Identity Model}
@@ -162,10 +222,11 @@ neither imports the other.  \pkg{internal/process} and
 \subsection{Schema}
 
 An identity is a YAML file at
-\fpath{\~{}/.punt-labs/ethos/identities/<handle>.yaml}.
+\fpath{.punt-labs/ethos/identities/<handle>.yaml} (repo-local) or
+\fpath{\~{}/.punt-labs/ethos/identities/<handle>.yaml} (global).
 
 \begin{center}
-\begin{longtable}{@{}llp{6cm}@{}}
+\begin{longtable}{@{}llp{5.5cm}@{}}
 \toprule
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
@@ -175,17 +236,38 @@ An identity is a YAML file at
 \midrule
 \endhead
 \field{name}          & string (required)  & Display name \\
-\field{handle}        & string (required)  & Unique lookup key, used as filename \\
-\field{kind}          & string (required)  & \texttt{human} or \texttt{agent} \\
+\field{handle}        & string (required)  & Unique lookup key, used as
+                                             filename \\
+\field{kind}          & string (required)  & \texttt{human} or
+                                             \texttt{agent} \\
 \field{email}         & string             & Beadle channel binding \\
 \field{github}        & string             & Biff channel binding \\
-\field{voice}         & object             & Vox channel binding:
-                                             \field{provider} and \field{voice\_id} \\
-\field{agent}         & string             & Path to Claude Code agent \texttt{.md}
+\field{agent}         & string             & Path to Claude Code agent
+                                             \texttt{.md} file \\
+\field{writing\_style} & string            & Slug referencing a writing
+                                             style \texttt{.md} file \\
+\field{personality}   & string             & Slug referencing a
+                                             personality \texttt{.md}
                                              file \\
-\field{writing\_style} & multiline string  & Prose style directives \\
-\field{personality}   & multiline string   & Behavioral directives \\
-\field{skills}        & list of strings    & Capability tags \\
+\field{talents}       & list of strings    & Slugs referencing talent
+                                             \texttt{.md} files \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Resolved fields --- populated by
+  \texttt{Store.Load}, never persisted:}} \\
+\midrule
+\field{WritingStyleContent}  & string       & Resolved markdown content
+                                              of writing style \\
+\field{PersonalityContent}   & string       & Resolved markdown content
+                                              of personality \\
+\field{TalentContents}       & []string     & Resolved markdown content
+                                              per talent (positionally
+                                              indexed) \\
+\field{Warnings}             & []string     & Warnings from attribute
+                                              resolution (missing
+                                              \texttt{.md} files) \\
+\field{Ext}                  & \texttt{map[string]map[string]string}
+                             & Tool-scoped extension data assembled
+                               from \fpath{<handle>.ext/} \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -201,8 +283,6 @@ An identity is a YAML file at
     may contain internal hyphens but not leading/trailing, used as
     filename).
   \item \field{kind} is one of \texttt{human} or \texttt{agent}.
-  \item If \field{voice\_id} is set, \field{voice.provider} is
-    required.
 \end{itemize}
 
 Validation errors are returned as a structured
@@ -210,28 +290,127 @@ Validation errors are returned as a structured
 
 \subsection{Persistence}
 
-\texttt{Store} takes a root directory path
-(\fpath{\~{}/.punt-labs/ethos} by default) and provides:
+\texttt{Store} takes a root directory path and provides:
 
 \begin{center}
-\begin{tabular}{@{}lp{7cm}@{}}
+\begin{tabular}{@{}lp{6.5cm}@{}}
 \toprule
 \textbf{Method} & \textbf{Behavior} \\
 \midrule
-\texttt{Save(id)}       & Atomic create with \texttt{O\_EXCL} --- rejects
-                          duplicate handles.  Creates the extension
-                          directory. \\
-\texttt{Load(handle)}   & Read YAML, assemble extensions from
-                          \fpath{<handle>.ext/} directory. \\
-\texttt{List()}          & Return all identities (calls \texttt{Load}
-                          per handle, includes extensions). \\
-\texttt{Active()}        & Read handle from the \fpath{active} file,
-                          then \texttt{Load()} the full identity. \\
-\texttt{SetActive(h)}   & Write the handle to the \fpath{active} file. \\
-\texttt{Exists(handle)}  & Check file existence. \\
+\texttt{Save(id)}        & Atomic create with \texttt{O\_EXCL} ---
+                           rejects duplicate handles.  Validates
+                           attribute references.  Creates the
+                           extension directory. \\
+\texttt{Load(handle)}    & Read YAML, resolve attributes (personality,
+                           writing style, talents) to markdown content,
+                           assemble extensions from
+                           \fpath{<handle>.ext/}.  Pass
+                           \texttt{Reference(true)} to skip content
+                           resolution. \\
+\texttt{List()}           & Return all identities in reference mode
+                           (slugs only).  Non-loadable files are
+                           reported as warnings. \\
+\texttt{FindBy(f, v)}    & Search identities where field \texttt{f}
+                           matches value \texttt{v}.  Supported fields:
+                           \texttt{handle}, \texttt{email},
+                           \texttt{github}.  Returns nil, nil on no
+                           match. \\
+\texttt{Exists(handle)}   & Check file existence. \\
+\texttt{Update(h, fn)}   & Read-modify-write with flock.  Applies
+                           mutation function \texttt{fn}, validates
+                           attribute references, writes atomically
+                           via temp file + rename. \\
+\texttt{ValidateRefs(id)} & Check that all attribute slugs
+                           (personality, writing style, talents)
+                           resolve to existing \texttt{.md} files. \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\subsection{LayeredStore}
+
+\texttt{LayeredStore} implements \texttt{IdentityStore} with two
+layers: repo-local (git-tracked) and user-global.  The repo layer
+is optional (nil when not inside a git repository).
+
+\begin{itemize}
+  \item \textbf{Load priority}: repo first, then global.  Parse
+    errors from the repo layer are surfaced (not silently fallen
+    through).  File-not-found falls through to global.
+  \item \textbf{Extensions}: always resolve from the global store,
+    even when the identity itself is in repo.
+  \item \textbf{Attribute resolution}: tries the identity's own
+    layer first, falls back to the other layer for any missing
+    \texttt{.md} files.
+  \item \textbf{List}: returns identities from both stores,
+    deduplicated by handle.  Repo wins on collision.
+  \item \textbf{Save}: writes to repo if available, otherwise
+    global.  Extension directory is always created in global.
+  \item \textbf{Update}: updates the identity in the owning store
+    (repo if it exists there, otherwise global).  Uses cross-layer
+    \texttt{ValidateRefs} so attribute references in either store
+    are accepted.
+  \item \textbf{Voice migration}: legacy \field{voice} fields in
+    repo identities are relocated to the global ext store
+    (\fpath{<handle>.ext/vox.yaml}) and stripped from the YAML.
+\end{itemize}
+
+\subsection{IdentityStore Interface}
+
+The \texttt{IdentityStore} interface abstracts over both
+\texttt{Store} (single-root) and \texttt{LayeredStore} (repo +
+global).  All consumers --- MCP handlers, hooks, CLI commands ---
+accept \texttt{IdentityStore} rather than a concrete type.
+
+Methods: \texttt{Load}, \texttt{Save}, \texttt{List},
+\texttt{FindBy}, \texttt{Exists}, \texttt{Update},
+\texttt{ValidateRefs}, \texttt{Root}, \texttt{IdentitiesDir},
+\texttt{Path}, \texttt{ExtDir}, \texttt{ExtGet}, \texttt{ExtSet},
+\texttt{ExtDel}, \texttt{ExtList}.
+
+% ===================================================================
+\section{Attribute System}
+% ===================================================================
+
+Attributes are named markdown documents stored as
+\fpath{<kind>/<slug>.md} files under both repo-local and global ethos
+roots.  Three kinds are pre-defined:
+
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Kind} & \textbf{Directory} & \textbf{CLI Command} &
+  \textbf{Identity Field} \\
+\midrule
+Talents       & \texttt{talents/}       & \cmd{talent}
+              & \field{talents} (list) \\
+Personalities & \texttt{personalities/} & \cmd{personality}
+              & \field{personality} (scalar) \\
+Writing Styles & \texttt{writing-styles/} & \cmd{writing-style}
+              & \field{writing\_style} (scalar) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Kind and Store}
+
+The \texttt{Kind} struct configures a \texttt{Store} for one attribute
+type, carrying directory name, CLI command name, display name, and
+plural name.  \texttt{Store} provides \texttt{Save}, \texttt{Load},
+\texttt{List}, \texttt{Delete}, \texttt{Exists}, and \texttt{Path}.
+
+\texttt{Store} supports an optional fallback store.  When set,
+read operations check the fallback (repo layer) first, then the
+primary store (global layer).  \texttt{List} merges results from
+both layers with the fallback winning on slug collision.  Writes
+always go to the primary store.
+
+\subsection{Slug Validation}
+
+Slugs follow the same pattern as identity handles:
+\verb|^[a-z0-9]([a-z0-9-]*[a-z0-9])?$|.  Path traversal is
+prevented by resolving the candidate path and checking it stays
+within the attribute directory.
 
 % ===================================================================
 \section{Extension System}
@@ -254,13 +433,14 @@ namespaced, file-per-tool design.
 
 Each file is a flat YAML map of key-value pairs.  Ethos never reads
 or interprets extension contents except to assemble the merged view
-returned by \texttt{Load()} and the \tool{get\_identity} MCP tool.
+returned by \texttt{Load()} and the \tool{identity} MCP tool.
 
 \subsection{Ownership Rules}
 
 \begin{enumerate}
   \item Ethos creates the \fpath{<handle>.ext/} directory on identity
-    creation.
+    creation.  Extensions always live in the global store, even when
+    the identity is repo-local.
   \item Each tool manages its own \fpath{<namespace>.yaml} file.
   \item Tools may read/write their file directly (sidecar contract) or
     through the ethos CLI/MCP interface.
@@ -302,6 +482,17 @@ enforce flat string values; session-level extensions accept arbitrary
 YAML structures.  A tool may store durable defaults at the persona
 level and ephemeral session state at the participant level.
 
+\subsection{Session Context (DES-022)}
+
+Any extension namespace may include a \texttt{session\_context} key.
+During \texttt{SessionStart}, \texttt{PreCompact}, and
+\texttt{SubagentStart} hooks, ethos collects all
+\texttt{session\_context} values from the agent's persona-level
+extensions, joins them, and emits the result alongside the persona
+block.  This allows consumers (e.g., Biff, Quarry) to inject
+behavioral instructions into the model's context without ethos
+understanding the content.
+
 % ===================================================================
 \section{Session Roster}
 % ===================================================================
@@ -315,7 +506,7 @@ everyone else?''
 Stored at \fpath{\~{}/.punt-labs/ethos/sessions/<session-id>.yaml}:
 
 \begin{center}
-\begin{longtable}{@{}llp{5.5cm}@{}}
+\begin{longtable}{@{}llp{5cm}@{}}
 \toprule
 \textbf{Field} & \textbf{Source} & \textbf{Purpose} \\
 \midrule
@@ -324,10 +515,15 @@ Stored at \fpath{\~{}/.punt-labs/ethos/sessions/<session-id>.yaml}:
 \textbf{Field} & \textbf{Source} & \textbf{Purpose} \\
 \midrule
 \endhead
-\field{session}     & Hook input        & Session identifier \\
-\field{started}     & Roster creation   & RFC~3339 timestamp \\
-\field{participants} & Hook lifecycle   & Ordered list of \texttt{Participant}
-                                          records \\
+\field{session}      & Hook input        & Session identifier \\
+\field{started}      & Roster creation   & RFC~3339 timestamp \\
+\field{repo}         & Git remote        & Repository name
+                                           (org/repo) \\
+\field{host}         & \texttt{os.Hostname()} & Short hostname (no
+                                           domain) \\
+\field{participants} & Hook lifecycle    & Ordered list of
+                                           \texttt{Participant}
+                                           records \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -345,11 +541,14 @@ Each participant record:
 \midrule
 \endhead
 \field{agent\_id}    & string  & OS login, Claude PID, or subagent ID \\
-\field{persona}      & string  & Ethos handle; null when no identity \\
+\field{persona}      & string  & Ethos handle; empty when no identity \\
 \field{agent\_type}  & string  & Raw type (e.g., \texttt{Explore},
                                  \texttt{code-reviewer}) \\
-\field{parent}       & string  & Parent's \field{agent\_id}; null for root \\
-\field{ext}          & \texttt{map[string]any}  & Tool-scoped ephemeral metadata \\
+\field{parent}       & string  & Parent's \field{agent\_id}; empty for
+                                 root \\
+\field{joined}       & string  & RFC~3339 timestamp of join \\
+\field{ext}          & \texttt{map[string]any}  & Tool-scoped ephemeral
+                                 metadata \\
 \bottomrule
 \end{longtable}
 \end{center}
@@ -369,26 +568,32 @@ mal (root -- $USER)
 \end{verbatim}
 
 Any participant can derive relationships from the tree: root (walk up
-to \field{parent:~null}), initiator (my \field{parent}), delegates
+to \field{parent:~empty}), initiator (my \field{parent}), delegates
 (anyone whose \field{parent} is my \field{agent\_id}), siblings (same
 \field{parent}).
 
 \subsection{Lifecycle via Hooks}
 
 \begin{center}
-\begin{tabular}{@{}llp{5cm}@{}}
+\begin{tabular}{@{}llp{4.5cm}@{}}
 \toprule
-\textbf{Hook Event} & \textbf{Roster Operation} & \textbf{Data Available} \\
+\textbf{Hook Event} & \textbf{Roster Operation} & \textbf{Data
+  Available} \\
 \midrule
-\texttt{SessionStart}  & Create roster, join root + primary
+\texttt{SessionStart}  & Create roster, join root + primary;
+                          emit persona block + team context;
+                          generate agent files
                         & \field{session\_id}, \texttt{\$USER},
-                          \texttt{\$PPID} as Claude PID \\
-\texttt{SubagentStart}  & Join subagent
+                          Claude PID \\
+\texttt{SubagentStart}  & Join subagent; emit persona if matched
                         & \field{session\_id}, \field{agent\_id},
                           \field{agent\_type} \\
 \texttt{SubagentStop}   & Leave subagent
                         & \field{session\_id}, \field{agent\_id} \\
-\texttt{SessionEnd}     & Delete roster + current session file
+\texttt{PreCompact}     & Re-emit full persona block + team context
+                          (survives compaction)
+                        & \field{session\_id} \\
+\texttt{SessionEnd}     & Delete roster + PID-keyed session file
                         & \field{session\_id} \\
 \bottomrule
 \end{tabular}
@@ -431,26 +636,127 @@ ID.  The \texttt{SessionEnd} hook deletes the file.
     (malformed).
 \end{enumerate}
 
+\texttt{PurgeCurrent()} additionally cleans stale PID-keyed files
+from the \fpath{sessions/current/} directory when the referenced
+process is no longer alive.
+
+% ===================================================================
+\section{Teams and Roles}
+% ===================================================================
+
+\subsection{Role Model}
+
+A role is a named YAML file at
+\fpath{roles/<slug>.yaml}.
+
+\begin{center}
+\begin{tabular}{@{}llp{6cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\field{name}             & string       & Slug-format name \\
+\field{responsibilities} & []string     & What the role does \\
+\field{permissions}      & []string     & What the role may access \\
+\field{tools}            & []string     & MCP tools available to agents
+                                          in this role (used in agent
+                                          file generation) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Role names follow slug validation.  CRUD is provided by
+\texttt{role.Store}, with \texttt{role.LayeredStore} searching both
+repo-local and global roots.  Deletion is guarded by referential
+integrity: a role cannot be deleted if any team references it.
+
+\subsection{Team Model}
+
+A team is a named YAML file at
+\fpath{teams/<slug>.yaml}.
+
+\begin{center}
+\begin{tabular}{@{}llp{5.5cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\field{name}           & string           & Slug-format name \\
+\field{repositories}   & []string         & Repos this team owns
+                                            (org/repo format) \\
+\field{members}        & []Member         & Identity-role
+                                            bindings \\
+\field{collaborations} & []Collaboration  & Directed relationships
+                                            between roles \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Member}: \field{identity} (handle) + \field{role} (slug).
+
+\textbf{Collaboration}: \field{from} (role) $\to$ \field{to} (role),
+with \field{type} constrained to \texttt{reports\_to},
+\texttt{collaborates\_with}, or \texttt{delegates\_to}.
+
+\subsection{Z-Spec Invariants}
+
+\texttt{team.Validate()} enforces referential integrity via
+callback functions (no circular imports):
+
+\begin{itemize}
+  \item Team name follows slug rules.
+  \item At least one member.
+  \item Every member's identity exists (via \texttt{identityExists}
+    callback).
+  \item Every member's role exists (via \texttt{roleExists}
+    callback).
+  \item No duplicate identity/role pairs.
+  \item Every collaboration's \field{from} and \field{to} roles are
+    filled by at least one member.
+  \item No self-collaborations.
+  \item Collaboration \field{type} is one of the three valid values.
+\end{itemize}
+
+These invariants are checked on team creation and member addition.
+
 % ===================================================================
 \section{Identity Resolution}
 % ===================================================================
 
-\texttt{resolve.Resolve(repoRoot)} determines the active identity
-handle through a two-level priority chain:
+\subsection{Human Resolution}
+
+\texttt{resolve.Resolve(store, sessionStore)} determines the active
+identity handle through a 4-step priority chain.  The chain stops
+at the first match:
 
 \begin{enumerate}
-  \item \textbf{Repo-local config} ---
-    \fpath{.punt-labs/ethos/config.yaml} in the repository root.
-    Contains a \texttt{RepoConfig} struct with \field{active} and
-    \field{agents} fields.  If \field{active} is non-empty, return it.
-  \item \textbf{Global active identity} ---
-    \fpath{\~{}/.punt-labs/ethos/active} (plain text file).  If
-    non-empty, return it.
-  \item \textbf{Error} --- no active identity configured.
+  \item \textbf{iam declaration} --- walk the process tree via
+    \texttt{FindClaudePID()}, read the PID-keyed session file, load
+    the roster, find the matching participant.  If found with a
+    persona, return it.  If found with no persona, stop (do not fall
+    through --- this is an explicit ``no identity'').
+  \item \textbf{git config user.name} --- run
+    \texttt{git config user.name}, match against identity
+    \field{github} field via \texttt{FindBy("github", name)}.
+  \item \textbf{git config user.email} --- run
+    \texttt{git config user.email}, match against identity
+    \field{email} field via \texttt{FindBy("email", email)}.
+  \item \textbf{\$USER} --- read the \texttt{USER} environment
+    variable, match against identity \field{handle} field via
+    \texttt{FindBy("handle", user)}.
 \end{enumerate}
 
-This mirrors Git's resolution: \fpath{.git/config} overrides
-\fpath{\~{}/.gitconfig}.
+Returns an error when no step matches.
+
+\subsection{Agent Resolution}
+
+\texttt{resolve.ResolveAgent(repoRoot)} reads the repo-local
+configuration file.  Tries \fpath{.punt-labs/ethos.yaml} first,
+falls back to the legacy path \fpath{.punt-labs/ethos/config.yaml}.
+Returns the \field{agent} handle from the config, or empty string
+if not configured.
+
+The \texttt{RepoConfig} struct also carries a \field{team} field,
+used by \texttt{ResolveTeam()} to determine which team owns the
+current repository.
 
 % ===================================================================
 \section{Process Tree Walker}
@@ -462,9 +768,9 @@ primary agent's \field{agent\_id} for session rosters and to locate
 PID-keyed session files.
 
 \begin{enumerate}
-  \item Run \texttt{ps -eo pid=,ppid=,comm=} to snapshot the process
-    table.
-  \item Parse into a map of PID $\to$ (parent PID, command name).
+  \item Read the process table using native OS interfaces:
+    \texttt{/proc/<pid>/stat} on Linux,
+    \texttt{sysctl kern.proc.pid} on macOS.  No subprocess spawning.
   \item Walk from the current PID upward, following parent pointers.
   \item Track the topmost PID where the command name is
     \texttt{claude}.
@@ -472,9 +778,91 @@ PID-keyed session files.
     degenerate process trees.
   \item If no \texttt{claude} ancestor is found, fall back to
     \texttt{os.Getppid()}.
-  \item Cache the result for the lifetime of the process (the answer
-    does not change).
+  \item Cache the result for the lifetime of the process via
+    \texttt{sync.Once} (the answer does not change).
 \end{enumerate}
+
+\subsection{Version-Named Binary Handling}
+
+Claude Code installs version-named binaries under
+\fpath{\~{}/.local/share/claude/versions/<version>}.  The process
+command name for these binaries is the version string (e.g.,
+\texttt{2.1.86}), not \texttt{claude}.
+
+\texttt{normalizeClaudeComm(comm, exePath)} detects this pattern:
+if the executable path contains \texttt{/claude/versions/}, the
+command name is normalized to \texttt{claude}.  On Linux, the exe
+path is read from \texttt{/proc/<pid>/exe}.  On macOS, it is read
+from \texttt{kern.procargs2}.
+
+% ===================================================================
+\section{Persona Animation}
+% ===================================================================
+
+Persona animation is the process of injecting identity context into
+Claude Code sessions so the model behaves according to the defined
+personality, writing style, and team role.
+
+\subsection{Three Layers}
+
+\begin{enumerate}
+  \item \textbf{SessionStart} --- emits the full persona block for
+    the repo's default agent.  Includes personality (with opening
+    line fold), writing style, talents, extension context
+    (\texttt{session\_context} keys), and team context (team members,
+    their roles, personalities, collaborations).  Also generates
+    \fpath{.claude/agents/<handle>.md} files from identity data and
+    installs static agent definitions from the ethos agents
+    directory.
+
+  \item \textbf{PreCompact} --- fires before context compaction.
+    Re-emits the full persona block, extension context, and team
+    context.  This ensures behavioral instructions survive
+    compaction.
+
+  \item \textbf{SubagentStart} --- auto-matches the subagent's
+    \field{agent\_type} against ethos identities.  If a match is
+    found, emits the subagent's persona block and extension context.
+    Includes a ``You report to'' line referencing the parent agent
+    from the session roster.
+\end{enumerate}
+
+\subsection{Persona Block Construction}
+
+\texttt{BuildPersonaBlock(id)} assembles the persona from a resolved
+identity:
+
+\begin{itemize}
+  \item Opening line: ``You are Name (handle), <first prose sentence
+    of personality>.''
+  \item Remaining personality content (first paragraph skipped to
+    avoid redundancy).
+  \item Writing style under \texttt{\#\# Writing Style}.
+  \item Talent slugs under \texttt{\#\# Talents} (slug list, not
+    full content, to stay within context budget).
+\end{itemize}
+
+Leading top-level headings (\texttt{\# Title}) are stripped from
+personality and writing style content.  Sub-headings are preserved.
+
+\subsection{Team Context Construction}
+
+\texttt{BuildTeamContext(team, roles, identities, selfHandle)} emits
+a team section with per-member entries.  For teammates (not self),
+each entry includes full personality content, writing style, role
+responsibilities, and talent slugs.  The self entry is compact (role
+and responsibilities only) since the full persona block was already
+emitted.  Collaborations are listed as compact directed edges.
+
+\subsection{Agent File Generation}
+
+\texttt{GenerateAgentFiles()} creates \fpath{.claude/agents/<handle>.md}
+files from ethos identity, personality, writing style, and role data.
+Files include YAML frontmatter (name, description, tools from the
+role) and a markdown body (opening line, personality, writing style,
+responsibilities, talents).  The main agent and human identities are
+skipped.  Writes are idempotent: files are only written when content
+differs from the existing file.
 
 % ===================================================================
 \section{Storage Layout}
@@ -490,29 +878,59 @@ PID-keyed session files.
 \textbf{Scope} & \textbf{Path} & \textbf{Git-tracked?} \\
 \midrule
 \endhead
-Identities      & \fpath{\~{}/.punt-labs/ethos/identities/<handle>.yaml}
-                 & No \\
-Extensions       & \fpath{\~{}/.punt-labs/ethos/identities/<handle>.ext/<ns>.yaml}
-                 & No \\
-Active identity  & \fpath{\~{}/.punt-labs/ethos/active}
-                 & No \\
-Sessions         & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
-                 & No \\
-Session locks    & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
-                 & No \\
-Current session  & \fpath{\~{}/.punt-labs/ethos/sessions/current/<pid>}
-                 & No \\
-Repo config      & \fpath{.punt-labs/ethos/config.yaml}
+\multicolumn{3}{@{}l}{\emph{Repo-local (under repository root):}} \\
+\midrule
+Repo identities  & \fpath{.punt-labs/ethos/identities/<handle>.yaml}
                  & Yes \\
-Repo agents      & \fpath{.punt-labs/ethos/agents/<name>.yaml}
+Repo talents     & \fpath{.punt-labs/ethos/talents/<slug>.md}
                  & Yes \\
+Repo personalities & \fpath{.punt-labs/ethos/personalities/<slug>.md}
+                 & Yes \\
+Repo writing styles & \fpath{.punt-labs/ethos/writing-styles/<slug>.md}
+                 & Yes \\
+Repo roles       & \fpath{.punt-labs/ethos/roles/<slug>.yaml}
+                 & Yes \\
+Repo teams       & \fpath{.punt-labs/ethos/teams/<slug>.yaml}
+                 & Yes \\
+Repo agents      & \fpath{.punt-labs/ethos/agents/<name>.md}
+                 & Yes \\
+Repo config      & \fpath{.punt-labs/ethos.yaml}
+                 & Yes \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{User-global
+  (\fpath{\~{}/.punt-labs/ethos/}):}} \\
+\midrule
+Global identities  & \fpath{\~{}/.punt-labs/ethos/identities/<handle>.yaml}
+                   & No \\
+Extensions         & \fpath{\~{}/.punt-labs/ethos/identities/<handle>.ext/<ns>.yaml}
+                   & No \\
+Global talents     & \fpath{\~{}/.punt-labs/ethos/talents/<slug>.md}
+                   & No \\
+Global personalities & \fpath{\~{}/.punt-labs/ethos/personalities/<slug>.md}
+                   & No \\
+Global writing styles & \fpath{\~{}/.punt-labs/ethos/writing-styles/<slug>.md}
+                   & No \\
+Global roles       & \fpath{\~{}/.punt-labs/ethos/roles/<slug>.yaml}
+                   & No \\
+Global teams       & \fpath{\~{}/.punt-labs/ethos/teams/<slug>.yaml}
+                   & No \\
+Sessions           & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
+                   & No \\
+Session locks      & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
+                   & No \\
+Current session    & \fpath{\~{}/.punt-labs/ethos/sessions/current/<pid>}
+                   & No \\
+Generated agents   & \fpath{.claude/agents/<handle>.md}
+                   & No \\
 \bottomrule
 \end{longtable}
 \end{center}
 
 All user-global state lives under \fpath{\~{}/.punt-labs/ethos/}.
 Repo-scoped state lives under \fpath{.punt-labs/ethos/} in the
-repository root.
+repository root (typically a git submodule of the team registry).
+The repo config file \fpath{.punt-labs/ethos.yaml} lives one level
+up from the submodule and is tracked in the consuming repository.
 
 % ===================================================================
 \section{CLI Surface}
@@ -524,17 +942,81 @@ accept a global \cmd{--json} flag for machine-readable output.
 \subsection{Identity Commands}
 
 \begin{center}
-\begin{tabular}{@{}lp{7cm}@{}}
+\begin{tabular}{@{}lp{6.5cm}@{}}
 \toprule
 \textbf{Command} & \textbf{Description} \\
 \midrule
-\cmd{whoami [handle]}     & Show or set the active identity. \\
-\cmd{create [-f FILE]}    & Create identity interactively or from a
-                            YAML file. \\
-\cmd{list}                & List all identities; active marked with
-                            \texttt{*}. \\
-\cmd{show <handle>}       & Show full identity details including
-                            extensions. \\
+\cmd{whoami}              & Show the caller's identity (resolved
+                            via 4-step chain). \\
+\cmd{identity}            & Parent command (defaults to whoami). \\
+\cmd{identity whoami}     & Show the caller's identity. \\
+\cmd{identity list}       & List all identities from both stores. \\
+\cmd{identity get <h>}    & Show full identity details including
+                            extensions and resolved content. \\
+\cmd{identity create}     & Create identity interactively or from
+                            a YAML file (\cmd{-f}). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Attribute Commands}
+
+Three parallel command groups: \cmd{talent}, \cmd{personality},
+\cmd{writing-style}.  Each provides:
+
+\begin{center}
+\begin{tabular}{@{}lp{6.5cm}@{}}
+\toprule
+\textbf{Subcommand} & \textbf{Description} \\
+\midrule
+\cmd{create <slug>}       & Create from \$EDITOR or file (\cmd{-f}). \\
+\cmd{list}                & List all slugs from both stores. \\
+\cmd{show <slug>}         & Print markdown content. \\
+\cmd{delete <slug>}       & Remove the \texttt{.md} file. \\
+\cmd{set <handle> <slug>} & Bind to an identity (personality, writing
+                            style only). \\
+\cmd{add <handle> <slug>} & Add to identity (talents only). \\
+\cmd{remove <h> <slug>}   & Remove from identity (talents only). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Role Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{6.5cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{role create <name>}  & Create interactively or from YAML
+                            (\cmd{-f}). \\
+\cmd{role list}            & List all roles from both stores. \\
+\cmd{role show <name>}     & Show role details. \\
+\cmd{role delete <name>}   & Delete (guarded by referential
+                            integrity). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Team Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{6cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{team create <name>}                & Create from YAML (\cmd{-f})
+                                          or interactive. \\
+\cmd{team list}                          & List all teams. \\
+\cmd{team show <name>}                   & Show team details. \\
+\cmd{team delete <name>}                 & Delete a team. \\
+\cmd{team add-member <t> <id> <role>}    & Add member with referential
+                                          integrity check. \\
+\cmd{team remove-member <t> <id> <role>} & Remove a member. \\
+\cmd{team add-collab <t> <f> <to> <type>} & Add directed
+                                          collaboration. \\
+\cmd{team for-repo [repo]}               & Show teams for a repo
+                                          (defaults to current). \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -542,7 +1024,7 @@ accept a global \cmd{--json} flag for machine-readable output.
 \subsection{Extension Commands}
 
 \begin{center}
-\begin{tabular}{@{}lp{7cm}@{}}
+\begin{tabular}{@{}lp{6.5cm}@{}}
 \toprule
 \textbf{Command} & \textbf{Description} \\
 \midrule
@@ -560,7 +1042,7 @@ accept a global \cmd{--json} flag for machine-readable output.
 \subsection{Session Commands}
 
 \begin{center}
-\begin{tabular}{@{}lp{7cm}@{}}
+\begin{tabular}{@{}lp{6.5cm}@{}}
 \toprule
 \textbf{Command} & \textbf{Description} \\
 \midrule
@@ -581,17 +1063,40 @@ accept a global \cmd{--json} flag for machine-readable output.
 \end{tabular}
 \end{center}
 
+\subsection{Hook Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{6.5cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{hook session-start}    & SessionStart hook handler. \\
+\cmd{hook session-end}      & SessionEnd hook handler. \\
+\cmd{hook subagent-start}   & SubagentStart hook handler. \\
+\cmd{hook subagent-stop}    & SubagentStop hook handler. \\
+\cmd{hook pre-compact}      & PreCompact hook handler. \\
+\cmd{hook format-output}    & PostToolUse output formatter. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The \cmd{hook} group is hidden from help output.  These commands are
+invoked by Claude Code hook configuration, not by users.
+
 \subsection{Admin Commands}
 
 \begin{center}
-\begin{tabular}{@{}lp{7cm}@{}}
+\begin{tabular}{@{}lp{6.5cm}@{}}
 \toprule
 \textbf{Command} & \textbf{Description} \\
 \midrule
 \cmd{version}              & Print version string. \\
 \cmd{doctor}               & Check installation health (identity
-                             directory, active identity). \\
+                             directory, human identity, default agent,
+                             duplicate fields). \\
 \cmd{serve}                & Start MCP server (stdio transport). \\
+\cmd{completion <shell>}   & Generate shell completion script
+                             (bash, zsh, fish). \\
 \cmd{uninstall [--purge]}  & Remove plugin; \cmd{--purge} also
                              removes binary and data. \\
 \bottomrule
@@ -603,97 +1108,129 @@ accept a global \cmd{--json} flag for machine-readable output.
 % ===================================================================
 
 \texttt{ethos serve} starts a stdio-transport MCP server that
-registers 12~tools via \texttt{Handler.RegisterTools()}.  The
-\texttt{Handler} struct receives injected \texttt{identity.Store}
-and \texttt{session.Store} instances.
+registers 9~tools via \texttt{Handler.RegisterTools()}.  Each tool
+is a consolidated endpoint that accepts a \field{method} parameter
+for dispatch.  The \texttt{Handler} struct holds injected stores:
+\texttt{identity.IdentityStore}, \texttt{session.Store},
+\texttt{attribute.Store} (talents, personalities, writing styles),
+\texttt{role.LayeredStore}, and \texttt{team.LayeredStore}.
 
-\subsection{Identity Tools}
-
-\begin{center}
-\begin{longtable}{@{}llp{5.5cm}@{}}
-\toprule
-\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
-\midrule
-\endfirsthead
-\toprule
-\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
-\midrule
-\endhead
-\tool{whoami}           & ---                 & Show active identity; optional
-                                                \field{handle} to set it. \\
-\tool{list\_identities} & ---                 & List all identities with active
-                                                status. \\
-\tool{get\_identity}    & \field{handle}       & Return full identity including
-                                                extensions. \\
-\tool{create\_identity} & \field{name},
-                          \field{handle},
-                          \field{kind}         & Create identity from provided
-                                                fields. \\
-\bottomrule
-\end{longtable}
-\end{center}
-
-\subsection{Extension Tools}
+\subsection{Identity Tool}
 
 \begin{center}
-\begin{longtable}{@{}llp{5.5cm}@{}}
+\begin{tabular}{@{}lp{6cm}@{}}
 \toprule
-\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\textbf{Method} & \textbf{Description} \\
 \midrule
-\endfirsthead
-\toprule
-\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
-\midrule
-\endhead
-\tool{ext\_get}  & \field{persona}, \field{namespace}
-                 & Read extension keys (optional \field{key} for
-                   single lookup). \\
-\tool{ext\_set}  & \field{persona}, \field{namespace},
-                   \field{key}, \field{value}
-                 & Write a key-value pair. \\
-\tool{ext\_del}  & \field{persona}, \field{namespace}
-                 & Delete a key or entire namespace (optional
-                   \field{key}). \\
-\tool{ext\_list} & \field{persona}
-                 & List all extension namespaces. \\
+\texttt{whoami}  & Resolve caller's identity via 4-step chain. \\
+\texttt{list}    & List all identities from both stores. \\
+\texttt{get}     & Load full identity by handle. \\
+\texttt{create}  & Create identity from provided fields. \\
 \bottomrule
-\end{longtable}
+\end{tabular}
 \end{center}
 
-\subsection{Session Tools}
+\subsection{Extension Tool}
 
 \begin{center}
-\begin{longtable}{@{}llp{5.5cm}@{}}
+\begin{tabular}{@{}lp{6cm}@{}}
 \toprule
-\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
+\textbf{Method} & \textbf{Description} \\
 \midrule
-\endfirsthead
-\toprule
-\textbf{Tool} & \textbf{Required Params} & \textbf{Description} \\
-\midrule
-\endhead
-\tool{session\_iam}     & \field{session\_id},
-                          \field{agent\_id},
-                          \field{persona}
-                        & Declare persona for a participant. \\
-\tool{session\_roster}  & \field{session\_id}
-                        & Return full roster with tree. \\
-\tool{session\_join}    & \field{session\_id},
-                          \field{agent\_id}
-                        & Register a participant (optional
-                          \field{persona}, \field{parent},
-                          \field{agent\_type}). \\
-\tool{session\_leave}   & \field{session\_id},
-                          \field{agent\_id}
-                        & Deregister a participant. \\
+\texttt{get}   & Read key(s) in a namespace. \\
+\texttt{set}   & Write a key-value pair. \\
+\texttt{del}   & Delete a key or namespace. \\
+\texttt{list}  & List namespaces for a persona. \\
 \bottomrule
-\end{longtable}
+\end{tabular}
 \end{center}
 
-Most tools return JSON objects on success.  Mutating tools
-(\tool{whoami} when setting, \tool{ext\_set}, \tool{ext\_del},
-\tool{session\_iam}, \tool{session\_leave}) return plain-text
-confirmation strings instead.  Error responses are also plain strings.
+\subsection{Session Tool}
+
+\begin{center}
+\begin{tabular}{@{}lp{6cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+\texttt{roster} & Load full roster (session ID auto-discovered if
+                  omitted). \\
+\texttt{iam}    & Declare persona for a participant. \\
+\texttt{join}   & Register a participant. \\
+\texttt{leave}  & Deregister a participant. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Attribute Tools}
+
+Three tools --- \tool{talent}, \tool{personality},
+\tool{writing\_style} --- each with:
+
+\begin{center}
+\begin{tabular}{@{}lp{6cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+\texttt{create}  & Create a new attribute \texttt{.md} file. \\
+\texttt{list}    & List all slugs from both stores. \\
+\texttt{show}    & Read attribute content. \\
+\texttt{delete}  & Remove the \texttt{.md} file. \\
+\texttt{set}     & Bind slug to identity (personality, writing
+                   style). \\
+\texttt{add}     & Add slug to identity (talent only). \\
+\texttt{remove}  & Remove slug from identity (talent only). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Role Tool}
+
+\begin{center}
+\begin{tabular}{@{}lp{6cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+\texttt{create}  & Create a new role. \\
+\texttt{list}    & List all role names. \\
+\texttt{show}    & Load role details. \\
+\texttt{delete}  & Delete role (referential integrity guarded). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Team Tool}
+
+\begin{center}
+\begin{tabular}{@{}lp{6cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+\texttt{create}         & Create a new team with members. \\
+\texttt{list}           & List all team names. \\
+\texttt{show}           & Load full team definition. \\
+\texttt{delete}         & Delete a team. \\
+\texttt{add\_member}    & Add identity/role pair. \\
+\texttt{remove\_member} & Remove identity/role pair. \\
+\texttt{add\_collab}    & Add directed collaboration. \\
+\texttt{for\_repo}      & Find teams that own a repository. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Doctor Tool}
+
+Standalone admin tool with no methods.  Runs all health checks
+(identity directory, human identity, default agent, duplicate
+fields) and returns a formatted status table.
+
+\subsection{Output Formatting}
+
+The \texttt{FormatOutput} hook provides two-channel display for
+every MCP tool response: a compact summary in
+\texttt{updatedMCPToolOutput} and full data in
+\texttt{additionalContext}.  Each tool has a dedicated formatter
+that produces columnar tables (identity list, session roster,
+role/team details) or structured summaries.
 
 % ===================================================================
 \section{Design Invariants}
@@ -725,14 +1262,17 @@ all operations:
   \item \textbf{Flock concurrency.}  All roster mutations acquire
     \texttt{flock(LOCK\_EX)} on a per-session lock file.  No daemon,
     no database, no race conditions on concurrent subagent hooks.
+    Identity updates also use flock on per-identity lock files.
 
   \item \textbf{Extension isolation.}  Each consumer's extension
     data lives in its own YAML file.  Concurrent writes by different
-    tools cannot corrupt each other's data.
+    tools cannot corrupt each other's data.  Extensions always live
+    in global, even for repo-local identities.
 
   \item \textbf{Process tree caching.}  \texttt{FindClaudePID()}
-    caches the result for the process lifetime.  The Claude ancestor
-    PID does not change during a session.
+    caches the result for the process lifetime via
+    \texttt{sync.Once}.  The Claude ancestor PID does not change
+    during a session.
 
   \item \textbf{No shell execution.}  All subprocess invocations use
     argument lists, never shell interpretation.
@@ -740,6 +1280,20 @@ all operations:
   \item \textbf{Depth-bounded tree walk.}  The process tree walk
     caps at 10~iterations to prevent infinite loops in degenerate
     process tables.
+
+  \item \textbf{Layered resolution.}  Repo-local takes priority for
+    identity, attribute, role, and team lookup.  Global is the
+    fallback.  Extensions are always global.  This mirrors Git's
+    resolution: local config overrides global config.
+
+  \item \textbf{Referential integrity.}  Teams enforce that every
+    member's identity and role exist at creation and mutation time.
+    Roles cannot be deleted while referenced by any team.
+    Collaborations must reference roles filled by current members.
+
+  \item \textbf{Idempotent agent generation.}  Generated agent files
+    are only written when their content differs from the existing file
+    on disk.  This prevents unnecessary file churn and git noise.
 \end{enumerate}
 
 % ===================================================================
@@ -753,7 +1307,8 @@ all operations:
     identities, extensions, sessions.  Standard user-mode file
     permissions.
   \item \textbf{Repo-local state}: \fpath{.punt-labs/ethos/} ---
-    config, agent roster.  Git-tracked; visible to collaborators.
+    identities, attributes, roles, teams, agents.  Git-tracked;
+    visible to collaborators.
   \item \textbf{No secrets.}  Ethos stores no passwords, API keys,
     or tokens.  Sensitive bindings (GPG keys, IMAP passwords) live
     in consumer extensions or credential stores, not in ethos.
@@ -763,8 +1318,10 @@ all operations:
 
 \begin{itemize}
   \item \textbf{MCP}: stdio transport.  No network listener.
-  \item \textbf{ps}: read-only process table query for tree walking.
-    Signal~0 for process liveness checks (no side effects).
+  \item \textbf{Native proc reading}: \texttt{/proc/<pid>/stat} on
+    Linux, \texttt{sysctl kern.proc.pid} on macOS.  Read-only.
+    Signal~0 for process liveness checks (no side effects).  No
+    subprocess spawning for process table queries.
 \end{itemize}
 
 \subsection{Trust Boundary}
@@ -777,6 +1334,11 @@ all operations:
   \item \textbf{Extension data is opaque.}  Ethos enforces structural
     constraints (namespace format, key format, size limits) but does
     not validate or interpret values.
+  \item \textbf{Path traversal prevention.}  Attribute slugs are
+    validated against a strict pattern and resolved paths are
+    checked to remain within the target directory.  Handle-based
+    file paths use \texttt{filepath.Base} to prevent directory
+    escape.
 \end{itemize}
 
 % ===================================================================
@@ -796,19 +1358,31 @@ inspection and testing:
 
   \item \textbf{Session liveness}: \texttt{Purge()} uses process
     signal~0 for numeric PIDs and age-based TTL for non-numeric IDs.
-    Every stale roster is eventually cleaned up.
+    \texttt{PurgeCurrent()} cleans stale PID-keyed files.  Every
+    stale roster is eventually cleaned up.
 
   \item \textbf{Hook-driven lifecycle}: the session roster is fully
-    managed by four Claude Code hook events.  No polling, no daemon,
+    managed by six Claude Code hook events.  No polling, no daemon,
     no manual intervention.
 
   \item \textbf{Cold start performance}: Go binary with no runtime
     dependencies.  $\sim$10\,ms cold start measured on Apple~M2.
     Hooks are invisible to the user.
 
-  \item \textbf{Store injectability}: all CRUD operations take a
-    \texttt{Store} with a configurable root path.  Tests use
+  \item \textbf{Store injectability}: all CRUD operations accept a
+    store with a configurable root path (or an
+    \texttt{IdentityStore} interface).  Tests use
     \texttt{t.TempDir()}.  No hardcoded \texttt{\$HOME}.
+
+  \item \textbf{Persona survivability}: the \texttt{PreCompact} hook
+    re-injects the full persona block, extension context, and team
+    context before context compaction.  Behavioral instructions are
+    never lost to compaction.
+
+  \item \textbf{Team integrity}: Z-spec invariants (identity
+    existence, role existence, no duplicates, collaboration
+    validity) are enforced on every write operation.  A team is
+    never persisted in an invalid state.
 \end{enumerate}
 
 \end{document}

@@ -57,6 +57,10 @@ Expands to `make lint docs test`: `go vet`, `staticcheck`, `shellcheck hooks/*.s
 | `internal/process/` | Process tree walker: find topmost Claude ancestor PID |
 | `internal/session/` | Session roster model, store with flock-based concurrency |
 | `internal/resolve/` | Identity resolution chain: repo-local → global → error |
+| `internal/hook/` | Hook handlers (SessionStart, PreCompact, SubagentStart/Stop, SessionEnd, PostToolUse) and format output |
+| `internal/doctor/` | Installation health checks |
+| `internal/role/` | Role model, CRUD, layered store |
+| `internal/team/` | Team model, CRUD, layered store, referential integrity enforcement |
 | `internal/mcp/` | MCP tool definitions and handlers (9 tools) |
 
 ### Storage Layout
@@ -68,12 +72,16 @@ Expands to `make lint docs test`: `go vet`, `staticcheck`, `shellcheck hooks/*.s
 | Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
 | Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
 | Repo config | `.punt-labs/ethos.yaml` | Yes |
+| Repo roles | `.punt-labs/ethos/roles/<name>.yaml` | Yes |
+| Repo teams | `.punt-labs/ethos/teams/<name>.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Extensions (global) | `~/.punt-labs/ethos/identities/<handle>.ext/<tool>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
 | Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
 | Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
+| Global roles | `~/.punt-labs/ethos/roles/<name>.yaml` | No |
+| Global teams | `~/.punt-labs/ethos/teams/<name>.yaml` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 
 ### Identity Schema

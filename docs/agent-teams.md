@@ -165,7 +165,7 @@ The SessionStart hook payload for teammates includes a valid `session_id`:
 
 Ethos uses `FindClaudePID()` to walk the process tree and find the topmost `claude` ancestor. This is used to key session PID files at `~/.punt-labs/ethos/sessions/current/<pid>`.
 
-**Problem (fixed in v2.2.2):** The lead's claude process is launched via the `~/.local/bin/claude` symlink, so `ps -o comm` shows `claude`. Teammates are spawned directly by the binary at `~/.local/share/claude/versions/2.1.86`, so `ps -o comm` shows `2.1.86`. The `isClaudeComm` function only matched `claude`, causing `FindClaudePID` to fail for teammates.
+**Problem (fixed in v2.3.0):** The lead's claude process is launched via the `~/.local/bin/claude` symlink, so `ps -o comm` shows `claude`. Teammates are spawned directly by the binary at `~/.local/share/claude/versions/2.1.86`, so `ps -o comm` shows `2.1.86`. The `isClaudeComm` function only matched `claude`, causing `FindClaudePID` to fail for teammates.
 
 **Fix:** On macOS, `readProc` checks if the executable path (from `kern.procargs2`) contains `/claude/versions/` and normalizes the comm to `claude`. On Linux, `readProc` inspects `/proc/<pid>/exe` for the same pattern. This allows `FindClaudePID` to find the teammate's claude ancestor regardless of how it was launched.
 

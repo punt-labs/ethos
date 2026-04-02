@@ -1062,7 +1062,7 @@ exist — this is acceptable.
 - **Use a different word only for the command file** — same split
   problem as option 1.
 
-## DES-015: Plugin development via cache symlink (PROPOSED)
+## DES-015: Plugin development via cache symlink (SETTLED)
 
 ### Problem
 
@@ -1672,3 +1672,174 @@ the same data through the same path — one source of truth, no drift.
 - **Staleness by mtime comparison** — fragile across filesystems and git
   operations that reset timestamps. Content comparison is simpler and
   correct.
+
+## DES-027: Teams and roles as first-class concepts (SETTLED)
+
+**Status**: Settled. Implemented in v2.2.0.
+
+### Problem
+
+Ethos tracked individual identities but had no concept of how they
+relate to each other. An identity could declare a personality and
+talents, but not its organizational role, who it reports to, which
+repos it works on, or which other identities it collaborates with.
+
+Without teams and roles, the PreCompact and SessionStart hooks could
+inject a single agent's persona but not its working context — who its
+teammates are, what each teammate is responsible for, and how delegation
+flows between them. Agent teams (multiple Claude Code processes
+collaborating) need this context to coordinate work correctly.
+
+### Decision
+
+Add Team and Role as first-class ethos concepts with dedicated packages,
+CLI commands, MCP tools, and layered stores.
+
+**Role** — a reusable definition of responsibilities and tool permissions:
+
+```yaml
+name: go-specialist
+responsibilities:
+  - Go implementation following Kernighan's principles
+  - Tests with race detection and full coverage
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
+```
+
+**Team** — binds identities to roles for a set of repositories, with
+a collaboration graph:
+
+```yaml
+name: engineering
+repositories:
+  - punt-labs/ethos
+  - punt-labs/biff
+members:
+  - identity: claude
+    role: coo
+  - identity: bwk
+    role: go-specialist
+collaborations:
+  - from: go-specialist
+    to: coo
+    type: reports_to
+```
+
+Both use the same layered resolution as identities: repo-local
+(`.punt-labs/ethos/`) overrides user-global (`~/.punt-labs/ethos/`).
+
+### Invariant enforcement
+
+Referential integrity is enforced on write, derived from the Z
+specification (`docs/teams.tex`):
+
+- Every team member must reference a valid identity handle and role name
+- Every team must have at least one member
+- Collaboration roles must be filled by team members
+- No self-collaboration (a role cannot collaborate with itself)
+- Roles referenced by teams cannot be deleted
+- Dangling collaborations are cleaned up when members are removed
+
+### Integration with hooks
+
+The repo config (`.punt-labs/ethos.yaml`) links to a team via the
+`team:` field. SessionStart and PreCompact hooks read this to build
+team context — member names, roles, responsibilities, and collaboration
+graph — injected alongside the persona block.
+
+DES-026 uses the role's `tools` field to generate agent definition
+frontmatter, closing the loop: identity defines who, role defines
+permissions, generated agent file combines both.
+
+### Rejected alternatives
+
+- **Tags on identities instead of roles** — no reuse, no referential
+  integrity, no collaboration graph. Tags are labels; roles are
+  structured definitions.
+- **External config file listing team members** — duplicates identity
+  data, drifts from the registry. Teams should reference identities,
+  not copy them.
+- **Flat member list without collaboration graph** — loses the
+  delegation structure that agent teams need. Who reports to whom
+  determines how work flows.
+
+## DES-028: Persona animation — behavioral injection across session lifecycle (SETTLED)
+
+**Status**: Settled. Implemented across v2.1.0–v2.3.0. Design doc at
+`docs/persona-animation.md`.
+
+### Problem
+
+Ethos declared identity — personality, writing style, talents — as
+static data on disk. The SessionStart hook confirmed the identity with
+a one-line message: `"Active identity: Claude Agento (claude)."` That
+is a name tag, not behavioral context. The personality, writing style,
+and talent content were never injected into the session. Three failure
+modes resulted:
+
+1. **Compaction drift** — personality from early turns gets summarized
+   away during context compression. The agent loses its behavioral
+   instructions mid-session.
+2. **Generic subagents** — SubagentStart joined the roster but injected
+   zero behavioral content. A `bwk` subagent with a Kernighan
+   personality acted identically to a generic agent.
+3. **No reinforcement** — writing style drifted over long sessions
+   because there was no mechanism to re-inject behavioral context.
+
+### Decision
+
+Inject full persona content at three lifecycle hooks. The agent
+definition (`.claude/agents/*.md`) defines *what* the agent does. The
+ethos identity defines *who* the agent is. Hooks connect the two.
+
+**Layer 1 — SessionStart**: load the primary agent's identity with full
+content resolution. Assemble a structured persona block (personality
+content, writing style content, talent slugs, role, team context) and
+emit it as session context. Replaces the one-line confirmation.
+
+**Layer 2 — PreCompact**: re-emit the full persona block before context
+compression. This preserves behavioral instructions through compaction.
+A condensed version was tried and rejected — source files are the
+authority on content length, and truncation caused behavioral drift.
+
+**Layer 3 — SubagentStart**: auto-match the subagent's `agent_type` to
+an identity handle. If matched, inject that identity's persona content
+into the subagent's context at spawn. Subagent agent definitions no
+longer need manual `ethos show` instructions.
+
+Talent slugs are listed but not expanded inline — full talent content
+is available on demand via `/ethos:talent show <slug>`. This keeps the
+persona block within context budget (~100–150 lines for personality +
+writing style, ~600 lines with team context).
+
+### What persona animation does NOT do
+
+- Override CLAUDE.md — the persona is additive context. CLAUDE.md wins
+  on conflicts.
+- Change the agent definition format — `.claude/agents/*.md` files
+  remain the same.
+- Require ethos — if ethos is not installed, no persona is injected.
+  The agent works normally. Ethos is a sidecar (DES-001).
+- Inject talent content — talents are listed as slugs to stay within
+  context budget.
+
+### Rejected alternatives
+
+- **Inject personality at SessionStart only, skip PreCompact** —
+  personality gets summarized away during compaction. Tested and
+  confirmed: agents lose their writing style within 2–3 compaction
+  cycles.
+- **Condensed persona block at PreCompact** — tried a 4-line summary.
+  Behavioral drift returned because the summary lost the specific
+  rules (sentence length limits, banned patterns, calibration
+  instructions). Full block is ~600 lines including team context;
+  fits within PreCompact budget.
+- **Subagents call `ethos show` themselves** — requires every agent
+  definition to include identity-loading instructions. Creates drift
+  between the agent file and the identity registry. Hook injection is
+  automatic and cannot go stale.
