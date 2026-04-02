@@ -28,19 +28,19 @@ kind: human                       # or "agent"
 email: jim@punt-labs.com
 github: jmf-pobox
 agent: .claude/agents/jfreeman.md
-writing_style: writing-styles/concise-quantified.md
-personality: personalities/principal-engineer.md
-skills:
-  - talents/executive.md
-  - talents/software-engineering.md
+writing_style: concise-quantified
+personality: principal-engineer
+talents:
+  - executive
+  - software-engineering
 ```
 
 ## Path Resolution
 
-Attribute paths (`writing_style`, `personality`, `skills`) are relative to
-this directory (`~/.punt-labs/ethos/`). The `agent` field is the exception —
-it resolves relative to the repo root because agent `.md` files live in
-the project, not in the ethos store.
+Attributes (`writing_style`, `personality`, `talents`) are slugs that
+reference `.md` files in the corresponding directories. The `agent` field
+is the exception — it resolves relative to the repo root because agent
+`.md` files live in the project, not in the ethos store.
 
 ## Extensions
 
@@ -49,7 +49,7 @@ owns its namespace. Ethos never reads or interprets extension contents.
 
 ## Attribute Files
 
-Skills, personalities, and writing styles are plain markdown files. No
+Talents, personalities, and writing styles are plain markdown files. No
 required frontmatter. Multiple identities can reference the same file.
 
 ## Sessions

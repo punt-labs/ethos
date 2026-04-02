@@ -58,6 +58,7 @@ sh install.sh
 - **Agent file generation** — SessionStart generates `.claude/agents/<handle>.md` from identity, personality, writing-style, and role data — agent definitions stay in sync automatically
 - **Persona animation** — SessionStart, PreCompact, and SubagentStart hooks inject personality, writing style, and talent content into agent context automatically
 - **Layered resolution** — repo-local identities override global; resolved from iam declaration, git config, or OS user (DES-011, DES-018)
+- **Extension session context** — any tool can provide `session_context` in its extension YAML; ethos injects it into agent context at session start and before compaction, with zero ethos-side code per consumer (DES-022)
 - **Channel bindings** — email (Beadle), GitHub (Biff), Claude Code agent definition; voice config lives in extensions (`ext/vox`)
 
 ## What It Looks Like
@@ -195,6 +196,22 @@ All tools have corresponding slash commands under `/ethos:*`.
 | `role` | list, show, create, delete | `/ethos:role` |
 | `doctor` | *(standalone)* | — |
 
+## Setup
+
+Ethos resolves repo-specific config from `.punt-labs/ethos.yaml` in the
+repo root:
+
+```yaml
+agent: claude       # primary agent identity handle
+team: engineering   # team definition for hook context
+```
+
+Team identity data (identities, personalities, writing styles, talents,
+roles, teams) lives in `.punt-labs/ethos/`. You can populate this
+directory locally or share it across repos as a git submodule. See the
+[Team Setup Guide](docs/team-setup.md) for how to create and structure
+a team from scratch.
+
 ## Identity Schema
 
 ```yaml
@@ -256,7 +273,7 @@ git; global files are personal.
 | Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
 | Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
-| Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+| Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
 | Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
@@ -313,6 +330,18 @@ ethos ext set mal beadle gpg_key_id 3AA5C34371567BD2
 ethos ext get mal beadle gpg_key_id
 ethos identity get mal   # includes ext map with all tool namespaces
 ```
+
+## Documentation
+
+[Team Setup Guide](docs/team-setup.md) |
+[Persona Animation](docs/persona-animation.md) |
+[Agent Teams](docs/agent-teams.md) |
+[Quarry Integration](docs/quarry-integration.md) |
+[Workflow](docs/workflow.md) |
+[Architecture](docs/architecture.tex) |
+[Design Decisions](DESIGN.md) |
+[Agent Guide](AGENTS.md) |
+[Changelog](CHANGELOG.md)
 
 ## Development
 

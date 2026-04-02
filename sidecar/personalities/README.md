@@ -9,7 +9,7 @@ personality: personalities/principal-engineer.md
 
 Each file defines behavioral patterns — decision-making approach, values,
 communication tendencies. Separate from writing style (how you write) and
-skills (what you know).
+talents (what you know).
 
 Multiple identities can share a personality.
 

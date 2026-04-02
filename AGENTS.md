@@ -31,7 +31,7 @@ ethos show mal --json                 # JSON output
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 7 tools using method-dispatch.
+When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 9 tools using method-dispatch.
 
 **All tools use a consolidated `method` parameter:**
 
@@ -43,6 +43,8 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 | `personality` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `writing_style` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `ext` | get, set, del, list | `handle`, `namespace`, `key`, `value` |
+| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type` |
+| `role` | list, show, create, delete | `name`, `responsibilities`, `permissions` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
 **Example — read identity from MCP:**
@@ -93,22 +95,28 @@ ethos session purge                   # Clean up stale rosters
 | `/ethos:talent` | Manage talents -- create, list, show, delete, add, remove |
 | `/ethos:personality` | Manage personalities -- create, list, show, delete, set |
 | `/ethos:writing-style` | Manage writing styles -- create, list, show, delete, set |
+| `/ethos:team` | Manage teams -- list, show, create, delete, members, collaborations |
+| `/ethos:role` | Manage roles -- list, show, create, delete |
 
 ### Roster Structure
 
 ```yaml
 session: ba3bb20f
 started: 2026-03-18T14:30:00Z
+repo: punt-labs/ethos               # org/repo from git remote
+host: dev-machine                   # short hostname
 participants:
   - agent_id: mal                   # $USER — the human
     persona: mal
     parent: ~                       # root of the tree
+    joined: 2026-03-18T14:30:00Z
     ext:
       biff: { tty: s001 }
 
   - agent_id: "19147"              # Claude PID
     persona: archie
     parent: mal
+    joined: 2026-03-18T14:30:01Z
     ext:
       biff: { tty: s004 }
 
@@ -116,6 +124,7 @@ participants:
     persona: code-reviewer
     parent: "19147"
     agent_type: code-reviewer
+    joined: 2026-03-18T14:31:15Z
     ext: {}
 ```
 
@@ -237,15 +246,146 @@ Extensions exist at two independent scopes:
 
 Use persona-level for defaults (Vox's preferred voice, Beadle's GPG key). Use session-level for runtime state (Biff's current TTY, Vox's active voice).
 
+### Extension Session Context
+
+Any extension can provide a `session_context` field containing markdown
+instructions that ethos injects into agent context at session start and
+before compaction. This is how tools integrate behavioral context without
+requiring ethos-side code changes.
+
+```yaml
+# claude.ext/quarry.yaml
+memory_collection: memory-claude
+session_context: |
+  ## Memory
+
+  You have persistent memory stored in quarry. Your memories survive
+  across sessions and machines.
+
+  To recall prior knowledge: /find <query>
+  To persist something you learned: /remember <content>
+```
+
+Ethos iterates over all extensions, collects `session_context` values,
+and emits them in sorted order after the persona block. No parsing, no
+interpretation — the content is yours to define.
+
+To set session context for your tool:
+
+```bash
+ethos ext set <handle> <your-tool> session_context "$(cat context.md)"
+```
+
+Or via MCP:
+
+```text
+Call mcp__plugin_ethos_self__ext with method="set", handle="claude",
+  namespace="your-tool", key="session_context", value="..."
+```
+
+## Teams and Roles
+
+Teams bind identities to roles for a set of repositories. Roles define
+responsibilities and tool permissions. Both are first-class ethos concepts
+with CLI, MCP, and layered resolution (repo-local overrides global).
+
+### Querying Teams
+
+```bash
+ethos team list                        # List all teams
+ethos team show engineering            # Show members, roles, collaborations
+ethos team for-repo punt-labs/ethos    # Which team works on this repo?
+```
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__team with method="show", name="engineering"
+Call mcp__plugin_ethos_self__team with method="for_repo", repo="punt-labs/ethos"
+```
+
+### Querying Roles
+
+```bash
+ethos role list                        # List all roles
+ethos role show go-specialist          # Show role responsibilities and tools
+```
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__role with method="show", name="go-specialist"
+```
+
+### Team Schema
+
+```yaml
+name: engineering
+repositories:
+  - punt-labs/ethos
+  - punt-labs/biff
+members:
+  - identity: claude
+    role: coo
+  - identity: bwk
+    role: go-specialist
+collaborations:
+  - from: go-specialist
+    to: coo
+    type: reports_to
+```
+
+### Role Schema
+
+```yaml
+name: go-specialist
+responsibilities:
+  - Go implementation following Kernighan's principles
+  - Tests with race detection and full coverage
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
+```
+
+The `tools` field is the source of truth for sub-agent tool restrictions.
+DES-026 uses it to generate agent definition frontmatter.
+
+### How Agents Use Team Context
+
+You don't need to query teams manually. The SessionStart and PreCompact
+hooks automatically inject team context into your session — member names,
+roles, responsibilities, and the collaboration graph. This context
+survives compaction because PreCompact re-injects it.
+
+Use the team and role MCP tools when you need to look up specific
+details: who has a particular role, which repos a team covers, or what
+tools a role permits.
+
 ## Identity Resolution
 
-When a tool asks "who is active?", ethos checks two locations in order:
+Human and agent identities are resolved automatically — no manual
+"set active" step required.
 
-1. **Repo-local config** — `.punt-labs/ethos/config.yaml` in the repo root. If it has an `active` field, use it.
-2. **Global active** — `~/.punt-labs/ethos/active`. Plain text file with the handle.
-3. **Error** — no active identity configured.
+**Human resolution** (stops at first match):
 
-This mirrors Git: `.git/config` overrides `~/.gitconfig`.
+| Step | Source | Match field |
+|------|--------|-------------|
+| 1 | `iam` declaration | Explicit persona set via `ethos session iam` |
+| 2 | `git config user.name` | Identity `github` field |
+| 3 | `git config user.email` | Identity `email` field |
+| 4 | `$USER` | Identity `handle` field |
+
+**Agent resolution** — per-repo `.punt-labs/ethos.yaml`:
+
+```yaml
+agent: claude
+```
+
+When `agent:` is unset, the primary agent has no persona.
 
 ## Hooks
 
@@ -340,11 +480,21 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
+| Repo identities | `.punt-labs/ethos/identities/<handle>.yaml` | Yes |
+| Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
+| Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
+| Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
+| Repo roles | `.punt-labs/ethos/roles/<name>.yaml` | Yes |
+| Repo teams | `.punt-labs/ethos/teams/<name>.yaml` | Yes |
+| Repo config | `.punt-labs/ethos.yaml` | Yes |
+| Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
+| Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Extensions | `~/.punt-labs/ethos/identities/<handle>.ext/<ns>.yaml` | No |
-| Active identity | `~/.punt-labs/ethos/active` | No |
+| Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
+| Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
+| Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
+| Global roles | `~/.punt-labs/ethos/roles/<name>.yaml` | No |
+| Global teams | `~/.punt-labs/ethos/teams/<name>.yaml` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<id>.yaml` | No |
 | Session locks | `~/.punt-labs/ethos/sessions/<id>.lock` | No |
 | Current session | `~/.punt-labs/ethos/sessions/current/<pid>` | No |
-| Repo config | `.punt-labs/ethos/config.yaml` | Yes |
-| Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
