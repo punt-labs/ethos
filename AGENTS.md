@@ -43,8 +43,8 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 | `personality` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `writing_style` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `ext` | get, set, del, list | `handle`, `namespace`, `key`, `value` |
-| `team` | list, show, create, delete, add-member, remove-member, add-collab, for-repo | `name`, `identity`, `role` |
-| `role` | list, show, create, delete | `name`, `content` |
+| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type` |
+| `role` | list, show, create, delete | `name`, `responsibilities`, `permissions` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
 **Example — read identity from MCP:**
@@ -487,7 +487,7 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 | Repo roles | `.punt-labs/ethos/roles/<name>.yaml` | Yes |
 | Repo teams | `.punt-labs/ethos/teams/<name>.yaml` | Yes |
 | Repo config | `.punt-labs/ethos.yaml` | Yes |
-| Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+| Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Extensions | `~/.punt-labs/ethos/identities/<handle>.ext/<ns>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |

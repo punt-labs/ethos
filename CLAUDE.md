@@ -74,7 +74,7 @@ Expands to `make lint docs test`: `go vet`, `staticcheck`, `shellcheck hooks/*.s
 | Repo config | `.punt-labs/ethos.yaml` | Yes |
 | Repo roles | `.punt-labs/ethos/roles/<name>.yaml` | Yes |
 | Repo teams | `.punt-labs/ethos/teams/<name>.yaml` | Yes |
-| Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+| Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Extensions (global) | `~/.punt-labs/ethos/identities/<handle>.ext/<tool>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |

@@ -77,7 +77,9 @@ talents:
   - security
 ```
 
-The handle must be lowercase alphanumeric with hyphens (`[a-z0-9-]`).
+The handle must start and end with a lowercase letter or digit, and may
+contain lowercase letters, digits, and hyphens in the middle
+(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`).
 Agent handles must exactly match the `subagent_type` string in Claude
 Code for auto-matching to work (case-sensitive).
 

@@ -273,7 +273,7 @@ git; global files are personal.
 | Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
 | Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
 | Repo config | `.punt-labs/ethos/config.yaml` | Yes |
-| Repo agents | `.punt-labs/ethos/agents/<name>.yaml` | Yes |
+| Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
 | Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
