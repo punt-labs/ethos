@@ -24,7 +24,7 @@ func TestValidateModel(t *testing.T) {
 		{"claude prefix sonnet", "claude-sonnet-4-6", true},
 		{"claude prefix haiku", "claude-haiku-4-5-20251001", true},
 		{"future model ID", "claude-opus-4-7", true},
-		{"claude prefix only", "claude-", true},
+		{"claude prefix only", "claude-", false},
 		{"unknown model", "gpt-4", false},
 		{"random string", "banana", false},
 	}
