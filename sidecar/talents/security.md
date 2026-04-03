@@ -30,7 +30,7 @@ separation between code and data.
 
 - Enforce strong password policies at registration, not just at login.
 - Hash passwords with bcrypt, scrypt, or argon2id. Never MD5 or SHA-256 alone.
-  Cost factor must make brute force impractical (bcrypt cost >= 13 (minimum 12 for compatibility, 13+ for new systems per current OWASP guidance)).
+  Cost factor must make brute force impractical. For new systems, use bcrypt cost 13 or higher. Use cost 12 only when required for legacy compatibility.
 - Rate-limit login attempts per account and per IP. Lock accounts after
   repeated failures with exponential backoff.
 - Session tokens must be cryptographically random, at least 128 bits of

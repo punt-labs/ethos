@@ -76,7 +76,7 @@ sufficient — verify the code actually works:
 
 ## Progress
 
-- For multi-step work, use TodoWrite (if available) or similar task tracking to track progress.
+- For multi-step work, use TodoWrite (if available) or another task tracker to record progress.
 - Mark tasks complete as they finish, not in batch at the end.
 - If blocked, report what you tried and what failed. Do not
   silently skip steps.

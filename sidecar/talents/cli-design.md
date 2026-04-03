@@ -267,9 +267,10 @@ To create this identity:
 
 ### TTY Detection
 
-Check whether stdin/stdout are terminals. In Go: `golang.org/x/term.IsTerminal()`
-(note: this is not in Go's standard library). In shell: `[ -t 0 ]` for stdin,
-`[ -t 1 ]` for stdout.
+Check whether stdin/stdout are terminals. In Go: `term.IsTerminal(int(os.Stdin.Fd()))`
+for stdin, `term.IsTerminal(int(os.Stdout.Fd()))` for stdout, and
+`term.IsTerminal(int(os.Stderr.Fd()))` for stderr (from `golang.org/x/term`,
+not Go's standard library). In shell: `[ -t 0 ]` for stdin, `[ -t 1 ]` for stdout.
 
 When not a TTY:
 
