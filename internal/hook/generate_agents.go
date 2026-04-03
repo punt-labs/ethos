@@ -119,6 +119,9 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 	for _, t := range r.Tools {
 		fmt.Fprintf(&b, "  - %s\n", t)
 	}
+	if r.Model != "" {
+		fmt.Fprintf(&b, "model: %s\n", r.Model)
+	}
 	b.WriteString("---\n")
 
 	// Body.

@@ -225,6 +225,42 @@ func TestGenerateAgentFiles(t *testing.T) {
 			},
 		},
 		{
+			name: "model field empty omits model from frontmatter",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				assert.NotContains(t, content, "model:")
+			},
+		},
+		{
+			name: "model field set appears in frontmatter",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				// Rewrite the go-specialist role with a model field.
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "go-specialist.yaml"), map[string]interface{}{
+					"name":             "go-specialist",
+					"model":            "sonnet",
+					"responsibilities": []string{"Go package implementation with tests", "code review"},
+					"tools":            []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
+				})
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				assert.Contains(t, content, "model: sonnet")
+			},
+		},
+		{
 			name: "missing personality skips agent",
 			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
 				// Remove the personality file.
