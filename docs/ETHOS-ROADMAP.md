@@ -258,6 +258,49 @@ has typed inputs, outputs, success criteria, and file ownership.
 
 **Delivery**: Documentation (done). Slash command (future).
 
+### 2.6 Mission Skill (`/mission`)
+
+**Problem**: The three-layer model (persona/role/mission) identifies
+the mission as the leader's responsibility, but provides no
+structured tooling for it. Leaders write freeform delegation prompts
+with inconsistent quality. The gap between CLAUDE.md guidance
+("delegate to specialists") and the raw Agent() primitive is too
+wide.
+
+**Evidence**: autostar demonstrates that structured onboarding with
+confirmable checkpoints produces better outcomes than freeform
+instructions. agents-architecture.tex says "make every worker prompt
+self-contained" with "files, expected outputs, constraints, and
+completion criteria." Our own agent-definitions guide documents the
+mission template but documentation is passive.
+
+**Solution**: A `/mission` skill that scaffolds mission-shaped
+delegations:
+
+1. Resolve the agent from the team roster (show available agents,
+   roles, status)
+2. Build the mission contract: task, inputs, outputs, success
+   criteria, files_owned, constraints — pre-populated from
+   conversation context, presented as confirmable options
+3. Check for file ownership conflicts with running agents
+4. Spawn the agent with the structured prompt
+5. Optionally track the mission in beads
+
+The skill reads ethos team/role data via MCP, scaffolds the prompt,
+and uses Claude Code's Agent() to execute. It sits at the structured
+layer between CLAUDE.md and agent primitives.
+
+**Phased delivery**:
+- **Phase A (MVP)**: Skill file at `~/.claude/skills/mission/SKILL.md`
+  — pure prompt engineering, no Go code
+- **Phase B**: `/ethos:mission` slash command with team data
+  pre-population
+- **Phase C**: File ownership tracking and conflict detection
+  (depends on roadmap 4.3)
+
+**Design**: See `docs/mission-skill-design.md` for the full
+specification including flow, contract format, and examples.
+
 ---
 
 ## Phase 3: Workflow
@@ -579,7 +622,8 @@ Phase 2 (Production Agents)     ← depends on Phase 1
 ├── 2.2 Role-based hooks
 ├── 2.3 Structured output for handoff
 ├── 2.4 Baseline-ops injection
-└── 2.5 Mission-shaped delegation guide ←── DONE (docs)
+├── 2.5 Mission-shaped delegation guide ←── DONE (docs)
+└── 2.6 Mission skill (/mission) ←── BRIDGES THE GAP
 
 Phase 3 (Workflow)              ← depends on Phase 1-2
 ├── 3.1 Feature-dev integration
