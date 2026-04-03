@@ -9,20 +9,51 @@ personalities, writing styles, talents, roles, teams, sessions, persona
 animation, agent file generation, extension session context. The
 architecture is sound.
 
-What's missing is **content** and **workflow**. The directories are
-empty. The generated agents are functional but minimal. The development
-workflow is manual and inconsistent.
+What's missing is **content**, **workflow**, and **delegation
+discipline**. The directories are empty. The generated agents are
+functional but minimal. The development workflow is manual and
+inconsistent. There is no structured model for how leaders delegate
+to agents.
 
-This roadmap was informed by studying two external projects:
+### Three-Layer Model
+
+An effective agent has three layers of context:
+
+| Layer | Provides | Lifecycle | Owner |
+|-------|----------|-----------|-------|
+| **Persona** | Identity, judgment, taste, communication style | Durable — across tasks and sessions | Ethos (personality + writing style + talents) |
+| **Role** | Tools, responsibilities, anti-responsibilities, team position | Semi-durable — changes with team | Ethos (role YAML) |
+| **Mission** | Typed I/O contract, files owned, success criteria | Ephemeral — one task, then done | Leader (delegation prompt) |
+
+Ethos owns persona and role. The leader writes the mission. The persona
+gives judgment. The role gives boundaries. The mission gives precision.
+
+### Sources
+
+This roadmap was informed by studying:
 
 - **claude-config-template** — 16 pre-built agents, 18 slash commands,
   80+ security rules, plan/implement/validate pipeline, 4-reviewer PR
   system, codebase indexing, memory consolidation, hook-based automation
 - **feature-dev plugin** — 7-phase development lifecycle, parallel
   specialized review, gated delegation model
+- **agents-architecture.tex** — Claude Code's official agent and team
+  architecture: identity via AsyncLocalStorage, 3-layer tool resolution,
+  mailbox + task list coordination, operational invariants
+- **channels-architecture.tex** — Claude Code's inbound MCP messaging:
+  7-layer gate model, permission relay, identity attribution
+  opportunities
+- **autostar** — soft RLVR skill: structured optimization loops, frozen
+  evaluators, bounded rounds with mandatory reflection, disposition-based
+  long-term memory
+- **DSPy** — programmatic prompt optimization: roles as typed interfaces,
+  offline optimization with evaluation traces, separation of
+  orchestration from compilation
 
-Both demonstrate that shipping pre-built content — not just mechanism —
-is what makes a tool useful out of the box.
+All demonstrate that shipping pre-built content — not just mechanism —
+is what makes a tool useful out of the box. The architecture docs
+further show that effective agents need runtime discipline, evaluation
+discipline, and structured delegation — not just good definitions.
 
 ---
 
@@ -125,6 +156,7 @@ session uses).
 ## Phase 2: Production-Quality Agents
 
 Make generated agent definitions as effective as hand-crafted ones.
+Introduce structured delegation so the mission layer is well-defined.
 
 ### 2.1 Anti-Responsibility Generation
 
@@ -134,7 +166,8 @@ boundaries, agents drift into adjacent domains.
 
 **Evidence**: claude-config-template's 5 PR review agents each include:
 "IMPORTANT: You are NOT checking X. Other agents handle those." This
-prevents scope creep.
+prevents scope creep. The agents-architecture.tex recommends "assign
+ownership" and "bound fan-out" — anti-responsibilities enforce this.
 
 **Solution**: Derive anti-responsibilities from the team collaboration
 graph. If `implementer` reports_to `coo`, generate: "Don't make
@@ -172,18 +205,21 @@ writes).
 
 **Delivery**: Hook templates per role category in `GenerateAgentFiles()`.
 
-### 2.3 Output Format Templates
+### 2.3 Structured Output for Agent Handoff
 
-**Problem**: When agents produce structured output (review findings,
-research results), inconsistent formatting makes consolidation hard.
+**Problem**: When one agent's result feeds another, free-form prose
+makes consolidation hard and loses structured data.
 
-**Evidence**: claude-config-template defines strict markdown output
-templates per agent type. Every review agent uses tables with
-✓/⚠️/✗ severity markers.
+**Evidence**: agents-architecture.tex: "prefer structured outputs for
+handoff — machine-readable fields such as files changed, verdicts,
+confidence, and open questions." claude-config-template defines strict
+output templates per agent type.
 
 **Solution**: Add `output_format` field to Role (optional markdown
 template). GenerateAgentFiles includes it in the agent body as an
-"Output Format" section.
+"Output Format" section. Output formats should include structured
+fields (files changed, verdict, confidence, open questions) alongside
+human-readable prose.
 
 **Delivery**: Field on Role struct, templates in starter roles.
 
@@ -196,6 +232,31 @@ agents don't reference it.
 `skills: [baseline-ops]` in frontmatter for every generated agent.
 
 **Delivery**: One-line change in `GenerateAgentFiles()`.
+
+### 2.5 Mission-Shaped Delegation Guide
+
+**Problem**: Ethos defines the persona (who) and role (what they can
+do), but says nothing about the mission (what they should do right
+now). Leaders write delegation prompts ad hoc with inconsistent
+quality.
+
+**Evidence**: agents-architecture.tex: "Make every worker prompt
+self-contained. Workers do not share the coordinator's full
+conversational state. The best prompts name files, expected outputs,
+constraints, and completion criteria explicitly." Autostar's 7-
+checkpoint onboarding demonstrates mission confirmation as a gate.
+
+**Solution**: The mission is the leader's responsibility, not an
+ethos-generated artifact. But ethos can provide guidance and
+structure. `docs/agent-definitions.md` now includes a "Writing
+Effective Delegation Prompts" section with the mission template:
+inputs, outputs, success criteria, files owned, constraints.
+
+Future: a `/delegate` slash command that scaffolds a mission-shaped
+prompt from the team's role definitions, ensuring every delegation
+has typed inputs, outputs, success criteria, and file ownership.
+
+**Delivery**: Documentation (done). Slash command (future).
 
 ---
 
@@ -321,6 +382,45 @@ knowledge."
 **Delivery**: Content in baseline-ops skill and quarry's
 extension session_context.
 
+### 3.5 Evaluation Discipline
+
+**Problem**: Our review and implementation workflows lack formal
+evaluation discipline. Review criteria can shift mid-review. There
+are no mandatory reflection gates between workflow phases. Escalation
+triggers are instinct-based, not signal-based.
+
+**Evidence**: agents-architecture.tex defines three evaluation
+principles: freeze the evaluator during a task, use mixed verification
+tracks, and work in bounded rounds with mandatory reflection. Autostar
+enforces immutable rubrics and mandatory reflection after every round
+with three specific questions: worth pursuing? escalate to user? pivot?
+
+**Solution**: Formalize evaluation discipline in the workflow layer:
+
+1. **Frozen evaluators**: Once review criteria are set for a PR
+   review cycle, they don't change until the cycle completes. No
+   moving goalposts.
+
+2. **Mixed verification tracks**: Combine deterministic (make check,
+   staticcheck), external tool (Copilot, Bugbot), model-based
+   (code-reviewer, security-reviewer), and human gate (user approval)
+   verification in every review cycle.
+
+3. **Bounded rounds with reflection**: After each review-fix cycle,
+   the leader asks: are we converging? should we change approach?
+   should we escalate? This is a gate, not a suggestion.
+
+4. **Concrete escalation signals**: Plateau (same findings across 2
+   cycles), divergence (fixing one issue introduces another), budget
+   (more than N cycles on one PR). These trigger escalation, not
+   "something feels off."
+
+**Delivery**: Workflow documentation and delegation patterns. The
+evaluation rules live in the workflow layer (feature-dev, CLAUDE.md),
+not in ethos core. Ethos's contribution is that review agents have
+stable personas with frozen evaluation criteria — the personality
+doesn't drift because PreCompact re-injects it.
+
 ---
 
 ## Phase 4: Operational Excellence
@@ -361,7 +461,29 @@ execute destructive commands.
 
 **Delivery**: Safety constraint field on Role, consumed by hooks.
 
-### 4.3 Session Audit Logging
+### 4.3 Write-Set Admission Control
+
+**Problem**: Multiple agents editing the same files creates merge
+conflicts, duplicate work, and overwritten changes. Currently the
+only protection is worktree isolation, which is opt-in.
+
+**Evidence**: agents-architecture.tex recommends: "Before launching an
+implementation worker, declare the expected file set and refuse
+concurrent writers with overlapping claims unless they are isolated
+in worktrees." The effective agents principles identify "broad write
+access" and "overlapping writes" as top anti-patterns.
+
+**Solution**: Missions declare `files_owned`. The leader (or a
+coordination hook) checks for overlapping claims before spawning
+a second writer. Options when overlap is detected: queue the second
+task, isolate in a worktree, or reject with explanation.
+
+**Delivery**: This requires coordination-layer support (feature-dev
+or agent teams), not ethos core. Ethos's contribution: the role
+defines tool restrictions (can this agent write at all?), and the
+mission template includes `files_owned` as a standard field.
+
+### 4.4 Session Audit Logging
 
 **Problem**: No audit trail for what happened during a session — what
 tools were used, what decisions were made, what the agent did.
@@ -375,7 +497,7 @@ invocations. Add optional audit logging to a session log file.
 
 **Delivery**: Addition to `HandleFormatOutput` in `internal/hook/`.
 
-### 4.4 Audio/Notification Hooks
+### 4.5 Audio/Notification Hooks
 
 **Problem**: No feedback when the agent finishes work or needs input.
 Long-running sessions require manual monitoring.
@@ -455,25 +577,28 @@ Phase 1 (Batteries Included)
 Phase 2 (Production Agents)     ← depends on Phase 1
 ├── 2.1 Anti-responsibility generation
 ├── 2.2 Role-based hooks
-├── 2.3 Output format templates
-└── 2.4 Baseline-ops injection
+├── 2.3 Structured output for handoff
+├── 2.4 Baseline-ops injection
+└── 2.5 Mission-shaped delegation guide ←── DONE (docs)
 
 Phase 3 (Workflow)              ← depends on Phase 1-2
 ├── 3.1 Feature-dev integration
 ├── 3.2 Specialized review identities
 ├── 3.3 Memory consolidation pattern
-└── 3.4 Codebase indexing integration
+├── 3.4 Codebase indexing integration
+└── 3.5 Evaluation discipline
 
 Phase 4 (Operational)           ← independent, can parallel Phase 2-3
 ├── 4.1 Context loading hooks
 ├── 4.2 Role-based safety constraints
-├── 4.3 Session audit logging
-└── 4.4 Audio/notification (vox)
+├── 4.3 Write-set admission control
+├── 4.4 Session audit logging
+└── 4.5 Audio/notification (vox)
 
 Phase 5 (Ecosystem)             ← future
 ├── 5.1 Starter team templates
 ├── 5.2 Agent marketplace
-└── 5.3 Cross-tool orchestration
+└── 5.3 Cross-tool workflow orchestration
 ```
 
 Phase 1 is the immediate priority. It requires no Go code changes
@@ -482,11 +607,15 @@ the installer.
 
 Phase 2 requires Go changes to `GenerateAgentFiles()` and the Role
 struct. Depends on Phase 1 roles and baseline-ops being shipped.
+Item 2.5 (mission-shaped delegation guide) is already documented in
+`docs/agent-definitions.md`.
 
 Phase 3 is integration work across ethos, feature-dev, and punt-kit.
 Depends on Phase 1-2 providing the identity and role content that
-workflow agents need.
+workflow agents need. Item 3.5 (evaluation discipline) formalizes
+review-cycle rules that currently live as ad hoc leader judgment.
 
 Phase 4 is independent and can run in parallel with Phase 2-3.
+Item 4.3 (write-set admission) requires coordination-layer support.
 
 Phase 5 is future work that depends on community adoption.
