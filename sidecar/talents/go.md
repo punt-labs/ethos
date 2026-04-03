@@ -341,7 +341,8 @@ func BenchmarkResolve(b *testing.B) {
 Run with `go test -bench=. -benchmem ./...`. The `-benchmem` flag shows
 allocations per operation — often the most actionable metric.
 
-Compare benchmarks across changes with `benchstat`:
+Compare benchmarks across changes with `benchstat`
+(install with `go install golang.org/x/perf/cmd/benchstat@latest`):
 
 ```bash
 go test -bench=. -count=10 ./... > old.txt
