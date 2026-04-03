@@ -19,11 +19,11 @@ to agents.
 
 An effective agent has three layers of context:
 
-| Layer | Provides | Lifecycle | Owner |
-|-------|----------|-----------|-------|
-| **Persona** | Identity, judgment, taste, communication style | Durable — across tasks and sessions | Ethos (personality + writing style + talents) |
-| **Role** | Tools, responsibilities, anti-responsibilities, team position | Semi-durable — changes with team | Ethos (role YAML) |
-| **Mission** | Typed I/O contract, files owned, success criteria | Ephemeral — one task, then done | Leader (delegation prompt) |
+| Layer | What It Provides | Lifecycle | Where It Lives |
+|-------|-----------------|-----------|---------------|
+| **Persona** | Identity, judgment, taste, communication style | Durable -- survives across tasks and sessions | Ethos identity (personality + writing style + talents) |
+| **Role** | Tools, responsibilities, anti-responsibilities, team position | Semi-durable -- changes when the team changes | Ethos role YAML |
+| **Mission** | Typed I/O contract, files owned, success criteria, constraints | Ephemeral -- one task, then done | Delegation prompt from leader |
 
 Ethos owns persona and role. The leader writes the mission. The persona
 gives judgment. The role gives boundaries. The mission gives precision.
@@ -82,7 +82,7 @@ independently embed "🚨 CRITICAL FIRST STEP: Read the codebase index"
 and tool usage patterns. This duplication is eliminated by a shared
 skill.
 
-**Bead**: ethos-l9d (exists, P1)
+**Bead**: ethos-l9d (closed, shipped PR #162)
 
 ### 1.2 Starter Roles
 
@@ -612,10 +612,10 @@ concern.
 
 ```
 Phase 1 (Batteries Included)
-├── 1.1 baseline-ops skill ←── HIGHEST LEVERAGE
-├── 1.2 Starter roles (6)
-├── 1.3 Starter talents (10)
-└── 1.4 Model field on Role
+├── 1.1 baseline-ops skill ←── DONE
+├── 1.2 Starter roles (6) ←── DONE
+├── 1.3 Starter talents (10) ←── DONE
+└── 1.4 Model field on Role ←── DONE
 
 Phase 2 (Production Agents)     ← depends on Phase 1
 ├── 2.1 Anti-responsibility generation
@@ -634,8 +634,8 @@ Phase 3 (Workflow)              ← depends on Phase 1-2
 
 Phase 4 (Operational)           ← independent, can parallel Phase 2-3
 ├── 4.1 Context loading hooks
-├── 4.2 Role-based safety constraints
-├── 4.3 Write-set admission control
+├── 4.2 Role-based safety constraints ← coordinate with Phase 2 Role changes
+├── 4.3 Write-set admission control ← depends on 2.6 Phase C
 ├── 4.4 Session audit logging
 └── 4.5 Audio/notification (vox)
 
@@ -645,9 +645,7 @@ Phase 5 (Ecosystem)             ← future
 └── 5.3 Cross-tool workflow orchestration
 ```
 
-Phase 1 is the immediate priority. It requires no Go code changes
-except 1.4 (model field). Everything else is content files deployed by
-the installer.
+Phase 1 shipped in PR #162. Phase 2 is the immediate priority.
 
 Phase 2 requires Go changes to `GenerateAgentFiles()` and the Role
 struct. Depends on Phase 1 roles and baseline-ops being shipped.
