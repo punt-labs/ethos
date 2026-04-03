@@ -3,6 +3,7 @@ package role
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 )
@@ -27,12 +28,14 @@ func ValidateModel(model string) error {
 	if model == "" {
 		return nil // empty means inherit
 	}
-	valid := map[string]bool{
+	shortAliases := map[string]bool{
 		"opus": true, "sonnet": true, "haiku": true, "inherit": true,
-		"claude-opus-4-6": true, "claude-sonnet-4-6": true, "claude-haiku-4-5-20251001": true,
 	}
-	if valid[model] {
+	if shortAliases[model] {
 		return nil
 	}
-	return fmt.Errorf("unrecognized model %q: must be one of opus, sonnet, haiku, inherit, or a full model ID", model)
+	if strings.HasPrefix(model, "claude-") && len(model) > len("claude-") {
+		return nil
+	}
+	return fmt.Errorf("unrecognized model %q: must be opus, sonnet, haiku, inherit, or a full claude-* model ID", model)
 }
