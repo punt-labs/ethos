@@ -208,7 +208,7 @@ Most agents need levels 1 + 2. Level 3 is for agents where experience shows scop
 ## Context Hygiene
 
 Sub-agents accumulate context over their lifetime — tool results, file
-reads, intermediate reasoning. When a sub-agent finishes one task and
+reads, intermediate notes and summaries. When a sub-agent finishes one task and
 is asked to continue with another, the stale context from the first
 task can degrade performance on the second.
 
@@ -222,7 +222,7 @@ a new agent with a clean prompt. A fresh agent with a precise prompt
 outperforms a reused agent carrying irrelevant context.
 
 The deciding factor is prompt quality, not efficiency. A fresh spawn
-costs one agent startup (~2-3 seconds). Stale context costs wrong
+costs one agent startup delay. Stale context costs wrong
 assumptions, missed constraints, and wasted turns recovering.
 
 ## Generated vs Hand-Written
@@ -286,4 +286,4 @@ If the personality is missing, the SubagentStart hook failed to match the `agent
 
 **Leader as router.** The coordinator should synthesize findings, not relay them. Writing "based on your findings, implement it" pushes understanding onto the worker instead of doing the synthesis yourself. The coordinator reads the research, decides what it means, and writes a precise implementation spec. If the coordinator's prompt to the next agent doesn't demonstrate understanding of the previous agent's output, the coordinator isn't doing its job. Effective delegation is: research agent returns findings → coordinator reads, evaluates, and decides → coordinator writes a spec with file paths, line numbers, and specific changes → implementation agent executes the spec.
 
-**Stale agent reuse.** Reusing a sub-agent across unrelated tasks saves one startup but carries context that confuses the model. See Context Hygiene above. When in doubt, spawn fresh.
+**Stale agent reuse.** Reusing a sub-agent across unrelated tasks saves one startup but carries context that confuses the model. See [Context Hygiene](#context-hygiene). When in doubt, spawn fresh.
