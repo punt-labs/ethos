@@ -3,6 +3,7 @@ package hook
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +223,48 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.NoError(t, err)
 
 				assert.Equal(t, info1.ModTime(), info2.ModTime(), "file should not be rewritten when content matches")
+			},
+		},
+		{
+			name: "model field empty omits model from frontmatter",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				parts := strings.SplitN(content, "---", 3)
+				require.Len(t, parts, 3, "expected frontmatter delimiters")
+				frontmatter := parts[1]
+				assert.NotContains(t, frontmatter, "model:")
+			},
+		},
+		{
+			name: "model field set appears in frontmatter",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				// Rewrite the go-specialist role with a model field.
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "go-specialist.yaml"), map[string]interface{}{
+					"name":             "go-specialist",
+					"model":            "sonnet",
+					"responsibilities": []string{"Go package implementation with tests", "code review"},
+					"tools":            []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
+				})
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				parts := strings.SplitN(content, "---", 3)
+				require.Len(t, parts, 3, "expected frontmatter delimiters")
+				frontmatter := parts[1]
+				assert.Contains(t, frontmatter, `model: "sonnet"`)
 			},
 		},
 		{
