@@ -43,7 +43,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 | `personality` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `writing_style` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `ext` | get, set, del, list | `handle`, `namespace`, `key`, `value` |
-| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type` |
+| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type`, `repo` |
 | `role` | list, show, create, delete | `name`, `responsibilities`, `permissions` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
@@ -249,8 +249,8 @@ Use persona-level for defaults (Vox's preferred voice, Beadle's GPG key). Use se
 ### Extension Session Context
 
 Any extension can provide a `session_context` field containing markdown
-instructions that ethos injects into agent context at session start and
-before compaction. This is how tools integrate behavioral context without
+instructions that ethos injects into agent context at session start, before
+compaction, and when sub-agents spawn. This is how tools integrate behavioral context without
 requiring ethos-side code changes.
 
 ```yaml
@@ -339,6 +339,7 @@ collaborations:
 
 ```yaml
 name: go-specialist
+model: sonnet
 responsibilities:
   - Go implementation following Kernighan's principles
   - Tests with race detection and full coverage
@@ -353,6 +354,8 @@ tools:
 
 The `tools` field is the source of truth for sub-agent tool restrictions.
 DES-026 uses it to generate agent definition frontmatter.
+
+Note: the MCP `role create` method accepts `responsibilities` and `permissions` but does not expose `tools`. To set `tools`, edit the role YAML file directly.
 
 ### How Agents Use Team Context
 
@@ -379,6 +382,11 @@ Human and agent identities are resolved automatically — no manual
 | 3 | `git config user.email` | Identity `email` field |
 | 4 | `$USER` | Identity `handle` field |
 
+> Step 2 resolves when `git config user.name` is set to the GitHub
+> username (a common convention for developers). If `git config
+> user.name` contains a display name like "Jane Freeman" rather than
+> a GitHub handle, this step will not match.
+
 **Agent resolution** — per-repo `.punt-labs/ethos.yaml`:
 
 ```yaml
@@ -389,7 +397,7 @@ When `agent:` is unset, the primary agent has no persona.
 
 ## Hooks
 
-Ethos registers 5 hooks in `hooks/hooks.json`:
+Ethos registers 6 hooks in `hooks/hooks.json`:
 
 | Hook | Script | Purpose |
 |------|--------|---------|

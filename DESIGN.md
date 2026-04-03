@@ -181,9 +181,7 @@ handle: mal
 kind: human
 email: mal@serenity.ship
 github: mal
-voice:
-  provider: elevenlabs
-  voice_id: abc123
+# voice config moved to ext/vox (DES-019)
 agent: .claude/agents/mal.md
 writing_style: |
   Direct. Short sentences. Data over adjectives.
@@ -618,10 +616,10 @@ default, lightweight references are opt-in.
 
 The Identity struct carries both:
 
-- **Path fields** (`WritingStyle`, `Personality`, `Skills`) — always
+- **Path fields** (`WritingStyle`, `Personality`, `Talents`) — always
   populated from YAML, present in both modes
 - **Content fields** (`WritingStyleContent`, `PersonalityContent`,
-  `SkillsContent`) — populated by default, empty when `reference: true`
+  `TalentContents`) — populated by default, empty when `reference: true`
 
 `List()` always passes `Reference(true)` — listing all identities should
 not read every attribute file. Content resolution is for single-identity

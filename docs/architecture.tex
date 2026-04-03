@@ -151,9 +151,10 @@ CLI entry point lives in \pkg{cmd/ethos}.  Module path:
                           prefix matching \\
 \pkg{internal/process/}  & Process tree walker: find topmost
                           \texttt{claude} ancestor PID via
-                          \texttt{/proc} (Linux) and \texttt{sysctl}
-                          (macOS); result cached via
-                          \texttt{sync.Once} \\
+                          \texttt{/proc} (Linux), \texttt{sysctl}
+                          \texttt{kern.proc.pid} and
+                          \texttt{kern.procargs2} (macOS); result
+                          cached via \texttt{sync.Once} \\
 \pkg{internal/resolve/}  & 4-step human resolution chain (iam
                           $\to$ git user.name $\to$ git user.email
                           $\to$ \$USER) plus agent resolution from
@@ -162,7 +163,8 @@ CLI entry point lives in \pkg{cmd/ethos}.  Module path:
                           \texttt{PreCompact},
                           \texttt{SubagentStart/Stop},
                           \texttt{SessionEnd},
-                          \texttt{FormatOutput}); persona builder,
+                          \texttt{FormatOutput} (PostToolUse event
+                          handler)); persona builder,
                           team context, extension context, agent
                           file generation, agent definition
                           installation \\
@@ -211,9 +213,14 @@ above it in this ordering.
 \pkg{internal/identity} depends on \pkg{attribute} for slug
 validation and content resolution.
 \pkg{internal/resolve} depends on \pkg{identity}, \pkg{session},
-and \pkg{process}.  \pkg{internal/session}, \pkg{internal/process},
+and \pkg{process}.  \pkg{internal/doctor} imports
+\pkg{internal/identity} for health checks.
+\pkg{internal/session}, \pkg{internal/process},
 \pkg{internal/role}, and \pkg{internal/team} are leaf or near-leaf
 packages.
+
+The diagram is simplified; \pkg{mcp} also depends on \pkg{doctor}
+and \pkg{hook}, and \pkg{doctor} imports \pkg{identity}.
 
 % ===================================================================
 \section{Identity Model}
@@ -350,8 +357,9 @@ is optional (nil when not inside a git repository).
     (repo if it exists there, otherwise global).  Uses cross-layer
     \texttt{ValidateRefs} so attribute references in either store
     are accepted.
-  \item \textbf{Voice migration}: legacy \field{voice} fields in
-    repo identities are relocated to the global ext store
+  \item \textbf{Voice migration (legacy only)}: pre-DES-019 identity
+    files may contain a \field{voice} field.  On load, the field is
+    relocated to the global ext store
     (\fpath{<handle>.ext/vox.yaml}) and stripped from the YAML.
 \end{itemize}
 
@@ -655,6 +663,14 @@ A role is a named YAML file at
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
 \field{name}             & string       & Slug-format name \\
+\field{model}            & string (optional) & Claude model for agents in
+                                          this role; one of \texttt{opus},
+                                          \texttt{sonnet}, \texttt{haiku},
+                                          \texttt{inherit}, or a full
+                                          \texttt{claude-*} ID.  Empty means
+                                          inherit.  Validated by
+                                          \texttt{ValidateModel()} on save
+                                          and load. \\
 \field{responsibilities} & []string     & What the role does \\
 \field{permissions}      & []string     & What the role may access \\
 \field{tools}            & []string     & MCP tools available to agents
@@ -770,7 +786,11 @@ PID-keyed session files.
 \begin{enumerate}
   \item Read the process table using native OS interfaces:
     \texttt{/proc/<pid>/stat} on Linux,
-    \texttt{sysctl kern.proc.pid} on macOS.  No subprocess spawning.
+    \texttt{sysctl kern.proc.pid} on macOS.  On macOS,
+    \texttt{readProc} uses \texttt{kern.proc.pid} for the parent PID
+    and command name, and \texttt{kern.procargs2} for the full
+    executable path (used for version-named binary normalization).
+    No subprocess spawning.
   \item Walk from the current PID upward, following parent pointers.
   \item Track the topmost PID where the command name is
     \texttt{claude}.
@@ -863,6 +883,19 @@ role) and a markdown body (opening line, personality, writing style,
 responsibilities, talents).  The main agent and human identities are
 skipped.  Writes are idempotent: files are only written when content
 differs from the existing file.
+
+\subsection{Constraints}
+
+\begin{itemize}
+  \item Persona context is additive --- it does not override CLAUDE.md.
+    Project-level instructions win on conflicts.
+  \item Agent definition format is unchanged --- \fpath{.claude/agents/*.md}
+    files remain standard Claude Code agent definitions.
+  \item Ethos is not required --- if not installed, no persona is injected.
+    Agents work normally.
+  \item Talent content is not injected inline --- talents are listed as
+    slugs.  Full content is available on demand via MCP.
+\end{itemize}
 
 % ===================================================================
 \section{Storage Layout}
@@ -1091,6 +1124,9 @@ invoked by Claude Code hook configuration, not by users.
 \textbf{Command} & \textbf{Description} \\
 \midrule
 \cmd{version}              & Print version string. \\
+\cmd{resolve-agent}        & Print the default agent handle from repo
+                             config (\fpath{.punt-labs/ethos.yaml}).
+                             Hidden from help output. \\
 \cmd{doctor}               & Check installation health (identity
                              directory, human identity, default agent,
                              duplicate fields). \\
@@ -1108,7 +1144,10 @@ invoked by Claude Code hook configuration, not by users.
 % ===================================================================
 
 \texttt{ethos serve} starts a stdio-transport MCP server that
-registers 9~tools via \texttt{Handler.RegisterTools()}.  Each tool
+registers up to 9~tools via \texttt{Handler.RegisterTools()}.
+The role and team tools are registered only when their stores are
+configured; in a full deployment (the normal case), all 9 are
+present.  Each tool
 is a consolidated endpoint that accepts a \field{method} parameter
 for dispatch.  The \texttt{Handler} struct holds injected stores:
 \texttt{identity.IdentityStore}, \texttt{session.Store},
