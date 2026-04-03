@@ -1,9 +1,9 @@
 package hook
 
+// Note: this test uses writeYAML from generate_agents_test.go (same package).
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -16,9 +16,9 @@ import (
 
 func integrationRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	return filepath.Join(filepath.Dir(filename), "..", "..")
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	return filepath.Join(wd, "..", "..")
 }
 
 func copyFlatDir(t *testing.T, src, dst string) {

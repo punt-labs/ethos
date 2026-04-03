@@ -3,7 +3,6 @@ package hook
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -13,9 +12,9 @@ import (
 
 func baselineRepoRoot(t *testing.T) string {
 	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	return filepath.Join(filepath.Dir(filename), "..", "..")
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	return filepath.Join(wd, "..", "..")
 }
 
 func TestBaselineOpsSkillExists(t *testing.T) {

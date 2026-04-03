@@ -1,8 +1,8 @@
 package role
 
 import (
+	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -11,9 +11,9 @@ import (
 
 func sidecarRoot(t *testing.T) string {
 	t.Helper()
-	_, filename, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	return filepath.Join(filepath.Dir(filename), "..", "..", "sidecar")
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	return filepath.Join(wd, "..", "..", "sidecar")
 }
 
 func TestSidecarRolesLoad(t *testing.T) {
