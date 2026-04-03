@@ -39,6 +39,9 @@ func (s *Store) Save(r *Role) error {
 	if err := ValidateName(r.Name); err != nil {
 		return err
 	}
+	if err := ValidateModel(r.Model); err != nil {
+		return err
+	}
 
 	p, err := s.path(r.Name)
 	if err != nil {

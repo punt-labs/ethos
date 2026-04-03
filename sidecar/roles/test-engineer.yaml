@@ -1,0 +1,14 @@
+name: test-engineer
+model: sonnet
+responsibilities:
+  - Write tests that cover new and changed behavior
+  - Improve test infrastructure (fixtures, helpers, factories)
+  - Identify coverage gaps and write regression tests
+  - Run quality gates after every change
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
