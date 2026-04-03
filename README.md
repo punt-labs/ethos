@@ -334,6 +334,7 @@ ethos identity get mal   # includes ext map with all tool namespaces
 ## Documentation
 
 [Team Setup Guide](docs/team-setup.md) |
+[Agent Definitions](docs/agent-definitions.md) |
 [Persona Animation](docs/persona-animation.md) |
 [Agent Teams](docs/agent-teams.md) |
 [Quarry Integration](docs/quarry-integration.md) |
