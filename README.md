@@ -16,6 +16,13 @@ another. Ethos provides that context. Any tool can read it via the filesystem,
 CLI, or MCP server. Same schema for humans and agents, extensible by any
 application.
 
+An effective agent needs three layers of context: a **persona** (durable
+identity — personality, writing style, domain expertise), a **role**
+(semi-durable boundaries — tools, responsibilities, team position), and a
+**mission** (ephemeral contract — specific task, inputs, outputs, success
+criteria). Ethos owns the first two. The leader writes the third. The persona
+gives judgment. The role gives boundaries. The mission gives precision.
+
 **Platforms:** macOS and Linux (amd64, arm64)
 
 ## Quick Start
@@ -335,6 +342,7 @@ ethos identity get mal   # includes ext map with all tool namespaces
 
 [Team Setup Guide](docs/team-setup.md) |
 [Agent Definitions](docs/agent-definitions.md) |
+[Mission Skill Design](docs/mission-skill-design.md) |
 [Persona Animation](docs/persona-animation.md) |
 [Agent Teams](docs/agent-teams.md) |
 [Quarry Integration](docs/quarry-integration.md) |
