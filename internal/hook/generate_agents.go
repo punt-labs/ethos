@@ -120,7 +120,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 		fmt.Fprintf(&b, "  - %s\n", t)
 	}
 	if r.Model != "" {
-		fmt.Fprintf(&b, "model: %s\n", r.Model)
+		fmt.Fprintf(&b, "model: %s\n", yamlQuote(r.Model))
 	}
 	b.WriteString("---\n")
 

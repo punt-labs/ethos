@@ -3,6 +3,7 @@ package hook
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,7 +235,10 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.NoError(t, readErr)
 
 				content := string(data)
-				assert.NotContains(t, content, "model:")
+				parts := strings.SplitN(content, "---", 3)
+				require.Len(t, parts, 3, "expected frontmatter delimiters")
+				frontmatter := parts[1]
+				assert.NotContains(t, frontmatter, "model:")
 			},
 		},
 		{
@@ -257,7 +261,10 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.NoError(t, readErr)
 
 				content := string(data)
-				assert.Contains(t, content, "model: sonnet")
+				parts := strings.SplitN(content, "---", 3)
+				require.Len(t, parts, 3, "expected frontmatter delimiters")
+				frontmatter := parts[1]
+				assert.Contains(t, frontmatter, `model: "sonnet"`)
 			},
 		},
 		{
