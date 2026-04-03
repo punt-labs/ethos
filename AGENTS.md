@@ -43,7 +43,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 | `personality` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `writing_style` | create, list, show, delete, set | `slug`, `content`, `handle` |
 | `ext` | get, set, del, list | `handle`, `namespace`, `key`, `value` |
-| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type` |
+| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type`, `repo` |
 | `role` | list, show, create, delete | `name`, `responsibilities`, `permissions` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
@@ -249,8 +249,8 @@ Use persona-level for defaults (Vox's preferred voice, Beadle's GPG key). Use se
 ### Extension Session Context
 
 Any extension can provide a `session_context` field containing markdown
-instructions that ethos injects into agent context at session start and
-before compaction. This is how tools integrate behavioral context without
+instructions that ethos injects into agent context at session start, before
+compaction, and when sub-agents spawn. This is how tools integrate behavioral context without
 requiring ethos-side code changes.
 
 ```yaml
@@ -339,6 +339,7 @@ collaborations:
 
 ```yaml
 name: go-specialist
+model: sonnet
 responsibilities:
   - Go implementation following Kernighan's principles
   - Tests with race detection and full coverage
@@ -353,6 +354,8 @@ tools:
 
 The `tools` field is the source of truth for sub-agent tool restrictions.
 DES-026 uses it to generate agent definition frontmatter.
+
+Note: the MCP `role create` method accepts `responsibilities` and `permissions` but does not expose `tools`. To set `tools`, edit the role YAML file directly.
 
 ### How Agents Use Team Context
 
@@ -379,6 +382,11 @@ Human and agent identities are resolved automatically — no manual
 | 3 | `git config user.email` | Identity `email` field |
 | 4 | `$USER` | Identity `handle` field |
 
+> Step 2 resolves when `git config user.name` is set to the GitHub
+> username (a common convention for developers). If `git config
+> user.name` contains a display name like "Jane Freeman" rather than
+> a GitHub handle, this step will not match.
+
 **Agent resolution** — per-repo `.punt-labs/ethos.yaml`:
 
 ```yaml
@@ -389,12 +397,12 @@ When `agent:` is unset, the primary agent has no persona.
 
 ## Hooks
 
-Ethos registers 5 hooks in `hooks/hooks.json`:
+Ethos registers 6 hooks in `hooks/hooks.json`:
 
 | Hook | Script | Purpose |
 |------|--------|---------|
 | `SessionStart` | `session-start.sh` | Create roster, inject identity context and persona (personality + writing style + talents) |
-| `PreCompact` | `pre-compact.sh` | Re-inject condensed persona before context compression |
+| `PreCompact` | `pre-compact.sh` | Re-inject full persona block + team context before context compression -- prevents behavioral drift |
 | `SubagentStart` | `subagent-start.sh` | Add subagent to roster, auto-match and inject persona |
 | `SubagentStop` | `subagent-stop.sh` | Remove subagent from roster |
 | `SessionEnd` | `session-end.sh` | Delete roster and PID-keyed session file |
@@ -420,7 +428,7 @@ Three hooks inject persona content automatically:
 
 1. **SessionStart** — loads the primary agent's identity and injects full personality content, writing style content, and talent slugs into the session context. This replaces the old one-line identity confirmation with a structured persona block.
 
-2. **PreCompact** — re-injects a condensed persona before context compression. Without this, the personality and writing style from SessionStart get summarized away during compaction, causing behavioral drift in long sessions.
+2. **PreCompact** — re-injects the full persona block + team context before context compression. A condensed version was tried and rejected -- behavioral drift returned within 2-3 compaction cycles.
 
 3. **SubagentStart** — when a subagent spawns, ethos auto-matches its `agent_type` to an identity handle. If a match is found, the subagent's personality and writing style content are injected into its context at spawn time.
 

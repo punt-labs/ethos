@@ -16,7 +16,7 @@ another. Ethos provides that context. Any tool can read it via the filesystem,
 CLI, or MCP server. Same schema for humans and agents, extensible by any
 application.
 
-An effective agent needs three layers of context: a **persona** (durable
+Ethos is built on a three-layer model for agent context: a **persona** (durable
 identity — personality, writing style, domain expertise), a **role**
 (semi-durable boundaries — tools, responsibilities, team position), and a
 **mission** (ephemeral contract — specific task, inputs, outputs, success
@@ -200,7 +200,7 @@ All tools have corresponding slash commands under `/ethos:*`.
 | `writing_style` | create, list, show, delete, set | `/ethos:writing-style` |
 | `session` | roster, iam, join, leave | `/ethos:session` |
 | `ext` | get, set, del, list | `/ethos:ext` |
-| `team` | list, show, create, delete, add-member, remove-member, add-collab, for-repo | `/ethos:team` |
+| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `/ethos:team` |
 | `role` | list, show, create, delete | `/ethos:role` |
 | `doctor` | *(standalone)* | — |
 
@@ -280,12 +280,16 @@ git; global files are personal.
 | Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
 | Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
 | Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
-| Repo config | `.punt-labs/ethos/config.yaml` | Yes |
+| Repo roles | `.punt-labs/ethos/roles/<name>.yaml` | Yes |
+| Repo teams | `.punt-labs/ethos/teams/<name>.yaml` | Yes |
+| Repo config | `.punt-labs/ethos.yaml` | Yes |
 | Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
 | Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
 | Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
+| Global roles | `~/.punt-labs/ethos/roles/<name>.yaml` | No |
+| Global teams | `~/.punt-labs/ethos/teams/<name>.yaml` | No |
 | Extensions | `~/.punt-labs/ethos/identities/<handle>.ext/<tool>.yaml` | No |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
 
@@ -301,7 +305,7 @@ Human and agent identities are resolved automatically — no manual
 3. `git config user.email` — matched against identity `email` field
 4. `$USER` — matched against identity `handle` field
 
-**Agent resolution** — per-repo `.punt-labs/ethos/config.yaml`:
+**Agent resolution** — per-repo `.punt-labs/ethos.yaml`:
 
 ```yaml
 agent: claude
