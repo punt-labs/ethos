@@ -342,7 +342,7 @@ Success criteria:
   - [concrete, verifiable conditions]
   - [tests that must pass, checks that must be green]
 
-Files owned:
+files_owned:
   - [specific paths the agent may create or modify]
 
 Constraints:
@@ -358,10 +358,9 @@ How will we know it's fixed? The agent fills in the blanks with
 guesses.
 
 **Delegating understanding.** "Based on the research findings,
-implement the solution" pushes synthesis onto the agent. The leader
-should read the research, decide what it means, and write a spec with
-file paths, line numbers, and specific changes. The mission proves the
-leader understood the input.
+implement the solution" pushes synthesis onto the agent. The mission
+should prove the leader understood the input. See the "Leader as
+router" anti-pattern above.
 
 **Unbounded scope.** A mission without file ownership lets the agent
 touch anything. A mission without constraints lets the agent make

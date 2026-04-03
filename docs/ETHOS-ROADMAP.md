@@ -497,7 +497,7 @@ invocations. Add optional audit logging to a session log file.
 
 **Delivery**: Addition to `HandleFormatOutput` in `internal/hook/`.
 
-### 4.4 Audio/Notification Hooks
+### 4.5 Audio/Notification Hooks
 
 **Problem**: No feedback when the agent finishes work or needs input.
 Long-running sessions require manual monitoring.
