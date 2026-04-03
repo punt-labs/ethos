@@ -201,22 +201,31 @@ change during a session.
 
 \subsubsection{Body Assembly Order}
 
-The body is assembled from ethos identity attributes in this order:
+The body is assembled from ethos identity attributes in this order
+(matching \cmd{buildAgentFile} in
+\fpath{internal/hook/generate\_agents.go}):
 
 \begin{enumerate}
-  \item \textbf{Personality} --- from
-    \fpath{personalities/<slug>.md}. Core principles, approach,
-    temperament. The first prose paragraph becomes the opening
-    ``You are Name (handle), ...'' line (via \cmd{BuildPersonaBlock}).
+  \item \textbf{Opening line} --- first content sentence from
+    \fpath{personalities/<slug>.md}, folded into
+    ``You are Name (handle), <sentence>.''
+  \item \textbf{Reporting line} --- hardcoded
+    ``You report to Claude Agento (COO/VP Engineering).''
+  \item \textbf{Remaining personality} --- from
+    \fpath{personalities/<slug>.md}, after stripping the leading
+    heading and first paragraph (already used in the opening line).
   \item \textbf{Writing style} --- from
-    \fpath{writing-styles/<slug>.md}. Sentence structure, vocabulary,
-    anti-patterns.
-  \item \textbf{Talents} --- from \fpath{talents/<slug>.md}. Domain
-    expertise, standards, tools. Listed as slugs; full content
-    available via MCP.
-  \item \textbf{Role constraints} --- ``What you do'' and ``What you
-    don't do'' sections derived from the team role definition.
+    \fpath{writing-styles/<slug>.md}, under a \texttt{\#\# Writing
+    Style} heading.
+  \item \textbf{Responsibilities} --- from the role definition, under
+    a \texttt{\#\# Responsibilities} heading. Each responsibility is
+    a bullet point.
+  \item \textbf{Talents} --- listed inline as comma-separated slugs
+    (e.g., ``Talents: engineering, formal-methods'').
 \end{enumerate}
+
+\noindent\textbf{Note:} There is no ``What You Do / What You Don't
+Do'' section today --- that is future work (Phase~2.1).
 
 \subsubsection{Frontmatter Assembly}
 
@@ -231,11 +240,11 @@ Frontmatter fields are derived from the identity and role:
 \field{description} & Identity + role summary & Required \\
 \field{tools} & Role definition & Read, Write, Edit, Bash,
   Grep, Glob \\
-\field{model} & Ethos config & \texttt{inherit} \\
-\field{effort} & Ethos config & \texttt{max} \\
-\field{memory} & Ethos config & \texttt{project} \\
-\field{skills} & Always includes baseline & \texttt{[baseline-ops]} \\
-\field{hooks} & Role-based (optional) & See \S\ref{sec:hooks} \\
+\field{model} & Role definition & Omitted when role has no model \\
+\field{effort} & (planned, not yet generated) & --- \\
+\field{memory} & (planned, not yet generated) & --- \\
+\field{skills} & (planned, not yet generated) & --- \\
+\field{hooks} & (planned, not yet generated) & --- \\
 \bottomrule
 \end{tabularx}
 \end{center}
@@ -488,6 +497,14 @@ SessionStart is the only reliable trigger. It runs at the start of
 every session before any delegation can occur. There is no separate
 install step.
 
+\medskip
+\noindent\textbf{Note:} Before generation runs,
+\cmd{InstallAgentDefinitions} copies any hand-authored \texttt{.md}
+files from \fpath{.punt-labs/ethos/agents/} to
+\fpath{.claude/agents/}. Generation then overwrites these with
+identity-derived content for team members. This two-step sequence
+ensures both hand-authored and generated agents are present.
+
 \subsection{Staleness Check}
 
 Before writing, compare generated content against the existing file
@@ -529,27 +546,19 @@ writing style \texttt{hettinger-prose}, and talent
 \begin{lstlisting}[language={}]
 ---
 name: rmh
-description: >-
-  Python specialist. Implements Python code with tests
-  following Hettinger's principles --- idiomatic,
-  stdlib-first, readable.
-tools: Read, Write, Edit, Bash, Grep, Glob
-model: inherit
-effort: max
-memory: project
-skills:
-  - baseline-ops
-hooks:
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: "make check 2>&1 | tail -20"
+description: "Python specialist on the Punt Labs engineering team"
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
 ---
 
-You are Raymond H (rmh), Python specialist sub-agent.
-Principles from Raymond Hettinger's talks, PEPs, and
-stdlib contributions.
+You are Raymond H (rmh), Python specialist on the Punt Labs
+engineering team.
+You report to Claude Agento (COO/VP Engineering).
 
 ## Core Principles
 
@@ -564,10 +573,18 @@ There must be a better way. Find it.
 Short sentences, under 30 words. Lead with the answer.
 ...
 
-## Talents
+## Responsibilities
+- Implement Python packages: modules, classes, functions, tests
+- Write clean, idiomatic Python following the project's standards
+...
 
-engineering
+Talents: engineering
 \end{lstlisting}
+
+\noindent The \field{model} field appears only when the role definition
+specifies a model. Fields \field{effort}, \field{memory},
+\field{skills}, and \field{hooks} are not yet generated (see
+Phase~1 and Phase~4).
 
 % ===================================================================
 \section{Team Assessment in the Development Workflow}
@@ -691,9 +708,10 @@ Frontmatter (YAML) & 15--25 & 100--150 \\
 baseline-ops skill content & 50--80 & 300--500 \\
 SubagentStart additionalContext (persona + extensions) & 30--60 &
   200--400 \\
-CLAUDE.md (loaded separately) & 200--400 & 1500--3000 \\
+CLAUDE.md (loaded separately; project-level $\sim$120 lines;
+  global CLAUDE.md may be larger) & 100--150 & 500--1000 \\
 \midrule
-\textbf{Total agent context at spawn} & & \textbf{2500--4750} \\
+\textbf{Total agent context at spawn} & & \textbf{1500--2750} \\
 \bottomrule
 \end{tabularx}
 \end{center}
