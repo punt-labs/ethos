@@ -44,7 +44,7 @@ func TestSidecarRolesLoad(t *testing.T) {
 func TestSidecarRolesToolRestrictions(t *testing.T) {
 	store := NewStore(sidecarRoot(t))
 
-	noWriteEdit := []string{"reviewer", "architect", "security-reviewer"}
+	noWriteEdit := []string{"reviewer", "architect", "security-reviewer", "researcher"}
 	for _, name := range noWriteEdit {
 		t.Run(name+"_no_file_modification", func(t *testing.T) {
 			r, err := store.Load(name)
