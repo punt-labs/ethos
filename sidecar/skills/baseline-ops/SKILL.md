@@ -17,6 +17,10 @@ Use dedicated tools instead of shell equivalents:
 Reserve Bash for commands that have no dedicated tool equivalent:
 `git`, `make`, package managers, build tools.
 
+Never chain multiple commands in a single Bash call using `&&`, `||`,
+`;`, `$()`, `|`, or `for` loops. Each Bash call must be exactly one
+command. Use absolute paths instead of `cd && command`.
+
 ## Verification
 
 Run `make check` after every file change. Zero violations before
@@ -65,14 +69,14 @@ sufficient — verify the code actually works:
 
 ## Knowledge Sources
 
-- Before broad codebase searches, check quarry for existing
-  knowledge: `/find <query>`.
+- Before broad codebase searches, check for existing indexed
+  knowledge. If quarry is available: `/find <query>`.
 - Read CLAUDE.md for project-specific rules — it loads
   automatically but may contain constraints not in the spec.
 
 ## Progress
 
-- For multi-step work, use TodoWrite to track progress.
+- For multi-step work, use TodoWrite (if available) or similar task tracking to track progress.
 - Mark tasks complete as they finish, not in batch at the end.
 - If blocked, report what you tried and what failed. Do not
   silently skip steps.

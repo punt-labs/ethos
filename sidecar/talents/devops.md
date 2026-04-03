@@ -166,7 +166,8 @@ RUN CGO_ENABLED=0 go build -o /bin/app ./cmd/app
 FROM alpine:3.21
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /bin/app /bin/app
-USER nobody:nobody
+RUN addgroup -S app && adduser -S -G app app
+USER app:app
 ENTRYPOINT ["/bin/app"]
 ```
 
@@ -179,9 +180,11 @@ Principles:
   `COPY .` so dependency download is cached across builds. The full
   source copy busts the cache; dependency resolution does not change
   on every commit.
-- **Run as non-root.** `USER nobody:nobody` or create a dedicated user.
-  Running as root inside a container is unnecessary for most workloads
-  and widens the blast radius of a compromise.
+- **Run as non-root.** Create a dedicated unprivileged user:
+  `RUN addgroup -S app && adduser -S -G app app` then `USER app:app`.
+  Avoid `nobody:nobody` which has unclear ownership semantics on some
+  systems. Running as root inside a container is unnecessary for most
+  workloads and widens the blast radius of a compromise.
 - **No latest tag.** Pin base images to specific versions: `alpine:3.21`,
   not `alpine:latest`. Reproducibility requires fixed inputs.
 - **Minimal final image.** `alpine` or `distroless`. The fewer packages

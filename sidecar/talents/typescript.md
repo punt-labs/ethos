@@ -208,6 +208,10 @@ Conditional types distribute over unions. `IsString<string | number>` becomes
 `true | false`, which simplifies to `boolean`. This is usually what you want,
 but if not, wrap both sides in a tuple: `[T] extends [string]`.
 
+The `[T] extends [string]` pattern works because wrapping in a tuple prevents
+TypeScript from distributing the conditional over union members. This is called
+non-distributive conditional types.
+
 ### Mapped Types
 
 Transform existing types:
