@@ -95,6 +95,9 @@ func (s *Store) Load(name string) (*Role, error) {
 	if err := yaml.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("parsing role %q: %w", name, err)
 	}
+	if err := ValidateModel(r.Model); err != nil {
+		return nil, fmt.Errorf("role %q: %w", name, err)
+	}
 	return &r, nil
 }
 
