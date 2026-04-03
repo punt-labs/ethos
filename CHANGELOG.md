@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Baseline operational skill** — `sidecar/skills/baseline-ops/SKILL.md` provides operational discipline (tool usage, verification, scope, security) for sub-agents that lose the default system prompt
-- **6 starter roles** — implementer, reviewer, researcher, architect, security-reviewer, test-engineer with tools, responsibilities, and model preferences; deployed by installer to `~/.punt-labs/ethos/roles/`
-- **10 starter talents** — go, python, typescript, security, code-review, testing, cli-design, api-design, documentation, devops; substantial domain expertise (200-800 lines each) deployed by installer to `~/.punt-labs/ethos/talents/`
-- **`model` field on Role** — roles can specify a preferred Claude model (opus, sonnet, haiku, inherit); `GenerateAgentFiles` includes it in agent frontmatter; validated against allowlist on save
+- **6 starter roles** — implementer, reviewer, researcher, architect, security-reviewer, test-engineer with tools, responsibilities, and model preferences; available in `sidecar/roles/` for teams to reference or copy
+- **10 starter talents** — go, python, typescript, security, code-review, testing, cli-design, api-design, documentation, devops; substantial domain expertise (200-800 lines each) available in `sidecar/talents/` for teams to reference or copy
+- **`model` field on Role** — roles can specify a preferred Claude model (opus, sonnet, haiku, inherit); `GenerateAgentFiles` includes it in agent frontmatter; validated against allowlist on save and load
 - **Agent definitions guide** — `docs/agent-definitions.md` covering separation of concerns, anti-responsibilities, tool restrictions, baseline ops, output contracts, scope enforcement, context hygiene, common anti-patterns
 - **Team setup guide** — `docs/team-setup.md` for third-party users creating teams from scratch
 - **Mission skill design** — `docs/mission-skill-design.md` specifying the `/mission` structured delegation skill
@@ -411,7 +411,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [1.0.0]: https://github.com/punt-labs/ethos/compare/v0.8.0...v1.0.0
 [0.8.0]: https://github.com/punt-labs/ethos/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/punt-labs/ethos/compare/v0.6.0...v0.7.0
-[0.6.0]: https://github.com/punt-labs/ethos/compare/v0.3.4...v0.6.0
+[0.6.0]: https://github.com/punt-labs/ethos/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/punt-labs/ethos/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/punt-labs/ethos/compare/v0.3.4...v0.4.0
 [0.3.4]: https://github.com/punt-labs/ethos/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/punt-labs/ethos/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/punt-labs/ethos/compare/v0.3.1...v0.3.2
