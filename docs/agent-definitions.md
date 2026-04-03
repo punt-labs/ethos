@@ -20,6 +20,8 @@ When a sub-agent spawns, Claude Code replaces the default system prompt with the
 
 ### Frontmatter
 
+**What ethos generates today** (DES-026):
+
 ```yaml
 ---
 name: bwk
@@ -34,35 +36,29 @@ tools:
   - Bash
   - Grep
   - Glob
-model: inherit
-effort: max
-memory: project
-skills:
-  - baseline-ops
-hooks:
-  PostToolUse:
-    - matcher: "Write|Edit"
-      hooks:
-        - type: command
-          command: "make check 2>&1 | tail -20"
 ---
 ```
 
-Field reference:
+Ethos generates `name`, `description`, and `tools` (from role). The
+body includes the personality opening line, personality content,
+writing style, talent slugs, and role responsibilities.
+
+**Additional frontmatter fields** (set manually or planned for future
+generation):
 
 | Field | Source | Notes |
 |-------|--------|-------|
-| `name` | Identity handle | Case-sensitive, must match exactly |
-| `description` | Identity + role summary | When Claude should delegate to this agent |
-| `tools` | Role definition | Explicit allowlist -- see Tool Restrictions |
-| `model` | Ethos config | `sonnet`, `opus`, `haiku`, full ID, or `inherit` |
-| `effort` | Ethos config | `low`, `medium`, `high`, `max` |
-| `memory` | Ethos config | `user`, `project`, or `local` |
-| `skills` | Always includes baseline | `baseline-ops` provides operational discipline |
-| `hooks` | Role-based | Implementation agents get PostToolUse for `make check` |
-| `isolation` | Optional | `worktree` for git worktree isolation |
-| `maxTurns` | Optional | Cap on agentic turns |
-| `background` | Optional | Always run as background task |
+| `name` | Identity handle | Generated. Case-sensitive, must match exactly |
+| `description` | Identity + role summary | Generated |
+| `tools` | Role definition | Generated. Explicit allowlist -- see Tool Restrictions |
+| `model` | Manual / future: Role | `sonnet`, `opus`, `haiku`, full ID, or `inherit` |
+| `effort` | Manual | `low`, `medium`, `high`, `max` |
+| `memory` | Manual | `user`, `project`, or `local` |
+| `skills` | Manual / future: generated | Claude Code skills preloaded at startup |
+| `hooks` | Manual / future: Role-based | Lifecycle hooks scoped to this agent |
+| `isolation` | Manual | `worktree` for git worktree isolation |
+| `maxTurns` | Manual | Cap on agentic turns |
+| `background` | Manual | Always run as background task |
 
 ### Body
 
@@ -158,7 +154,13 @@ Never omit the `tools` field. When omitted, the sub-agent inherits all tools fro
 
 Sub-agents lose Claude Code's default system prompt entirely. Without a baseline, the agent does not know to use Read instead of `cat`, or to run `make check` after changes.
 
-The `baseline-ops` skill (designed in the agent identity spec, not yet shipped) will provide this as a preloaded skill via `skills: [baseline-ops]`. Until the skill ships, include operational discipline directly in the agent body or CLAUDE.md. The essential rules:
+The `baseline-ops` skill (designed in agent-identity-spec.tex, not yet
+shipped) will provide this as a preloaded Claude Code skill via
+`skills: [baseline-ops]` in agent frontmatter. Note: Claude Code
+"skills" (preloaded content injected at startup) are distinct from
+ethos "talents" (domain expertise referenced by slug). Until the skill
+ships, include operational discipline directly in the agent body or
+CLAUDE.md. The essential rules:
 
 - Use dedicated tools: Read over `cat`, Grep over `grep`, Glob over `find`
 - Run `make check` after every change, zero violations before returning
@@ -205,10 +207,15 @@ Most agents need levels 1 + 2. Level 3 is for agents where experience shows scop
 
 ## Generated vs Hand-Written
 
-Ethos generates agent definitions from identity data during SessionStart (DES-026). The generated file includes:
+Ethos generates agent definitions from identity data during SessionStart (DES-026). The generated file currently includes:
 
-- **Frontmatter**: name, description, tools (from role), model, effort, memory
-- **Body**: personality opening line, principles (from personality markdown), talent slugs, role constraints ("What You Do" / "What You Don't Do")
+- **Frontmatter**: name, description, tools (from role)
+- **Body**: personality opening line, personality content (remainder after opening), writing style, talent slugs, role responsibilities
+
+Fields like `model`, `effort`, `memory`, `skills`, and `hooks` are not
+yet generated — set them manually or wait for Phase 2 of the
+[roadmap](ETHOS-ROADMAP.md). Anti-responsibilities ("What You Don't
+Do") are also planned for generation from the team collaboration graph.
 
 The generation is idempotent -- running twice with unchanged identity data produces identical output. Content is compared before writing; identical files are not rewritten.
 
