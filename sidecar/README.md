@@ -16,6 +16,8 @@ is the contract.
   talents/                         # shared talent definitions (markdown)
   personalities/                  # shared personality definitions (markdown)
   writing-styles/                 # shared writing style definitions (markdown)
+  roles/                          # role definitions (YAML)
+  skills/                         # Claude Code skills (e.g., baseline-ops)
   sessions/                       # session rosters (ephemeral, auto-managed)
 ```
 

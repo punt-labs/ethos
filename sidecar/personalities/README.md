@@ -4,7 +4,7 @@ Shared personality definitions as plain markdown files. Referenced from
 identity YAML:
 
 ```yaml
-personality: personalities/principal-engineer.md
+personality: principal-engineer
 ```
 
 Each file defines behavioral patterns — decision-making approach, values,

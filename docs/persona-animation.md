@@ -44,7 +44,7 @@ All three core layers are implemented and working:
 1. **Persona verification** — a way to check whether the agent is actually
    following its persona (active verification via PostToolUse or Stop hook)
 
-Cross-surface consistency is partially solved by DES-022: each tool
+Cross-surface consistency is solved by DES-022: each tool
 (quarry, beadle, biff, vox) provides its own `session_context` in its
 extension YAML. Ethos emits all session contexts at SessionStart and
 PreCompact, giving the agent consistent behavioral instructions across
@@ -197,8 +197,8 @@ verification is already working.
 | 3 | Inject subagent persona at spawn | SubagentStart | Done (v2.1.0) |
 | 4 | Remove manual `ethos show` from agent definitions | Agent .md files | Done — agent definitions no longer need identity loading |
 | 5 | Agent teams support | SessionStart | Done (v2.3.0) — PID fix for version-named binaries |
-| 6 | Extension session context (DES-022) | SessionStart, PreCompact | Done (v2.6.1) — tools provide their own context |
-| 7 | Agent file generation (DES-026) | SessionStart | Done (v2.6.0) — generate .claude/agents/ from identity data |
+| 6 | Agent file generation (DES-026) | SessionStart | Done (v2.6.0) — generate .claude/agents/ from identity data |
+| 7 | Extension session context (DES-022) | SessionStart, PreCompact, SubagentStart | Done (v2.6.1) — tools provide their own context |
 | 8 | Active persona verification | PostToolUse / Stop | Future |
 
 Phases 1-7 are complete. Phase 8 is a future enhancement.

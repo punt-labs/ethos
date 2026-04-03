@@ -3,6 +3,8 @@
 How to create and structure an ethos team from scratch. This guide is
 for any organization using ethos, not specific to Punt Labs.
 
+**Prerequisite:** Install ethos first -- see [Quick Start](../README.md#quick-start).
+
 ## Overview
 
 Ethos stores identity data in `.punt-labs/ethos/` relative to the repo
@@ -134,6 +136,7 @@ and agent file generation.
 ```yaml
 # roles/backend-engineer.yaml
 name: backend-engineer
+model: sonnet
 responsibilities:
   - Implement backend services and APIs
   - Write tests with full coverage
@@ -148,6 +151,11 @@ tools:
 
 The `tools` field determines which Claude Code tools the agent can
 use when ethos generates agent definition files (DES-026).
+
+To create a role with all fields including `tools`, write the YAML file
+and use `ethos role create -f roles/backend-engineer.yaml`. The
+interactive `ethos role create` prompts for `responsibilities` and
+`permissions` only.
 
 ## Step 4: Create Teams
 
@@ -184,7 +192,7 @@ Collaboration roles must be filled by team members.
 Create `.punt-labs/ethos.yaml` at the repo root:
 
 ```yaml
-agent: my-agent          # handle of the primary agent identity
+agent: code-reviewer     # handle of the primary agent identity
 team: engineering        # team name for hook context
 ```
 
@@ -199,10 +207,12 @@ submodule in each project:
 
 ```bash
 # Create the team repo
-mkdir my-team && cd my-team
+mkdir my-team
+cd my-team
 git init
 # ... add identities, personalities, writing-styles, talents, roles, teams
-git add . && git commit -m "Initial team setup"
+git add .
+git commit -m "Initial team setup"
 git remote add origin git@github.com:myorg/team.git
 git push -u origin main
 
@@ -222,7 +232,8 @@ git clone --recurse-submodules git@github.com:myorg/project.git
 If already cloned without submodules:
 
 ```bash
-git submodule init && git submodule update
+git submodule init
+git submodule update
 ```
 
 To pull latest team data:
@@ -250,8 +261,9 @@ Once configured, ethos hooks handle the rest:
 2. **PreCompact** — re-injects the persona block before context
    compression so behavioral instructions survive long sessions.
 
-3. **SubagentStart** — auto-matches subagent types to identity handles
-   and injects the matched persona.
+3. **SubagentStart** — auto-matches subagent types to identity handles,
+   injects the matched persona and any extension session contexts for
+   that identity.
 
 ## Extension Session Context
 
@@ -260,7 +272,7 @@ Any tool can provide session-scoped instructions by setting a
 session contexts at session start and before compaction.
 
 ```bash
-ethos ext set my-agent my-tool session_context "$(cat instructions.md)"
+ethos ext set my-agent my-tool session_context "Your session context instructions here"
 ```
 
 This is how tools like quarry (memory), beadle (email), and biff

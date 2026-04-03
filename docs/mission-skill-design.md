@@ -1,7 +1,7 @@
 # Mission Skill Design
 
 How ethos bridges the gap between high-level delegation guidance
-(CLAUDE.md) and low-level agent primitives (Agent tool).
+and low-level agent primitives (Agent tool).
 
 ## Problem
 
@@ -9,7 +9,7 @@ Three layers exist for directing agent work:
 
 | Layer | What It Provides | Gap |
 |-------|-----------------|-----|
-| CLAUDE.md | "Delegate to specialists, review their work" | Too abstract — no structure for what a delegation should contain |
+| Delegation standards | "Delegate to specialists, review their work" | Too abstract — no structure for what a delegation should contain |
 | **??? (mission skill)** | Structured task contract with typed fields | **Missing** |
 | Agent(subagent_type, prompt) | Raw spawn with freeform prompt string | Too low-level — quality depends entirely on prompt discipline |
 
@@ -42,7 +42,7 @@ Invoked when the leader wants to delegate a bounded task:
 **Step 1: Resolve the agent.**
 
 Read the team roster via ethos. Show available agents with their
-roles, tools, and current status (idle/busy via session roster).
+roles, tools, and session presence (via session roster).
 If the user named an agent, confirm. If not, suggest based on the
 task description and role match.
 
@@ -51,18 +51,21 @@ Available agents for this task:
 
   bwk  — Go specialist (implementer)
          Tools: Read, Write, Edit, Bash, Grep, Glob
-         Status: idle
+         In session: no
 
   rmh  — Python specialist (implementer)
          Tools: Read, Write, Edit, Bash, Grep, Glob
-         Status: idle
+         In session: no
 
   djb  — Security reviewer (security-reviewer)
          Tools: Read, Grep, Glob, Bash
-         Status: idle
+         In session: no
 
 Recommended: bwk (task involves Go code)
 ```
+
+Note: the session roster tracks presence (joined/left), not activity
+state.
 
 **Step 2: Build the mission contract.**
 
@@ -116,8 +119,9 @@ Before spawning:
 Show the complete mission. Leader confirms. Skill spawns the agent
 with the structured prompt.
 
-The spawn uses `Agent(subagent_type=handle, prompt=mission_text)`.
-The mission_text is the formatted contract — not freeform prose.
+The spawn uses `Agent(subagent_type=handle, prompt=mission_text, run_in_background=true)`.
+The mission_text is the formatted contract -- not freeform prose.
+In this workflow, run_in_background=true keeps the mission asynchronous so the leader can continue tracking and later review the results against the contract.
 
 **Step 5: Track.**
 
@@ -130,38 +134,31 @@ completes, the leader reviews results against the success criteria.
 The skill generates a prompt in this structure:
 
 ```
-## Mission
-
 Task: [one-sentence description]
 
-## Inputs
+Inputs:
+  - [specific files, data, or synthesized findings]
 
-- [specific files, data, or synthesized findings]
+Outputs:
+  - [files to create or modify]
+  - [format for structured results if applicable]
 
-## Outputs
+Success criteria:
+  - [concrete, verifiable conditions]
+  - [tests that must pass]
 
-- [files to create or modify]
-- [format for structured results if applicable]
+files_owned:
+  - [paths this agent may create or modify -- nothing else]
 
-## Success Criteria
-
-- [concrete, verifiable conditions]
-- [tests that must pass]
-
-## files_owned
-
-- [paths this agent may create or modify — nothing else]
-
-## Constraints
-
-- [design decisions already made]
-- [what NOT to do]
+Constraints:
+  - [design decisions already made]
+  - [what NOT to do]
 ```
 
 This is the prompt the agent receives. Combined with:
 - The agent definition (persona + role from ethos)
 - SubagentStart hook injection (personality, writing style, team context)
-- CLAUDE.md (project rules)
+- Project rules (CLAUDE.md, loaded separately by Claude Code)
 - baseline-ops skill (operational discipline)
 
 The agent has everything: who it is, what it can do, what it should
@@ -172,9 +169,12 @@ do right now, how to work, and what rules to follow.
 | Data | Source | Purpose |
 |------|--------|---------|
 | Team roster | ethos team MCP tool | Available agents and roles |
-| Session roster | ethos session MCP tool | Active/idle status |
+| Session roster | ethos session MCP tool | In-session status |
 | Role definitions | ethos role MCP tool | Tools and responsibilities |
 | Conversation context | Current session | Pre-populate mission fields |
+
+The role and team MCP tools are registered only when their stores are
+configured. The skill should handle their absence gracefully.
 | Bead state | beads CLI | Track mission in work tracker |
 
 ### What the Skill Does NOT Do
@@ -186,6 +186,9 @@ do right now, how to work, and what rules to follow.
   works independently. The leader monitors via task notifications.
 - Does not evaluate results. The leader reviews agent output against
   the success criteria. Evaluation is a separate concern.
+- Does not work from sub-agents. Sub-agents cannot spawn other
+  sub-agents (Claude Code constraint). The /mission skill is only
+  valid in the primary session.
 
 ### Relationship to Existing Tools
 

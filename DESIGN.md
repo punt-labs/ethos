@@ -181,9 +181,7 @@ handle: mal
 kind: human
 email: mal@serenity.ship
 github: mal
-voice:
-  provider: elevenlabs
-  voice_id: abc123
+# voice config moved to ext/vox (DES-019)
 agent: .claude/agents/mal.md
 writing_style: |
   Direct. Short sentences. Data over adjectives.
@@ -618,10 +616,10 @@ default, lightweight references are opt-in.
 
 The Identity struct carries both:
 
-- **Path fields** (`WritingStyle`, `Personality`, `Skills`) — always
+- **Path fields** (`WritingStyle`, `Personality`, `Talents`) — always
   populated from YAML, present in both modes
 - **Content fields** (`WritingStyleContent`, `PersonalityContent`,
-  `SkillsContent`) — populated by default, empty when `reference: true`
+  `TalentContents`) — populated by default, empty when `reference: true`
 
 `List()` always passes `Reference(true)` — listing all identities should
 not read every attribute file. Content resolution is for single-identity
@@ -1699,9 +1697,12 @@ CLI commands, MCP tools, and layered stores.
 
 ```yaml
 name: go-specialist
+model: sonnet
 responsibilities:
   - Go implementation following Kernighan's principles
   - Tests with race detection and full coverage
+permissions:
+  - approve-merges
 tools:
   - Read
   - Write
@@ -1710,6 +1711,8 @@ tools:
   - Grep
   - Glob
 ```
+
+The `model` field specifies the Claude model for agents in this role (opus, sonnet, haiku, inherit, or a full claude-* ID). Empty means inherit. Validated by `ValidateModel()` on save and load.
 
 **Team** — binds identities to roles for a set of repositories, with
 a collaboration graph:
@@ -1730,6 +1733,8 @@ collaborations:
     type: reports_to
 ```
 
+Valid collaboration types: `reports_to` (hierarchical reporting), `collaborates_with` (peer collaboration), `delegates_to` (work delegation).
+
 Both use the same layered resolution as identities: repo-local
 (`.punt-labs/ethos/`) overrides user-global (`~/.punt-labs/ethos/`).
 
@@ -1743,6 +1748,7 @@ specification (`docs/teams.tex`):
 - Collaboration roles must be filled by team members
 - No self-collaboration (a role cannot collaborate with itself)
 - Roles referenced by teams cannot be deleted
+- No duplicate identity/role assignments within a team
 - Dangling collaborations are cleaned up when members are removed
 
 ### Integration with hooks
@@ -1811,6 +1817,8 @@ authority on content length, and truncation caused behavioral drift.
 an identity handle. If matched, inject that identity's persona content
 into the subagent's context at spawn. Subagent agent definitions no
 longer need manual `ethos show` instructions.
+
+SessionStart and PreCompact also emit extension `session_context` values from all extension namespaces (per DES-022). This is separate from the persona block — each tool provides its own context (quarry provides memory instructions, beadle provides email config, biff provides messaging config). Ethos iterates extensions and appends session_context values after the persona block, with zero consumer-specific code.
 
 Talent slugs are listed but not expanded inline — full talent content
 is available on demand via `/ethos:talent show <slug>`. This keeps the
