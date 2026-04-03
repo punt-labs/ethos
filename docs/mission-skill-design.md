@@ -121,7 +121,7 @@ with the structured prompt.
 
 The spawn uses `Agent(subagent_type=handle, prompt=mission_text, run_in_background=true)`.
 The mission_text is the formatted contract -- not freeform prose.
-Per CLAUDE.md: every Agent call must use run_in_background: true.
+In this workflow, run_in_background=true keeps the mission asynchronous so the leader can continue tracking and later review the results against the contract.
 
 **Step 5: Track.**
 

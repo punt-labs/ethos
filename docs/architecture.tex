@@ -787,9 +787,12 @@ PID-keyed session files.
   \item Read the process table using native OS interfaces:
     \texttt{/proc/<pid>/stat} on Linux,
     \texttt{sysctl kern.proc.pid} on macOS.  On macOS,
-    \texttt{readProc} uses \texttt{kern.proc.pid} for the parent PID
-    and command name, and \texttt{kern.procargs2} for the full
-    executable path (used for version-named binary normalization).
+    \texttt{readProc} uses \texttt{kern.proc.pid} for the parent PID,
+    and \texttt{kern.procargs2} as the primary source of the full
+    executable path and command name (via the executable basename,
+    used for version-named binary normalization), falling back to
+    \texttt{kern.proc.pid}'s \texttt{P\_comm} when the path cannot
+    be read.
     No subprocess spawning.
   \item Walk from the current PID upward, following parent pointers.
   \item Track the topmost PID where the command name is

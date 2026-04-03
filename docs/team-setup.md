@@ -207,7 +207,8 @@ submodule in each project:
 
 ```bash
 # Create the team repo
-mkdir my-team && cd my-team
+mkdir my-team
+cd my-team
 git init
 # ... add identities, personalities, writing-styles, talents, roles, teams
 git add .
@@ -271,9 +272,7 @@ Any tool can provide session-scoped instructions by setting a
 session contexts at session start and before compaction.
 
 ```bash
-# Save content to a variable first, or pass a file path:
-CONTENT=$(cat instructions.md)
-ethos ext set my-agent my-tool session_context "$CONTENT"
+ethos ext set my-agent my-tool session_context "Your session context instructions here"
 ```
 
 This is how tools like quarry (memory), beadle (email), and biff

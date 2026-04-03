@@ -501,9 +501,11 @@ install step.
 \noindent\textbf{Note:} Before generation runs,
 \cmd{InstallAgentDefinitions} copies any hand-authored \texttt{.md}
 files from \fpath{.punt-labs/ethos/agents/} to
-\fpath{.claude/agents/}. Generation then overwrites these with
-identity-derived content for team members. This two-step sequence
-ensures both hand-authored and generated agents are present.
+\fpath{.claude/agents/}. Generation then writes identity-derived content for team members
+to \fpath{.claude/agents/<handle>.md}, replacing any hand-authored
+file only when its filename collides with a generated team-member
+handle. This two-step sequence ensures both hand-authored and
+generated agents are present.
 
 \subsection{Staleness Check}
 
