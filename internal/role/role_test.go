@@ -1,9 +1,12 @@
 package role
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateModel(t *testing.T) {
@@ -17,9 +20,11 @@ func TestValidateModel(t *testing.T) {
 		{"sonnet", "sonnet", true},
 		{"haiku", "haiku", true},
 		{"inherit", "inherit", true},
-		{"full opus ID", "claude-opus-4-6", true},
-		{"full sonnet ID", "claude-sonnet-4-6", true},
-		{"full haiku ID", "claude-haiku-4-5-20251001", true},
+		{"claude prefix opus", "claude-opus-4-6", true},
+		{"claude prefix sonnet", "claude-sonnet-4-6", true},
+		{"claude prefix haiku", "claude-haiku-4-5-20251001", true},
+		{"future model ID", "claude-opus-4-7", true},
+		{"claude prefix only", "claude-", true},
 		{"unknown model", "gpt-4", false},
 		{"random string", "banana", false},
 	}
@@ -35,4 +40,18 @@ func TestValidateModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoadInvalidModel(t *testing.T) {
+	dir := t.TempDir()
+	rolesDir := filepath.Join(dir, "roles")
+	require.NoError(t, os.MkdirAll(rolesDir, 0o700))
+
+	data := []byte("name: bad-role\nmodel: banana\n")
+	require.NoError(t, os.WriteFile(filepath.Join(rolesDir, "bad-role.yaml"), data, 0o600))
+
+	s := NewStore(dir)
+	_, err := s.Load("bad-role")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unrecognized model")
 }
