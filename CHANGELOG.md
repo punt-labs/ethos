@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Baseline operational skill** — `sidecar/skills/baseline-ops/SKILL.md` provides operational discipline (tool usage, verification, scope, security) for sub-agents that lose the default system prompt
+- **6 starter roles** — implementer, reviewer, researcher, architect, security-reviewer, test-engineer with tools, responsibilities, and model preferences; deployed by installer to `~/.punt-labs/ethos/roles/`
+- **10 starter talents** — go, python, typescript, security, code-review, testing, cli-design, api-design, documentation, devops; substantial domain expertise (200-800 lines each) deployed by installer to `~/.punt-labs/ethos/talents/`
+- **`model` field on Role** — roles can specify a preferred Claude model (opus, sonnet, haiku, inherit); `GenerateAgentFiles` includes it in agent frontmatter; validated against allowlist on save
+- **Agent definitions guide** — `docs/agent-definitions.md` covering separation of concerns, anti-responsibilities, tool restrictions, baseline ops, output contracts, scope enforcement, context hygiene, common anti-patterns
+- **Team setup guide** — `docs/team-setup.md` for third-party users creating teams from scratch
+- **Mission skill design** — `docs/mission-skill-design.md` specifying the `/mission` structured delegation skill
+- **ETHOS-ROADMAP.md** — 5-phase roadmap with 24 work items across batteries included, production agents, workflow, operational excellence, and ecosystem
+- **Persona/role/mission three-layer model** — documented in agent-definitions.md and README as the core thesis for effective agents
+- DES-027 (Teams/Roles as first-class concepts) and DES-028 (Persona animation) ADRs
+
+### Changed
+
+- **architecture.tex** — full rewrite from v0.3.3 to v2.6.1 (18 sections, 1388 lines covering all 11 packages)
+- **AGENTS.md** — added team/role MCP tools, extension session context, rewrote stale Identity Resolution and Storage Layout sections
+- **CLAUDE.md** — added 4 missing packages and 4 missing storage rows to architecture tables
+- **README.md** — added Setup, Documentation, and three-layer model sections; added extension session context to features
+- DES-015 status updated from PROPOSED to SETTLED
+
+### Fixed
+
+- **CHANGELOG.md** — Unreleased link corrected from v0.3.4 to v2.6.1; added 20 missing version comparison links
+- **persona-animation.md** — version v2.2.2 corrected to v2.3.0; updated for DES-022
+- **agent-teams.md** — version v2.2.2 corrected to v2.3.0; removed stale ps reference
+- **agent-identity-spec.tex** — updated to v2.6.1; SubagentStart extension gap documented as shipped; staleness check updated to content comparison
+- **Sidecar READMEs** — skills→talents in 3 files; path references updated to slugs
+
 ## [2.6.1] - 2026-04-01
 
 ### Fixed
