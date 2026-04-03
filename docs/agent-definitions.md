@@ -54,10 +54,7 @@ distinct content.
 ```yaml
 ---
 name: bwk
-description: >-
-  Go specialist sub-agent. Implements Go code with tests
-  following Kernighan's principles -- simplicity, clarity,
-  generality.
+description: "Go specialist sub-agent. Implements Go code with tests following Kernighan's principles -- simplicity, clarity, generality."
 tools:
   - Read
   - Write

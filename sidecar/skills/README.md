@@ -1,8 +1,9 @@
 # Skills
 
-Claude Code skills deployed by the ethos installer. Skills provide
-preloaded content injected into sub-agent context at startup via the
-`skills` frontmatter field.
+Claude Code skills shipped in this directory. To make them available
+to Claude Code, copy the desired skill folders into ~/.claude/skills/.
+Skills provide preloaded content injected into sub-agent context at
+startup via the `skills` frontmatter field.
 
 ## baseline-ops
 
