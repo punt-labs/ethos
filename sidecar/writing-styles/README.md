@@ -4,7 +4,7 @@ Shared writing style definitions as plain markdown files. Referenced from
 identity YAML:
 
 ```yaml
-writing_style: writing-styles/concise-quantified.md
+writing_style: concise-quantified
 ```
 
 Each file defines written communication patterns — sentence structure,

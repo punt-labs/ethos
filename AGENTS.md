@@ -402,7 +402,7 @@ Ethos registers 6 hooks in `hooks/hooks.json`:
 | Hook | Script | Purpose |
 |------|--------|---------|
 | `SessionStart` | `session-start.sh` | Create roster, inject identity context and persona (personality + writing style + talents) |
-| `PreCompact` | `pre-compact.sh` | Re-inject condensed persona before context compression |
+| `PreCompact` | `pre-compact.sh` | Re-inject full persona block + team context before context compression -- prevents behavioral drift |
 | `SubagentStart` | `subagent-start.sh` | Add subagent to roster, auto-match and inject persona |
 | `SubagentStop` | `subagent-stop.sh` | Remove subagent from roster |
 | `SessionEnd` | `session-end.sh` | Delete roster and PID-keyed session file |
@@ -428,7 +428,7 @@ Three hooks inject persona content automatically:
 
 1. **SessionStart** — loads the primary agent's identity and injects full personality content, writing style content, and talent slugs into the session context. This replaces the old one-line identity confirmation with a structured persona block.
 
-2. **PreCompact** — re-injects a condensed persona before context compression. Without this, the personality and writing style from SessionStart get summarized away during compaction, causing behavioral drift in long sessions.
+2. **PreCompact** — re-injects the full persona block + team context before context compression. A condensed version was tried and rejected -- behavioral drift returned within 2-3 compaction cycles.
 
 3. **SubagentStart** — when a subagent spawns, ethos auto-matches its `agent_type` to an identity handle. If a match is found, the subagent's personality and writing style content are injected into its context at spawn time.
 
