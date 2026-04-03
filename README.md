@@ -67,6 +67,7 @@ sh install.sh
 - **Layered resolution** — repo-local identities override global; resolved from iam declaration, git config, or OS user (DES-011, DES-018)
 - **Extension session context** — any tool can provide `session_context` in its extension YAML; ethos injects it into agent context at session start and before compaction, with zero ethos-side code per consumer (DES-022)
 - **Channel bindings** — email (Beadle), GitHub (Biff), Claude Code agent definition; voice config lives in extensions (`ext/vox`)
+- **Starter content** — ships 10 domain expertise talents (go, python, typescript, security, code-review, testing, cli-design, api-design, documentation, devops), 6 role archetypes (implementer, reviewer, researcher, architect, security-reviewer, test-engineer), and a baseline operational skill for sub-agents
 
 ## What It Looks Like
 
@@ -349,6 +350,7 @@ ethos identity get mal   # includes ext map with all tool namespaces
 [Workflow](docs/workflow.md) |
 [Architecture](docs/architecture.tex) |
 [Design Decisions](DESIGN.md) |
+[Roadmap](docs/ETHOS-ROADMAP.md) |
 [Agent Guide](AGENTS.md) |
 [Changelog](CHANGELOG.md)
 
