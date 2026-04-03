@@ -349,9 +349,12 @@ Retry-After: 30
 ### Scoping
 
 Rate limits should apply per API key or per user, not per IP address.
-IP-based limits break for corporate NATs and shared proxies. When
-unauthenticated endpoints need protection, use IP-based limits as a
-fallback with generous thresholds.
+IP-based limits are unreliable: they break for corporate NATs (legitimate
+users denied service) and create a denial-of-service vector (attackers
+trigger limits to block all users on shared infrastructure). Use
+per-API-key or per-user limits instead. When unauthenticated endpoints
+need protection, use IP-based limits as a fallback with generous
+thresholds.
 
 ## Pagination
 
