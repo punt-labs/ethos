@@ -205,6 +205,26 @@ Three levels, from lightest to strongest:
 
 Most agents need levels 1 + 2. Level 3 is for agents where experience shows scope creep is a recurring problem.
 
+## Context Hygiene
+
+Sub-agents accumulate context over their lifetime — tool results, file
+reads, intermediate notes and summaries. When a sub-agent finishes one task and
+is asked to continue with another, the stale context from the first
+task can degrade performance on the second.
+
+**Resume when context overlap is high.** If the next task operates on
+the same files, the same subsystem, and the same constraints, reusing
+the agent avoids re-reading and re-discovering what it already knows.
+
+**Spawn fresh when context has shifted.** If the next task is in a
+different domain, different files, or different phase of work, spawn
+a new agent with a clean prompt. A fresh agent with a precise prompt
+outperforms a reused agent carrying irrelevant context.
+
+The deciding factor is prompt quality, not efficiency. A fresh spawn
+costs one agent startup delay. Stale context costs wrong
+assumptions, missed constraints, and wasted turns recovering.
+
 ## Generated vs Hand-Written
 
 Ethos generates agent definitions from identity data during SessionStart (DES-026). The generated file currently includes:
@@ -263,3 +283,7 @@ If the personality is missing, the SubagentStart hook failed to match the `agent
 **Monolithic agent definitions.** If the agent body exceeds 300 lines, the agent is trying to do too much. Split into multiple specialized agents with clear scope boundaries. Two 80-line agents outperform one 300-line agent because each maintains focus.
 
 **Duplicating SubagentStart content.** The SubagentStart hook injects the persona block, team context, and extension `session_context` dynamically. Do not hardcode "You report to X" or team structure in the agent body -- it arrives via the hook and stays current.
+
+**Leader as router.** The coordinator should synthesize findings, not relay them. Writing "based on your findings, implement it" pushes understanding onto the worker instead of doing the synthesis yourself. The coordinator reads the research, decides what it means, and writes a precise implementation spec. If the coordinator's prompt to the next agent doesn't demonstrate understanding of the previous agent's output, the coordinator isn't doing its job. Effective delegation is: research agent returns findings → coordinator reads, evaluates, and decides → coordinator writes a spec with file paths, line numbers, and specific changes → implementation agent executes the spec.
+
+**Stale agent reuse.** Reusing a sub-agent across unrelated tasks saves one startup but carries context that confuses the model. See [Context Hygiene](#context-hygiene). When in doubt, spawn fresh.
