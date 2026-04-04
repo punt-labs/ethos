@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-04-04
+
 ### Added
 
 - **Baseline operational skill** — `internal/seed/sidecar/skills/baseline-ops/SKILL.md` provides operational discipline (tool usage, verification, scope, security) for sub-agents that lose the default system prompt
