@@ -93,19 +93,17 @@ func setupSubprocessEnv(t *testing.T) *subprocessEnv {
 
 // runHookSubprocess spawns the ethos binary with "hook <event>",
 // writes payload to stdin via an inherited pipe fd, and waits for the
-// process to exit within 5 seconds.
-//
-// The write end is closed after Start() so the child's ReadInput gets
-// EOF after the buffered data. On Linux, inherited pipe fds do not
-// support SetReadDeadline, so readWithTimeout (single f.Read) is the
-// active path. Closing the write end is not strictly necessary for
-// the single-Read implementation, but provides a clean EOF signal.
+// process to exit within 5 seconds. Both pipe ends are deferred-closed
+// so they are cleaned up on any early return (e.g. assertion failure).
+// The child uses readWithTimeout (single f.Read with a timer), so it
+// does not require EOF to proceed -- data in the pipe buffer suffices.
 func runHookSubprocess(t *testing.T, se *subprocessEnv, event, payload string) (stdout, stderr string, err error) {
 	t.Helper()
 
 	rFd, wFd, pipeErr := os.Pipe()
 	require.NoError(t, pipeErr)
 	defer rFd.Close()
+	defer wFd.Close()
 
 	_, writeErr := wFd.Write([]byte(payload))
 	require.NoError(t, writeErr)
@@ -120,9 +118,6 @@ func runHookSubprocess(t *testing.T, se *subprocessEnv, event, payload string) (
 	cmd.Stderr = &errBuf
 
 	require.NoError(t, cmd.Start())
-
-	// Close write end so the child gets EOF after the buffered data.
-	wFd.Close()
 
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -441,10 +436,19 @@ func TestShellScript_SessionStart(t *testing.T) {
 
 	// The hook command must cd to the repo and run the hook script,
 	// matching how Claude Code invokes: spawn("cd /repo && bash hook.sh", { shell: true })
-	hookCmd := fmt.Sprintf("cd %s && bash %s", se.repo, hookScript)
+	hookCmd := fmt.Sprintf("cd %q && bash %q", se.repo, hookScript)
 
 	cmd := exec.Command("node", jsFile, hookCmd, payload)
-	cmd.Env = append(se.env, "PATH="+filepath.Dir(ethosBinary)+":"+os.Getenv("PATH"))
+	// Prepend the ethos binary dir to PATH rather than appending a duplicate.
+	binDir := filepath.Dir(ethosBinary)
+	env := make([]string, 0, len(se.env))
+	for _, e := range se.env {
+		if len(e) > 5 && e[:5] == "PATH=" {
+			e = "PATH=" + binDir + ":" + e[5:]
+		}
+		env = append(env, e)
+	}
+	cmd.Env = env
 
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -472,7 +476,6 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "creating temp dir for binary: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(dir)
 
 	bin := filepath.Join(dir, "ethos")
 	wd, err := os.Getwd()
@@ -487,9 +490,12 @@ func TestMain(m *testing.M) {
 	out, buildErr := cmd.CombinedOutput()
 	if buildErr != nil {
 		fmt.Fprintf(os.Stderr, "go build failed: %v\n%s\n", buildErr, out)
-		os.Exit(1)
+		// Leave ethosBinary empty; subprocess tests skip, unit tests still run.
+	} else {
+		ethosBinary = bin
 	}
-	ethosBinary = bin
 
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
