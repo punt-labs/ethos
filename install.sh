@@ -154,6 +154,8 @@ mkdir -p "$HOME/.punt-labs/ethos/personalities"
 chmod 700 "$HOME/.punt-labs/ethos/personalities"
 mkdir -p "$HOME/.punt-labs/ethos/writing-styles"
 chmod 700 "$HOME/.punt-labs/ethos/writing-styles"
+mkdir -p "$HOME/.punt-labs/ethos/roles"
+chmod 700 "$HOME/.punt-labs/ethos/roles"
 ok "$HOME/.punt-labs/ethos/"
 
 # --- Step 4: Register marketplace ---
@@ -231,6 +233,15 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
   cleanup_https_rewrite
 else
   info "Skipping plugin install (claude CLI not found)"
+fi
+
+# --- Step 6b: Seed starter content ---
+
+info "Seeding starter content..."
+if "$INSTALL_DIR/$BINARY" seed; then
+  ok "Starter roles, talents, and skills deployed"
+else
+  warn "Could not seed starter content — run 'ethos seed' manually"
 fi
 
 # --- Step 7: Health check ---

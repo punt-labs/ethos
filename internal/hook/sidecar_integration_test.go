@@ -38,7 +38,7 @@ func copyFlatDir(t *testing.T, src, dst string) {
 
 func TestSidecarIntegration(t *testing.T) {
 	repoRoot := integrationRepoRoot(t)
-	sidecarDir := filepath.Join(repoRoot, "sidecar")
+	sidecarDir := filepath.Join(repoRoot, "internal", "seed", "sidecar")
 
 	root := t.TempDir()
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")

@@ -13,7 +13,7 @@ func attrSidecarRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
 	require.NoError(t, err)
-	return filepath.Join(wd, "..", "..", "sidecar")
+	return filepath.Join(wd, "..", "..", "internal", "seed", "sidecar")
 }
 
 func TestSidecarTalentsLoad(t *testing.T) {

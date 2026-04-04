@@ -406,7 +406,7 @@ missed (go back to Phase 3 or 5).
 ### Phase 7: Documentation
 
 **Files**: `CHANGELOG.md`, `README.md`, `CLAUDE.md`, `DESIGN.md`,
-`sidecar/README.md`
+`internal/seed/sidecar/README.md`
 
 - **CHANGELOG**: document the breaking change (global active removed,
   `whoami` is read-only, human resolution from git/OS, new
@@ -420,7 +420,7 @@ missed (go back to Phase 3 or 5).
   "`whoami` manages the global active identity in the registry." Change
   to reflect that `whoami` runs the human resolution chain (CLI) or
   reads the session roster (MCP).
-- **sidecar/README.md**: remove `active` file from the sidecar contract
+- **internal/seed/sidecar/README.md**: remove `active` file from the sidecar contract
   layout documentation
 
 ## Risks
