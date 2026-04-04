@@ -184,12 +184,12 @@ Never omit the `tools` field. When omitted, the sub-agent inherits all tools fro
 
 Sub-agents lose Claude Code's default system prompt entirely. Without a baseline, the agent does not know to use Read instead of `cat`, or to run `make check` after changes.
 
-The baseline-ops skill is shipped in this repo at `internal/seed/sidecar/skills/baseline-ops/SKILL.md`.
-It is not installed automatically; to reference it via `skills: [baseline-ops]`
-in agent frontmatter, copy it to `~/.claude/skills/baseline-ops/SKILL.md`. It is a
-preloaded Claude Code skill. Note: Claude Code "skills" (preloaded content
-injected at startup) are distinct from ethos "talents" (domain
-expertise referenced by slug). The skill covers:
+The baseline-ops skill is shipped in the ethos binary and deployed to
+`~/.claude/skills/baseline-ops/SKILL.md` by `ethos seed` (called
+automatically by the installer). To reference it, add `skills: [baseline-ops]`
+to the agent frontmatter. It is a preloaded Claude Code skill. Note: Claude
+Code "skills" (preloaded content injected at startup) are distinct from ethos
+"talents" (domain expertise referenced by slug). The skill covers:
 
 - Use dedicated tools: Read over `cat`, Grep over `grep`, Glob over `find`
 - No chained Bash commands (`&&`, `||`, `;`, `$()`, `|`, `for` loops)

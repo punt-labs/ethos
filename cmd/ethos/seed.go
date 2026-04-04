@@ -15,6 +15,7 @@ var seedCmd = &cobra.Command{
 	Use:     "seed",
 	Short:   "Deploy starter roles, talents, and skills to global directories",
 	GroupID: "admin",
+	Args:    cobra.NoArgs,
 	RunE:    runSeed,
 }
 

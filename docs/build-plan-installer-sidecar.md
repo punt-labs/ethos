@@ -56,15 +56,15 @@ overrides global via the existing layered store.
   content via `ethos init` or a post-install hook. This avoids
   modifying the installer's download path.
 
-### Chosen approach: `ethos doctor --seed`
+### Chosen approach: `ethos seed` with `go:embed`
 
-Add a `--seed` flag to `ethos doctor` (or a new `ethos seed` command)
-that copies bundled sidecar content to the global directories. The
-installer calls this after installing the binary.
+The `ethos seed` command deploys embedded sidecar content from the
+binary to global directories. The installer calls `ethos seed` after
+installing the binary.
 
 Why this is better than shell-level copying:
 - Works for both download and source-build install paths
-- The binary can embed sidecar content via `go:embed`
+- The binary embeds sidecar content via `go:embed` -- no external files needed
 - No separate tarball download needed
 - `ethos seed` is independently useful (users can re-seed after
   customizing)
@@ -124,17 +124,10 @@ content into an embeddable location before `go build`.
 a known location relative to the binary, OR we restructure so the
 embeddable content lives in a Go-accessible path.
 
-**Simplest approach**: `ethos seed` reads from the plugin cache.
-When ethos is installed as a plugin, the full repo (including
-internal/seed/sidecar/) is cached at `~/.claude/plugins/cache/punt-labs/ethos/<version>/`.
-The `seed` command reads from there.
-
-This means:
-1. Binary-only install (no plugin): `ethos seed` cannot find sidecar
-   content → warns and skips
-2. Plugin install: `ethos seed` reads from plugin cache → deploys
-
-This is acceptable because the plugin install is the primary path.
+**Superseded**: The plugin-cache approach below was considered but
+replaced by `go:embed`. The binary embeds all sidecar content directly,
+eliminating the dependency on the plugin cache. Both binary-only and
+plugin installs work identically.
 
 ### Phase 2: `ethos seed` CLI command
 
@@ -144,20 +137,19 @@ This is acceptable because the plugin install is the primary path.
 ethos seed [--force]
 ```
 
-- Discovers sidecar content from plugin cache
-  (`~/.claude/plugins/cache/punt-labs/ethos/*/internal/seed/sidecar/`)
+- Deploys `go:embed` sidecar content from the binary
 - Copies roles, talents, skills, READMEs to global directories
-- Default: `cp -n` (no clobber) — skip existing files
-- `--force`: overwrite existing files
+- Default: no clobber — skip existing files
+- `--force`: overwrite existing files via atomic temp-file rename
 - Reports what was deployed
 
-**File:** `cmd/ethos/seed_test.go`
+**File:** `internal/seed/seed_test.go`
 
 Tests:
 - Seeds into empty directory → all files present
 - Seeds into directory with existing files → existing preserved
 - Seeds with --force → existing overwritten
-- Seeds with no plugin cache → graceful error
+- Idempotent: second seed skips everything
 
 ### Phase 3: Installer calls `ethos seed`
 
@@ -241,15 +233,8 @@ manual testing.
 
 ## Risk
 
-**Plugin cache discovery**: The sidecar content location depends on
-the plugin cache path, which includes a version number. If the cache
-structure changes, `ethos seed` breaks. Mitigation: discover by
-walking the cache directory for the most recent version, not
-hardcoding the path.
-
-**go:embed limitation**: Cannot embed from parent directories.
-Mitigation: read from plugin cache at runtime instead of embedding.
-
-**Binary-only install**: Users who install only the binary (no plugin)
-cannot run `ethos seed`. Mitigation: document this limitation, offer
-`ethos seed --from <path>` for manual sidecar path specification.
+All three original risks (plugin cache discovery, go:embed limitation,
+binary-only install) are resolved by the `go:embed` approach. Sidecar
+content is embedded in the binary at build time, so `ethos seed` works
+identically for binary-only and plugin installs with no external
+dependencies.

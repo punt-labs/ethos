@@ -54,10 +54,10 @@ sh install.sh
 
 </details>
 
-The installer automatically seeds starter content (roles, talents,
-and the baseline-ops skill) to `~/.punt-labs/ethos/`. To re-seed
-or update after install: `ethos seed` (or `ethos seed --force` to
-overwrite customizations).
+The installer automatically seeds starter content: roles and talents
+to `~/.punt-labs/ethos/`, and the baseline-ops skill to
+`~/.claude/skills/`. To re-seed or update after install: `ethos seed`
+(or `ethos seed --force` to overwrite customizations).
 
 ## Features
 

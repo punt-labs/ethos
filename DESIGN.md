@@ -1040,7 +1040,7 @@ Rename `skill` to `talent` everywhere:
 - Identity YAML field: `talents:` → `talents:`
 - Identity struct fields: `Skills` → `Talents`, `SkillContents` → `TalentContents`
 - Attribute Kind: `attribute.Skills` → `attribute.Talents`
-- Storage directory: `~/.punt-labs/ethos/skills/` → `~/.punt-labs/ethos/talents/`
+- Storage directory: `~/.punt-labs/ethos/skills/` → `~/.punt-labs/ethos/talents/` (attribute directory, not Claude Code skills)
 - Sidecar: `internal/seed/sidecar/skills/` → `internal/seed/sidecar/talents/`
 
 ### Breaking change

@@ -86,7 +86,11 @@ func seedReadmes(fsys embed.FS, destRoot string, force bool, r *Result) {
 		}
 		// path is like "sidecar/roles/README.md"
 		// rel becomes "roles/README.md"
-		rel, _ := filepath.Rel("sidecar", path)
+		rel, relErr := filepath.Rel("sidecar", path)
+		if relErr != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("computing relative path for %s: %v", path, relErr))
+			return nil
+		}
 		dest := filepath.Join(destRoot, rel)
 		data, readErr := fs.ReadFile(fsys, path)
 		if readErr != nil {
@@ -108,15 +112,26 @@ func writeFile(dest string, data []byte, force bool, r *Result) {
 	}
 
 	if force {
-		tmp := dest + ".seed.tmp"
-		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".seed.*.tmp")
+		if err != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
-			os.Remove(tmp)
 			return
 		}
-		if err := os.Rename(tmp, dest); err != nil {
+		tmpPath := tmp.Name()
+		if _, err := tmp.Write(data); err != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
+			tmp.Close()
+			os.Remove(tmpPath)
+			return
+		}
+		if err := tmp.Close(); err != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
+			os.Remove(tmpPath)
+			return
+		}
+		if err := os.Rename(tmpPath, dest); err != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("renaming %s: %v", dest, err))
-			os.Remove(tmp)
+			os.Remove(tmpPath)
 			return
 		}
 		r.Deployed = append(r.Deployed, dest)
@@ -132,10 +147,16 @@ func writeFile(dest string, data []byte, force bool, r *Result) {
 		r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
 		return
 	}
-	defer f.Close()
 
 	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(dest)
 		r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
+		return
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(dest)
+		r.Errors = append(r.Errors, fmt.Sprintf("closing %s: %v", dest, err))
 		return
 	}
 	r.Deployed = append(r.Deployed, dest)
