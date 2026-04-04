@@ -54,6 +54,11 @@ sh install.sh
 
 </details>
 
+The installer automatically seeds starter content (roles, talents,
+and the baseline-ops skill) to `~/.punt-labs/ethos/`. To re-seed
+or update after install: `ethos seed` (or `ethos seed --force` to
+overwrite customizations).
+
 ## Features
 
 - **Same schema for humans and agents** — one YAML file per persona, `kind: human` or `kind: agent`
@@ -181,6 +186,7 @@ Systems design, correctness over speed...
 | `ethos doctor [--json]` | Check installation health |
 | `ethos serve` | Start MCP server (stdio) |
 | `ethos completion <bash\|zsh\|fish>` | Generate shell completion script |
+| `ethos seed [--force]` | Deploy starter roles, talents, and skills to global directories |
 | `ethos uninstall` | Remove plugin (`--purge` to remove binary + data) |
 
 `--json` is a global flag — valid before or after the subcommand.
@@ -216,7 +222,10 @@ team: engineering   # team definition for hook context
 
 Team identity data (identities, personalities, writing styles, talents,
 roles, teams) lives in `.punt-labs/ethos/`. You can populate this
-directory locally or share it across repos as a git submodule. See the
+directory locally or share it across repos as a git submodule.
+Running `ethos seed` populates global defaults (6 starter roles, 10
+talents, and the baseline-ops skill). Teams override or extend with
+repo-local content. See the
 [Team Setup Guide](docs/team-setup.md) for how to create and structure
 a team from scratch.
 

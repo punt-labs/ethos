@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ETHOS-ROADMAP.md** — 5-phase roadmap with 24 work items across batteries included, production agents, workflow, operational excellence, and ecosystem
 - **Persona/role/mission three-layer model** — documented in agent-definitions.md and README as the core thesis for effective agents
 - DES-027 (Teams/Roles as first-class concepts) and DES-028 (Persona animation) ADRs
+- **`ethos seed` command** — deploys embedded starter roles, talents, skills, and READMEs to `~/.punt-labs/ethos/` and `~/.claude/skills/`; uses `go:embed` so content is available on all install paths; `--force` to overwrite existing files
+- **Installer auto-seeds** — `install.sh` calls `ethos seed` after plugin install to deploy starter content automatically
 
 ### Changed
 
