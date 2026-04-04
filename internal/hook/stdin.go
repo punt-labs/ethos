@@ -37,8 +37,9 @@ func readDirect(r io.Reader) (map[string]any, error) {
 // blocking forever when Claude Code leaves the pipe open.
 func readFromFile(f *os.File, timeout time.Duration) (map[string]any, error) {
 	if err := f.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		// Deadline not supported on this fd; fall back to direct read.
-		return readDirect(f)
+		// Deadline not supported (Linux pipes). Race a goroutine
+		// against a timer so we don't block forever.
+		return readWithTimeout(f, timeout)
 	}
 	defer f.SetReadDeadline(time.Time{}) //nolint:errcheck
 
@@ -65,6 +66,45 @@ func readFromFile(f *os.File, timeout time.Duration) (map[string]any, error) {
 	}
 
 	return parseJSON(buf)
+}
+
+// readWithTimeout reads from f in a goroutine and returns whatever was
+// read before timeout expires. Used when SetReadDeadline is not supported
+// (e.g., Linux pipes inherited from a parent process).
+//
+// Uses a single f.Read (not io.ReadAll) because ReadAll blocks until EOF.
+// On an open pipe, EOF never arrives — ReadAll consumes the data into its
+// internal buffer, then blocks on the second Read waiting for more. The
+// timer fires, the goroutine hasn't returned, and the data is lost.
+//
+// A single Read returns as soon as data is available. Hook payloads are
+// small JSON objects (< 4KB, well within PIPE_BUF), delivered in one
+// pipe write, so one Read gets the full payload. The goroutine may leak
+// if no data ever arrives — acceptable for a short-lived hook process.
+func readWithTimeout(f *os.File, timeout time.Duration) (map[string]any, error) {
+	type result struct {
+		data []byte
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		buf := make([]byte, 65536)
+		n, err := f.Read(buf)
+		if n > 0 {
+			ch <- result{buf[:n], nil}
+			return
+		}
+		ch <- result{nil, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			return map[string]any{}, nil // no data — treat like timeout
+		}
+		return parseJSON(r.data)
+	case <-time.After(timeout):
+		return map[string]any{}, nil
+	}
 }
 
 // parseJSON attempts to parse data as a JSON object. Returns an empty
