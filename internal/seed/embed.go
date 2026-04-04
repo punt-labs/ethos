@@ -11,5 +11,5 @@ var Talents embed.FS
 //go:embed sidecar/skills/baseline-ops/SKILL.md
 var Skills embed.FS
 
-//go:embed sidecar/identities/README.md sidecar/talents/README.md sidecar/personalities/README.md sidecar/writing-styles/README.md sidecar/sessions/README.md sidecar/roles/README.md sidecar/skills/README.md sidecar/README.md
+//go:embed sidecar/identities/README.md sidecar/talents/README.md sidecar/personalities/README.md sidecar/writing-styles/README.md sidecar/roles/README.md sidecar/skills/README.md sidecar/README.md
 var Readmes embed.FS

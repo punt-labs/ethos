@@ -34,19 +34,21 @@ func runSeed(cmd *cobra.Command, args []string) error {
 
 	result, err := seed.Seed(destRoot, skillsRoot, seedForce)
 	if err != nil {
-		for _, e := range result.Errors {
-			fmt.Fprintf(os.Stderr, "  error: %s\n", e)
+		if result != nil {
+			for _, e := range result.Errors {
+				fmt.Fprintf(os.Stderr, "  error: %s\n", e)
+			}
 		}
 		return err
 	}
 
 	for _, d := range result.Deployed {
-		fmt.Fprintf(os.Stderr, "  deployed: %s\n", d)
+		fmt.Printf("  deployed: %s\n", d)
 	}
 	for _, s := range result.Skipped {
-		fmt.Fprintf(os.Stderr, "  skipped (exists): %s\n", s)
+		fmt.Printf("  skipped (exists): %s\n", s)
 	}
 
-	fmt.Fprintf(os.Stderr, "\nSeeded %d files (%d skipped)\n", len(result.Deployed), len(result.Skipped))
+	fmt.Printf("\nSeeded %d files (%d skipped)\n", len(result.Deployed), len(result.Skipped))
 	return nil
 }

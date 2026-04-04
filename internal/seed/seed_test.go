@@ -24,17 +24,28 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "roles", "researcher.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "roles", "test-engineer.yaml"))
 
-	// Should have deployed talents
+	// Should have deployed all 10 talents
 	assert.FileExists(t, filepath.Join(dest, "talents", "go.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "python.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "security.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "typescript.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "testing.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "code-review.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "devops.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "documentation.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "api-design.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "cli-design.md"))
 
 	// Should have deployed skills
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 
-	// Should have deployed READMEs
-	assert.FileExists(t, filepath.Join(dest, "roles", "README.md"))
+	// Should have deployed all 7 READMEs (sessions excluded)
+	assert.FileExists(t, filepath.Join(dest, "identities", "README.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "README.md"))
+	assert.FileExists(t, filepath.Join(dest, "personalities", "README.md"))
+	assert.FileExists(t, filepath.Join(dest, "writing-styles", "README.md"))
+	assert.FileExists(t, filepath.Join(dest, "roles", "README.md"))
+	assert.FileExists(t, filepath.Join(dest, "skills", "README.md"))
 	assert.FileExists(t, filepath.Join(dest, "README.md"))
 
 	assert.NotEmpty(t, result.Deployed)

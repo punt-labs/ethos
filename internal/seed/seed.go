@@ -76,13 +76,17 @@ func seedFile(fsys embed.FS, src, dest string, force bool, r *Result) {
 }
 
 func seedReadmes(fsys embed.FS, destRoot string, force bool, r *Result) {
-	_ = fs.WalkDir(fsys, "sidecar", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || d.Name() != "README.md" {
+	err := fs.WalkDir(fsys, "sidecar", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("walking %s: %v", path, walkErr))
+			return nil
+		}
+		if d.IsDir() || d.Name() != "README.md" {
 			return nil
 		}
 		// path is like "sidecar/roles/README.md"
 		// rel becomes "roles/README.md"
-		rel := strings.TrimPrefix(path, "sidecar/")
+		rel, _ := filepath.Rel("sidecar", path)
 		dest := filepath.Join(destRoot, rel)
 		data, readErr := fs.ReadFile(fsys, path)
 		if readErr != nil {
@@ -92,20 +96,34 @@ func seedReadmes(fsys embed.FS, destRoot string, force bool, r *Result) {
 		writeFile(dest, data, force, r)
 		return nil
 	})
+	if err != nil {
+		r.Errors = append(r.Errors, fmt.Sprintf("walking sidecar for READMEs: %v", err))
+	}
 }
 
 func writeFile(dest string, data []byte, force bool, r *Result) {
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 		r.Errors = append(r.Errors, fmt.Sprintf("mkdir %s: %v", filepath.Dir(dest), err))
 		return
 	}
 
-	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
 	if force {
-		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+		tmp := dest + ".seed.tmp"
+		if err := os.WriteFile(tmp, data, 0o644); err != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
+			os.Remove(tmp)
+			return
+		}
+		if err := os.Rename(tmp, dest); err != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("renaming %s: %v", dest, err))
+			os.Remove(tmp)
+			return
+		}
+		r.Deployed = append(r.Deployed, dest)
+		return
 	}
 
-	f, err := os.OpenFile(dest, flags, 0o644)
+	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		if os.IsExist(err) {
 			r.Skipped = append(r.Skipped, dest)
