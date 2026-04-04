@@ -20,7 +20,7 @@ func baselineRepoRoot(t *testing.T) string {
 func TestBaselineOpsSkillExists(t *testing.T) {
 	repoRoot := baselineRepoRoot(t)
 
-	skillPath := filepath.Join(repoRoot, "sidecar", "skills", "baseline-ops", "SKILL.md")
+	skillPath := filepath.Join(repoRoot, "internal", "seed", "sidecar", "skills", "baseline-ops", "SKILL.md")
 	data, err := os.ReadFile(skillPath)
 	require.NoError(t, err, "baseline-ops SKILL.md should exist")
 

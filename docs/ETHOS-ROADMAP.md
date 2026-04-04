@@ -102,7 +102,7 @@ patterns:
 | `security-reviewer` | Read, Grep, Glob, Bash | Vulnerability hunting, dependency audit, threat modeling |
 | `test-engineer` | Read, Write, Edit, Bash, Grep, Glob | Write tests, improve coverage, test infrastructure |
 
-**Delivery**: YAML files in `sidecar/roles/`, deployed by installer to
+**Delivery**: YAML files in `internal/seed/sidecar/roles/`, deployed by installer to
 `~/.punt-labs/ethos/roles/`. Teams override or extend.
 
 ### 1.3 Starter Talents
@@ -130,7 +130,7 @@ no domain knowledge.
 `memories/security_rules/`. Rich domain content is what makes agents
 effective — not just role boundaries.
 
-**Delivery**: Markdown files in `sidecar/talents/`, deployed by
+**Delivery**: Markdown files in `internal/seed/sidecar/talents/`, deployed by
 installer. These are starting points — teams extend with
 project-specific expertise.
 
