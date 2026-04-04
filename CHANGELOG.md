@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.0] - 2026-04-04
+
 ### Fixed
 
 - **Linux hook stdin hang (DES-029)** — all 6 hook shell scripts hung silently on Linux because Claude Code spawns hooks via `/bin/sh -c`, making `/dev/stdin` inaccessible to the Go binary. Shell scripts now read stdin with `IFS= read -r -t 1` and forward via `printf | binary` over a fresh pipe. Works on both Linux and macOS.
