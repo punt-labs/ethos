@@ -69,6 +69,69 @@ func TestReadInput_JSONArray(t *testing.T) {
 	assert.Empty(t, data)
 }
 
+func TestReadWithTimeout_PipeClosed(t *testing.T) {
+	// Data written and pipe closed — readWithTimeout returns the data
+	// promptly (the normal case when Claude Code sends input).
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+
+	_, err = wFd.Write([]byte(`{"source": "timeout-fallback"}`))
+	require.NoError(t, err)
+	wFd.Close() // EOF after data
+
+	start := time.Now()
+	data, err := readWithTimeout(rFd, 200*time.Millisecond)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Equal(t, "timeout-fallback", data["source"])
+	assert.Less(t, elapsed, 100*time.Millisecond, "should return immediately, not wait for timeout")
+}
+
+func TestReadWithTimeout_EmptyPipe(t *testing.T) {
+	// Open pipe with no data and no EOF — must return empty map on timeout.
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	defer wFd.Close()
+
+	start := time.Now()
+	data, err := readWithTimeout(rFd, 100*time.Millisecond)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Empty(t, data)
+	assert.GreaterOrEqual(t, elapsed, 80*time.Millisecond, "should wait near timeout duration")
+	assert.Less(t, elapsed, 500*time.Millisecond, "must not block beyond timeout")
+}
+
+func TestReadWithTimeout_OpenPipeWithData(t *testing.T) {
+	// The critical case: data in the pipe, write end NOT closed.
+	// This is what Claude Code does for SessionStart hooks.
+	// The old io.ReadAll approach consumed the data into its buffer
+	// but blocked on the second Read waiting for EOF — the timer
+	// fired and the data was lost. Single f.Read returns immediately.
+	rFd, wFd, err := os.Pipe()
+	require.NoError(t, err)
+	defer rFd.Close()
+	defer wFd.Close()
+
+	_, err = wFd.Write([]byte(`{"session_id": "linux-open-pipe"}`))
+	require.NoError(t, err)
+	// Deliberately NOT closing wFd.
+
+	start := time.Now()
+	data, err := readWithTimeout(rFd, 200*time.Millisecond)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err)
+	assert.Equal(t, "linux-open-pipe", data["session_id"],
+		"must return data even when pipe stays open")
+	assert.Less(t, elapsed, 100*time.Millisecond,
+		"should return as soon as data is read, not wait for timeout")
+}
+
 func TestReadInput_NestedJSON(t *testing.T) {
 	r := bytes.NewReader([]byte(`{"tool_input": {"command": "ls"}, "tool_name": "Bash"}`))
 	data, err := ReadInput(r, 100*time.Millisecond)

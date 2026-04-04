@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Linux hook stdin hang (DES-029)** — all 6 hook shell scripts hung silently on Linux because Claude Code spawns hooks via `/bin/sh -c`, making `/dev/stdin` inaccessible to the Go binary. Shell scripts now read stdin with `IFS= read -r -t 1` and forward via `printf | binary` over a fresh pipe. Works on both Linux and macOS.
+- **Go stdin fallback for non-pollable fds** — `readWithTimeout` in `internal/hook/stdin.go` uses a single `f.Read` (not `io.ReadAll`) when `SetReadDeadline` fails on Linux inherited pipe fds. Defense-in-depth behind the shell-level fix.
+
+### Added
+
+- **Fake Claude spawn regression test** — `TestShellScript_SessionStart` reproduces Claude Code's exact hook execution path using Node.js `spawn(shell: true)`. Fails if any hook script uses `< /dev/stdin`. CI requires `actions/setup-node`.
+- **Subprocess integration tests** — 6 tests spawning the real ethos binary for each hook event (SessionStart, PreCompact, SubagentStart, SubagentStop, SessionEnd, open-pipe hang).
+- **Linux process tests** — 14 tests for `/proc` filesystem parsing: comm truncation, spaces/parentheses in comm, version-named binary normalization, symlink behavior.
+- **DES-029** — ADR documenting the root cause chain: Node.js `spawn(shell: true)` → `/bin/sh -c` → `/dev/stdin` inaccessible on Linux.
+- **DES-030** — ADR documenting the subprocess integration test strategy and why in-process `os.Pipe()` tests gave false confidence.
+
 ## [2.7.0] - 2026-04-04
 
 ### Added

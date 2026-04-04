@@ -1851,3 +1851,237 @@ writing style, ~600 lines with team context).
   definition to include identity-loading instructions. Creates drift
   between the agent file and the identity registry. Hook injection is
   automatic and cannot go stale.
+
+## DES-029: Shell reads stdin, not Go — Linux pipe fd inheritance (SETTLED)
+
+**Status**: Settled. Root cause confirmed 2026-04-04 after 10+ restart
+cycles on Linux.
+
+### Problem
+
+Ethos hooks hung on Linux, preventing session creation, persona
+injection, and all hook-driven features. The same code worked on macOS.
+The failure was silent — no log output, no error, hooks simply produced
+no result. Diagnosis took an extended session because the symptoms
+pointed at multiple layers (plugin loading, cache staleness, process
+discovery) before the actual cause was isolated.
+
+### Root Cause Chain
+
+Claude Code's hook process model creates an fd inheritance chain that
+Go cannot read reliably on Linux.
+
+**1. Claude Code spawns hooks via `/bin/sh -c`.**
+
+`executeHooks()` in Claude Code's `hooks.ts` calls
+`spawn(command, [], { shell: true })`. On Unix, `shell: true` means
+the actual process tree is:
+
+```text
+Claude Code runtime
+  └── /bin/sh -c "hooks/session-start.sh"
+       └── bash hooks/session-start.sh  (shebang)
+            └── ethos hook session-start
+```
+
+Claude Code writes one JSON blob plus `\n` to the shell process's
+stdin, then calls `stdin.end()`. The ethos binary inherits fd 0 from
+an intermediate `/bin/sh` process, not from a direct pipe. This fd
+has passed through Node.js's `child_process.spawn()` → `/bin/sh` →
+bash → Go — a materially different environment from `pipe()` +
+`fork()` + `exec()` test harnesses.
+
+**2. Go cannot read the inherited fd reliably on Linux.**
+
+The inherited fd 0 does not support `SetReadDeadline` on Linux —
+Go's `os.NewFile` cannot register it with epoll. The fallback
+`readWithTimeout` uses a goroutine with `f.Read`, but `f.Read` on
+this specific inherited fd hangs on Linux. Standard test harnesses
+(Go `os.Pipe`, `syscall.Pipe`, C `pipe()` + `fork()` + `dup2()` +
+`exec()`, FIFOs) all produce fds where `f.Read` works correctly.
+The production fd from Claude Code's `/bin/sh -c` intermediate does
+not. The exact kernel-level property that differs is undiagnosed.
+
+On macOS, the same fd chain works because kqueue handles inherited
+pipe fds that epoll does not.
+
+**3. Silent failure — no diagnostic output.**
+
+The hook process hung indefinitely on `f.Read`. Claude Code's hook
+timeout killed it before stderr flushed. The empty `hook-errors.log`
+made the failure appear as though hooks never fired, leading
+investigation toward plugin loading, cache staleness, and hook
+discovery — all dead ends. Replacing ethos's hooks with quarry's
+(which don't read stdin) proved hooks did fire; the hang was in
+stdin reading.
+
+### Decision
+
+**Shell scripts read stdin, not Go.** Treat Claude Code hook stdin as
+a shell-facing transport. Bash reads the inherited fd, stores the
+bytes, and forwards over a fresh pipe that Go can read reliably:
+
+```bash
+HOOK_INPUT=""
+IFS= read -r -t 1 HOOK_INPUT 2>/dev/null || true
+printf '%s\n' "$HOOK_INPUT" | ethos hook session-start 2>>... || true
+```
+
+This replaces `ethos hook session-start < /dev/stdin`. The Go binary
+receives stdin from `printf` via a fresh pipe (not inherited), which
+`ReadAll` handles correctly on all platforms.
+
+### Why This Works
+
+- `IFS= read -r -t 1` is a bash built-in with 1-second timeout —
+  reads the inherited fd in bash (not Go), preserving whitespace.
+- `printf '%s\n'` (not `echo`) avoids shell-specific output quirks
+  and creates a Go-managed pipe where `ReadAll` gets EOF. No blocking.
+- The 1-second timeout matches the existing `ReadInput` timeout in Go.
+- If stdin is empty or the timeout fires, `HOOK_INPUT` is empty and
+  the Go binary receives an empty map — same as the previous timeout
+  behavior.
+- `read -t` returns non-zero on timeout even when data was read (no
+  trailing newline). `|| true` prevents the non-zero exit from
+  clearing `HOOK_INPUT`. The variable must be initialized before
+  `read`, not in the `||` fallback.
+
+### What This Preserves
+
+- `internal/hook/stdin.go` still handles both deadline-capable and
+  non-deadline fds correctly — the `readWithTimeout` fallback remains
+  as defense-in-depth for any caller that passes an inherited fd
+  directly.
+- Subprocess integration tests (`internal/hook/subprocess_test.go`)
+  still test the Go binary with inherited pipe fds to catch future
+  regressions in the Go layer.
+- The hook shell scripts remain thin gates — 3 lines of logic
+  (read, echo, exec).
+
+### Rejected Alternatives
+
+- **`< /dev/stdin` with Go-side timeout** — the Go `readWithTimeout`
+  fix works in isolation (subprocess tests pass) but fails in the
+  real Claude Code execution environment. The fd inheritance behavior
+  differs between test pipes (Go-managed, epoll-registered) and
+  production pipes (inherited, not pollable). Testing cannot fully
+  reproduce the production fd state.
+- **`syscall.SetNonblock` + poll loop in Go** — invasive, requires
+  `golang.org/x/sys/unix` dependency for `Poll`, and fights Go's
+  runtime fd management. Shell-level timeout is simpler and proven.
+- **Don't read stdin at all** — ethos needs `session_id` from Claude
+  Code's hook payload to create session rosters. Quarry and biff don't
+  need stdin data; ethos does.
+- **Environment variable for session_id** — Claude Code does not
+  expose session_id as an env var. Stdin JSON is the only source.
+
+### Cross-Project Pattern
+
+Any Claude Code plugin hook that reads stdin via `< /dev/stdin` on
+Linux is vulnerable to the same hang. The safe pattern:
+
+```bash
+# SAFE: bash reads with timeout, forwards over fresh pipe
+HOOK_INPUT=""
+IFS= read -r -t 1 HOOK_INPUT 2>/dev/null || true
+printf '%s\n' "$HOOK_INPUT" | my-binary hook event 2>>log || true
+
+# UNSAFE: inherited pipe fd from /bin/sh -c blocks Go's Read on Linux
+my-binary hook event < /dev/stdin 2>>log || true
+```
+
+Note: Claude Code spawns hooks via `/bin/sh -c "<command>"`. The hook
+script's shebang (`#!/usr/bin/env bash`) means the binary's fd 0 has
+passed through `/bin/sh` → bash → binary. Use `printf` not `echo` for
+the forwarding pipe (shell portability). Initialize `HOOK_INPUT=""`
+before `read`, not in `|| HOOK_INPUT=""` — `read -t` returns non-zero
+on timeout even when data was read.
+
+This supersedes the DES-009 guidance on stdin handling. DES-009
+identified `INPUT=$(cat)` as the blocking pattern and recommended
+`read -r -t 1` in bash. DES-029 confirms that even Go-native
+workarounds (`SetReadDeadline`, `readWithTimeout`) fail on Linux
+inherited pipe fds in production, and the bash `read -t` approach
+is the only reliable solution across platforms.
+
+## DES-030: Subprocess integration tests for hooks (SETTLED)
+
+**Status**: Settled. Implemented 2026-04-04.
+
+### Problem
+
+All hook tests in `internal/hook/*_test.go` used `bytes.Reader` or
+`os.Pipe()` for stdin. These are Go-managed objects where
+`SetReadDeadline` works on all platforms. The Linux pipe hang (DES-029)
+passed every unit test because no test exercised the actual execution
+path: binary invocation with an inherited pipe fd.
+
+`TestReadInput_OpenPipeNoEOF` was the specific test that gave false
+confidence. It used `os.Pipe()` to create a pipe, wrote data, left the
+write end open, and verified `ReadInput` returned within the timeout.
+This test passed on Linux because `os.Pipe()` creates fds registered
+with Go's epoll poller — `SetReadDeadline` works on them.
+`SetReadDeadline` fails only on inherited fds from parent processes.
+
+### Decision
+
+Add subprocess integration tests that spawn the real ethos binary as a
+child process with a controlled pipe for stdin. The child inherits the
+pipe fd — the same mechanism Claude Code uses.
+
+**Test pattern:**
+
+```go
+rFd, wFd, _ := os.Pipe()
+wFd.Write(payload)
+// Do NOT close wFd — simulates Claude Code open pipe
+
+cmd := exec.Command(binaryPath, "hook", "session-start")
+cmd.Stdin = rFd  // child inherits fd — not Go-managed
+cmd.Start()
+
+select {
+case err := <-done:
+    // check exit code, stdout, side effects
+case <-time.After(5 * time.Second):
+    t.Fatal("hook hung")
+}
+```
+
+One test per hook handler: SessionStart, PreCompact, SubagentStart,
+SubagentStop, SessionEnd. Plus `TestSubprocess_OpenPipe` which keeps
+the write end open and verifies the hook exits within 5 seconds.
+
+`TestMain` builds the binary once per test run. Each test creates
+isolated temp directories with fake identity files and git repos.
+
+### Proof of Regression Coverage
+
+Stashing the `readWithTimeout` fix and running the subprocess tests
+produces: `hook hung with open pipe -- did not exit within 5 seconds`.
+Restoring the fix: tests pass in <2 seconds. The subprocess test is a
+proven regression gate.
+
+### Platform Coverage
+
+Build tag `//go:build linux || darwin` — runs on both platforms. On
+macOS, the tests verify that `SetReadDeadline` continues to work. On
+Linux, they exercise the `readWithTimeout` fallback path.
+
+`internal/process/proc_linux_test.go` (`//go:build linux`) adds 14
+Linux-specific tests for `/proc` filesystem parsing: comm truncation
+to 15 chars, spaces and parentheses in comm, version-named binary
+normalization via `/proc/pid/exe`, and symlink resolution behavior.
+
+### Rejected Alternatives
+
+- **Mock the fd in unit tests** — cannot reproduce the kernel-level
+  difference between Go-managed and inherited pipe fds. The unit tests
+  pass on both platforms; the production code fails on Linux.
+  In-process mocking is necessary but not sufficient.
+- **Integration tests via shell scripts** — harder to assert on
+  side effects (session files, roster content), harder to run in CI,
+  and duplicates the Go test infrastructure.
+- **Skip subprocess tests, rely on manual testing** — the bug survived
+  10+ manual restart cycles because the failure was silent. Only
+  automated tests that spawn the real binary catch this class of bug.

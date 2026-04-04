@@ -3,4 +3,6 @@
 [[ -f "$HOME/.punt-hooks-kill" ]] && exit 0
 [[ -d "$HOME/.punt-labs/ethos" ]] || exit 0
 command -v ethos >/dev/null 2>&1 || exit 0
-ethos hook session-end < /dev/stdin 2>>"$HOME/.punt-labs/ethos/hook-errors.log" || true
+HOOK_INPUT=""
+IFS= read -r -t 1 HOOK_INPUT 2>/dev/null || true
+printf '%s\n' "$HOOK_INPUT" | ethos hook session-end 2>>"$HOME/.punt-labs/ethos/hook-errors.log" || true
