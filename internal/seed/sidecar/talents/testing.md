@@ -97,7 +97,7 @@ Skip it when it produces busywork.
 
 Every test has three phases:
 
-```
+```text
 // Arrange: set up preconditions
 input := buildValidOrder(quantity: 5)
 

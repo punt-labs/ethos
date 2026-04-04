@@ -35,16 +35,19 @@ overrides global via the existing layered store.
 | `internal/seed/sidecar/*/README.md` | `~/.punt-labs/ethos/*/README.md` | `cp -n` (no clobber) |
 
 **Why `cp -n` (no clobber):**
+
 - First install seeds defaults
 - Reinstall preserves user customizations
 - User can always reset by deleting and reinstalling
 
 **Why global, not repo-local:**
+
 - Global applies to every project without per-repo setup
 - Repo-local content (team submodule) overrides global automatically
 - The installer runs once, not per-repo
 
 **Installer changes (shell only, no Go):**
+
 - The installer already downloads a release binary OR builds from
   source. In the download path, the sidecar content is not available
   (only the binary is downloaded). In the source build path, the
@@ -63,6 +66,7 @@ binary to global directories. The installer calls `ethos seed` after
 installing the binary.
 
 Why this is better than shell-level copying:
+
 - Works for both download and source-build install paths
 - The binary embeds sidecar content via `go:embed` -- no external files needed
 - No separate tarball download needed
@@ -88,6 +92,7 @@ Why this is better than shell-level copying:
 ### Phase 1: Embed sidecar content in binary
 
 **Files:**
+
 - `internal/seed/` — new package
 - `internal/seed/embed.go` — `go:embed` directives for sidecar content
 - `internal/seed/seed.go` — `Seed(destRoot string)` function
@@ -133,7 +138,7 @@ plugin installs work identically.
 
 **File:** `cmd/ethos/seed.go`
 
-```
+```text
 ethos seed [--force]
 ```
 
@@ -146,6 +151,7 @@ ethos seed [--force]
 **File:** `internal/seed/seed_test.go`
 
 Tests:
+
 - Seeds into empty directory → all files present
 - Seeds into directory with existing files → existing preserved
 - Seeds with --force → existing overwritten
@@ -171,14 +177,17 @@ fi
 ### Phase 4: Tests
 
 **Automated (Go):**
+
 - `cmd/ethos/seed_test.go` — unit tests for seed logic
 - Verify: roles load from seeded directory, talents load, skill exists
 
 **Automated (shell):**
+
 - Not needed — installer changes are minimal and `ethos seed` is
   tested in Go
 
 **Manual verification:**
+
 - Fresh install: `ethos seed` → `ethos role list` shows 6 starter
   roles → `ethos talent list` shows 10 starter talents
 - Reinstall: modify a role → `ethos seed` → modified file preserved
@@ -219,7 +228,7 @@ fi
 
 ## Sequence
 
-```
+```text
 Phase 1 (embed/discover) → Phase 2 (seed command) → Phase 3 (installer)
      → Phase 4 (tests) → Phase 5 (docs) → Phase 6 (review)
      → Phase 7 (manual test) → Phase 8 (PR)

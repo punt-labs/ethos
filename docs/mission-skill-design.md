@@ -46,7 +46,7 @@ roles, tools, and session presence (via session roster).
 If the user named an agent, confirm. If not, suggest based on the
 task description and role match.
 
-```
+```text
 Available agents for this task:
 
   bwk  — Go specialist (implementer)
@@ -73,7 +73,7 @@ Scaffold the mission from context. Pre-populate fields from what
 the leader has discussed in the conversation. Present as confirmable
 options (autostar pattern — don't silently infer).
 
-```
+```text
 Mission for bwk:
 
   Task: Implement BuildExtensionContext in internal/hook/
@@ -110,6 +110,7 @@ Mission for bwk:
 **Step 3: Check for conflicts.**
 
 Before spawning:
+
 - Check session roster for active agents
 - Check if any files_owned overlap with another agent's claimed files
 - If overlap: warn and offer options (queue, worktree, abort)
@@ -133,7 +134,7 @@ completes, the leader reviews results against the success criteria.
 
 The skill generates a prompt in this structure:
 
-```
+```text
 Task: [one-sentence description]
 
 Inputs:
@@ -156,6 +157,7 @@ Constraints:
 ```
 
 This is the prompt the agent receives. Combined with:
+
 - The agent definition (persona + role from ethos)
 - SubagentStart hook injection (personality, writing style, team context)
 - Project rules (CLAUDE.md, loaded separately by Claude Code)
@@ -222,7 +224,7 @@ coordination-layer support (roadmap 4.3 write-set admission).
 
 ### Example Session
 
-```
+```text
 User: I need bwk to add a model field to the Role struct
 
 Claude: Let me build that mission.

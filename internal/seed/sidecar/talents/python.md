@@ -327,7 +327,7 @@ For classes that manage resources, implement `__enter__` and `__exit__`.
 Use the src layout for installable packages. It prevents accidental imports
 of the source directory during testing.
 
-```
+```text
 myproject/
   pyproject.toml
   src/
@@ -576,6 +576,7 @@ resolution, session management, and configuration loading," it is three
 classes.
 
 Signs of a god class:
+
 - Methods that do not use most of the instance attributes.
 - Groups of methods that only interact with each other, not the rest.
 - The class file is longer than 300 lines.
@@ -787,13 +788,13 @@ A Python project Makefile should have at minimum:
 check: lint test
 
 lint:
-	uv run ruff check src/ tests/
-	uv run mypy --strict src/
+    uv run ruff check src/ tests/
+    uv run mypy --strict src/
 
 format:
-	uv run ruff format src/ tests/
-	uv run ruff check --fix src/ tests/
+    uv run ruff format src/ tests/
+    uv run ruff check --fix src/ tests/
 
 test:
-	uv run pytest -x --tb=short tests/
+    uv run pytest -x --tb=short tests/
 ```

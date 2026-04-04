@@ -375,7 +375,7 @@ Each finding includes:
 
 ### Example
 
-```
+```text
 file: internal/resolve/chain.go:47
 severity: CRITICAL
 category: bug
@@ -394,7 +394,7 @@ End the review with a summary: total findings by severity, overall
 assessment (approve, request changes, or comment), and any
 cross-cutting themes.
 
-```
+```text
 Summary: 2 CRITICAL, 3 WARNING, 1 NOTE
 Recommendation: Request Changes
 Theme: Error paths are under-tested. Several nil-return cases are not

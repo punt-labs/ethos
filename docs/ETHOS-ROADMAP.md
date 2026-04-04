@@ -291,6 +291,7 @@ and uses Claude Code's Agent() to execute. It sits at the structured
 layer between CLAUDE.md and agent primitives.
 
 **Phased delivery**:
+
 - **Phase A (MVP)**: Skill file at `~/.claude/skills/mission/SKILL.md`
   — pure prompt engineering, no Go code
 - **Phase B**: `/ethos:mission` slash command with team data
@@ -316,6 +317,7 @@ happens before planning, planning before implementation, and validation
 before shipping.
 
 **Evidence**: claude-config-template's orchestrator runs:
+
 1. Index codebase
 2. Refine query (analyze codebase, improve query)
 3. Fetch technical documentation
@@ -385,6 +387,7 @@ what didn't, what constraints were discovered — none of this persists
 systematically.
 
 **Evidence**: claude-config-template uses a 4-file pattern:
+
 - `project.md` — stable project context
 - `todo.md` — active work
 - `done.md` — completed work with traceability
@@ -399,6 +402,7 @@ The missing piece is **deliberate reflection** — a step after each
 implementation where the agent captures what it learned.
 
 Ethos can support this by:
+
 1. Adding a `reflect` talent that teaches agents the reflection pattern
 2. Providing session context (via DES-022) that reminds agents to
    capture learnings in quarry before closing
@@ -492,6 +496,7 @@ can run destructive commands without pre-execution checks.
 
 **Evidence**: claude-config-template implements 3-layer defense in
 `pre_tool_use.py`:
+
 1. Regex patterns (~0ms) — catches rm -rf, fork bombs
 2. settings.json deny list (~1ms) — enforced even with --dangerously-skip-permissions
 3. LLM intent checking (~1-2s) — catches sophisticated threats
@@ -610,7 +615,7 @@ concern.
 
 ## Priority and Sequencing
 
-```
+```text
 Phase 1 (Batteries Included)
 ├── 1.1 baseline-ops skill ←── DONE
 ├── 1.2 Starter roles (6) ←── DONE

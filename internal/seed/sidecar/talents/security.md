@@ -176,7 +176,7 @@ may enter the system through multiple paths.
 - HashiCorp Vault, AWS Secrets Manager, GCP Secret Manager, or similar.
   Application authenticates to vault at startup, retrieves secrets, holds
   them in memory only.
-- Rotate secrets on a schedule. Vault-managed dynamic secrets (e.g., 
+- Rotate secrets on a schedule. Vault-managed dynamic secrets (e.g.,
   short-lived database credentials) are preferred over static secrets.
 - Encrypt secrets at rest and in transit. Audit access logs.
 
