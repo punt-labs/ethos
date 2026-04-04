@@ -651,7 +651,7 @@ symlinks.
 
 ### Sidecar README deployment
 
-The repo `sidecar/` directory contains README.md files for each
+The repo `internal/seed/sidecar/` directory contains README.md files for each
 subdirectory of `~/.punt-labs/ethos/`. The installer copies these during
 installation so users and consuming tools have documentation of the file
 layout and sidecar contract. READMEs are deployed with `cp -n` (no
@@ -1041,7 +1041,7 @@ Rename `skill` to `talent` everywhere:
 - Identity struct fields: `Skills` → `Talents`, `SkillContents` → `TalentContents`
 - Attribute Kind: `attribute.Skills` → `attribute.Talents`
 - Storage directory: `~/.punt-labs/ethos/skills/` → `~/.punt-labs/ethos/talents/`
-- Sidecar: `sidecar/skills/` → `sidecar/talents/`
+- Sidecar: `internal/seed/sidecar/skills/` → `internal/seed/sidecar/talents/`
 
 ### Breaking change
 

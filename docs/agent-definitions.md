@@ -184,7 +184,7 @@ Never omit the `tools` field. When omitted, the sub-agent inherits all tools fro
 
 Sub-agents lose Claude Code's default system prompt entirely. Without a baseline, the agent does not know to use Read instead of `cat`, or to run `make check` after changes.
 
-The baseline-ops skill is shipped in this repo at `sidecar/skills/baseline-ops/SKILL.md`.
+The baseline-ops skill is shipped in this repo at `internal/seed/sidecar/skills/baseline-ops/SKILL.md`.
 It is not installed automatically; to reference it via `skills: [baseline-ops]`
 in agent frontmatter, copy it to `~/.claude/skills/baseline-ops/SKILL.md`. It is a
 preloaded Claude Code skill. Note: Claude Code "skills" (preloaded content

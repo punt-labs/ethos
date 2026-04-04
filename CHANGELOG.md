@@ -9,9 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Baseline operational skill** — `sidecar/skills/baseline-ops/SKILL.md` provides operational discipline (tool usage, verification, scope, security) for sub-agents that lose the default system prompt
-- **6 starter roles** — implementer, reviewer, researcher, architect, security-reviewer, test-engineer with tools, responsibilities, and model preferences; available in `sidecar/roles/` for teams to reference or copy
-- **10 starter talents** — go, python, typescript, security, code-review, testing, cli-design, api-design, documentation, devops; substantial domain expertise (200-800 lines each) available in `sidecar/talents/` for teams to reference or copy
+- **Baseline operational skill** — `internal/seed/sidecar/skills/baseline-ops/SKILL.md` provides operational discipline (tool usage, verification, scope, security) for sub-agents that lose the default system prompt
+- **6 starter roles** — implementer, reviewer, researcher, architect, security-reviewer, test-engineer with tools, responsibilities, and model preferences; available in `internal/seed/sidecar/roles/` for teams to reference or copy
+- **10 starter talents** — go, python, typescript, security, code-review, testing, cli-design, api-design, documentation, devops; substantial domain expertise (200-800 lines each) available in `internal/seed/sidecar/talents/` for teams to reference or copy
 - **`model` field on Role** — roles can specify a preferred Claude model (opus, sonnet, haiku, inherit); `GenerateAgentFiles` includes it in agent frontmatter; validated against allowlist on save and load
 - **Agent definitions guide** — `docs/agent-definitions.md` covering separation of concerns, anti-responsibilities, tool restrictions, baseline ops, output contracts, scope enforcement, context hygiene, common anti-patterns
 - **Team setup guide** — `docs/team-setup.md` for third-party users creating teams from scratch
