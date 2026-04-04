@@ -13,7 +13,6 @@
       "mcp__plugin_ethos-dev_self__*",
       "mcp__github__*",
       "mcp__quarry__*",
-      "Bash(bash:*)",
       "Bash(cat:*)",
       "Bash(chmod +x:*)",
       "Bash(claude mcp:*)",
@@ -29,9 +28,6 @@
       "Bash(npx:*)",
       "Bash(go:*)",
       "Bash(ethos:*)",
-      "Read(../**)",
-      "Edit(../**)",
-      "Write(../**)",
       "WebFetch(domain:claude.com)",
       "WebFetch(domain:docs.anthropic.com)",
       "WebFetch(domain:elevenlabs.io)",
@@ -119,7 +115,11 @@
       "Skill(z-spec:setup)",
       "Skill(z-spec:doctor)",
       "Skill(z-spec:help)",
-      "Skill(z-spec:cleanup)"
+      "Skill(z-spec:cleanup)",
+      "Read",
+      "Write",
+      "Edit",
+      "Bash"
     ],
     "deny": [
       "Bash(rm -rf /:*)",
