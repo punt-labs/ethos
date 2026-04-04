@@ -129,6 +129,11 @@ func writeFile(dest string, data []byte, force bool, r *Result) {
 			os.Remove(tmpPath)
 			return
 		}
+		if err := os.Chmod(tmpPath, 0o644); err != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("chmod %s: %v", dest, err))
+			os.Remove(tmpPath)
+			return
+		}
 		if err := os.Rename(tmpPath, dest); err != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("renaming %s: %v", dest, err))
 			os.Remove(tmpPath)

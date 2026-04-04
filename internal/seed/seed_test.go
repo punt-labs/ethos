@@ -97,10 +97,16 @@ func TestSeedForce(t *testing.T) {
 	require.NoError(t, err)
 
 	// File should be overwritten with embedded content
-	data, err := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
+	rolePath := filepath.Join(rolesDir, "implementer.yaml")
+	data, err := os.ReadFile(rolePath)
 	require.NoError(t, err)
 	assert.NotEqual(t, "custom", string(data), "force should overwrite")
 	assert.Contains(t, string(data), "name: implementer")
+
+	// Force-written files must have 0644 permissions, not 0600 from CreateTemp
+	info, err := os.Stat(rolePath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm(), "force-seeded file should be 0644")
 
 	assert.Empty(t, result.Skipped)
 }
