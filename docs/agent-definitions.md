@@ -145,21 +145,25 @@ Every agent should explicitly state what it does not do. Without this, agents dr
 Examples by agent type:
 
 **Implementation agents** (bwk, rmh, adb):
+
 - Don't make architectural decisions -- those come from your spec
 - Don't modify files outside your assigned scope
 - Don't add features not in the spec
 
 **CLI agents** (mdm):
+
 - Don't add interactive prompts unless the spec requires them
 - Don't make architectural decisions -- those come from your spec
 
 **Review agents** (djb):
+
 - Don't fix code -- report findings for the implementation agent
 - Don't make architectural decisions -- present findings with evidence
 
 *These are illustrative patterns. Actual agent definitions may vary.*
 
 **Research agents**:
+
 - Don't write code -- return findings for delegation
 - Don't make design decisions -- present options with tradeoffs
 
@@ -295,7 +299,7 @@ Best practice: put behavioral content in ethos (personality, writing style, tale
 
 After creating or modifying an agent definition, verify it loads correctly:
 
-```
+```text
 Agent(subagent_type="<handle>", prompt="Who are you? What are your principles? What tools do you have?")
 ```
 
@@ -337,7 +341,7 @@ mission — a typed contract for a single task.
 
 A good delegation prompt contains:
 
-```
+```text
 Task: [one-sentence description of what to build/find/review]
 
 Inputs:
