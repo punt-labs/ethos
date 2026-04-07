@@ -159,17 +159,32 @@ func validateWriteSetEntry(entry string) error {
 		return fmt.Errorf("write_set entry %q contains control character", trimmed)
 	}
 
-	// Reject absolute paths (Unix `/` and Windows-style `C:\`).
-	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") {
+	// Normalize backslashes to forward slashes first. This makes
+	// Windows-form paths evaluate the same as Unix-form paths and
+	// catches UNC paths (`\\server\share` becomes `//server/share`)
+	// with the same absolute-path check below.
+	normalized := strings.ReplaceAll(trimmed, `\`, "/")
+
+	// Reject absolute paths in every form we can recognize:
+	//   - Unix root:   `/etc/passwd`
+	//   - UNC (post-normalize): `//server/share`
+	//   - Platform-specific forms via filepath.IsAbs
+	if strings.HasPrefix(normalized, "/") || filepath.IsAbs(trimmed) {
 		return fmt.Errorf("write_set entry %q must be a relative path", trimmed)
+	}
+
+	// Reject Windows drive-letter prefixes (`C:\foo`, `D:/bar`).
+	// Neither filepath.IsAbs nor the slash check catches these on Unix,
+	// so a future base-dir join could be bypassed.
+	if len(trimmed) >= 2 && trimmed[1] == ':' &&
+		((trimmed[0] >= 'A' && trimmed[0] <= 'Z') || (trimmed[0] >= 'a' && trimmed[0] <= 'z')) {
+		return fmt.Errorf("write_set entry %q must be a relative path (drive letter)", trimmed)
 	}
 
 	// Scan every segment for literal `..`. This catches both leading
 	// (`../etc/passwd`) and embedded (`internal/../../tmp`) traversal.
-	// Replace any backslashes with forward slashes first so a Windows-form
-	// path like `internal\..\..\tmp` does not slip through on Unix where
-	// filepath.ToSlash is a no-op.
-	normalized := strings.ReplaceAll(trimmed, `\`, "/")
+	// Uses the already-normalized form so `internal\..\..\tmp` is
+	// caught on Unix where filepath.ToSlash is a no-op.
 	for _, seg := range strings.Split(normalized, "/") {
 		if seg == ".." {
 			return fmt.Errorf("write_set entry %q contains path traversal", trimmed)

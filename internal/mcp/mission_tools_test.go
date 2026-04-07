@@ -286,6 +286,22 @@ func TestHandleMission_ListFilterStatus(t *testing.T) {
 	assert.Len(t, all, 2)
 }
 
+// TestHandleMission_ListRejectsUnknownStatus asserts that an invalid
+// status filter produces a structured tool error rather than silently
+// returning an empty list. The MCP schema also constrains the enum,
+// but the handler defends at the boundary in case a caller bypasses it.
+func TestHandleMission_ListRejectsUnknownStatus(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method": "list",
+		"status": "bogus",
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError, "expected tool error result")
+	assert.Contains(t, resultText(t, result), `invalid status filter "bogus"`)
+}
+
 func TestHandleMission_Close(t *testing.T) {
 	h := testHandlerWithMissions(t)
 

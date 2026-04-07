@@ -349,29 +349,30 @@ The worker reads the contract as its first action and emits a result
 artifact when done.
 
 ```yaml
-mission: m-2026-04-07-001
+mission_id: m-2026-04-07-001
+status: open
 leader: claude
 worker: bwk
-created: 2026-04-07T15:00:00Z
+created_at: 2026-04-07T15:00:00Z
+updated_at: 2026-04-07T15:00:00Z
+bead: ethos-13j
 inputs:
-  - bead: ethos-13j
-  - files: [internal/hook/stdin.go]
-outputs:
-  - files_changed: [internal/hook/stdin.go, internal/hook/stdin_test.go]
-  - verdict: pass | fail | escalate
-  - confidence: 0.0-1.0
-  - open_questions: []
+  bead: ethos-13j
+  files: [internal/hook/stdin.go]
 write_set:
-  - internal/hook/
+  - internal/hook/stdin.go
+  - internal/hook/stdin_test.go
 tools: [Read, Write, Edit, Bash, Grep, Glob]
 success_criteria:
   - make check passes
   - new test reproduces the bug without the fix
   - new test passes with the fix
-evaluator: djb  # frozen at launch
+evaluator:
+  handle: djb
+  pinned_at: 2026-04-07T15:00:00Z
 budget:
   rounds: 3
-  reflection_required: true
+  reflection_after_each: true
 ```
 
 **Delivery**: New `internal/mission/` package. CLI: `ethos mission
@@ -421,7 +422,7 @@ between rounds is detected and surfaced.
 evaluator:
   handle: djb
   pinned_at: 2026-04-07T15:00:00Z
-  content_hash: sha256:abc123...
+  hash: sha256:abc123...
 ```
 
 When the evaluator subagent spawns for round N+1, ethos verifies the

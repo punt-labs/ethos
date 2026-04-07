@@ -2173,10 +2173,14 @@ error rather than producing an invalid ID.
 
 **Append-only event log** is JSON lines, one event per state transition.
 Events are written with a single `Write` of `marshaled + '\n'` to an
-`O_APPEND` file. JSON-lines append-mode is robust to interleaved writes
-on POSIX as long as each write is `< PIPE_BUF` (4096 bytes) and atomic
-at the kernel level. No flock required. 3.1 writes `create`, `update`,
-and `close` events. 3.4 will add `reflect`. 3.5 will add `verify`.
+`O_APPEND` file while holding the per-mission `flock` on the `.lock`
+file. `O_APPEND` ensures each write targets end-of-file, but the
+correctness guarantee against concurrent writers comes from the lock;
+`PIPE_BUF` atomicity applies to pipes and FIFOs, not regular files.
+The short-write contract is enforced by checking `n == len(line)`
+after `Write` so a truncated line is an explicit error, not a silent
+corruption. 3.1 writes `create`, `update`, and `close` events.
+3.4 will add `reflect`. 3.5 will add `verify`.
 
 **Trust boundary enforcement** runs on every read and write path.
 `Store.Create`, `Store.Update`, and `Store.Close` call `Validate()`

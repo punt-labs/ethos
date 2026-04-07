@@ -202,6 +202,11 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 		{name: "escape", path: "internal/foo\x1bbar", wantErrMatch: "control character"},
 		{name: "tab", path: "internal/foo\tbar", wantErrMatch: "control character"},
 		{name: "DEL", path: "internal/foo\x7fbar", wantErrMatch: "control character"},
+		{name: "windows drive letter upper", path: `C:\foo`, wantErrMatch: "drive letter"},
+		{name: "windows drive letter lower", path: `d:\foo`, wantErrMatch: "drive letter"},
+		{name: "windows drive letter with forward slash", path: "E:/foo", wantErrMatch: "drive letter"},
+		{name: "UNC path backslash", path: `\\server\share\file`, wantErrMatch: "relative path"},
+		{name: "UNC path forward slash", path: "//server/share/file", wantErrMatch: "relative path"},
 	}
 
 	for _, tt := range tests {

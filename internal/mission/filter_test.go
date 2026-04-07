@@ -6,6 +6,35 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestIsValidStatusFilter(t *testing.T) {
+	tests := []struct {
+		filter string
+		want   bool
+	}{
+		{StatusOpen, true},
+		{StatusClosed, true},
+		{StatusFailed, true},
+		{StatusEscalated, true},
+		{"all", true},
+		{"", false},
+		{"bogus", false},
+		{"OPEN", false}, // case-sensitive
+		{"in_progress", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.filter+"="+boolStr(tt.want), func(t *testing.T) {
+			assert.Equal(t, tt.want, IsValidStatusFilter(tt.filter))
+		})
+	}
+}
+
+func boolStr(b bool) string {
+	if b {
+		return "valid"
+	}
+	return "invalid"
+}
+
 func TestStatusMatches(t *testing.T) {
 	tests := []struct {
 		name           string

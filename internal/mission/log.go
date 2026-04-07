@@ -59,8 +59,16 @@ func (s *Store) appendEventLocked(missionID string, e Event) error {
 	}
 	defer f.Close()
 
-	if _, err := f.Write(line); err != nil {
+	// The io.Writer contract says a short write (n < len(line))
+	// must be accompanied by a non-nil error, but defensive code
+	// should not trust implementations to honor the contract —
+	// a silently truncated line corrupts the append-only JSONL log.
+	n, err := f.Write(line)
+	if err != nil {
 		return fmt.Errorf("writing event: %w", err)
+	}
+	if n != len(line) {
+		return fmt.Errorf("writing event: short write %d of %d bytes", n, len(line))
 	}
 	return nil
 }

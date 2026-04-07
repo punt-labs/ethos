@@ -761,8 +761,12 @@ func writeMissionFields(ctx *strings.Builder, c map[string]any) {
 	tw := tabwriter.NewWriter(ctx, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(tw, "Mission:\t%s\n", missionID)
 	fmt.Fprintf(tw, "Status:\t%s\n", status)
-	if createdAt, _ := c["created_at"].(string); createdAt != "" {
+	createdAt, _ := c["created_at"].(string)
+	if createdAt != "" {
 		fmt.Fprintf(tw, "Created:\t%s\n", formatMissionTime(createdAt))
+	}
+	if updatedAt, _ := c["updated_at"].(string); updatedAt != "" && updatedAt != createdAt {
+		fmt.Fprintf(tw, "Updated:\t%s\n", formatMissionTime(updatedAt))
 	}
 	if closedAt, _ := c["closed_at"].(string); closedAt != "" {
 		fmt.Fprintf(tw, "Closed:\t%s\n", formatMissionTime(closedAt))
@@ -801,10 +805,47 @@ func writeMissionFields(ctx *strings.Builder, c map[string]any) {
 
 	_ = tw.Flush()
 
-	// Multi-value sections as bullet lists.
+	// Labeled/multi-value sections. Match the CLI's printContract
+	// order: Inputs, Write set, Tools, Success criteria, Context.
+	writeMissionInputs(ctx, c["inputs"])
 	writeMissionBulletSection(ctx, "Write set", c["write_set"])
 	writeMissionBulletSection(ctx, "Tools", c["tools"])
 	writeMissionBulletSection(ctx, "Success criteria", c["success_criteria"])
+	if contextStr, _ := c["context"].(string); contextStr != "" {
+		ctx.WriteString("\n\nContext:\n")
+		ctx.WriteString(contextStr)
+	}
+}
+
+// writeMissionInputs renders the Inputs section for writeMissionFields,
+// matching the CLI's printContract layout: labeled lines under an
+// "Inputs:" header (bead, file, ref). Empty or missing inputs emit
+// nothing.
+func writeMissionInputs(ctx *strings.Builder, raw any) {
+	inputs, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	bead, _ := inputs["bead"].(string)
+	files, _ := inputs["files"].([]any)
+	refs, _ := inputs["references"].([]any)
+	if bead == "" && len(files) == 0 && len(refs) == 0 {
+		return
+	}
+	ctx.WriteString("\n\nInputs:")
+	if bead != "" {
+		ctx.WriteString("\n  bead: " + bead)
+	}
+	for _, f := range files {
+		if s, ok := f.(string); ok {
+			ctx.WriteString("\n  file: " + s)
+		}
+	}
+	for _, r := range refs {
+		if s, ok := r.(string); ok {
+			ctx.WriteString("\n  ref:  " + s)
+		}
+	}
 }
 
 // formatMissionTime converts an RFC3339 timestamp to a local-time
@@ -854,7 +895,7 @@ func formatMissionList(w io.Writer, result string) error {
 		return emit(w, summary, "(none)")
 	}
 
-	headers := []string{"MISSION", "STATUS", "LEADER", "WORKER", "EVALUATOR"}
+	headers := []string{"MISSION", "STATUS", "LEADER", "WORKER", "EVALUATOR", "CREATED"}
 	rows := make([][]string, n)
 	for i, e := range entries {
 		missionID, _ := e["mission_id"].(string)
@@ -862,7 +903,8 @@ func formatMissionList(w io.Writer, result string) error {
 		leader, _ := e["leader"].(string)
 		worker, _ := e["worker"].(string)
 		evaluator, _ := e["evaluator"].(string)
-		rows[i] = []string{missionID, status, leader, worker, evaluator}
+		createdAt, _ := e["created_at"].(string)
+		rows[i] = []string{missionID, status, leader, worker, evaluator, formatMissionTime(createdAt)}
 	}
 	return emit(w, summary, FormatTable(headers, rows))
 }

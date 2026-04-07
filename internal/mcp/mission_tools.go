@@ -31,6 +31,7 @@ func (h *Handler) missionTool() mcplib.Tool {
 			mcplib.Description("Full contract YAML body. Required for create."),
 		),
 		mcplib.WithString("status",
+			mcplib.Enum("open", "closed", "failed", "escalated", "all"),
 			mcplib.Description("Filter for list (open|closed|failed|escalated|all) or terminal status for close (closed|failed|escalated)."),
 		),
 	)
@@ -122,6 +123,12 @@ func (h *Handler) handleShowMission(req mcplib.CallToolRequest) (*mcplib.CallToo
 // closed historical records.
 func (h *Handler) handleListMissions(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	status := stringArg(req, "status", "open")
+	if !mission.IsValidStatusFilter(status) {
+		return mcplib.NewToolResultError(fmt.Sprintf(
+			"invalid status filter %q: must be one of open, closed, failed, escalated, all",
+			status,
+		)), nil
+	}
 	ids, err := h.missionStore.List()
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to list missions: %v", err)), nil
