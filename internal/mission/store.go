@@ -61,6 +61,9 @@ func (s *Store) Root() string { return s.root }
 // Returns an error only if NewID fails to allocate a mission ID
 // (daily counter exhausted or poisoned counter file).
 func (s *Store) ApplyServerFields(c *Contract, now time.Time) error {
+	if c == nil {
+		return fmt.Errorf("contract is nil")
+	}
 	id, err := NewID(s.root, now)
 	if err != nil {
 		return fmt.Errorf("generating mission ID: %w", err)
@@ -95,12 +98,23 @@ func (s *Store) logPath(missionID string) string {
 	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".jsonl")
 }
 
-// Create persists a new mission contract. The caller must populate
-// MissionID and CreatedAt; UpdatedAt is set to CreatedAt on first write
-// if empty. A "create" event is appended to the JSONL log.
+// Create persists a new mission contract. The caller must supply a
+// fully-populated Contract (the server-controlled fields — MissionID,
+// Status, CreatedAt, UpdatedAt, ClosedAt, Evaluator.PinnedAt — can be
+// left empty and set via ApplyServerFields before Create, which is
+// what the CLI and MCP entry points do). Validate() runs before any
+// disk write, so missing required fields (leader, worker, evaluator,
+// write_set, success_criteria, budget) produce an error and touch no
+// files. UpdatedAt defaults to CreatedAt on first write if empty —
+// the one field Create may fill in.
 //
-// Validation runs before any disk write. If validation fails, no files
-// are touched.
+// A "create" event is appended to the JSONL log. On event append
+// failure the contract file is rolled back so the operation is
+// atomic from the caller's point of view.
+//
+// Works on a shallow copy of c so a validation failure never mutates
+// the caller's struct. On success, UpdatedAt is reflected back to
+// the caller.
 func (s *Store) Create(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")

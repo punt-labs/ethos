@@ -21,28 +21,22 @@ type Event struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
-// appendEvent writes a single event line to <root>/missions/<id>.jsonl,
-// acquiring the per-mission flock for the duration of the write.
+// Event log writes:
 //
-// Each event is encoded as one complete JSON line and written via a
-// single Write call to an O_APPEND file. The per-mission flock
-// serializes writers across cooperating processes, which is the
-// correctness guarantee against concurrent-writer interleaving.
-// (PIPE_BUF atomicity applies to pipes and FIFOs, not regular files,
-// so the lock does the real work here; the short-write check in
-// appendEventLocked defends against partial writes regardless.)
+// Each event is encoded as one complete JSON line via json.Marshal
+// and written via a single Write call to an O_APPEND file. Production
+// callers (Create/Update/Close) hold the per-mission flock and call
+// appendEventLocked directly — the flock is what serializes writers
+// across cooperating processes, not PIPE_BUF atomicity (which applies
+// to pipes/FIFOs, not regular files). A short-write check defends
+// against partial writes regardless.
 //
-// This helper is intentionally unexported. Public callers go through
-// Create/Update/Close, which already hold the flock and call
-// appendEventLocked. A public AppendEvent would be a deadlock footgun
-// for any future caller invoking it from inside an existing locked
-// block. 3.7's log reader API will re-export when external readers
-// genuinely need it.
-func (s *Store) appendEvent(missionID string, e Event) error {
-	return s.withLock(missionID, func() error {
-		return s.appendEventLocked(missionID, e)
-	})
-}
+// There is no public appendEvent wrapper that acquires the flock.
+// Earlier drafts had one, but it was only used by tests and became
+// a deadlock footgun for any future caller invoking it from inside
+// an existing locked block. 3.7's log reader API will add a public
+// read path when external consumers genuinely need it; writes stay
+// internal to the store.
 
 // appendEventLocked writes a single event without acquiring the flock.
 // The caller must hold the lock for the given missionID.
