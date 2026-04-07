@@ -763,13 +763,13 @@ func writeMissionFields(ctx *strings.Builder, c map[string]any) {
 	fmt.Fprintf(tw, "Status:\t%s\n", status)
 	createdAt, _ := c["created_at"].(string)
 	if createdAt != "" {
-		fmt.Fprintf(tw, "Created:\t%s\n", formatMissionTime(createdAt))
+		fmt.Fprintf(tw, "Created:\t%s\n", FormatLocalTime(createdAt))
 	}
 	if updatedAt, _ := c["updated_at"].(string); updatedAt != "" && updatedAt != createdAt {
-		fmt.Fprintf(tw, "Updated:\t%s\n", formatMissionTime(updatedAt))
+		fmt.Fprintf(tw, "Updated:\t%s\n", FormatLocalTime(updatedAt))
 	}
 	if closedAt, _ := c["closed_at"].(string); closedAt != "" {
-		fmt.Fprintf(tw, "Closed:\t%s\n", formatMissionTime(closedAt))
+		fmt.Fprintf(tw, "Closed:\t%s\n", FormatLocalTime(closedAt))
 	}
 	fmt.Fprintf(tw, "Leader:\t%s\n", leader)
 	fmt.Fprintf(tw, "Worker:\t%s\n", worker)
@@ -780,7 +780,7 @@ func writeMissionFields(ctx *strings.Builder, c map[string]any) {
 		hash, _ := ev["hash"].(string)
 		line := handle
 		if pinned != "" {
-			line += fmt.Sprintf(" (pinned %s", formatMissionTime(pinned))
+			line += fmt.Sprintf(" (pinned %s", FormatLocalTime(pinned))
 			if hash != "" {
 				line += ", hash " + hash
 			}
@@ -845,10 +845,13 @@ func writeMissionInputs(ctx *strings.Builder, raw any) {
 	}
 }
 
-// formatMissionTime converts an RFC3339 timestamp to a local-time
-// display form matching cmd/ethos/session.go formatStarted. If
-// parsing fails, returns the raw string unchanged.
-func formatMissionTime(raw string) string {
+// FormatLocalTime converts an RFC3339 timestamp to a local-time
+// display form (`Mon Jan _2 15:04`). Exported so cmd/ethos can share
+// the same formatter across session, mission, and any future
+// command that renders a timestamp to the user — one implementation,
+// one visual convention. If parsing fails, returns the raw string
+// unchanged so the caller still gets something displayable.
+func FormatLocalTime(raw string) string {
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
 		return raw
@@ -901,7 +904,7 @@ func formatMissionList(w io.Writer, result string) error {
 		worker, _ := e["worker"].(string)
 		evaluator, _ := e["evaluator"].(string)
 		createdAt, _ := e["created_at"].(string)
-		rows[i] = []string{missionID, status, leader, worker, evaluator, formatMissionTime(createdAt)}
+		rows[i] = []string{missionID, status, leader, worker, evaluator, FormatLocalTime(createdAt)}
 	}
 	return emit(w, summary, FormatTable(headers, rows))
 }

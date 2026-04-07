@@ -147,9 +147,18 @@ func (c *Contract) Validate() error {
 
 // containsControlChar reports whether s contains any byte in the C0
 // control range (0x00-0x1F) or DEL (0x7F). These bytes have no
-// legitimate place in handles, paths, or the append-only log — a
-// leader value containing a newline could break the JSONL log's
-// one-line-per-event invariant by forging a fake event.
+// legitimate place in handles, paths, or log event fields.
+//
+// The append-only JSONL log encodes events via json.Marshal, which
+// escapes control characters inside strings — so a leader value
+// containing a newline does not literally forge a second log line.
+// The real risks are: terminal/CLI injection (ANSI escape sequences
+// in `ethos mission show` output, fake prompts in downstream tools),
+// confusion for log readers that don't unescape JSON, and buggy
+// tooling further up the stack that concatenates identity handles
+// into human-readable strings without sanitization. Reject them at
+// the trust boundary rather than trusting every downstream consumer
+// to handle them correctly.
 func containsControlChar(s string) bool {
 	for _, r := range s {
 		if r < 0x20 || r == 0x7f {

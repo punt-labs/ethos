@@ -733,7 +733,7 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	assert.Contains(t, ctx, "Success criteria:")
 	assert.Contains(t, ctx, "- make check passes")
 	assert.NotContains(t, ctx, `"mission_id":`) // Not raw JSON
-	// Raw RFC3339 timestamp should not appear — formatMissionTime
+	// Raw RFC3339 timestamp should not appear — FormatLocalTime
 	// converts it.
 	assert.NotContains(t, ctx, "2026-04-07T21:30:00Z")
 }
@@ -763,7 +763,7 @@ func TestFormatOutput_Mission_Show(t *testing.T) {
 
 func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
 	// Closed contract — verifies the closed_at row appears in the
-	// header block via formatMissionTime.
+	// header block via FormatLocalTime.
 	payload := makeToolPayload("mission", "show", missionContractJSONClosed)
 	out := runFormat(t, payload)
 
@@ -889,7 +889,7 @@ func TestFormatMissionTime(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := formatMissionTime(tt.raw)
+			got := FormatLocalTime(tt.raw)
 			if tt.name == "valid RFC3339" {
 				// Local-time formatted; can't assert exact value across
 				// time zones, but it must contain the month name and a

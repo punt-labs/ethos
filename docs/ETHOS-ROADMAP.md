@@ -355,7 +355,6 @@ leader: claude
 worker: bwk
 created_at: 2026-04-07T15:00:00Z
 updated_at: 2026-04-07T15:00:00Z
-bead: ethos-13j
 inputs:
   bead: ethos-13j
   files: [internal/hook/stdin.go]

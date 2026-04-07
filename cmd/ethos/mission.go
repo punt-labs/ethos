@@ -208,16 +208,7 @@ func runMissionList(status string) {
 		os.Exit(1)
 	}
 
-	type entry struct {
-		MissionID string `json:"mission_id"`
-		Status    string `json:"status"`
-		Leader    string `json:"leader"`
-		Worker    string `json:"worker"`
-		Evaluator string `json:"evaluator"`
-		CreatedAt string `json:"created_at"`
-	}
-
-	var entries []entry
+	entries := []mission.ListEntry{}
 	for _, id := range ids {
 		c, loadErr := ms.Load(id)
 		if loadErr != nil {
@@ -230,20 +221,10 @@ func runMissionList(status string) {
 		if !mission.StatusMatches(status, c.Status) {
 			continue
 		}
-		entries = append(entries, entry{
-			MissionID: c.MissionID,
-			Status:    c.Status,
-			Leader:    c.Leader,
-			Worker:    c.Worker,
-			Evaluator: c.Evaluator.Handle,
-			CreatedAt: c.CreatedAt,
-		})
+		entries = append(entries, mission.NewListEntry(c))
 	}
 
 	if jsonOutput {
-		if entries == nil {
-			entries = []entry{}
-		}
 		printJSON(entries)
 		return
 	}

@@ -130,15 +130,7 @@ func (h *Handler) handleListMissions(req mcplib.CallToolRequest) (*mcplib.CallTo
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to list missions: %v", err)), nil
 	}
 
-	type entry struct {
-		MissionID string `json:"mission_id"`
-		Status    string `json:"status"`
-		Leader    string `json:"leader"`
-		Worker    string `json:"worker"`
-		Evaluator string `json:"evaluator"`
-		CreatedAt string `json:"created_at"`
-	}
-	entries := []entry{}
+	entries := []mission.ListEntry{}
 	for _, id := range ids {
 		c, loadErr := h.missionStore.Load(id)
 		if loadErr != nil {
@@ -148,14 +140,7 @@ func (h *Handler) handleListMissions(req mcplib.CallToolRequest) (*mcplib.CallTo
 		if !mission.StatusMatches(status, c.Status) {
 			continue
 		}
-		entries = append(entries, entry{
-			MissionID: c.MissionID,
-			Status:    c.Status,
-			Leader:    c.Leader,
-			Worker:    c.Worker,
-			Evaluator: c.Evaluator.Handle,
-			CreatedAt: c.CreatedAt,
-		})
+		entries = append(entries, mission.NewListEntry(c))
 	}
 	return jsonResult(entries)
 }
