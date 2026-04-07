@@ -627,6 +627,139 @@ func TestFormatOutput_Role_Show(t *testing.T) {
 	assert.Contains(t, ctx, "- deploy")
 }
 
+// --- Mission tool tests ---
+
+// missionContractJSON is a full contract as returned by create/show.
+const missionContractJSON = `{
+  "mission_id": "m-2026-04-07-001",
+  "status": "open",
+  "created_at": "2026-04-07T21:30:00Z",
+  "updated_at": "2026-04-07T21:30:00Z",
+  "bead": "ethos-07m.5",
+  "leader": "claude",
+  "worker": "bwk",
+  "evaluator": {
+    "handle": "djb",
+    "pinned_at": "2026-04-07T21:30:00Z"
+  },
+  "inputs": {"bead": "ethos-07m.5"},
+  "write_set": ["internal/mission/", "cmd/ethos/mission.go"],
+  "tools": ["Read", "Write"],
+  "success_criteria": ["make check passes"],
+  "budget": {"rounds": 3, "reflection_after_each": true}
+}`
+
+func TestFormatOutput_Mission_Create(t *testing.T) {
+	payload := makeToolPayload("mission", "create", missionContractJSON)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Created m-2026-04-07-001", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Mission:   m-2026-04-07-001")
+	assert.Contains(t, ctx, "Status:    open")
+	assert.Contains(t, ctx, "Leader:    claude")
+	assert.Contains(t, ctx, "Worker:    bwk")
+	assert.Contains(t, ctx, "Evaluator: djb")
+	assert.Contains(t, ctx, "Budget:    3 round(s)")
+	assert.Contains(t, ctx, "Write set:")
+	assert.Contains(t, ctx, "- internal/mission/")
+	assert.Contains(t, ctx, "Tools:")
+	assert.Contains(t, ctx, "- Read")
+	assert.Contains(t, ctx, "- Write")
+	assert.NotContains(t, ctx, `"mission_id":`) // Not raw JSON
+}
+
+func TestFormatOutput_Mission_Show(t *testing.T) {
+	payload := makeToolPayload("mission", "show", missionContractJSON)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "m-2026-04-07-001 (open)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Mission:   m-2026-04-07-001")
+	assert.Contains(t, ctx, "Success criteria:")
+	assert.Contains(t, ctx, "- make check passes")
+}
+
+func TestFormatOutput_Mission_Show_Malformed(t *testing.T) {
+	payload := makeToolPayload("mission", "show", "not-json")
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "not-json")
+}
+
+func TestFormatOutput_Mission_List(t *testing.T) {
+	result := `[
+		{"mission_id":"m-2026-04-07-001","status":"open","leader":"claude","worker":"bwk","evaluator":"djb","created_at":"2026-04-07T21:30:00Z"},
+		{"mission_id":"m-2026-04-07-002","status":"closed","leader":"claude","worker":"rmh","evaluator":"djb","created_at":"2026-04-07T22:00:00Z"}
+	]`
+	payload := makeToolPayload("mission", "list", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "2 missions", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "MISSION")
+	assert.Contains(t, ctx, "STATUS")
+	assert.Contains(t, ctx, "LEADER")
+	assert.Contains(t, ctx, "WORKER")
+	assert.Contains(t, ctx, "EVALUATOR")
+	assert.Contains(t, ctx, "m-2026-04-07-001")
+	assert.Contains(t, ctx, "m-2026-04-07-002")
+	assert.Contains(t, ctx, "open")
+	assert.Contains(t, ctx, "closed")
+	assert.Contains(t, ctx, "bwk")
+	assert.Contains(t, ctx, "rmh")
+}
+
+func TestFormatOutput_Mission_List_Singular(t *testing.T) {
+	result := `[{"mission_id":"m-2026-04-07-001","status":"open","leader":"claude","worker":"bwk","evaluator":"djb","created_at":"2026-04-07T21:30:00Z"}]`
+	payload := makeToolPayload("mission", "list", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "1 mission", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_Mission_List_Empty(t *testing.T) {
+	result := `[]`
+	payload := makeToolPayload("mission", "list", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 missions", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
+}
+
+func TestFormatOutput_Mission_Close(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","status":"closed"}`
+	payload := makeToolPayload("mission", "close", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Closed m-2026-04-07-001 as closed", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_Mission_Close_Failed(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","status":"failed"}`
+	payload := makeToolPayload("mission", "close", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Closed m-2026-04-07-001 as failed", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_Mission_UnknownMethod(t *testing.T) {
+	payload := makeToolPayload("mission", "bogus", `{"mission_id":"x"}`)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	// Unknown method falls back to emitSimple + truncate.
+	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "mission_id")
+}
+
 // --- Edge cases ---
 
 func TestFormatOutput_EmptyInput(t *testing.T) {

@@ -183,17 +183,20 @@ func TestValidate(t *testing.T) {
 // the contract is the trust point, so the rule is enforced at parse time.
 func TestValidate_RejectsPathTraversal(t *testing.T) {
 	tests := []struct {
-		name string
-		path string
+		name         string
+		path         string
+		wantErrMatch string
 	}{
-		{"parent escape", "../etc/passwd"},
-		{"embedded parent escape", "internal/../../../tmp"},
-		{"absolute unix path", "/etc/passwd"},
-		{"empty entry", ""},
-		{"whitespace-only entry", "   "},
-		{"single dot dot", ".."},
-		{"trailing parent", "internal/.."},
-		{"backslash parent (windows form)", `internal\..\..\tmp`},
+		{name: "parent escape", path: "../etc/passwd", wantErrMatch: "path traversal"},
+		{name: "embedded parent escape", path: "internal/../../../tmp", wantErrMatch: "path traversal"},
+		{name: "absolute unix path", path: "/etc/passwd", wantErrMatch: "relative path"},
+		{name: "empty entry", path: "", wantErrMatch: "empty or whitespace"},
+		{name: "whitespace-only entry", path: "   ", wantErrMatch: "empty or whitespace"},
+		{name: "single dot dot", path: "..", wantErrMatch: "path traversal"},
+		{name: "trailing parent", path: "internal/..", wantErrMatch: "path traversal"},
+		{name: "backslash parent (windows form)", path: `internal\..\..\tmp`, wantErrMatch: "path traversal"},
+		{name: "null byte", path: "internal/foo\x00/bar", wantErrMatch: "null byte"},
+		{name: "null byte truncation", path: "allowed\x00../etc/passwd", wantErrMatch: "null byte"},
 	}
 
 	for _, tt := range tests {
@@ -202,6 +205,27 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 			c.WriteSet = []string{tt.path}
 			err := c.Validate()
 			require.Error(t, err, "expected validation error for path %q", tt.path)
+			assert.Contains(t, err.Error(), tt.wantErrMatch)
+		})
+	}
+}
+
+// TestValidate_AcceptsSingleDotSegment asserts that `./foo` is treated
+// as legitimate path syntax, not as path traversal. Single-dot segments
+// are a common shell convention and do not escape the base directory.
+// The reviewer suggested rejecting them; this was overridden — rejecting
+// single-dot would produce false positives on legitimate paths.
+func TestValidate_AcceptsSingleDotSegment(t *testing.T) {
+	tests := []string{
+		"./internal/mission/",
+		"internal/./mission/",
+		"./cmd/ethos/mission.go",
+	}
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			c := validContract()
+			c.WriteSet = []string{path}
+			require.NoError(t, c.Validate())
 		})
 	}
 }

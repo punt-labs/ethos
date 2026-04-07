@@ -124,25 +124,37 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 // Update writes a mutated contract back to disk under flock. The caller
 // is responsible for any field mutation; Update bumps UpdatedAt and
 // validates before writing.
+//
+// Update works on a shallow copy of the caller's contract inside the
+// lock so that a mid-method failure (stat, validate, write) leaves the
+// caller's struct unchanged. On success, UpdatedAt is reflected back
+// to the caller — that is the one field Update is contracted to
+// mutate. The shallow copy is safe because Validate and writeContract
+// never modify any slice or nested struct; value-type sub-structs
+// (Evaluator, Inputs, Budget) are deep-copied by the shallow copy
+// itself.
 func (s *Store) Update(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
-	}
-	c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := c.Validate(); err != nil {
-		return fmt.Errorf("invalid contract: %w", err)
 	}
 	return s.withLock(c.MissionID, func() error {
 		if _, err := os.Stat(s.contractPath(c.MissionID)); err != nil {
 			return fmt.Errorf("mission %q not found: %w", c.MissionID, err)
 		}
-		if err := s.writeContract(c); err != nil {
+		updated := *c
+		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := updated.Validate(); err != nil {
+			return fmt.Errorf("invalid contract: %w", err)
+		}
+		if err := s.writeContract(&updated); err != nil {
 			return err
 		}
+		// Success: reflect the new UpdatedAt back to the caller.
+		c.UpdatedAt = updated.UpdatedAt
 		return s.appendEventLocked(c.MissionID, Event{
-			TS:    c.UpdatedAt,
+			TS:    updated.UpdatedAt,
 			Event: "update",
-			Actor: c.Leader,
+			Actor: updated.Leader,
 		})
 	})
 }
@@ -181,6 +193,12 @@ func (s *Store) Close(missionID, status string) error {
 
 // loadLocked reads a contract without acquiring the flock. Callers must
 // already hold the lock for the given missionID.
+//
+// Runs Validate() for symmetry with the public Load() — a corrupt or
+// hand-edited contract must be rejected before Close (or any future
+// locked caller) mutates it. Otherwise an invalid on-disk state could
+// slip through Close's post-mutation Validate because the mutation
+// fixed the field under inspection.
 func (s *Store) loadLocked(missionID string) (*Contract, error) {
 	data, err := os.ReadFile(s.contractPath(missionID))
 	if err != nil {
@@ -189,6 +207,9 @@ func (s *Store) loadLocked(missionID string) (*Contract, error) {
 	var c Contract
 	if err := yaml.Unmarshal(data, &c); err != nil {
 		return nil, fmt.Errorf("invalid contract file %s: %w", missionID, err)
+	}
+	if err := c.Validate(); err != nil {
+		return nil, fmt.Errorf("contract %q failed validation on load: %w", missionID, err)
 	}
 	return &c, nil
 }

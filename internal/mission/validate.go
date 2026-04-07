@@ -119,6 +119,12 @@ func validateWriteSetEntry(entry string) error {
 		return fmt.Errorf("write_set entry cannot be empty or whitespace")
 	}
 
+	// Reject null bytes: any path containing \x00 is almost certainly a
+	// smuggled C-string truncation attempt ("allowed/prefix\x00../etc").
+	if strings.ContainsRune(trimmed, 0) {
+		return fmt.Errorf("write_set entry %q contains null byte", trimmed)
+	}
+
 	// Reject absolute paths (Unix `/` and Windows-style `C:\`).
 	if filepath.IsAbs(trimmed) || strings.HasPrefix(trimmed, "/") {
 		return fmt.Errorf("write_set entry %q must be a relative path", trimmed)

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
-	"strings"
+	"path/filepath"
+	"text/tabwriter"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/hook"
@@ -17,44 +19,37 @@ import (
 func missionStore() *mission.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
 		os.Exit(1)
 	}
-	return mission.NewStore(home + "/.punt-labs/ethos")
+	return mission.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
 }
 
-// --- mission ---
-
+// --- mission (bare command) ---
+//
+// missionCmd has no Run — cobra prints help automatically when a command
+// with subcommands is invoked with no arguments. This matches the role
+// and team command patterns.
 var missionCmd = &cobra.Command{
 	Use:     "mission",
 	Short:   "Manage mission contracts",
 	GroupID: "session",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionList(missionListStatus)
-	},
 }
 
 // --- mission create ---
 
-var (
-	missionCreateFile      string
-	missionCreateLeader    string
-	missionCreateWorker    string
-	missionCreateEvaluator string
-	missionCreateBead      string
-	missionCreateRounds    int
-)
+var missionCreateFile string
 
 var missionCreateCmd = &cobra.Command{
 	Use:   "create",
-	Short: "Create a new mission contract",
-	Long: `Create a new mission contract.
+	Short: "Create a mission contract from a YAML file",
+	Long: `Create a mission contract from a complete YAML file.
 
-The contract is the typed delegation artifact: leader, worker, evaluator,
-write_set, tools, success_criteria, and budget. The recommended path is
-to write the contract as YAML and pass --file; flag-based creation is a
-fallback for the simplest cases.`,
+All required fields (leader, worker, evaluator, inputs, write_set,
+success_criteria, budget) must be present in the file. Unknown fields
+are rejected (KnownFields strict decode). Validation runs before the
+contract is persisted.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
@@ -66,7 +61,11 @@ fallback for the simplest cases.`,
 var missionShowCmd = &cobra.Command{
 	Use:   "show <id-or-prefix>",
 	Short: "Show mission contract details",
-	Args:  cobra.ExactArgs(1),
+	Long: `Show mission contract details.
+
+Accepts a full mission ID (m-YYYY-MM-DD-NNN) or any unambiguous prefix.
+Use --json to emit the raw contract for piping.`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionShow(args[0])
 	},
@@ -79,7 +78,12 @@ var missionListStatus string
 var missionListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List mission contracts",
-	Args:  cobra.NoArgs,
+	Long: `List mission contracts.
+
+Filters by --status (default "open"). Pass --status all to include
+closed, failed, and escalated missions alongside open ones. Pass
+--json for a machine-readable summary.`,
+	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionList(missionListStatus)
 	},
@@ -92,22 +96,27 @@ var missionCloseStatus string
 var missionCloseCmd = &cobra.Command{
 	Use:   "close <id-or-prefix>",
 	Short: "Close a mission contract",
-	Args:  cobra.ExactArgs(1),
+	Long: `Close a mission contract with a terminal status.
+
+Accepts a full mission ID or unambiguous prefix. Default terminal
+status is "closed"; use --status failed or --status escalated for
+the other terminal states. The close event is appended to the mission
+event log.`,
+	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionClose(args[0], missionCloseStatus)
 	},
 }
 
 func init() {
-	missionCreateCmd.Flags().StringVarP(&missionCreateFile, "file", "f", "", "Read full contract YAML from file")
-	missionCreateCmd.Flags().StringVar(&missionCreateLeader, "leader", "", "Leader handle")
-	missionCreateCmd.Flags().StringVar(&missionCreateWorker, "worker", "", "Worker handle")
-	missionCreateCmd.Flags().StringVar(&missionCreateEvaluator, "evaluator", "", "Evaluator handle")
-	missionCreateCmd.Flags().StringVar(&missionCreateBead, "bead", "", "Bead ID")
-	missionCreateCmd.Flags().IntVar(&missionCreateRounds, "rounds", 3, "Round budget")
+	missionCreateCmd.Flags().StringVarP(&missionCreateFile, "file", "f", "", "Read contract YAML from file (required)")
+	_ = missionCreateCmd.MarkFlagRequired("file")
 
-	missionListCmd.Flags().StringVar(&missionListStatus, "status", "open", "Filter by status: open, closed, all")
-	missionCloseCmd.Flags().StringVar(&missionCloseStatus, "status", mission.StatusClosed, "Terminal status: closed, failed, escalated")
+	missionListCmd.Flags().StringVar(&missionListStatus, "status", "open",
+		"Filter by status (open|closed|failed|escalated|all)")
+
+	missionCloseCmd.Flags().StringVar(&missionCloseStatus, "status", mission.StatusClosed,
+		"Terminal status (closed|failed|escalated)")
 
 	missionCmd.AddCommand(
 		missionCreateCmd,
@@ -118,58 +127,38 @@ func init() {
 	rootCmd.AddCommand(missionCmd)
 }
 
-// runMissionCreate handles `ethos mission create`. Two paths: file-driven
-// or flag-driven. The file path is recommended for anything beyond the
-// simplest contracts; flags exist so the COO can spike a quick mission
-// from the command line.
+// runMissionCreate handles `ethos mission create --file <path>`.
+//
+// There is exactly one creation path: strict YAML decode from a file.
+// Flag-only creation was removed in round 2 — it could only produce
+// placeholder contracts, which defeats the purpose of the contract as
+// a trust boundary.
 func runMissionCreate() {
 	ms := missionStore()
 
-	var c mission.Contract
-	if missionCreateFile != "" {
-		data, err := os.ReadFile(missionCreateFile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
-		}
-		// Strict unmarshal: unknown fields would mask typos in the
-		// contract YAML and silently degrade safety. yaml.v3 returns
-		// a parse error for malformed input; KnownFields makes
-		// unrecognized keys an error too.
-		dec := yaml.NewDecoder(strings.NewReader(string(data)))
-		dec.KnownFields(true)
-		if err := dec.Decode(&c); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: parsing contract file: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		if missionCreateLeader == "" || missionCreateWorker == "" || missionCreateEvaluator == "" {
-			fmt.Fprintf(os.Stderr, "ethos: --leader, --worker, and --evaluator are required when --file is not given\n")
-			os.Exit(1)
-		}
-		c = mission.Contract{
-			Leader:          missionCreateLeader,
-			Worker:          missionCreateWorker,
-			SuccessCriteria: []string{"placeholder — replace via show/edit"},
-			WriteSet:        []string{"placeholder/"},
-			Bead:            missionCreateBead,
-			Evaluator: mission.Evaluator{
-				Handle: missionCreateEvaluator,
-			},
-			Budget: mission.Budget{
-				Rounds:              missionCreateRounds,
-				ReflectionAfterEach: true,
-			},
-		}
+	data, err := os.ReadFile(missionCreateFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Always force authoritative server-side fields. The contract YAML may
-	// suggest a status or timestamps; the store is the source of truth.
+	// Strict unmarshal: unknown fields would mask typos in the contract
+	// YAML and silently degrade safety. KnownFields makes them an error.
+	var c mission.Contract
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission create: parsing contract file: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Server-controlled fields. The contract YAML may suggest timestamps
+	// or a status; the store is the source of truth.
 	now := time.Now().UTC()
 	if c.MissionID == "" {
 		id, err := mission.NewID(ms.Root(), now)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
 			os.Exit(1)
 		}
 		c.MissionID = id
@@ -182,27 +171,26 @@ func runMissionCreate() {
 	}
 
 	if err := ms.Create(&c); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
 		os.Exit(1)
 	}
 
 	if jsonOutput {
 		printJSON(&c)
-		return
 	}
-	fmt.Printf("Created mission %s\n", c.MissionID)
+	// Non-JSON mode is silent on success — matches session.go pattern.
 }
 
 func runMissionShow(idOrPrefix string) {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: mission show: %v\n", err)
 		os.Exit(1)
 	}
 	c, err := ms.Load(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: mission show: %v\n", err)
 		os.Exit(1)
 	}
 	if jsonOutput {
@@ -216,7 +204,7 @@ func runMissionList(status string) {
 	ms := missionStore()
 	ids, err := ms.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: mission list: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -233,10 +221,13 @@ func runMissionList(status string) {
 	for _, id := range ids {
 		c, loadErr := ms.Load(id)
 		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: warning: mission %s: %v\n", id, loadErr)
+			// Include the path in the warning so the operator can jump
+			// straight to the corrupt file.
+			fmt.Fprintf(os.Stderr, "ethos: warning: %s: %v\n",
+				filepath.Join(ms.Root(), "missions", id+".yaml"), loadErr)
 			continue
 		}
-		if !statusMatches(status, c.Status) {
+		if !mission.StatusMatches(status, c.Status) {
 			continue
 		}
 		entries = append(entries, entry{
@@ -265,6 +256,9 @@ func runMissionList(status string) {
 	headers := []string{"MISSION", "STATUS", "LEADER", "WORKER", "EVALUATOR", "CREATED"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
+		// Mission IDs are human-scale (16 chars m-YYYY-MM-DD-NNN) and
+		// printed in full. Sessions use shortID(...) because their IDs
+		// are 36-char UUIDs — the mission case does not need truncation.
 		rows[i] = []string{
 			e.MissionID,
 			e.Status,
@@ -281,53 +275,48 @@ func runMissionClose(idOrPrefix, status string) {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 		os.Exit(1)
 	}
 	if err := ms.Close(id, status); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 		os.Exit(1)
 	}
 	if jsonOutput {
 		printJSON(map[string]string{"mission_id": id, "status": status})
-		return
 	}
-	fmt.Printf("Closed mission %s as %s\n", id, status)
+	// Non-JSON mode is silent on success — matches session.go pattern.
 }
 
-// statusMatches returns true if the contract status passes the filter.
-// "all" matches everything; the default ("open") matches only open
-// missions; any other value is treated as an exact match.
-func statusMatches(filter, contractStatus string) bool {
-	if filter == "" || filter == "all" {
-		return true
-	}
-	return filter == contractStatus
-}
-
-// printContract emits a human-readable summary of a contract.
+// printContract emits a human-readable summary of a contract. The
+// header block uses text/tabwriter for aligned field/value columns;
+// multi-value sections (write_set, tools, success_criteria) are
+// rendered as bullet lists because hook.FormatTable is reserved for
+// truly tabular data.
 func printContract(c *mission.Contract) {
-	fmt.Printf("Mission:   %s\n", c.MissionID)
-	fmt.Printf("Status:    %s\n", c.Status)
-	fmt.Printf("Created:   %s\n", formatStarted(c.CreatedAt))
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "Mission:\t%s\n", c.MissionID)
+	fmt.Fprintf(tw, "Status:\t%s\n", c.Status)
+	fmt.Fprintf(tw, "Created:\t%s\n", formatStarted(c.CreatedAt))
 	if c.UpdatedAt != "" && c.UpdatedAt != c.CreatedAt {
-		fmt.Printf("Updated:   %s\n", formatStarted(c.UpdatedAt))
+		fmt.Fprintf(tw, "Updated:\t%s\n", formatStarted(c.UpdatedAt))
 	}
 	if c.ClosedAt != "" {
-		fmt.Printf("Closed:    %s\n", formatStarted(c.ClosedAt))
+		fmt.Fprintf(tw, "Closed:\t%s\n", formatStarted(c.ClosedAt))
 	}
 	if c.Bead != "" {
-		fmt.Printf("Bead:      %s\n", c.Bead)
+		fmt.Fprintf(tw, "Bead:\t%s\n", c.Bead)
 	}
-	fmt.Println()
-	fmt.Printf("Leader:    %s\n", c.Leader)
-	fmt.Printf("Worker:    %s\n", c.Worker)
-	fmt.Printf("Evaluator: %s (pinned %s)\n", c.Evaluator.Handle, formatStarted(c.Evaluator.PinnedAt))
+	fmt.Fprintf(tw, "Leader:\t%s\n", c.Leader)
+	fmt.Fprintf(tw, "Worker:\t%s\n", c.Worker)
+	pinned := formatStarted(c.Evaluator.PinnedAt)
+	fmt.Fprintf(tw, "Evaluator:\t%s (pinned %s)\n", c.Evaluator.Handle, pinned)
 	if c.Evaluator.Hash != "" {
-		fmt.Printf("           hash %s\n", c.Evaluator.Hash)
+		fmt.Fprintf(tw, "\thash %s\n", c.Evaluator.Hash)
 	}
-	fmt.Println()
-	fmt.Printf("Budget:    %d round(s), reflection_after_each=%t\n", c.Budget.Rounds, c.Budget.ReflectionAfterEach)
+	fmt.Fprintf(tw, "Budget:\t%d round(s), reflection_after_each=%t\n",
+		c.Budget.Rounds, c.Budget.ReflectionAfterEach)
+	_ = tw.Flush()
 
 	if len(c.Inputs.Files) > 0 || c.Inputs.Bead != "" || len(c.Inputs.References) > 0 {
 		fmt.Println()
@@ -353,7 +342,10 @@ func printContract(c *mission.Contract) {
 
 	if len(c.Tools) > 0 {
 		fmt.Println()
-		fmt.Printf("Tools: %v\n", c.Tools)
+		fmt.Println("Tools:")
+		for _, t := range c.Tools {
+			fmt.Printf("  - %s\n", t)
+		}
 	}
 
 	if len(c.SuccessCriteria) > 0 {

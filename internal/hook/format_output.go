@@ -70,6 +70,8 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return formatTeam(w, method, result)
 	case "role":
 		return formatRole(w, method, result)
+	case "mission":
+		return formatMission(w, method, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -666,6 +668,181 @@ func formatRoleShow(w io.Writer, result string) error {
 	}
 
 	return emit(w, name, ctx.String())
+}
+
+// --- Mission tool formatters ---
+
+// formatMission dispatches on method for the mission MCP tool. Each
+// mission method has a distinct result shape:
+//
+//   create / show → a single Contract object
+//   list          → an array of {mission_id, status, leader, ...} summaries
+//   close         → {mission_id, status}
+func formatMission(w io.Writer, method, result string) error {
+	switch method {
+	case "show":
+		return formatMissionShow(w, result)
+	case "create":
+		return formatMissionCreate(w, result)
+	case "list":
+		return formatMissionList(w, result)
+	case "close":
+		return formatMissionClose(w, result)
+	default:
+		return emitSimple(w, truncate(result, 200))
+	}
+}
+
+// formatMissionShow renders a single contract in a 2-column field table.
+// The summary line is "<mission_id> <status>"; the context is the full
+// field table plus the write_set and success_criteria as bullet lists.
+func formatMissionShow(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	status, _ := c["status"].(string)
+	if missionID == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	summary := fmt.Sprintf("%s (%s)", missionID, status)
+
+	var ctx strings.Builder
+	writeMissionFields(&ctx, c)
+
+	return emit(w, summary, ctx.String())
+}
+
+// formatMissionCreate reuses the show layout — create returns the full
+// persisted contract — but uses a "Created <id>" summary line.
+func formatMissionCreate(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	if missionID == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	summary := "Created " + missionID
+
+	var ctx strings.Builder
+	writeMissionFields(&ctx, c)
+
+	return emit(w, summary, ctx.String())
+}
+
+// writeMissionFields writes a contract's key fields to ctx in the same
+// shape the CLI's printContract uses: single-value fields as "Name: val"
+// lines, multi-value fields as bullet lists.
+func writeMissionFields(ctx *strings.Builder, c map[string]any) {
+	missionID, _ := c["mission_id"].(string)
+	status, _ := c["status"].(string)
+	leader, _ := c["leader"].(string)
+	worker, _ := c["worker"].(string)
+	createdAt, _ := c["created_at"].(string)
+	bead, _ := c["bead"].(string)
+
+	ctx.WriteString("Mission:   " + missionID)
+	ctx.WriteString("\nStatus:    " + status)
+	if createdAt != "" {
+		ctx.WriteString("\nCreated:   " + createdAt)
+	}
+	if closedAt, _ := c["closed_at"].(string); closedAt != "" {
+		ctx.WriteString("\nClosed:    " + closedAt)
+	}
+	if bead != "" {
+		ctx.WriteString("\nBead:      " + bead)
+	}
+	ctx.WriteString("\nLeader:    " + leader)
+	ctx.WriteString("\nWorker:    " + worker)
+
+	if ev, ok := c["evaluator"].(map[string]any); ok {
+		handle, _ := ev["handle"].(string)
+		pinned, _ := ev["pinned_at"].(string)
+		ctx.WriteString("\nEvaluator: " + handle)
+		if pinned != "" {
+			ctx.WriteString(" (pinned " + pinned + ")")
+		}
+	}
+
+	if budget, ok := c["budget"].(map[string]any); ok {
+		rounds, _ := budget["rounds"].(float64)
+		reflect, _ := budget["reflection_after_each"].(bool)
+		ctx.WriteString(fmt.Sprintf("\nBudget:    %d round(s), reflection_after_each=%t", int(rounds), reflect))
+	}
+
+	// Multi-value sections as bullet lists.
+	writeMissionBulletSection(ctx, "Write set", c["write_set"])
+	writeMissionBulletSection(ctx, "Tools", c["tools"])
+	writeMissionBulletSection(ctx, "Success criteria", c["success_criteria"])
+}
+
+// writeMissionBulletSection writes a section header and a bullet list
+// of string values. Non-string entries are skipped. Empty or missing
+// sections emit nothing — the formatter stays tidy when optional fields
+// are absent.
+func writeMissionBulletSection(ctx *strings.Builder, title string, raw any) {
+	arr, ok := raw.([]any)
+	if !ok || len(arr) == 0 {
+		return
+	}
+	ctx.WriteString("\n\n" + title + ":")
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			ctx.WriteString("\n  - " + s)
+		}
+	}
+}
+
+// formatMissionList renders the list method's summary as a table with
+// one row per mission.
+func formatMissionList(w io.Writer, result string) error {
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(result), &entries); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	n := len(entries)
+	noun := "missions"
+	if n == 1 {
+		noun = "mission"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	headers := []string{"MISSION", "STATUS", "LEADER", "WORKER", "EVALUATOR"}
+	rows := make([][]string, n)
+	for i, e := range entries {
+		missionID, _ := e["mission_id"].(string)
+		status, _ := e["status"].(string)
+		leader, _ := e["leader"].(string)
+		worker, _ := e["worker"].(string)
+		evaluator, _ := e["evaluator"].(string)
+		rows[i] = []string{missionID, status, leader, worker, evaluator}
+	}
+	return emit(w, summary, FormatTable(headers, rows))
+}
+
+// formatMissionClose renders the close method's confirmation as a
+// single-line summary.
+func formatMissionClose(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	status, _ := c["status"].(string)
+	if missionID == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+	return emitSimple(w, fmt.Sprintf("Closed %s as %s", missionID, status))
 }
 
 // --- JSON extraction helpers ---

@@ -11,10 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `mission` subcommand for creating, listing, and closing mission
   contracts — the typed delegation artifact that is the foundation
-  of Phase 3 workflow primitives (`ethos-07m.5`).
-- `mission` MCP tool with methods create, show, list, close.
-- `internal/mission/` package: Contract schema, filesystem store,
-  daily ID generator, append-only JSONL event log, validation.
+  of Phase 3 workflow primitives (`ethos-07m.5`). Creation is
+  file-only (`--file <path>`); strict YAML decode with unknown-field
+  rejection. Non-JSON mode is silent on success; `--json` emits the
+  persisted contract.
+- `mission` MCP tool with methods create, show, list, close. Full
+  formatter in `internal/hook/format_output.go` (DES-020) with a
+  2-column field view for single contracts and a table for list.
+- `internal/mission/` package: Contract schema, filesystem store with
+  flock-protected concurrency and shallow-copy Update semantics
+  (failed Update leaves the caller's struct untouched), daily ID
+  generator, append-only JSONL event log, validation (mission ID
+  format, RFC3339 timestamps, path-traversal and null-byte rejection
+  on write_set entries, round budget bounds, required fields).
+- `internal/mission/filter.go` — shared `StatusMatches` helper used by
+  both the CLI and the MCP list handlers.
 
 ## [2.8.0] - 2026-04-04
 

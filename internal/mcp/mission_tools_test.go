@@ -369,21 +369,3 @@ func TestHandleMission_UnknownMethod(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "unknown method")
 }
 
-func TestMissionStatusMatches(t *testing.T) {
-	tests := []struct {
-		filter string
-		status string
-		want   bool
-	}{
-		{"", "open", true},
-		{"all", "closed", true},
-		{"open", "open", true},
-		{"open", "closed", false},
-		{"closed", "closed", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.filter+"/"+tt.status, func(t *testing.T) {
-			assert.Equal(t, tt.want, missionStatusMatches(tt.filter, tt.status))
-		})
-	}
-}

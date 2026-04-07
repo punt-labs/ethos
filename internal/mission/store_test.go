@@ -3,10 +3,12 @@
 package mission
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -149,6 +151,57 @@ func TestStore_UpdateMissing(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestStore_UpdateDoesNotMutateCallerOnFailure asserts that a failed
+// Update leaves the caller's Contract struct in its pre-call state.
+// This is the contract for every method that takes a pointer argument:
+// failure must not mutate.
+func TestStore_UpdateDoesNotMutateCallerOnFailure(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	loaded, err := s.Load("m-2026-04-07-001")
+	require.NoError(t, err)
+
+	originalUpdatedAt := loaded.UpdatedAt
+	originalWriteSet := append([]string(nil), loaded.WriteSet...)
+
+	// Force a validation failure by clearing the write_set — Update's
+	// shallow-copy pattern must reject this without touching the caller.
+	loaded.WriteSet = nil
+	err = s.Update(loaded)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid contract")
+
+	// Caller's struct is unchanged — UpdatedAt not bumped, WriteSet is
+	// still whatever the caller set it to before the failed call.
+	assert.Equal(t, originalUpdatedAt, loaded.UpdatedAt, "UpdatedAt must not change on failed Update")
+	assert.Nil(t, loaded.WriteSet, "Update must not touch the caller's WriteSet")
+	_ = originalWriteSet // kept for readability of the intent above
+}
+
+// TestStore_UpdateSuccessReflectsUpdatedAt asserts that a successful
+// Update does reflect the new UpdatedAt back to the caller — this is
+// the one field Update is contracted to mutate on success.
+func TestStore_UpdateSuccessReflectsUpdatedAt(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	loaded, err := s.Load("m-2026-04-07-001")
+	require.NoError(t, err)
+	originalUpdatedAt := loaded.UpdatedAt
+
+	// Real mutation: add context. Wait briefly to guarantee the clock
+	// has advanced past the create timestamp so the RFC3339 string
+	// actually differs.
+	loaded.Context = "post-create mutation"
+	time.Sleep(1 * time.Second)
+	require.NoError(t, s.Update(loaded))
+
+	assert.NotEqual(t, originalUpdatedAt, loaded.UpdatedAt, "UpdatedAt must advance on success")
+}
+
 func TestStore_Close(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-003")
@@ -194,6 +247,51 @@ func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
 			assert.Equal(t, status, loaded.Status)
 		})
 	}
+}
+
+// TestStore_CloseFailsOnCorruptContract asserts that Close refuses to
+// mutate a contract that fails validation on load. A hand-edited or
+// corrupt on-disk YAML must be rejected before Close touches it,
+// otherwise the pre-existing corruption could slip through Close's
+// post-mutation Validate (the mutation might happen to fix the field
+// under inspection).
+func TestStore_CloseFailsOnCorruptContract(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+
+	missionID := "m-2026-04-07-999"
+	// Parseable YAML but invalid mission_id (fails rule 1).
+	corrupt := []byte(`mission_id: bogus-id
+status: open
+created_at: 2026-04-07T21:30:00Z
+updated_at: 2026-04-07T21:30:00Z
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+  pinned_at: 2026-04-07T21:30:00Z
+inputs: {}
+write_set:
+  - internal/mission/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`)
+	path := s.contractPath(missionID)
+	require.NoError(t, os.WriteFile(path, corrupt, 0o600))
+
+	originalBytes, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	err = s.Close(missionID, StatusClosed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed validation on load")
+
+	// File on disk must be untouched.
+	afterBytes, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, originalBytes, afterBytes, "corrupt contract must not be mutated by a failed Close")
 }
 
 func TestStore_List(t *testing.T) {
@@ -308,7 +406,7 @@ func TestStore_ConcurrentCreate(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			id := "m-2026-04-07-" + threeDigit(i+1)
+			id := fmt.Sprintf("m-2026-04-07-%03d", i+1)
 			c := newContract(id)
 			if err := s.Create(c); err != nil {
 				errs <- err
@@ -346,7 +444,7 @@ func TestStore_ConcurrentUpdateSameMission(t *testing.T) {
 				errs <- err
 				return
 			}
-			loaded.Context = "writer-" + threeDigit(i)
+			loaded.Context = fmt.Sprintf("writer-%03d", i)
 			if err := s.Update(loaded); err != nil {
 				errs <- err
 			}

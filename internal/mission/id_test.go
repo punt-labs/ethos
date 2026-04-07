@@ -3,6 +3,7 @@
 package mission
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestNewID_Monotonic(t *testing.T) {
 	for i := 1; i <= n; i++ {
 		id, err := NewID(root, now)
 		require.NoError(t, err)
-		expected := "m-2026-04-07-" + threeDigit(i)
+		expected := fmt.Sprintf("m-2026-04-07-%03d", i)
 		assert.Equal(t, expected, id)
 		assert.False(t, seen[id], "duplicate ID %q", id)
 		seen[id] = true
@@ -111,32 +112,6 @@ func TestNewID_PadsZeroes(t *testing.T) {
 	for i := 1; i <= 12; i++ {
 		id, err := NewID(root, now)
 		require.NoError(t, err)
-		assert.Equal(t, "m-2026-04-07-"+threeDigit(i), id)
+		assert.Equal(t, fmt.Sprintf("m-2026-04-07-%03d", i), id)
 	}
-}
-
-// threeDigit pads i to a 3-character zero-padded decimal string.
-func threeDigit(i int) string {
-	switch {
-	case i < 10:
-		return "00" + itoa(i)
-	case i < 100:
-		return "0" + itoa(i)
-	default:
-		return itoa(i)
-	}
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var buf [4]byte
-	pos := len(buf)
-	for i > 0 {
-		pos--
-		buf[pos] = byte('0' + (i % 10))
-		i /= 10
-	}
-	return string(buf[pos:])
 }

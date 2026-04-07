@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -68,7 +69,7 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	}
 
 	var c mission.Contract
-	dec := yaml.NewDecoder(strings.NewReader(body))
+	dec := yaml.NewDecoder(bytes.NewReader([]byte(body)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("parsing contract: %v", err)), nil
@@ -141,7 +142,7 @@ func (h *Handler) handleListMissions(req mcplib.CallToolRequest) (*mcplib.CallTo
 			// Skip corrupt rows; the CLI will surface them.
 			continue
 		}
-		if !missionStatusMatches(status, c.Status) {
+		if !mission.StatusMatches(status, c.Status) {
 			continue
 		}
 		entries = append(entries, entry{
@@ -179,12 +180,3 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	})
 }
 
-// missionStatusMatches mirrors the CLI's statusMatches helper. Kept
-// inside the mcp package so the dispatch is independent of the CLI
-// binary.
-func missionStatusMatches(filter, contractStatus string) bool {
-	if filter == "" || filter == "all" {
-		return true
-	}
-	return filter == contractStatus
-}
