@@ -1,0 +1,364 @@
+//go:build !windows
+
+package mission
+
+import (
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func testStore(t *testing.T) *Store {
+	t.Helper()
+	return NewStore(t.TempDir())
+}
+
+// newContract returns a fresh, valid contract with the given mission ID
+// for use in store tests.
+func newContract(missionID string) *Contract {
+	c := validContract()
+	c.MissionID = missionID
+	return &c
+}
+
+func TestStore_RoundTrip(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+
+	require.NoError(t, s.Create(c))
+
+	loaded, err := s.Load("m-2026-04-07-001")
+	require.NoError(t, err)
+	assert.Equal(t, c.MissionID, loaded.MissionID)
+	assert.Equal(t, c.Status, loaded.Status)
+	assert.Equal(t, c.CreatedAt, loaded.CreatedAt)
+	assert.Equal(t, c.Leader, loaded.Leader)
+	assert.Equal(t, c.Worker, loaded.Worker)
+	assert.Equal(t, c.Evaluator.Handle, loaded.Evaluator.Handle)
+	assert.Equal(t, c.Evaluator.PinnedAt, loaded.Evaluator.PinnedAt)
+	assert.Equal(t, c.WriteSet, loaded.WriteSet)
+	assert.Equal(t, c.Tools, loaded.Tools)
+	assert.Equal(t, c.SuccessCriteria, loaded.SuccessCriteria)
+	assert.Equal(t, c.Budget.Rounds, loaded.Budget.Rounds)
+	assert.Equal(t, c.Budget.ReflectionAfterEach, loaded.Budget.ReflectionAfterEach)
+	assert.Equal(t, c.Inputs.Bead, loaded.Inputs.Bead)
+	assert.Equal(t, c.Inputs.Files, loaded.Inputs.Files)
+}
+
+func TestStore_CreateRejectsNil(t *testing.T) {
+	s := testStore(t)
+	require.Error(t, s.Create(nil))
+}
+
+func TestStore_CreateRejectsInvalid(t *testing.T) {
+	s := testStore(t)
+	c := newContract("not-a-mission-id")
+	require.Error(t, s.Create(c))
+}
+
+func TestStore_CreateRejectsDuplicate(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	dup := newContract("m-2026-04-07-001")
+	err := s.Create(dup)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+}
+
+func TestStore_LoadNotFound(t *testing.T) {
+	s := testStore(t)
+	_, err := s.Load("m-2026-04-07-001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+func TestStore_LoadEmptyID(t *testing.T) {
+	s := testStore(t)
+	_, err := s.Load("")
+	require.Error(t, err)
+}
+
+func TestStore_LoadCorruptYAML(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(s.missionsDir(), "m-2026-04-07-001.yaml"),
+		[]byte("not: [valid"), 0o600,
+	))
+	_, err := s.Load("m-2026-04-07-001")
+	require.Error(t, err)
+}
+
+func TestStore_LoadFailsValidation(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	// Persist a contract that parses as YAML but fails Validate.
+	bad := []byte(`mission_id: bogus
+status: open
+created_at: 2026-04-07T21:30:00Z
+updated_at: 2026-04-07T21:30:00Z
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+  pinned_at: 2026-04-07T21:30:00Z
+inputs: {}
+write_set:
+  - internal/mission/
+success_criteria:
+  - foo
+budget:
+  rounds: 3
+`)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(s.missionsDir(), "m-2026-04-07-001.yaml"),
+		bad, 0o600,
+	))
+	_, err := s.Load("m-2026-04-07-001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validation")
+}
+
+func TestStore_Update(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-002")
+	require.NoError(t, s.Create(c))
+
+	loaded, err := s.Load("m-2026-04-07-002")
+	require.NoError(t, err)
+	loaded.Context = "added context after creation"
+	require.NoError(t, s.Update(loaded))
+
+	reloaded, err := s.Load("m-2026-04-07-002")
+	require.NoError(t, err)
+	assert.Equal(t, "added context after creation", reloaded.Context)
+	// UpdatedAt should have moved forward.
+	assert.NotEqual(t, c.CreatedAt, reloaded.UpdatedAt)
+}
+
+func TestStore_UpdateMissing(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-099")
+	err := s.Update(c)
+	require.Error(t, err)
+}
+
+func TestStore_Close(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-003")
+	require.NoError(t, s.Create(c))
+
+	require.NoError(t, s.Close("m-2026-04-07-003", StatusClosed))
+
+	loaded, err := s.Load("m-2026-04-07-003")
+	require.NoError(t, err)
+	assert.Equal(t, StatusClosed, loaded.Status)
+	assert.NotEmpty(t, loaded.ClosedAt)
+}
+
+func TestStore_CloseRejectsOpenStatus(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-004")
+	require.NoError(t, s.Create(c))
+	err := s.Close("m-2026-04-07-004", StatusOpen)
+	require.Error(t, err)
+}
+
+func TestStore_CloseRejectsUnknownStatus(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-005")
+	require.NoError(t, s.Create(c))
+	err := s.Close("m-2026-04-07-005", "abandoned")
+	require.Error(t, err)
+}
+
+func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
+	cases := map[string]string{
+		StatusFailed:    "m-2026-04-07-006",
+		StatusEscalated: "m-2026-04-07-007",
+	}
+	s := testStore(t)
+	for status, id := range cases {
+		t.Run(status, func(t *testing.T) {
+			c := newContract(id)
+			require.NoError(t, s.Create(c))
+			require.NoError(t, s.Close(id, status))
+			loaded, err := s.Load(id)
+			require.NoError(t, err)
+			assert.Equal(t, status, loaded.Status)
+		})
+	}
+}
+
+func TestStore_List(t *testing.T) {
+	s := testStore(t)
+
+	// Empty list.
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+
+	require.NoError(t, s.Create(newContract("m-2026-04-07-001")))
+	require.NoError(t, s.Create(newContract("m-2026-04-07-002")))
+
+	ids, err = s.List()
+	require.NoError(t, err)
+	assert.Len(t, ids, 2)
+	assert.Contains(t, ids, "m-2026-04-07-001")
+	assert.Contains(t, ids, "m-2026-04-07-002")
+}
+
+func TestStore_ListSkipsCounter(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+
+	// Drop a counter file directly to simulate the ID generator state.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(s.missionsDir(), ".counter-2026-04-07"),
+		[]byte("3"), 0o600,
+	))
+
+	require.NoError(t, s.Create(newContract("m-2026-04-07-001")))
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m-2026-04-07-001"}, ids)
+}
+
+func TestStore_ListNoDirectory(t *testing.T) {
+	s := NewStore(filepath.Join(t.TempDir(), "nonexistent"))
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+}
+
+func TestStore_MatchByPrefix(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Create(newContract("m-2026-04-07-001")))
+	require.NoError(t, s.Create(newContract("m-2026-04-07-002")))
+	require.NoError(t, s.Create(newContract("m-2026-04-08-001")))
+
+	tests := []struct {
+		name    string
+		prefix  string
+		want    string
+		wantErr string
+	}{
+		{
+			name:   "exact match",
+			prefix: "m-2026-04-07-001",
+			want:   "m-2026-04-07-001",
+		},
+		{
+			name:   "unique prefix",
+			prefix: "m-2026-04-08",
+			want:   "m-2026-04-08-001",
+		},
+		{
+			name:    "ambiguous prefix",
+			prefix:  "m-2026-04-07",
+			wantErr: "ambiguous prefix",
+		},
+		{
+			name:    "no match",
+			prefix:  "m-2025",
+			wantErr: "no mission matching prefix",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := s.MatchByPrefix(tt.prefix)
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestStore_FilePermissions(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	info, err := os.Stat(s.contractPath("m-2026-04-07-001"))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestStore_ConcurrentCreate(t *testing.T) {
+	// Each goroutine creates a distinct mission ID. The test asserts the
+	// store does not corrupt state under concurrent flock acquisition.
+	s := testStore(t)
+	const n = 20
+
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		i := i
+		go func() {
+			defer wg.Done()
+			id := "m-2026-04-07-" + threeDigit(i+1)
+			c := newContract(id)
+			if err := s.Create(c); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Len(t, ids, n)
+}
+
+func TestStore_ConcurrentUpdateSameMission(t *testing.T) {
+	// Two goroutines mutate the same mission. The flock must serialize
+	// them; both writes must succeed and the final state must be
+	// well-formed YAML that loads cleanly.
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		i := i
+		go func() {
+			defer wg.Done()
+			loaded, err := s.Load("m-2026-04-07-001")
+			if err != nil {
+				errs <- err
+				return
+			}
+			loaded.Context = "writer-" + threeDigit(i)
+			if err := s.Update(loaded); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	loaded, err := s.Load("m-2026-04-07-001")
+	require.NoError(t, err)
+	assert.NotEmpty(t, loaded.Context)
+}

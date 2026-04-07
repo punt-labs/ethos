@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `mission` subcommand for creating, listing, and closing mission
+  contracts — the typed delegation artifact that is the foundation
+  of Phase 3 workflow primitives (`ethos-07m.5`).
+- `mission` MCP tool with methods create, show, list, close.
+- `internal/mission/` package: Contract schema, filesystem store,
+  daily ID generator, append-only JSONL event log, validation.
+
 ## [2.8.0] - 2026-04-04
 
 ### Fixed
