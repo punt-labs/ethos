@@ -27,7 +27,12 @@ type Contract struct {
 	ClosedAt  string `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
 	Session   string `yaml:"session,omitempty" json:"session,omitempty"`
 	Repo      string `yaml:"repo,omitempty" json:"repo,omitempty"`
-	Bead      string `yaml:"bead,omitempty" json:"bead,omitempty"`
+
+	// Bead ID lives at inputs.bead — the single source of truth.
+	// An earlier draft carried both a top-level Bead and Inputs.Bead,
+	// but the duplication made divergence trivial and silent. 3.1
+	// removes the top-level field; callers should populate Inputs.Bead
+	// and consumers should read it from there.
 
 	Leader    string    `yaml:"leader" json:"leader"`
 	Worker    string    `yaml:"worker" json:"worker"`

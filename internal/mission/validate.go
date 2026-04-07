@@ -53,28 +53,28 @@ func (c *Contract) Validate() error {
 		return fmt.Errorf("contract is nil")
 	}
 
-	// 1. mission_id
+	// mission_id
 	if !missionIDPattern.MatchString(c.MissionID) {
 		return fmt.Errorf("invalid mission_id %q: must match m-YYYY-MM-DD-NNN", c.MissionID)
 	}
 
-	// 2. status
+	// status
 	if !validStatuses[c.Status] {
 		return fmt.Errorf("invalid status %q: must be one of open, closed, failed, escalated", c.Status)
 	}
 
-	// 3. created_at parseable as RFC3339
+	// created_at parseable as RFC3339
 	if _, err := time.Parse(time.RFC3339, c.CreatedAt); err != nil {
 		return fmt.Errorf("invalid created_at %q: %w", c.CreatedAt, err)
 	}
 
-	// 3a. updated_at parseable as RFC3339 (required field per the
-	// store's Create flow, which defaults it to created_at).
+	// updated_at parseable as RFC3339 (required field per the store's
+	// Create flow, which defaults it to created_at).
 	if _, err := time.Parse(time.RFC3339, c.UpdatedAt); err != nil {
 		return fmt.Errorf("invalid updated_at %q: %w", c.UpdatedAt, err)
 	}
 
-	// 3b. status↔closed_at invariant:
+	// status ↔ closed_at invariant:
 	//   - status == open  → closed_at must be empty
 	//   - status != open  → closed_at must be non-empty and RFC3339
 	// The on-disk trust boundary must reject contracts that claim to
@@ -93,7 +93,7 @@ func (c *Contract) Validate() error {
 		}
 	}
 
-	// 4. leader non-empty and clean
+	// leader non-empty and clean
 	if strings.TrimSpace(c.Leader) == "" {
 		return fmt.Errorf("leader is required")
 	}
@@ -101,7 +101,7 @@ func (c *Contract) Validate() error {
 		return fmt.Errorf("leader contains control character")
 	}
 
-	// 5. worker non-empty and clean
+	// worker non-empty and clean
 	if strings.TrimSpace(c.Worker) == "" {
 		return fmt.Errorf("worker is required")
 	}
@@ -109,7 +109,7 @@ func (c *Contract) Validate() error {
 		return fmt.Errorf("worker contains control character")
 	}
 
-	// 6. evaluator.handle non-empty and clean
+	// evaluator.handle non-empty and clean
 	if strings.TrimSpace(c.Evaluator.Handle) == "" {
 		return fmt.Errorf("evaluator.handle is required")
 	}
@@ -117,12 +117,12 @@ func (c *Contract) Validate() error {
 		return fmt.Errorf("evaluator.handle contains control character")
 	}
 
-	// 7. evaluator.pinned_at parseable as RFC3339
+	// evaluator.pinned_at parseable as RFC3339
 	if _, err := time.Parse(time.RFC3339, c.Evaluator.PinnedAt); err != nil {
 		return fmt.Errorf("invalid evaluator.pinned_at %q: %w", c.Evaluator.PinnedAt, err)
 	}
 
-	// 8. write_set is non-empty and every entry is well-formed
+	// write_set is non-empty and every entry is well-formed
 	if len(c.WriteSet) == 0 {
 		return fmt.Errorf("write_set must contain at least one entry")
 	}
@@ -132,12 +132,12 @@ func (c *Contract) Validate() error {
 		}
 	}
 
-	// 9. budget.rounds in [1, 10]
+	// budget.rounds in [1, 10]
 	if c.Budget.Rounds < minRounds || c.Budget.Rounds > maxRounds {
 		return fmt.Errorf("budget.rounds %d out of range [%d, %d]", c.Budget.Rounds, minRounds, maxRounds)
 	}
 
-	// 10. success_criteria non-empty
+	// success_criteria non-empty
 	if len(c.SuccessCriteria) == 0 {
 		return fmt.Errorf("success_criteria must contain at least one entry")
 	}

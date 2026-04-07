@@ -305,9 +305,6 @@ func printContract(c *mission.Contract) {
 	if c.ClosedAt != "" {
 		fmt.Fprintf(tw, "Closed:\t%s\n", formatStarted(c.ClosedAt))
 	}
-	if c.Bead != "" {
-		fmt.Fprintf(tw, "Bead:\t%s\n", c.Bead)
-	}
 	fmt.Fprintf(tw, "Leader:\t%s\n", c.Leader)
 	fmt.Fprintf(tw, "Worker:\t%s\n", c.Worker)
 	// Fold the evaluator's hash inline. The continuation-row pattern

@@ -771,9 +771,6 @@ func writeMissionFields(ctx *strings.Builder, c map[string]any) {
 	if closedAt, _ := c["closed_at"].(string); closedAt != "" {
 		fmt.Fprintf(tw, "Closed:\t%s\n", formatMissionTime(closedAt))
 	}
-	if bead, _ := c["bead"].(string); bead != "" {
-		fmt.Fprintf(tw, "Bead:\t%s\n", bead)
-	}
 	fmt.Fprintf(tw, "Leader:\t%s\n", leader)
 	fmt.Fprintf(tw, "Worker:\t%s\n", worker)
 

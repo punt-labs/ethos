@@ -630,12 +630,14 @@ func TestFormatOutput_Role_Show(t *testing.T) {
 // --- Mission tool tests ---
 
 // missionContractJSON is a full contract as returned by create/show.
+// Bead lives at inputs.bead — the single source of truth. An earlier
+// draft carried a top-level "bead" too, but that duplication was
+// removed when Copilot caught the divergence risk.
 const missionContractJSON = `{
   "mission_id": "m-2026-04-07-001",
   "status": "open",
   "created_at": "2026-04-07T21:30:00Z",
   "updated_at": "2026-04-07T21:30:00Z",
-  "bead": "ethos-07m.5",
   "leader": "claude",
   "worker": "bwk",
   "evaluator": {
@@ -715,7 +717,10 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	assert.Contains(t, ctx, missionLabel(t, "Worker:")+"bwk")
 	assert.Contains(t, ctx, missionLabel(t, "Evaluator:")+"djb (pinned ")
 	assert.Contains(t, ctx, missionLabel(t, "Budget:")+"3 round(s), reflection_after_each=true")
-	assert.Contains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
+	// Bead lives at inputs.bead — rendered inside the Inputs
+	// section, not as a header row. No top-level Bead: field any more.
+	assert.Contains(t, ctx, "bead: ethos-07m.5")
+	assert.NotContains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
 	// Created uses local-time formatting; the date is 7 Apr UTC which
 	// renders as April in every timezone (TZ shifts can move the day
 	// of month but not the month within a 24h window).

@@ -535,11 +535,12 @@ Beads track work items, not decisions. There's no audit substrate.
 ~/.punt-labs/ethos/missions/m-2026-04-07-001.jsonl
 ```
 
-Events: `created`, `worker_spawned`, `round_started`, `round_ended`,
-`reflection_recorded`, `evaluator_spawned`, `evaluator_finished`,
-`mission_closed`. Each event includes timestamp, actor, and structured
-payload. The log is the source of truth; derived summaries (memory,
-beads) are convenience layers.
+Events: `create`, `update`, `close` in 3.1; 3.4 adds `reflect`;
+3.5 adds `verify`; 3.7 extends with `worker_spawned`, `round_started`,
+`round_ended`, `evaluator_spawned`, `evaluator_finished`, and any
+other transitions the log reader surfaces. Each event includes
+timestamp, actor, and structured payload. The log is the source of
+truth; derived summaries (memory, beads) are convenience layers.
 
 **Delivery**: Event log in `internal/mission/`. Append-only file with
 JSON lines. CLI: `ethos mission log <id>`. No edit, no delete.

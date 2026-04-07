@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -298,11 +297,10 @@ func TestStore_UpdateSuccessReflectsUpdatedAt(t *testing.T) {
 	require.NoError(t, err)
 	originalUpdatedAt := loaded.UpdatedAt
 
-	// Real mutation: add context. Wait briefly to guarantee the clock
-	// has advanced past the create timestamp so the RFC3339 string
-	// actually differs.
+	// Real mutation: add context. The validContract's CreatedAt is
+	// hardcoded in the past, so time.Now() inside Update will always
+	// produce a different RFC3339 string — no sleep needed.
 	loaded.Context = "post-create mutation"
-	time.Sleep(1 * time.Second)
 	require.NoError(t, s.Update(loaded))
 
 	assert.NotEqual(t, originalUpdatedAt, loaded.UpdatedAt, "UpdatedAt must advance on success")

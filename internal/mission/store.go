@@ -44,8 +44,11 @@ func (s *Store) Root() string { return s.root }
 // server's responsibility, and any caller-supplied value is overwritten
 // without warning.
 //
-// Fields set:
-//   - MissionID: generated via NewID if empty (date-based counter)
+// Fields set (every one is unconditionally overwritten):
+//   - MissionID: always generated via NewID. A caller-supplied
+//     mission_id would bypass the daily counter, leaving the counter
+//     file stale and risking a later collision when NewID catches up.
+//     The server owns this field full stop.
 //   - Status: forced to StatusOpen — a newly created mission is always open
 //   - CreatedAt: set to now (RFC3339, UTC)
 //   - UpdatedAt: set equal to CreatedAt
@@ -58,13 +61,11 @@ func (s *Store) Root() string { return s.root }
 // Returns an error only if NewID fails to allocate a mission ID
 // (daily counter exhausted or poisoned counter file).
 func (s *Store) ApplyServerFields(c *Contract, now time.Time) error {
-	if c.MissionID == "" {
-		id, err := NewID(s.root, now)
-		if err != nil {
-			return fmt.Errorf("generating mission ID: %w", err)
-		}
-		c.MissionID = id
+	id, err := NewID(s.root, now)
+	if err != nil {
+		return fmt.Errorf("generating mission ID: %w", err)
 	}
+	c.MissionID = id
 	created := now.UTC().Format(time.RFC3339)
 	c.Status = StatusOpen
 	c.CreatedAt = created
@@ -139,7 +140,7 @@ func (s *Store) Create(c *Contract) error {
 			Details: map[string]any{
 				"worker":    staged.Worker,
 				"evaluator": staged.Evaluator.Handle,
-				"bead":      staged.Bead,
+				"bead":      staged.Inputs.Bead,
 			},
 		}); err != nil {
 			// Rollback: remove the just-written contract so the
@@ -169,13 +170,20 @@ func (s *Store) Create(c *Contract) error {
 // Decodes with KnownFields(true) so an attacker who has local write
 // access cannot drop extra fields into the on-disk YAML and have them
 // silently ignored. Symmetric with the strict create paths.
+//
+// Distinguishes "not found" from other read errors (permission denied,
+// I/O failure) so operators get an accurate diagnostic instead of a
+// misleading "not found" for a file that exists but can't be read.
 func (s *Store) Load(missionID string) (*Contract, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
 	data, err := os.ReadFile(s.contractPath(missionID))
 	if err != nil {
-		return nil, fmt.Errorf("mission %q not found: %w", missionID, err)
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("mission %q not found", missionID)
+		}
+		return nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
 	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
@@ -215,7 +223,10 @@ func (s *Store) Update(c *Contract) error {
 		// Read the current bytes for rollback before touching the file.
 		oldData, err := os.ReadFile(dest)
 		if err != nil {
-			return fmt.Errorf("mission %q not found: %w", c.MissionID, err)
+			if os.IsNotExist(err) {
+				return fmt.Errorf("mission %q not found", c.MissionID)
+			}
+			return fmt.Errorf("reading mission %q: %w", c.MissionID, err)
 		}
 		updated := *c
 		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -260,7 +271,10 @@ func (s *Store) Close(missionID, status string) error {
 		// representation on a failed event append.
 		oldData, err := os.ReadFile(dest)
 		if err != nil {
-			return fmt.Errorf("mission %q not found: %w", missionID, err)
+			if os.IsNotExist(err) {
+				return fmt.Errorf("mission %q not found", missionID)
+			}
+			return fmt.Errorf("reading mission %q: %w", missionID, err)
 		}
 		c, err := s.loadLocked(missionID)
 		if err != nil {
@@ -313,7 +327,10 @@ func (s *Store) Close(missionID, status string) error {
 func (s *Store) loadLocked(missionID string) (*Contract, error) {
 	data, err := os.ReadFile(s.contractPath(missionID))
 	if err != nil {
-		return nil, fmt.Errorf("mission %q not found: %w", missionID, err)
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("mission %q not found", missionID)
+		}
+		return nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
 	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
