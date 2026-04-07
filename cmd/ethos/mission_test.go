@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,24 +69,6 @@ context: "smoke test contract"
 `
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
-}
-
-// captureStderr runs fn while capturing os.Stderr and returns the output.
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-	defer func() { os.Stderr = old }()
-
-	fn()
-
-	w.Close()
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, r)
-	require.NoError(t, err)
-	return buf.String()
 }
 
 // runCobra runs a command through the rootCmd Execute path with the
