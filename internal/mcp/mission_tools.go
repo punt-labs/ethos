@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -10,7 +9,6 @@ import (
 	"github.com/punt-labs/ethos/internal/mission"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
-	"gopkg.in/yaml.v3"
 )
 
 // missionTool defines the consolidated `mission` MCP tool. The single
@@ -73,12 +71,15 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 		return mcplib.NewToolResultError("contract YAML body is required for create"), nil
 	}
 
-	var c mission.Contract
-	dec := yaml.NewDecoder(bytes.NewReader([]byte(body)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&c); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("parsing contract: %v", err)), nil
+	// Strict decode via the shared helper: unknown fields, multi-doc
+	// YAML, and trailing content are all rejected. CLI and MCP share
+	// this entry point so the input trust boundary is enforced
+	// identically regardless of how the YAML reached the store.
+	parsed, err := mission.DecodeContractStrict([]byte(body), "mcp create request")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
 	}
+	c := *parsed
 
 	// Server-controlled fields. The caller may suggest a mission_id but
 	// we always overwrite status, created_at, updated_at, and the

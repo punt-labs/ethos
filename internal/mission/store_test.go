@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func testStore(t *testing.T) *Store {
@@ -60,6 +62,36 @@ func TestStore_CreateRejectsInvalid(t *testing.T) {
 	s := testStore(t)
 	c := newContract("not-a-mission-id")
 	require.Error(t, s.Create(c))
+}
+
+// TestStore_CreateDoesNotMutateCallerOnValidationFailure asserts that
+// a Create that fails Validate() leaves the caller's struct untouched.
+// Create uses a shallow-copy pattern so UpdatedAt's default-fill never
+// leaks back to the caller on a failure path.
+func TestStore_CreateDoesNotMutateCallerOnValidationFailure(t *testing.T) {
+	s := testStore(t)
+	// Start with a valid contract, then break it by emptying WriteSet.
+	c := newContract("m-2026-04-07-030")
+	c.WriteSet = nil          // validation will reject this
+	originalUpdatedAt := c.UpdatedAt // caller has "" here
+
+	err := s.Create(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write_set")
+	assert.Equal(t, originalUpdatedAt, c.UpdatedAt, "Create must not default-fill UpdatedAt on failure")
+}
+
+// TestStore_CreateSuccessReflectsUpdatedAt asserts that a successful
+// Create reflects the (possibly defaulted) UpdatedAt back to the
+// caller. This is the one field Create is contracted to set, and the
+// caller needs it to build a consistent in-memory view after the
+// round-trip.
+func TestStore_CreateSuccessReflectsUpdatedAt(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-031")
+	c.UpdatedAt = "" // force the default-fill path
+	require.NoError(t, s.Create(c))
+	assert.Equal(t, c.CreatedAt, c.UpdatedAt, "Create must default UpdatedAt to CreatedAt and reflect it back")
 }
 
 func TestStore_CreateRejectsDuplicate(t *testing.T) {
@@ -303,6 +335,80 @@ func TestStore_CloseRejectsUnknownStatus(t *testing.T) {
 	require.NoError(t, s.Create(c))
 	err := s.Close("m-2026-04-07-005", "abandoned")
 	require.Error(t, err)
+}
+
+// TestStore_CloseRejectsAlreadyTerminal asserts that re-closing a
+// mission that's already in a terminal state fails. Re-closing would
+// silently overwrite the original closed_at timestamp and append a
+// duplicate "close" event to the JSONL log, violating the
+// one-transition-per-event invariant.
+func TestStore_CloseRejectsAlreadyTerminal(t *testing.T) {
+	cases := []string{StatusClosed, StatusFailed, StatusEscalated}
+	s := testStore(t)
+	for i, firstStatus := range cases {
+		id := fmt.Sprintf("m-2026-04-07-%03d", 40+i)
+		t.Run(firstStatus, func(t *testing.T) {
+			c := newContract(id)
+			require.NoError(t, s.Create(c))
+			require.NoError(t, s.Close(id, firstStatus))
+
+			// Second close must fail regardless of the target status.
+			for _, secondStatus := range cases {
+				err := s.Close(id, secondStatus)
+				require.Error(t, err, "re-closing %s with %s must fail", firstStatus, secondStatus)
+				assert.Contains(t, err.Error(), "already in terminal state")
+			}
+		})
+	}
+}
+
+// TestDecodeContractStrict_RejectsMultipleDocuments asserts that a
+// YAML stream containing two complete documents is rejected. Multi-
+// document input could be used to smuggle content past the trust
+// boundary by appending a second document to a legitimate contract.
+func TestDecodeContractStrict_RejectsMultipleDocuments(t *testing.T) {
+	// Build a valid contract YAML, then append a second document.
+	c := validContract()
+	first, err := yaml.Marshal(&c)
+	require.NoError(t, err)
+	second := []byte("---\nmission_id: m-2026-04-07-999\n")
+	combined := append(first, second...)
+
+	_, err = DecodeContractStrict(combined, "test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "multiple YAML documents")
+}
+
+// TestDecodeContractStrict_RejectsTrailingContent asserts that a
+// valid contract followed by trailing scalar content is rejected.
+// Trailing content is a subtler form of the multi-document smuggling
+// attack.
+func TestDecodeContractStrict_RejectsTrailingContent(t *testing.T) {
+	c := validContract()
+	first, err := yaml.Marshal(&c)
+	require.NoError(t, err)
+	combined := append(first, []byte("---\nextra_scalar\n")...)
+
+	_, err = DecodeContractStrict(combined, "test")
+	require.Error(t, err)
+	// Either "multiple YAML documents" or "trailing content" — both
+	// are valid ways for the decoder to describe the extra stream.
+	msg := err.Error()
+	assert.True(t,
+		strings.Contains(msg, "multiple YAML documents") || strings.Contains(msg, "trailing content"),
+		"expected multi-document or trailing-content error, got: %s", msg)
+}
+
+// TestDecodeContractStrict_AcceptsSingleDocument asserts that a
+// well-formed single-document contract decodes successfully — the
+// strict decoder must not be overly aggressive.
+func TestDecodeContractStrict_AcceptsSingleDocument(t *testing.T) {
+	c := validContract()
+	data, err := yaml.Marshal(&c)
+	require.NoError(t, err)
+	parsed, err := DecodeContractStrict(data, "test")
+	require.NoError(t, err)
+	assert.Equal(t, c.MissionID, parsed.MissionID)
 }
 
 // TestStore_UpdateRollsBackOnEventAppendFailure asserts that Update

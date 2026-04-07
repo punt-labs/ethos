@@ -25,21 +25,26 @@ const (
 )
 
 // Validate checks that a Contract is well-formed enough to persist.
-// Called by Store.Create and Store.Update before writing to disk.
+// Called by Store.Create and Store.Update before writing to disk,
+// and defensively on every read (Load, loadLocked).
 //
 // Validation rules:
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
 //  3. created_at is parseable as RFC3339
-//  4. leader is non-empty and contains no control characters
-//  5. worker is non-empty and contains no control characters
-//  6. evaluator.handle is non-empty and contains no control characters
-//  7. evaluator.pinned_at is parseable as RFC3339
-//  8. write_set is non-empty AND every entry: no null byte, no other
-//     control character, no `..` segment, not absolute, not empty
-//     after trimming
-//  9. budget.rounds is in [1, 10]
-//  10. success_criteria has at least one entry
+//  4. updated_at is parseable as RFC3339
+//  5. status ↔ closed_at invariant:
+//     - status == open  → closed_at must be empty
+//     - status != open  → closed_at must be non-empty and RFC3339
+//  6. leader is non-empty and contains no control characters
+//  7. worker is non-empty and contains no control characters
+//  8. evaluator.handle is non-empty and contains no control characters
+//  9. evaluator.pinned_at is parseable as RFC3339
+//  10. write_set is non-empty AND every entry: no null byte, no other
+//      control character, no `..` segment, not absolute (including
+//      Windows drive letters and UNC), not empty after trimming
+//  11. budget.rounds is in [1, 10]
+//  12. success_criteria has at least one entry
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).

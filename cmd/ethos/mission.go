@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,7 +10,6 @@ import (
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 // missionStore returns the default mission store rooted at
@@ -142,15 +140,16 @@ func runMissionCreate() {
 		os.Exit(1)
 	}
 
-	// Strict unmarshal: unknown fields would mask typos in the contract
-	// YAML and silently degrade safety. KnownFields makes them an error.
-	var c mission.Contract
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	if err := dec.Decode(&c); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission create: parsing contract file: %v\n", err)
+	// Strict decode via the shared helper: unknown fields, multiple
+	// documents, and trailing content are all rejected. CLI and MCP
+	// share this entry point so the input trust boundary is enforced
+	// identically regardless of how the YAML reached the store.
+	parsed, err := mission.DecodeContractStrict(data, missionCreateFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
 		os.Exit(1)
 	}
+	c := *parsed
 
 	// Server-controlled fields. The contract YAML may suggest timestamps
 	// or a status; the store is the source of truth.

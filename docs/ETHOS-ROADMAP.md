@@ -532,7 +532,7 @@ Beads track work items, not decisions. There's no audit substrate.
 **Solution**: Each mission has an append-only event log:
 
 ```text
-~/.punt-labs/ethos/missions/m-2026-04-07-001.log
+~/.punt-labs/ethos/missions/m-2026-04-07-001.jsonl
 ```
 
 Events: `created`, `worker_spawned`, `round_started`, `round_ended`,

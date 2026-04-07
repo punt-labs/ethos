@@ -99,7 +99,7 @@ func TestHandleMission_CreateMalformedYAML(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "parsing contract")
+	assert.Contains(t, resultText(t, result), "invalid contract")
 }
 
 func TestHandleMission_CreateRejectsUnknownField(t *testing.T) {
@@ -112,7 +112,7 @@ func TestHandleMission_CreateRejectsUnknownField(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
-	assert.Contains(t, resultText(t, result), "parsing contract")
+	assert.Contains(t, resultText(t, result), "invalid contract")
 }
 
 func TestHandleMission_CreateRejectsBadWriteSet(t *testing.T) {

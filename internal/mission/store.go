@@ -4,7 +4,9 @@ package mission
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,38 +67,42 @@ func (s *Store) Create(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
-	// Default UpdatedAt to CreatedAt for first write so the field is
-	// always populated even when the caller omits it.
-	if c.UpdatedAt == "" {
-		c.UpdatedAt = c.CreatedAt
+	// Work on a shallow copy so a validation failure never mutates
+	// the caller's struct. The UpdatedAt default-fill and Validate
+	// both touch only the copy. On success we reflect the new
+	// UpdatedAt back to the caller — the one field Create is
+	// contracted to set.
+	staged := *c
+	if staged.UpdatedAt == "" {
+		staged.UpdatedAt = staged.CreatedAt
 	}
-	if err := c.Validate(); err != nil {
+	if err := staged.Validate(); err != nil {
 		return fmt.Errorf("invalid contract: %w", err)
 	}
 	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating missions directory: %w", err)
 	}
 
-	return s.withLock(c.MissionID, func() error {
-		dest := s.contractPath(c.MissionID)
+	err := s.withLock(staged.MissionID, func() error {
+		dest := s.contractPath(staged.MissionID)
 		// Refuse to overwrite an existing contract via Create — Update
 		// is the explicit mutation path.
-		if _, err := os.Stat(dest); err == nil {
-			return fmt.Errorf("mission %q already exists", c.MissionID)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("checking mission existence: %w", err)
+		if _, statErr := os.Stat(dest); statErr == nil {
+			return fmt.Errorf("mission %q already exists", staged.MissionID)
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("checking mission existence: %w", statErr)
 		}
-		if err := s.writeContract(c); err != nil {
+		if err := s.writeContract(&staged); err != nil {
 			return err
 		}
-		if err := s.appendEventLocked(c.MissionID, Event{
+		if err := s.appendEventLocked(staged.MissionID, Event{
 			TS:    time.Now().UTC().Format(time.RFC3339),
 			Event: "create",
-			Actor: c.Leader,
+			Actor: staged.Leader,
 			Details: map[string]any{
-				"worker":    c.Worker,
-				"evaluator": c.Evaluator.Handle,
-				"bead":      c.Bead,
+				"worker":    staged.Worker,
+				"evaluator": staged.Evaluator.Handle,
+				"bead":      staged.Bead,
 			},
 		}); err != nil {
 			// Rollback: remove the just-written contract so the
@@ -111,6 +117,14 @@ func (s *Store) Create(c *Contract) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// Success: reflect the new UpdatedAt back to the caller — the
+	// one field Create is contracted to set. A failed Create leaves
+	// the caller's struct unchanged.
+	c.UpdatedAt = staged.UpdatedAt
+	return nil
 }
 
 // Load reads a mission contract by ID.
@@ -126,7 +140,7 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mission %q not found: %w", missionID, err)
 	}
-	c, err := decodeContractStrict(data, missionID)
+	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -215,6 +229,14 @@ func (s *Store) Close(missionID, status string) error {
 		if err != nil {
 			return err
 		}
+		// Refuse to re-close a mission that's already in a terminal
+		// state. Re-closing would silently overwrite the original
+		// closed_at timestamp and append a duplicate "close" event
+		// to the JSONL log, which breaks the log's one-transition-
+		// per-event invariant.
+		if c.Status != StatusOpen {
+			return fmt.Errorf("mission %q is already in terminal state %q", missionID, c.Status)
+		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		c.Status = status
 		c.ClosedAt = now
@@ -256,7 +278,7 @@ func (s *Store) loadLocked(missionID string) (*Contract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mission %q not found: %w", missionID, err)
 	}
-	c, err := decodeContractStrict(data, missionID)
+	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -266,15 +288,38 @@ func (s *Store) loadLocked(missionID string) (*Contract, error) {
 	return c, nil
 }
 
-// decodeContractStrict parses a YAML contract with KnownFields(true).
-// Used by Load and loadLocked so the on-disk trust boundary matches
-// the strict-decode behavior of the CLI and MCP create paths.
-func decodeContractStrict(data []byte, missionID string) (*Contract, error) {
+// DecodeContractStrict parses a YAML contract with strict rules: every
+// field must be known to the Contract struct, and exactly one YAML
+// document must be present. Multi-document YAML or trailing content
+// after the first document is rejected — otherwise a caller could
+// smuggle extra content past the trust boundary by appending it to
+// a legitimate contract.
+//
+// This helper is the single entry point for YAML → Contract decoding
+// in the mission package. Both the CLI (`ethos mission create --file`)
+// and the MCP `mission create` handler use it, as do the Store's
+// Load/loadLocked paths, so the on-disk trust boundary matches the
+// input trust boundary exactly.
+//
+// The label argument is a human-readable identifier (mission ID or
+// file path) used in error messages to help operators locate the
+// source of a parse failure.
+func DecodeContractStrict(data []byte, label string) (*Contract, error) {
 	var c Contract
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
-		return nil, fmt.Errorf("invalid contract file %s: %w", missionID, err)
+		return nil, fmt.Errorf("invalid contract %s: %w", label, err)
+	}
+	// Enforce single-document input: a second Decode must return
+	// io.EOF. Anything else means there was more content — either a
+	// second YAML document (separated by `---`) or trailing scalars.
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("invalid contract %s: multiple YAML documents are not allowed", label)
+		}
+		return nil, fmt.Errorf("invalid contract %s: trailing content after first document: %w", label, err)
 	}
 	return &c, nil
 }
