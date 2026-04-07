@@ -63,6 +63,31 @@ func (c *Contract) Validate() error {
 		return fmt.Errorf("invalid created_at %q: %w", c.CreatedAt, err)
 	}
 
+	// 3a. updated_at parseable as RFC3339 (required field per the
+	// store's Create flow, which defaults it to created_at).
+	if _, err := time.Parse(time.RFC3339, c.UpdatedAt); err != nil {
+		return fmt.Errorf("invalid updated_at %q: %w", c.UpdatedAt, err)
+	}
+
+	// 3b. status↔closed_at invariant:
+	//   - status == open  → closed_at must be empty
+	//   - status != open  → closed_at must be non-empty and RFC3339
+	// The on-disk trust boundary must reject contracts that claim to
+	// be open but have a closed_at timestamp, or that claim a terminal
+	// status but never recorded the close time.
+	if c.Status == StatusOpen {
+		if c.ClosedAt != "" {
+			return fmt.Errorf("status is open but closed_at is set to %q", c.ClosedAt)
+		}
+	} else {
+		if c.ClosedAt == "" {
+			return fmt.Errorf("status is %q but closed_at is empty", c.Status)
+		}
+		if _, err := time.Parse(time.RFC3339, c.ClosedAt); err != nil {
+			return fmt.Errorf("invalid closed_at %q: %w", c.ClosedAt, err)
+		}
+	}
+
 	// 4. leader non-empty and clean
 	if strings.TrimSpace(c.Leader) == "" {
 		return fmt.Errorf("leader is required")

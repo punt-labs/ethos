@@ -31,7 +31,11 @@ func (h *Handler) missionTool() mcplib.Tool {
 			mcplib.Description("Full contract YAML body. Required for create."),
 		),
 		mcplib.WithString("status",
-			mcplib.Enum("open", "closed", "failed", "escalated", "all"),
+			// No enum constraint: the valid values differ per method
+			// (list accepts "open|closed|failed|escalated|all",
+			// close accepts "closed|failed|escalated" only). A shared
+			// enum would advertise "open" and "all" as valid for close,
+			// which is wrong. Each handler validates its own input.
 			mcplib.Description("Filter for list (open|closed|failed|escalated|all) or terminal status for close (closed|failed|escalated)."),
 		),
 	)
@@ -92,6 +96,11 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	c.Status = mission.StatusOpen
 	c.CreatedAt = now.Format(time.RFC3339)
 	c.UpdatedAt = c.CreatedAt
+	// ClosedAt is terminal-only — clear it on create. The server owns
+	// this field; any caller-supplied value would be a trust boundary
+	// violation, and Validate's status↔closed_at invariant would
+	// reject a non-empty ClosedAt on an open contract anyway.
+	c.ClosedAt = ""
 	c.Evaluator.PinnedAt = c.CreatedAt
 
 	if err := h.missionStore.Create(&c); err != nil {

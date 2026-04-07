@@ -68,6 +68,47 @@ func TestValidate(t *testing.T) {
 			wantErr: "invalid mission_id",
 		},
 
+		// Rule 3a: updated_at RFC3339
+		{
+			name:    "rule 3a: empty updated_at",
+			mutate:  func(c *Contract) { c.UpdatedAt = "" },
+			wantErr: "invalid updated_at",
+		},
+		{
+			name:    "rule 3a: malformed updated_at",
+			mutate:  func(c *Contract) { c.UpdatedAt = "not-a-time" },
+			wantErr: "invalid updated_at",
+		},
+
+		// Rule 3b: status↔closed_at invariant
+		{
+			name:    "rule 3b: open with closed_at set",
+			mutate:  func(c *Contract) { c.ClosedAt = "2026-04-07T22:00:00Z" },
+			wantErr: "status is open but closed_at is set",
+		},
+		{
+			name: "rule 3b: closed without closed_at",
+			mutate: func(c *Contract) {
+				c.Status = StatusClosed
+			},
+			wantErr: "closed_at is empty",
+		},
+		{
+			name: "rule 3b: failed without closed_at",
+			mutate: func(c *Contract) {
+				c.Status = StatusFailed
+			},
+			wantErr: "closed_at is empty",
+		},
+		{
+			name: "rule 3b: closed with malformed closed_at",
+			mutate: func(c *Contract) {
+				c.Status = StatusClosed
+				c.ClosedAt = "not-a-time"
+			},
+			wantErr: "invalid closed_at",
+		},
+
 		// Rule 2: status enum
 		{
 			name:    "rule 2: empty status",

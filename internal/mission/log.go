@@ -24,12 +24,13 @@ type Event struct {
 // appendEvent writes a single event line to <root>/missions/<id>.jsonl,
 // acquiring the per-mission flock for the duration of the write.
 //
-// Atomic per line: open with O_APPEND, write one complete line in a
-// single Write call, close. The mission's flock is acquired around the
-// write so concurrent appends from cooperating processes do not interleave
-// — even though POSIX guarantees a single write of <PIPE_BUF bytes is
-// atomic, holding the flock prevents partial-line tearing for larger
-// payloads (the Details map is unbounded).
+// Each event is encoded as one complete JSON line and written via a
+// single Write call to an O_APPEND file. The per-mission flock
+// serializes writers across cooperating processes, which is the
+// correctness guarantee against concurrent-writer interleaving.
+// (PIPE_BUF atomicity applies to pipes and FIFOs, not regular files,
+// so the lock does the real work here; the short-write check in
+// appendEventLocked defends against partial writes regardless.)
 //
 // This helper is intentionally unexported. Public callers go through
 // Create/Update/Close, which already hold the flock and call

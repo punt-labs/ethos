@@ -78,9 +78,10 @@ func (s *Store) Create(c *Contract) error {
 	}
 
 	return s.withLock(c.MissionID, func() error {
+		dest := s.contractPath(c.MissionID)
 		// Refuse to overwrite an existing contract via Create — Update
 		// is the explicit mutation path.
-		if _, err := os.Stat(s.contractPath(c.MissionID)); err == nil {
+		if _, err := os.Stat(dest); err == nil {
 			return fmt.Errorf("mission %q already exists", c.MissionID)
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("checking mission existence: %w", err)
@@ -88,7 +89,7 @@ func (s *Store) Create(c *Contract) error {
 		if err := s.writeContract(c); err != nil {
 			return err
 		}
-		return s.appendEventLocked(c.MissionID, Event{
+		if err := s.appendEventLocked(c.MissionID, Event{
 			TS:    time.Now().UTC().Format(time.RFC3339),
 			Event: "create",
 			Actor: c.Leader,
@@ -97,7 +98,18 @@ func (s *Store) Create(c *Contract) error {
 				"evaluator": c.Evaluator.Handle,
 				"bead":      c.Bead,
 			},
-		})
+		}); err != nil {
+			// Rollback: remove the just-written contract so the
+			// operation is atomic from the caller's point of view.
+			// Without rollback, a retry after a log-append failure
+			// would hit "already exists" and the caller would have
+			// no clean recovery path.
+			if rbErr := os.Remove(dest); rbErr != nil && !os.IsNotExist(rbErr) {
+				return fmt.Errorf("create: event append failed: %w; rollback failed: %v", err, rbErr)
+			}
+			return fmt.Errorf("create: event append failed, contract rolled back: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -138,12 +150,20 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 // never modify any slice or nested struct; value-type sub-structs
 // (Evaluator, Inputs, Budget) are deep-copied by the shallow copy
 // itself.
+//
+// Atomicity: the new contract is written, then the update event is
+// appended. If the event append fails, the original contract is
+// restored and the caller's struct is NOT mutated — the method's
+// failure semantics match "operation did not happen."
 func (s *Store) Update(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
 	return s.withLock(c.MissionID, func() error {
-		if _, err := os.Stat(s.contractPath(c.MissionID)); err != nil {
+		dest := s.contractPath(c.MissionID)
+		// Read the current bytes for rollback before touching the file.
+		oldData, err := os.ReadFile(dest)
+		if err != nil {
 			return fmt.Errorf("mission %q not found: %w", c.MissionID, err)
 		}
 		updated := *c
@@ -154,23 +174,43 @@ func (s *Store) Update(c *Contract) error {
 		if err := s.writeContract(&updated); err != nil {
 			return err
 		}
-		// Success: reflect the new UpdatedAt back to the caller.
-		c.UpdatedAt = updated.UpdatedAt
-		return s.appendEventLocked(c.MissionID, Event{
+		if err := s.appendEventLocked(c.MissionID, Event{
 			TS:    updated.UpdatedAt,
 			Event: "update",
 			Actor: updated.Leader,
-		})
+		}); err != nil {
+			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+				return fmt.Errorf("update: event append failed: %w; rollback failed: %v", err, rbErr)
+			}
+			return fmt.Errorf("update: event append failed, contract rolled back: %w", err)
+		}
+		// Success: reflect the new UpdatedAt back to the caller — this
+		// mutation happens only after the event log commits, so a
+		// failed Update leaves the caller's struct unchanged.
+		c.UpdatedAt = updated.UpdatedAt
+		return nil
 	})
 }
 
 // Close transitions a mission to the given terminal status (closed,
 // failed, or escalated), sets ClosedAt, and appends a "close" event.
+//
+// Atomicity: the new closed state is written, then the close event is
+// appended. If the event append fails, the original contract bytes
+// are restored — a failed Close leaves the on-disk state unchanged.
 func (s *Store) Close(missionID, status string) error {
 	if !validStatuses[status] || status == StatusOpen {
 		return fmt.Errorf("invalid close status %q: must be closed, failed, or escalated", status)
 	}
 	return s.withLock(missionID, func() error {
+		dest := s.contractPath(missionID)
+		// Read the current bytes for rollback before loading the
+		// contract into a struct, so we can restore the exact on-disk
+		// representation on a failed event append.
+		oldData, err := os.ReadFile(dest)
+		if err != nil {
+			return fmt.Errorf("mission %q not found: %w", missionID, err)
+		}
 		c, err := s.loadLocked(missionID)
 		if err != nil {
 			return err
@@ -185,14 +225,20 @@ func (s *Store) Close(missionID, status string) error {
 		if err := s.writeContract(c); err != nil {
 			return err
 		}
-		return s.appendEventLocked(missionID, Event{
+		if err := s.appendEventLocked(missionID, Event{
 			TS:    now,
 			Event: "close",
 			Actor: c.Leader,
 			Details: map[string]any{
 				"status": status,
 			},
-		})
+		}); err != nil {
+			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+				return fmt.Errorf("close: event append failed: %w; rollback failed: %v", err, rbErr)
+			}
+			return fmt.Errorf("close: event append failed, contract rolled back: %w", err)
+		}
+		return nil
 	})
 }
 
@@ -300,6 +346,21 @@ func (s *Store) writeContract(c *Contract) error {
 		return fmt.Errorf("writing temp contract: %w", err)
 	}
 	return os.Rename(tmp, dest)
+}
+
+// restoreContract writes oldData back to dest atomically via temp+rename.
+// Used by Update and Close to roll back a contract write when the
+// follow-on event-log append fails, keeping the caller's view of
+// on-disk state consistent with the operation's success/failure.
+func (s *Store) restoreContract(dest string, oldData []byte) error {
+	tmp := dest + ".tmp"
+	if err := os.WriteFile(tmp, oldData, 0o600); err != nil {
+		return fmt.Errorf("writing rollback temp: %w", err)
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		return fmt.Errorf("renaming rollback temp: %w", err)
+	}
+	return nil
 }
 
 // withLock executes fn while holding an exclusive flock on the mission's

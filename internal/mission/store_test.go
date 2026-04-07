@@ -305,6 +305,96 @@ func TestStore_CloseRejectsUnknownStatus(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestStore_UpdateRollsBackOnEventAppendFailure asserts that Update
+// restores the original on-disk contract bytes when appending the
+// update event fails, matching the method's atomic-from-caller's-view
+// contract. The failure is induced by replacing the mission's log
+// file with a directory, which makes os.OpenFile(O_APPEND) fail.
+func TestStore_UpdateRollsBackOnEventAppendFailure(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-020")
+	require.NoError(t, s.Create(c))
+
+	// Snapshot the on-disk contract and the caller's struct before
+	// the sabotaged update.
+	contractPath := s.contractPath(c.MissionID)
+	originalBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+	originalUpdatedAt := c.UpdatedAt
+
+	// Sabotage: remove the log file and replace it with a directory
+	// so appendEventLocked's OpenFile call fails.
+	logPath := s.logPath(c.MissionID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	// Attempt a real update — add context.
+	c.Context = "this update must roll back"
+	err = s.Update(c)
+	require.Error(t, err, "Update must fail when the event log is unreachable")
+	assert.Contains(t, err.Error(), "event append failed")
+	assert.Contains(t, err.Error(), "contract rolled back")
+
+	// Verify the on-disk bytes match the original exactly.
+	restoredBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalBytes), string(restoredBytes), "contract bytes must be identical after rollback")
+
+	// Caller's struct must not have been mutated.
+	assert.Equal(t, originalUpdatedAt, c.UpdatedAt, "caller UpdatedAt must not advance on failed Update")
+}
+
+// TestStore_CloseRollsBackOnEventAppendFailure asserts the same
+// atomic-rollback behavior for Close: if the event-log append fails,
+// the on-disk contract bytes are restored to the pre-close state.
+func TestStore_CloseRollsBackOnEventAppendFailure(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-021")
+	require.NoError(t, s.Create(c))
+
+	contractPath := s.contractPath(c.MissionID)
+	originalBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+
+	// Sabotage the log path the same way as the Update test.
+	logPath := s.logPath(c.MissionID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	err = s.Close(c.MissionID, StatusClosed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event append failed")
+	assert.Contains(t, err.Error(), "contract rolled back")
+
+	restoredBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalBytes), string(restoredBytes), "closed contract bytes must match pre-close state")
+}
+
+// TestStore_CreateRollsBackOnEventAppendFailure asserts that Create
+// removes the contract file when the event append fails so a retry
+// doesn't hit "already exists."
+func TestStore_CreateRollsBackOnEventAppendFailure(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+
+	// Pre-create a directory at the log path so appendEventLocked's
+	// OpenFile call fails when Create tries to log the create event.
+	missionID := "m-2026-04-07-022"
+	logPath := filepath.Join(s.missionsDir(), missionID+".jsonl")
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	c := newContract(missionID)
+	err := s.Create(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event append failed")
+	assert.Contains(t, err.Error(), "contract rolled back")
+
+	// The contract file must not exist after rollback.
+	_, statErr := os.Stat(s.contractPath(missionID))
+	assert.True(t, os.IsNotExist(statErr), "contract file must be removed on rollback")
+}
+
 func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
 	cases := map[string]string{
 		StatusFailed:    "m-2026-04-07-006",
