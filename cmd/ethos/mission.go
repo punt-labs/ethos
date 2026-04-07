@@ -204,6 +204,15 @@ func runMissionShow(idOrPrefix string) {
 }
 
 func runMissionList(status string) {
+	// Validate the filter at the boundary so `ethos mission list
+	// --status bogus` returns an explicit error instead of an empty
+	// table. Symmetric with the MCP handler's defense.
+	if !mission.IsValidStatusFilter(status) {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission list: invalid --status %q: must be one of open, closed, failed, escalated, all\n",
+			status)
+		os.Exit(1)
+	}
 	ms := missionStore()
 	ids, err := ms.List()
 	if err != nil {
