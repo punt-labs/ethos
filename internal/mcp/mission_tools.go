@@ -81,28 +81,14 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	}
 	c := *parsed
 
-	// Server-controlled fields. The caller may suggest a mission_id but
-	// we always overwrite status, created_at, updated_at, and the
-	// evaluator's pinned_at — the evaluator is pinned AT mission launch
-	// by definition, so any caller-supplied value would mean a mission
-	// whose evaluator was pinned before the mission was created.
-	now := time.Now().UTC()
-	if c.MissionID == "" {
-		id, err := mission.NewID(h.missionStore.Root(), now)
-		if err != nil {
-			return mcplib.NewToolResultError(fmt.Sprintf("generating mission ID: %v", err)), nil
-		}
-		c.MissionID = id
+	// Apply server-controlled fields (mission_id, status, timestamps,
+	// evaluator.pinned_at) via the shared helper. CLI and MCP entry
+	// points are in lockstep: any caller-supplied values for these
+	// fields are overwritten identically regardless of where the YAML
+	// came from.
+	if err := h.missionStore.ApplyServerFields(&c, time.Now()); err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
 	}
-	c.Status = mission.StatusOpen
-	c.CreatedAt = now.Format(time.RFC3339)
-	c.UpdatedAt = c.CreatedAt
-	// ClosedAt is terminal-only — clear it on create. The server owns
-	// this field; any caller-supplied value would be a trust boundary
-	// violation, and Validate's status↔closed_at invariant would
-	// reject a non-empty ClosedAt on an open contract anyway.
-	c.ClosedAt = ""
-	c.Evaluator.PinnedAt = c.CreatedAt
 
 	if err := h.missionStore.Create(&c); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to create mission: %v", err)), nil

@@ -151,31 +151,14 @@ func runMissionCreate() {
 	}
 	c := *parsed
 
-	// Server-controlled fields. The contract YAML may suggest timestamps
-	// or a status; the store is the source of truth.
-	now := time.Now().UTC()
-	if c.MissionID == "" {
-		id, err := mission.NewID(ms.Root(), now)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
-			os.Exit(1)
-		}
-		c.MissionID = id
+	// Apply server-controlled fields (mission_id, status, timestamps,
+	// evaluator.pinned_at). Shared with the MCP create path via
+	// Store.ApplyServerFields so any caller-supplied values for these
+	// fields are overwritten identically regardless of entry point.
+	if err := ms.ApplyServerFields(&c, time.Now()); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
+		os.Exit(1)
 	}
-	c.Status = mission.StatusOpen
-	c.CreatedAt = now.Format(time.RFC3339)
-	c.UpdatedAt = c.CreatedAt
-	// ClosedAt is a terminal-only field. A newly-created mission is
-	// always open, so clear anything the YAML supplied. The Validate
-	// invariant (open ⇒ closed_at empty) would reject a non-empty
-	// value anyway, but clearing it explicitly keeps the trust
-	// boundary one-sided: the server owns this field on create.
-	c.ClosedAt = ""
-	// PinnedAt is server-controlled by definition: the evaluator is
-	// pinned AT mission launch. Any value the YAML supplies for
-	// pinned_at would mean a mission whose evaluator was pinned before
-	// the mission was created — incoherent. Always overwrite.
-	c.Evaluator.PinnedAt = c.CreatedAt
 
 	if err := ms.Create(&c); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)

@@ -37,6 +37,43 @@ func NewStore(root string) *Store {
 // Root returns the store's root directory.
 func (s *Store) Root() string { return s.root }
 
+// ApplyServerFields sets all server-controlled fields on a contract at
+// create time. Both the CLI (`ethos mission create --file`) and the
+// MCP `mission create` handler call this before Store.Create so the
+// two paths stay in lockstep — server-controlled fields are the
+// server's responsibility, and any caller-supplied value is overwritten
+// without warning.
+//
+// Fields set:
+//   - MissionID: generated via NewID if empty (date-based counter)
+//   - Status: forced to StatusOpen — a newly created mission is always open
+//   - CreatedAt: set to now (RFC3339, UTC)
+//   - UpdatedAt: set equal to CreatedAt
+//   - ClosedAt: cleared (terminal-only field; Validate's status↔closed_at
+//     invariant would reject a non-empty value on an open contract anyway)
+//   - Evaluator.PinnedAt: set equal to CreatedAt — the evaluator is
+//     pinned AT mission launch by definition; any caller-supplied
+//     timestamp would be incoherent
+//
+// Returns an error only if NewID fails to allocate a mission ID
+// (daily counter exhausted or poisoned counter file).
+func (s *Store) ApplyServerFields(c *Contract, now time.Time) error {
+	if c.MissionID == "" {
+		id, err := NewID(s.root, now)
+		if err != nil {
+			return fmt.Errorf("generating mission ID: %w", err)
+		}
+		c.MissionID = id
+	}
+	created := now.UTC().Format(time.RFC3339)
+	c.Status = StatusOpen
+	c.CreatedAt = created
+	c.UpdatedAt = created
+	c.ClosedAt = ""
+	c.Evaluator.PinnedAt = created
+	return nil
+}
+
 func (s *Store) missionsDir() string {
 	return filepath.Join(s.root, "missions")
 }
