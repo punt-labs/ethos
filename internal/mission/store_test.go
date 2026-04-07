@@ -127,6 +127,80 @@ budget:
 	assert.Contains(t, err.Error(), "validation")
 }
 
+// TestStore_LoadRejectsUnknownField asserts that Store.Load uses
+// KnownFields(true). An attacker with local write access cannot drop
+// extra fields into the on-disk YAML and have them silently ignored —
+// the trust boundary on disk is symmetric with the create paths.
+func TestStore_LoadRejectsUnknownField(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	bad := []byte(`mission_id: m-2026-04-07-001
+status: open
+created_at: 2026-04-07T21:30:00Z
+updated_at: 2026-04-07T21:30:00Z
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+  pinned_at: 2026-04-07T21:30:00Z
+inputs: {}
+write_set:
+  - internal/mission/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+bogus: smuggled
+`)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(s.missionsDir(), "m-2026-04-07-001.yaml"),
+		bad, 0o600,
+	))
+	_, err := s.Load("m-2026-04-07-001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "field bogus not found")
+}
+
+// TestStore_CloseFailsOnUnknownField asserts that Close's loadLocked
+// path also rejects unknown fields. Round 2 added Validate symmetry;
+// round 3 adds KnownFields symmetry.
+func TestStore_CloseFailsOnUnknownField(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	bad := []byte(`mission_id: m-2026-04-07-001
+status: open
+created_at: 2026-04-07T21:30:00Z
+updated_at: 2026-04-07T21:30:00Z
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+  pinned_at: 2026-04-07T21:30:00Z
+inputs: {}
+write_set:
+  - internal/mission/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+bogus: smuggled
+`)
+	path := filepath.Join(s.missionsDir(), "m-2026-04-07-001.yaml")
+	require.NoError(t, os.WriteFile(path, bad, 0o600))
+
+	originalBytes, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	err = s.Close("m-2026-04-07-001", StatusClosed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "field bogus not found")
+
+	// File on disk must be untouched.
+	afterBytes, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, originalBytes, afterBytes, "Close must not mutate a YAML rejected by KnownFields")
+}
+
 func TestStore_Update(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-002")

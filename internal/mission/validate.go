@@ -31,12 +31,13 @@ const (
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
 //  3. created_at is parseable as RFC3339
-//  4. leader is non-empty
-//  5. worker is non-empty
-//  6. evaluator.handle is non-empty
+//  4. leader is non-empty and contains no control characters
+//  5. worker is non-empty and contains no control characters
+//  6. evaluator.handle is non-empty and contains no control characters
 //  7. evaluator.pinned_at is parseable as RFC3339
-//  8. write_set is non-empty AND every entry: no `..`, not absolute,
-//     not empty after trimming
+//  8. write_set is non-empty AND every entry: no null byte, no other
+//     control character, no `..` segment, not absolute, not empty
+//     after trimming
 //  9. budget.rounds is in [1, 10]
 //  10. success_criteria has at least one entry
 //
@@ -62,19 +63,28 @@ func (c *Contract) Validate() error {
 		return fmt.Errorf("invalid created_at %q: %w", c.CreatedAt, err)
 	}
 
-	// 4. leader non-empty
+	// 4. leader non-empty and clean
 	if strings.TrimSpace(c.Leader) == "" {
 		return fmt.Errorf("leader is required")
 	}
+	if containsControlChar(c.Leader) {
+		return fmt.Errorf("leader contains control character")
+	}
 
-	// 5. worker non-empty
+	// 5. worker non-empty and clean
 	if strings.TrimSpace(c.Worker) == "" {
 		return fmt.Errorf("worker is required")
 	}
+	if containsControlChar(c.Worker) {
+		return fmt.Errorf("worker contains control character")
+	}
 
-	// 6. evaluator.handle non-empty
+	// 6. evaluator.handle non-empty and clean
 	if strings.TrimSpace(c.Evaluator.Handle) == "" {
 		return fmt.Errorf("evaluator.handle is required")
+	}
+	if containsControlChar(c.Evaluator.Handle) {
+		return fmt.Errorf("evaluator.handle contains control character")
 	}
 
 	// 7. evaluator.pinned_at parseable as RFC3339
@@ -105,6 +115,20 @@ func (c *Contract) Validate() error {
 	return nil
 }
 
+// containsControlChar reports whether s contains any byte in the C0
+// control range (0x00-0x1F) or DEL (0x7F). These bytes have no
+// legitimate place in handles, paths, or the append-only log — a
+// leader value containing a newline could break the JSONL log's
+// one-line-per-event invariant by forging a fake event.
+func containsControlChar(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
 // validateWriteSetEntry rejects empty paths, absolute paths, and any
 // path containing a `..` segment (path traversal).
 //
@@ -119,10 +143,20 @@ func validateWriteSetEntry(entry string) error {
 		return fmt.Errorf("write_set entry cannot be empty or whitespace")
 	}
 
-	// Reject null bytes: any path containing \x00 is almost certainly a
-	// smuggled C-string truncation attempt ("allowed/prefix\x00../etc").
+	// Reject null bytes first with a specific message: any path
+	// containing \x00 is almost certainly a smuggled C-string
+	// truncation attempt ("allowed/prefix\x00../etc"). The general
+	// control-character check below would also catch this; keeping
+	// the special case gives the operator a clearer diagnostic.
 	if strings.ContainsRune(trimmed, 0) {
 		return fmt.Errorf("write_set entry %q contains null byte", trimmed)
+	}
+
+	// Reject any other control character (newline, CR, ESC, tab, etc.).
+	// A path with a newline would break the append-only log invariant
+	// when an event is written that references it.
+	if containsControlChar(trimmed) {
+		return fmt.Errorf("write_set entry %q contains control character", trimmed)
 	}
 
 	// Reject absolute paths (Unix `/` and Windows-style `C:\`).

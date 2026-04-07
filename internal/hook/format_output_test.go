@@ -649,6 +649,59 @@ const missionContractJSON = `{
   "budget": {"rounds": 3, "reflection_after_each": true}
 }`
 
+// missionContractJSONClosed is a contract that was closed — exercises
+// the closed_at rendering path.
+const missionContractJSONClosed = `{
+  "mission_id": "m-2026-04-07-002",
+  "status": "closed",
+  "created_at": "2026-04-07T21:30:00Z",
+  "updated_at": "2026-04-07T22:00:00Z",
+  "closed_at": "2026-04-07T22:00:00Z",
+  "leader": "claude",
+  "worker": "bwk",
+  "evaluator": {
+    "handle": "djb",
+    "pinned_at": "2026-04-07T21:30:00Z"
+  },
+  "inputs": {},
+  "write_set": ["internal/mission/"],
+  "success_criteria": ["make check passes"],
+  "budget": {"rounds": 3, "reflection_after_each": true}
+}`
+
+// missionContractJSONMinimal is a contract with no optional fields:
+// no bead, no tools, no inputs, no closed_at. Exercises the conditional
+// rendering branches.
+const missionContractJSONMinimal = `{
+  "mission_id": "m-2026-04-07-003",
+  "status": "open",
+  "created_at": "2026-04-07T21:30:00Z",
+  "updated_at": "2026-04-07T21:30:00Z",
+  "leader": "claude",
+  "worker": "bwk",
+  "evaluator": {
+    "handle": "djb",
+    "pinned_at": "2026-04-07T21:30:00Z"
+  },
+  "inputs": {},
+  "write_set": ["internal/mission/"],
+  "success_criteria": ["make check passes"],
+  "budget": {"rounds": 3, "reflection_after_each": true}
+}`
+
+// The tabwriter pads field labels to the longest label ("Evaluator:" =
+// 10 chars) plus 2 columns of padding, so "Mission:" (8 chars) becomes
+// "Mission:" + 4 spaces, "Status:" (7 chars) becomes "Status:" + 5
+// spaces, etc. Tests use these helpers so the magic widths live in
+// one place.
+func missionLabel(t *testing.T, label string) string {
+	t.Helper()
+	const widestLabel = len("Evaluator:") // 10
+	const padding = 2
+	pad := widestLabel + padding - len(label)
+	return label + strings.Repeat(" ", pad)
+}
+
 func TestFormatOutput_Mission_Create(t *testing.T) {
 	payload := makeToolPayload("mission", "create", missionContractJSON)
 	out := runFormat(t, payload)
@@ -656,18 +709,39 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "Created m-2026-04-07-001", r.HookSpecificOutput.UpdatedMCPToolOutput)
 	ctx := r.HookSpecificOutput.AdditionalContext
-	assert.Contains(t, ctx, "Mission:   m-2026-04-07-001")
-	assert.Contains(t, ctx, "Status:    open")
-	assert.Contains(t, ctx, "Leader:    claude")
-	assert.Contains(t, ctx, "Worker:    bwk")
-	assert.Contains(t, ctx, "Evaluator: djb")
-	assert.Contains(t, ctx, "Budget:    3 round(s)")
+	assert.Contains(t, ctx, missionLabel(t, "Mission:")+"m-2026-04-07-001")
+	assert.Contains(t, ctx, missionLabel(t, "Status:")+"open")
+	assert.Contains(t, ctx, missionLabel(t, "Leader:")+"claude")
+	assert.Contains(t, ctx, missionLabel(t, "Worker:")+"bwk")
+	assert.Contains(t, ctx, missionLabel(t, "Evaluator:")+"djb (pinned ")
+	assert.Contains(t, ctx, missionLabel(t, "Budget:")+"3 round(s), reflection_after_each=true")
+	assert.Contains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
+	// Created uses local-time formatting; the date is 7 Apr UTC which
+	// renders as April in every timezone (TZ shifts can move the day
+	// of month but not the month within a 24h window).
+	assert.Contains(t, ctx, "Apr")
 	assert.Contains(t, ctx, "Write set:")
 	assert.Contains(t, ctx, "- internal/mission/")
 	assert.Contains(t, ctx, "Tools:")
 	assert.Contains(t, ctx, "- Read")
 	assert.Contains(t, ctx, "- Write")
+	assert.Contains(t, ctx, "Success criteria:")
+	assert.Contains(t, ctx, "- make check passes")
 	assert.NotContains(t, ctx, `"mission_id":`) // Not raw JSON
+	// Raw RFC3339 timestamp should not appear — formatMissionTime
+	// converts it.
+	assert.NotContains(t, ctx, "2026-04-07T21:30:00Z")
+}
+
+func TestFormatOutput_Mission_Create_MissingMissionID(t *testing.T) {
+	// The early guard short-circuits with a clear malformed banner
+	// rather than rendering a partial card that looks legitimate.
+	payload := makeToolPayload("mission", "create", `{"status":"open"}`)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Created (malformed contract)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Contains(t, r.HookSpecificOutput.AdditionalContext, "malformed contract")
 }
 
 func TestFormatOutput_Mission_Show(t *testing.T) {
@@ -677,9 +751,38 @@ func TestFormatOutput_Mission_Show(t *testing.T) {
 	r := parseFormatResult(t, out)
 	assert.Equal(t, "m-2026-04-07-001 (open)", r.HookSpecificOutput.UpdatedMCPToolOutput)
 	ctx := r.HookSpecificOutput.AdditionalContext
-	assert.Contains(t, ctx, "Mission:   m-2026-04-07-001")
+	assert.Contains(t, ctx, missionLabel(t, "Mission:")+"m-2026-04-07-001")
 	assert.Contains(t, ctx, "Success criteria:")
 	assert.Contains(t, ctx, "- make check passes")
+}
+
+func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
+	// Closed contract — verifies the closed_at row appears in the
+	// header block via formatMissionTime.
+	payload := makeToolPayload("mission", "show", missionContractJSONClosed)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "m-2026-04-07-002 (closed)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, missionLabel(t, "Status:")+"closed")
+	// Closed: row must be present with a formatted timestamp.
+	assert.Regexp(t, `Closed:\s+\w+ Apr`, ctx)
+}
+
+func TestFormatOutput_Mission_Show_NoOptionalFields(t *testing.T) {
+	// Minimal contract — no bead, no tools, no closed_at, no
+	// inputs.bead. Optional sections must be skipped, not emit empty
+	// headers.
+	payload := makeToolPayload("mission", "show", missionContractJSONMinimal)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, missionLabel(t, "Mission:")+"m-2026-04-07-003")
+	assert.NotContains(t, ctx, "Bead:")
+	assert.NotContains(t, ctx, "Closed:")
+	assert.NotContains(t, ctx, "Tools:")
 }
 
 func TestFormatOutput_Mission_Show_Malformed(t *testing.T) {
@@ -751,6 +854,15 @@ func TestFormatOutput_Mission_Close_Failed(t *testing.T) {
 	assert.Equal(t, "Closed m-2026-04-07-001 as failed", r.HookSpecificOutput.UpdatedMCPToolOutput)
 }
 
+func TestFormatOutput_Mission_Close_Escalated(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","status":"escalated"}`
+	payload := makeToolPayload("mission", "close", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Closed m-2026-04-07-001 as escalated", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
 func TestFormatOutput_Mission_UnknownMethod(t *testing.T) {
 	payload := makeToolPayload("mission", "bogus", `{"mission_id":"x"}`)
 	out := runFormat(t, payload)
@@ -758,6 +870,32 @@ func TestFormatOutput_Mission_UnknownMethod(t *testing.T) {
 	r := parseFormatResult(t, out)
 	// Unknown method falls back to emitSimple + truncate.
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "mission_id")
+}
+
+func TestFormatMissionTime(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string // empty means "must equal raw"
+	}{
+		{name: "valid RFC3339", raw: "2026-04-07T21:30:00Z"},
+		{name: "invalid timestamp", raw: "yesterday", want: "yesterday"},
+		{name: "empty string", raw: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatMissionTime(tt.raw)
+			if tt.name == "valid RFC3339" {
+				// Local-time formatted; can't assert exact value across
+				// time zones, but it must contain the month name and a
+				// 24h-style time.
+				assert.Contains(t, got, "Apr")
+				assert.Regexp(t, `\d{2}:\d{2}`, got)
+				return
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 // --- Edge cases ---

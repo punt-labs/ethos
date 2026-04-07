@@ -3,6 +3,7 @@
 package mission
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,6 +102,10 @@ func (s *Store) Create(c *Contract) error {
 }
 
 // Load reads a mission contract by ID.
+//
+// Decodes with KnownFields(true) so an attacker who has local write
+// access cannot drop extra fields into the on-disk YAML and have them
+// silently ignored. Symmetric with the strict create paths.
 func (s *Store) Load(missionID string) (*Contract, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
@@ -109,16 +114,16 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mission %q not found: %w", missionID, err)
 	}
-	var c Contract
-	if err := yaml.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("invalid contract file %s: %w", missionID, err)
+	c, err := decodeContractStrict(data, missionID)
+	if err != nil {
+		return nil, err
 	}
 	// Defense in depth: even on read, run Validate. A corrupt or
 	// hand-edited contract should be flagged before callers act on it.
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("contract %q failed validation on load: %w", missionID, err)
 	}
-	return &c, nil
+	return c, nil
 }
 
 // Update writes a mutated contract back to disk under flock. The caller
@@ -194,22 +199,36 @@ func (s *Store) Close(missionID, status string) error {
 // loadLocked reads a contract without acquiring the flock. Callers must
 // already hold the lock for the given missionID.
 //
-// Runs Validate() for symmetry with the public Load() — a corrupt or
-// hand-edited contract must be rejected before Close (or any future
-// locked caller) mutates it. Otherwise an invalid on-disk state could
-// slip through Close's post-mutation Validate because the mutation
-// fixed the field under inspection.
+// Decodes with KnownFields(true) and runs Validate() for symmetry with
+// the public Load() — a corrupt or hand-edited contract must be
+// rejected before Close (or any future locked caller) mutates it.
+// Otherwise an invalid on-disk state could slip through Close's
+// post-mutation Validate because the mutation fixed the field under
+// inspection.
 func (s *Store) loadLocked(missionID string) (*Contract, error) {
 	data, err := os.ReadFile(s.contractPath(missionID))
 	if err != nil {
 		return nil, fmt.Errorf("mission %q not found: %w", missionID, err)
 	}
-	var c Contract
-	if err := yaml.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("invalid contract file %s: %w", missionID, err)
+	c, err := decodeContractStrict(data, missionID)
+	if err != nil {
+		return nil, err
 	}
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("contract %q failed validation on load: %w", missionID, err)
+	}
+	return c, nil
+}
+
+// decodeContractStrict parses a YAML contract with KnownFields(true).
+// Used by Load and loadLocked so the on-disk trust boundary matches
+// the strict-decode behavior of the CLI and MCP create paths.
+func decodeContractStrict(data []byte, missionID string) (*Contract, error) {
+	var c Contract
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
+		return nil, fmt.Errorf("invalid contract file %s: %w", missionID, err)
 	}
 	return &c, nil
 }

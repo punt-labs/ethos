@@ -4,6 +4,8 @@ package mission
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -114,4 +116,56 @@ func TestNewID_PadsZeroes(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, fmt.Sprintf("m-2026-04-07-%03d", i), id)
 	}
+}
+
+// writeCounter drops a raw counter value into the missions/ counter
+// file for the given UTC date so a test can simulate a poisoned or
+// near-exhausted counter.
+func writeCounter(t *testing.T, root string, day time.Time, value string) {
+	t.Helper()
+	dir := filepath.Join(root, "missions")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	path := filepath.Join(dir, ".counter-"+day.UTC().Format("2006-01-02"))
+	require.NoError(t, os.WriteFile(path, []byte(value), 0o600))
+}
+
+// TestNewID_CounterOverflow asserts that NewID refuses to roll past
+// 999 for a given day. The counter is bounded by the m-YYYY-MM-DD-NNN
+// regex, so a 4-digit value would produce IDs that fail Validate.
+func TestNewID_CounterOverflow(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+
+	writeCounter(t, root, now, "999")
+
+	_, err := NewID(root, now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside valid range")
+}
+
+// TestNewID_PoisonedCounter asserts that NewID detects a counter file
+// containing maxInt and refuses to issue a 4-digit ID.
+func TestNewID_PoisonedCounter(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+
+	writeCounter(t, root, now, "9223372036854775807")
+
+	_, err := NewID(root, now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside valid range")
+}
+
+// TestNewID_NegativeCounter asserts that NewID rejects a negative
+// counter file. After the +1 increment a negative value still rounds
+// to a value <1, so the bounds check fires.
+func TestNewID_NegativeCounter(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+
+	writeCounter(t, root, now, "-5")
+
+	_, err := NewID(root, now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside valid range")
 }

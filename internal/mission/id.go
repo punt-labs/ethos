@@ -42,10 +42,10 @@ func NewID(root string, now time.Time) (string, error) {
 	}
 	defer f.Close()
 
-	// Acquire an exclusive flock on the counter file. The flock is
-	// released by the OS when the file descriptor is closed (defer above)
-	// — we also explicitly LOCK_UN before write to keep the lock window
-	// observable.
+	// Acquire an exclusive flock on the counter file. The OS releases
+	// the lock when the file descriptor closes; the explicit LOCK_UN
+	// defer makes the lock/unlock pair symmetric for readers of the
+	// code.
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
 		return "", fmt.Errorf("acquiring counter lock: %w", err)
 	}
@@ -69,6 +69,16 @@ func NewID(root string, now time.Time) (string, error) {
 		current = v
 	}
 	next := current + 1
+	// Bound to [1, 999] so the resulting m-YYYY-MM-DD-NNN ID always
+	// matches the schema regex. Detects both daily exhaustion and
+	// poisoned counter files (negative or huge values written by an
+	// attacker with local write access to the missions dir).
+	if next < 1 || next > 999 {
+		return "", fmt.Errorf(
+			"mission ID counter for %s is %d, outside valid range [1, 999]",
+			day, next,
+		)
+	}
 
 	// Truncate and rewrite under the same lock.
 	if err := f.Truncate(0); err != nil {

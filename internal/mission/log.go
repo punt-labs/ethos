@@ -21,7 +21,8 @@ type Event struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
-// AppendEvent writes a single event line to <root>/missions/<id>.jsonl.
+// appendEvent writes a single event line to <root>/missions/<id>.jsonl,
+// acquiring the per-mission flock for the duration of the write.
 //
 // Atomic per line: open with O_APPEND, write one complete line in a
 // single Write call, close. The mission's flock is acquired around the
@@ -29,7 +30,14 @@ type Event struct {
 // — even though POSIX guarantees a single write of <PIPE_BUF bytes is
 // atomic, holding the flock prevents partial-line tearing for larger
 // payloads (the Details map is unbounded).
-func (s *Store) AppendEvent(missionID string, e Event) error {
+//
+// This helper is intentionally unexported. Public callers go through
+// Create/Update/Close, which already hold the flock and call
+// appendEventLocked. A public AppendEvent would be a deadlock footgun
+// for any future caller invoking it from inside an existing locked
+// block. 3.7's log reader API will re-export when external readers
+// genuinely need it.
+func (s *Store) appendEvent(missionID string, e Event) error {
 	return s.withLock(missionID, func() error {
 		return s.appendEventLocked(missionID, e)
 	})

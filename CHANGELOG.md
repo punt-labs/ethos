@@ -16,14 +16,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejection. Non-JSON mode is silent on success; `--json` emits the
   persisted contract.
 - `mission` MCP tool with methods create, show, list, close. Full
-  formatter in `internal/hook/format_output.go` (DES-020) with a
-  2-column field view for single contracts and a table for list.
+  formatter in `internal/hook/format_output.go` (DES-020) sharing a
+  single `text/tabwriter` layout with the CLI so the two surfaces
+  cannot drift.
 - `internal/mission/` package: Contract schema, filesystem store with
-  flock-protected concurrency and shallow-copy Update semantics
-  (failed Update leaves the caller's struct untouched), daily ID
-  generator, append-only JSONL event log, validation (mission ID
-  format, RFC3339 timestamps, path-traversal and null-byte rejection
-  on write_set entries, round budget bounds, required fields).
+  flock-protected concurrency, shallow-copy Update semantics (failed
+  Update leaves the caller's struct untouched), strict KnownFields
+  YAML decode on every read path (Load and Close's loadLocked) so
+  attacker-dropped fields cannot slip past the on-disk trust
+  boundary, daily ID generator with `[1, 999]` counter bounds that
+  reject exhaustion and poisoned counter files, append-only JSONL
+  event log, and validation enforcing mission ID format, RFC3339
+  timestamps, control-character rejection in identity handles and
+  write_set entries, path-traversal and null-byte rejection,
+  round budget bounds, and required fields. The Evaluator's
+  `pinned_at` is server-controlled at create time on every entry
+  point (CLI and MCP).
 - `internal/mission/filter.go` — shared `StatusMatches` helper used by
   both the CLI and the MCP list handlers.
 

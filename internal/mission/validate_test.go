@@ -197,6 +197,11 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 		{name: "backslash parent (windows form)", path: `internal\..\..\tmp`, wantErrMatch: "path traversal"},
 		{name: "null byte", path: "internal/foo\x00/bar", wantErrMatch: "null byte"},
 		{name: "null byte truncation", path: "allowed\x00../etc/passwd", wantErrMatch: "null byte"},
+		{name: "newline", path: "internal/foo\nbar", wantErrMatch: "control character"},
+		{name: "carriage return", path: "internal/foo\rbar", wantErrMatch: "control character"},
+		{name: "escape", path: "internal/foo\x1bbar", wantErrMatch: "control character"},
+		{name: "tab", path: "internal/foo\tbar", wantErrMatch: "control character"},
+		{name: "DEL", path: "internal/foo\x7fbar", wantErrMatch: "control character"},
 	}
 
 	for _, tt := range tests {
@@ -206,6 +211,43 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 			err := c.Validate()
 			require.Error(t, err, "expected validation error for path %q", tt.path)
 			assert.Contains(t, err.Error(), tt.wantErrMatch)
+		})
+	}
+}
+
+// TestValidate_RejectsControlCharsInHandles asserts that Leader,
+// Worker, and Evaluator.Handle reject any value containing a C0
+// control character. A leader value with a newline could break the
+// JSONL log's one-line-per-event invariant by forging a fake event.
+func TestValidate_RejectsControlCharsInHandles(t *testing.T) {
+	tests := []struct {
+		name   string
+		field  string // for error message context
+		mutate func(*Contract)
+	}{
+		// Leader
+		{name: "leader newline", field: "leader", mutate: func(c *Contract) { c.Leader = "claude\nFAKE" }},
+		{name: "leader carriage return", field: "leader", mutate: func(c *Contract) { c.Leader = "claude\rFAKE" }},
+		{name: "leader escape", field: "leader", mutate: func(c *Contract) { c.Leader = "claude\x1bFAKE" }},
+		{name: "leader tab", field: "leader", mutate: func(c *Contract) { c.Leader = "claude\tFAKE" }},
+		{name: "leader null byte", field: "leader", mutate: func(c *Contract) { c.Leader = "claude\x00FAKE" }},
+		{name: "leader DEL", field: "leader", mutate: func(c *Contract) { c.Leader = "claude\x7fFAKE" }},
+
+		// Worker
+		{name: "worker newline", field: "worker", mutate: func(c *Contract) { c.Worker = "bwk\nFAKE" }},
+		{name: "worker escape", field: "worker", mutate: func(c *Contract) { c.Worker = "bwk\x1bFAKE" }},
+
+		// Evaluator.Handle
+		{name: "evaluator newline", field: "evaluator.handle", mutate: func(c *Contract) { c.Evaluator.Handle = "djb\nFAKE" }},
+		{name: "evaluator escape", field: "evaluator.handle", mutate: func(c *Contract) { c.Evaluator.Handle = "djb\x1bFAKE" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			tt.mutate(&c)
+			err := c.Validate()
+			require.Error(t, err, "expected validation error for %s", tt.name)
+			assert.Contains(t, err.Error(), tt.field+" contains control character")
 		})
 	}
 }

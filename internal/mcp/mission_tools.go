@@ -76,8 +76,10 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	}
 
 	// Server-controlled fields. The caller may suggest a mission_id but
-	// we always overwrite status, created_at, updated_at, and (when
-	// missing) the evaluator's pinned_at.
+	// we always overwrite status, created_at, updated_at, and the
+	// evaluator's pinned_at — the evaluator is pinned AT mission launch
+	// by definition, so any caller-supplied value would mean a mission
+	// whose evaluator was pinned before the mission was created.
 	now := time.Now().UTC()
 	if c.MissionID == "" {
 		id, err := mission.NewID(h.missionStore.Root(), now)
@@ -89,9 +91,7 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	c.Status = mission.StatusOpen
 	c.CreatedAt = now.Format(time.RFC3339)
 	c.UpdatedAt = c.CreatedAt
-	if c.Evaluator.PinnedAt == "" {
-		c.Evaluator.PinnedAt = c.CreatedAt
-	}
+	c.Evaluator.PinnedAt = c.CreatedAt
 
 	if err := h.missionStore.Create(&c); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to create mission: %v", err)), nil

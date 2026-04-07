@@ -21,7 +21,7 @@ func TestAppendEvent_RoundTrip(t *testing.T) {
 
 	// Create already wrote one event; append four more.
 	for i := 1; i <= 4; i++ {
-		require.NoError(t, s.AppendEvent("m-2026-04-07-001", Event{
+		require.NoError(t, s.appendEvent("m-2026-04-07-001", Event{
 			TS:    fmt.Sprintf("2026-04-07T22:00:%02dZ", i),
 			Event: "update",
 			Actor: "claude",
@@ -48,7 +48,7 @@ func TestAppendEvent_NoTruncation(t *testing.T) {
 	// Write 50 events with distinct payloads. None should be lost.
 	const n = 50
 	for i := 0; i < n; i++ {
-		require.NoError(t, s.AppendEvent("m-2026-04-07-001", Event{
+		require.NoError(t, s.appendEvent("m-2026-04-07-001", Event{
 			TS:      "2026-04-07T22:00:00Z",
 			Event:   "update",
 			Actor:   "claude",
@@ -66,13 +66,13 @@ func TestAppendEvent_PreservesOrder(t *testing.T) {
 	c := newContract("m-2026-04-07-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendEvent("m-2026-04-07-001", Event{
+	require.NoError(t, s.appendEvent("m-2026-04-07-001", Event{
 		TS: "2026-04-07T22:00:01Z", Event: "update", Actor: "claude",
 	}))
-	require.NoError(t, s.AppendEvent("m-2026-04-07-001", Event{
+	require.NoError(t, s.appendEvent("m-2026-04-07-001", Event{
 		TS: "2026-04-07T22:00:02Z", Event: "update", Actor: "claude",
 	}))
-	require.NoError(t, s.AppendEvent("m-2026-04-07-001", Event{
+	require.NoError(t, s.appendEvent("m-2026-04-07-001", Event{
 		TS: "2026-04-07T22:00:03Z", Event: "close", Actor: "claude",
 	}))
 
@@ -89,7 +89,7 @@ func TestAppendEvent_DetailsRoundTrip(t *testing.T) {
 	c := newContract("m-2026-04-07-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendEvent("m-2026-04-07-001", Event{
+	require.NoError(t, s.appendEvent("m-2026-04-07-001", Event{
 		TS:    "2026-04-07T22:00:01Z",
 		Event: "update",
 		Actor: "claude",

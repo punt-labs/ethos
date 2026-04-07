@@ -104,6 +104,9 @@ func runCobra(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	defer func() {
 		rootCmd.SetOut(oldOut)
 		rootCmd.SetErr(oldErr)
+		// Clear cobra's root args slice so the next test that uses the
+		// rootCmd directly doesn't see leftover args from this test.
+		rootCmd.SetArgs(nil)
 	}()
 
 	rootCmd.SetArgs(args)
@@ -154,7 +157,10 @@ func TestMissionCreate_RequiresFile(t *testing.T) {
 
 	_, stderr, err := runCobra(t, "mission", "create")
 	require.Error(t, err, "create without --file must fail")
-	assert.Contains(t, stderr, "required flag")
+	// Tightened from "required flag" to the specific flag name so a
+	// future regression that demands a different required flag would
+	// not silently match.
+	assert.Contains(t, stderr, `required flag(s) "file"`)
 }
 
 // --- bare mission command ---

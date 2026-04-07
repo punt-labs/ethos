@@ -166,9 +166,11 @@ func runMissionCreate() {
 	c.Status = mission.StatusOpen
 	c.CreatedAt = now.Format(time.RFC3339)
 	c.UpdatedAt = c.CreatedAt
-	if c.Evaluator.PinnedAt == "" {
-		c.Evaluator.PinnedAt = c.CreatedAt
-	}
+	// PinnedAt is server-controlled by definition: the evaluator is
+	// pinned AT mission launch. Any value the YAML supplies for
+	// pinned_at would mean a mission whose evaluator was pinned before
+	// the mission was created — incoherent. Always overwrite.
+	c.Evaluator.PinnedAt = c.CreatedAt
 
 	if err := ms.Create(&c); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
@@ -177,6 +179,7 @@ func runMissionCreate() {
 
 	if jsonOutput {
 		printJSON(&c)
+		return
 	}
 	// Non-JSON mode is silent on success — matches session.go pattern.
 }
@@ -284,6 +287,7 @@ func runMissionClose(idOrPrefix, status string) {
 	}
 	if jsonOutput {
 		printJSON(map[string]string{"mission_id": id, "status": status})
+		return
 	}
 	// Non-JSON mode is silent on success — matches session.go pattern.
 }
@@ -309,14 +313,23 @@ func printContract(c *mission.Contract) {
 	}
 	fmt.Fprintf(tw, "Leader:\t%s\n", c.Leader)
 	fmt.Fprintf(tw, "Worker:\t%s\n", c.Worker)
+	// Fold the evaluator's hash inline. The continuation-row pattern
+	// (a row that starts with a tab) is fragile in tabwriter — once
+	// the hash field exists, the column widths get recomputed in
+	// surprising ways. One row, one Evaluator: line.
 	pinned := formatStarted(c.Evaluator.PinnedAt)
-	fmt.Fprintf(tw, "Evaluator:\t%s (pinned %s)\n", c.Evaluator.Handle, pinned)
+	evaluatorLine := fmt.Sprintf("%s (pinned %s", c.Evaluator.Handle, pinned)
 	if c.Evaluator.Hash != "" {
-		fmt.Fprintf(tw, "\thash %s\n", c.Evaluator.Hash)
+		evaluatorLine += ", hash " + c.Evaluator.Hash
 	}
+	evaluatorLine += ")"
+	fmt.Fprintf(tw, "Evaluator:\t%s\n", evaluatorLine)
 	fmt.Fprintf(tw, "Budget:\t%d round(s), reflection_after_each=%t\n",
 		c.Budget.Rounds, c.Budget.ReflectionAfterEach)
-	_ = tw.Flush()
+	if err := tw.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission show: %v\n", err)
+		os.Exit(1)
+	}
 
 	if len(c.Inputs.Files) > 0 || c.Inputs.Bead != "" || len(c.Inputs.References) > 0 {
 		fmt.Println()
