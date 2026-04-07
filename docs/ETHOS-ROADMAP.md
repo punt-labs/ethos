@@ -304,169 +304,269 @@ specification including flow, contract format, and examples.
 
 ---
 
-## Phase 3: Workflow
+## Phase 3: Workflow Primitives
 
-Address the development workflow gap. Learn from feature-dev's 7-phase
-lifecycle and claude-config-template's plan/implement/validate pipeline.
+Build the structured workflow primitives that turn ethos identities and
+roles into runtime contracts. The source material is `agents-architecture.tex`
+and `instructions-memory-architecture.tex`. Phase 3 takes the rules in
+those documents and gives them executable form.
 
-### 3.1 Plan-Implement-Validate Pipeline
+### Design rules from the architecture documents
 
-**Problem**: Our current workflow is manual — the developer (or COO)
-drives each phase. There's no structured pipeline that ensures research
-happens before planning, planning before implementation, and validation
-before shipping.
+Two rules from `agents-architecture.tex` shape every primitive in
+Phase 3:
 
-**Evidence**: claude-config-template's orchestrator runs:
+1. **Roles are interfaces, not personas.** A role is specified by its
+   inputs, outputs, tools, and success criteria. Stylistic descriptions
+   ("be a careful researcher") are not contracts.
+2. **Centralize understanding, decentralize execution.** The leader
+   synthesizes findings and writes the next prompt. Workers do not
+   inherit the leader's reasoning state.
 
-1. Index codebase
-2. Refine query (analyze codebase, improve query)
-3. Fetch technical documentation
-4. Research codebase with refined query
-5. Create implementation plan
-6. Validate plan
-7. Implement plan
-8. Review → fix cycles (max 3)
-9. Cleanup (document learnings)
+Two rules from `instructions-memory-architecture.tex` shape where the
+primitives live:
 
-feature-dev follows a similar 7-phase lifecycle: Claim → Branch →
-Implement → Document → Review → Ship → Close.
+1. **Documentation is guidance, hooks and policies are enforcement.**
+   Anything that sounds like "every time," "before," or "after" belongs
+   in a hook or policy, not in a personality file.
+2. **Subagents do not inherit ambient context.** Load-bearing
+   constraints must be restated in the delegated task, not assumed.
 
-**Solution**: Ethos doesn't own the workflow — that's the plugin layer
-(feature-dev, punt-kit). But ethos provides the **identity and team
-context** that makes workflow agents effective. The workflow gap is:
+These four rules force a single conclusion: discipline must be a
+runtime contract, not text in a personality file. Phase 3 builds the
+contracts.
 
-1. **Feature-dev needs ethos integration**: Feature-dev's review agents
-   should be ethos identities with personalities, not anonymous agents.
-   The code-reviewer agent should have the principal-engineer
-   personality. The silent-failure-hunter should have the security
-   personality.
+### 3.1 Mission Contract
 
-2. **Workflow agents need roles**: The plan-validate-implement pattern
-   maps to roles: architect (plans), implementer (executes), reviewer
-   (validates). Ethos roles provide the tool restrictions and
-   anti-responsibilities.
+**Problem**: Today the leader writes a free-form prompt and hopes the
+worker has enough context. Success criteria, write-set, evaluator, and
+budget are implicit. There is no artifact the worker can verify against
+and no artifact the leader can audit afterward.
 
-3. **Team context in delegation**: When the COO delegates to bwk, bwk
-   should know the team structure — who else is available, what each
-   person does, who to escalate to. Ethos already injects this via
-   BuildTeamContext. The workflow needs to leverage it.
+**Solution**: A typed mission contract. Ethos owns the schema and the
+storage. The leader fills in the contract before launching a worker.
+The worker reads the contract as its first action and emits a result
+artifact when done.
 
-**Delivery**: Integration work between ethos and feature-dev/punt-kit.
-Not ethos core changes — identity and role definitions for workflow
-agents.
+```yaml
+mission: m-2026-04-07-001
+leader: claude
+worker: bwk
+created: 2026-04-07T15:00:00Z
+inputs:
+  - bead: ethos-13j
+  - files: [internal/hook/stdin.go]
+outputs:
+  - files_changed: [internal/hook/stdin.go, internal/hook/stdin_test.go]
+  - verdict: pass | fail | escalate
+  - confidence: 0.0-1.0
+  - open_questions: []
+write_set:
+  - internal/hook/
+tools: [Read, Write, Edit, Bash, Grep, Glob]
+success_criteria:
+  - make check passes
+  - new test reproduces the bug without the fix
+  - new test passes with the fix
+evaluator: djb  # frozen at launch
+budget:
+  rounds: 3
+  reflection_required: true
+```
 
-### 3.2 Parallel Specialized Review
+**Delivery**: New `internal/mission/` package. CLI: `ethos mission
+create`, `ethos mission show`, `ethos mission close`. MCP: `mission`
+tool with create/show/list/close methods. Storage:
+`~/.punt-labs/ethos/missions/<id>.yaml`.
 
-**Problem**: Code review is currently two agents (code-reviewer +
-silent-failure-hunter). The claude-config-template demonstrates that
-4 specialized reviewers catch more than 2 generalists.
+### 3.2 Write-Set Admission Control
 
-**Evidence**: Template uses: code-quality (opus), security, best
-practices, test coverage — all in parallel. Each has a narrow focus
-and explicit non-overlap.
+**Problem**: When two missions claim overlapping files, the second one
+silently corrupts the first one's work or merges into a half-applied
+state. There is no runtime gate that prevents this.
 
-**Solution**: Define 4 review identities in the team registry:
+**Solution**: The mission contract declares its `write_set`. Ethos
+records active mission write sets in a session-scoped registry. A new
+mission whose write set overlaps an active mission must either wait or
+isolate in a worktree. The check happens at `mission create` time, not
+at first edit.
 
-| Identity | Personality | Talents | Role |
-|----------|------------|---------|------|
-| `code-reviewer` | principal-engineer | code-review, testing | reviewer |
-| `security-reviewer` | bernstein | security, code-review | security-reviewer |
-| `test-reviewer` | principal-engineer | testing | reviewer |
-| `style-reviewer` | principal-engineer | documentation, code-review | reviewer |
+```text
+ethos mission create --bead ethos-13j --write-set internal/hook/
+ERROR: write-set conflict with mission m-2026-04-07-002 (worker: rmh)
+  overlapping paths: internal/hook/
+  options:
+    --wait              wait for m-2026-04-07-002 to close
+    --isolate           launch in a worktree (no shared writes)
+```
 
-Each gets generated agent definitions with anti-responsibilities
-("You are NOT checking security — the security-reviewer handles that").
+**Delivery**: Write-set tracking in `internal/mission/`. Conflict
+detection on create. Worktree integration via existing `cmd.Stdin`
+isolation patterns from `subprocess_test.go`.
 
-**Delivery**: Identity YAML files in the team registry. Role and talent
-definitions from Phase 1.
+### 3.3 Frozen Evaluator
 
-### 3.3 Memory Consolidation Pattern
+**Problem**: Today's review agents can drift mid-cycle. The
+code-reviewer's personality file may change between PR review rounds
+because it's loaded from disk on each invocation. The success criteria
+the leader had in mind at round 1 may not be the criteria the verifier
+applies at round 3.
 
-**Problem**: Knowledge from implementation sessions is lost. What worked,
-what didn't, what constraints were discovered — none of this persists
-systematically.
+**Solution**: The mission contract names its evaluator at launch time.
+The evaluator is identified by ethos handle plus content hash of the
+evaluator's personality, talents, and success criteria. Any drift
+between rounds is detected and surfaced.
 
-**Evidence**: claude-config-template uses a 4-file pattern:
+```yaml
+evaluator:
+  handle: djb
+  pinned_at: 2026-04-07T15:00:00Z
+  content_hash: sha256:abc123...
+```
 
-- `project.md` — stable project context
-- `todo.md` — active work
-- `done.md` — completed work with traceability
-- `decisions.md` — accumulated architectural decisions
+When the evaluator subagent spawns for round N+1, ethos verifies the
+content hash still matches. If the personality file changed, the
+mission must be explicitly re-launched — no silent goalpost moving.
 
-Sprint reflection captures observations fast (`scratchpad.md`), then
-consolidation integrates them deliberately into `decisions.md`.
+**Delivery**: Evaluator pinning in `internal/mission/`. Content hash
+computed from personality + writing_style + talents + success_criteria.
+SubagentStart hook validates the hash before injecting persona.
 
-**Solution**: This maps to quarry + beads. Quarry already provides
-semantic search over accumulated knowledge. Beads track work items.
-The missing piece is **deliberate reflection** — a step after each
-implementation where the agent captures what it learned.
+### 3.4 Bounded Rounds with Reflection
 
-Ethos can support this by:
+**Problem**: Long-running fix cycles drift indefinitely. The leader has
+no structural gate that says "stop and reconsider after N rounds." The
+agent fixes round 5's bug while introducing round 6's bug, and nobody
+notices.
 
-1. Adding a `reflect` talent that teaches agents the reflection pattern
-2. Providing session context (via DES-022) that reminds agents to
-   capture learnings in quarry before closing
+**Solution**: Mission contracts declare a round budget. After each
+round, ethos forces a reflection step before the next round can start.
+The reflection is a structured artifact, not free prose:
 
-**Delivery**: Talent file + extension session_context content.
+```yaml
+reflection:
+  round: 3
+  converging: false
+  signals:
+    - plateau: code-reviewer reports same finding as round 2
+    - divergence: silent-failure-hunter caught new issue introduced this round
+  recommendation: pivot | escalate | continue | stop
+  reason: |
+    Two consecutive rounds of plateau on the same finding indicates the
+    current approach won't converge. Recommend pivot to alternative
+    implementation.
+```
 
-### 3.4 Codebase Indexing Integration
+After the budget is exhausted without convergence, the mission must
+either be re-scoped (new contract, new budget) or closed. No quiet
+seventh round.
 
-**Problem**: Multiple agents need codebase understanding before doing
-work. Without an index, each agent rediscovers the same information
-via expensive Glob/Grep cycles.
+**Delivery**: Reflection schema in `internal/mission/`. Round counter
+on the mission. CLI: `ethos mission reflect <id>`. Block on
+`ethos mission round <id>` if reflection missing.
 
-**Evidence**: claude-config-template's indexers generate
-`codebase_overview_*.md` files that agents read as their first step.
-5+ agents mandate "🚨 CRITICAL FIRST STEP: Read the codebase index."
-Quarry already does semantic indexing.
+### 3.5 Independent Verification
 
-**Solution**: This is quarry's domain, not ethos's. But ethos's
-session_context mechanism (DES-022) can inject "check quarry before
-searching" as standard guidance. The `baseline-ops` skill should
-include: "Before broad codebase searches, query quarry for existing
-knowledge."
+**Problem**: When the same agent implements and verifies, the verifier
+is too invested in its own implementation. The verifier reads the
+implementer's scratch state and rationalizes it.
 
-**Delivery**: Content in baseline-ops skill and quarry's
-extension session_context.
+**Solution**: The verifier subagent receives only the mission contract
+and the deltas (files changed, test output). It cannot read the
+implementer's scratch files, prior reasoning, or personality
+adjustments. Ethos enforces this by spawning the verifier in a separate
+subagent context with a restricted file allowlist derived from the
+mission write set.
 
-### 3.5 Evaluation Discipline
+The verifier cannot be the implementer. Ethos checks that the
+mission's `worker` and `evaluator` handles differ, and that the
+evaluator's role does not overlap the worker's role.
 
-**Problem**: Our review and implementation workflows lack formal
-evaluation discipline. Review criteria can shift mid-review. There
-are no mandatory reflection gates between workflow phases. Escalation
-triggers are instinct-based, not signal-based.
+**Delivery**: Verifier isolation in `internal/mission/`. SubagentStart
+hook injects the mission contract and deltas, strips parent transcript.
+Role overlap check on mission create.
 
-**Evidence**: agents-architecture.tex defines three evaluation
-principles: freeze the evaluator during a task, use mixed verification
-tracks, and work in bounded rounds with mandatory reflection. Autostar
-enforces immutable rubrics and mandatory reflection after every round
-with three specific questions: worth pursuing? escalate to user? pivot?
+### 3.6 Structured Handoff Artifacts
 
-**Solution**: Formalize evaluation discipline in the workflow layer:
+**Problem**: Today, worker output is prose. The leader reads it,
+interprets it, decides what's important. This works for one worker but
+breaks down at fan-out: synthesizing five prose reports into a single
+decision is the leader's hardest job.
 
-1. **Frozen evaluators**: Once review criteria are set for a PR
-   review cycle, they don't change until the cycle completes. No
-   moving goalposts.
+**Solution**: Every worker emits a typed result artifact. The schema is
+fixed:
 
-2. **Mixed verification tracks**: Combine deterministic (make check,
-   staticcheck), external tool (Copilot, Bugbot), model-based
-   (code-reviewer, security-reviewer), and human gate (user approval)
-   verification in every review cycle.
+```yaml
+result:
+  mission: m-2026-04-07-001
+  verdict: pass | fail | escalate
+  confidence: 0.0-1.0
+  files_changed:
+    - path: internal/hook/stdin.go
+      lines_added: 23
+      lines_removed: 4
+  evidence:
+    - test: TestShellScript_SessionStart
+      status: pass
+      duration_ms: 12
+  open_questions:
+    - "Should we backport this to v2.7.x?"
+  prose: |
+    Optional human-facing summary, not the coordination substrate.
+```
 
-3. **Bounded rounds with reflection**: After each review-fix cycle,
-   the leader asks: are we converging? should we change approach?
-   should we escalate? This is a gate, not a suggestion.
+The leader's synthesis step reads structured fields, not prose. Prose
+is the human-facing layer.
 
-4. **Concrete escalation signals**: Plateau (same findings across 2
-   cycles), divergence (fixing one issue introduces another), budget
-   (more than N cycles on one PR). These trigger escalation, not
-   "something feels off."
+**Delivery**: Result schema in `internal/mission/`. Validation on
+`ethos mission close`. Refuse to close a mission without a valid
+result artifact.
 
-**Delivery**: Workflow documentation and delegation patterns. The
-evaluation rules live in the workflow layer (feature-dev, CLAUDE.md),
-not in ethos core. Ethos's contribution is that review agents have
-stable personas with frozen evaluation criteria — the personality
-doesn't drift because PreCompact re-injects it.
+### 3.7 Append-Only Mission Log
+
+**Problem**: When something goes wrong, the leader cannot reconstruct
+what happened. Memory files are not authoritative — they're recall.
+Beads track work items, not decisions. There's no audit substrate.
+
+**Solution**: Each mission has an append-only event log:
+
+```text
+~/.punt-labs/ethos/missions/m-2026-04-07-001.log
+```
+
+Events: `created`, `worker_spawned`, `round_started`, `round_ended`,
+`reflection_recorded`, `evaluator_spawned`, `evaluator_finished`,
+`mission_closed`. Each event includes timestamp, actor, and structured
+payload. The log is the source of truth; derived summaries (memory,
+beads) are convenience layers.
+
+**Delivery**: Event log in `internal/mission/`. Append-only file with
+JSON lines. CLI: `ethos mission log <id>`. No edit, no delete.
+
+### What Phase 3 is not
+
+- **Not integration with anything.** Ethos owns the primitives. They
+  are usable from any workflow tool that wants discipline, but Phase 3
+  ships them standalone with no upstream or downstream dependency.
+- **Not personality changes.** Personalities stay advisory. Mission
+  contracts are the enforcement layer.
+- **Not new identities.** The 4 specialized review identities idea
+  from earlier drafts of this section is moved to Phase 4 — they are
+  one example of a team that could use the Phase 3 primitives, not a
+  prerequisite for building them.
+- **Not memory rework.** Memory remains advisory recall. Mission logs
+  are a separate substrate with different rules (append-only,
+  authoritative, not subject to truncation).
+
+### Sequencing
+
+Mission contract first (3.1) — every other primitive depends on its
+schema. Then write-set admission (3.2) and frozen evaluator (3.3) in
+parallel — both are independent extensions to the contract. Then
+bounded rounds (3.4) and independent verification (3.5) — both depend
+on the mission lifecycle. Result artifacts (3.6) and the event log
+(3.7) are consumed by everything else but can be built last because
+they don't block the others.
 
 ---
 

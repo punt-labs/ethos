@@ -2085,3 +2085,222 @@ normalization via `/proc/pid/exe`, and symlink resolution behavior.
 - **Skip subprocess tests, rely on manual testing** — the bug survived
   10+ manual restart cycles because the failure was silent. Only
   automated tests that spawn the real binary catch this class of bug.
+
+## DES-031: Mission contract — typed delegation artifact (SETTLED)
+
+**Status**: Settled. Implemented 2026-04-07 as `ethos-07m.5` — the
+Phase 3.1 foundation primitive. 3 rounds (implementation + 2 review
+cycles), 3 reviewers (feature-dev:code-reviewer, mdm, djb frozen
+evaluator). djb verdict: pass (0.88); round 3 added trust-boundary
+hardening (strict on-disk YAML, control-char rejection, counter
+bounds) per fix-it-now principle.
+
+### Problem
+
+Delegation between agents in ethos has been free-form prose. The leader
+writes a paragraph in a sub-agent prompt; the worker interprets it; the
+verifier (if any) is whoever happens to be available. There is no typed
+contract. Three concrete failures result:
+
+1. **Drift between rounds.** The leader changes their mind about success
+   criteria mid-cycle. The worker has no anchor — they implement to a
+   moving target. There is no record of what was promised at launch.
+2. **Reviewer substitution.** The reviewer at round 3 is a different
+   agent than the reviewer at round 1, with a different threshold. The
+   verdict is non-comparable across rounds.
+3. **Untracked write-set overlap.** Two workers edit the same file
+   concurrently because no mechanism declared the conflict. The bug
+   only surfaces at git merge.
+
+The four rules from the agent and instructions/memory architecture
+documents (`~/Documents/agents-architecture.tex`,
+`~/Documents/instructions-memory-architecture.tex`) name the underlying
+discipline gap:
+
+1. Roles are interfaces, not personas — but ethos delegations were
+   prose, not interfaces.
+2. Centralize understanding, decentralize execution — but reasoning
+   state leaked into worker prompts.
+3. Documentation is guidance, hooks and policies are enforcement —
+   but constraints lived in CLAUDE.md, not in runtime checks.
+4. Subagents do not inherit ambient context — but delegations assumed
+   they did.
+
+Phase 3 is the runtime that fixes these. The mission contract is
+its foundation: every other Phase 3 primitive reads this schema.
+
+### Decision
+
+Added an `internal/mission/` package that defines a typed `Contract`
+struct, a flock-protected filesystem store under
+`~/.punt-labs/ethos/missions/`, a daily monotonic ID generator, an
+append-only JSONL event log, and CLI + MCP surfaces for `create`,
+`show`, `list`, and `close`.
+
+**Schema invariants (enforced by `Contract.Validate()`):**
+
+- `mission_id` matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$` (date-based, not
+  content-hash — operational artifact, not historical record).
+- `evaluator.handle` is non-empty AND pinned at launch (`pinned_at`
+  is server-controlled; `hash` is reserved for 3.3 to populate).
+- `write_set` is non-empty; entries reject `..` traversal, absolute
+  paths, null bytes, and C0 control characters (log forgery
+  prevention). Single-dot segments (`./foo`) are permitted —
+  legitimate syntax.
+- `success_criteria` is non-empty; entries are free-form strings that
+  the evaluator interprets.
+- `budget.rounds` is between 1 and 10; default 3.
+- Leader/Worker/Evaluator handle fields reject control characters
+  (same log-forgery defense as write_set).
+- `tools` is a string allowlist; 3.4/3.5 may enforce it via subagent
+  tool restrictions.
+
+**Storage layout** mirrors `internal/session/`:
+
+```text
+~/.punt-labs/ethos/missions/
+  m-2026-04-07-001.yaml          # contract
+  m-2026-04-07-001.jsonl         # append-only event log
+  m-2026-04-07-001.lock          # flock target
+  .counter-2026-04-07            # daily counter, flock-protected
+```
+
+**Mission ID generation** uses a per-day counter file. Multiple leaders
+on the same day share the counter via `flock(LOCK_EX)`. The counter is
+bounded to `[1, 999]`: at exhaustion or on attacker-poisoned counter
+files (negative or out-of-range values), `NewID` returns an explicit
+error rather than producing an invalid ID.
+
+**Append-only event log** is JSON lines, one event per state transition.
+Events are written with a single `Write` of `marshaled + '\n'` to an
+`O_APPEND` file. JSON-lines append-mode is robust to interleaved writes
+on POSIX as long as each write is `< PIPE_BUF` (4096 bytes) and atomic
+at the kernel level. No flock required. 3.1 writes `create`, `update`,
+and `close` events. 3.4 will add `reflect`. 3.5 will add `verify`.
+
+**Trust boundary enforcement** runs on every read and write path.
+`Store.Create`, `Store.Update`, and `Store.Close` call `Validate()`
+before mutation. `Store.Load` and `Store.loadLocked` call `Validate()`
+for defense in depth on reads — a corrupt or hand-edited contract is
+rejected before any caller acts on it. Both the CLI and MCP create
+paths use `yaml.NewDecoder(...).KnownFields(true).Decode(&c)` for strict
+YAML parsing. Store load paths also use `KnownFields(true)` for
+trust-boundary symmetry — an attacker with local write access to
+`~/.punt-labs/ethos/missions/<id>.yaml` cannot smuggle extra fields.
+
+**Server-controlled fields** on create: `status` → `open`, `created_at`
+→ `now`, `updated_at` → `created_at`, `evaluator.pinned_at` →
+`created_at`. Caller-supplied values for these fields are ignored.
+Pinning the evaluator AT mission launch is a definitional invariant —
+a caller-supplied `pinned_at` that predates the mission's own creation
+is incoherent.
+
+**CLI surface** mirrors `cmd/ethos/session.go`:
+
+```text
+ethos mission                       # show help (cobra default)
+ethos mission create --file <yaml>  # create from YAML file (required)
+ethos mission show <id-or-prefix>
+ethos mission list [--status open|closed|failed|escalated|all]
+ethos mission close <id-or-prefix> [--status closed|failed|escalated]
+```
+
+Only `--file` creates a contract. A flag-build path (`--leader`,
+`--worker`, etc.) was considered in the round 1 spec but removed in
+round 2 after a reviewer caught that it silently planted literal
+`"placeholder"` strings into persisted contracts.
+
+**MCP surface** mirrors `internal/mcp/team_tools.go` — one `mission`
+tool with a `method` enum `{create, show, list, close}`. Returns
+formatted text per DES-020 via `internal/hook/format_output.go`
+`formatMission`, which uses `text/tabwriter` for layout consistency
+with the CLI's `printContract`.
+
+### Why YAML for the contract and JSONL for the log
+
+YAML matches the existing identity, session, role, and team storage
+formats. Humans edit it; tools serialize it; existing helpers
+(`yaml.Marshal/Unmarshal`) handle it. JSONL is append-only and
+machine-readable: each line is independently parseable, and event-log
+analysis (3.7) does not require loading the whole file. The two formats
+serve different access patterns.
+
+### Why a date-based mission ID, not a content hash
+
+Missions are operational, not historical. A leader needs to refer to
+"the mission I started this morning" by short prefix (`m-2026-04-07-001`
+shortens via `MatchByPrefix` to `m-2026-04-07` or even `001`). Content
+hashes are collision-free but not human-friendly, and the counter is
+bounded to 999 missions per day per installation — more than enough
+operational headroom.
+
+### Why a frozen evaluator
+
+If the reviewer changes mid-cycle, the verdict is non-comparable across
+rounds. A worker may "pass" round 3 against a more lenient reviewer
+than round 1, masking unresolved issues. Pinning the evaluator at
+launch (and, in 3.3, hashing their content) makes the verdict
+reproducible. 3.1 records the handle and timestamp; 3.3 will compute
+the content hash; 3.5 will spawn the verifier with that exact pinned
+state. 3.1 ships with `pinned_at` server-controlled — the caller
+cannot backdate the pinning.
+
+### What 3.1 deliberately does NOT do
+
+- **Write-set conflict detection** (3.2). 3.1 validates each path's
+  shape but does not check overlap with other open missions.
+- **Evaluator content hashing** (3.3). 3.1 stores the handle and
+  pinned-at timestamp; the hash field is empty.
+- **Round limit enforcement** (3.4). 3.1 stores `budget.rounds`;
+  no hook enforces it yet.
+- **Verifier subagent isolation** (3.5). 3.1 records the verifier
+  handle; the launch mechanism comes later.
+- **Result artifact validation** (3.6). 3.1 accepts mission close
+  without a result artifact.
+- **Append-only log reading API** (3.7). 3.1 writes events via a
+  private `appendEvent` helper; public reads come later.
+
+This staging keeps the foundation small enough to ship in three
+rounds with a clean djb verdict.
+
+### Rejected Alternatives
+
+- **Free-form prose contracts in CLAUDE.md** — already the status quo.
+  Fails three of the four architecture rules. Cannot be enforced.
+- **JSON for the contract** — faster to parse but inconsistent with
+  existing ethos storage (sessions, identities, roles, teams are all
+  YAML). Operator will edit contract files by hand more often than
+  programmatically; YAML wins on readability.
+- **Flag-build `mission create`** (`--leader alice --worker bwk`) —
+  implemented in round 1, removed in round 2. The flag-build path
+  cannot supply `write_set` or `success_criteria` via flags, so it
+  silently planted placeholder data into persisted contracts — a
+  trust-boundary violation. McIlroy: do one thing well. `--file`
+  is the only create path.
+- **Mission storage in the repo** (`.punt-labs/ethos/missions/`) — like
+  identities and teams. Rejected because missions are operational state,
+  not configuration. They are short-lived, machine-specific, and would
+  pollute the repo with churn. Stored under `~/.punt-labs/ethos/`.
+- **Content-hash mission IDs** — collision-free but not human-friendly.
+  Date-based IDs are easier to refer to and prefix-match.
+- **Per-leader counter** instead of per-day shared counter — opens a
+  race when multiple leaders launch simultaneously. Per-day shared
+  counter with flock is simpler.
+- **Single-dot (`.`) segment rejection in write_set** — proposed by
+  reviewers during round 2. Rejected by the leader: `./foo` is
+  legitimate path syntax and the existing `..` check catches actual
+  traversals regardless. `TestValidate_AcceptsSingleDotSegment` is an
+  explicit proof-of-pushback test.
+- **Rely on `Validate()` at create time only, trust on-disk state** —
+  round 1 behavior. Rejected by the djb frozen evaluator: an attacker
+  with local write access to `~/.punt-labs/ethos/missions/` could
+  bypass the CLI/MCP path. Round 3 added `KnownFields(true)` to both
+  `Load` and `loadLocked`, making on-disk trust symmetric with the
+  input path.
+- **Public `AppendEvent` on the mission store** — round 1 exposed a
+  public append path for future log-reader integration. Rejected by
+  djb as a deadlock footgun: `Create/Update/Close` are already inside
+  `withLock` when they append events and correctly use a private
+  `appendEventLocked`. A future external caller of a public
+  `AppendEvent` from inside a locked block would deadlock on Linux
+  flock. Round 3 unexported it; 3.7 will re-export if needed.
