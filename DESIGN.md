@@ -2553,3 +2553,219 @@ just tried to claim, not a normalized form.
   is the gate that needs the normalization, not the schema. A future
   hardening pass on `validate.go` could reject double slashes
   outright; out of scope for 3.2.
+
+## DES-033: Frozen evaluator — content hash pinning (PROPOSED)
+
+**Status**: Proposed. Implemented 2026-04-08 as `ethos-07m.7` — the
+Phase 3.3 primitive that makes DES-031's "frozen evaluator" actually
+enforceable at runtime. Two rounds: initial implementation plus local
+review fixes. Local reviewers: `mdm` (CLI surface — nine findings
+across high, medium, and low severity, all addressed).
+`feature-dev:code-reviewer` was
+attempted twice but hit transient API overload; leader supplemented
+with a targeted self-review that turned up no additional findings
+beyond mdm's list. Frozen evaluator: `djb` (pinned at mission launch).
+Status flips SETTLED after djb's verdict and PR merge.
+
+### Problem
+
+Phase 3.1 shipped the mission contract's `Evaluator.Hash` field as an
+empty placeholder. Nothing populated it; nothing verified it. Between
+mission launch and verifier spawn, an operator could edit the
+evaluator's personality, writing_style, talents, or role content and
+the subsequent verifier subagent would silently apply the updated
+standard. DES-031 called out exactly this gap and deferred the fix to
+3.3: *"3.3 will populate it from the resolved evaluator's
+personality+role+writing-style content (sha256)."*
+
+The underlying discipline rule is from
+`~/Documents/agents-architecture.tex`: *"Freeze the evaluator for the
+duration of the task. Changing the scoring rule mid-run creates fake
+progress and makes results impossible to compare."* Pinning the
+evaluator handle is half the job; pinning its content is the other
+half.
+
+### Decision
+
+At mission create time, `Store.ApplyServerFields` resolves the
+evaluator handle to its full identity content (personality,
+writing_style, talents, role), computes a deterministic sha256 over
+every content source, and writes the hex-encoded result into
+`Contract.Evaluator.Hash`. An unresolvable evaluator handle fails
+the create — an empty hash is not a valid outcome.
+
+At verifier subagent spawn time, the `SubagentStart` hook recomputes
+the hash from current identity content and compares against every
+open mission whose `Evaluator.Handle` matches the spawning subagent.
+Any mismatch is a fatal refusal. The mismatch error names every
+drifted mission, the pinned and current hash prefixes, a per-section
+breakdown of the current content, and both recovery paths.
+
+**Hash algorithm** (DES-033-v1, version-prefixed for future format
+changes):
+
+- Format version: `ethos-evaluator-hash-v1` (included in the hash
+  input so a bump invalidates every prior pinned hash)
+- Field separators: 0x1F (Unit Separator) between label and value;
+  0x1E (Record Separator) between sections. Both are ASCII control
+  bytes that ethos identity validation already rejects from handles
+  and slugs; collisions inside markdown bodies are absorbed by the
+  length prefix.
+- Length prefixes in BYTES, not runes, to prevent field-boundary
+  attacks (a multi-byte character cannot smuggle bytes into the
+  next field).
+- Section order (fixed, load-bearing):
+  1. Handle — anchors the hash to a specific identity, so two
+     evaluators with the same content don't collide
+  2. Personality content (markdown body, byte-for-byte)
+  3. Writing style content (markdown body, byte-for-byte)
+  4. Talents — each `(slug, content)` pair in identity declaration
+     order. Reordering talents is a content change the hash must
+     reflect.
+  5. Roles — each `(team/role_name, canonical_content)` pair sorted
+     lexicographically by `team/role_name`. Sorting is required
+     because `RoleLister` walks teams in map iteration order;
+     sorting makes the output stable across processes.
+
+**Role binding semantics.** Ethos identities have no direct role
+field — roles bind via team membership. `NewLiveHashSources` walks
+every team, collects every `(team, role)` assignment for the
+evaluator handle, and includes each with the team name as a prefix
+so two identical role names on different teams stay distinguishable.
+An evaluator on multiple teams appears multiple times in the hash,
+which is intentional: team-scoped role rebindings are drift the
+gate should catch.
+
+**Canonical role content** is rendered via a hand-rolled
+`key=value\n` format, NOT `yaml.Marshal`. YAML marshal is
+nondeterministic across releases (key ordering, indent style); the
+hand-rolled format is stable and the failure modes are obvious.
+
+**Verifier hook enforcement.**
+
+- Runs BEFORE joining the session roster. A refused spawn leaves
+  no roster trace, and the operator's diagnostic is the hash
+  mismatch, not a confusing post-join failure.
+- Lists open missions, loads each, filters to `Status == StatusOpen`,
+  then further filters to those whose `Evaluator.Handle` matches
+  the spawning subagent. Non-matching missions are skipped.
+- Computes the current hash ONCE per hook invocation (cached across
+  all matching missions) and compares against each mission's
+  pinned hash. Every mismatch is aggregated into a single
+  multi-line error, not a sequence of failed spawns.
+- A corrupt or unloadable mission is fatal, not silently skipped.
+  Silent skip would let an attacker bypass the frozen evaluator by
+  hand-corrupting one contract.
+- Misconfiguration (non-nil mission store, nil `HashSources`) is
+  fatal. Silently skipping the gate would let stale evaluator
+  content through under a configuration error.
+
+**Drift error format.**
+
+```text
+refusing verifier spawn: evaluator "djb" content has drifted since 3 open missions were launched
+  m-2026-04-08-001: pinned 19095bb477fb → current cce412ad7986
+  m-2026-04-08-003: pinned 19095bb477fb → current cce412ad7986
+  m-2026-04-08-005: pinned a2f193c001de → current cce412ad7986
+  current content sections (check which you edited):
+    personality:       aa288d81f495
+    writing_style:     1d9226cf9e3d
+    talent "security": 674bd4174a76
+    role "punt/lead":  87f293bd0e1a
+  to preserve these missions: revert the edit to the evaluator's identity content
+  to accept the new content: close the listed missions and relaunch them with the new content
+```
+
+The per-section breakdown is the CURRENT state, not a diff against
+the pinned state — the contract only stores the rollup, so the
+pinned per-section hashes are unknown at verify time. The operator
+finds the drifted file by elimination: whichever current section
+hash they don't recognize is the file they touched. This is a
+pragmatic trade against a schema change (pinning the breakdown
+alongside the rollup), which would have expanded 3.3's scope.
+
+### Legacy mission handling
+
+Pre-3.3 missions with empty `Evaluator.Hash` are ALLOWED with a
+stderr warning, not refused. In practice there are no legacy
+missions — Phase 3.1 shipped hours before Phase 3.3 — but the
+warning path covers the edge case without forcing a hard upgrade.
+Any future mission created with the 3.3 binary gets a real hash.
+
+### What 3.3 deliberately does NOT do
+
+- **No pinned per-section breakdown.** The contract only stores the
+  rollup. Pinning the breakdown would be a schema change (new
+  fields on `Evaluator`) and would let the verifier diff pinned-vs-
+  current rather than just listing current sections. Deferred —
+  the pragmatic "operator finds it by elimination" approach ships
+  first.
+- **No cryptographic signing.** The hash is a content fingerprint,
+  not a signature. The trust boundary is the on-disk mission
+  contract and the on-disk identity files; an attacker with write
+  access to both can evade the gate by editing both in sync. This
+  is the inherent filesystem trust model, not a 3.3 regression.
+- **No TOCTOU protection on identity files.** The hash reads the
+  evaluator's files at create time and again at verify time;
+  between those reads the files are trusted to be stable.
+  Concurrent edits during a hook invocation are not a supported
+  adversarial model.
+- **No runtime bypass.** There is no flag, environment variable,
+  or configuration option to disable the hash gate. The only ways
+  to proceed after a mismatch are (a) revert the edit, (b) close
+  the mission, or (c) in the edge case of a misconfigured
+  installation, fix the configuration.
+- **No hash format migration path.** The version prefix
+  (`ethos-evaluator-hash-v1`) reserves the ability to change the
+  algorithm in a future phase. Today there is no v2 and no
+  migration tooling; a bump would invalidate every existing
+  pinned mission and force a relaunch.
+
+### Rejected Alternatives
+
+- **Hash the identity YAML file as bytes.** Simpler but brittle:
+  YAML key order or indentation changes would flip the hash even
+  when the semantic content is unchanged. Hand-rolled canonical
+  serialization gives stability across releases.
+- **Compute the hash on the CLI/MCP side and pass it to
+  `ApplyServerFields`.** Rejected: the trust boundary is the
+  server-side `ApplyServerFields` call, not the caller. If the CLI
+  could supply a hash, a caller with write access to the identity
+  files could compute a pre-drift hash and smuggle it into the
+  contract at launch, bypassing the gate entirely. The hash must
+  be computed server-side from the identity store at create time.
+- **Store a per-section breakdown alongside the rollup.** Would
+  let the verifier diff pinned-vs-current and name the drifted
+  file exactly. Rejected for 3.3 because it requires a schema
+  change (new nested struct on `Evaluator`). The current "show
+  current sections, operator finds by elimination" approach ships
+  without schema changes; a future phase could revisit.
+- **Soft-fail on mismatch with a warning.** Would match the
+  legacy-mission policy. Rejected: the whole point of the gate is
+  to refuse the spawn. A warning-only mode would turn the primitive
+  into documentation — which the architecture rule explicitly
+  rejects.
+- **Pin only the evaluator's personality.** Simpler, but incomplete:
+  writing_style influences verdict framing, talents influence
+  domain judgment, roles influence tool access. An edit to any of
+  them is a real change the gate must detect.
+- **Refuse verifier spawns on any misconfigured installation.**
+  The current code refuses on misconfiguration (non-nil Missions,
+  nil HashSources). An alternative would be to silently skip
+  the gate in that case (legacy-compatible default). Rejected:
+  misconfiguration is an operator error and deserves loud
+  feedback, not a silent bypass.
+- **Cache the computed hash across hook invocations in-memory.**
+  Phase 3.3's hook runs once per subagent spawn, reads the
+  identity files fresh, computes the hash, and exits. Caching
+  across invocations would require a persistent hook process
+  (ethos hooks are short-lived). The per-invocation cost is ~4
+  file reads + sha256, which is well under the hook's latency
+  budget.
+- **Walk teams lazily only when a mission matches.** The current
+  `checkVerifierHash` only calls `ComputeEvaluatorHash` when a
+  mission with a matching evaluator handle is found. Team walking
+  happens inside that compute call. An earlier draft had
+  `NewLiveHashSources` pre-walking teams on construction; rejected
+  because it does work that's often unused (most hook invocations
+  are for non-evaluator subagents).
