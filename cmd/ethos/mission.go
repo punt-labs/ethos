@@ -484,10 +484,15 @@ func runMissionShow(idOrPrefix string) {
 		printReflections(reflections)
 	}
 
+	// A corrupt results file still renders the Results section —
+	// printResults(nil) emits `Results:\n  (none)` so the operator
+	// sees the header regardless of load success. The stderr warning
+	// carries the load failure; without the stdout marker, an
+	// operator piping `show` through `less` would lose the signal
+	// entirely. Round 4 mdm finding N1.
 	results, err := ms.LoadResults(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading results: %v\n", err)
-		return
 	}
 	printResults(results)
 }

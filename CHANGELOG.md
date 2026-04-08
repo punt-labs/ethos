@@ -35,7 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paragraph to `ethos mission close --help` documenting the result
   gate and the remediation path; and unifies the error-wrapper style
   in `validateFileChange` and Contract `validate` so both read
-  `field: <cause>`.
+  `field: <cause>`. Round 4 (mdm finding N1) removes a stale early
+  `return` in `runMissionShow` so a corrupt `.results.yaml` still
+  renders the Results header and `(none)` marker on stdout — an
+  operator piping `ethos mission show <id> 2>/dev/null | less` no
+  longer loses the section entirely, and the stderr warning still
+  carries the load failure.
 
 ### Added
 
