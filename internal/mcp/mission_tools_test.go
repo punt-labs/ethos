@@ -490,6 +490,229 @@ func TestHandleMission_CreateRejectsCrossMissionConflict(t *testing.T) {
 	assert.Contains(t, msg, "internal/foo/bar.go")
 }
 
+// --- 3.4: reflect, reflections, advance ---
+
+// validReflectionYAML is a minimal continue-recommendation reflection
+// the MCP reflect handler accepts. Tests parameterize it via
+// reflectionYAMLForRound when they need other rounds or
+// recommendations.
+const validReflectionYAML = `round: 1
+author: claude
+converging: true
+signals:
+  - tests passing
+recommendation: continue
+reason: round 1 went well
+`
+
+func reflectionYAMLForRound(round int, rec, reason string) string {
+	return fmt.Sprintf(`round: %d
+author: claude
+converging: true
+signals:
+  - tests passing
+recommendation: %s
+reason: %q
+`, round, rec, reason)
+}
+
+func TestHandleMission_Reflect_RoundTrip(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	reflectResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflect",
+		"mission_id": created.MissionID,
+		"reflection": validReflectionYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, reflectResult.IsError, "reflect must succeed: %s", resultText(t, reflectResult))
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, reflectResult)), &got))
+	assert.Equal(t, created.MissionID, got["mission_id"])
+	assert.Equal(t, float64(1), got["round"])
+	assert.Equal(t, "continue", got["recommendation"])
+}
+
+func TestHandleMission_Reflect_RequiresMissionID(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflect",
+		"reflection": validReflectionYAML,
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mission_id is required")
+}
+
+func TestHandleMission_Reflect_RequiresBody(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflect",
+		"mission_id": "m-2026-04-08-001",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "reflection YAML body is required")
+}
+
+func TestHandleMission_Reflect_RejectsUnknownField(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	body := validReflectionYAML + "bogus: smuggled\n"
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflect",
+		"mission_id": created.MissionID,
+		"reflection": body,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "field bogus not found")
+}
+
+func TestHandleMission_Reflections_EmptyReturnsArray(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflections",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Equal(t, "[]", resultText(t, result))
+}
+
+func TestHandleMission_Reflections_ReturnsAfterReflect(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflect",
+		"mission_id": created.MissionID,
+		"reflection": validReflectionYAML,
+	}))
+	require.NoError(t, err)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflections",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var rs []mission.Reflection
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &rs))
+	require.Len(t, rs, 1)
+	assert.Equal(t, 1, rs[0].Round)
+	assert.Equal(t, "continue", rs[0].Recommendation)
+}
+
+func TestHandleMission_Advance_RequiresReflection(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "advance",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError, "advance without reflection must fail")
+	msg := resultText(t, result)
+	assert.Contains(t, msg, "no reflection for round 1")
+	assert.Contains(t, msg, created.MissionID)
+}
+
+func TestHandleMission_Advance_HappyPath(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflect",
+		"mission_id": created.MissionID,
+		"reflection": validReflectionYAML,
+	}))
+	require.NoError(t, err)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "advance",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "advance must succeed: %s", resultText(t, result))
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &got))
+	assert.Equal(t, created.MissionID, got["mission_id"])
+	assert.Equal(t, float64(2), got["current_round"])
+}
+
+func TestHandleMission_Advance_StopBlocks(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	stopBody := reflectionYAMLForRound(1, "stop", "fixture is broken; close")
+	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "reflect",
+		"mission_id": created.MissionID,
+		"reflection": stopBody,
+	}))
+	require.NoError(t, err)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "advance",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	msg := resultText(t, result)
+	assert.Contains(t, msg, `recommends "stop"`)
+	assert.Contains(t, msg, "fixture is broken")
+}
+
 // TestHandleMission_CreateMatchesCLIHashWithRoles is the round 4
 // Bugbot regression test. It proves the Phase 3.3 parity invariant:
 // the MCP create path and the CLI create path produce identical

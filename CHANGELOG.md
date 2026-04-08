@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Bounded rounds with mandatory reflection** (Phase 3.4,
+  `ethos-07m.8`) — `Contract` gains a `current_round` field, and a
+  new `Reflection` type plus the `Store.AdvanceRound` gate make
+  `Budget.Rounds` enforceable. Reflections are typed (round, author,
+  converging, signals, recommendation enum, reason) and append-only:
+  `Store.AppendReflection` refuses duplicate rounds, refuses
+  reflections whose round does not match the contract's
+  `current_round`, and refuses reflections on closed missions. The
+  round-advance gate refuses to bump `current_round` when (a) the
+  current round has no reflection on disk, (b) the reflection
+  recommends `stop` or `escalate` (the leader's `reason` is surfaced
+  verbatim), or (c) advancing would exceed `Budget.Rounds`.
+  Reflections live alongside the contract in a sibling
+  `<id>.reflections.yaml` file so the contract itself stays pure.
+  Three new `mission` subcommands wire this to operators —
+  `ethos mission reflect <id> --file <path>` to record a reflection,
+  `ethos mission advance <id>` to bump the round, and
+  `ethos mission reflections <id>` to dump the round-by-round log.
+  The `mission` MCP tool gains matching `reflect`, `advance`, and
+  `reflections` methods, each with a formatter in
+  `internal/hook/format_output.go` (DES-020). The new
+  `round_advanced` and `reflect` events are appended to the
+  per-mission JSONL log so the round lifecycle is auditable. The
+  Phase 3.1/3.2/3.3 primitives are untouched: existing `Validate`
+  rules still hold, the cross-mission write_set conflict scan still
+  runs, and the frozen-evaluator hash and verifier-spawn gate are
+  unchanged.
 - **Frozen evaluator with content hash pinning** (Phase 3.3,
   `ethos-07m.7`) — `Store.ApplyServerFields` now resolves the
   evaluator handle through the live identity, role, and team stores

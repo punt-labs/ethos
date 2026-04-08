@@ -1403,6 +1403,406 @@ func TestApplyServerFields_HashRoundTripsThroughCreate(t *testing.T) {
 		"Evaluator.Hash must survive the YAML round trip byte-for-byte")
 }
 
+// --- 3.4: round-advance gate and reflection store ---
+
+// reflectionFor returns a fresh, valid reflection for the given round
+// with the given recommendation. Tests use this to keep the table
+// rows compact and the assertions focused on the gate behavior, not
+// on building the input.
+func reflectionFor(round int, rec string) *Reflection {
+	return &Reflection{
+		Round:          round,
+		Author:         "claude",
+		Converging:     true,
+		Signals:        []string{"all green"},
+		Recommendation: rec,
+		Reason:         "round " + fmt.Sprint(round) + " " + rec,
+	}
+}
+
+// TestStore_FreshContractStartsAtRoundOne asserts the round-tracking
+// default: a mission created via the store starts at round 1, and
+// CurrentRound is reflected back to the caller. The default-fill is
+// the upgrade path that lets pre-3.4 callers (and the existing
+// validContract test fixture) keep working without explicitly
+// setting CurrentRound.
+func TestStore_FreshContractStartsAtRoundOne(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.CurrentRound = 0
+	require.NoError(t, s.Create(c))
+	assert.Equal(t, 1, c.CurrentRound, "Create must reflect CurrentRound back as 1")
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, loaded.CurrentRound, "stored mission must start at round 1")
+}
+
+// TestStore_LoadDefaultsCurrentRoundForPre34Files asserts that a
+// hand-written contract YAML without a current_round line still
+// loads in 3.4. Pre-3.4 missions on disk have no current_round
+// field; the read path defaults the missing value to 1 so the
+// upgrade is invisible to operators.
+func TestStore_LoadDefaultsCurrentRoundForPre34Files(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	body := []byte(`mission_id: m-2026-04-07-001
+status: open
+created_at: 2026-04-07T21:30:00Z
+updated_at: 2026-04-07T21:30:00Z
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+  pinned_at: 2026-04-07T21:30:00Z
+inputs: {}
+write_set:
+  - internal/mission/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(s.missionsDir(), "m-2026-04-07-001.yaml"),
+		body, 0o600,
+	))
+	loaded, err := s.Load("m-2026-04-07-001")
+	require.NoError(t, err)
+	assert.Equal(t, 1, loaded.CurrentRound)
+}
+
+// TestStore_AppendReflection_RoundTrip asserts success criteria 1
+// and 2: a well-formed reflection is stored and retrievable via
+// LoadReflections after AppendReflection succeeds.
+func TestStore_AppendReflection_RoundTrip(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := reflectionFor(1, RecommendationContinue)
+	require.NoError(t, s.AppendReflection(c.MissionID, r))
+	assert.NotEmpty(t, r.CreatedAt, "AppendReflection must reflect CreatedAt back")
+
+	loaded, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, loaded, 1)
+	assert.Equal(t, 1, loaded[0].Round)
+	assert.Equal(t, RecommendationContinue, loaded[0].Recommendation)
+	assert.Equal(t, "claude", loaded[0].Author)
+}
+
+// TestStore_AppendReflection_RejectsWrongRound asserts that the
+// reflection store refuses a Round value that does not match the
+// mission's CurrentRound. The misuse should be caught at submit
+// time, not at advance time, so the operator's error message is
+// close to the bug.
+func TestStore_AppendReflection_RejectsWrongRound(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	// Mission is at round 1; submitting a round-2 reflection is wrong.
+	r := reflectionFor(2, RecommendationContinue)
+	err := s.AppendReflection(c.MissionID, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "round 2")
+	assert.Contains(t, err.Error(), "current round 1")
+}
+
+// TestStore_AppendReflection_RejectsDuplicate asserts the
+// append-only invariant: once round N's reflection is recorded, a
+// second submission for round N is refused. This is success
+// criterion 7.
+func TestStore_AppendReflection_RejectsDuplicate(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	err := s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationPivot))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+	assert.Contains(t, err.Error(), "append-only")
+}
+
+// TestStore_AppendReflection_RejectsClosedMission asserts that
+// reflections cannot be recorded on a terminal mission.
+func TestStore_AppendReflection_RejectsClosedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	require.NoError(t, s.Close(c.MissionID, StatusClosed))
+
+	err := s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminal state")
+}
+
+// TestStore_AppendReflection_RejectsMalformed asserts that
+// AppendReflection runs Validate before any disk I/O. A malformed
+// reflection (no signals) is refused and the on-disk file is left
+// unchanged.
+func TestStore_AppendReflection_RejectsMalformed(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	bad := reflectionFor(1, RecommendationContinue)
+	bad.Signals = nil
+	err := s.AppendReflection(c.MissionID, bad)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "signals")
+
+	// No reflections file should exist.
+	_, statErr := os.Stat(s.reflectionsPath(c.MissionID))
+	assert.True(t, os.IsNotExist(statErr), "rejected reflection must leave no file")
+}
+
+// TestStore_AdvanceRound_BlockedWithoutReflection asserts success
+// criterion 3: round 1 → round 2 fails when round 1 has no
+// reflection on disk.
+func TestStore_AdvanceRound_BlockedWithoutReflection(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	_, err := s.AdvanceRound(c.MissionID, "claude")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no reflection for round 1")
+	assert.Contains(t, err.Error(), c.MissionID)
+
+	// Mission must still be at round 1 — failed advance leaves
+	// CurrentRound untouched.
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, loaded.CurrentRound)
+}
+
+// TestStore_AdvanceRound_UnblocksAfterReflection asserts success
+// criterion 4: submitting the round 1 reflection and retrying the
+// advance succeeds, and CurrentRound becomes 2.
+func TestStore_AdvanceRound_UnblocksAfterReflection(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	newRound, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	assert.Equal(t, 2, newRound)
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, loaded.CurrentRound)
+}
+
+// TestStore_AdvanceRound_BudgetExhaustionRefused asserts success
+// criterion 5: a mission whose CurrentRound has reached its budget
+// cannot advance regardless of reflection state.
+func TestStore_AdvanceRound_BudgetExhaustionRefused(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.Budget.Rounds = 3
+	require.NoError(t, s.Create(c))
+
+	// Round 1 → 2.
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	_, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+
+	// Round 2 → 3.
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(2, RecommendationContinue)))
+	_, err = s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+
+	// Round 3 → 4 must fail (budget exhausted).
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(3, RecommendationContinue)))
+	_, err = s.AdvanceRound(c.MissionID, "claude")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "exhausted its round budget")
+	assert.Contains(t, err.Error(), "3/3")
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, loaded.CurrentRound)
+}
+
+// TestStore_AdvanceRound_StopRecommendationBlocks asserts success
+// criterion 6 (stop variant): a stop reflection blocks the next
+// advance and the leader's reason is surfaced verbatim.
+func TestStore_AdvanceRound_StopRecommendationBlocks(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := reflectionFor(1, RecommendationStop)
+	r.Reason = "the test fixture is irreparable; stop and re-scope"
+	require.NoError(t, s.AppendReflection(c.MissionID, r))
+
+	_, err := s.AdvanceRound(c.MissionID, "claude")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `recommends "stop"`)
+	assert.Contains(t, err.Error(), "the test fixture is irreparable")
+}
+
+// TestStore_AdvanceRound_EscalateRecommendationBlocks asserts the
+// escalate variant of success criterion 6.
+func TestStore_AdvanceRound_EscalateRecommendationBlocks(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := reflectionFor(1, RecommendationEscalate)
+	r.Reason = "needs human review"
+	require.NoError(t, s.AppendReflection(c.MissionID, r))
+
+	_, err := s.AdvanceRound(c.MissionID, "claude")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `recommends "escalate"`)
+	assert.Contains(t, err.Error(), "needs human review")
+}
+
+// TestStore_AdvanceRound_PivotPermitted asserts that a pivot
+// recommendation does NOT block the advance — pivot is the
+// "different approach in the next round" signal, not "stop".
+func TestStore_AdvanceRound_PivotPermitted(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationPivot)))
+	newRound, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	assert.Equal(t, 2, newRound)
+}
+
+// TestStore_AdvanceRound_RefusesClosedMission asserts that the gate
+// refuses to advance a mission that is no longer open.
+func TestStore_AdvanceRound_RefusesClosedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	require.NoError(t, s.Close(c.MissionID, StatusClosed))
+
+	_, err := s.AdvanceRound(c.MissionID, "claude")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminal state")
+}
+
+// TestStore_AdvanceRound_LogsTransition asserts success criterion 8:
+// a successful round advance writes a `round_advanced` event with
+// from/to round numbers, and an unsuccessful one does not.
+// Reflections write a `reflect` event regardless of advance.
+func TestStore_AdvanceRound_LogsTransition(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	_, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+
+	events := readLog(t, s, c.MissionID)
+	// create + reflect + round_advanced.
+	require.Len(t, events, 3)
+	assert.Equal(t, "create", events[0].Event)
+	assert.Equal(t, "reflect", events[1].Event)
+	assert.Equal(t, float64(1), events[1].Details["round"])
+	assert.Equal(t, "continue", events[1].Details["recommendation"])
+	assert.Equal(t, "round_advanced", events[2].Event)
+	assert.Equal(t, float64(1), events[2].Details["from_round"])
+	assert.Equal(t, float64(2), events[2].Details["to_round"])
+}
+
+// TestStore_LoadReflections_EmptyForFreshMission asserts that a
+// brand-new mission has no reflections file on disk and
+// LoadReflections returns nil with no error.
+func TestStore_LoadReflections_EmptyForFreshMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	rs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	assert.Nil(t, rs)
+}
+
+// TestStore_LoadReflections_RejectsUnknownField asserts that a
+// hand-edited reflections file with a smuggled key is rejected on
+// read, symmetric with the contract decode trust boundary.
+func TestStore_LoadReflections_RejectsUnknownField(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	// Drop a hand-rolled reflections file with a bogus key.
+	body := []byte(`reflections:
+  - round: 1
+    author: claude
+    converging: true
+    signals:
+      - one
+    recommendation: continue
+    reason: ok
+    bogus: smuggled
+`)
+	require.NoError(t, os.WriteFile(s.reflectionsPath(c.MissionID), body, 0o600))
+
+	_, err := s.LoadReflections(c.MissionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "field bogus not found")
+}
+
+// TestStore_AdvanceRound_ConcurrentSerialization asserts that two
+// concurrent advances on the same mission cannot both succeed: the
+// per-mission flock serializes the bumps so the contract's
+// CurrentRound never skips a round.
+func TestStore_AdvanceRound_ConcurrentSerialization(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.Budget.Rounds = 5
+	require.NoError(t, s.Create(c))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+
+	const n = 10
+	var wg sync.WaitGroup
+	results := make(chan int, n)
+	errs := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r, err := s.AdvanceRound(c.MissionID, "claude")
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- r
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+
+	var winners []int
+	for r := range results {
+		winners = append(winners, r)
+	}
+	// Exactly one goroutine successfully bumps to round 2; the rest
+	// see "no reflection for round 2" because no reflection has been
+	// submitted for the new round yet. This is the round-monotone
+	// invariant under concurrency.
+	assert.Len(t, winners, 1, "exactly one concurrent advance must win")
+	if len(winners) == 1 {
+		assert.Equal(t, 2, winners[0])
+	}
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, loaded.CurrentRound)
+}
+
 // TestStore_CreateRejectsDotSegmentBypass asserts that dot-segment
 // path syntax (legitimate per the per-entry validator's
 // TestValidate_AcceptsSingleDotSegment) cannot bypass the cross-

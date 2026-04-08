@@ -32,6 +32,7 @@ func validContract() Contract {
 			Rounds:              3,
 			ReflectionAfterEach: true,
 		},
+		CurrentRound: 1,
 	}
 }
 

@@ -143,6 +143,17 @@ func (s *Store) logPath(missionID string) string {
 	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".jsonl")
 }
 
+// reflectionsPath returns the sibling YAML file that holds the
+// round-by-round reflections for a mission. Reflections live next to
+// the contract, not inside it: the contract is the trust boundary
+// pinned at launch, and a growing array of reflections would force
+// every Update to rewrite an unbounded slice. The sibling file grows
+// as rounds happen and is the single source of truth for the
+// round-advance gate.
+func (s *Store) reflectionsPath(missionID string) string {
+	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".reflections.yaml")
+}
+
 // Create persists a new mission contract. The caller must supply a
 // fully-populated Contract (the server-controlled fields — MissionID,
 // Status, CreatedAt, UpdatedAt, ClosedAt, Evaluator.PinnedAt — can be
@@ -172,6 +183,16 @@ func (s *Store) Create(c *Contract) error {
 	staged := *c
 	if staged.UpdatedAt == "" {
 		staged.UpdatedAt = staged.CreatedAt
+	}
+	// 3.4: a freshly created mission begins at round 1. The caller
+	// may leave CurrentRound at its zero value; Validate would
+	// otherwise reject the staged contract for being out of [1, N].
+	// Default-filling here keeps the caller's struct unchanged on
+	// failure (the shallow copy is what Validate sees) and lets a
+	// pre-3.4 client that doesn't know about the field still produce
+	// a well-formed contract.
+	if staged.CurrentRound == 0 {
+		staged.CurrentRound = 1
 	}
 	if err := staged.Validate(); err != nil {
 		return fmt.Errorf("invalid contract: %w", err)
@@ -225,10 +246,12 @@ func (s *Store) Create(c *Contract) error {
 	if err != nil {
 		return err
 	}
-	// Success: reflect the new UpdatedAt back to the caller — the
-	// one field Create is contracted to set. A failed Create leaves
-	// the caller's struct unchanged.
+	// Success: reflect the new UpdatedAt and the (possibly defaulted)
+	// CurrentRound back to the caller. These are the two fields Create
+	// is contracted to set. A failed Create leaves the caller's struct
+	// unchanged.
 	c.UpdatedAt = staged.UpdatedAt
+	c.CurrentRound = staged.CurrentRound
 	return nil
 }
 
@@ -270,6 +293,15 @@ func decodeAndValidate(data []byte, missionID string) (*Contract, error) {
 	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
 		return nil, err
+	}
+	// 3.4: pre-3.4 contracts on disk have no current_round line and
+	// decode to CurrentRound == 0. Default-fill on read keeps the
+	// upgrade path clean — a mission created by 3.3 still loads in
+	// 3.4 — and the in-memory invariant (1 ≤ CurrentRound ≤
+	// Budget.Rounds) is enforced by the Validate call below for
+	// every other failure mode.
+	if c.CurrentRound == 0 {
+		c.CurrentRound = 1
 	}
 	// Defense in depth: even on read, run Validate. A corrupt or
 	// hand-edited contract should be flagged before callers act on it.
@@ -597,6 +629,311 @@ func (s *Store) withCreateLock(fn func() error) error {
 	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
 	return fn()
+}
+
+// --- 3.4: reflections and round advance ---
+
+// reflectionsFile is the on-disk schema for the sibling
+// .reflections.yaml file. The single Round-keyed sequence is the
+// shape callers see; the wrapper struct exists so the file format
+// can grow new top-level metadata without breaking decode.
+//
+// Two ordering invariants hold for the on-disk slice (and the helper
+// methods enforce them on every write):
+//
+//  1. Reflections are sorted by Round ascending. The store rewrites
+//     the file on every Append, and the rewrite preserves order.
+//  2. Each Round value appears at most once. AppendReflection
+//     refuses to add a duplicate, so the slice is dense.
+type reflectionsFile struct {
+	Reflections []Reflection `yaml:"reflections"`
+}
+
+// LoadReflections returns the reflections recorded for a mission, in
+// round order. Missing file → empty slice; the absence of any
+// reflection is the normal state for a brand-new round 1 mission.
+//
+// Decodes with KnownFields(true) so a hand-edited reflections file
+// cannot smuggle extra keys past the trust boundary, symmetric with
+// the contract decode path.
+func (s *Store) LoadReflections(missionID string) ([]Reflection, error) {
+	if strings.TrimSpace(missionID) == "" {
+		return nil, fmt.Errorf("missionID is required")
+	}
+	data, err := os.ReadFile(s.reflectionsPath(missionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading reflections for %q: %w", missionID, err)
+	}
+	parsed, err := decodeReflectionsFile(data, missionID)
+	if err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+// decodeReflectionsFile parses a reflections.yaml body, runs Validate
+// on every entry, and asserts the round-monotone invariant. Returns
+// the decoded slice (nil if the file is empty/blank).
+func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) {
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, nil
+	}
+	var wrapper reflectionsFile
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&wrapper); err != nil {
+		return nil, fmt.Errorf("invalid reflections file %q: %w", missionID, err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("invalid reflections file %q: multiple YAML documents are not allowed", missionID)
+		}
+		return nil, fmt.Errorf("invalid reflections file %q: trailing content: %w", missionID, err)
+	}
+	for i := range wrapper.Reflections {
+		r := &wrapper.Reflections[i]
+		if err := r.Validate(); err != nil {
+			return nil, fmt.Errorf("reflections[%d] for %q: %w", i, missionID, err)
+		}
+		if i > 0 && wrapper.Reflections[i-1].Round >= r.Round {
+			return nil, fmt.Errorf(
+				"reflections file %q is out of order or has duplicate round: %d after %d",
+				missionID, r.Round, wrapper.Reflections[i-1].Round,
+			)
+		}
+	}
+	return wrapper.Reflections, nil
+}
+
+// AppendReflection records a reflection for a mission's current round.
+// The append is append-only by construction: a duplicate Round is
+// refused, and the file is rewritten via temp+rename so a partial
+// write cannot leave a half-encoded YAML doc on disk.
+//
+// The caller-provided Reflection.Round must equal Contract.CurrentRound
+// (the round the worker is currently in). Submitting a reflection for
+// any other round is a programming error and is refused — the gate
+// would otherwise have to chase out-of-order reflections at advance
+// time, where the operator-facing error is much further from the bug.
+//
+// Validate runs before any disk I/O. CreatedAt is set to now if the
+// caller left it blank. The reflect event is appended to the JSONL
+// log inside the per-mission flock so concurrent advance/reflect
+// attempts on the same mission serialize cleanly.
+//
+// Atomic from the caller's view: a write failure leaves the on-disk
+// reflections file unchanged.
+func (s *Store) AppendReflection(missionID string, r *Reflection) error {
+	if r == nil {
+		return fmt.Errorf("reflection is nil")
+	}
+	staged := *r
+	if strings.TrimSpace(staged.CreatedAt) == "" {
+		staged.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if err := staged.Validate(); err != nil {
+		return fmt.Errorf("invalid reflection: %w", err)
+	}
+	return s.withLock(missionID, func() error {
+		c, _, err := s.loadLocked(missionID)
+		if err != nil {
+			return err
+		}
+		// Refuse to record a reflection on a closed mission. The
+		// round-advance gate is also closed-status-aware, but rejecting
+		// here gives a clearer diagnostic than "advance refused" later.
+		if c.Status != StatusOpen {
+			return fmt.Errorf("mission %q is in terminal state %q; reflections are accepted only on open missions", missionID, c.Status)
+		}
+		if staged.Round != c.CurrentRound {
+			return fmt.Errorf(
+				"reflection round %d does not match mission %q current round %d",
+				staged.Round, missionID, c.CurrentRound,
+			)
+		}
+		existing, err := s.loadReflectionsLocked(missionID)
+		if err != nil {
+			return err
+		}
+		for _, e := range existing {
+			if e.Round == staged.Round {
+				return fmt.Errorf(
+					"reflection for round %d of mission %q already exists; reflections are append-only",
+					staged.Round, missionID,
+				)
+			}
+		}
+		updated := append(existing, staged)
+		if err := s.writeReflectionsLocked(missionID, updated); err != nil {
+			return err
+		}
+		if err := s.appendEventLocked(missionID, Event{
+			TS:    staged.CreatedAt,
+			Event: "reflect",
+			Actor: staged.Author,
+			Details: map[string]any{
+				"round":          staged.Round,
+				"recommendation": staged.Recommendation,
+				"converging":     staged.Converging,
+				"signal_count":   len(staged.Signals),
+			},
+		}); err != nil {
+			// Roll back the reflections file so the mission's on-disk
+			// state matches the operation's failure: if the event log
+			// rejects the reflect record, the reflection itself must
+			// not be observable to a later read.
+			if rbErr := s.writeReflectionsLocked(missionID, existing); rbErr != nil {
+				return fmt.Errorf("reflect: event append failed: %w; rollback failed: %v", err, rbErr)
+			}
+			return fmt.Errorf("reflect: event append failed, reflection rolled back: %w", err)
+		}
+		// Reflect Author/CreatedAt back to the caller — these are the
+		// two fields AppendReflection is contracted to set.
+		r.CreatedAt = staged.CreatedAt
+		return nil
+	})
+}
+
+// loadReflectionsLocked is the lock-respecting twin of LoadReflections.
+// The caller must already hold the per-mission flock; AppendReflection
+// and AdvanceRound use it to read the existing slice without
+// re-acquiring the lock and deadlocking.
+func (s *Store) loadReflectionsLocked(missionID string) ([]Reflection, error) {
+	data, err := os.ReadFile(s.reflectionsPath(missionID))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading reflections for %q: %w", missionID, err)
+	}
+	return decodeReflectionsFile(data, missionID)
+}
+
+// writeReflectionsLocked rewrites the reflections file via temp+rename.
+// Caller must hold the per-mission flock. The file is wrapped in a
+// reflectionsFile struct so future top-level metadata (e.g. a
+// schema_version key) can be added without breaking decode of older
+// files.
+func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error {
+	wrapper := reflectionsFile{Reflections: rs}
+	data, err := yaml.Marshal(&wrapper)
+	if err != nil {
+		return fmt.Errorf("marshaling reflections: %w", err)
+	}
+	dest := s.reflectionsPath(missionID)
+	tmp := dest + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return fmt.Errorf("writing temp reflections: %w", err)
+	}
+	return os.Rename(tmp, dest)
+}
+
+// AdvanceRound is the round-advance gate. It moves a mission from
+// round N to round N+1, refusing the move if any of the 3.4
+// invariants is violated:
+//
+//  1. The mission is not open. Closed/failed/escalated missions are
+//     out of the gate's purview.
+//  2. The current round (N) has no reflection on disk. Reflection is
+//     mandatory between rounds — that is the whole point of 3.4.
+//  3. The current round's reflection recommended `stop` or
+//     `escalate`. The gate surfaces the leader's reason verbatim so
+//     the operator sees the leader's own words.
+//  4. Advancing would exceed Budget.Rounds. The contract is the
+//     trust boundary; the budget is load-bearing.
+//
+// On success, Contract.CurrentRound is bumped, the contract is
+// rewritten, and a `round_advanced` event is appended to the log.
+// The transition is atomic with respect to other operations on the
+// same mission via the per-mission flock.
+//
+// Returns the new round number on success.
+func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
+	if strings.TrimSpace(missionID) == "" {
+		return 0, fmt.Errorf("missionID is required")
+	}
+	if strings.TrimSpace(actor) == "" {
+		return 0, fmt.Errorf("actor is required")
+	}
+	var newRound int
+	err := s.withLock(missionID, func() error {
+		c, oldData, err := s.loadLocked(missionID)
+		if err != nil {
+			return err
+		}
+		if c.Status != StatusOpen {
+			return fmt.Errorf("mission %q is in terminal state %q; cannot advance round", missionID, c.Status)
+		}
+		// Budget exhaustion check happens before the reflection check
+		// so the operator sees the right diagnostic when they have
+		// reflected on the final round and then tried to push past
+		// the budget anyway. The right next step there is to close
+		// the mission, not to record one more reflection.
+		if c.CurrentRound >= c.Budget.Rounds {
+			return fmt.Errorf(
+				"mission %q has exhausted its round budget (%d/%d); close or re-scope",
+				missionID, c.CurrentRound, c.Budget.Rounds,
+			)
+		}
+		reflections, err := s.loadReflectionsLocked(missionID)
+		if err != nil {
+			return err
+		}
+		var current *Reflection
+		for i := range reflections {
+			if reflections[i].Round == c.CurrentRound {
+				current = &reflections[i]
+				break
+			}
+		}
+		if current == nil {
+			return fmt.Errorf(
+				"mission %q has no reflection for round %d; submit one before advancing",
+				missionID, c.CurrentRound,
+			)
+		}
+		if IsTerminalRecommendation(current.Recommendation) {
+			return fmt.Errorf(
+				"mission %q round %d reflection recommends %q: %s",
+				missionID, c.CurrentRound, current.Recommendation, current.Reason,
+			)
+		}
+		// All gates passed; commit the bump.
+		dest := s.contractPath(missionID)
+		c.CurrentRound++
+		c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := c.Validate(); err != nil {
+			return fmt.Errorf("invalid contract after advance: %w", err)
+		}
+		if err := s.writeContract(c); err != nil {
+			return err
+		}
+		if err := s.appendEventLocked(missionID, Event{
+			TS:    c.UpdatedAt,
+			Event: "round_advanced",
+			Actor: actor,
+			Details: map[string]any{
+				"from_round":     c.CurrentRound - 1,
+				"to_round":       c.CurrentRound,
+				"recommendation": current.Recommendation,
+			},
+		}); err != nil {
+			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+				return fmt.Errorf("advance: event append failed: %w; rollback failed: %v", err, rbErr)
+			}
+			return fmt.Errorf("advance: event append failed, contract rolled back: %w", err)
+		}
+		newRound = c.CurrentRound
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return newRound, nil
 }
 
 // checkWriteSetConflicts loads every existing mission, filters to

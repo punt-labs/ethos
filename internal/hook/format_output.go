@@ -690,9 +690,93 @@ func formatMission(w io.Writer, method, result string) error {
 		return formatMissionList(w, result)
 	case "close":
 		return formatMissionClose(w, result)
+	case "reflect":
+		return formatMissionReflect(w, result)
+	case "reflections":
+		return formatMissionReflections(w, result)
+	case "advance":
+		return formatMissionAdvance(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
+}
+
+// formatMissionReflect renders the reflect method's confirmation:
+// "<mission_id> round N (<recommendation>)" — short enough to fit
+// on a single tool-result row but specific enough to confirm what
+// was recorded.
+func formatMissionReflect(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	rec, _ := c["recommendation"].(string)
+	round, ok := c["round"].(float64)
+	if missionID == "" || !ok {
+		return emitSimple(w, truncate(result, 200))
+	}
+	return emitSimple(w, fmt.Sprintf("Reflected %s round %d (%s)", missionID, int(round), rec))
+}
+
+// formatMissionAdvance renders the advance method's confirmation:
+// "<mission_id> → round N". On error the MCP layer surfaces the
+// gate refusal verbatim, so the formatter only handles the success
+// shape.
+func formatMissionAdvance(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	round, ok := c["current_round"].(float64)
+	if missionID == "" || !ok {
+		return emitSimple(w, truncate(result, 200))
+	}
+	return emitSimple(w, fmt.Sprintf("Advanced %s to round %d", missionID, int(round)))
+}
+
+// formatMissionReflections renders the reflections method's array
+// as one bullet per round. The summary line counts the entries; an
+// empty array becomes "(none)" so the operator distinguishes "no
+// reflections yet" from a tool error.
+func formatMissionReflections(w io.Writer, result string) error {
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(result), &entries); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	n := len(entries)
+	noun := "reflections"
+	if n == 1 {
+		noun = "reflection"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+	var ctx strings.Builder
+	for i, e := range entries {
+		round, _ := e["round"].(float64)
+		rec, _ := e["recommendation"].(string)
+		author, _ := e["author"].(string)
+		converging, _ := e["converging"].(bool)
+		if i > 0 {
+			ctx.WriteString("\n")
+		}
+		fmt.Fprintf(&ctx, "  - round %d (%s) by %s — converging=%t",
+			int(round), rec, author, converging)
+		if signals, ok := e["signals"].([]any); ok {
+			for _, s := range signals {
+				if str, ok := s.(string); ok {
+					fmt.Fprintf(&ctx, "\n      • %s", str)
+				}
+			}
+		}
+		if reason, _ := e["reason"].(string); reason != "" {
+			fmt.Fprintf(&ctx, "\n      reason: %s", reason)
+		}
+	}
+	return emit(w, summary, ctx.String())
 }
 
 // formatMissionShow renders a single contract in a tabwriter-aligned
@@ -797,6 +881,13 @@ func writeMissionFields(ctx *strings.Builder, c map[string]any) {
 		// real (and invalid) value.
 		if roundsOK && rounds >= 1 && rounds <= 10 {
 			fmt.Fprintf(tw, "Budget:\t%d round(s), reflection_after_each=%t\n", int(rounds), reflect)
+			// 3.4: render the current round so the operator can see
+			// progress at a glance. The current_round field is only
+			// present on 3.4+ contracts; pre-3.4 missions decode it
+			// as zero, which we skip rather than emit "0 of 3".
+			if cr, ok := c["current_round"].(float64); ok && cr >= 1 {
+				fmt.Fprintf(tw, "Round:\t%d of %d\n", int(cr), int(rounds))
+			}
 		}
 	}
 

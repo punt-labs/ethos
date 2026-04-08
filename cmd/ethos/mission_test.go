@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,13 +48,26 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// missionTestEnv sets HOME to a fresh temp directory and resets the
-// global flag state used by mission commands. The returned path is the
-// HOME root for the test.
+// missionTestEnv sets HOME to a fresh temp directory, resets the
+// global flag state used by mission commands, and seeds the
+// canonical `djb` evaluator identity. Phase 3.3's frozen-evaluator
+// invariant requires the contract's evaluator handle to resolve to
+// real personality, writing-style, and talent content at create
+// time; tests that exercise the CLI create path would otherwise
+// fail with `evaluator not found` because the temp HOME starts
+// empty. Returns the HOME root.
 func missionTestEnv(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
 	t.Setenv("HOME", tmp)
+
+	// Seed the evaluator identity into the global store
+	// (~/.punt-labs/ethos), which is what the CLI's identityStore()
+	// resolves to when there is no repo-local .punt-labs/ethos. The
+	// content is fixed placeholder text — every test that creates a
+	// mission needs the same djb identity, so a single shared seed
+	// keeps the fixture cost out of every test body.
+	seedEvaluator(t, filepath.Join(tmp, ".punt-labs", "ethos"))
 
 	// Reset the package-level flag globals so cross-test contamination
 	// (e.g. a leaked --json from a prior test) does not bleed in.
@@ -67,6 +82,36 @@ func missionTestEnv(t *testing.T) string {
 		missionCloseStatus = mission.StatusClosed
 	})
 	return tmp
+}
+
+// seedEvaluator drops a minimal djb identity (the canonical evaluator
+// every contract names) into the given root. Mirrors the MCP test
+// helper testHandlerWithMissions so the CLI tests no longer rely on
+// a magically-pre-existing identity at the user's home directory.
+func seedEvaluator(t *testing.T, root string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(root, 0o700))
+
+	require.NoError(t, attribute.NewStore(root, attribute.Personalities).Save(&attribute.Attribute{
+		Slug:    "bernstein",
+		Content: "# Bernstein\n\nFrozen-evaluator placeholder.\n",
+	}))
+	require.NoError(t, attribute.NewStore(root, attribute.WritingStyles).Save(&attribute.Attribute{
+		Slug:    "bernstein-prose",
+		Content: "# Bernstein Prose\n\nPlaceholder.\n",
+	}))
+	require.NoError(t, attribute.NewStore(root, attribute.Talents).Save(&attribute.Attribute{
+		Slug:    "security",
+		Content: "# Security\n",
+	}))
+	require.NoError(t, identity.NewStore(root).Save(&identity.Identity{
+		Name:         "Dan B",
+		Handle:       "djb",
+		Kind:         "agent",
+		Personality:  "bernstein",
+		WritingStyle: "bernstein-prose",
+		Talents:      []string{"security"},
+	}))
 }
 
 // writeContractFile drops a YAML contract into a temp file and returns
@@ -421,6 +466,200 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 	assert.Equal(t, mission.StatusFailed, c.Status)
 }
 
+// --- 3.4: reflect, reflections, advance ---
+
+// writeReflectionFile drops a reflection YAML body into a temp file
+// and returns the path. The body is parameterized by round and
+// recommendation so the same helper covers continue, pivot, stop,
+// and escalate cases.
+func writeReflectionFile(t *testing.T, round int, recommendation, reason string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, fmt.Sprintf("reflection-%d.yaml", round))
+	body := fmt.Sprintf(`round: %d
+author: claude
+converging: true
+signals:
+  - tests passing
+  - lint clean
+recommendation: %s
+reason: %q
+`, round, recommendation, reason)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+func TestMissionReflect_RoundTrip(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	missionReflectFile = writeReflectionFile(t, 1, "continue", "round 1 went well")
+	stdout := captureStdout(t, func() { runMissionReflect(ids[0], missionReflectFile) })
+	assert.Empty(t, strings.TrimSpace(stdout), "reflect must be silent on success (non-JSON mode)")
+
+	rs, err := ms.LoadReflections(ids[0])
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, "continue", rs[0].Recommendation)
+}
+
+func TestMissionReflect_JSON(t *testing.T) {
+	missionTestEnv(t)
+	jsonOutput = true
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	out := captureStdout(t, func() { runMissionReflect(ids[0], missionReflectFile) })
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, ids[0], got["mission_id"])
+	assert.Equal(t, float64(1), got["round"])
+	assert.Equal(t, "continue", got["recommendation"])
+	assert.NotEmpty(t, got["created_at"])
+}
+
+func TestMissionAdvance_RequiresReflection(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.8
+write_set:
+  - tests/advance-noreflect/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	// Create the mission.
+	cmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	cmd.Env = env
+	require.NoError(t, cmd.Run())
+
+	// List to discover the ID.
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	// Try to advance without a reflection — must exit 1 with the
+	// "no reflection for round 1" message on stderr.
+	advCmd := exec.Command(ethosBinary, "mission", "advance", id)
+	advCmd.Env = env
+	var advErr bytes.Buffer
+	advCmd.Stderr = &advErr
+	err := advCmd.Run()
+	require.Error(t, err)
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	stderr := advErr.String()
+	assert.Contains(t, stderr, "no reflection for round 1")
+	assert.Contains(t, stderr, id)
+}
+
+func TestMissionAdvance_HappyPath(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Reflect on round 1.
+	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
+
+	// Advance — non-JSON mode prints "Advanced <id> to round 2".
+	out := captureStdout(t, func() { runMissionAdvance(id) })
+	assert.Contains(t, out, "Advanced "+id+" to round 2")
+
+	loaded, err := ms.Load(id)
+	require.NoError(t, err)
+	assert.Equal(t, 2, loaded.CurrentRound)
+}
+
+// TestMissionShow_RendersCurrentRound asserts that printContract
+// includes the new "Round: N of M" line so the operator can read
+// the mission's progress at a glance.
+func TestMissionShow_RendersCurrentRound(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	out := captureStdout(t, func() { runMissionShow(ids[0]) })
+	assert.Contains(t, out, "Round:")
+	assert.Contains(t, out, "1 of 3")
+}
+
+// TestMissionReflections_JSON asserts that the reflections command
+// returns an array (never null) and that each entry round-trips
+// through the CLI's strict decoder.
+func TestMissionReflections_JSON(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	id := ids[0]
+
+	// Empty case — no reflections yet, must produce "[]" (not "null").
+	jsonOutput = true
+	out := captureStdout(t, func() { runMissionReflections(id) })
+	assert.Equal(t, "[]", strings.TrimSpace(out))
+
+	// Submit a reflection and re-fetch.
+	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
+
+	out = captureStdout(t, func() { runMissionReflections(id) })
+	var got []mission.Reflection
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.Len(t, got, 1)
+	assert.Equal(t, 1, got[0].Round)
+	assert.Equal(t, "continue", got[0].Recommendation)
+}
+
 // TestMissionCreate_ConflictRejectedSubprocess exercises the Phase 3.2
 // admission control through the real CLI binary. The first invocation
 // creates a mission with write_set [internal/foo/]; the second
@@ -437,6 +676,10 @@ func TestMissionCreate_ConflictRejectedSubprocess(t *testing.T) {
 	}
 
 	home := t.TempDir()
+	// Phase 3.3 requires the evaluator handle to resolve at create
+	// time, so seed the canonical djb identity into the subprocess
+	// HOME exactly the way the in-process tests do via missionTestEnv.
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
 	tmp := t.TempDir()
 
 	contractA := filepath.Join(tmp, "a.yaml")
