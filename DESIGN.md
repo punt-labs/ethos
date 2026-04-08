@@ -3001,15 +3001,21 @@ dotfiles. A regression test exercises all three failure modes
   submits a malformed reflection should find out immediately, not
   discover it only when they try to advance.
 
-## DES-035: Verifier isolation (PROPOSED)
+## DES-035: Verifier isolation (SETTLED)
 
-**Status**: Proposed. Implemented 2026-04-08 as `ethos-07m.9` — the
+**Status**: Settled. Implemented 2026-04-08 as `ethos-07m.9` — the
 Phase 3.5 primitive that enforces verifier independence from the
 implementer. Two rounds: initial implementation plus local review
 fixes. Local reviewers: `feature-dev:code-reviewer` (correctness — 1
-HIGH, 1 MEDIUM) and `mdm` (CLI surface — 3 HIGH, 3 MEDIUM, 4 LOW).
-Frozen evaluator: `djb` (pinned at mission launch). Status flips
-SETTLED after djb's verdict and PR merge.
+HIGH, 1 MEDIUM) and `mdm` (CLI surface — 3 HIGH, 3 MEDIUM, 4 LOW,
+all addressed in round 2). Frozen evaluator: `djb` (pinned at
+mission launch). djb's final verdict: PASS (0.95) with two
+follow-up notes filed as separate beads: `ethos-29o` (TOCTOU
+between checkVerifierHash Load and renderVerifierBlock ReadFile,
+inherited from Phase 3.3's lockless read pattern and out of scope
+for 3.5's threat model) and `ethos-x05` / `ethos-4au` (SC6
+tool-level file allowlist enforcement and SC5 walked-diff round
+delta — both explicitly scope-deferred per the threat model).
 
 ### Problem
 
