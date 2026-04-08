@@ -118,8 +118,46 @@ const (
 // once v2 ships. Bumped only on intentional format changes.
 const hashFormatVersion = "ethos-evaluator-hash-v1"
 
+// EvaluatorHashBreakdown records the per-section sha256 hex hashes that
+// compose an evaluator rollup. Computed by ComputeEvaluatorHashBreakdown
+// and surfaced by the SubagentStart verifier gate when a rollup mismatch
+// is detected so the operator can see which file they probably touched.
+//
+// The rollup is not a sum of the sections — sections and rollup use the
+// same format-versioned, length-prefixed serialization, so a per-section
+// hash is a shortcut into "this one source's content" without exposing
+// the byte-level format.
+//
+// Talents and Roles are maps so a section with no entries surfaces as
+// an empty map rather than a missing field. The keys preserve the
+// labels the error renderer uses in operator output.
+type EvaluatorHashBreakdown struct {
+	Rollup       string            // full sha256 hex of the rollup
+	Handle       string            // per-section sha256 hex
+	Personality  string            // per-section sha256 hex
+	WritingStyle string            // per-section sha256 hex
+	Talents      map[string]string // slug → sha256 hex
+	Roles        map[string]string // team/role → sha256 hex
+}
+
 // ComputeEvaluatorHash returns the deterministic sha256 (hex) of every
 // content source that could influence the evaluator's verdict.
+//
+// Thin wrapper over ComputeEvaluatorHashBreakdown: the rollup is what
+// ApplyServerFields pins into Contract.Evaluator.Hash, and the vast
+// majority of callers only need that one value. The verifier gate
+// calls the Breakdown variant so it can show per-section hashes in
+// mismatch errors.
+func ComputeEvaluatorHash(handle string, sources HashSources) (string, error) {
+	b, err := ComputeEvaluatorHashBreakdown(handle, sources)
+	if err != nil {
+		return "", err
+	}
+	return b.Rollup, nil
+}
+
+// ComputeEvaluatorHashBreakdown returns the rollup hash and the
+// per-section hashes in a single pass over the evaluator's content.
 //
 // Sources hashed (DES-033, in this exact order):
 //
@@ -152,26 +190,34 @@ const hashFormatVersion = "ethos-evaluator-hash-v1"
 // and slug names; collisions inside markdown bodies are absorbed by
 // the explicit length prefix.
 //
-// Returns the hex-encoded hash on success. Errors come from the
-// upstream loaders (identity not found, role load failure) or from
-// nil sources — every error is wrapped with the operation context.
-func ComputeEvaluatorHash(handle string, sources HashSources) (string, error) {
+// Per-section hashes use the SAME format-versioned wrapper as the
+// rollup so changing the format version invalidates every section hash
+// at once. A section hash is therefore a self-contained sha256 whose
+// inputs are the format version, one section label, and one value (or
+// label/value pair) — the operator can compare two section hashes
+// directly without knowing the composition rule for the rollup.
+//
+// Returns the breakdown on success. Errors come from the upstream
+// loaders (identity not found, role load failure) or from nil sources
+// — every error is wrapped with the operation context.
+func ComputeEvaluatorHashBreakdown(handle string, sources HashSources) (EvaluatorHashBreakdown, error) {
+	var zero EvaluatorHashBreakdown
 	if strings.TrimSpace(handle) == "" {
-		return "", errors.New("computing evaluator hash: handle is required")
+		return zero, errors.New("computing evaluator hash: handle is required")
 	}
 	if err := sources.Validate(); err != nil {
-		return "", fmt.Errorf("computing evaluator hash: %w", err)
+		return zero, fmt.Errorf("computing evaluator hash: %w", err)
 	}
 
 	id, err := sources.Identities.LoadEvaluator(handle)
 	if err != nil {
-		return "", fmt.Errorf("computing evaluator hash: loading identity %q: %w", handle, err)
+		return zero, fmt.Errorf("computing evaluator hash: loading identity %q: %w", handle, err)
 	}
 	if id == nil {
-		return "", fmt.Errorf("computing evaluator hash: identity %q resolved to nil", handle)
+		return zero, fmt.Errorf("computing evaluator hash: identity %q resolved to nil", handle)
 	}
 	if len(id.TalentContents) != len(id.Talents) {
-		return "", fmt.Errorf(
+		return zero, fmt.Errorf(
 			"computing evaluator hash: identity %q has %d talents but %d talent contents — refusing to hash partial content",
 			handle, len(id.Talents), len(id.TalentContents),
 		)
@@ -179,7 +225,7 @@ func ComputeEvaluatorHash(handle string, sources HashSources) (string, error) {
 
 	roles, err := sources.Roles.ListRoles(handle)
 	if err != nil {
-		return "", fmt.Errorf("computing evaluator hash: listing roles for %q: %w", handle, err)
+		return zero, fmt.Errorf("computing evaluator hash: listing roles for %q: %w", handle, err)
 	}
 	// Sort by name so map-iteration order in the lister cannot leak
 	// into the output. ListRoles is contractually unordered.
@@ -212,7 +258,60 @@ func ComputeEvaluatorHash(handle string, sources HashSources) (string, error) {
 	}
 
 	sum := sha256.Sum256([]byte(buf.String()))
-	return hex.EncodeToString(sum[:]), nil
+	out := EvaluatorHashBreakdown{
+		Rollup:       hex.EncodeToString(sum[:]),
+		Handle:       hashSection(labelHandle, id.Handle),
+		Personality:  hashSection(labelPersonality, id.PersonalityContent),
+		WritingStyle: hashSection(labelWritingStyle, id.WritingStyleContent),
+		Talents:      make(map[string]string, len(id.Talents)),
+		Roles:        make(map[string]string, len(roles)),
+	}
+	for i, slug := range id.Talents {
+		out.Talents[slug] = hashTalentSection(slug, id.TalentContents[i])
+	}
+	for _, r := range roles {
+		out.Roles[r.Name] = hashRoleSection(r.Name, r.Content)
+	}
+	return out, nil
+}
+
+// hashSection returns the sha256 hex of a single (label, value) section
+// wrapped in the format version. Used for the scalar sections — handle,
+// personality, writing_style.
+func hashSection(label, value string) string {
+	var b strings.Builder
+	b.Grow(len(hashFormatVersion) + len(label) + len(value) + 16)
+	b.WriteString(hashFormatVersion)
+	b.WriteString(sectionSep)
+	writeField(&b, label, value)
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// hashTalentSection returns the sha256 hex of a single talent's slug +
+// content pair, wrapped in the format version. Matches the layout the
+// rollup uses for this talent so a section hash diff pinpoints a
+// specific talent, not just "some talent changed."
+func hashTalentSection(slug, content string) string {
+	var b strings.Builder
+	b.WriteString(hashFormatVersion)
+	b.WriteString(sectionSep)
+	writeField(&b, labelTalent+":slug", slug)
+	writeField(&b, labelTalent+":content", content)
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// hashRoleSection returns the sha256 hex of a single role's name +
+// content pair, wrapped in the format version.
+func hashRoleSection(name, content string) string {
+	var b strings.Builder
+	b.WriteString(hashFormatVersion)
+	b.WriteString(sectionSep)
+	writeField(&b, labelRole+":name", name)
+	writeField(&b, labelRole+":content", content)
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 // writeField appends a length-prefixed (label, value) pair to the

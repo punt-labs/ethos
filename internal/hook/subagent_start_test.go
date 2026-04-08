@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -471,6 +472,11 @@ func TestSubagentStart_VerifierMatchingHashAllowsSpawn(t *testing.T) {
 // load-bearing invariant from DES-033: editing the evaluator's
 // personality file between mission create and verifier spawn refuses
 // the spawn with an actionable error message.
+//
+// The error names the mission, the evaluator handle, the rollup drift
+// (`pinned ... -> current ...`), the per-section content breakdown so
+// the operator can see which file they edited, and BOTH recovery
+// options (revert the edit or close+relaunch).
 func TestSubagentStart_VerifierDriftedPersonalityRefusesSpawn(t *testing.T) {
 	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
 
@@ -493,9 +499,66 @@ func TestSubagentStart_VerifierDriftedPersonalityRefusesSpawn(t *testing.T) {
 	msg := err.Error()
 	assert.Contains(t, msg, c.MissionID, "error must name the mission")
 	assert.Contains(t, msg, "djb", "error must name the evaluator handle")
-	assert.Contains(t, msg, "pinned hash", "error must label the pinned hash")
-	assert.Contains(t, msg, "current hash", "error must label the current hash")
-	assert.Contains(t, msg, "relaunch", "error must tell the operator how to recover")
+	assert.Contains(t, msg, "pinned ", "error must label the pinned hash")
+	assert.Contains(t, msg, "current ", "error must label the current hash")
+	assert.Contains(t, msg, "current content sections", "error must list the current per-section hashes")
+	assert.Contains(t, msg, "personality:", "error must name the personality section")
+	assert.Contains(t, msg, "writing_style:", "error must name the writing_style section")
+	assert.Contains(t, msg, `talent "security"`, "error must name each talent by slug")
+	assert.Contains(t, msg, "revert the edit", "error must offer the revert recovery path")
+	assert.Contains(t, msg, "relaunch", "error must offer the relaunch recovery path")
+}
+
+// TestSubagentStart_VerifierAggregatesMultipleDriftedMissions asserts
+// the H2 invariant: when the operator has edited one evaluator whose
+// content is shared by several open missions, the hook emits a single
+// aggregate error naming every drifted mission — not N separate
+// refusal cycles. Each round of mission create must see every
+// drifted mission at once so the operator can plan their recovery
+// in one pass.
+func TestSubagentStart_VerifierAggregatesMultipleDriftedMissions(t *testing.T) {
+	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// Three missions, each with a disjoint write_set so Phase 3.2's
+	// cross-mission conflict check does not collapse them.
+	c1 := validVerifierContract("djb")
+	c1.WriteSet = []string{"internal/multi/a/"}
+	require.NoError(t, missions.ApplyServerFields(&c1, time.Now(), hash))
+	require.NoError(t, missions.Create(&c1))
+
+	c2 := validVerifierContract("djb")
+	c2.WriteSet = []string{"internal/multi/b/"}
+	require.NoError(t, missions.ApplyServerFields(&c2, time.Now(), hash))
+	require.NoError(t, missions.Create(&c2))
+
+	c3 := validVerifierContract("djb")
+	c3.WriteSet = []string{"internal/multi/c/"}
+	require.NoError(t, missions.ApplyServerFields(&c3, time.Now(), hash))
+	require.NoError(t, missions.Create(&c3))
+
+	// One edit to the evaluator's personality invalidates all three.
+	personalityPath := filepath.Join(dir, "personalities", "bernstein.md")
+	require.NoError(t, os.WriteFile(
+		personalityPath,
+		[]byte("# Bernstein\n\nDrifted content across three missions.\n"),
+		0o600,
+	))
+
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.Error(t, err, "drift must refuse the spawn")
+	msg := err.Error()
+	assert.Contains(t, msg, "3 open missions", "header must state the drifted mission count")
+	assert.Contains(t, msg, c1.MissionID, "error must name mission 1")
+	assert.Contains(t, msg, c2.MissionID, "error must name mission 2")
+	assert.Contains(t, msg, c3.MissionID, "error must name mission 3")
+	// Aggregate phrasing must offer the multi-mission recovery path.
+	assert.Contains(t, msg, "close the listed missions",
+		"aggregate error must use the plural recovery instruction")
+	assert.Contains(t, msg, "revert the edit",
+		"aggregate error must also offer the revert recovery path")
+	// The per-section listing is rendered once, not once per mission.
+	assert.Equal(t, 1, strings.Count(msg, "current content sections"),
+		"the content-sections block must appear exactly once")
 }
 
 // TestSubagentStart_VerifierDriftedWritingStyleRefusesSpawn asserts

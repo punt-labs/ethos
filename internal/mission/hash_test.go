@@ -377,3 +377,167 @@ func TestHashFormatVersionInOutput(t *testing.T) {
 		t.Fatalf("hash format version %q does not match expected prefix", hashFormatVersion)
 	}
 }
+
+// TestComputeEvaluatorHashBreakdown_MatchesRollup proves the wrapper
+// relationship: ComputeEvaluatorHash returns exactly the Rollup field
+// of the breakdown. A caller migrating between the two must not see a
+// drift.
+func TestComputeEvaluatorHashBreakdown_MatchesRollup(t *testing.T) {
+	srcs := newTestSources(
+		map[string]*EvaluatorIdentity{"djb": seedDjb()},
+		map[string][]EvaluatorRole{"djb": seedDjbRoles()},
+	)
+	rollup, err := ComputeEvaluatorHash("djb", srcs)
+	require.NoError(t, err)
+	breakdown, err := ComputeEvaluatorHashBreakdown("djb", srcs)
+	require.NoError(t, err)
+	assert.Equal(t, rollup, breakdown.Rollup, "rollup must match the wrapper")
+	assert.Len(t, breakdown.Handle, 64)
+	assert.Len(t, breakdown.Personality, 64)
+	assert.Len(t, breakdown.WritingStyle, 64)
+	assert.Len(t, breakdown.Talents, 2, "two seed talents must appear in the breakdown")
+	assert.Contains(t, breakdown.Talents, "security")
+	assert.Contains(t, breakdown.Talents, "engineering")
+	assert.Len(t, breakdown.Roles, 1)
+	assert.Contains(t, breakdown.Roles, "security-engineer")
+}
+
+// TestComputeEvaluatorHashBreakdown_Deterministic runs the breakdown
+// twice against the same fixtures and asserts every field matches.
+// Determinism is the load-bearing property; the breakdown must respect
+// it too.
+func TestComputeEvaluatorHashBreakdown_Deterministic(t *testing.T) {
+	srcs := newTestSources(
+		map[string]*EvaluatorIdentity{"djb": seedDjb()},
+		map[string][]EvaluatorRole{"djb": seedDjbRoles()},
+	)
+	first, err := ComputeEvaluatorHashBreakdown("djb", srcs)
+	require.NoError(t, err)
+	second, err := ComputeEvaluatorHashBreakdown("djb", srcs)
+	require.NoError(t, err)
+	assert.Equal(t, first.Rollup, second.Rollup)
+	assert.Equal(t, first.Handle, second.Handle)
+	assert.Equal(t, first.Personality, second.Personality)
+	assert.Equal(t, first.WritingStyle, second.WritingStyle)
+	assert.Equal(t, first.Talents, second.Talents)
+	assert.Equal(t, first.Roles, second.Roles)
+}
+
+// TestComputeEvaluatorHashBreakdown_PerSectionEditDetection drives the
+// table-driven edit-detection test against the breakdown. Each edit
+// must change the specific section hash the edit touches AND the
+// rollup — an edit to personality must not change the writing-style
+// section hash.
+func TestComputeEvaluatorHashBreakdown_PerSectionEditDetection(t *testing.T) {
+	baseline, err := ComputeEvaluatorHashBreakdown("djb", newTestSources(
+		map[string]*EvaluatorIdentity{"djb": seedDjb()},
+		map[string][]EvaluatorRole{"djb": seedDjbRoles()},
+	))
+	require.NoError(t, err)
+
+	cases := []struct {
+		name            string
+		mutate          func(*EvaluatorIdentity, *[]EvaluatorRole)
+		changedSections []string // which top-level breakdown keys must change
+	}{
+		{
+			name: "personality edit changes personality hash only",
+			mutate: func(id *EvaluatorIdentity, _ *[]EvaluatorRole) {
+				id.PersonalityContent += "\nAdditional paragraph.\n"
+			},
+			changedSections: []string{"personality"},
+		},
+		{
+			name: "writing style edit changes writing_style hash only",
+			mutate: func(id *EvaluatorIdentity, _ *[]EvaluatorRole) {
+				id.WritingStyleContent += "\nNew rule.\n"
+			},
+			changedSections: []string{"writing_style"},
+		},
+		{
+			name: "talent content edit changes that talent's hash only",
+			mutate: func(id *EvaluatorIdentity, _ *[]EvaluatorRole) {
+				// Edit the first talent ("security") only.
+				id.TalentContents[0] += "\nMore text.\n"
+			},
+			changedSections: []string{"talent:security"},
+		},
+		{
+			name: "role content edit changes that role's hash only",
+			mutate: func(_ *EvaluatorIdentity, roles *[]EvaluatorRole) {
+				(*roles)[0].Content += "\n- new responsibility\n"
+			},
+			changedSections: []string{"role:security-engineer"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id := seedDjb()
+			roles := seedDjbRoles()
+			tc.mutate(id, &roles)
+			got, err := ComputeEvaluatorHashBreakdown("djb", newTestSources(
+				map[string]*EvaluatorIdentity{"djb": id},
+				map[string][]EvaluatorRole{"djb": roles},
+			))
+			require.NoError(t, err)
+
+			// Rollup always changes — that's the contract the drift
+			// gate relies on.
+			assert.NotEqual(t, baseline.Rollup, got.Rollup, "rollup must change on any edit")
+
+			// Handle section is stable across all identity-content edits.
+			assert.Equal(t, baseline.Handle, got.Handle, "handle hash must be stable")
+
+			// Verify that exactly the expected sections changed.
+			changed := map[string]bool{}
+			if baseline.Personality != got.Personality {
+				changed["personality"] = true
+			}
+			if baseline.WritingStyle != got.WritingStyle {
+				changed["writing_style"] = true
+			}
+			for slug, h := range got.Talents {
+				if baseline.Talents[slug] != h {
+					changed["talent:"+slug] = true
+				}
+			}
+			// Talent removals (slug present in baseline but not in got)
+			// would land here too, though no case in this table exercises
+			// that — the edit cases all preserve the talent/role counts.
+			for name, h := range got.Roles {
+				if baseline.Roles[name] != h {
+					changed["role:"+name] = true
+				}
+			}
+
+			for _, want := range tc.changedSections {
+				assert.Contains(t, changed, want, "%s: expected %s section to change", tc.name, want)
+			}
+			// And nothing else should have changed.
+			assert.Len(t, changed, len(tc.changedSections),
+				"%s: unexpected sections changed: %v", tc.name, changed)
+		})
+	}
+}
+
+// TestComputeEvaluatorHashBreakdown_TalentSectionDistinguishable proves
+// that two talents with the same content but different slugs hash to
+// different section values. Without this property the slug would not
+// participate in the per-talent hash and an operator renaming a talent
+// wouldn't see anything change in the per-section breakdown.
+func TestComputeEvaluatorHashBreakdown_TalentSectionDistinguishable(t *testing.T) {
+	id := &EvaluatorIdentity{
+		Handle:              "x",
+		PersonalityContent:  "p",
+		WritingStyleContent: "w",
+		Talents:             []string{"alpha", "beta"},
+		TalentContents:      []string{"shared-body", "shared-body"},
+	}
+	b, err := ComputeEvaluatorHashBreakdown("x", newTestSources(
+		map[string]*EvaluatorIdentity{"x": id}, nil,
+	))
+	require.NoError(t, err)
+	assert.NotEqual(t, b.Talents["alpha"], b.Talents["beta"],
+		"per-talent hash must include the slug, not just the content")
+}

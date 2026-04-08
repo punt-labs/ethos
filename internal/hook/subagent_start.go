@@ -2,9 +2,11 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -154,8 +156,8 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 }
 
 // checkVerifierHash recomputes the evaluator hash for every open
-// mission whose Evaluator.Handle matches agentType, and returns a
-// fatal error if any pinned hash disagrees with the current content.
+// mission whose Evaluator.Handle matches agentType and returns a
+// single fatal error aggregating every mismatch.
 //
 // The check is intentionally conservative: a single drifted mission
 // blocks the spawn even if other missions still match. This protects
@@ -170,11 +172,12 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 //   - All matching open missions have current content matching their
 //     pinned hash
 //
-// On a real mismatch the error names the mission ID, evaluator handle,
-// pinned hash prefix, current hash prefix, and the relaunch
-// instruction. Hash prefixes are the leading 12 hex characters — long
-// enough for visual disambiguation, short enough to fit on a single
-// terminal line.
+// On one or more real mismatches the error is a multi-line block
+// naming every drifted mission, the pinned and current rollup hash
+// prefixes, the per-section hashes of the CURRENT content so the
+// operator can cross-reference which file they edited, and two
+// recovery options (revert the edit to preserve the missions, or
+// close and relaunch to accept the new content).
 func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 	if deps.Missions == nil {
 		return nil // legacy install: no mission store
@@ -195,7 +198,16 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 		return fmt.Errorf("verifier hash gate: listing missions: %w", err)
 	}
 
-	var currentHash string
+	// Breakdown is computed at most once per checkVerifierHash call,
+	// lazily, on the first matching open mission. All subsequent
+	// comparisons reuse the same struct: the evaluator handle is
+	// fixed by agentType, so the breakdown is too.
+	var (
+		breakdown       mission.EvaluatorHashBreakdown
+		breakdownLoaded bool
+		mismatches      []driftedMission
+	)
+
 	for _, id := range ids {
 		c, loadErr := deps.Missions.Load(id)
 		if loadErr != nil {
@@ -213,16 +225,15 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 		if c.Evaluator.Handle != agentType {
 			continue
 		}
-		// Compute the current hash once — every matching open
-		// mission compares against the same byte string.
-		if currentHash == "" {
-			currentHash, err = mission.ComputeEvaluatorHash(c.Evaluator.Handle, deps.Hash)
+		if !breakdownLoaded {
+			breakdown, err = mission.ComputeEvaluatorHashBreakdown(c.Evaluator.Handle, deps.Hash)
 			if err != nil {
 				return fmt.Errorf(
 					"verifier hash gate: recomputing hash for evaluator %q: %w",
 					c.Evaluator.Handle, err,
 				)
 			}
+			breakdownLoaded = true
 		}
 		if c.Evaluator.Hash == "" {
 			// Pre-3.3 mission with an empty pinned hash. Refusing
@@ -235,21 +246,100 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 			)
 			continue
 		}
-		if c.Evaluator.Hash != currentHash {
-			return fmt.Errorf(
-				"refusing verifier spawn: evaluator %q content has drifted since mission %s was launched\n"+
-					"  pinned hash:  %s\n"+
-					"  current hash: %s\n"+
-					"  to accept the new content, close mission %s and relaunch it",
-				c.Evaluator.Handle,
-				c.MissionID,
-				hashPrefix(c.Evaluator.Hash),
-				hashPrefix(currentHash),
-				c.MissionID,
-			)
+		if c.Evaluator.Hash != breakdown.Rollup {
+			mismatches = append(mismatches, driftedMission{
+				ID:     c.MissionID,
+				Pinned: c.Evaluator.Hash,
+			})
 		}
 	}
-	return nil
+	if len(mismatches) == 0 {
+		return nil
+	}
+	return errors.New(formatDriftError(agentType, breakdown, mismatches))
+}
+
+// driftedMission is an internal record collected during checkVerifierHash
+// and consumed by formatDriftError. Pinned is the full hex the
+// formatter truncates; the mission ID is rendered verbatim.
+type driftedMission struct {
+	ID     string
+	Pinned string
+}
+
+// formatDriftError renders the operator-facing multi-line block the
+// verifier gate emits when one or more open missions disagree with
+// the current evaluator content.
+//
+// The block has four parts:
+//  1. A summary line naming the evaluator and the mission count.
+//  2. One line per drifted mission showing pinned → current rollup.
+//  3. The per-section breakdown of the CURRENT content so the
+//     operator can cross-reference which source file they edited.
+//  4. Two recovery options — revert the edit, or close and relaunch.
+//
+// Mission lines are sorted by mission ID so two runs of the gate
+// against the same drifted set produce identical output.
+func formatDriftError(
+	evaluator string,
+	breakdown mission.EvaluatorHashBreakdown,
+	mismatches []driftedMission,
+) string {
+	sort.Slice(mismatches, func(i, j int) bool {
+		return mismatches[i].ID < mismatches[j].ID
+	})
+
+	var b strings.Builder
+	if len(mismatches) == 1 {
+		fmt.Fprintf(&b,
+			"refusing verifier spawn: evaluator %q content has drifted since mission %s was launched\n",
+			evaluator, mismatches[0].ID,
+		)
+	} else {
+		fmt.Fprintf(&b,
+			"refusing verifier spawn: evaluator %q content has drifted since %d open missions were launched\n",
+			evaluator, len(mismatches),
+		)
+	}
+	for _, m := range mismatches {
+		fmt.Fprintf(&b, "  %s: pinned %s -> current %s\n",
+			m.ID, hashPrefix(m.Pinned), hashPrefix(breakdown.Rollup),
+		)
+	}
+	b.WriteString("  current content sections (check which you edited):\n")
+	fmt.Fprintf(&b, "    personality:       %s\n", hashPrefix(breakdown.Personality))
+	fmt.Fprintf(&b, "    writing_style:     %s\n", hashPrefix(breakdown.WritingStyle))
+	// Render talents and roles in sorted order for determinism.
+	talentSlugs := make([]string, 0, len(breakdown.Talents))
+	for slug := range breakdown.Talents {
+		talentSlugs = append(talentSlugs, slug)
+	}
+	sort.Strings(talentSlugs)
+	for _, slug := range talentSlugs {
+		fmt.Fprintf(&b, "    talent %-12s %s\n",
+			fmt.Sprintf("%q:", slug), hashPrefix(breakdown.Talents[slug]),
+		)
+	}
+	roleNames := make([]string, 0, len(breakdown.Roles))
+	for name := range breakdown.Roles {
+		roleNames = append(roleNames, name)
+	}
+	sort.Strings(roleNames)
+	for _, name := range roleNames {
+		fmt.Fprintf(&b, "    role %-14s %s\n",
+			fmt.Sprintf("%q:", name), hashPrefix(breakdown.Roles[name]),
+		)
+	}
+	b.WriteString("  to preserve these missions: revert the edit to the evaluator's identity content\n")
+	if len(mismatches) == 1 {
+		fmt.Fprintf(&b,
+			"  to accept the new content: close mission %s and relaunch it",
+			mismatches[0].ID,
+		)
+	} else {
+		b.WriteString("  to accept the new content: close the listed missions and relaunch them")
+	}
+	return b.String()
 }
 
 // hashPrefix returns the first 12 hex characters of a hash string,

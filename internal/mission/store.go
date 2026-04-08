@@ -16,6 +16,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ErrEvaluatorNotFound wraps the underlying identity-store "not found"
+// error so ApplyServerFields can return a single-line operator-facing
+// message instead of the deeply-wrapped error chain the identity,
+// mission, and hash-sources layers would otherwise produce.
+//
+// Sentinel error so callers can check via errors.Is; the concrete
+// error carries the handle in its message for diagnostics.
+var ErrEvaluatorNotFound = errors.New("evaluator not found")
+
 // Store provides CRUD operations for mission contracts on the filesystem.
 //
 // Mirrors internal/session/store.go: contracts are stored as YAML files in
@@ -78,6 +87,17 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSource
 	}
 	hash, err := ComputeEvaluatorHash(c.Evaluator.Handle, sources)
 	if err != nil {
+		// Detect the specific "identity YAML file does not exist" case
+		// and collapse the 6-level wrapped chain into a single clean
+		// operator message. All other hash errors (permission denied,
+		// partial talent content, role store corruption) keep their
+		// wrapped chain because the chain carries diagnostic value.
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf(
+				"apply server fields: %w %q (use `ethos identity list` to see available handles)",
+				ErrEvaluatorNotFound, c.Evaluator.Handle,
+			)
+		}
 		return fmt.Errorf("apply server fields: %w", err)
 	}
 	id, err := NewID(s.root, now)

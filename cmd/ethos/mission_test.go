@@ -285,6 +285,53 @@ func TestMissionShow_JSON(t *testing.T) {
 	assert.Equal(t, ids[0], c.MissionID)
 }
 
+// TestMissionShow_HashOnOwnLine asserts the M1 fix: `mission show`
+// renders the 64-character evaluator hash on its own "Hash:" row, not
+// inline on the "Evaluator:" row. An inline hash produces a
+// ~116-character line that wraps on 80-column terminals.
+//
+// The test uses a freshly created mission through the CLI path so the
+// evaluator hash is whatever ApplyServerFields computed — the exact
+// value does not matter; only that the row exists, carries a
+// 64-character hex, and sits on its own physical line.
+func TestMissionShow_HashOnOwnLine(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	out := captureStdout(t, func() { runMissionShow(id) })
+
+	// The Evaluator row still names the handle and pinned timestamp,
+	// but no longer carries the hash inline.
+	assert.Contains(t, out, "Evaluator:")
+	assert.Contains(t, out, "(pinned ")
+	assert.NotContains(t, out, ", hash ",
+		"hash must not be folded into the Evaluator line")
+
+	// A dedicated Hash row follows. The hex value is 64 characters;
+	// we confirm the row exists and the line it lives on contains a
+	// 64-char hex substring.
+	lines := strings.Split(out, "\n")
+	var hashLine string
+	for _, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), "Hash:") {
+			hashLine = l
+			break
+		}
+	}
+	require.NotEmpty(t, hashLine, "Hash row must be present for a 3.3+ mission")
+	// Count hex characters on the hash line. tabwriter may pad with
+	// spaces, so we scan for a contiguous 64-char hex sequence.
+	assert.Regexp(t, `[0-9a-f]{64}`, hashLine,
+		"Hash row must contain a 64-char hex sha256")
+}
+
 // --- list ---
 
 func TestMissionList_Empty(t *testing.T) {

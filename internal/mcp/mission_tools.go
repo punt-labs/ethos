@@ -17,7 +17,7 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("create", "show", "list", "close"),
 			mcplib.Description("Operation to perform."),
