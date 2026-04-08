@@ -40,7 +40,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders the Results header and `(none)` marker on stdout — an
   operator piping `ethos mission show <id> 2>/dev/null | less` no
   longer loses the section entirely, and the stderr warning still
-  carries the load failure.
+  carries the load failure. Round 5 (Copilot finding) closes the
+  on-disk trust symmetry gap in `decodeResultsFile`: the write path
+  (`AppendResult`) has always refused a result whose self-declared
+  `mission` field disagrees with the target mission, but until now
+  the read path did not. An attacker with local write access to
+  `~/.punt-labs/ethos/missions/<id>.results.yaml` could hand-edit
+  the file to contain a forged result claiming a different mission,
+  and the close gate would accept it as long as the round number
+  matched. The decoder now rejects any `results[i].mission` that
+  does not equal the target, naming both IDs in the error —
+  symmetric with the Phase 3.1 round-3 `KnownFields(true)` fix.
 
 ### Added
 

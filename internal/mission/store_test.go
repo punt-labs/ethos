@@ -2565,6 +2565,75 @@ func TestStore_LoadResults_RejectsUnknownField(t *testing.T) {
 	assert.Contains(t, err.Error(), "field bogus not found")
 }
 
+// TestStore_LoadResults_RejectsMismatchedMissionID asserts the
+// on-disk trust symmetry Phase 3.6 round 5 added: a hand-edited
+// results file whose entry carries a Mission ID different from the
+// file's parent mission is rejected at read time, exactly as
+// AppendResult rejects it at write time.
+//
+// Before the fix, an attacker with local write access to
+// ~/.punt-labs/ethos/missions/<id>.results.yaml could drop a
+// forged result into mission A's sibling file claiming mission B.
+// decodeResultsFile ran r.Validate (which passes — the forged
+// entry is internally consistent) but never checked
+// r.Mission == missionID. The close gate then accepted the forged
+// result as long as the round matched, silently authorizing a
+// terminal transition on A based on work reported for B.
+//
+// The test seeds a results file under missionA containing a result
+// whose mission field is missionB, then drives two surfaces:
+//  1. LoadResults(missionA) must return an error naming both IDs.
+//  2. Close(missionA, StatusClosed) must refuse, propagating the
+//     load failure. Pre-fix, Close silently accepted because
+//     checkResultGateLocked only matched on round number.
+func TestStore_LoadResults_RejectsMismatchedMissionID(t *testing.T) {
+	s := testStore(t)
+	missionA := "m-2026-04-08-001"
+	missionB := "m-2026-04-08-002"
+	c := newContract(missionA)
+	require.NoError(t, s.Create(c))
+
+	// Hand-craft a results file under missionA whose single entry
+	// declares itself as belonging to missionB. Round 1 matches the
+	// freshly-created mission's current_round so the pre-fix gate
+	// would have been satisfied by the forgery.
+	body := []byte(`results:
+  - mission: ` + missionB + `
+    round: 1
+    author: bwk
+    verdict: pass
+    confidence: 0.8
+    evidence:
+      - name: make check
+        status: pass
+`)
+	require.NoError(t, os.WriteFile(s.resultsPath(missionA), body, 0o600))
+
+	// Surface 1: LoadResults names both IDs in the mismatch error.
+	_, err := s.LoadResults(missionA)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "mission")
+	assert.Contains(t, msg, missionA, "error must name the target mission")
+	assert.Contains(t, msg, missionB, "error must name the forged mission")
+
+	// Surface 2: Close refuses, and the load failure is propagated
+	// through checkResultGateLocked rather than silently satisfied
+	// by the round match. Pre-fix this assertion fails — Close
+	// accepts the forgery and flips missionA to closed.
+	err = s.Close(missionA, StatusClosed)
+	require.Error(t, err, "close must refuse when the results file is forged")
+	assert.Contains(t, err.Error(), "mission")
+
+	// And the mission must still be open — the gate refusal must
+	// not leak any partial state through.
+	loaded, loadErr := s.Load(missionA)
+	require.NoError(t, loadErr)
+	assert.Equal(t, StatusOpen, loaded.Status,
+		"gate refusal must not flip the status on a forgery")
+	assert.Empty(t, loaded.ClosedAt)
+}
+
 // TestStore_LoadResults_EmptyForFreshMission asserts that a brand-new
 // mission has no results file on disk and LoadResults returns nil
 // with no error.

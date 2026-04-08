@@ -1357,6 +1357,20 @@ func decodeResultsFile(data []byte, missionID string) ([]Result, error) {
 		if err := r.Validate(); err != nil {
 			return nil, fmt.Errorf("results[%d] for %q: %w", i, missionID, err)
 		}
+		// On-disk trust symmetry with AppendResult: the write path
+		// refuses a result whose self-declared Mission does not match
+		// the target mission, but until Phase 3.6 round 5 the read
+		// path did not. An attacker with local write access could
+		// hand-edit <mission-A>.results.yaml to contain a result
+		// claiming mission-B, and the close gate would accept it as
+		// long as the round number matched. Reject the mismatch here
+		// so the two surfaces enforce the same invariant.
+		if r.Mission != missionID {
+			return nil, fmt.Errorf(
+				"results[%d].mission: expected %q, got %q",
+				i, missionID, r.Mission,
+			)
+		}
 		if i > 0 && wrapper.Results[i-1].Round >= r.Round {
 			return nil, fmt.Errorf(
 				"results file %q is out of order or has duplicate round: %d after %d",
