@@ -980,6 +980,84 @@ budget:
 		"corrupt-results show must carry the load failure on stderr, got: %s", stderr)
 }
 
+// TestMissionShow_CorruptReflectionsStillPrintsSection asserts the
+// round-6 Bugbot fix: when LoadReflections fails on a corrupt
+// `.reflections.yaml` sibling, `mission show` still renders the
+// Reflections header and `(none)` marker on stdout, and the load
+// failure surfaces on stderr. Round 4 fixed the same class for
+// Results (mdm N1); this test closes the parallel miss. Without
+// this, an operator piping `ethos mission show <id> 2>/dev/null |
+// less` would see the contract block but nothing where the
+// Reflections section should be, and the warning signal would be
+// lost. Runs in a subprocess so stdout and stderr can be asserted
+// independently — the symmetry bug is precisely about what each
+// stream carries.
+func TestMissionShow_CorruptReflectionsStillPrintsSection(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/corrupt-reflections/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	// Corrupt the sibling reflections file. The file path mirrors
+	// the store's reflectionsPath layout —
+	// <root>/missions/<id>.reflections.yaml.
+	reflectionsFile := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".reflections.yaml")
+	require.NoError(t, os.WriteFile(reflectionsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
+
+	showCmd := exec.Command(ethosBinary, "mission", "show", id)
+	showCmd.Env = env
+	var stdoutBuf, stderrBuf bytes.Buffer
+	showCmd.Stdout = &stdoutBuf
+	showCmd.Stderr = &stderrBuf
+	require.NoError(t, showCmd.Run(),
+		"mission show must exit 0 on corrupt reflections, got stderr: %s", stderrBuf.String())
+
+	stdout := stdoutBuf.String()
+	assert.Contains(t, stdout, "Reflections:",
+		"corrupt-reflections show must print the Reflections: header on stdout, got: %s", stdout)
+	assert.Contains(t, stdout, "(none)",
+		"corrupt-reflections show must print (none) marker on stdout, got: %s", stdout)
+
+	stderr := stderrBuf.String()
+	assert.Contains(t, stderr, "loading reflections",
+		"corrupt-reflections show must carry the load failure on stderr, got: %s", stderr)
+}
+
 // TestMissionClose_HelpMentionsResultGate asserts the G1 round-3
 // fix: `mission close --help` documents that a result artifact is
 // required for the current round, mirroring `mission advance --help`.

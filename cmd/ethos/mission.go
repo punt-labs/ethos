@@ -476,20 +476,18 @@ func runMissionShow(idOrPrefix string) {
 
 	// Reflections and results are advisory in show — load them
 	// after the contract render so a corrupt sibling file does not
-	// block the operator from seeing the contract.
+	// block the operator from seeing the contract. Both sections
+	// render their header + `(none)` marker unconditionally so an
+	// operator piping `show` through `less` never loses the signal
+	// on stdout; the stderr warning carries the load failure. Round
+	// 4 fixed the Results case (mdm N1); round 6 closed the parallel
+	// miss for Reflections (Bugbot).
 	reflections, err := ms.LoadReflections(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading reflections: %v\n", err)
-	} else {
-		printReflections(reflections)
 	}
+	printReflections(reflections)
 
-	// A corrupt results file still renders the Results section —
-	// printResults(nil) emits `Results:\n  (none)` so the operator
-	// sees the header regardless of load success. The stderr warning
-	// carries the load failure; without the stdout marker, an
-	// operator piping `show` through `less` would lose the signal
-	// entirely. Round 4 mdm finding N1.
 	results, err := ms.LoadResults(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading results: %v\n", err)
@@ -868,22 +866,29 @@ func printContract(c *mission.Contract) {
 }
 
 // printReflections renders the round-by-round reflection log under
-// the contract block. Empty input is silent — a fresh mission with
-// no reflections does not need a section header. Each reflection is
-// rendered as a small block: round number, recommendation, signals,
-// and reason (when present), so the operator can read the leader's
-// decision history without parsing YAML.
+// the contract block. Empty input renders "Reflections: (none)" so
+// an operator running `mission show` on a fresh mission — or on one
+// whose sibling `.reflections.yaml` failed to load — sees the
+// section exists but has no entries. Each reflection is rendered as
+// a small block: round number, recommendation, signals, and reason
+// (when present), so the operator can read the leader's decision
+// history without parsing YAML.
 //
 // Terminal recommendations (stop, escalate) are uppercased so an
 // operator scanning a long reflection log can spot a blocking
 // decision at a glance — a lowercase "stop" between two "continue"
 // rows is easy to miss.
+//
+// Round 6 of Phase 3.6 added the empty-state marker, parallel to
+// the round-3 E1 fix for printResults. Bugbot caught the Reflections
+// case when round 4 fixed only the Results side of the pair.
 func printReflections(rs []mission.Reflection) {
-	if len(rs) == 0 {
-		return
-	}
 	fmt.Println()
 	fmt.Println("Reflections:")
+	if len(rs) == 0 {
+		fmt.Println("  (none)")
+		return
+	}
 	for _, r := range rs {
 		rec := r.Recommendation
 		if mission.IsTerminalRecommendation(rec) {

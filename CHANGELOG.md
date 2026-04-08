@@ -51,6 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matched. The decoder now rejects any `results[i].mission` that
   does not equal the target, naming both IDs in the error —
   symmetric with the Phase 3.1 round-3 `KnownFields(true)` fix.
+  Round 6 (Bugbot finding) closes the parallel miss of the round-4
+  Results fix on the Reflections side of `runMissionShow`: a corrupt
+  `.reflections.yaml` now still renders the `Reflections:` header
+  and `(none)` marker on stdout, with the load failure on stderr,
+  matching the symmetric Results behavior. `printReflections` on
+  empty input now emits the section header and `(none)` marker
+  instead of returning silently — parallel to the round-3 E1 fix
+  for `printResults`.
 
 ### Added
 
