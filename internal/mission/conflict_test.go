@@ -121,6 +121,36 @@ func TestPathsOverlap(t *testing.T) {
 			b:    "cmd/ethos/mission.go",
 			want: true,
 		},
+		{
+			name: "double slash in middle equivalent to single",
+			a:    "internal//foo",
+			b:    "internal/foo",
+			want: true,
+		},
+		{
+			name: "double slash forward prefix",
+			a:    "internal/foo",
+			b:    "internal//foo/bar.go",
+			want: true,
+		},
+		{
+			// `///` collapses to nil after trim+filter, so it matches
+			// nothing — same convention as an empty input.
+			name: "triple slash collapses to nil",
+			a:    "///",
+			b:    "internal/foo",
+			want: false,
+		},
+		{
+			// The per-entry validator rejects leading slashes upstream,
+			// so this case cannot reach the conflict check in
+			// production. The row locks the helper's behavior in case
+			// the validator's coverage ever changes.
+			name: "leading slash filtered",
+			a:    "/internal/foo",
+			b:    "internal/foo",
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

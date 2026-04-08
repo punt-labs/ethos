@@ -119,8 +119,16 @@ func pathsOverlap(a, b string) bool {
 //     validator already rejected drive letters and UNC paths)
 //   - trim a single trailing `/` so `internal/foo/` and `internal/foo`
 //     produce the same segment list
+//   - drop empty segments produced by doubled slashes, so
+//     `internal//foo` and `internal/foo` compare equal
 //
-// An empty or whitespace-only input produces a nil segment list,
+// The per-entry validator does not reject double slashes, so the
+// conflict check must normalize them here — otherwise an empty middle
+// segment breaks the prefix comparison and two logically overlapping
+// missions can coexist.
+//
+// An empty or whitespace-only input — or an input like `///` that
+// collapses to nothing after filtering — produces a nil segment list,
 // which signals "matches nothing" to pathsOverlap.
 func splitSegments(p string) []string {
 	p = strings.TrimSpace(p)
@@ -132,7 +140,18 @@ func splitSegments(p string) []string {
 	if p == "" {
 		return nil
 	}
-	return strings.Split(p, "/")
+	raw := strings.Split(p, "/")
+	segs := raw[:0]
+	for _, s := range raw {
+		if s == "" {
+			continue
+		}
+		segs = append(segs, s)
+	}
+	if len(segs) == 0 {
+		return nil
+	}
+	return segs
 }
 
 // formatConflictError builds the operator-facing error string from
