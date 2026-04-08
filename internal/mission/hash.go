@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -322,7 +323,7 @@ func hashRoleSection(name, content string) string {
 func writeField(buf *strings.Builder, label, value string) {
 	buf.WriteString(label)
 	buf.WriteString(fieldSep)
-	buf.WriteString(fmt.Sprintf("%d", len(value)))
+	buf.WriteString(strconv.Itoa(len(value)))
 	buf.WriteString(fieldSep)
 	buf.WriteString(value)
 	buf.WriteString(fieldSep)

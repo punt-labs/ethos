@@ -705,3 +705,65 @@ func TestSubagentStart_VerifierGateNoMissionStoreIsLegacy(t *testing.T) {
 
 	require.NoError(t, hookErr, "legacy install (no mission store) must not block")
 }
+
+// TestSubagentStart_VerifierGateMisconfiguredHashIsFatal asserts that a
+// caller who wires in a mission store but forgets to populate
+// HashSources fails loudly. Silently skipping the gate on a
+// misconfigured hash bundle would let drifted evaluator content
+// through — the same silent-bypass case DES-033 was written to
+// prevent. Mirrors the fail-fast rule enforced by
+// TestApplyServerFields_RejectsNilSources in the mission package.
+func TestSubagentStart_VerifierGateMisconfiguredHashIsFatal(t *testing.T) {
+	_, idStore, missions, sessions, _ := setupVerifierTest(t, "djb")
+
+	sessionID := "verifier-test-djb"
+	require.NoError(t, sessions.Create(sessionID,
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
+	))
+
+	payload := `{"agent_id":"sub-verifier","agent_type":"djb","session_id":"verifier-test-djb"}`
+
+	hookErr := HandleSubagentStartWithDeps(bytes.NewReader([]byte(payload)),
+		SubagentStartDeps{
+			Identities: idStore,
+			Sessions:   sessions,
+			Missions:   missions,
+			Hash:       mission.HashSources{}, // deliberately empty
+		})
+
+	require.Error(t, hookErr, "misconfigured hash sources must refuse the spawn")
+	assert.Contains(t, hookErr.Error(), "misconfigured",
+		"error must label the misconfiguration so the operator fixes the wiring, not the content")
+}
+
+// TestSubagentStart_VerifierGateCorruptMissionIsFatal asserts that a
+// hand-corrupted mission file on disk blocks the spawn. Silently
+// skipping an unparseable contract would let an attacker bypass the
+// frozen-evaluator gate by truncating or mangling the YAML — so the
+// gate returns a fatal error that names the offending mission ID.
+func TestSubagentStart_VerifierGateCorruptMissionIsFatal(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// Seed one valid open mission so List walks at least one file
+	// through the normal code path.
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// Write a corrupt YAML file directly into the missions directory
+	// with a mission_id-shaped filename. The List walker treats any
+	// non-dotfile .yaml file as a mission, so Load will be called
+	// on this file and fail to decode.
+	corruptPath := filepath.Join(missions.Root(), "missions", "m-2026-04-08-999.yaml")
+	require.NoError(t, os.WriteFile(corruptPath, []byte("not valid yaml {[}\n"), 0o600))
+
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.Error(t, err, "corrupt mission file must refuse the spawn")
+	msg := err.Error()
+	assert.Contains(t, msg, "failed to load mission",
+		"error must label the load failure so the operator knows which layer broke")
+	assert.Contains(t, msg, "m-2026-04-08-999",
+		"error must name the offending mission ID so the operator can find the file")
+}
