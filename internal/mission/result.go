@@ -253,7 +253,7 @@ func (r *Result) Validate() error {
 // prefix out of validateWriteSetEntry for exactly this reason.
 func validateFileChange(fc FileChange) error {
 	if err := validateWriteSetEntry(fc.Path); err != nil {
-		return fmt.Errorf("path %w", err)
+		return fmt.Errorf("path: %w", err)
 	}
 	if fc.Added < 0 {
 		return fmt.Errorf("added %d must be non-negative", fc.Added)

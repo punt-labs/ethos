@@ -132,7 +132,7 @@ func (c *Contract) Validate() error {
 	}
 	for i, entry := range c.WriteSet {
 		if err := validateWriteSetEntry(entry); err != nil {
-			return fmt.Errorf("write_set[%d]: write_set entry %w", i, err)
+			return fmt.Errorf("write_set[%d]: write_set entry: %w", i, err)
 		}
 	}
 

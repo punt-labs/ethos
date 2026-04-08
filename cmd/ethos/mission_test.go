@@ -711,6 +711,217 @@ func TestMissionShow_IncludesResults(t *testing.T) {
 	assert.Equal(t, float64(1), first["round"])
 }
 
+// TestMissionShow_EmptyResultsIsArray asserts the A2 round-3 fix:
+// `mission show --json` on a mission with no submitted result must
+// return `"results": []`, not `"results": null`. The round-2 guard
+// — `if payload["results"] == nil { ... }` — was dead code because
+// a typed-nil []mission.Result boxed into map[string]any produces
+// an `any` whose *type* is non-nil even though its value is nil.
+// Round 3 pre-initializes the slice before constructing the
+// payload so JSON-encodes an empty array.
+func TestMissionShow_EmptyResultsIsArray(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	// Raw text: `"results": []` must appear, `"results": null` must
+	// not. Both forms use the printJSON indent width so the exact
+	// substring is stable across runs.
+	assert.Contains(t, jsonOut, `"results": []`,
+		"empty results must serialize as [], got: %s", jsonOut)
+	assert.NotContains(t, jsonOut, `"results": null`,
+		"empty results must not serialize as null, got: %s", jsonOut)
+
+	// Parsed: results must be an []any{} (non-nil, empty), not nil.
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must be an array, got: %v", payload["results"])
+	assert.Equal(t, 0, len(results))
+}
+
+// TestMissionShow_JSONIncludesSessionAndRepo asserts the C1 round-3
+// fix: `mission show --json` round-trips the `session` and `repo`
+// Contract fields when the source contract sets them. Round 2's
+// hand-rolled payload map dropped both fields silently, causing
+// load-bearing cross-session identity data to vanish from the MCP
+// and CLI surfaces. Round 3 replaced the map with a ShowPayload
+// struct that embeds *Contract, so every Contract field — including
+// any added in the future — round-trips automatically.
+func TestMissionShow_JSONIncludesSessionAndRepo(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Mutate the persisted contract in place to set session and
+	// repo. The CLI create path does not accept these fields from
+	// the YAML today, but the store's Update path does — the
+	// round-trip test exercises what the show path sees, not the
+	// create path.
+	c, err := ms.Load(id)
+	require.NoError(t, err)
+	c.Session = "test-session-abc"
+	c.Repo = "punt-labs/ethos"
+	require.NoError(t, ms.Update(c))
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+	assert.Equal(t, "test-session-abc", payload["session"],
+		"session must round-trip through show JSON, got: %v", payload["session"])
+	assert.Equal(t, "punt-labs/ethos", payload["repo"],
+		"repo must round-trip through show JSON, got: %v", payload["repo"])
+}
+
+// TestMissionShow_JSONOmitsEmptyOptionalFields asserts the C1
+// round-3 fix preserves Contract json-tag `omitempty` semantics.
+// An open mission with no context, no tools, and no closed_at
+// must NOT emit those fields in JSON — the round-2 hand-rolled
+// map unconditionally emitted every field, leaking
+// "closed_at": "" and "context": "" into payloads for open
+// missions and muddying the distinction between "absent" and
+// "empty".
+func TestMissionShow_JSONOmitsEmptyOptionalFields(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Clear context and tools so the omitempty fields are truly
+	// empty. The fixture in writeContractFile sets context and
+	// tools; this test needs the opposite shape.
+	c, err := ms.Load(id)
+	require.NoError(t, err)
+	c.Context = ""
+	c.Tools = nil
+	require.NoError(t, ms.Update(c))
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	// An open mission never has closed_at; it must not appear in
+	// the payload.
+	assert.NotContains(t, jsonOut, `"closed_at"`,
+		"open mission must not emit closed_at (omitempty), got: %s", jsonOut)
+	// Empty context must not appear.
+	assert.NotContains(t, jsonOut, `"context"`,
+		"empty context must be omitted (omitempty), got: %s", jsonOut)
+	// Empty tools must not appear.
+	assert.NotContains(t, jsonOut, `"tools"`,
+		"empty tools must be omitted (omitempty), got: %s", jsonOut)
+}
+
+// TestMissionShow_JSONSurfacesCorruptResultsAsWarnings asserts the
+// D1 round-3 fix: when LoadResults returns an error (corrupt
+// sibling file on disk), `mission show --json` emits a top-level
+// `warnings` array with the load failure instead of silently
+// returning `"results": []`. Without this, a corrupt file was
+// indistinguishable from "no result submitted".
+func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Corrupt the sibling results file. The file path mirrors the
+	// store's resultsPath layout — <root>/missions/<id>.results.yaml.
+	resultsFile := filepath.Join(ms.Root(), "missions", id+".results.yaml")
+	require.NoError(t, os.WriteFile(resultsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+
+	// results must still be present (an empty array) so the
+	// payload remains parseable.
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must still be an array on load failure, got: %v", payload["results"])
+	assert.Equal(t, 0, len(results))
+
+	// warnings must carry the load failure.
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "warnings must be a top-level array, got: %v", payload["warnings"])
+	require.NotEmpty(t, warnings)
+	firstWarning, _ := warnings[0].(string)
+	assert.Contains(t, firstWarning, "loading results",
+		"warning must name the load failure, got: %s", firstWarning)
+}
+
+// TestMissionShow_PrintsEmptyResultsSection asserts the E1 round-3
+// fix: `mission show` on a mission with no submitted result
+// renders a "Results: (none)" block instead of printing nothing.
+// Round 2's printResults returned early on an empty slice; an
+// operator running show on a fresh mission saw no indication
+// results were even expected.
+func TestMissionShow_PrintsEmptyResultsSection(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	out := captureStdout(t, func() { runMissionShow(id) })
+	assert.Contains(t, out, "Results:",
+		"empty-results show must print the Results: header, got: %s", out)
+	assert.Contains(t, out, "(none)",
+		"empty-results show must print (none) marker, got: %s", out)
+}
+
+// TestMissionClose_HelpMentionsResultGate asserts the G1 round-3
+// fix: `mission close --help` documents that a result artifact is
+// required for the current round, mirroring `mission advance --help`.
+// Without this paragraph, an operator reading only the close help
+// is surprised by the "no result artifact for round N" refusal.
+func TestMissionClose_HelpMentionsResultGate(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission", "close", "--help")
+	require.NoError(t, err)
+	// The gate language must surface the prerequisite and the
+	// remediation path. Both pieces matter: the operator needs to
+	// know what is required AND how to satisfy it.
+	assert.Contains(t, stdout, "result",
+		"close help must mention the result prerequisite, got: %s", stdout)
+	assert.Contains(t, stdout, "ethos mission result",
+		"close help must link to the result subcommand, got: %s", stdout)
+}
+
 // TestMissionShow_RendersCurrentRound asserts that printContract
 // includes the new "Round: N of M" line so the operator can read
 // the mission's progress at a glance.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1234,6 +1235,122 @@ func TestHandleMission_Show_EmptyResultsReturnsArray(t *testing.T) {
 	msg := resultText(t, showResult)
 	assert.Contains(t, msg, `"results": []`,
 		"empty results must render as [], not null; got: %s", msg)
+}
+
+// TestHandleMission_Show_JSONIncludesSessionAndRepo asserts the
+// C1 round-3 MCP parity fix: the show payload round-trips the
+// Contract's session and repo fields. Round 2 dropped them from
+// the hand-rolled payload map on both the CLI and the MCP paths;
+// round 3 replaced both with a ShowPayload struct that embeds
+// *Contract, so every Contract field auto-propagates to both
+// surfaces.
+func TestHandleMission_Show_JSONIncludesSessionAndRepo(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	// The test harness' handler shares a mission store with the
+	// NewLiveHashSources path; mutate session and repo directly on
+	// the persisted contract via the store's Update method.
+	c, err := h.missionStore.Load(created.MissionID)
+	require.NoError(t, err)
+	c.Session = "mcp-session-xyz"
+	c.Repo = "punt-labs/test"
+	require.NoError(t, h.missionStore.Update(c))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &payload))
+	assert.Equal(t, "mcp-session-xyz", payload["session"],
+		"MCP show payload must round-trip session, got: %v", payload["session"])
+	assert.Equal(t, "punt-labs/test", payload["repo"],
+		"MCP show payload must round-trip repo, got: %v", payload["repo"])
+}
+
+// TestHandleMission_Show_JSONOmitsEmptyOptionalFields asserts the
+// C1 round-3 MCP parity fix preserves Contract json-tag omitempty
+// semantics. The struct-embedding payload must NOT emit closed_at,
+// context, or tools on an open minimal mission — round 2's
+// hand-rolled map emitted every field unconditionally.
+func TestHandleMission_Show_JSONOmitsEmptyOptionalFields(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	msg := resultText(t, showResult)
+	assert.NotContains(t, msg, `"closed_at"`,
+		"open mission must not emit closed_at, got: %s", msg)
+	assert.NotContains(t, msg, `"tools"`,
+		"missing tools must be omitted, got: %s", msg)
+}
+
+// TestHandleMission_Show_SurfacesCorruptResultsAsWarnings asserts
+// the D1 round-3 fix: when LoadResults returns an error from a
+// corrupt sibling file, handleShowMission emits a top-level
+// `warnings` array so the MCP caller has a signal that the results
+// file is broken. Without this, the corrupt file was
+// indistinguishable from "no result submitted" — the inline
+// comment promised the corruption would "surface in a future
+// mission results call" but gave the caller no reason to make it.
+func TestHandleMission_Show_SurfacesCorruptResultsAsWarnings(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	// Corrupt the sibling results file directly on disk.
+	resultsFile := fmt.Sprintf("%s/missions/%s.results.yaml",
+		h.missionStore.Root(), created.MissionID)
+	require.NoError(t, os.WriteFile(resultsFile, []byte("not: : valid: yaml\n  [}\n"), 0o600))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError,
+		"corrupt sibling file must not fail the show; got: %s", resultText(t, showResult))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &payload))
+
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must still be an array, got: %v", payload["results"])
+	assert.Equal(t, 0, len(results), "corrupt load must yield empty results slice")
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "warnings must be a top-level array, got: %v", payload["warnings"])
+	require.NotEmpty(t, warnings)
+	firstWarning, _ := warnings[0].(string)
+	assert.Contains(t, firstWarning, "loading results",
+		"warning must name the load failure, got: %s", firstWarning)
 }
 
 // TestHandleMission_Result_UnknownIDReturnsError asserts that

@@ -171,7 +171,13 @@ var missionCloseCmd = &cobra.Command{
 Accepts a full mission ID or unambiguous prefix. Default terminal
 status is "closed"; use --status failed or --status escalated for
 the other terminal states. The close event is appended to the mission
-event log.`,
+event log.
+
+A valid result artifact for the current round is required. The close
+gate refuses the terminal transition with "no result artifact for
+round N" until the worker has submitted a result for that round.
+Submit one with "ethos mission result <id> --file <path>" before
+closing; see "ethos mission result --help" for the required YAML shape.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionClose(args[0], missionCloseStatus)
@@ -434,37 +440,34 @@ func runMissionShow(idOrPrefix string) {
 		os.Exit(1)
 	}
 	if jsonOutput {
-		// JSON shape extends the bare contract with a top-level
-		// `results` array so a consumer that previously decoded
-		// only the contract still decodes the same fields, and a
-		// consumer that wants to reconstruct the close verdict
-		// does not need a second round trip. Reflections stay out
-		// of the payload — fetch via `ethos mission reflections`
-		// to keep the show call's wire size bounded by the
-		// contract. Round 2 added results because mdm found the
-		// operator could not see the verdict that authorized a
-		// close without `cat`-ing the YAML file.
-		results, _ := ms.LoadResults(id)
-		payload := map[string]any{
-			"mission_id":      c.MissionID,
-			"status":          c.Status,
-			"created_at":      c.CreatedAt,
-			"updated_at":      c.UpdatedAt,
-			"closed_at":       c.ClosedAt,
-			"leader":          c.Leader,
-			"worker":          c.Worker,
-			"evaluator":       c.Evaluator,
-			"inputs":          c.Inputs,
-			"write_set":       c.WriteSet,
-			"tools":           c.Tools,
-			"success_criteria": c.SuccessCriteria,
-			"budget":          c.Budget,
-			"current_round":   c.CurrentRound,
-			"context":         c.Context,
-			"results":         results,
+		// JSON shape wraps the contract in ShowPayload: the
+		// contract's own json tags drive serialization (so
+		// `session`, `repo`, and every omitempty field behave
+		// exactly as they would on a bare contract), plus a
+		// top-level `results` array and an optional `warnings`
+		// field. Round 2 hand-rolled a map and silently dropped
+		// session/repo; the struct embedding keeps CLI and MCP
+		// in lockstep and auto-propagates any future Contract
+		// field to both surfaces.
+		results, loadErr := ms.LoadResults(id)
+		if results == nil {
+			// Pre-initialize BEFORE constructing the payload so
+			// JSON emits `[]`, not `null`. A typed-nil
+			// []mission.Result slice still marshals as `null`
+			// through struct embedding — the empty-slice fix
+			// and the struct-embedding fix are complementary,
+			// not alternatives.
+			results = []mission.Result{}
 		}
-		if payload["results"] == nil {
-			payload["results"] = []mission.Result{}
+		payload := mission.ShowPayload{Contract: c, Results: results}
+		if loadErr != nil {
+			// Surface the load failure on stderr for human
+			// operators AND in the JSON warnings field for
+			// scriptability. A corrupt sibling file must not
+			// be indistinguishable from "no result submitted".
+			fmt.Fprintf(os.Stderr, "ethos: warning: loading results: %v\n", loadErr)
+			payload.Warnings = append(payload.Warnings,
+				fmt.Sprintf("loading results: %v", loadErr))
 		}
 		printJSON(payload)
 		return
@@ -893,23 +896,29 @@ func printReflections(rs []mission.Reflection) {
 }
 
 // printResults renders the round-by-round result log under the
-// contract and reflections blocks. Empty input is silent — a fresh
-// mission without a result is not ready for the close gate to care.
-// Each result is rendered as a small block: round number, verdict,
-// confidence, author, files_changed count, evidence count, and the
-// first line of prose (if present) so the operator can read the
-// worker's own assessment without parsing YAML.
+// contract and reflections blocks. Each result is rendered as a
+// small block: round number, verdict, confidence, author,
+// files_changed count, evidence count, and the first line of prose
+// (if present) so the operator can read the worker's own assessment
+// without parsing YAML.
+//
+// Empty input renders "Results: (none)" so an operator running
+// `mission show` on a fresh mission sees the section exists but
+// has no entries yet. Round 2 of Phase 3.6 added the section;
+// round 3 added the empty-state marker so the operator does not
+// mistake silence for "no results expected".
 //
 // Round 2 of Phase 3.6 added this — mdm flagged that `mission show`
 // on a closed mission printed nothing about the result that
 // authorized the close. The typed artifact was invisible to the
 // CLI; operators had to `cat` the sibling YAML to see the verdict.
 func printResults(rs []mission.Result) {
-	if len(rs) == 0 {
-		return
-	}
 	fmt.Println()
 	fmt.Println("Results:")
+	if len(rs) == 0 {
+		fmt.Println("  (none)")
+		return
+	}
 	for _, r := range rs {
 		fmt.Printf("  - round %d (%s) by %s — confidence=%.2f\n",
 			r.Round, r.Verdict, r.Author, r.Confidence)

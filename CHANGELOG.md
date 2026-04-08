@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`mission show --json` and MCP `mission show` payload shape**
+  (Phase 3.6 round 3, `ethos-07m.10`) — both surfaces now serialize
+  a new `mission.ShowPayload` struct that embeds `*Contract` and adds
+  sibling `results` (always an array, never `null`) and optional
+  `warnings` (omitempty) fields. This replaces the round-2 hand-rolled
+  `map[string]any` that silently dropped the Contract's `session` and
+  `repo` fields and unconditionally emitted every `omitempty`-tagged
+  field on open missions. Any consumer decoding directly into
+  `mission.Contract` still works — the embedded pointer serializes
+  the Contract fields identically, and `omitempty` is honored. A
+  consumer that was decoding the round-2 map into a custom struct
+  with an enumerated field list will now see `session`, `repo`, and
+  the omitted empty fields correctly. The new `warnings` field
+  surfaces corrupt sibling-file failures that previously returned
+  `"results": []` indistinguishable from "no result submitted", so
+  scripted MCP callers gain a signal the CLI-only stderr channel did
+  not carry. The `mission show` hook formatter
+  (`internal/hook/format_output.go`) now renders a `Results:` section
+  (and an empty-state `(none)` marker) and a `Warnings:` section when
+  non-empty — previously the agent-facing MCP rendering dropped the
+  results field entirely. Round 3 also makes the `mission show` CLI
+  empty-state render `Results: (none)` so an operator running `show`
+  on a fresh mission sees the section exists and is empty; adds a
+  paragraph to `ethos mission close --help` documenting the result
+  gate and the remediation path; and unifies the error-wrapper style
+  in `validateFileChange` and Contract `validate` so both read
+  `field: <cause>`.
+
 ### Added
 
 - **Structured result artifacts and close gate** (Phase 3.6,

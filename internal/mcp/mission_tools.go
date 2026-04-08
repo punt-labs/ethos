@@ -134,8 +134,12 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 // same invisible-verdict gap mdm flagged at the CLI.
 //
 // Results load is advisory: a corrupt sibling file produces a
-// warning but the show still succeeds with the contract visible,
-// matching the CLI's behavior.
+// warnings entry in the payload (MCP has no stderr channel), but
+// the show still succeeds with the contract visible. Round 3
+// replaced the round-2 hand-rolled payload map with ShowPayload so
+// the Contract's own json tags drive serialization and fields like
+// `session` and `repo` round-trip without the handler having to
+// enumerate them.
 func (h *Handler) handleShowMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	idArg := stringArg(req, "mission_id", "")
 	if idArg == "" {
@@ -149,38 +153,21 @@ func (h *Handler) handleShowMission(req mcplib.CallToolRequest) (*mcplib.CallToo
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to load mission: %v", err)), nil
 	}
-	// Load results as an advisory extension to the payload. A missing
-	// or empty sibling file becomes `[]` in the output (never null)
-	// so MCP clients can decode into []mission.Result without a
-	// nil guard.
+	// Load results as an advisory extension. A missing or empty
+	// sibling file becomes `[]` in the output (never null) so MCP
+	// clients can decode into []mission.Result without a nil guard.
+	// A load error becomes a warning in the payload so the caller
+	// has a scriptable signal that the results file is corrupt;
+	// without this, a corrupt file was indistinguishable from "no
+	// result submitted".
 	results, loadErr := h.missionStore.LoadResults(id)
-	if loadErr != nil {
-		// Do not block the show on a corrupt results file — the
-		// contract is still the trust boundary and the operator
-		// deserves to see it. The corrupted file surfaces in a
-		// future `mission results` call.
-		results = nil
-	}
 	if results == nil {
 		results = []mission.Result{}
 	}
-	payload := map[string]any{
-		"mission_id":       c.MissionID,
-		"status":           c.Status,
-		"created_at":       c.CreatedAt,
-		"updated_at":       c.UpdatedAt,
-		"closed_at":        c.ClosedAt,
-		"leader":           c.Leader,
-		"worker":           c.Worker,
-		"evaluator":        c.Evaluator,
-		"inputs":           c.Inputs,
-		"write_set":        c.WriteSet,
-		"tools":            c.Tools,
-		"success_criteria": c.SuccessCriteria,
-		"budget":           c.Budget,
-		"current_round":    c.CurrentRound,
-		"context":          c.Context,
-		"results":          results,
+	payload := mission.ShowPayload{Contract: c, Results: results}
+	if loadErr != nil {
+		payload.Warnings = append(payload.Warnings,
+			fmt.Sprintf("loading results: %v", loadErr))
 	}
 	return jsonResult(payload)
 }

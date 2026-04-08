@@ -869,7 +869,11 @@ func formatMissionReflections(w io.Writer, result string) error {
 // formatMissionShow renders a single contract in a tabwriter-aligned
 // field block. The summary line is "<mission_id> (<status>)"; the
 // context is the field block plus write_set / tools / success_criteria
-// as bullet lists.
+// as bullet lists, and — when round 2 of Phase 3.6 landed the
+// results field on the show payload — a round-by-round Results
+// section below the contract so the MCP hook surface does not hide
+// the verdict that authorized a close. The pattern parallels
+// formatMissionResults; the two share one bullet shape.
 func formatMissionShow(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -885,8 +889,75 @@ func formatMissionShow(w io.Writer, result string) error {
 
 	var ctx strings.Builder
 	writeMissionFields(&ctx, c)
+	// The show payload (round 2+) carries a top-level `results`
+	// array; render it under the contract block. Missing or nil
+	// means a pre-3.6 consumer fed us a bare contract — no
+	// results section, no error. An empty array renders "(none)"
+	// so the operator sees the section exists and is empty.
+	if raw, ok := c["results"]; ok {
+		writeMissionResults(&ctx, raw)
+	}
+	// Surface any warnings from a corrupt sibling file. Round 3
+	// added this — without it, a corrupted results file was
+	// indistinguishable from "no results yet" for MCP callers.
+	if raw, ok := c["warnings"]; ok {
+		writeMissionWarnings(&ctx, raw)
+	}
 
 	return emit(w, summary, ctx.String())
+}
+
+// writeMissionResults renders the top-level `results` array from a
+// show payload as a Results section under the contract block. Empty
+// or missing arrays render "(none)" so the operator distinguishes
+// "no result submitted yet" from "formatter forgot to render the
+// section". The per-round bullet shape matches formatMissionResults'
+// array method — one helper, one visual convention.
+func writeMissionResults(ctx *strings.Builder, raw any) {
+	entries, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	ctx.WriteString("\n\nResults:")
+	if len(entries) == 0 {
+		ctx.WriteString("\n  (none)")
+		return
+	}
+	for _, e := range entries {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		round, _ := em["round"].(float64)
+		verdict, _ := em["verdict"].(string)
+		author, _ := em["author"].(string)
+		confidence, _ := em["confidence"].(float64)
+		fmt.Fprintf(ctx, "\n  - round %d (%s) by %s — confidence=%.2f",
+			int(round), verdict, author, confidence)
+		if prose, _ := em["prose"].(string); prose != "" {
+			// First line of prose only; multi-line narrative
+			// belongs in the dedicated `mission results` call.
+			line := strings.SplitN(prose, "\n", 2)[0]
+			fmt.Fprintf(ctx, "\n      %s", line)
+		}
+	}
+}
+
+// writeMissionWarnings renders a top-level `warnings` array (when
+// non-empty) as a Warnings section. The show payload emits this
+// only when an advisory sibling load failed; the operator must see
+// the failure even in JSON-parsed MCP mode.
+func writeMissionWarnings(ctx *strings.Builder, raw any) {
+	entries, ok := raw.([]any)
+	if !ok || len(entries) == 0 {
+		return
+	}
+	ctx.WriteString("\n\nWarnings:")
+	for _, e := range entries {
+		if s, ok := e.(string); ok {
+			ctx.WriteString("\n  - " + s)
+		}
+	}
 }
 
 // formatMissionCreate reuses the show layout — create returns the full

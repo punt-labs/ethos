@@ -98,3 +98,27 @@ type Budget struct {
 	Rounds              int  `yaml:"rounds" json:"rounds"`
 	ReflectionAfterEach bool `yaml:"reflection_after_each" json:"reflection_after_each"`
 }
+
+// ShowPayload is the wire shape the CLI `mission show --json` and the
+// MCP `mission show` handler return: the full contract, the
+// round-by-round result log, and an optional warnings list.
+//
+// The contract is embedded by pointer so its json tags drive
+// serialization. Any future Contract field is auto-propagated to
+// both surfaces without touching the show path — round 2's
+// hand-rolled map dropped `session` and `repo` precisely because
+// the CLI and MCP sides each maintained their own field list.
+//
+// Results is always emitted: empty state serializes as [] (the
+// caller pre-initializes to []Result{} so a typed-nil slice never
+// leaks through the map[string]any boxing trap mdm caught in round
+// 2). Warnings is omitempty so an open mission with a healthy
+// results file produces no noise; when LoadResults fails, the
+// caller populates Warnings with the load error so the failure
+// surfaces in JSON mode without requiring a stderr channel the MCP
+// surface does not have.
+type ShowPayload struct {
+	*Contract
+	Results  []Result `json:"results"`
+	Warnings []string `json:"warnings,omitempty"`
+}
