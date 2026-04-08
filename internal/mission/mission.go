@@ -49,13 +49,16 @@ type Contract struct {
 
 // Evaluator is the frozen reviewer pinned at mission launch.
 //
-// Hash is OPTIONAL in 3.1; 3.3 will populate it from the resolved
-// evaluator's personality+role+writing-style content (sha256). Until
-// then it is an empty string.
+// Hash is populated at create time in 3.3 via ApplyServerFields from
+// the resolved evaluator's personality, writing_style, talents, and
+// role content (sha256). The YAML tag keeps omitempty for on-disk
+// backward compatibility with pre-3.3 mission files (no empty hash:
+// "" line on save), but the JSON tag always emits the field so
+// consumers that key on presence see a consistent shape.
 type Evaluator struct {
 	Handle   string `yaml:"handle" json:"handle"`
 	PinnedAt string `yaml:"pinned_at" json:"pinned_at"`
-	Hash     string `yaml:"hash,omitempty" json:"hash,omitempty"`
+	Hash     string `yaml:"hash,omitempty" json:"hash"`
 }
 
 // Inputs are what the worker reads from. Files are paths the worker

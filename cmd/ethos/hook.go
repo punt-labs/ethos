@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/punt-labs/ethos/internal/hook"
+	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/spf13/cobra"
 )
 
@@ -105,7 +106,23 @@ func runHookSessionEnd() {
 func runHookSubagentStart() {
 	s := identityStore()
 	ss := sessionStore()
-	if err := hook.HandleSubagentStart(os.Stdin, s, ss); err != nil {
+	// Phase 3.3: wire the mission store and live hash sources so the
+	// verifier hash gate enforces frozen-evaluator pinning at every
+	// subagent spawn. A drift between mission create and verifier
+	// spawn refuses the spawn with a fatal, operator-readable error.
+	ms := missionStore()
+	hashSources, err := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
+		os.Exit(1)
+	}
+	deps := hook.SubagentStartDeps{
+		Identities: s,
+		Sessions:   ss,
+		Missions:   ms,
+		Hash:       hashSources,
+	}
+	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
 		os.Exit(1)
 	}

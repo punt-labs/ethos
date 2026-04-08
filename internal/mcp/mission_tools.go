@@ -17,7 +17,7 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("create", "show", "list", "close"),
 			mcplib.Description("Operation to perform."),
@@ -82,11 +82,22 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	c := *parsed
 
 	// Apply server-controlled fields (mission_id, status, timestamps,
-	// evaluator.pinned_at) via the shared helper. CLI and MCP entry
-	// points are in lockstep: any caller-supplied values for these
-	// fields are overwritten identically regardless of where the YAML
-	// came from.
-	if err := h.missionStore.ApplyServerFields(&c, time.Now()); err != nil {
+	// evaluator.pinned_at, evaluator.hash) via the shared helper.
+	// CLI and MCP entry points are in lockstep: any caller-supplied
+	// values for these fields are overwritten identically regardless
+	// of where the YAML came from. Hash sources resolve the evaluator
+	// against the live identity, role, and team stores; an
+	// unresolvable handle is fatal — see DES-033.
+	//
+	// NewLiveHashSources rejects nil role or team stores so an MCP
+	// handler built without WithRoleStore/WithTeamStore fails loudly
+	// here instead of silently pinning a role-free hash that the
+	// verifier hook (always wired with both stores) could never match.
+	sources, err := mission.NewLiveHashSources(h.store, h.roles, h.teams)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	if err := h.missionStore.ApplyServerFields(&c, time.Now(), sources); err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
 

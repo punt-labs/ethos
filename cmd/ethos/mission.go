@@ -47,8 +47,8 @@ var missionCreateCmd = &cobra.Command{
 Required fields: leader, worker, evaluator, write_set,
 success_criteria, and budget. Optional fields: inputs, context,
 session, repo. Server-controlled fields (mission_id, status,
-created_at, updated_at, closed_at, evaluator.pinned_at) are
-overwritten regardless of what the file supplies.
+created_at, updated_at, closed_at, evaluator.pinned_at,
+evaluator.hash) are overwritten regardless of what the file supplies.
 
 Unknown fields are rejected (KnownFields strict decode), and
 multi-document YAML or trailing content after the first document is
@@ -56,7 +56,12 @@ also rejected. Validation runs before the contract is persisted.
 
 Creation also fails if the new contract's write_set overlaps any
 currently-open mission's write_set; the error names the blocking
-mission(s) and the overlapping path(s).`,
+mission(s) and the overlapping path(s).
+
+Creation also fails if the evaluator handle cannot be resolved to a
+valid identity with personality, writing style, and talent content;
+the error names the handle. Use ` + "`ethos identity list`" + ` to see
+available handles.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
@@ -161,10 +166,19 @@ func runMissionCreate() {
 	c := *parsed
 
 	// Apply server-controlled fields (mission_id, status, timestamps,
-	// evaluator.pinned_at). Shared with the MCP create path via
-	// Store.ApplyServerFields so any caller-supplied values for these
-	// fields are overwritten identically regardless of entry point.
-	if err := ms.ApplyServerFields(&c, time.Now()); err != nil {
+	// evaluator.pinned_at, evaluator.hash). Shared with the MCP create
+	// path via Store.ApplyServerFields so any caller-supplied values
+	// for these fields are overwritten identically regardless of entry
+	// point. The hash sources resolve the evaluator handle through
+	// the live identity, role, and team stores; an unresolvable
+	// evaluator is fatal — see DES-033.
+	is := identityStore()
+	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
+		os.Exit(1)
+	}
+	if err := ms.ApplyServerFields(&c, time.Now(), sources); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
 		os.Exit(1)
 	}
@@ -297,17 +311,15 @@ func printContract(c *mission.Contract) {
 	}
 	fmt.Fprintf(tw, "Leader:\t%s\n", c.Leader)
 	fmt.Fprintf(tw, "Worker:\t%s\n", c.Worker)
-	// Fold the evaluator's hash inline. The continuation-row pattern
-	// (a row that starts with a tab) is fragile in tabwriter — once
-	// the hash field exists, the column widths get recomputed in
-	// surprising ways. One row, one Evaluator: line.
+	// Evaluator line carries the handle and the pinned timestamp. The
+	// hash goes on its own row so it does not wrap on 80-column
+	// terminals — a sha256 hex is 64 characters, which overflows the
+	// typical continuation budget.
 	pinned := formatStarted(c.Evaluator.PinnedAt)
-	evaluatorLine := fmt.Sprintf("%s (pinned %s", c.Evaluator.Handle, pinned)
+	fmt.Fprintf(tw, "Evaluator:\t%s (pinned %s)\n", c.Evaluator.Handle, pinned)
 	if c.Evaluator.Hash != "" {
-		evaluatorLine += ", hash " + c.Evaluator.Hash
+		fmt.Fprintf(tw, "Hash:\t%s\n", c.Evaluator.Hash)
 	}
-	evaluatorLine += ")"
-	fmt.Fprintf(tw, "Evaluator:\t%s\n", evaluatorLine)
 	fmt.Fprintf(tw, "Budget:\t%d round(s), reflection_after_each=%t\n",
 		c.Budget.Rounds, c.Budget.ReflectionAfterEach)
 	if err := tw.Flush(); err != nil {

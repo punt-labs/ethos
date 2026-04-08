@@ -1,0 +1,511 @@
+package mission
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/team"
+)
+
+// EvaluatorIdentity is the subset of an ethos identity the hash function
+// reads. Three fields are scalar attribute slugs (personality, writing
+// style); Talents is a positionally indexed pair of slug + content lists.
+//
+// The struct keeps the hash *algorithm* decoupled from the concrete
+// identity package: ComputeEvaluatorHash operates on this reduced
+// shape, not on identity.Identity directly, so the algorithm is
+// trivially testable with hand-built fixtures. The live-store
+// adapters (NewLiveHashSources, liveIdentityLoader) import
+// internal/identity, internal/role, and internal/team — the
+// algorithm core does not touch them.
+type EvaluatorIdentity struct {
+	Handle              string
+	PersonalityContent  string
+	WritingStyleContent string
+	Talents             []string // slugs, in identity declaration order
+	TalentContents      []string // resolved content, indexed parallel to Talents
+}
+
+// EvaluatorRole is the subset of an ethos role the hash function reads.
+// Name uniquely identifies the role within its store; Content is a
+// canonicalized rendering of the role's responsibilities/permissions/tools
+// supplied by the caller.
+type EvaluatorRole struct {
+	Name    string
+	Content string
+}
+
+// IdentityLoader resolves an evaluator handle to its full attribute
+// content. Implementations are expected to be the existing identity
+// store — typically `*identity.LayeredStore` adapted by the caller.
+//
+// Load returns the resolved identity (with personality, writing style,
+// and talent content populated) or an error. A non-existent handle is
+// an error, not a nil-without-error sentinel: an empty hash on a
+// missing evaluator is exactly the silent bypass DES-033 forbids.
+type IdentityLoader interface {
+	LoadEvaluator(handle string) (*EvaluatorIdentity, error)
+}
+
+// RoleLister enumerates the role names assigned to an evaluator handle
+// and resolves each to its content. The two-step shape lets callers
+// adapt the existing role store, which has no native "by handle" API,
+// without forcing the mission package to walk teams itself.
+//
+// ListRoles returns role names in any order — the hash function sorts
+// them lexicographically before serialization. An empty list is a
+// valid result (the evaluator may not be on any team); the hash still
+// covers personality, writing style, and talents.
+type RoleLister interface {
+	ListRoles(handle string) ([]EvaluatorRole, error)
+}
+
+// HashSources bundles the dependencies of ComputeEvaluatorHash. Two
+// fields, both required: the identity loader and the role lister.
+// A nil field is a programmer error and produces an explicit error
+// rather than a panic — call sites compose this struct once and reuse it.
+type HashSources struct {
+	Identities IdentityLoader
+	Roles      RoleLister
+}
+
+// Validate returns an error if either loader is nil. Cheap to call at
+// every entry point so a misconfigured caller fails loudly at the
+// hash boundary instead of silently producing a sha256 of empty input.
+func (h HashSources) Validate() error {
+	if h.Identities == nil {
+		return errors.New("hash sources: Identities loader is nil")
+	}
+	if h.Roles == nil {
+		return errors.New("hash sources: Roles lister is nil")
+	}
+	return nil
+}
+
+// Field separators for the hash serialization. Bytes 0x1E (Record
+// Separator) and 0x1F (Unit Separator) are ASCII control codes that
+// ethos identity validation rejects from handles and slugs, and that
+// are uncommon as delimiter bytes in markdown bodies. Markdown
+// content MAY contain these bytes — the format remains unambiguous
+// because the serialization is length-prefixed: a stray 0x1F inside a
+// personality body is counted by the byte length, not interpreted as
+// a field boundary. The length prefix is what carries the safety
+// property, not the rarity of the separator.
+const (
+	fieldSep   = "\x1f" // between (label, value) pairs
+	sectionSep = "\x1e" // between sections
+)
+
+// Section labels. Stable strings — changing any of these is a hash
+// format break that invalidates every existing pinned mission. The
+// labels themselves are part of the hash input so a value swap
+// between two sections (e.g. moving the personality content into the
+// writing style slot) produces a different hash even when the bytes
+// are otherwise identical.
+const (
+	labelHandle       = "handle"
+	labelPersonality  = "personality"
+	labelWritingStyle = "writing_style"
+	labelTalent       = "talent"
+	labelRole         = "role"
+)
+
+// hashFormatVersion is prepended to the serialized form so a future
+// algorithm change can be made backward-compatible if needed: a
+// pinned hash from version v1 will not collide with a freshly
+// computed hash under v2, and the verifier can refuse v1 hashes
+// once v2 ships. Bumped only on intentional format changes.
+const hashFormatVersion = "ethos-evaluator-hash-v1"
+
+// EvaluatorHashBreakdown records the per-section sha256 hex hashes that
+// compose an evaluator rollup. Computed by ComputeEvaluatorHashBreakdown
+// and surfaced by the SubagentStart verifier gate when a rollup mismatch
+// is detected so the operator can see which file they probably touched.
+//
+// The rollup is not a sum of the sections — sections and rollup use the
+// same format-versioned, length-prefixed serialization, so a per-section
+// hash is a shortcut into "this one source's content" without exposing
+// the byte-level format.
+//
+// Talents and Roles are maps so a section with no entries surfaces as
+// an empty map rather than a missing field. The keys preserve the
+// labels the error renderer uses in operator output.
+type EvaluatorHashBreakdown struct {
+	Rollup       string            // full sha256 hex of the rollup
+	Handle       string            // per-section sha256 hex
+	Personality  string            // per-section sha256 hex
+	WritingStyle string            // per-section sha256 hex
+	Talents      map[string]string // slug → sha256 hex
+	Roles        map[string]string // team/role → sha256 hex
+}
+
+// ComputeEvaluatorHash returns the deterministic sha256 (hex) of every
+// content source that could influence the evaluator's verdict.
+//
+// Thin wrapper over ComputeEvaluatorHashBreakdown: the rollup is what
+// ApplyServerFields pins into Contract.Evaluator.Hash, and the vast
+// majority of callers only need that one value. The verifier gate
+// calls the Breakdown variant so it can show per-section hashes in
+// mismatch errors.
+func ComputeEvaluatorHash(handle string, sources HashSources) (string, error) {
+	b, err := ComputeEvaluatorHashBreakdown(handle, sources)
+	if err != nil {
+		return "", err
+	}
+	return b.Rollup, nil
+}
+
+// ComputeEvaluatorHashBreakdown returns the rollup hash and the
+// per-section hashes in a single pass over the evaluator's content.
+//
+// Sources hashed (DES-033, in this exact order):
+//
+//  1. The evaluator handle itself. Two evaluators sharing identical
+//     attribute content (e.g. two stub personalities pointing at the
+//     same .md file) must still produce different hashes — the handle
+//     anchors the contract to a specific identity, not just to a body
+//     of text.
+//  2. Personality content (markdown body, byte-for-byte).
+//  3. Writing style content (markdown body, byte-for-byte).
+//  4. Each talent, in identity declaration order, as a (slug, content)
+//     pair. Order matters: swapping two talents on the identity
+//     yields a different hash even when the union of slug+content
+//     is unchanged.
+//  5. Each role assignment for this handle, sorted lexicographically
+//     by role name, as a (name, content) pair. Sorting is required
+//     because RoleLister implementations are free to walk teams in
+//     map iteration order — sorting before hashing is what makes the
+//     output stable across processes and across operating systems.
+//
+// Serialization is length-prefixed and separator-delimited so an
+// adversary cannot smuggle content from one field into another by
+// embedding a separator byte. Each field encodes as
+//
+//	<label> SEP <decimal length> SEP <value>
+//
+// and each section encodes as one or more fields followed by a
+// section separator. The separators are ASCII control bytes (0x1E,
+// 0x1F) that ethos identity validation already rejects from handles
+// and slug names; collisions inside markdown bodies are absorbed by
+// the explicit length prefix.
+//
+// Per-section hashes use the SAME format-versioned wrapper as the
+// rollup so changing the format version invalidates every section hash
+// at once. A section hash is therefore a self-contained sha256 whose
+// inputs are the format version, one section label, and one value (or
+// label/value pair) — the operator can compare two section hashes
+// directly without knowing the composition rule for the rollup.
+//
+// Returns the breakdown on success. Errors come from the upstream
+// loaders (identity not found, role load failure) or from nil sources
+// — every error is wrapped with the operation context.
+func ComputeEvaluatorHashBreakdown(handle string, sources HashSources) (EvaluatorHashBreakdown, error) {
+	var zero EvaluatorHashBreakdown
+	if strings.TrimSpace(handle) == "" {
+		return zero, errors.New("computing evaluator hash: handle is required")
+	}
+	if err := sources.Validate(); err != nil {
+		return zero, fmt.Errorf("computing evaluator hash: %w", err)
+	}
+
+	id, err := sources.Identities.LoadEvaluator(handle)
+	if err != nil {
+		return zero, fmt.Errorf("computing evaluator hash: loading identity %q: %w", handle, err)
+	}
+	if id == nil {
+		return zero, fmt.Errorf("computing evaluator hash: identity %q resolved to nil", handle)
+	}
+	if len(id.TalentContents) != len(id.Talents) {
+		return zero, fmt.Errorf(
+			"computing evaluator hash: identity %q has %d talents but %d talent contents — refusing to hash partial content",
+			handle, len(id.Talents), len(id.TalentContents),
+		)
+	}
+
+	roles, err := sources.Roles.ListRoles(handle)
+	if err != nil {
+		return zero, fmt.Errorf("computing evaluator hash: listing roles for %q: %w", handle, err)
+	}
+	// Sort by name so map-iteration order in the lister cannot leak
+	// into the output. ListRoles is contractually unordered.
+	sort.Slice(roles, func(i, j int) bool { return roles[i].Name < roles[j].Name })
+
+	var buf strings.Builder
+	buf.Grow(1024)
+	buf.WriteString(hashFormatVersion)
+	buf.WriteString(sectionSep)
+
+	writeField(&buf, labelHandle, id.Handle)
+	buf.WriteString(sectionSep)
+
+	writeField(&buf, labelPersonality, id.PersonalityContent)
+	buf.WriteString(sectionSep)
+
+	writeField(&buf, labelWritingStyle, id.WritingStyleContent)
+	buf.WriteString(sectionSep)
+
+	for i, slug := range id.Talents {
+		writeField(&buf, labelTalent+":slug", slug)
+		writeField(&buf, labelTalent+":content", id.TalentContents[i])
+		buf.WriteString(sectionSep)
+	}
+
+	for _, r := range roles {
+		writeField(&buf, labelRole+":name", r.Name)
+		writeField(&buf, labelRole+":content", r.Content)
+		buf.WriteString(sectionSep)
+	}
+
+	sum := sha256.Sum256([]byte(buf.String()))
+	out := EvaluatorHashBreakdown{
+		Rollup:       hex.EncodeToString(sum[:]),
+		Handle:       hashSection(labelHandle, id.Handle),
+		Personality:  hashSection(labelPersonality, id.PersonalityContent),
+		WritingStyle: hashSection(labelWritingStyle, id.WritingStyleContent),
+		Talents:      make(map[string]string, len(id.Talents)),
+		Roles:        make(map[string]string, len(roles)),
+	}
+	for i, slug := range id.Talents {
+		out.Talents[slug] = hashTalentSection(slug, id.TalentContents[i])
+	}
+	for _, r := range roles {
+		out.Roles[r.Name] = hashRoleSection(r.Name, r.Content)
+	}
+	return out, nil
+}
+
+// hashSection returns the sha256 hex of a single (label, value) section
+// wrapped in the format version. Used for the scalar sections — handle,
+// personality, writing_style.
+func hashSection(label, value string) string {
+	var b strings.Builder
+	b.Grow(len(hashFormatVersion) + len(label) + len(value) + 16)
+	b.WriteString(hashFormatVersion)
+	b.WriteString(sectionSep)
+	writeField(&b, label, value)
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// hashTalentSection returns the sha256 hex of a single talent's slug +
+// content pair, wrapped in the format version. Matches the layout the
+// rollup uses for this talent so a section hash diff pinpoints a
+// specific talent, not just "some talent changed."
+func hashTalentSection(slug, content string) string {
+	var b strings.Builder
+	b.WriteString(hashFormatVersion)
+	b.WriteString(sectionSep)
+	writeField(&b, labelTalent+":slug", slug)
+	writeField(&b, labelTalent+":content", content)
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// hashRoleSection returns the sha256 hex of a single role's name +
+// content pair, wrapped in the format version.
+func hashRoleSection(name, content string) string {
+	var b strings.Builder
+	b.WriteString(hashFormatVersion)
+	b.WriteString(sectionSep)
+	writeField(&b, labelRole+":name", name)
+	writeField(&b, labelRole+":content", content)
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// writeField appends a length-prefixed (label, value) pair to the
+// hash buffer. The decimal length is the byte count of value, not the
+// rune count — the hash operates on bytes throughout. The trailing
+// fieldSep terminates the field and gives the next writeField call
+// (or the section break) a clean attachment point.
+func writeField(buf *strings.Builder, label, value string) {
+	buf.WriteString(label)
+	buf.WriteString(fieldSep)
+	buf.WriteString(strconv.Itoa(len(value)))
+	buf.WriteString(fieldSep)
+	buf.WriteString(value)
+	buf.WriteString(fieldSep)
+}
+
+// NewLiveHashSources adapts the live identity, role, and team stores
+// into a HashSources value. CLI, MCP, and the verifier hook all build
+// their HashSources here so the resolution rules stay in lockstep.
+//
+// The adapter does two jobs:
+//
+//  1. Loads the evaluator identity in resolved-content mode (no
+//     Reference flag), so personality, writing style, and talent
+//     contents are populated for the hash to read.
+//  2. Walks every team to find every role assignment for the
+//     evaluator's handle. Roles are returned unsorted;
+//     ComputeEvaluatorHash sorts before serialization.
+//
+// All three stores are required. A nil store is a programmer error
+// and returns an explicit error rather than silently producing a
+// HashSources whose role coverage depends on which caller built it.
+// Divergent role coverage between two callers (say, CLI wires the
+// team store and MCP does not) would cause the CLI-pinned hash to
+// disagree with the MCP-pinned hash for the same evaluator content —
+// which breaks the entire frozen-evaluator gate. Fail loudly at the
+// boundary instead.
+func NewLiveHashSources(
+	identities identity.IdentityStore,
+	roles *role.LayeredStore,
+	teams *team.LayeredStore,
+) (HashSources, error) {
+	if identities == nil {
+		return HashSources{}, errors.New("new live hash sources: identity store is nil")
+	}
+	if roles == nil {
+		return HashSources{}, errors.New("new live hash sources: role store is nil")
+	}
+	if teams == nil {
+		return HashSources{}, errors.New("new live hash sources: team store is nil")
+	}
+	return HashSources{
+		Identities: &liveIdentityLoader{store: identities},
+		Roles:      &liveRoleLister{teams: teams, roles: roles},
+	}, nil
+}
+
+// liveIdentityLoader wraps an identity.IdentityStore and exposes the
+// LoadEvaluator method ComputeEvaluatorHash needs. The adapter is the
+// only place that knows how to translate the identity package's
+// in-memory shape into the mission package's narrower view.
+type liveIdentityLoader struct {
+	store identity.IdentityStore
+}
+
+// LoadEvaluator resolves the handle to an EvaluatorIdentity. The
+// underlying store is called WITHOUT Reference(true) so attribute
+// content is populated — the hash needs the bytes, not the slugs.
+//
+// Identity resolution warnings (a missing personality .md file is the
+// usual cause) are surfaced as a fatal error rather than silently
+// dropped. A partially resolved evaluator is exactly the silent-bypass
+// case the contract forbids.
+func (a *liveIdentityLoader) LoadEvaluator(handle string) (*EvaluatorIdentity, error) {
+	if a.store == nil {
+		return nil, errors.New("identity store is nil")
+	}
+	id, err := a.store.Load(handle)
+	if err != nil {
+		return nil, err
+	}
+	if len(id.Warnings) > 0 {
+		return nil, fmt.Errorf(
+			"identity %q has %d unresolved attribute warnings: %v",
+			handle, len(id.Warnings), id.Warnings,
+		)
+	}
+	return &EvaluatorIdentity{
+		Handle:              id.Handle,
+		PersonalityContent:  id.PersonalityContent,
+		WritingStyleContent: id.WritingStyleContent,
+		Talents:             append([]string(nil), id.Talents...),
+		TalentContents:      append([]string(nil), id.TalentContents...),
+	}, nil
+}
+
+// liveRoleLister walks the team store to discover role assignments
+// for an evaluator handle and loads each role's content from the
+// role store. Two-step lookup is necessary because the role store
+// has no "by identity" index — role-to-identity binding lives in
+// team membership.
+type liveRoleLister struct {
+	teams *team.LayeredStore
+	roles *role.LayeredStore
+}
+
+// ListRoles returns every (team, role) assignment for the given
+// handle, with content.
+//
+// Failures from the role store on a role that IS referenced by a team
+// membership are fatal — a missing role .yaml when the team file
+// claims the binding is filesystem corruption that ComputeEvaluatorHash
+// must not paper over.
+//
+// Each role name is prefixed with the team name (`team/role`) so two
+// identical role names on different teams are distinguishable in the
+// hash. Without the team prefix, an evaluator on two teams could lose
+// one assignment to map de-duplication after the sort step.
+//
+// The liveRoleLister is always built with non-nil stores via
+// NewLiveHashSources — a nil store is rejected at the adapter
+// boundary, not silently ignored here.
+func (a *liveRoleLister) ListRoles(handle string) ([]EvaluatorRole, error) {
+	if a.teams == nil || a.roles == nil {
+		return nil, errors.New("list roles: team or role store is nil")
+	}
+	teamNames, err := a.teams.List()
+	if err != nil {
+		return nil, fmt.Errorf("listing teams: %w", err)
+	}
+	var out []EvaluatorRole
+	for _, name := range teamNames {
+		t, err := a.teams.Load(name)
+		if err != nil {
+			return nil, fmt.Errorf("loading team %q: %w", name, err)
+		}
+		for _, m := range t.Members {
+			if m.Identity != handle {
+				continue
+			}
+			r, err := a.roles.Load(m.Role)
+			if err != nil {
+				return nil, fmt.Errorf("loading role %q for team %q: %w", m.Role, t.Name, err)
+			}
+			out = append(out, EvaluatorRole{
+				Name:    t.Name + "/" + m.Role,
+				Content: canonicalRoleContent(r),
+			})
+		}
+	}
+	return out, nil
+}
+
+// canonicalRoleContent renders a role into a stable byte representation
+// for hashing. Marshaling via yaml.Marshal would be nondeterministic
+// across releases (key ordering, indent style); a hand-rolled format
+// keeps the bytes stable and the failure modes obvious.
+//
+// Format: one `key=value\n` line per scalar field, then one line per
+// element of the responsibilities, permissions, and tools slices.
+// Each slice is rendered in declaration order — reordering a
+// responsibility on the role file is a content change the hash must
+// reflect.
+func canonicalRoleContent(r *role.Role) string {
+	if r == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("name=")
+	b.WriteString(r.Name)
+	b.WriteByte('\n')
+	b.WriteString("model=")
+	b.WriteString(r.Model)
+	b.WriteByte('\n')
+	for _, resp := range r.Responsibilities {
+		b.WriteString("responsibility=")
+		b.WriteString(resp)
+		b.WriteByte('\n')
+	}
+	for _, perm := range r.Permissions {
+		b.WriteString("permission=")
+		b.WriteString(perm)
+		b.WriteByte('\n')
+	}
+	for _, tool := range r.Tools {
+		b.WriteString("tool=")
+		b.WriteString(tool)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
