@@ -6,6 +6,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 )
 
@@ -70,6 +71,8 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return formatTeam(w, method, result)
 	case "role":
 		return formatRole(w, method, result)
+	case "mission":
+		return formatMission(w, method, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -666,6 +669,259 @@ func formatRoleShow(w io.Writer, result string) error {
 	}
 
 	return emit(w, name, ctx.String())
+}
+
+// --- Mission tool formatters ---
+
+// formatMission dispatches on method for the mission MCP tool. Each
+// mission method has a distinct result shape:
+//
+//   create        → a single Contract object
+//   show          → a single Contract object
+//   list          → an array of {mission_id, status, leader, ...} summaries
+//   close         → {mission_id, status}
+func formatMission(w io.Writer, method, result string) error {
+	switch method {
+	case "create":
+		return formatMissionCreate(w, result)
+	case "show":
+		return formatMissionShow(w, result)
+	case "list":
+		return formatMissionList(w, result)
+	case "close":
+		return formatMissionClose(w, result)
+	default:
+		return emitSimple(w, truncate(result, 200))
+	}
+}
+
+// formatMissionShow renders a single contract in a tabwriter-aligned
+// field block. The summary line is "<mission_id> (<status>)"; the
+// context is the field block plus write_set / tools / success_criteria
+// as bullet lists.
+func formatMissionShow(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	status, _ := c["status"].(string)
+	if missionID == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	summary := fmt.Sprintf("%s (%s)", missionID, status)
+
+	var ctx strings.Builder
+	writeMissionFields(&ctx, c)
+
+	return emit(w, summary, ctx.String())
+}
+
+// formatMissionCreate reuses the show layout — create returns the full
+// persisted contract — but uses a "Created <id>" summary line.
+func formatMissionCreate(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	if missionID == "" {
+		// Early guard: a contract without a mission_id is malformed.
+		// Surface that explicitly rather than rendering a partial card
+		// that looks legitimate.
+		return emit(w, "Created (malformed contract)", "(malformed contract — missing mission_id)")
+	}
+
+	summary := "Created " + missionID
+
+	var ctx strings.Builder
+	writeMissionFields(&ctx, c)
+
+	return emit(w, summary, ctx.String())
+}
+
+// writeMissionFields writes a contract's key fields into ctx using
+// text/tabwriter, matching the CLI's printContract layout. The single
+// shared layout means the CLI and the MCP formatter never drift.
+//
+// Loose JSON-map coupling is intentional: this formatter must not
+// import internal/mission. Other format* functions in this file
+// follow the same convention.
+func writeMissionFields(ctx *strings.Builder, c map[string]any) {
+	missionID, _ := c["mission_id"].(string)
+	if missionID == "" {
+		ctx.WriteString("(malformed contract — missing mission_id)")
+		return
+	}
+	status, _ := c["status"].(string)
+	leader, _ := c["leader"].(string)
+	worker, _ := c["worker"].(string)
+
+	tw := tabwriter.NewWriter(ctx, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "Mission:\t%s\n", missionID)
+	fmt.Fprintf(tw, "Status:\t%s\n", status)
+	createdAt, _ := c["created_at"].(string)
+	if createdAt != "" {
+		fmt.Fprintf(tw, "Created:\t%s\n", FormatLocalTime(createdAt))
+	}
+	if updatedAt, _ := c["updated_at"].(string); updatedAt != "" && updatedAt != createdAt {
+		fmt.Fprintf(tw, "Updated:\t%s\n", FormatLocalTime(updatedAt))
+	}
+	if closedAt, _ := c["closed_at"].(string); closedAt != "" {
+		fmt.Fprintf(tw, "Closed:\t%s\n", FormatLocalTime(closedAt))
+	}
+	fmt.Fprintf(tw, "Leader:\t%s\n", leader)
+	fmt.Fprintf(tw, "Worker:\t%s\n", worker)
+
+	if ev, ok := c["evaluator"].(map[string]any); ok {
+		handle, _ := ev["handle"].(string)
+		pinned, _ := ev["pinned_at"].(string)
+		hash, _ := ev["hash"].(string)
+		line := handle
+		if pinned != "" {
+			line += fmt.Sprintf(" (pinned %s", FormatLocalTime(pinned))
+			if hash != "" {
+				line += ", hash " + hash
+			}
+			line += ")"
+		}
+		fmt.Fprintf(tw, "Evaluator:\t%s\n", line)
+	}
+
+	if budget, ok := c["budget"].(map[string]any); ok {
+		rounds, roundsOK := budget["rounds"].(float64)
+		reflect, _ := budget["reflection_after_each"].(bool)
+		// Skip the budget line if rounds is missing or out of range
+		// rather than emitting "0 round(s)" which would look like a
+		// real (and invalid) value.
+		if roundsOK && rounds >= 1 && rounds <= 10 {
+			fmt.Fprintf(tw, "Budget:\t%d round(s), reflection_after_each=%t\n", int(rounds), reflect)
+		}
+	}
+
+	_ = tw.Flush()
+
+	// Labeled/multi-value sections. Match the CLI's printContract
+	// order: Inputs, Write set, Tools, Success criteria, Context.
+	writeMissionInputs(ctx, c["inputs"])
+	writeMissionBulletSection(ctx, "Write set", c["write_set"])
+	writeMissionBulletSection(ctx, "Tools", c["tools"])
+	writeMissionBulletSection(ctx, "Success criteria", c["success_criteria"])
+	if contextStr, _ := c["context"].(string); contextStr != "" {
+		ctx.WriteString("\n\nContext:\n")
+		ctx.WriteString(contextStr)
+	}
+}
+
+// writeMissionInputs renders the Inputs section for writeMissionFields,
+// matching the CLI's printContract layout: labeled lines under an
+// "Inputs:" header (bead, file, ref). Empty or missing inputs emit
+// nothing.
+func writeMissionInputs(ctx *strings.Builder, raw any) {
+	inputs, ok := raw.(map[string]any)
+	if !ok {
+		return
+	}
+	bead, _ := inputs["bead"].(string)
+	files, _ := inputs["files"].([]any)
+	refs, _ := inputs["references"].([]any)
+	if bead == "" && len(files) == 0 && len(refs) == 0 {
+		return
+	}
+	ctx.WriteString("\n\nInputs:")
+	if bead != "" {
+		ctx.WriteString("\n  bead: " + bead)
+	}
+	for _, f := range files {
+		if s, ok := f.(string); ok {
+			ctx.WriteString("\n  file: " + s)
+		}
+	}
+	for _, r := range refs {
+		if s, ok := r.(string); ok {
+			ctx.WriteString("\n  ref:  " + s)
+		}
+	}
+}
+
+// FormatLocalTime converts an RFC3339 timestamp to a local-time
+// display form (`Mon Jan _2 15:04`). Exported so cmd/ethos can share
+// the same formatter across session, mission, and any future
+// command that renders a timestamp to the user — one implementation,
+// one visual convention. If parsing fails, returns the raw string
+// unchanged so the caller still gets something displayable.
+func FormatLocalTime(raw string) string {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	return t.Local().Format("Mon Jan _2 15:04")
+}
+
+// writeMissionBulletSection writes a section header and a bullet list
+// of string values. Non-string entries are skipped. Empty or missing
+// sections emit nothing — the formatter stays tidy when optional fields
+// are absent.
+func writeMissionBulletSection(ctx *strings.Builder, title string, raw any) {
+	arr, ok := raw.([]any)
+	if !ok || len(arr) == 0 {
+		return
+	}
+	ctx.WriteString("\n\n" + title + ":")
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			ctx.WriteString("\n  - " + s)
+		}
+	}
+}
+
+// formatMissionList renders the list method's summary as a table with
+// one row per mission.
+func formatMissionList(w io.Writer, result string) error {
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(result), &entries); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	n := len(entries)
+	noun := "missions"
+	if n == 1 {
+		noun = "mission"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	headers := []string{"MISSION", "STATUS", "LEADER", "WORKER", "EVALUATOR", "CREATED"}
+	rows := make([][]string, n)
+	for i, e := range entries {
+		missionID, _ := e["mission_id"].(string)
+		status, _ := e["status"].(string)
+		leader, _ := e["leader"].(string)
+		worker, _ := e["worker"].(string)
+		evaluator, _ := e["evaluator"].(string)
+		createdAt, _ := e["created_at"].(string)
+		rows[i] = []string{missionID, status, leader, worker, evaluator, FormatLocalTime(createdAt)}
+	}
+	return emit(w, summary, FormatTable(headers, rows))
+}
+
+// formatMissionClose renders the close method's confirmation as a
+// single-line summary.
+func formatMissionClose(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	status, _ := c["status"].(string)
+	if missionID == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+	return emitSimple(w, fmt.Sprintf("Closed %s as %s", missionID, status))
 }
 
 // --- JSON extraction helpers ---

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/process"
@@ -484,14 +483,12 @@ func shortID(id string) string {
 	return id[:8]
 }
 
-// formatStarted converts an RFC3339 timestamp to a human-readable format.
-// Returns the raw string if parsing fails.
+// formatStarted is a thin wrapper around hook.FormatLocalTime so
+// existing callers in this package keep the same short local name.
+// The implementation lives in internal/hook so session, mission, and
+// any future command share one time-formatting convention.
 func formatStarted(raw string) string {
-	t, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return raw
-	}
-	return t.Local().Format("Mon Jan _2 15:04")
+	return hook.FormatLocalTime(raw)
 }
 
 func runSessionPurge() {
