@@ -1129,9 +1129,16 @@ func checkRoleOverlap(roles RoleLister, c *Contract) error {
 		return overlaps[i].evaluatorBinding < overlaps[j].evaluatorBinding
 	})
 	var lines []string
+	// Singular/plural split: "1 overlapping role assignment" vs
+	// "N overlapping role assignments". The bare "(s)" reads awkwardly
+	// in operator output — render the correct word for the count.
+	noun := "assignments"
+	if len(overlaps) == 1 {
+		noun = "assignment"
+	}
 	lines = append(lines, fmt.Sprintf(
-		"mission %q: worker %q and evaluator %q share %d overlapping role assignment(s); the verifier must not share a role with the worker",
-		c.MissionID, worker, evaluator, len(overlaps),
+		"mission %q: worker %q and evaluator %q share %d overlapping role %s; the verifier must not share a role with the worker",
+		c.MissionID, worker, evaluator, len(overlaps), noun,
 	))
 	for _, o := range overlaps {
 		if o.workerBinding == o.evaluatorBinding {

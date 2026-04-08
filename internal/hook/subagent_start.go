@@ -257,10 +257,16 @@ func renderVerifierBlock(m *mission.Contract, store *mission.Store) (string, err
 		return "", fmt.Errorf("reading contract %q: %w", m.MissionID, err)
 	}
 
-	allowlist := verifierAllowlist(m, store)
+	repoAllowlist, absAllowlist := verifierAllowlistSplit(m, store)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "# Verifier context (mission %s)\n\n", m.MissionID)
+	// H2 header for the block root and H3 for its sub-sections. The
+	// host prompt already uses H1 and H2 for its own structure (the
+	// persona block uses ## Personality / ## Writing Style / ## Talents);
+	// an H1 here would collide with the host and produce a broken
+	// outline. The block's per-mission separator is an HR written by
+	// the caller, not another header level.
+	fmt.Fprintf(&b, "## Verifier context (mission %s)\n\n", m.MissionID)
 	fmt.Fprintf(&b, "You are the frozen verifier %q for mission %s.\n",
 		m.Evaluator.Handle, m.MissionID)
 	b.WriteString("\n")
@@ -270,7 +276,7 @@ func renderVerifierBlock(m *mission.Contract, store *mission.Store) (string, err
 	b.WriteString("  - Your verdict is scored against the success criteria pinned in the contract, not against any rubric you invent.\n")
 	b.WriteString("\n")
 
-	b.WriteString("## Mission contract (byte-for-byte from disk)\n\n")
+	b.WriteString("### Mission contract (byte-for-byte from disk)\n\n")
 	b.WriteString("```yaml\n")
 	b.Write(contractBytes)
 	if len(contractBytes) == 0 || contractBytes[len(contractBytes)-1] != '\n' {
@@ -278,22 +284,39 @@ func renderVerifierBlock(m *mission.Contract, store *mission.Store) (string, err
 	}
 	b.WriteString("```\n\n")
 
-	b.WriteString("## Verification criteria\n\n")
-	if len(m.SuccessCriteria) == 0 {
-		b.WriteString("(the contract declares no success criteria; refuse the spawn)\n\n")
-	} else {
-		for _, sc := range m.SuccessCriteria {
-			fmt.Fprintf(&b, "  - %s\n", sc)
+	b.WriteString("### Verification criteria\n\n")
+	// Contract.Validate() refuses an empty SuccessCriteria, so this
+	// loop is always non-empty — the store never persists a contract
+	// that would render a blank criteria section. The defensive
+	// "no criteria" branch that used to live here would be silently
+	// incorrect if Validate ever regressed; leave the loud nothing
+	// instead of prose that says "refuse the spawn" without refusing.
+	for _, sc := range m.SuccessCriteria {
+		fmt.Fprintf(&b, "  - %s\n", sc)
+	}
+	b.WriteString("\n")
+
+	b.WriteString("### File allowlist\n\n")
+	b.WriteString("These are the only paths the verifier may read:\n\n")
+	// Split by path kind so the operator can see at a glance which
+	// entries resolve from the repo root and which are absolute. The
+	// write_set is repo-relative per the per-entry validator in
+	// validate.go; the contract file lives at an absolute path under
+	// the mission store.
+	if len(repoAllowlist) > 0 {
+		b.WriteString("Repo-relative paths (resolve from repo root):\n")
+		for _, entry := range repoAllowlist {
+			fmt.Fprintf(&b, "  - %s\n", entry)
 		}
 		b.WriteString("\n")
 	}
-
-	b.WriteString("## File allowlist\n\n")
-	b.WriteString("The verifier MAY read these paths (and nothing else):\n\n")
-	for _, entry := range allowlist {
-		fmt.Fprintf(&b, "  - %s\n", entry)
+	if len(absAllowlist) > 0 {
+		b.WriteString("Absolute paths:\n")
+		for _, entry := range absAllowlist {
+			fmt.Fprintf(&b, "  - %s\n", entry)
+		}
+		b.WriteString("\n")
 	}
-	b.WriteString("\n")
 	b.WriteString("Any Read, Grep, or Glob against a path outside this list must be\n")
 	b.WriteString("refused as out-of-scope for this verification pass.\n")
 
@@ -318,8 +341,26 @@ func renderVerifierBlock(m *mission.Contract, store *mission.Store) (string, err
 // per the per-entry validator in validate.go — the verifier's
 // working directory is the repo root.
 func verifierAllowlist(m *mission.Contract, store *mission.Store) []string {
+	repo, abs := verifierAllowlistSplit(m, store)
+	out := make([]string, 0, len(repo)+len(abs))
+	out = append(out, repo...)
+	out = append(out, abs...)
+	return out
+}
+
+// verifierAllowlistSplit returns the same allowlist as verifierAllowlist
+// but split into two slices: repo-relative entries (the write_set) and
+// absolute entries (the contract file). The renderer uses the split
+// form so the operator can see which paths resolve from the repo root
+// and which are anchored on the filesystem; the flat form is kept for
+// the deduplication and ordering unit tests, which only care about the
+// final list shape.
+//
+// Deduplication matches the original helper: an entry that appears in
+// both the write_set and the contract file path is emitted once,
+// under the section its first-seen occurrence lives in.
+func verifierAllowlistSplit(m *mission.Contract, store *mission.Store) (repo, abs []string) {
 	seen := make(map[string]struct{})
-	var out []string
 	for _, entry := range m.WriteSet {
 		if entry == "" {
 			continue
@@ -328,15 +369,16 @@ func verifierAllowlist(m *mission.Contract, store *mission.Store) []string {
 			continue
 		}
 		seen[entry] = struct{}{}
-		out = append(out, entry)
+		repo = append(repo, entry)
 	}
 	if store != nil {
 		contractPath := store.ContractPath(m.MissionID)
 		if _, ok := seen[contractPath]; !ok {
-			out = append(out, contractPath)
+			seen[contractPath] = struct{}{}
+			abs = append(abs, contractPath)
 		}
 	}
-	return out
+	return repo, abs
 }
 
 // checkVerifierHash recomputes the evaluator hash for every open

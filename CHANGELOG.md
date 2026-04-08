@@ -33,7 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missions whose evaluator handle matches the spawning agent. The
   Phase 3.1/3.2/3.3/3.4 primitives are untouched: schema, conflict
   check, frozen-evaluator hash, round-advance gate, and reflection
-  storage are all preserved exactly.
+  storage are all preserved exactly. To recover from a role-overlap
+  refusal, either name a different evaluator handle or rebind one
+  of the two identities to a different role via
+  `ethos team add-member` (the gate compares `team/role` bindings
+  after canonicalization). To recover from a worker-equals-evaluator
+  refusal, assign a distinct reviewer.
 - **Bounded rounds with mandatory reflection** (Phase 3.4,
   `ethos-07m.8`) — `Contract` gains a `current_round` field, and a
   new `Reflection` type plus the `Store.AdvanceRound` gate make

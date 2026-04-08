@@ -872,9 +872,17 @@ func TestSubagentStart_VerifierIsolationBlockShape(t *testing.T) {
 	ctx := result.HookSpecificOutput.AdditionalContext
 	require.NotEmpty(t, ctx, "verifier spawn must emit an additionalContext block")
 
-	// Header + role line.
-	assert.Contains(t, ctx, "# Verifier context",
-		"isolation block must begin with a clearly labeled header")
+	// Header + role line. The block root uses H2 (## Verifier context)
+	// so the hierarchy does not collide with the host prompt's H1
+	// structure; sub-sections (contract, criteria, allowlist) use H3.
+	assert.Contains(t, ctx, "## Verifier context",
+		"isolation block must begin with a clearly labeled H2 header")
+	assert.Contains(t, ctx, "### Mission contract",
+		"mission contract sub-section must be an H3 under the H2 root")
+	assert.Contains(t, ctx, "### Verification criteria",
+		"verification criteria sub-section must be an H3 under the H2 root")
+	assert.Contains(t, ctx, "### File allowlist",
+		"file allowlist sub-section must be an H3 under the H2 root")
 	assert.Contains(t, ctx, c.MissionID,
 		"isolation block must name the mission in the header")
 	assert.Contains(t, ctx, `frozen verifier "djb"`,
