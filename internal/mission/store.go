@@ -199,6 +199,21 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 		}
 		return nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
+	c, err := decodeAndValidate(data, missionID)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// decodeAndValidate is the shared strict-decode + validate + filename-
+// match check used by Load and loadLocked. Factored out so the two
+// read paths stay in lockstep. The filename check prevents a
+// hand-edited foo.yaml file containing mission_id: m-... from
+// being silently accepted — a later Close would write the mutated
+// contract to m-....yaml (because writeContract uses c.MissionID),
+// producing a second file and leaving foo.yaml stale.
+func decodeAndValidate(data []byte, missionID string) (*Contract, error) {
 	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
 		return nil, err
@@ -207,6 +222,16 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	// hand-edited contract should be flagged before callers act on it.
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("contract %q failed validation on load: %w", missionID, err)
+	}
+	// The on-disk filename must match the contract's own mission_id.
+	// Rejects the scenario where a caller passes a filename that
+	// doesn't match the contract content (typically a hand-edited
+	// file, or a rename that forgot to update the payload).
+	if c.MissionID != missionID {
+		return nil, fmt.Errorf(
+			"contract filename %q does not match mission_id %q in the file",
+			missionID, c.MissionID,
+		)
 	}
 	return c, nil
 }
@@ -280,17 +305,10 @@ func (s *Store) Close(missionID, status string) error {
 	}
 	return s.withLock(missionID, func() error {
 		dest := s.contractPath(missionID)
-		// Read the current bytes for rollback before loading the
-		// contract into a struct, so we can restore the exact on-disk
-		// representation on a failed event append.
-		oldData, err := os.ReadFile(dest)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("mission %q not found", missionID)
-			}
-			return fmt.Errorf("reading mission %q: %w", missionID, err)
-		}
-		c, err := s.loadLocked(missionID)
+		// loadLocked returns both the parsed contract and the raw
+		// bytes, so Close reads the file only once and keeps the
+		// original bytes for rollback if the event append fails.
+		c, oldData, err := s.loadLocked(missionID)
 		if err != nil {
 			return err
 		}
@@ -330,7 +348,9 @@ func (s *Store) Close(missionID, status string) error {
 }
 
 // loadLocked reads a contract without acquiring the flock. Callers must
-// already hold the lock for the given missionID.
+// already hold the lock for the given missionID. Returns both the parsed
+// contract and the raw bytes so callers that need the bytes for rollback
+// (Close, Update) don't have to read the file twice.
 //
 // Decodes with KnownFields(true) and runs Validate() for symmetry with
 // the public Load() — a corrupt or hand-edited contract must be
@@ -338,22 +358,19 @@ func (s *Store) Close(missionID, status string) error {
 // Otherwise an invalid on-disk state could slip through Close's
 // post-mutation Validate because the mutation fixed the field under
 // inspection.
-func (s *Store) loadLocked(missionID string) (*Contract, error) {
+func (s *Store) loadLocked(missionID string) (*Contract, []byte, error) {
 	data, err := os.ReadFile(s.contractPath(missionID))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("mission %q not found", missionID)
+			return nil, nil, fmt.Errorf("mission %q not found", missionID)
 		}
-		return nil, fmt.Errorf("reading mission %q: %w", missionID, err)
+		return nil, nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
-	c, err := DecodeContractStrict(data, missionID)
+	c, err := decodeAndValidate(data, missionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if err := c.Validate(); err != nil {
-		return nil, fmt.Errorf("contract %q failed validation on load: %w", missionID, err)
-	}
-	return c, nil
+	return c, data, nil
 }
 
 // DecodeContractStrict parses a YAML contract with strict rules: every
