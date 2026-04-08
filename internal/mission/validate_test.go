@@ -32,6 +32,7 @@ func validContract() Contract {
 			Rounds:              3,
 			ReflectionAfterEach: true,
 		},
+		CurrentRound: 1,
 	}
 }
 
@@ -205,6 +206,30 @@ func TestValidate(t *testing.T) {
 			name:    "rule 10: empty success_criteria",
 			mutate:  func(c *Contract) { c.SuccessCriteria = nil },
 			wantErr: "success_criteria must contain at least one entry",
+		},
+
+		// Rule 13: current_round in [1, budget.rounds]. Store.Create
+		// and Store.loadLocked rewrite CurrentRound == 0 to 1 before
+		// calling Validate, but a caller that builds a Contract
+		// directly (MCP tests, hand-rolled fixtures) bypasses those
+		// paths and must still see the range rejection.
+		{
+			name:    "rule 13: current_round zero",
+			mutate:  func(c *Contract) { c.CurrentRound = 0 },
+			wantErr: "current_round 0 out of range",
+		},
+		{
+			name: "rule 13: current_round exceeds budget",
+			mutate: func(c *Contract) {
+				c.CurrentRound = 4
+				c.Budget.Rounds = 3
+			},
+			wantErr: "current_round 4 out of range",
+		},
+		{
+			name:    "rule 13: current_round above max budget",
+			mutate:  func(c *Contract) { c.CurrentRound = 11 },
+			wantErr: "current_round 11 out of range",
 		},
 	}
 

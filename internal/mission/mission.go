@@ -43,7 +43,29 @@ type Contract struct {
 	Tools           []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 	SuccessCriteria []string `yaml:"success_criteria" json:"success_criteria"`
 
-	Budget  Budget `yaml:"budget" json:"budget"`
+	Budget Budget `yaml:"budget" json:"budget"`
+
+	// CurrentRound is the round the worker is currently executing.
+	// 3.4 makes Budget.Rounds enforceable: each call to
+	// Store.AdvanceRound bumps this field by 1, and the gate refuses
+	// the bump if (a) the previous round has no reflection, (b) the
+	// previous round's reflection recommended stop or escalate, or
+	// (c) the bump would exceed Budget.Rounds.
+	//
+	// A freshly created mission starts at round 1: round-tracking is
+	// 1-indexed and the first round begins implicitly when Create
+	// returns. Validate enforces 1 ≤ CurrentRound ≤ Budget.Rounds.
+	//
+	// Round tracking lives on the Contract (not derived from the
+	// event log) so the gate can answer "what round are we in?" with
+	// a single Load. Deriving from the log would force every gate
+	// call to scan the JSONL file, complicating the per-mission
+	// flock contract and exposing log reads outside the package.
+	// The trade-off: a malformed CurrentRound on disk fails Validate
+	// at load time, which is symmetric with every other Contract
+	// field — the trust boundary stays in one place.
+	CurrentRound int `yaml:"current_round,omitempty" json:"current_round"`
+
 	Context string `yaml:"context,omitempty" json:"context,omitempty"`
 }
 

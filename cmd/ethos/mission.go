@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -61,7 +62,12 @@ mission(s) and the overlapping path(s).
 Creation also fails if the evaluator handle cannot be resolved to a
 valid identity with personality, writing style, and talent content;
 the error names the handle. Use ` + "`ethos identity list`" + ` to see
-available handles.`,
+available handles.
+
+budget.rounds is now a hard cap: after round N the operator must
+submit a reflection via ` + "`ethos mission reflect`" + ` and advance via
+` + "`ethos mission advance`" + ` before beginning round N+1; the round
+budget cannot be extended without re-scoping.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
@@ -120,6 +126,72 @@ event log.`,
 	},
 }
 
+// --- mission reflect ---
+
+var missionReflectFile string
+
+var missionReflectCmd = &cobra.Command{
+	Use:   "reflect <id-or-prefix>",
+	Short: "Submit a structured reflection for the current round",
+	Long: `Submit a structured reflection for the mission's current round.
+
+The reflection is read from a YAML file containing round, author,
+converging, signals, recommendation, and (when the recommendation is
+stop or escalate) reason. The round number must equal the mission's
+current round; reflections are append-only and a duplicate is refused.
+
+After reflecting, run "ethos mission advance" to move to the next
+round. The advance gate refuses to proceed when the latest
+reflection recommends stop or escalate, or when the budget would be
+exceeded.
+
+recommendation must be one of: continue, pivot, stop, escalate. The
+gate refuses to advance after a stop or escalate. signals must
+contain at least one entry.`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runMissionReflect(args[0], missionReflectFile)
+	},
+}
+
+// --- mission reflections ---
+
+var missionReflectionsCmd = &cobra.Command{
+	Use:   "reflections <id-or-prefix>",
+	Short: "Show the round-by-round reflection log",
+	Long: `Show the round-by-round reflection log for a mission.
+
+Prints only the round-by-round reflection log for a mission; unlike
+"mission show", the contract header is omitted so the output parses
+as a single JSON array with --json (always an array, even when there
+are no reflections yet — empty rather than null).`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runMissionReflections(args[0])
+	},
+}
+
+// --- mission advance ---
+
+var missionAdvanceCmd = &cobra.Command{
+	Use:   "advance <id-or-prefix>",
+	Short: "Advance the mission to the next round",
+	Long: `Advance the mission from its current round to the next.
+
+The advance is refused if any of the following hold:
+  - the current round has no reflection on file
+  - the current round's reflection recommends stop or escalate
+  - the mission has exhausted its round budget
+  - the mission is in a terminal state
+
+On success, the contract's current_round is bumped and a
+round_advanced event is appended to the mission event log.`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runMissionAdvance(args[0])
+	},
+}
+
 func init() {
 	missionCreateCmd.Flags().StringVarP(&missionCreateFile, "file", "f", "", "Read contract YAML from file (required)")
 	_ = missionCreateCmd.MarkFlagRequired("file")
@@ -130,11 +202,17 @@ func init() {
 	missionCloseCmd.Flags().StringVar(&missionCloseStatus, "status", mission.StatusClosed,
 		"Terminal status (closed|failed|escalated)")
 
+	missionReflectCmd.Flags().StringVarP(&missionReflectFile, "file", "f", "", "Read reflection YAML from file (required)")
+	_ = missionReflectCmd.MarkFlagRequired("file")
+
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
 		missionListCmd,
 		missionCloseCmd,
+		missionReflectCmd,
+		missionReflectionsCmd,
+		missionAdvanceCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -208,10 +286,53 @@ func runMissionShow(idOrPrefix string) {
 		os.Exit(1)
 	}
 	if jsonOutput {
+		// JSON shape is the bare contract — backward compatible with
+		// every existing consumer that unmarshals the output into a
+		// mission.Contract. Reflections are fetched separately via
+		// `ethos mission reflections`, which keeps the show payload
+		// stable as the reflection log grows.
 		printJSON(c)
 		return
 	}
 	printContract(c)
+
+	// Reflections are advisory in show — load them after the
+	// contract render so a corrupt reflections file does not block
+	// the operator from seeing the contract.
+	reflections, err := ms.LoadReflections(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: loading reflections: %v\n", err)
+		return
+	}
+	printReflections(reflections)
+}
+
+// runMissionReflections handles `ethos mission reflections <id>`,
+// the read-only counterpart to `mission reflect`. Returns the
+// round-by-round reflection log as a YAML-friendly JSON array (or a
+// human-readable bullet list).
+func runMissionReflections(idOrPrefix string) {
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission reflections: %v\n", err)
+		os.Exit(1)
+	}
+	rs, err := ms.LoadReflections(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission reflections: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOutput {
+		// Always return an array, never null, so consumers can
+		// unmarshal into []Reflection without a nil check.
+		if rs == nil {
+			rs = []mission.Reflection{}
+		}
+		printJSON(rs)
+		return
+	}
+	printReflections(rs)
 }
 
 func runMissionList(status string) {
@@ -293,6 +414,108 @@ func runMissionClose(idOrPrefix, status string) {
 	// Non-JSON mode is silent on success — matches session.go pattern.
 }
 
+// runMissionReflect handles `ethos mission reflect <id> --file <path>`.
+//
+// The reflection YAML is decoded strictly, validated, and appended
+// via Store.AppendReflection. The mission is resolved by ID or
+// unambiguous prefix to match the show/close convention. The
+// caller's reflection round must equal the mission's current round
+// — passing a stale round produces a precise error at submit time
+// rather than a vague one at advance time.
+func runMissionReflect(idOrPrefix, file string) {
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
+		os.Exit(1)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
+		os.Exit(1)
+	}
+	r, err := mission.DecodeReflectionStrict(data, file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
+		os.Exit(1)
+	}
+	if err := ms.AppendReflection(id, r); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOutput {
+		printJSON(map[string]any{
+			"mission_id":     id,
+			"round":          r.Round,
+			"recommendation": r.Recommendation,
+			"created_at":     r.CreatedAt,
+		})
+		return
+	}
+	// Non-JSON mode is silent on success — matches session.go pattern.
+}
+
+// runMissionAdvance handles `ethos mission advance <id>`. The gate
+// refuses to advance when the current round has no reflection, when
+// the reflection recommends stop or escalate, or when the budget
+// would be exceeded; in all three cases the operator-facing message
+// surfaces the reason verbatim.
+func runMissionAdvance(idOrPrefix string) {
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
+		os.Exit(1)
+	}
+	// Resolve the actor to record on the round_advanced event. A
+	// load failure is fatal here — recording an "unknown" actor on
+	// the audit trail would pollute the event log with empty
+	// attribution and make post-hoc review of who advanced which
+	// round impossible.
+	actor, err := resolveActor(ms, id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
+		os.Exit(1)
+	}
+	newRound, err := ms.AdvanceRound(id, actor)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOutput {
+		printJSON(map[string]any{
+			"mission_id":    id,
+			"current_round": newRound,
+		})
+		return
+	}
+	// Non-JSON mode is silent on success — matches every other
+	// mission subcommand (create, close, reflect). Exit code 0 tells
+	// the story; a chatty success message would be out of family.
+	_ = newRound
+}
+
+// resolveActor returns the handle to record on a round_advanced
+// event. The leader stored in the contract is the right answer for
+// 3.4 because every advance is a leader operation; future phases
+// may resolve the calling persona via /ethos:whoami.
+//
+// A load failure is returned to the caller so it can surface a
+// concrete error. Falling back to an "unknown" string would pollute
+// the audit trail and mask a real problem — an unreadable contract
+// should fail loudly, not silently.
+func resolveActor(ms *mission.Store, id string) (string, error) {
+	c, err := ms.Load(id)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve actor for mission %q: %w", id, err)
+	}
+	leader := strings.TrimSpace(c.Leader)
+	if leader == "" {
+		return "", fmt.Errorf("cannot resolve actor for mission %q: contract has no leader", id)
+	}
+	return leader, nil
+}
+
 // printContract emits a human-readable summary of a contract. The
 // header block uses text/tabwriter for aligned field/value columns;
 // multi-value sections (write_set, tools, success_criteria) are
@@ -322,6 +545,7 @@ func printContract(c *mission.Contract) {
 	}
 	fmt.Fprintf(tw, "Budget:\t%d round(s), reflection_after_each=%t\n",
 		c.Budget.Rounds, c.Budget.ReflectionAfterEach)
+	fmt.Fprintf(tw, "Round:\t%d of %d\n", c.CurrentRound, c.Budget.Rounds)
 	if err := tw.Flush(); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission show: %v\n", err)
 		os.Exit(1)
@@ -369,5 +593,38 @@ func printContract(c *mission.Contract) {
 		fmt.Println()
 		fmt.Println("Context:")
 		fmt.Println(c.Context)
+	}
+}
+
+// printReflections renders the round-by-round reflection log under
+// the contract block. Empty input is silent — a fresh mission with
+// no reflections does not need a section header. Each reflection is
+// rendered as a small block: round number, recommendation, signals,
+// and reason (when present), so the operator can read the leader's
+// decision history without parsing YAML.
+//
+// Terminal recommendations (stop, escalate) are uppercased so an
+// operator scanning a long reflection log can spot a blocking
+// decision at a glance — a lowercase "stop" between two "continue"
+// rows is easy to miss.
+func printReflections(rs []mission.Reflection) {
+	if len(rs) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Reflections:")
+	for _, r := range rs {
+		rec := r.Recommendation
+		if mission.IsTerminalRecommendation(rec) {
+			rec = strings.ToUpper(rec)
+		}
+		fmt.Printf("  - round %d (%s) by %s — converging=%t\n",
+			r.Round, rec, r.Author, r.Converging)
+		for _, sig := range r.Signals {
+			fmt.Printf("      • %s\n", sig)
+		}
+		if r.Reason != "" {
+			fmt.Printf("      reason: %s\n", r.Reason)
+		}
 	}
 }

@@ -2773,3 +2773,230 @@ Any future mission created with the 3.3 binary gets a real hash.
   `NewLiveHashSources` pre-walking teams on construction; rejected
   because it does work that's often unused (most hook invocations
   are for non-evaluator subagents).
+
+## DES-034: Bounded rounds with mandatory reflection (SETTLED)
+
+**Status**: Settled. Implemented 2026-04-08 as `ethos-07m.8` — the
+Phase 3.4 primitive that makes DES-031's `Budget.Rounds` field
+enforceable. Two rounds: initial implementation plus local review
+fixes. Local reviewers: `feature-dev:code-reviewer` (correctness —
+1 HIGH, 2 MEDIUM, 1 LOW) and `mdm` (CLI surface — 1 BLOCKER, 1
+HIGH, 2 MEDIUM, 4 LOW). The mdm BLOCKER (`Store.List` treating
+`<id>.reflections.yaml` as a contract, breaking Phase 3.2's
+conflict check) was caught by running the binary end-to-end with
+real fixtures — exactly the kind of cross-primitive integration bug
+that only shows up on the command line. Frozen evaluator: `djb`
+(pinned at mission launch). djb's final verdict: PASS (0.96) with
+one follow-up torpedo filed as a separate bead (`containsControlChar`
+on `Reflection.Reason` field, rule-5 consistency).
+
+### Problem
+
+Long-running fix cycles drift indefinitely. Phase 3.1 shipped
+`Budget.Rounds` as metadata; nothing enforced it. An agent could
+run through round 5, introduce a new regression in round 6, and
+keep going until the leader noticed by hand. The architecture rule
+from `~/Documents/agents-architecture.tex` §"Evaluation Discipline":
+*"Work in bounded rounds. Long-running optimization should not be
+an unbroken stream of edits. After a bounded set of attempts,
+require a reflection step: continue, pivot, ask the user, or
+stop."*
+
+Phase 3.3's frozen evaluator stops evaluator drift. Phase 3.4 stops
+round drift. Together they close the two "silent drift" failure
+modes the architecture docs named.
+
+### Decision
+
+A new typed `Reflection` artifact sits between round N and round
+N+1. The round-advance gate in `Store.AdvanceRound` refuses to
+begin round N+1 until the reflection for round N is on disk AND
+its recommendation is non-terminal (continue or pivot) AND the
+budget isn't exhausted.
+
+**Reflection schema** (`internal/mission/reflection.go`, typed not
+prose):
+
+- `round` — integer, the round just ended
+- `created_at` — RFC3339 server-filled at append time
+- `author` — leader handle recording the reflection
+- `converging` — bool, whether the work appears to be approaching
+  success
+- `signals` — list of observations (at least one, each non-empty,
+  no control characters)
+- `recommendation` — enum: `continue` | `pivot` | `stop` | `escalate`
+- `reason` — prose, required when recommendation is terminal
+
+**Recommendation semantics:**
+
+- `continue` — advance permitted, same approach
+- `pivot` — advance permitted, worker takes a different approach
+  in round N+1
+- `stop` — advance refused, mission must close
+- `escalate` — advance refused, mission must be re-scoped or
+  escalated to a human
+
+**Storage — sibling file, not inline.** Reflections live in
+`<missionsDir>/<id>.reflections.yaml`, a sibling to the contract,
+NOT inside the contract. Two reasons:
+
+1. The contract is pinned at launch per DES-031. An unbounded
+   reflection slice inside it would force every `Store.Update` to
+   rewrite an unbounded history, and any Update failure would risk
+   losing prior reflections.
+2. The reflections file grows as rounds happen; the contract file
+   stays structurally stable. Separating them keeps each file's
+   lifecycle clean.
+
+Both files are serialized through the same per-mission flock
+(`withLock(missionID, ...)`), so contract+reflection operations
+for the same mission are atomic with respect to concurrent
+readers. KnownFields(true) strict decode applies to both, keeping
+the trust boundary symmetric with DES-031's contract trust
+boundary.
+
+**Append-only invariant.** `AppendReflection` refuses to overwrite
+an existing round's reflection. The reflections file is
+monotone-sorted by round number at decode time; a hand-edited or
+corrupt out-of-order file is rejected before any caller acts on
+it. This preserves the round history for later post-mortem —
+memory and beads are derived summaries, but the append-only log
+is the source of truth.
+
+**Round tracking — new `Contract.CurrentRound` field.** Chosen
+over "derive from event log" because:
+
+1. The gate needs to answer "what round is this mission currently
+   in?" on every `mission show` and every advance call. Walking
+   the event log on every read adds an unbounded latency cost.
+2. The field is a small integer; the contract write is cheap.
+3. Phase 3.7's event log reader API will still be able to derive
+   the round history from events if an audit needs it. The
+   `CurrentRound` field is a cache of state, not a source of
+   truth.
+
+Default-filled to 1 on Create and Load, so pre-3.4 contracts
+upgrade cleanly. Rule 13 of `Contract.Validate` enforces
+`CurrentRound in [1, Budget.Rounds]`.
+
+**Round-advance gate logic** (`Store.AdvanceRound`):
+
+1. Acquire per-mission flock
+2. Load contract + reflections inside the lock
+3. Refuse if `Status != StatusOpen`
+4. Refuse if `CurrentRound >= Budget.Rounds` (budget exhausted,
+   re-scope or close)
+5. Refuse if no reflection exists for `CurrentRound`
+6. Refuse if the reflection's recommendation is terminal (stop,
+   escalate) — surface the reflection's `Reason` verbatim so the
+   operator sees the leader's own words
+7. Bump `CurrentRound`, validate, write contract, append event,
+   roll back on log failure
+
+The ORDER of 4, 5, 6 is load-bearing: the operator sees "close and
+re-scope" on budget exhaustion, not "submit one more reflection"
+on the last round.
+
+**CLI surface:**
+
+- `ethos mission reflect <id> --file <reflection.yaml>` — submit
+  the current round's reflection
+- `ethos mission advance <id>` — attempt to begin the next round
+- `ethos mission reflections <id>` — print the round-by-round
+  reflection log (`--json` emits a single JSON array)
+- `ethos mission show <id>` — now displays `Round: N of M` and
+  includes the reflection log as a secondary block
+
+All four subcommands surface through the same `formatMission*`
+dispatchers per DES-020, with the `mission` MCP tool growing
+three matching methods.
+
+**Silent-on-success convention.** `mission advance` is silent on
+success in non-JSON mode, matching `create`/`close`/`reflect`.
+Exit code 0 tells the story.
+
+**BLOCKER caught in round 2 local review:** the initial design
+added a sibling file but did NOT update `Store.List`. Phase 3.2's
+`checkWriteSetConflicts` walks `Store.List` and treats any load
+failure as fatal (correctly — silently skipping corrupt missions
+is a bypass). After a single reflection was submitted, `List`
+would return `<id>.reflections.yaml` as a candidate, `Load` would
+fail on the wrong schema, and every future `mission create` would
+refuse. mdm caught this by running the binary end-to-end with
+real fixtures — not by reading code. Round 2 fixed it by adding
+an `isContractFile` helper that excludes `.reflections.yaml` and
+dotfiles. A regression test exercises all three failure modes
+(list, prefix-match, create-after-reflection).
+
+### What 3.4 deliberately does NOT do
+
+- **No machine-readable reflection analysis.** Reflections are
+  prose + typed enum, not a scoring function. A future phase could
+  add signal classification, but 3.4 trusts the leader to pick
+  `continue` / `pivot` / `stop` / `escalate` honestly.
+- **No reflection on round 0.** Reflections are submitted at the
+  end of a round, for the round that just completed. Round 1
+  starts without a prior reflection. The gate only fires when
+  advancing FROM round N to round N+1.
+- **No auto-reflection.** The leader submits reflections by hand
+  via `mission reflect`. Phase 3.4 is a gate, not an automation
+  engine.
+- **No reflection for closed missions.** Once `Close` transitions
+  the mission to a terminal state, reflections are no longer
+  accepted. The mission's round history is frozen.
+- **No reflection deletion.** Reflections are append-only. A
+  mistaken reflection is recorded forever; the leader can close
+  the mission and create a replacement if the mistake was
+  material.
+- **No schema change to `Budget.Rounds` bounds.** The [1, 10]
+  range from DES-031 is preserved. 3.4 adds enforcement, not a
+  new range.
+- **No cross-primitive changes.** Phase 3.1 contract schema,
+  Phase 3.2 conflict check, Phase 3.3 frozen evaluator hash, the
+  store flock discipline, and the SubagentStart hook are all
+  untouched. 3.4 is additive.
+
+### Rejected Alternatives
+
+- **Derive CurrentRound from the event log.** Cleaner
+  conceptually — the event log is the source of truth — but
+  expensive: every `mission show` would walk the log. The
+  CurrentRound field is a cache of derivable state, not a source
+  of truth; Phase 3.7's log reader can reconstruct it for audit.
+- **Store reflections inside the Contract struct.** Rejected
+  because the contract is pinned at launch. Unbounded growth
+  would force Update to rewrite an unbounded slice on every
+  transition. A sibling file decouples the lifecycles.
+- **Hard-refuse reflections for any round other than the current
+  one.** The implementation does refuse reflections for past or
+  future rounds, but the strictness was briefly questioned:
+  should a leader be able to submit a "correction" reflection for
+  round 1 while in round 3? Rejected: reflections are the
+  round-by-round trust handoff. A correction would reopen the
+  gate on round 2's advance retroactively, which is exactly the
+  "moving goalposts" failure mode the primitive prevents. Leaders
+  who made a mistake close the mission and relaunch.
+- **Warning on `converging: false` with `recommendation: continue`.**
+  Rejected: this is the leader explicitly choosing "give it one
+  more try." The field is on the record for post-mortem; the gate
+  does not second-guess it at advance time.
+- **Pin reflections to the frozen evaluator.** Reflections are
+  the LEADER's artifact, not the evaluator's. Phase 3.3 pinned
+  the evaluator's identity content. Phase 3.4 pins the LEADER's
+  round-by-round judgment. The two primitives are orthogonal.
+- **Make `mission advance` interactive** (prompt for a reflection
+  inline instead of requiring a separate `reflect` call).
+  Rejected per McIlroy's rule against non-interactive prompts in
+  scripted contexts. The two-step `reflect` + `advance` flow is
+  composable; the one-step interactive flow breaks scripting.
+- **Store reflections in the JSONL event log instead of a sibling
+  YAML file.** Rejected: the event log is append-only JSONL for
+  state transitions, not structured content. Mixing structured
+  reflection YAML into a JSONL log would require schema tagging
+  and custom parse logic. The sibling YAML file uses the same
+  YAML decode pipeline as the contract itself.
+- **Always record the reflection, even if it's malformed, and
+  error out at advance time instead of at submit time.** Rejected:
+  the submit path is where validation belongs. An operator who
+  submits a malformed reflection should find out immediately, not
+  discover it only when they try to advance.

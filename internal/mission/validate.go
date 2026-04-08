@@ -28,7 +28,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (12 total — must match the numbered list below
+// Validation rules (13 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -46,6 +46,9 @@ const (
 //      Windows drive letters and UNC), not empty after trimming
 //  11. budget.rounds is in [1, 10]
 //  12. success_criteria has at least one entry
+//  13. current_round is in [1, budget.rounds] (3.4 round-tracking
+//      invariant; zero is rewritten to 1 by Store.Create so a
+//      pre-3.4 contract loaded in-place still parses)
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
@@ -141,6 +144,18 @@ func (c *Contract) Validate() error {
 	// success_criteria non-empty
 	if len(c.SuccessCriteria) == 0 {
 		return fmt.Errorf("success_criteria must contain at least one entry")
+	}
+
+	// current_round in [1, budget.rounds]. Pre-3.4 contracts loaded
+	// from disk may carry CurrentRound == 0; Store.Create rewrites
+	// that to 1 before persisting and Store.loadLocked rewrites it
+	// on read so a hand-edited or pre-3.4 file does not fail
+	// validation purely because the field was added in 3.4. The
+	// validation rule itself is the strict in-memory invariant: any
+	// caller that has gone through Store.Create or Store.Update sees
+	// 1 ≤ CurrentRound ≤ Budget.Rounds.
+	if c.CurrentRound < 1 || c.CurrentRound > c.Budget.Rounds {
+		return fmt.Errorf("current_round %d out of range [1, %d]", c.CurrentRound, c.Budget.Rounds)
 	}
 
 	return nil
