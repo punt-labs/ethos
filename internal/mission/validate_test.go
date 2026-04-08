@@ -248,6 +248,16 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 		{name: "windows drive letter with forward slash", path: "E:/foo", wantErrMatch: "drive letter"},
 		{name: "UNC path backslash", path: `\\server\share\file`, wantErrMatch: "relative path"},
 		{name: "UNC path forward slash", path: "//server/share/file", wantErrMatch: "relative path"},
+		// Root-claim rejection: a write_set entry that normalizes to
+		// "the project root" (only `.` segments and slashes) would
+		// silently bypass the conflict check because pathsOverlap
+		// against an empty segment list returns false. Bugbot caught
+		// this on PR #178; the per-entry validator now blocks the
+		// input upstream so the conflict check never sees it.
+		{name: "rejects lone dot", path: ".", wantErrMatch: "claims the project root"},
+		{name: "rejects dot with trailing slash", path: "./", wantErrMatch: "claims the project root"},
+		{name: "rejects dot-slash-dot", path: "./.", wantErrMatch: "claims the project root"},
+		{name: "rejects multiple dot segments", path: "././", wantErrMatch: "claims the project root"},
 	}
 
 	for _, tt := range tests {

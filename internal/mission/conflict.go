@@ -117,8 +117,8 @@ func pathsOverlap(a, b string) bool {
 //   - trim leading/trailing whitespace
 //   - replace any `\` with `/` (defense in depth — the per-entry
 //     validator already rejected drive letters and UNC paths)
-//   - trim a single trailing `/` so `internal/foo/` and `internal/foo`
-//     produce the same segment list
+//   - trim trailing `/` characters so `internal/foo/` and
+//     `internal/foo` produce the same segment list
 //   - drop empty segments produced by doubled slashes, so
 //     `internal//foo` and `internal/foo` compare equal
 //   - drop `.` segments so `./internal/foo`, `internal/./foo`, and

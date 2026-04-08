@@ -176,7 +176,12 @@ func TestPathsOverlap(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "lone dot collapses to nil",
+			// The per-entry validator rejects lone-dot and other
+			// root-equivalent entries upstream (Bugbot finding on
+			// PR #178), so this case cannot reach the conflict check
+			// in production. The row locks the helper's behavior in
+			// case the validator's coverage ever changes.
+			name: "lone dot path matches nothing (validator rejects upstream)",
 			a:    ".",
 			b:    "internal/foo",
 			want: false,

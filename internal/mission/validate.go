@@ -226,6 +226,27 @@ func validateWriteSetEntry(entry string) error {
 		return fmt.Errorf("write_set entry %q must be a relative path (drive letter)", trimmed)
 	}
 
+	// Reject root claims — entries that consist only of `.` segments
+	// and slashes. The per-entry validator deliberately accepts `.`
+	// segments inside a path (`./foo`, `internal/./foo`) per
+	// TestValidate_AcceptsSingleDotSegment, but a STANDALONE `.` (or
+	// `./`, `././.`, etc.) normalizes to "the project root" which the
+	// conflict check correctly cannot represent — pathsOverlap returns
+	// false against every other path because the segment list is
+	// empty, so a root claim would silently coexist with every open
+	// mission. Reject at the entry level so the conflict check never
+	// sees an ambiguous root claim. Bugbot caught this on PR #178.
+	isRootClaim := true
+	for _, seg := range strings.Split(normalized, "/") {
+		if seg != "" && seg != "." {
+			isRootClaim = false
+			break
+		}
+	}
+	if isRootClaim {
+		return fmt.Errorf("write_set entry %q claims the project root via dot syntax; specify the directories or files this mission writes", trimmed)
+	}
+
 	// Scan every segment for literal `..`. This catches both leading
 	// (`../etc/passwd`) and embedded (`internal/../../tmp`) traversal.
 	// Uses the already-normalized form so `internal\..\..\tmp` is

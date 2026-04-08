@@ -139,9 +139,6 @@ func (s *Store) Create(c *Contract) error {
 	if err := staged.Validate(); err != nil {
 		return fmt.Errorf("invalid contract: %w", err)
 	}
-	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
-		return fmt.Errorf("creating missions directory: %w", err)
-	}
 
 	err := s.withCreateLock(func() error {
 		return s.withLock(staged.MissionID, func() error {
