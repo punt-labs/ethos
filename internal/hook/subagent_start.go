@@ -2,13 +2,16 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
 )
@@ -21,10 +24,52 @@ type SubagentStartResult struct {
 	} `json:"hookSpecificOutput"`
 }
 
+// SubagentStartDeps groups the dependencies HandleSubagentStartWithDeps
+// needs. The legacy HandleSubagentStart entry point builds an empty
+// deps struct and delegates here so existing callers and tests keep
+// compiling without an extra plumbing pass.
+//
+// Identities and Sessions are required. Missions and HashSources are
+// optional: if either is nil the verifier hash check is skipped (the
+// installation has no mission store, the hook still emits the persona
+// block as before).
+type SubagentStartDeps struct {
+	Identities identity.IdentityStore
+	Sessions   *session.Store
+	Missions   *mission.Store
+	// Hash is the source bundle ComputeEvaluatorHash uses to recompute
+	// the live evaluator content. Required when Missions is non-nil
+	// and Phase 3.3 verifier discipline is in effect.
+	Hash mission.HashSources
+}
+
 // HandleSubagentStart reads the SubagentStart hook payload from stdin,
 // joins the subagent to the session roster, and emits persona context
-// if the subagent matches an ethos identity.
+// if the subagent matches an ethos identity. This is the legacy entry
+// point — it skips the Phase 3.3 verifier hash check.
+//
+// New code should call HandleSubagentStartWithDeps so the verifier
+// hash gate runs. The legacy signature is preserved so existing
+// callers and tests in the hook package continue to compile.
 func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.Store) error {
+	return HandleSubagentStartWithDeps(r, SubagentStartDeps{
+		Identities: store,
+		Sessions:   ss,
+	})
+}
+
+// HandleSubagentStartWithDeps is the full subagent-start handler. In
+// addition to the persona block emission HandleSubagentStart provides,
+// it enforces DES-033's frozen-evaluator gate: when the spawning
+// subagent matches the evaluator handle of any open mission, the
+// hook recomputes the evaluator's current hash and refuses the spawn
+// if any open mission's pinned hash disagrees.
+//
+// The mismatch error names the offending mission, the pinned and
+// current hash prefixes, and the relaunch instruction the operator
+// needs to recover. Hash success is silent — operators only see
+// the hash when something is wrong.
+func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		return fmt.Errorf("subagent-start: %w", err)
@@ -38,10 +83,23 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 		return nil
 	}
 
+	// Phase 3.3: verifier hash gate. Run BEFORE joining the session
+	// roster — a refused spawn must leave no trace in the roster, and
+	// the operator's diagnostic must be the hash mismatch, not a
+	// confusing post-join failure. The check is a no-op when the
+	// installation has no mission store wired in (legacy hook flow).
+	if err := checkVerifierHash(agentType, deps); err != nil {
+		// Return a non-nil error so cmd/ethos/hook.go's runner exits
+		// non-zero, which Claude Code surfaces to the operator as a
+		// fatal subagent launch failure. The error string carries
+		// the diagnostic; the runner prints it verbatim.
+		return err
+	}
+
 	// Resolve persona: if an identity exists with the same handle as
 	// agent_type, use it as the persona.
 	persona := ""
-	if agentType != "" && store.Exists(agentType) {
+	if agentType != "" && deps.Identities.Exists(agentType) {
 		persona = agentType
 	}
 
@@ -52,7 +110,7 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 		AgentType: agentType,
 	}
 
-	if joinErr := ss.Join(sessionID, p); joinErr != nil {
+	if joinErr := deps.Sessions.Join(sessionID, p); joinErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to join session %s: %v\n", sessionID, joinErr)
 	}
 
@@ -62,7 +120,7 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 	}
 
 	// Load identity with full attribute content for persona injection.
-	id, err := store.Load(persona)
+	id, err := deps.Identities.Load(persona)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: subagent-start: identity %q exists but attribute resolution failed: %v\n", persona, err)
 		return nil
@@ -76,7 +134,7 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 	block := BuildPersonaBlock(id)
 	if block != "" {
 		// Prepend parent context if we can resolve the parent from the roster.
-		parentLine := resolveParentLine(ss, sessionID, p.Parent, store)
+		parentLine := resolveParentLine(deps.Sessions, sessionID, p.Parent, deps.Identities)
 		if parentLine != "" {
 			block = insertAfterFirstLine(block, parentLine)
 		}
@@ -95,6 +153,221 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 	result.HookSpecificOutput.HookEventName = "SubagentStart"
 	result.HookSpecificOutput.AdditionalContext = strings.Join(sections, "\n\n")
 	return json.NewEncoder(os.Stdout).Encode(result)
+}
+
+// checkVerifierHash recomputes the evaluator hash for every open
+// mission whose Evaluator.Handle matches agentType and returns a
+// single fatal error aggregating every mismatch.
+//
+// The check is intentionally conservative: a single drifted mission
+// blocks the spawn even if other missions still match. This protects
+// the per-mission verdict integrity DES-033 was written to enforce —
+// silently allowing the spawn against a stale pinned hash would
+// invalidate the original mission's launch contract.
+//
+// Returns nil and is a no-op when:
+//   - Missions is nil (legacy install, no mission store)
+//   - agentType is empty
+//   - No open mission names agentType as evaluator
+//   - Every matching open mission is either legacy (empty pinned
+//     hash) or has current content matching its pinned hash
+//
+// Returns a fatal error when:
+//   - deps.Hash is misconfigured (Missions is non-nil but HashSources
+//     is incomplete). Silent skip would let stale evaluator content
+//     through under a configuration error.
+//   - A matching mission fails to load (corrupt or unparseable file).
+//   - The current hash recomputation itself fails.
+//   - Any matching open mission's pinned hash does not equal the
+//     recomputed current hash.
+//
+// On one or more real mismatches the error is a multi-line block
+// naming every drifted mission, the pinned and current rollup hash
+// prefixes, the per-section hashes of the CURRENT content so the
+// operator can cross-reference which file they edited, and two
+// recovery options (revert the edit to preserve the missions, or
+// close and relaunch to accept the new content).
+func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
+	if deps.Missions == nil {
+		return nil // legacy install: no mission store
+	}
+	if err := deps.Hash.Validate(); err != nil {
+		// Misconfiguration: a mission store is present but the hash
+		// sources are not. Refusing spawns on misconfiguration is
+		// the safe default — silently skipping the gate would let
+		// stale evaluator content through.
+		return fmt.Errorf("verifier hash gate misconfigured: %w", err)
+	}
+	if strings.TrimSpace(agentType) == "" {
+		return nil
+	}
+
+	ids, err := deps.Missions.List()
+	if err != nil {
+		return fmt.Errorf("verifier hash gate: listing missions: %w", err)
+	}
+
+	// Breakdown is computed at most once per checkVerifierHash call,
+	// lazily, on the first NON-LEGACY matching open mission. Legacy
+	// missions (empty pinned hash) must never trigger the compute:
+	// they cannot match any recomputed hash and the compute itself
+	// might fail (e.g. the evaluator's identity content was removed
+	// after the legacy mission was launched), which would wrongly
+	// block the spawn. The legacy check is therefore the first
+	// filter after status and handle match.
+	var (
+		breakdown       mission.EvaluatorHashBreakdown
+		breakdownLoaded bool
+		mismatches      []driftedMission
+	)
+
+	for _, id := range ids {
+		c, loadErr := deps.Missions.Load(id)
+		if loadErr != nil {
+			// A corrupt or unparseable mission file blocks the gate.
+			// Silently skipping it would let an attacker bypass the
+			// frozen evaluator by hand-corrupting the contract.
+			return fmt.Errorf(
+				"verifier hash gate: failed to load mission %q: %w",
+				id, loadErr,
+			)
+		}
+		if c.Status != mission.StatusOpen {
+			continue
+		}
+		if c.Evaluator.Handle != agentType {
+			continue
+		}
+		if c.Evaluator.Hash == "" {
+			// Pre-3.3 mission with an empty pinned hash. Warn and
+			// continue; do not attempt to recompute the current
+			// hash. A legacy mission can never match a recomputed
+			// hash, and the recompute itself may fail against
+			// content that was valid at launch time but no longer
+			// resolves — which would wrongly refuse every spawn.
+			// The mission's launch predates the gate.
+			fmt.Fprintf(os.Stderr,
+				"ethos: subagent-start: warning: mission %s has empty Evaluator.Hash (pre-3.3); skipping gate\n",
+				c.MissionID,
+			)
+			continue
+		}
+		if !breakdownLoaded {
+			breakdown, err = mission.ComputeEvaluatorHashBreakdown(c.Evaluator.Handle, deps.Hash)
+			if err != nil {
+				return fmt.Errorf(
+					"verifier hash gate: recomputing hash for evaluator %q: %w",
+					c.Evaluator.Handle, err,
+				)
+			}
+			breakdownLoaded = true
+		}
+		if c.Evaluator.Hash != breakdown.Rollup {
+			mismatches = append(mismatches, driftedMission{
+				ID:     c.MissionID,
+				Pinned: c.Evaluator.Hash,
+			})
+		}
+	}
+	if len(mismatches) == 0 {
+		return nil
+	}
+	return errors.New(formatDriftError(agentType, breakdown, mismatches))
+}
+
+// driftedMission is an internal record collected during checkVerifierHash
+// and consumed by formatDriftError. Pinned is the full hex the
+// formatter truncates; the mission ID is rendered verbatim.
+type driftedMission struct {
+	ID     string
+	Pinned string
+}
+
+// formatDriftError renders the operator-facing multi-line block the
+// verifier gate emits when one or more open missions disagree with
+// the current evaluator content.
+//
+// The block has four parts:
+//  1. A summary line naming the evaluator and the mission count.
+//  2. One line per drifted mission showing pinned → current rollup.
+//  3. The per-section breakdown of the CURRENT content so the
+//     operator can cross-reference which source file they edited.
+//  4. Two recovery options — revert the edit, or close and relaunch.
+//
+// Mission lines are sorted by mission ID so two runs of the gate
+// against the same drifted set produce identical output.
+func formatDriftError(
+	evaluator string,
+	breakdown mission.EvaluatorHashBreakdown,
+	mismatches []driftedMission,
+) string {
+	sort.Slice(mismatches, func(i, j int) bool {
+		return mismatches[i].ID < mismatches[j].ID
+	})
+
+	var b strings.Builder
+	if len(mismatches) == 1 {
+		fmt.Fprintf(&b,
+			"refusing verifier spawn: evaluator %q content has drifted since mission %s was launched\n",
+			evaluator, mismatches[0].ID,
+		)
+	} else {
+		fmt.Fprintf(&b,
+			"refusing verifier spawn: evaluator %q content has drifted since %d open missions were launched\n",
+			evaluator, len(mismatches),
+		)
+	}
+	for _, m := range mismatches {
+		fmt.Fprintf(&b, "  %s: pinned %s -> current %s\n",
+			m.ID, hashPrefix(m.Pinned), hashPrefix(breakdown.Rollup),
+		)
+	}
+	b.WriteString("  current content sections (check which you edited):\n")
+	fmt.Fprintf(&b, "    personality:       %s\n", hashPrefix(breakdown.Personality))
+	fmt.Fprintf(&b, "    writing_style:     %s\n", hashPrefix(breakdown.WritingStyle))
+	// Render talents and roles in sorted order for determinism.
+	talentSlugs := make([]string, 0, len(breakdown.Talents))
+	for slug := range breakdown.Talents {
+		talentSlugs = append(talentSlugs, slug)
+	}
+	sort.Strings(talentSlugs)
+	for _, slug := range talentSlugs {
+		fmt.Fprintf(&b, "    talent %-12s %s\n",
+			fmt.Sprintf("%q:", slug), hashPrefix(breakdown.Talents[slug]),
+		)
+	}
+	roleNames := make([]string, 0, len(breakdown.Roles))
+	for name := range breakdown.Roles {
+		roleNames = append(roleNames, name)
+	}
+	sort.Strings(roleNames)
+	for _, name := range roleNames {
+		fmt.Fprintf(&b, "    role %-14s %s\n",
+			fmt.Sprintf("%q:", name), hashPrefix(breakdown.Roles[name]),
+		)
+	}
+	b.WriteString("  to preserve these missions: revert the edit to the evaluator's identity content\n")
+	if len(mismatches) == 1 {
+		fmt.Fprintf(&b,
+			"  to accept the new content: close mission %s and relaunch it",
+			mismatches[0].ID,
+		)
+	} else {
+		b.WriteString("  to accept the new content: close the listed missions and relaunch them")
+	}
+	return b.String()
+}
+
+// hashPrefix returns the first 12 hex characters of a hash string,
+// or the full string if shorter. Used in operator-facing error
+// messages so the line stays readable while still distinguishing
+// hashes for follow-up debugging.
+func hashPrefix(h string) string {
+	const n = 12
+	if len(h) <= n {
+		return h
+	}
+	return h[:n]
 }
 
 // resolveParentLine finds the primary Claude agent in the session roster
