@@ -4,7 +4,6 @@ package mission
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,11 +19,21 @@ const counterDateFormat = "2006-01-02"
 //
 // Format: m-YYYY-MM-DD-NNN where NNN is a zero-padded 3-digit counter.
 // The counter is per-day and persisted at <root>/missions/.counter-YYYY-MM-DD.
-// Concurrent NewID calls are serialized via flock — the counter file is the
-// lock target as well as the persistence target.
+// Concurrent NewID calls are serialized via flock on a separate stable
+// lock file (<root>/missions/.counter-YYYY-MM-DD.lock), not on the
+// counter file itself — so the counter file can be replaced atomically
+// via temp+rename without racing a concurrent flock acquirer on the
+// unlinked inode.
 //
 // Two callers on the same day produce strictly distinct IDs (NNN-1 and NNN).
 // Two callers on different days each start at 001.
+//
+// Atomicity: the counter update is a read-modify-write under the lock,
+// persisted via WriteFile(tmp) + Rename(tmp, counter). A partial write
+// during the temp write leaves the counter file unchanged; a rename is
+// atomic on POSIX. There is no transient empty-file window (which would
+// otherwise make the next caller reset to 1 and collide with an existing
+// mission 001).
 func NewID(root string, now time.Time) (string, error) {
 	missionsDir := filepath.Join(root, "missions")
 	if err := os.MkdirAll(missionsDir, 0o700); err != nil {
@@ -33,38 +42,36 @@ func NewID(root string, now time.Time) (string, error) {
 
 	day := now.UTC().Format(counterDateFormat)
 	counterPath := filepath.Join(missionsDir, ".counter-"+day)
+	lockPath := counterPath + ".lock"
 
-	// Open with O_RDWR|O_CREATE so we can both read the prior counter and
-	// rewrite it under the same lock.
-	f, err := os.OpenFile(counterPath, os.O_RDWR|os.O_CREATE, 0o600)
+	// Acquire the flock on a stable file that is never renamed or
+	// unlinked by NewID. Locking the counter file directly would race
+	// with the temp+rename pattern below: a concurrent caller could
+	// open the post-rename counter file, get a fresh unlocked inode,
+	// and re-lock it while this call still holds the lock on the
+	// pre-rename (now unlinked) inode.
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return "", fmt.Errorf("opening counter file: %w", err)
+		return "", fmt.Errorf("opening counter lock file: %w", err)
 	}
-	defer f.Close()
+	defer lockFile.Close()
 
-	// Acquire an exclusive flock on the counter file. The OS releases
-	// the lock when the file descriptor closes; the explicit LOCK_UN
-	// defer makes the lock/unlock pair symmetric for readers of the
-	// code.
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
 		return "", fmt.Errorf("acquiring counter lock: %w", err)
 	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
 
-	// Read whatever is currently in the file.
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", fmt.Errorf("seeking counter file: %w", err)
-	}
-	data, err := io.ReadAll(f)
-	if err != nil {
+	// Read the current counter value. Missing file is treated as 0
+	// (first caller of the day).
+	data, err := os.ReadFile(counterPath)
+	if err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("reading counter file: %w", err)
 	}
-
 	current := 0
 	if s := strings.TrimSpace(string(data)); s != "" {
-		v, err := strconv.Atoi(s)
-		if err != nil {
-			return "", fmt.Errorf("parsing counter file %q: %w", counterPath, err)
+		v, parseErr := strconv.Atoi(s)
+		if parseErr != nil {
+			return "", fmt.Errorf("parsing counter file %q: %w", counterPath, parseErr)
 		}
 		current = v
 	}
@@ -80,15 +87,18 @@ func NewID(root string, now time.Time) (string, error) {
 		)
 	}
 
-	// Truncate and rewrite under the same lock.
-	if err := f.Truncate(0); err != nil {
-		return "", fmt.Errorf("truncating counter file: %w", err)
+	// Atomic write via temp + rename. A partial write inside WriteFile
+	// leaves the counter file unchanged; os.Rename is atomic on POSIX.
+	// No transient empty-file state — the next caller either sees the
+	// old value (if this call failed before rename) or the new value
+	// (if rename committed).
+	tmp := counterPath + ".tmp"
+	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", next)), 0o600); err != nil {
+		return "", fmt.Errorf("writing temp counter: %w", err)
 	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", fmt.Errorf("seeking counter file: %w", err)
-	}
-	if _, err := fmt.Fprintf(f, "%d\n", next); err != nil {
-		return "", fmt.Errorf("writing counter file: %w", err)
+	if err := os.Rename(tmp, counterPath); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("renaming counter file: %w", err)
 	}
 
 	return fmt.Sprintf("m-%s-%03d", day, next), nil
