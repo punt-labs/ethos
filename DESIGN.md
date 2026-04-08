@@ -2308,3 +2308,220 @@ rounds with a clean djb verdict.
   `appendEventLocked`. A future external caller of a public
   `AppendEvent` from inside a locked block would deadlock on Linux
   flock. Round 3 unexported it; 3.7 will re-export if needed.
+
+## DES-032: Cross-mission write_set admission control (PROPOSED)
+
+**Status**: Proposed. Implemented 2026-04-08 as `ethos-07m.6` — the
+Phase 3.2 primitive on top of DES-031. Three rounds: initial
+implementation, local-review fixes, leader-found defense-in-depth.
+Local reviewers: `feature-dev:code-reviewer` (correctness) and `mdm`
+(CLI surface). Frozen evaluator: `djb` (pinned at mission launch).
+Status flips to SETTLED after djb's verdict and PR merge.
+
+### Problem
+
+The Phase 3.1 mission contract has a `write_set` field that declares
+which paths a worker may modify. The Phase 3.1 validator rejects
+malformed individual entries (traversal, absolute paths, control
+characters, drive letters, UNC). But there is no **cross-mission**
+check. Two operators (or two agents in the same operator's session)
+can each create a mission whose `write_set` overlaps the other, and
+both can run, and both will quietly corrupt each other's work. The
+bug only surfaces at git merge or at runtime when one worker
+overwrites the other's file.
+
+The threat model is not adversarial — it is uncoordinated cooperation.
+The dominant case is two agents in the same session that don't know
+about each other's claims. The architecture document
+(`~/Documents/agents-architecture.tex` §"Design Improvements") names
+this exact failure mode under "Write-set admission control" and
+recommends: "Before launching an implementation worker, declare the
+expected file set and refuse concurrent writers with overlapping
+claims unless they are isolated in worktrees."
+
+### Decision
+
+`Store.Create` rejects a new mission whose `write_set` overlaps any
+currently-open mission's `write_set`. The check happens at create
+time, not at first edit, so the conflict surfaces before the worker
+runs.
+
+**Conflict semantics: segment-prefix overlap on cleaned paths.**
+
+Two paths overlap when, after normalization (trim whitespace, replace
+backslashes, trim trailing slash, split on `/`, drop empty segments),
+one path's segment list is a prefix of the other's. Examples:
+
+- `internal/foo` overlaps `internal/foo/bar.go` (forward prefix)
+- `internal/foo/bar.go` overlaps `internal/foo` (reverse prefix)
+- `internal/foo` does NOT overlap `internal/foobar` (segment boundary)
+- `internal/foo/` and `internal/foo` are equivalent
+- `internal//foo/bar.go` is equivalent to `internal/foo/bar.go` (the
+  empty middle segment is filtered — see Round 3 below for why this
+  matters)
+- Comparison is case-sensitive (POSIX)
+
+The per-entry validator already rejects `..`, absolute paths, drive
+letters, UNC, control characters, and null bytes. The conflict check
+does not re-validate; it only normalizes for comparison.
+
+**Active mission set: `Status == StatusOpen` only.** Closed, failed,
+and escalated missions are out of the registry. Closing a mission is
+the explicit way to release its write_set claim.
+
+**Two-level locking.** Phase 3.1 introduced a per-mission flock for
+serializing writes to a single mission's contract. Phase 3.2 adds a
+**directory-level create lock** at `<missionsDir>/.create.lock`. The
+directory lock is acquired exclusively by `Store.Create` for the
+duration of the conflict scan AND the new mission's write. Without
+it, two concurrent Creates with disjoint mission IDs would each
+acquire their own per-mission lock, both pass the conflict scan, and
+both write — a TOCTOU race that the per-mission lock cannot close.
+
+The lock file is a stable filename never renamed or unlinked, so
+concurrent acquirers always lock the same inode (the same race that
+Phase 3.1 fixed in `NewID` by separating the counter file from its
+lock file). `Update` and `Close` do NOT acquire the directory lock —
+they mutate an existing mission's status, which is unrelated to
+Create-vs-Create serialization.
+
+**Race window with Close.** A `Close` operation can run concurrently
+with `Create`'s scan. If a Close transitions an open mission to
+terminal state during the scan, the new Create may see it as still
+open and report a false positive conflict. This is an acceptable
+trade: false positive is recoverable (operator retries), false
+negative would silently allow the corruption Phase 3.2 is designed to
+prevent. A future enhancement could have Close briefly acquire the
+directory lock; out of scope for 3.2.
+
+**Counter consumption on rejection.** `ApplyServerFields` calls
+`NewID` BEFORE `Store.Create`, so a rejected Create burns a daily
+counter slot. The counter is bounded to [1, 999] and single-operator
+usage will not approach the ceiling. Rolling back the counter on
+rejection would require a new counter API and reintroduce the
+temp+rename race that 3.1 already eliminated. Burn the slot.
+
+**Fatal Load failure.** If `Store.Load` fails on any existing mission
+during the scan (file corrupted, permission denied, hand-edited
+beyond strict YAML), the entire Create call fails with a wrapped
+error naming the unloadable mission. Silently skipping a corrupt
+mission would defeat the conflict check — an attacker (or accidental
+corruption) could bypass the gate by breaking exactly the existing
+mission whose write_set blocks them.
+
+**Error format** (one line per blocking mission):
+
+```text
+ethos: mission create: write_set conflict with mission m-2026-04-08-001 (worker: bwk): overlapping paths [internal/foo/bar.go]
+```
+
+For multi-conflict, the underlying error embeds newlines and the CLI
+prints each line. The MCP path returns the same body via
+`mcplib.NewToolResultError("failed to create mission: " + body)`.
+The displayed path is the operator's literal entry, preserved
+verbatim including trailing slashes — operators see the path they
+just tried to claim, not a normalized form.
+
+### Round-by-round summary
+
+- **Round 1.** Initial implementation: `internal/mission/conflict.go`
+  with `Conflict` struct, `findWriteSetConflicts`, `pathsOverlap`,
+  `splitSegments`, `formatConflictError`. Integration in `Store.Create`
+  via new outer `withCreateLock` and inner `checkWriteSetConflicts`.
+  Tests: 17-row `pathsOverlap` table, 10-row `findWriteSetConflicts`
+  table, 6 store integration tests including 10-goroutine concurrent
+  serialization, CLI subprocess test, MCP integration test. CHANGELOG
+  entry. Local review: 1 HIGH (asymmetric assertion coverage between
+  CLI and MCP tests) + 3 MEDIUM (build tag, CHANGELOG recovery
+  sentence, cobra Long help text) + 1 LOW (`errors.New` vs
+  `fmt.Errorf("%s", ...)`).
+
+- **Round 2.** All 5 findings addressed in 5 focused fixes — no scope
+  creep beyond a one-paragraph cobra Long docstring update. Leader
+  verified the round 2 binary against real fixtures, confirming the
+  error format byte-for-byte and exit code 1 on conflict.
+
+- **Round 3.** Leader-found defense-in-depth: `splitSegments` did not
+  filter empty segments after `strings.Split`, so a write_set entry
+  like `internal//foo/bar.go` (double slash) normalized to
+  `[internal "" foo bar.go]` and bypassed the conflict check against
+  `internal/foo`. The per-entry validator does not reject double
+  slashes, so the conflict check must normalize them. One-line fix
+  in `splitSegments` plus 4 new test rows locking the behavior.
+
+### What 3.2 deliberately does NOT do
+
+- **`--wait` and `--isolate` flags.** The roadmap entry mentions both
+  as recovery options. Both require additional infrastructure
+  (`--wait` needs a blocking wait-on-mission-close primitive;
+  `--isolate` needs Agent isolation:worktree integration that the
+  leader has separately determined does not currently work as
+  intended). Deferred to follow-up beads.
+- **Conflict-rejected event audit.** A rejected Create attempt is
+  not logged anywhere — the rejected mission was never created and
+  has no log file, and the existing mission's log is not modified to
+  record the failed claim. 3.7's log reader API may add a
+  `create_rejected` event if the audit value justifies the
+  complexity.
+- **In-memory conflict registry.** The check loads every open mission
+  from disk on every Create. O(n) where n is the number of open
+  missions, which is small (single-operator, short-lived missions).
+  3.7's log reader could maintain an in-memory index if n grows.
+- **Mission deletion or write_set mutation.** Existing missions
+  cannot be deleted (no Delete API) and their write_set is locked
+  after creation (Update changes context but Validate enforces
+  schema invariants). The conflict check operates on a stable
+  registry.
+- **Cross-machine coordination.** Mission storage is per-machine
+  (DES-023). The conflict check covers one machine. Two operators on
+  two machines can claim the same files without seeing each other's
+  registries. This is consistent with Phase 3.1's local-only design.
+
+### Rejected Alternatives
+
+- **Conflict check as a separate API call.** `Store.CheckWriteSetConflict(c)`
+  that callers invoke before `Store.Create`. Rejected: it would create
+  a TOCTOU window between the check and the create, and any caller
+  who forgot the check would silently bypass the gate. The check
+  belongs inside `Store.Create` so there is no opt-out path.
+- **Enforcement via a hook instead of the store API.** A
+  `PreToolUse`-style hook that intercepts mission creation. Rejected:
+  hooks are best for cross-cutting concerns that touch multiple
+  callers. The store API is the single point all callers go through;
+  pushing the check up to a hook adds latency and complexity for no
+  enforcement benefit. The architecture document is explicit:
+  "Documentation is guidance, hooks and policies are enforcement" —
+  but the store API IS the enforcement layer for mission state, not
+  documentation.
+- **Filesystem semantics for path comparison.** Use `os.SameFile` or
+  `filepath.EvalSymlinks` to compare paths via inode or resolved
+  target. Rejected: write_set entries are declared paths, not
+  filesystem references. They may not exist yet (the worker is about
+  to create them). String-based segment-prefix comparison is the
+  right granularity for declared intent.
+- **Per-byte string equality** instead of segment-prefix. Rejected:
+  it would not catch directory-vs-file overlap (`internal/foo/`
+  blocking `internal/foo/bar.go`), which is the dominant case.
+- **Comma-separated paths in the error message.** `[a, b]` instead
+  of `[a b]`. Rejected: paths can contain commas (rare but legal),
+  while space-separated reads cleanly for the common case and
+  matches the spec's pinned format.
+- **Validating paths exist on disk.** Rejected: the worker may be
+  creating the file. The conflict check cares about declared
+  intent, not realized state.
+- **Skipping the directory create lock and relying on the per-mission
+  lock.** Round 1's first design draft. Rejected because the
+  per-mission lock only serializes Creates with the SAME mission ID
+  — and concurrent Creates with disjoint IDs would each get their
+  own lock and race past the conflict scan. The directory lock is
+  what closes the TOCTOU.
+- **Counter rollback on conflict.** Rejected per the rationale above:
+  rollback API would reintroduce a race that 3.1's NewID already
+  fixed.
+- **Including double-slash rejection in `validate.go` instead of
+  filtering in `splitSegments`.** Round 3 alternative. Rejected
+  because `validate.go` was on the forbidden-path list for Phase 3.2
+  (per-entry validation is unchanged) and because the conflict check
+  is the gate that needs the normalization, not the schema. A future
+  hardening pass on `validate.go` could reject double slashes
+  outright; out of scope for 3.2.
