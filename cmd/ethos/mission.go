@@ -13,15 +13,60 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// missionStore returns the default mission store rooted at
-// ~/.punt-labs/ethos. Mirrors sessionStore() — global-only, no layering.
+// missionStore returns a bare mission store rooted at
+// ~/.punt-labs/ethos. Mirrors sessionStore() — global-only, no
+// layering. Used by read-only commands (`mission show`, `list`,
+// `close`, `reflect`, `advance`, `reflections`) where the Phase 3.5
+// role-overlap check is irrelevant — it fires only at create time.
+//
+// A read-only command never needs the RoleLister, and wiring one
+// here would force every `ethos mission show` to stand up the
+// identity, role, and team stores just to print a contract. Worse,
+// a broken role fixture would print the role-overlap warning for
+// every unrelated read command.
+//
+// Create paths (CLI `mission create` and MCP `mission create`) go
+// through missionStoreForCreate instead, which wires the lister
+// and fails loudly on a misconfigured role store.
 func missionStore() *mission.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
 		os.Exit(1)
 	}
-	return mission.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	return mission.NewStore(root)
+}
+
+// missionStoreForCreate returns a mission store with the Phase 3.5
+// role-overlap RoleLister wired from the live identity, role, and
+// team stores. Used by:
+//
+//   - `runMissionCreate` — the CLI create path
+//   - `serve.go` — the MCP server shares one Store instance across
+//     every mission tool method; a `mission create` call made via
+//     MCP must see the same role-overlap gate as the CLI
+//
+// A RoleLister wiring failure is FATAL here: silently degrading
+// would let a mis-seeded role store through the gate, which is the
+// bug Phase 3.5 exists to prevent. The operator sees an actionable
+// error at the create path instead of a silently-disabled check.
+func missionStoreForCreate() *mission.Store {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
+		os.Exit(1)
+	}
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	ms := mission.NewStore(root)
+	is := identityStore()
+	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission: cannot wire role overlap check: %v\n", err)
+		os.Exit(1)
+	}
+	return ms.WithRoleLister(sources.Roles)
 }
 
 // --- mission (bare command) ---
@@ -60,9 +105,16 @@ currently-open mission's write_set; the error names the blocking
 mission(s) and the overlapping path(s).
 
 Creation also fails if the evaluator handle cannot be resolved to a
-valid identity with personality, writing style, and talent content;
-the error names the handle. Use ` + "`ethos identity list`" + ` to see
-available handles.
+valid identity with personality, writing style, talent content, and
+role assignments; the error names the handle. Use ` + "`ethos identity list`" + `
+to see available handles.
+
+Creation also fails if ` + "`worker`" + ` and ` + "`evaluator.handle`" + ` resolve to
+the same handle, or if the worker and evaluator are bound to the same
+role (after canonicalizing ` + "`team/role`" + ` to ` + "`role`" + `) — the verifier
+must not share a role with the worker. To recover, name a different
+evaluator handle, or rebind one of the two identities to a distinct
+role via ` + "`ethos team add-member`" + `.
 
 budget.rounds is now a hard cap: after round N the operator must
 submit a reflection via ` + "`ethos mission reflect`" + ` and advance via
@@ -223,8 +275,11 @@ func init() {
 // Flag-only creation was removed in round 2 — it could only produce
 // placeholder contracts, which defeats the purpose of the contract as
 // a trust boundary.
+//
+// Uses missionStoreForCreate so the Phase 3.5 role-overlap gate
+// fires; read-only subcommands use the bare missionStore.
 func runMissionCreate() {
-	ms := missionStore()
+	ms := missionStoreForCreate()
 
 	data, err := os.ReadFile(missionCreateFile)
 	if err != nil {

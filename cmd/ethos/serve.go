@@ -23,7 +23,13 @@ func runServeImpl() {
 	writingStyles := layeredAttributeStore(is, attribute.WritingStyles)
 	roles := layeredRoleStore(is)
 	teams := layeredTeamStore(is)
-	missions := missionStore()
+	// MCP shares one Store instance across every mission tool method
+	// (create, list, show, close, reflect, advance, reflections). A
+	// `mission create` call made via MCP must see the same role-
+	// overlap gate as the CLI, so wire the lister here — the read-only
+	// methods don't use it, but they still resolve against the same
+	// store.
+	missions := missionStoreForCreate()
 	mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles,
 		mcp.WithSessionStore(sessionStore()),
 		mcp.WithRoleStore(roles),

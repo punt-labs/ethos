@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -468,6 +469,178 @@ func TestShellScript_SessionStart(t *testing.T) {
 
 	// Stdout should contain the persona block JSON.
 	assert.NotEmpty(t, outBuf.String(), "stdout should contain hookSpecificOutput JSON")
+}
+
+// seedVerifierMission writes a minimal open mission contract directly
+// to the subprocess env's mission store, naming the given agent handle
+// as the evaluator. The mission has an empty pinned hash so the
+// subagent-start hook's Phase 3.3 drift gate accepts it as legacy and
+// falls through to Phase 3.5's context-isolation block path.
+//
+// The empty hash is the same trick TestSubagentStart_VerifierGateLegacyMissionAllowsSpawn
+// uses in-process: pre-3.3 contracts that predate the gate are let
+// through with a stderr warning so the upgrade path is clean, and the
+// warning is irrelevant to this test's stdout assertions.
+//
+// Returns the mission ID so the caller can assert it appears in the
+// isolation block.
+func seedVerifierMission(t *testing.T, se *subprocessEnv, evaluator string) string {
+	t.Helper()
+	missionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "missions")
+	require.NoError(t, os.MkdirAll(missionsDir, 0o700))
+
+	// Build a minimal valid Contract value and marshal it directly. The
+	// mission package's writeContract is unexported, so the test
+	// re-implements the rename-safe write and skips the create lock —
+	// this fixture path never races with a real CLI invocation.
+	missionID := "m-2026-04-08-900"
+	c := mission.Contract{
+		MissionID: missionID,
+		Status:    mission.StatusOpen,
+		CreatedAt: "2026-04-08T00:00:00Z",
+		UpdatedAt: "2026-04-08T00:00:00Z",
+		Leader:    "claude",
+		Worker:    "bwk",
+		Evaluator: mission.Evaluator{
+			Handle:   evaluator,
+			PinnedAt: "2026-04-08T00:00:00Z",
+			// Empty Hash = legacy mission, skipped by the hash gate.
+		},
+		Inputs: mission.Inputs{
+			Bead: "ethos-07m.9",
+		},
+		WriteSet: []string{
+			"internal/mission/store.go",
+			"internal/hook/subagent_start.go",
+		},
+		SuccessCriteria: []string{
+			"isolation block renders under H2",
+			"allowlist is split into repo-relative and absolute",
+		},
+		Budget: mission.Budget{
+			Rounds:              3,
+			ReflectionAfterEach: true,
+		},
+		CurrentRound: 1,
+	}
+	data, err := yaml.Marshal(&c)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(missionsDir, missionID+".yaml"), data, 0o600))
+	return missionID
+}
+
+// TestSubprocess_VerifierIsolationBlock exercises the full Phase 3.5
+// isolation path through the real ethos binary. It seeds a mission
+// naming test-agent as the evaluator, spawns subagent-start with
+// agent_type=test-agent, and asserts the JSON additionalContext
+// carries the isolation block markers and excludes the persona block
+// markers. A second spawn with agent_type set to a different handle
+// asserts the opposite: non-verifier spawns are untouched.
+//
+// The test is the end-to-end counterpart to the in-process
+// TestSubagentStart_VerifierIsolationBlockShape unit test — a wiring
+// bug that only surfaces at the binary level (bad env, bad flag
+// plumbing, missing import) would be caught here.
+func TestSubprocess_VerifierIsolationBlock(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+
+	se := setupSubprocessEnv(t)
+	sid := "test-sub-vi-001"
+
+	// Parent session is required for the subagent-start join path to
+	// have a target.
+	startPayload := fmt.Sprintf(`{"session_id":%q}`, sid)
+	_, _, startErr := runHookSubprocess(t, se, "session-start", startPayload)
+	require.NoError(t, startErr, "session-start setup failed")
+
+	// Seed a mission naming test-agent as the evaluator. The default
+	// subprocessEnv already created the test-agent identity in the
+	// global store.
+	missionID := seedVerifierMission(t, se, "test-agent")
+
+	// Spawn as the evaluator handle — the isolation block path MUST
+	// fire because an open mission names test-agent as evaluator.
+	verifierPayload := fmt.Sprintf(
+		`{"session_id":%q,"agent_id":"sub-vi-001","agent_type":"test-agent"}`, sid)
+	stdout, stderr, err := runHookSubprocess(t, se, "subagent-start", verifierPayload)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+	require.NoError(t, err, "subagent-start exited non-zero: %s", stderr)
+	require.NotEmpty(t, stdout, "verifier spawn must emit a JSON envelope")
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result))
+	assert.Equal(t, "SubagentStart", result.HookSpecificOutput.HookEventName)
+	ctx := result.HookSpecificOutput.AdditionalContext
+	require.NotEmpty(t, ctx, "verifier spawn must carry an additionalContext block")
+
+	// Isolation block markers — the Phase 3.5 round 2 header layout
+	// uses H2 for the root and H3 for sub-sections.
+	assert.Contains(t, ctx, "## Verifier context",
+		"isolation block must begin with an H2 header")
+	assert.Contains(t, ctx, missionID,
+		"isolation block must name the mission in the header")
+	assert.Contains(t, ctx, `frozen verifier "test-agent"`,
+		"isolation block must name the verifier with the handle")
+	assert.Contains(t, ctx, "### Mission contract",
+		"isolation block must include the mission contract sub-section")
+	assert.Contains(t, ctx, "### Verification criteria",
+		"isolation block must include the verification criteria sub-section")
+	assert.Contains(t, ctx, "### File allowlist",
+		"isolation block must include the file allowlist sub-section")
+	assert.Contains(t, ctx, "internal/mission/store.go",
+		"allowlist must include write_set entries")
+	assert.Contains(t, ctx, "Repo-relative paths",
+		"allowlist must label the repo-relative section")
+	assert.Contains(t, ctx, "Absolute paths",
+		"allowlist must label the absolute section")
+	assert.Contains(t, ctx, "MUST NOT read",
+		"isolation block must carry the explicit MUST NOT directive")
+
+	// Persona block markers must be absent — a verifier spawn replaces
+	// the persona/extension injection with the isolation block, not
+	// layers it on top.
+	assert.NotContains(t, ctx, "## Personality",
+		"Phase 3.5: persona block must not appear on verifier spawns")
+	assert.NotContains(t, ctx, "## Writing Style",
+		"Phase 3.5: writing-style block must not appear on verifier spawns")
+	assert.NotContains(t, ctx, "You report to",
+		"Phase 3.5: parent-reports-to line must not appear on verifier spawns")
+
+	// Flip side: a spawn whose agent_type is NOT the evaluator must
+	// fall through to the normal persona path. Seed a second identity
+	// into the global store so the normal path has content to render.
+	otherID, err := yaml.Marshal(map[string]interface{}{
+		"name":   "Worker Agent",
+		"handle": "worker-agent",
+		"kind":   "agent",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(se.home, ".punt-labs", "ethos", "identities", "worker-agent.yaml"),
+		otherID, 0o644))
+
+	nonVerifierPayload := fmt.Sprintf(
+		`{"session_id":%q,"agent_id":"sub-vi-002","agent_type":"worker-agent"}`, sid)
+	stdout2, stderr2, err := runHookSubprocess(t, se, "subagent-start", nonVerifierPayload)
+	t.Logf("non-verifier stdout: %s", stdout2)
+	t.Logf("non-verifier stderr: %s", stderr2)
+	require.NoError(t, err, "non-verifier subagent-start exited non-zero: %s", stderr2)
+
+	// The non-verifier path may return either an empty stdout (no
+	// persona content) or a persona block. In either case, the
+	// isolation-block markers MUST be absent.
+	if stdout2 != "" {
+		var result2 SubagentStartResult
+		require.NoError(t, json.Unmarshal([]byte(stdout2), &result2))
+		ctx2 := result2.HookSpecificOutput.AdditionalContext
+		assert.NotContains(t, ctx2, "## Verifier context",
+			"non-verifier spawn must not receive the isolation block")
+		assert.NotContains(t, ctx2, "### Mission contract",
+			"non-verifier spawn must not receive the contract sub-section")
+	}
 }
 
 func TestMain(m *testing.M) {

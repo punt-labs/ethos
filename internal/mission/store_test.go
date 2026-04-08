@@ -1896,3 +1896,258 @@ func TestStore_ListSkipsReflectionsFile(t *testing.T) {
 	assert.NoError(t, s.Create(&c2),
 		"Create must not choke on the sibling reflections file")
 }
+
+// --- Phase 3.5: worker-verifier role distinction ---
+
+// TestStore_CreateRejectsWorkerEqualsEvaluator asserts the weakest of
+// Phase 3.5's role invariants: a contract that names the same handle
+// for worker and evaluator is rejected with an actionable error. The
+// check does not depend on a RoleLister — it is a structural refusal
+// that fires before any store state is touched.
+func TestStore_CreateRejectsWorkerEqualsEvaluator(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-210")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "bwk"
+
+	err := s.Create(c)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "bwk")
+	assert.Contains(t, msg, "worker")
+	assert.Contains(t, msg, "evaluator")
+	assert.Contains(t, msg, "verifier must not review its own work")
+
+	// No file was written — the self-verification guard fires before
+	// the create lock is taken.
+	_, statErr := os.Stat(s.contractPath(c.MissionID))
+	assert.True(t, os.IsNotExist(statErr),
+		"rejected self-verification contract must leave no file on disk")
+}
+
+// TestStore_CreateRejectsWorkerEqualsEvaluatorWithWhitespace covers the
+// corner case where the two fields are logically equal but differ by
+// surrounding whitespace. The trim in checkSelfVerification must
+// normalize both sides before comparison.
+func TestStore_CreateRejectsWorkerEqualsEvaluatorWithWhitespace(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-211")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = " bwk "
+	// containsControlChar allows spaces; Validate trims for its own
+	// non-empty check but does not canonicalize. The self-verification
+	// guard does the canonical comparison itself.
+
+	err := s.Create(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot also be evaluator")
+}
+
+// TestStore_CreateAllowsDistinctHandles is the positive control: a
+// contract with distinct worker and evaluator handles and no configured
+// RoleLister is accepted. The self-verification guard does not
+// over-reach.
+func TestStore_CreateAllowsDistinctHandles(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-212")
+	// worker=bwk, evaluator=djb is the fixture default.
+	require.NoError(t, s.Create(c))
+}
+
+// TestStore_CreateRejectsSameTeamRoleBinding asserts Phase 3.5's
+// stronger invariant: two distinct handles bound to the exact same
+// team-scoped role (`engineering/go-specialist`) cannot verify each
+// other's work, and Store.Create refuses with an error naming both
+// handles, the shared binding, and the recovery path.
+//
+// The test wires a fake RoleLister via Store.WithRoleLister so it
+// exercises the opt-in integration contract without standing up the
+// full identity/role/team stores.
+func TestStore_CreateRejectsSameTeamRoleBinding(t *testing.T) {
+	s := testStore(t).WithRoleLister(&mapRoleLister{
+		m: map[string][]EvaluatorRole{
+			"bwk": {{Name: "engineering/go-specialist"}},
+			"mdm": {{Name: "engineering/go-specialist"}},
+		},
+	})
+	c := newContract("m-2026-04-07-220")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "mdm"
+
+	err := s.Create(c)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "bwk")
+	assert.Contains(t, msg, "mdm")
+	assert.Contains(t, msg, "engineering/go-specialist")
+	assert.Contains(t, msg, "recovery")
+
+	_, statErr := os.Stat(s.contractPath(c.MissionID))
+	assert.True(t, os.IsNotExist(statErr),
+		"rejected role-overlap contract must leave no file on disk")
+}
+
+// TestStore_CreateRejectsSameRoleSlugOnDifferentTeams covers the
+// canonicalization branch of the overlap rule. Two handles on
+// different teams but bound to the same role slug (the teams differ
+// but the role name after the slash matches) still share the same
+// responsibilities and must be refused.
+func TestStore_CreateRejectsSameRoleSlugOnDifferentTeams(t *testing.T) {
+	s := testStore(t).WithRoleLister(&mapRoleLister{
+		m: map[string][]EvaluatorRole{
+			"bwk": {{Name: "engineering/go-specialist"}},
+			"alt": {{Name: "security/go-specialist"}},
+		},
+	})
+	c := newContract("m-2026-04-07-221")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "alt"
+
+	err := s.Create(c)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "same role slug after canonicalization")
+	assert.Contains(t, msg, "engineering/go-specialist")
+	assert.Contains(t, msg, "security/go-specialist")
+}
+
+// TestStore_CreateAcceptsDistinctRoles is the canonical example from
+// the mission contract: `bwk` (engineering/go-specialist) and `djb`
+// (security/security-reviewer) share a team ideation but have
+// distinct roles. Create must succeed.
+func TestStore_CreateAcceptsDistinctRoles(t *testing.T) {
+	s := testStore(t).WithRoleLister(&mapRoleLister{
+		m: map[string][]EvaluatorRole{
+			"bwk": {{Name: "engineering/go-specialist"}},
+			"djb": {{Name: "engineering/security-reviewer"}},
+		},
+	})
+	c := newContract("m-2026-04-07-222")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "djb"
+
+	require.NoError(t, s.Create(c))
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, "bwk", loaded.Worker)
+	assert.Equal(t, "djb", loaded.Evaluator.Handle)
+}
+
+// TestStore_CreateAcceptsEvaluatorWithNoRoles covers the "evaluator on
+// no teams" branch: an identity with no role bindings cannot overlap
+// anything, so Create is accepted as long as the worker != evaluator
+// guard passes.
+func TestStore_CreateAcceptsEvaluatorWithNoRoles(t *testing.T) {
+	s := testStore(t).WithRoleLister(&mapRoleLister{
+		m: map[string][]EvaluatorRole{
+			"bwk": {{Name: "engineering/go-specialist"}},
+			"djb": nil, // no role bindings
+		},
+	})
+	c := newContract("m-2026-04-07-223")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "djb"
+	require.NoError(t, s.Create(c))
+}
+
+// TestStore_CreateWithoutRoleListerSkipsOverlapCheck asserts the
+// backward-compatibility invariant: a bare Store (no RoleLister wired)
+// runs only the worker!=evaluator guard and lets role-coincident
+// handles through. This is the pre-3.5 fixture test pattern used by
+// every existing store test, and this test is the regression guard
+// that ensures the old path keeps compiling and running.
+func TestStore_CreateWithoutRoleListerSkipsOverlapCheck(t *testing.T) {
+	// Deliberately no WithRoleLister — even though bwk and mdm
+	// would share a role binding if the lister were wired, the
+	// bare store accepts the contract.
+	s := testStore(t)
+	c := newContract("m-2026-04-07-224")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "mdm"
+	require.NoError(t, s.Create(c))
+}
+
+// TestStore_CreateReportsMultipleOverlappingBindings asserts that when
+// worker and evaluator share more than one role (both team/role and
+// a canonicalized slug on another team), the error names every
+// offending binding — one line per overlap. Operators need the full
+// picture to plan their recovery.
+func TestStore_CreateReportsMultipleOverlappingBindings(t *testing.T) {
+	s := testStore(t).WithRoleLister(&mapRoleLister{
+		m: map[string][]EvaluatorRole{
+			"bwk": {
+				{Name: "engineering/go-specialist"},
+				{Name: "infra/reviewer"},
+			},
+			"mdm": {
+				{Name: "engineering/go-specialist"}, // exact binding match
+				{Name: "security/reviewer"},         // canonical slug match
+			},
+		},
+	})
+	c := newContract("m-2026-04-07-225")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "mdm"
+
+	err := s.Create(c)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "engineering/go-specialist")
+	assert.Contains(t, msg, "infra/reviewer")
+	assert.Contains(t, msg, "security/reviewer")
+	assert.Contains(t, msg, "2 overlapping role assignment",
+		"error must count the overlaps")
+}
+
+// TestStore_CreateRoleOverlapCheckIsCreateOnly asserts invariant 8 from
+// the mission contract: the overlap check applies only at create
+// time. A pre-3.5 mission on disk with a role-coincident pair keeps
+// loading cleanly — the gate is not retroactive.
+//
+// We simulate "pre-3.5 on disk" by creating the contract via a bare
+// store (no lister) and then reading it back from a lister-wired
+// store. The read path must not re-run the overlap check.
+func TestStore_CreateRoleOverlapCheckIsCreateOnly(t *testing.T) {
+	root := t.TempDir()
+	bare := NewStore(root)
+	c := newContract("m-2026-04-07-226")
+	c.Worker = "bwk"
+	c.Evaluator.Handle = "mdm"
+	require.NoError(t, bare.Create(c),
+		"bare store must accept the pre-3.5 contract")
+
+	wired := NewStore(root).WithRoleLister(&mapRoleLister{
+		m: map[string][]EvaluatorRole{
+			"bwk": {{Name: "engineering/go-specialist"}},
+			"mdm": {{Name: "engineering/go-specialist"}},
+		},
+	})
+	loaded, err := wired.Load(c.MissionID)
+	require.NoError(t, err,
+		"Load must not retroactively apply the overlap check")
+	assert.Equal(t, "bwk", loaded.Worker)
+	assert.Equal(t, "mdm", loaded.Evaluator.Handle)
+}
+
+// TestCanonicalRoleSlug exercises the role-slug canonicalization
+// helper directly. The rule is "strip everything up to and including
+// the last slash"; names with no slash pass through; empty and
+// whitespace-only inputs yield "".
+func TestCanonicalRoleSlug(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"engineering/go-specialist", "go-specialist"},
+		{"security/go-specialist", "go-specialist"},
+		{"bare-role", "bare-role"},
+		{"engineering/subgroup/go-specialist", "go-specialist"},
+		{"", ""},
+		{"  ", ""},
+		{"engineering/", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			assert.Equal(t, tc.want, canonicalRoleSlug(tc.in))
+		})
+	}
+}

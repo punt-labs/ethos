@@ -758,3 +758,202 @@ budget:
 	assert.Contains(t, stderr, "worker: bwk")
 	assert.Contains(t, stderr, "internal/foo/bar.go")
 }
+
+// seedRoleOverlapFixture writes a fully-populated identity fixture
+// under HOME/.punt-labs/ethos that ties two agents to the same team
+// and the same role, so the Phase 3.5 role-overlap gate has something
+// to refuse when the CLI create path wires its RoleLister via
+// NewLiveHashSources.
+//
+// Deliberately writes YAML by hand instead of going through the
+// package CRUD APIs — the test is exercising the CLI's live-store
+// wiring, and the fixture layout must match what the layered stores
+// read at runtime.
+//
+// The shared role is `go-specialist`; the shared team is `engineering`.
+// Both agents (`bwk` and `mdm`) are members of engineering bound to
+// go-specialist. Both agents also have the full personality/writing
+// style/talent content the frozen-evaluator hash needs — otherwise
+// the MCP and CLI create paths would fail on the hash step before
+// ever reaching the overlap gate.
+func seedRoleOverlapFixture(t *testing.T, home string) {
+	t.Helper()
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	// Start from the same base the happy-path create tests use.
+	seedEvaluator(t, root)
+
+	// Add personality, writing style, and talent for the second agent
+	// so its identity resolves cleanly. Content is deliberately
+	// different from djb's so a future hash assertion could
+	// distinguish them, though this test only cares that both
+	// identities load without warnings.
+	require.NoError(t, attribute.NewStore(root, attribute.Personalities).Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nMethodical systems programmer.\n",
+	}))
+	require.NoError(t, attribute.NewStore(root, attribute.WritingStyles).Save(&attribute.Attribute{
+		Slug:    "kernighan-prose",
+		Content: "# Kernighan Prose\n\nShort declarative sentences.\n",
+	}))
+	require.NoError(t, attribute.NewStore(root, attribute.Talents).Save(&attribute.Attribute{
+		Slug:    "go-systems",
+		Content: "# Go Systems\n",
+	}))
+	require.NoError(t, identity.NewStore(root).Save(&identity.Identity{
+		Name:         "Brian K",
+		Handle:       "bwk",
+		Kind:         "agent",
+		Personality:  "kernighan",
+		WritingStyle: "kernighan-prose",
+		Talents:      []string{"go-systems"},
+	}))
+
+	// Write the role file directly. Roles live under root/roles/<slug>.yaml;
+	// a bare Save on the global store is the simplest path. The role
+	// content does not matter for the overlap gate — only the name does —
+	// but a minimal set of responsibilities keeps role.Validate happy.
+	rolesDir := filepath.Join(root, "roles")
+	require.NoError(t, os.MkdirAll(rolesDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(rolesDir, "go-specialist.yaml"),
+		[]byte("name: go-specialist\nresponsibilities:\n  - Go implementation\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(rolesDir, "security-reviewer.yaml"),
+		[]byte("name: security-reviewer\nresponsibilities:\n  - Security review\n"),
+		0o600,
+	))
+
+	// Write the team file directly. Both bwk and mdm start bound to
+	// go-specialist; the second phase of the test rebinds djb to
+	// security-reviewer so the overlap check passes.
+	//
+	// Note: seedEvaluator already created djb with its own attribute
+	// content; we just add it as a team member so the live store
+	// walking picks it up.
+	teamsDir := filepath.Join(root, "teams")
+	require.NoError(t, os.MkdirAll(teamsDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(teamsDir, "engineering.yaml"),
+		[]byte(`name: engineering
+members:
+  - identity: bwk
+    role: go-specialist
+  - identity: djb
+    role: go-specialist
+`),
+		0o600,
+	))
+}
+
+// rewriteTeamWithDistinctRoles mutates the fixture so djb is bound
+// to security-reviewer instead of go-specialist. Used between the
+// two halves of TestMissionCreate_RoleOverlapThroughLiveStoresSubprocess
+// to show the recovery path is exactly "rebind one side to a distinct
+// role and try again."
+func rewriteTeamWithDistinctRoles(t *testing.T, home string) {
+	t.Helper()
+	teamFile := filepath.Join(home, ".punt-labs", "ethos", "teams", "engineering.yaml")
+	require.NoError(t, os.WriteFile(teamFile, []byte(`name: engineering
+members:
+  - identity: bwk
+    role: go-specialist
+  - identity: djb
+    role: security-reviewer
+`), 0o600))
+}
+
+// TestMissionCreate_RoleOverlapThroughLiveStoresSubprocess exercises
+// the Phase 3.5 role-overlap gate through the real CLI wiring: from
+// `ethos mission create` down through identityStore → layeredRoleStore
+// → layeredTeamStore → NewLiveHashSources → WithRoleLister → Store.Create.
+// A unit test that fakes the RoleLister cannot catch a wiring bug in
+// that chain; this subprocess test is the only gate.
+//
+// Two spawns in one test:
+//  1. worker=bwk, evaluator=djb, both bound to engineering/go-specialist.
+//     Must exit 1 with the role-overlap error naming both handles, the
+//     shared binding, and the recovery hint.
+//  2. After rewriting the team file so djb is bound to
+//     engineering/security-reviewer, the same contract must succeed —
+//     the "rebind one side to a distinct role" recovery path is
+//     executable in-process.
+func TestMissionCreate_RoleOverlapThroughLiveStoresSubprocess(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedRoleOverlapFixture(t, home)
+
+	// The ethos repo's own .punt-labs/ethos/ submodule already defines
+	// bwk and djb with DISTINCT roles (engineering/go-specialist and
+	// engineering/security-engineer). Running the binary inside the
+	// repo would pick up the repo-local identity store via
+	// FindRepoEthosRoot, overriding the test fixture and defeating the
+	// overlap assertion. Give the child a CWD with its own bare .git
+	// so FindRepoRoot stops outside the ethos repo.
+	repo := t.TempDir()
+	gitInit := exec.Command("git", "init", repo)
+	gitInit.Env = append(os.Environ(),
+		"HOME="+home,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	out, err := gitInit.CombinedOutput()
+	require.NoError(t, err, "git init failed: %s", out)
+
+	contract := filepath.Join(repo, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.9
+write_set:
+  - internal/mission/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	// Phase 1: both agents share engineering/go-specialist; create
+	// must fail with the overlap error.
+	cmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	cmd.Env = env
+	cmd.Dir = repo
+	var outA, errA bytes.Buffer
+	cmd.Stdout = &outA
+	cmd.Stderr = &errA
+	err = cmd.Run()
+	require.Error(t, err, "role-overlapping create must fail")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError, got %T: %v", err, err)
+	assert.Equal(t, 1, exitErr.ExitCode(), "exit code must be 1")
+
+	stderr := errA.String()
+	assert.Contains(t, stderr, "ethos: mission create:")
+	assert.Contains(t, stderr, "bwk")
+	assert.Contains(t, stderr, "djb")
+	assert.Contains(t, stderr, "engineering/go-specialist")
+	assert.Contains(t, stderr, "recovery")
+
+	// Phase 2: rebind djb to a distinct role; the same contract must
+	// now succeed. This is the recovery path the error message
+	// surfaces, executed verbatim.
+	rewriteTeamWithDistinctRoles(t, home)
+
+	cmd = exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	cmd.Env = env
+	cmd.Dir = repo
+	var outB, errB bytes.Buffer
+	cmd.Stdout = &outB
+	cmd.Stderr = &errB
+	require.NoError(t, cmd.Run(),
+		"after rebinding djb to security-reviewer, create must succeed: %s",
+		errB.String())
+}
