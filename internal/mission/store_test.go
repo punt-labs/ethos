@@ -955,3 +955,34 @@ func TestStore_CreateConcurrentConflictSerialization(t *testing.T) {
 			"failure must be the conflict error, not a lock error")
 	}
 }
+
+// TestStore_CreateRejectsDotSegmentBypass asserts that dot-segment
+// path syntax (legitimate per the per-entry validator's
+// TestValidate_AcceptsSingleDotSegment) cannot bypass the cross-
+// mission write_set conflict check. This regression test exists
+// because round 3's empty-segment filter missed the dot-segment
+// variant; djb's frozen-evaluator review caught the gap.
+func TestStore_CreateRejectsDotSegmentBypass(t *testing.T) {
+	s := testStore(t)
+
+	a := withWriteSet("m-2026-04-08-001", "internal/mission/store.go")
+	require.NoError(t, s.Create(a))
+
+	// Each variant must conflict with A.
+	cases := []string{
+		"./internal/mission/store.go",
+		"internal/./mission/store.go",
+		"internal/mission/./store.go",
+		"./internal/./mission/store.go",
+	}
+	for i, ws := range cases {
+		t.Run(ws, func(t *testing.T) {
+			id := fmt.Sprintf("m-2026-04-08-%03d", i+2)
+			b := withWriteSet(id, ws)
+			err := s.Create(b)
+			require.Error(t, err, "dot-segment variant must be rejected: %q", ws)
+			assert.Contains(t, err.Error(), "write_set conflict")
+			assert.Contains(t, err.Error(), a.MissionID)
+		})
+	}
+}

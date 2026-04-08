@@ -151,6 +151,54 @@ func TestPathsOverlap(t *testing.T) {
 			b:    "internal/foo",
 			want: true,
 		},
+		{
+			name: "leading dot segment equivalent",
+			a:    "./internal/foo",
+			b:    "internal/foo",
+			want: true,
+		},
+		{
+			name: "interior dot segment equivalent",
+			a:    "internal/./foo",
+			b:    "internal/foo",
+			want: true,
+		},
+		{
+			name: "trailing dot segment equivalent",
+			a:    "internal/foo/.",
+			b:    "internal/foo",
+			want: true,
+		},
+		{
+			name: "multiple dot segments collapse",
+			a:    "./internal/./foo/./bar",
+			b:    "internal/foo/bar",
+			want: true,
+		},
+		{
+			name: "lone dot collapses to nil",
+			a:    ".",
+			b:    "internal/foo",
+			want: false,
+		},
+		{
+			name: "dot-only path collapses to nil",
+			a:    "./",
+			b:    "internal/foo",
+			want: false,
+		},
+		{
+			name: "dot segment forward prefix",
+			a:    "./internal/foo",
+			b:    "internal/foo/bar.go",
+			want: true,
+		},
+		{
+			name: "dot mixed with double slash",
+			a:    "internal/.//foo",
+			b:    "internal/foo",
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

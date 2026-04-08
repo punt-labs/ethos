@@ -121,15 +121,28 @@ func pathsOverlap(a, b string) bool {
 //     produce the same segment list
 //   - drop empty segments produced by doubled slashes, so
 //     `internal//foo` and `internal/foo` compare equal
+//   - drop `.` segments so `./internal/foo`, `internal/./foo`, and
+//     `internal/foo` compare equal
 //
-// The per-entry validator does not reject double slashes, so the
-// conflict check must normalize them here — otherwise an empty middle
-// segment breaks the prefix comparison and two logically overlapping
-// missions can coexist.
+// The per-entry validator (see validate.go and
+// TestValidate_AcceptsSingleDotSegment) deliberately accepts `.` as
+// legitimate path syntax: it is a shell convention for "current
+// directory" and is not a traversal segment — only `..` escapes the
+// base. DES-031 recorded "Single-dot (`.`) segment rejection in
+// write_set" as a rejected alternative. The conflict check therefore
+// must normalize `.` segments away here, otherwise two logically
+// overlapping missions (e.g. `./internal/foo` vs `internal/foo`) fall
+// on opposite sides of the segment-prefix comparison and both are
+// admitted — the exact silent-conflict scenario Phase 3.2 exists to
+// prevent.
 //
-// An empty or whitespace-only input — or an input like `///` that
-// collapses to nothing after filtering — produces a nil segment list,
-// which signals "matches nothing" to pathsOverlap.
+// Likewise, the per-entry validator does not reject double slashes,
+// so the conflict check must normalize empty middle segments here for
+// the same reason.
+//
+// An empty or whitespace-only input — or an input like `///` or `./.`
+// that collapses to nothing after filtering — produces a nil segment
+// list, which signals "matches nothing" to pathsOverlap.
 func splitSegments(p string) []string {
 	p = strings.TrimSpace(p)
 	if p == "" {
@@ -143,7 +156,7 @@ func splitSegments(p string) []string {
 	raw := strings.Split(p, "/")
 	segs := raw[:0]
 	for _, s := range raw {
-		if s == "" {
+		if s == "" || s == "." {
 			continue
 		}
 		segs = append(segs, s)
