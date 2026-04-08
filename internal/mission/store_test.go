@@ -28,6 +28,21 @@ func newContract(missionID string) *Contract {
 	return &c
 }
 
+// disjointContract returns a fresh, valid contract whose write_set is
+// unique to the given mission ID. Tests that create more than one
+// mission in the same store must use this so the cross-mission
+// write_set conflict check (Phase 3.2) does not collapse them.
+//
+// The write_set namespace `tests/<missionID>/` is deliberately fake —
+// it never collides with real source paths and is trivially distinct
+// per ID.
+func disjointContract(missionID string) *Contract {
+	c := validContract()
+	c.MissionID = missionID
+	c.WriteSet = []string{"tests/" + missionID + "/"}
+	return &c
+}
+
 func TestStore_RoundTrip(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-001")
@@ -578,8 +593,8 @@ func TestStore_List(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, ids)
 
-	require.NoError(t, s.Create(newContract("m-2026-04-07-001")))
-	require.NoError(t, s.Create(newContract("m-2026-04-07-002")))
+	require.NoError(t, s.Create(disjointContract("m-2026-04-07-001")))
+	require.NoError(t, s.Create(disjointContract("m-2026-04-07-002")))
 
 	ids, err = s.List()
 	require.NoError(t, err)
@@ -614,9 +629,9 @@ func TestStore_ListNoDirectory(t *testing.T) {
 
 func TestStore_MatchByPrefix(t *testing.T) {
 	s := testStore(t)
-	require.NoError(t, s.Create(newContract("m-2026-04-07-001")))
-	require.NoError(t, s.Create(newContract("m-2026-04-07-002")))
-	require.NoError(t, s.Create(newContract("m-2026-04-08-001")))
+	require.NoError(t, s.Create(disjointContract("m-2026-04-07-001")))
+	require.NoError(t, s.Create(disjointContract("m-2026-04-07-002")))
+	require.NoError(t, s.Create(disjointContract("m-2026-04-08-001")))
 
 	tests := []struct {
 		name    string
@@ -670,8 +685,11 @@ func TestStore_FilePermissions(t *testing.T) {
 }
 
 func TestStore_ConcurrentCreate(t *testing.T) {
-	// Each goroutine creates a distinct mission ID. The test asserts the
-	// store does not corrupt state under concurrent flock acquisition.
+	// Each goroutine creates a distinct mission ID with a disjoint
+	// write_set. The test asserts the store does not corrupt state
+	// under concurrent flock acquisition. Phase 3.2's create-lock
+	// serializes the conflict scan so each goroutine sees a stable
+	// view of the registry.
 	s := testStore(t)
 	const n = 20
 
@@ -683,7 +701,7 @@ func TestStore_ConcurrentCreate(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			id := fmt.Sprintf("m-2026-04-07-%03d", i+1)
-			c := newContract(id)
+			c := disjointContract(id)
 			if err := s.Create(c); err != nil {
 				errs <- err
 			}
@@ -735,4 +753,236 @@ func TestStore_ConcurrentUpdateSameMission(t *testing.T) {
 	loaded, err := s.Load("m-2026-04-07-001")
 	require.NoError(t, err)
 	assert.NotEmpty(t, loaded.Context)
+}
+
+// withWriteSet returns a fresh valid contract with the given mission
+// ID and write_set. Used by the cross-mission conflict integration
+// tests below.
+func withWriteSet(missionID string, writeSet ...string) *Contract {
+	c := validContract()
+	c.MissionID = missionID
+	c.WriteSet = writeSet
+	return &c
+}
+
+// TestStore_CreateRejectsCrossMissionConflict asserts the Phase 3.2
+// admission control: a Create whose write_set overlaps an existing
+// open mission's write_set must fail, and the failure must leave no
+// trace on disk for the rejected mission.
+func TestStore_CreateRejectsCrossMissionConflict(t *testing.T) {
+	s := testStore(t)
+
+	a := withWriteSet("m-2026-04-08-001", "internal/foo/")
+	require.NoError(t, s.Create(a))
+
+	// Snapshot mission A on disk so we can prove a rejected create
+	// does not perturb existing missions.
+	aPath := s.contractPath(a.MissionID)
+	aBytesBefore, err := os.ReadFile(aPath)
+	require.NoError(t, err)
+	aLogPath := s.logPath(a.MissionID)
+	aLogBefore, err := os.ReadFile(aLogPath)
+	require.NoError(t, err)
+
+	b := withWriteSet("m-2026-04-08-002", "internal/foo/bar.go")
+	err = s.Create(b)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "write_set conflict")
+	assert.Contains(t, err.Error(), a.MissionID)
+	assert.Contains(t, err.Error(), "worker: bwk")
+	assert.Contains(t, err.Error(), "internal/foo/bar.go")
+
+	// No on-disk traces for the rejected mission B.
+	_, statErr := os.Stat(s.contractPath(b.MissionID))
+	assert.True(t, os.IsNotExist(statErr), "B's contract file must not exist")
+	_, statErr = os.Stat(s.logPath(b.MissionID))
+	assert.True(t, os.IsNotExist(statErr), "B's log file must not exist")
+
+	// Mission A's contract and log are byte-identical to before the
+	// rejected create.
+	aBytesAfter, err := os.ReadFile(aPath)
+	require.NoError(t, err)
+	assert.Equal(t, aBytesBefore, aBytesAfter, "mission A's contract must be unchanged")
+	aLogAfter, err := os.ReadFile(aLogPath)
+	require.NoError(t, err)
+	assert.Equal(t, aLogBefore, aLogAfter, "mission A's log must be unchanged")
+}
+
+// TestStore_CreateAllowsConflictAfterClose asserts that closed,
+// failed, and escalated missions are out of the conflict registry —
+// only StatusOpen blocks a new create.
+func TestStore_CreateAllowsConflictAfterClose(t *testing.T) {
+	cases := []string{StatusClosed, StatusFailed, StatusEscalated}
+	for _, terminal := range cases {
+		t.Run(terminal, func(t *testing.T) {
+			s := testStore(t)
+
+			a := withWriteSet("m-2026-04-08-001", "internal/foo/")
+			require.NoError(t, s.Create(a))
+			require.NoError(t, s.Close(a.MissionID, terminal))
+
+			// Overlapping create must succeed: A is no longer active.
+			b := withWriteSet("m-2026-04-08-002", "internal/foo/bar.go")
+			require.NoError(t, s.Create(b))
+
+			loaded, err := s.Load(b.MissionID)
+			require.NoError(t, err)
+			assert.Equal(t, StatusOpen, loaded.Status)
+		})
+	}
+}
+
+// TestStore_CreateAllowsDisjointWriteSets asserts that two open
+// missions with non-overlapping write_sets coexist without error.
+// This is the happy path: the conflict check must not be a blanket
+// "one mission at a time" gate.
+func TestStore_CreateAllowsDisjointWriteSets(t *testing.T) {
+	s := testStore(t)
+
+	a := withWriteSet("m-2026-04-08-001", "internal/foo/")
+	require.NoError(t, s.Create(a))
+
+	b := withWriteSet("m-2026-04-08-002", "cmd/ethos/")
+	require.NoError(t, s.Create(b))
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Len(t, ids, 2)
+}
+
+// TestStore_CreateMultiConflictReportsAllBlockers asserts that a new
+// mission overlapping two existing open missions surfaces both
+// blockers in the error message — one line per blocker.
+func TestStore_CreateMultiConflictReportsAllBlockers(t *testing.T) {
+	s := testStore(t)
+
+	a := withWriteSet("m-2026-04-08-001", "internal/foo/")
+	require.NoError(t, s.Create(a))
+
+	b := withWriteSet("m-2026-04-08-002", "cmd/ethos/")
+	require.NoError(t, s.Create(b))
+
+	c := withWriteSet("m-2026-04-08-003",
+		"internal/foo/bar.go",
+		"cmd/ethos/serve.go",
+	)
+	err := s.Create(c)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, a.MissionID)
+	assert.Contains(t, msg, b.MissionID)
+	assert.Contains(t, msg, "internal/foo/bar.go")
+	assert.Contains(t, msg, "cmd/ethos/serve.go")
+
+	// Multi-conflict errors are one line per blocker.
+	lines := strings.Split(msg, "\n")
+	assert.Len(t, lines, 2, "expected one line per blocking mission")
+}
+
+// TestStore_CreateConflictLeavesNoArtifacts asserts the rollback
+// criterion: a conflict-rejected create must leave no partial state
+// (no <id>.yaml, no <id>.jsonl, no .tmp leftovers) for the rejected
+// mission. Empty lock files are acceptable — they are stable, named
+// after the mission ID, and used to serialize concurrent attempts.
+func TestStore_CreateConflictLeavesNoArtifacts(t *testing.T) {
+	s := testStore(t)
+
+	a := withWriteSet("m-2026-04-08-001", "internal/foo/")
+	require.NoError(t, s.Create(a))
+
+	b := withWriteSet("m-2026-04-08-002", "internal/foo/bar.go")
+	err := s.Create(b)
+	require.Error(t, err)
+
+	// No contract or log file for the rejected mission.
+	_, statErr := os.Stat(s.contractPath(b.MissionID))
+	assert.True(t, os.IsNotExist(statErr), "rejected mission must have no contract file")
+	_, statErr = os.Stat(s.logPath(b.MissionID))
+	assert.True(t, os.IsNotExist(statErr), "rejected mission must have no log file")
+
+	// No .tmp leftovers anywhere in the missions directory.
+	entries, err := os.ReadDir(s.missionsDir())
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.False(t, strings.HasSuffix(e.Name(), ".tmp"),
+			"unexpected .tmp leftover after rejected create: %s", e.Name())
+	}
+}
+
+// TestStore_CreateConcurrentConflictSerialization asserts the
+// directory-level create lock: 10 goroutines try to claim the same
+// write_set with disjoint mission IDs; exactly one succeeds and the
+// other 9 see a conflict error. Without the create lock all 10 would
+// race past their conflict scan and corrupt each other.
+func TestStore_CreateConcurrentConflictSerialization(t *testing.T) {
+	s := testStore(t)
+	const n = 10
+
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	successes := make(chan string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		i := i
+		go func() {
+			defer wg.Done()
+			id := fmt.Sprintf("m-2026-04-08-%03d", i+1)
+			// Same write_set on every goroutine — only one can win.
+			c := withWriteSet(id, "internal/contended/")
+			if err := s.Create(c); err != nil {
+				errs <- err
+				return
+			}
+			successes <- id
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	close(successes)
+
+	var winners []string
+	for id := range successes {
+		winners = append(winners, id)
+	}
+	var failures []error
+	for err := range errs {
+		failures = append(failures, err)
+	}
+	assert.Len(t, winners, 1, "exactly one concurrent Create must succeed")
+	assert.Len(t, failures, n-1, "all other concurrent Creates must fail")
+	for _, err := range failures {
+		assert.Contains(t, err.Error(), "write_set conflict",
+			"failure must be the conflict error, not a lock error")
+	}
+}
+
+// TestStore_CreateRejectsDotSegmentBypass asserts that dot-segment
+// path syntax (legitimate per the per-entry validator's
+// TestValidate_AcceptsSingleDotSegment) cannot bypass the cross-
+// mission write_set conflict check. This regression test exists
+// because round 3's empty-segment filter missed the dot-segment
+// variant; djb's frozen-evaluator review caught the gap.
+func TestStore_CreateRejectsDotSegmentBypass(t *testing.T) {
+	s := testStore(t)
+
+	a := withWriteSet("m-2026-04-08-001", "internal/mission/store.go")
+	require.NoError(t, s.Create(a))
+
+	// Each variant must conflict with A.
+	cases := []string{
+		"./internal/mission/store.go",
+		"internal/./mission/store.go",
+		"internal/mission/./store.go",
+		"./internal/./mission/store.go",
+	}
+	for i, ws := range cases {
+		t.Run(ws, func(t *testing.T) {
+			id := fmt.Sprintf("m-2026-04-08-%03d", i+2)
+			b := withWriteSet(id, ws)
+			err := s.Create(b)
+			require.Error(t, err, "dot-segment variant must be rejected: %q", ws)
+			assert.Contains(t, err.Error(), "write_set conflict")
+			assert.Contains(t, err.Error(), a.MissionID)
+		})
+	}
 }

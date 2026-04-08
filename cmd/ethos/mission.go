@@ -52,7 +52,11 @@ overwritten regardless of what the file supplies.
 
 Unknown fields are rejected (KnownFields strict decode), and
 multi-document YAML or trailing content after the first document is
-also rejected. Validation runs before the contract is persisted.`,
+also rejected. Validation runs before the contract is persisted.
+
+Creation also fails if the new contract's write_set overlaps any
+currently-open mission's write_set; the error names the blocking
+mission(s) and the overlapping path(s).`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
