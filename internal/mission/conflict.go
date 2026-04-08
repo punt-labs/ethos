@@ -3,6 +3,7 @@
 package mission
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -153,5 +154,5 @@ func formatConflictError(conflicts []Conflict) error {
 			c.MissionID, c.Worker, strings.Join(c.Paths, " "),
 		)
 	}
-	return fmt.Errorf("%s", strings.Join(lines, "\n"))
+	return errors.New(strings.Join(lines, "\n"))
 }

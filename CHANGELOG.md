@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Creates with disjoint mission IDs cannot both pass the scan and
   both write. The error names every blocking mission by ID, worker,
   and overlapping path — one line per blocker. CLI exit code is 1;
-  MCP returns a structured tool error.
+  MCP returns a structured tool error. To unblock, close the named
+  mission or re-scope the new contract's write_set to disjoint paths.
 - `mission` subcommand for creating, listing, and closing mission
   contracts — the typed delegation artifact that is the foundation
   of Phase 3 workflow primitives (`ethos-07m.5`). Creation is

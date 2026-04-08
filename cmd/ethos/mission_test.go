@@ -462,5 +462,6 @@ budget:
 	assert.Contains(t, stderr, "ethos: mission create:")
 	assert.Contains(t, stderr, "write_set conflict with mission")
 	assert.Contains(t, stderr, createdID)
+	assert.Contains(t, stderr, "worker: bwk")
 	assert.Contains(t, stderr, "internal/foo/bar.go")
 }
