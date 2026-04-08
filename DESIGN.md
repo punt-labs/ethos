@@ -3227,9 +3227,12 @@ not being referenced in the block at all.
 **Status**: Settled. Implemented 2026-04-08 as `ethos-07m.10` — the
 Phase 3.6 primitive that turns worker output from prose into a
 typed artifact and gates terminal mission transitions on its
-presence. Six worker rounds (1 implementation, 4 review-fix, 1
-late-stage Bugbot fix), four local review cycles, fourteen reviewer
-agent invocations across the cycle. Local reviewers: `djb` (frozen
+presence. Six worker rounds total: 1 implementation (round 1), 3
+local-review-fix rounds (rounds 2, 3, 4 — driven by 4-reviewer
+local cycles after rounds 1, 2, and 3), and 2 PR-side-fix rounds
+(round 5 for Copilot, round 6 for Bugbot). Fourteen reviewer agent
+invocations across the four local review cycles. Local reviewers:
+`djb` (frozen
 evaluator — 0.92, 0.95, 0.98 across the three rounds he reviewed),
 `mdm` (CLI specialist — caught the dead-code nil-slice guard, the
 hand-rolled-payload data loss, the missing `mission close --help`
