@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -35,7 +36,8 @@ var ErrEvaluatorNotFound = errors.New("evaluator not found")
 // contracts are not git-tracked and not layered. Phase 3.2+ may revisit if
 // repo-scoped missions become necessary.
 type Store struct {
-	root string // e.g. ~/.punt-labs/ethos
+	root  string     // e.g. ~/.punt-labs/ethos
+	roles RoleLister // optional; wires the Phase 3.5 role-overlap check
 }
 
 // NewStore creates a Store rooted at the given directory.
@@ -43,8 +45,40 @@ func NewStore(root string) *Store {
 	return &Store{root: root}
 }
 
+// WithRoleLister wires a RoleLister for the Phase 3.5 role-overlap
+// check. When set, Store.Create refuses a contract whose worker and
+// evaluator share a team-scoped role binding or a role slug after
+// canonicalization — see checkRoleOverlap.
+//
+// The method is opt-in so existing unit tests that build a bare Store
+// keep working; CLI and MCP construction wires the lister via the
+// live identity, role, and team stores. A nil lister disables the
+// check entirely (the worker != evaluator handle guard in
+// checkRoleConflicts still runs).
+//
+// Returns the receiver so construction stays compact:
+//
+//	ms := mission.NewStore(root).WithRoleLister(rl)
+func (s *Store) WithRoleLister(r RoleLister) *Store {
+	s.roles = r
+	return s
+}
+
 // Root returns the store's root directory.
 func (s *Store) Root() string { return s.root }
+
+// ContractPath returns the absolute path to a mission contract file
+// on disk. Exposed so the Phase 3.5 verifier context-isolation path
+// can read the contract byte-for-byte before injecting it into the
+// verifier subagent — the invariant is "the contract the verifier
+// sees is the contract pinned on disk, no re-serialization allowed".
+//
+// Mission ID is run through filepath.Base as defense in depth, the
+// same way contractPath does internally. A caller passing a relative
+// or traversal-laced ID will only ever get a path under missionsDir.
+func (s *Store) ContractPath(missionID string) string {
+	return s.contractPath(missionID)
+}
 
 // ApplyServerFields sets all server-controlled fields on a contract at
 // create time. Both the CLI (`ethos mission create --file`) and the
@@ -198,6 +232,18 @@ func (s *Store) Create(c *Contract) error {
 		return fmt.Errorf("invalid contract: %w", err)
 	}
 
+	// Phase 3.5: worker-verifier role distinction.
+	//
+	// The worker != evaluator handle guard is a cheap structural
+	// check that runs before any lock is taken — a contract that
+	// names the same handle for both slots can never be repaired,
+	// and the caller deserves a fast error. The role-overlap check
+	// runs inside the create lock so it sees the same store state
+	// as checkWriteSetConflicts.
+	if err := checkSelfVerification(&staged); err != nil {
+		return err
+	}
+
 	err := s.withCreateLock(func() error {
 		return s.withLock(staged.MissionID, func() error {
 			dest := s.contractPath(staged.MissionID)
@@ -216,6 +262,15 @@ func (s *Store) Create(c *Contract) error {
 			// the create lock is released.
 			if err := s.checkWriteSetConflicts(&staged); err != nil {
 				return err
+			}
+			// Phase 3.5: role-overlap check. Runs only when a RoleLister
+			// is wired via WithRoleLister — tests that build a bare
+			// Store skip the check. CLI and MCP construction always
+			// wires the lister so production callers cannot opt out.
+			if s.roles != nil {
+				if err := checkRoleOverlap(s.roles, &staged); err != nil {
+					return err
+				}
 			}
 			if err := s.writeContract(&staged); err != nil {
 				return err
@@ -958,6 +1013,169 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 		return 0, err
 	}
 	return newRound, nil
+}
+
+// checkSelfVerification refuses a contract that names the same handle
+// as both worker and evaluator. This is Phase 3.5's weakest role
+// invariant — a pure field comparison, no lookups — and runs before
+// any lock is taken so the caller sees a fast failure.
+//
+// The caller can always rename one side; the error names both slots
+// so the fix is obvious.
+func checkSelfVerification(c *Contract) error {
+	worker := strings.TrimSpace(c.Worker)
+	evaluator := strings.TrimSpace(c.Evaluator.Handle)
+	if worker == "" || evaluator == "" {
+		// Empty fields are a Validate concern, not a role concern.
+		return nil
+	}
+	if worker == evaluator {
+		return fmt.Errorf(
+			"mission %q: worker %q cannot also be evaluator; assign a distinct reviewer (the verifier must not review its own work)",
+			c.MissionID, worker,
+		)
+	}
+	return nil
+}
+
+// checkRoleOverlap refuses a contract whose worker and evaluator share
+// a team-scoped role binding OR a role slug after canonicalization.
+//
+// The invariant is Phase 3.5's load-bearing distinction: roles are
+// interfaces, and two identities bound to the same role on the same
+// team have identical responsibilities — they cannot verify each
+// other's work any more meaningfully than one identity can verify
+// itself.
+//
+// Canonicalization rules (see canonicalRoleSlug):
+//   - `engineering/go-specialist` and `engineering/go-specialist`
+//     overlap (same team-scoped binding).
+//   - `engineering/go-specialist` and `security/go-specialist`
+//     overlap (same role slug regardless of team).
+//   - `engineering/go-specialist` and `engineering/security-reviewer`
+//     do NOT overlap (same team, different role).
+//   - Identity on no teams → no overlap. An empty binding set is a
+//     pass; the check is for ACTIVE role coincidence, not for
+//     missing metadata.
+//
+// Errors name both handles and every overlapping binding so the
+// operator can edit the team membership or rename one side.
+func checkRoleOverlap(roles RoleLister, c *Contract) error {
+	if roles == nil {
+		return nil
+	}
+	worker := strings.TrimSpace(c.Worker)
+	evaluator := strings.TrimSpace(c.Evaluator.Handle)
+	if worker == "" || evaluator == "" {
+		return nil
+	}
+	// checkSelfVerification already caught worker == evaluator; this
+	// helper is only ever called after that gate.
+
+	workerRoles, err := roles.ListRoles(worker)
+	if err != nil {
+		return fmt.Errorf("role overlap check: listing roles for worker %q: %w", worker, err)
+	}
+	evaluatorRoles, err := roles.ListRoles(evaluator)
+	if err != nil {
+		return fmt.Errorf("role overlap check: listing roles for evaluator %q: %w", evaluator, err)
+	}
+	if len(workerRoles) == 0 || len(evaluatorRoles) == 0 {
+		return nil
+	}
+
+	// Build the worker's full binding set and its canonical role-slug
+	// set. Two passes over the evaluator's roles check both overlap
+	// flavors and collect every offending binding so the error lists
+	// them all, not just the first one found.
+	workerBindings := make(map[string]struct{}, len(workerRoles))
+	workerSlugs := make(map[string]string, len(workerRoles))
+	for _, r := range workerRoles {
+		workerBindings[r.Name] = struct{}{}
+		slug := canonicalRoleSlug(r.Name)
+		if slug != "" {
+			workerSlugs[slug] = r.Name
+		}
+	}
+
+	type overlap struct {
+		workerBinding    string
+		evaluatorBinding string
+	}
+	var overlaps []overlap
+	for _, r := range evaluatorRoles {
+		if _, ok := workerBindings[r.Name]; ok {
+			// Same team/role exactly: the stronger of the two
+			// collision flavors. Record with the worker and
+			// evaluator both naming the same binding.
+			overlaps = append(overlaps, overlap{workerBinding: r.Name, evaluatorBinding: r.Name})
+			continue
+		}
+		slug := canonicalRoleSlug(r.Name)
+		if slug == "" {
+			continue
+		}
+		if workerBinding, ok := workerSlugs[slug]; ok {
+			overlaps = append(overlaps, overlap{workerBinding: workerBinding, evaluatorBinding: r.Name})
+		}
+	}
+	if len(overlaps) == 0 {
+		return nil
+	}
+	sort.Slice(overlaps, func(i, j int) bool {
+		if overlaps[i].workerBinding != overlaps[j].workerBinding {
+			return overlaps[i].workerBinding < overlaps[j].workerBinding
+		}
+		return overlaps[i].evaluatorBinding < overlaps[j].evaluatorBinding
+	})
+	var lines []string
+	// Singular/plural split: "1 overlapping role assignment" vs
+	// "N overlapping role assignments". The bare "(s)" reads awkwardly
+	// in operator output — render the correct word for the count.
+	noun := "assignments"
+	if len(overlaps) == 1 {
+		noun = "assignment"
+	}
+	lines = append(lines, fmt.Sprintf(
+		"mission %q: worker %q and evaluator %q share %d overlapping role %s; the verifier must not share a role with the worker",
+		c.MissionID, worker, evaluator, len(overlaps), noun,
+	))
+	for _, o := range overlaps {
+		if o.workerBinding == o.evaluatorBinding {
+			lines = append(lines, fmt.Sprintf(
+				"  both bound to %q (same team, same role)",
+				o.workerBinding,
+			))
+		} else {
+			lines = append(lines, fmt.Sprintf(
+				"  worker bound to %q, evaluator bound to %q (same role slug after canonicalization)",
+				o.workerBinding, o.evaluatorBinding,
+			))
+		}
+	}
+	lines = append(lines, "  recovery: assign the evaluator to a distinct role, or name a different evaluator")
+	return errors.New(strings.Join(lines, "\n"))
+}
+
+// canonicalRoleSlug extracts the role slug from a RoleLister binding
+// name of the form "team/role". The team prefix is stripped so two
+// identities bound to the same role on different teams still compare
+// equal. A name with no slash (legacy or hand-built) is returned
+// as-is. An empty name returns "".
+//
+// Stripping uses the LAST slash so future multi-level team paths
+// (e.g. `engineering/subgroup/go-specialist`) still yield the right
+// slug. The existing liveRoleLister emits `team/role`, single-slash;
+// this helper accepts both shapes.
+func canonicalRoleSlug(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
+	if i := strings.LastIndex(name, "/"); i >= 0 {
+		return name[i+1:]
+	}
+	return name
 }
 
 // checkWriteSetConflicts loads every existing mission, filters to
