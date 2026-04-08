@@ -2774,15 +2774,21 @@ Any future mission created with the 3.3 binary gets a real hash.
   because it does work that's often unused (most hook invocations
   are for non-evaluator subagents).
 
-## DES-034: Bounded rounds with mandatory reflection (PROPOSED)
+## DES-034: Bounded rounds with mandatory reflection (SETTLED)
 
-**Status**: Proposed. Implemented 2026-04-08 as `ethos-07m.8` — the
+**Status**: Settled. Implemented 2026-04-08 as `ethos-07m.8` — the
 Phase 3.4 primitive that makes DES-031's `Budget.Rounds` field
 enforceable. Two rounds: initial implementation plus local review
 fixes. Local reviewers: `feature-dev:code-reviewer` (correctness —
 1 HIGH, 2 MEDIUM, 1 LOW) and `mdm` (CLI surface — 1 BLOCKER, 1
-HIGH, 2 MEDIUM, 4 LOW). Frozen evaluator: `djb` (pinned at mission
-launch). Status flips SETTLED after djb's verdict and PR merge.
+HIGH, 2 MEDIUM, 4 LOW). The mdm BLOCKER (`Store.List` treating
+`<id>.reflections.yaml` as a contract, breaking Phase 3.2's
+conflict check) was caught by running the binary end-to-end with
+real fixtures — exactly the kind of cross-primitive integration bug
+that only shows up on the command line. Frozen evaluator: `djb`
+(pinned at mission launch). djb's final verdict: PASS (0.96) with
+one follow-up torpedo filed as a separate bead (`containsControlChar`
+on `Reflection.Reason` field, rule-5 consistency).
 
 ### Problem
 
