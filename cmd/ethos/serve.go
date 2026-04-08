@@ -23,10 +23,12 @@ func runServeImpl() {
 	writingStyles := layeredAttributeStore(is, attribute.WritingStyles)
 	roles := layeredRoleStore(is)
 	teams := layeredTeamStore(is)
+	missions := missionStore()
 	mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles,
 		mcp.WithSessionStore(sessionStore()),
 		mcp.WithRoleStore(roles),
 		mcp.WithTeamStore(teams),
+		mcp.WithMissionStore(missions),
 	).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {

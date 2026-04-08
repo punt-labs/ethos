@@ -11,6 +11,7 @@ import (
 	"github.com/punt-labs/ethos/internal/doctor"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
@@ -30,6 +31,7 @@ type Handler struct {
 	writingStyles *attribute.Store
 	roles         *role.LayeredStore
 	teams         *team.LayeredStore
+	missionStore  *mission.Store
 }
 
 // Option configures optional Handler fields.
@@ -48,6 +50,11 @@ func WithRoleStore(rs *role.LayeredStore) Option {
 // WithTeamStore sets the team store on the handler.
 func WithTeamStore(ts *team.LayeredStore) Option {
 	return func(h *Handler) { h.teams = ts }
+}
+
+// WithMissionStore sets the mission store on the handler.
+func WithMissionStore(ms *mission.Store) Option {
+	return func(h *Handler) { h.missionStore = ms }
 }
 
 // NewHandler creates a Handler with the given stores.
@@ -125,6 +132,10 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// Team tool (if store configured)
 	if h.teams != nil {
 		s.AddTool(h.teamTool(), h.handleTeam)
+	}
+	// Mission tool (if store configured)
+	if h.missionStore != nil {
+		s.AddTool(h.missionTool(), h.handleMission)
 	}
 }
 
