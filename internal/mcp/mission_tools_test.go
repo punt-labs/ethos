@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -30,6 +31,27 @@ budget:
   rounds: 3
   reflection_after_each: true
 `
+
+// contractYAMLWithWriteSet returns a valid contract body with a custom
+// write_set entry. Tests that create more than one mission in the same
+// store must use disjoint write_sets to bypass the Phase 3.2
+// cross-mission conflict check.
+func contractYAMLWithWriteSet(path string) string {
+	return `leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.5
+write_set:
+  - ` + path + `
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+  reflection_after_each: true
+`
+}
 
 func testHandlerWithMissions(t *testing.T) *Handler {
 	t.Helper()
@@ -208,10 +230,12 @@ func TestHandleMission_List(t *testing.T) {
 	h := testHandlerWithMissions(t)
 
 	// Create three missions back to back; counter rolls 001 → 003.
+	// Each gets a disjoint write_set so Phase 3.2's conflict check
+	// does not collapse them.
 	for i := 0; i < 3; i++ {
 		_, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 			"method":   "create",
-			"contract": validContractYAML,
+			"contract": contractYAMLWithWriteSet(fmt.Sprintf("tests/list-%d/", i)),
 		}))
 		require.NoError(t, err)
 	}
@@ -240,10 +264,12 @@ func TestHandleMission_ListEmptyReturnsArray(t *testing.T) {
 func TestHandleMission_ListFilterStatus(t *testing.T) {
 	h := testHandlerWithMissions(t)
 
+	// Disjoint write_sets so Phase 3.2's cross-mission conflict check
+	// does not collapse the second create.
 	for i := 0; i < 2; i++ {
 		_, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 			"method":   "create",
-			"contract": validContractYAML,
+			"contract": contractYAMLWithWriteSet(fmt.Sprintf("tests/list-filter-%d/", i)),
 		}))
 		require.NoError(t, err)
 	}
@@ -383,5 +409,38 @@ func TestHandleMission_UnknownMethod(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "unknown method")
+}
+
+// TestHandleMission_CreateRejectsCrossMissionConflict asserts that
+// the MCP create handler surfaces the Phase 3.2 conflict error as a
+// structured tool error. The first create succeeds; the second create
+// with an overlapping write_set must fail with content matching the
+// existing mission's ID, the worker handle, and the overlapping path.
+func TestHandleMission_CreateRejectsCrossMissionConflict(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	first, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contractYAMLWithWriteSet("internal/foo/"),
+	}))
+	require.NoError(t, err)
+	require.False(t, first.IsError)
+
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, first)), &created))
+
+	second, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contractYAMLWithWriteSet("internal/foo/bar.go"),
+	}))
+	require.NoError(t, err)
+	require.True(t, second.IsError, "overlapping create must produce a tool error")
+
+	msg := resultText(t, second)
+	assert.Contains(t, msg, "failed to create mission:")
+	assert.Contains(t, msg, "write_set conflict with mission")
+	assert.Contains(t, msg, created.MissionID)
+	assert.Contains(t, msg, "worker: bwk")
+	assert.Contains(t, msg, "internal/foo/bar.go")
 }
 

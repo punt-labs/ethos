@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +14,37 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// ethosBinary is the path to the compiled ethos binary, built once
+// per test run by TestMain. Empty if the build failed; subprocess
+// tests skip in that case while in-process tests still run.
+var ethosBinary string
+
+// TestMain builds the ethos binary into a temp file before running
+// any tests. Subprocess tests need this so they can exercise the
+// runtime os.Exit error paths in `runMissionCreate` (the in-process
+// captureStdout pattern would crash on os.Exit).
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "ethos-cmd-test-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "creating temp dir for binary: %v\n", err)
+		os.Exit(1)
+	}
+	bin := filepath.Join(dir, "ethos")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "go build for cmd/ethos tests failed: %v\n", err)
+		// Leave ethosBinary empty; subprocess tests will skip and the
+		// other tests still run.
+	} else {
+		ethosBinary = bin
+	}
+
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 // missionTestEnv sets HOME to a fresh temp directory and resets the
 // global flag state used by mission commands. The returned path is the
@@ -66,6 +99,37 @@ budget:
   rounds: 3
   reflection_after_each: true
 context: "smoke test contract"
+`
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+// writeContractFileWithWriteSet writes a contract file with a custom
+// write_set, returning the file path. Tests that create more than one
+// mission in the same store must use disjoint write_sets to bypass
+// the Phase 3.2 cross-mission conflict check.
+func writeContractFileWithWriteSet(t *testing.T, writeSet ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "contract.yaml")
+	var ws strings.Builder
+	for _, w := range writeSet {
+		ws.WriteString("  - ")
+		ws.WriteString(w)
+		ws.WriteString("\n")
+	}
+	body := `leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.5
+write_set:
+` + ws.String() + `success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+  reflection_after_each: true
 `
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
@@ -232,10 +296,13 @@ func TestMissionList_Empty(t *testing.T) {
 func TestMissionList_FilterByStatus(t *testing.T) {
 	missionTestEnv(t)
 
-	// Create three missions.
-	missionCreateFile = writeContractFile(t)
+	// Create three missions with disjoint write_sets so Phase 3.2's
+	// cross-mission conflict check does not collapse them.
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-a/")
 	captureStdout(t, runMissionCreate)
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-b/")
 	captureStdout(t, runMissionCreate)
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-c/")
 	captureStdout(t, runMissionCreate)
 
 	ms := missionStore()
@@ -305,4 +372,95 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
 	assert.Equal(t, mission.StatusFailed, c.Status)
+}
+
+// TestMissionCreate_ConflictRejectedSubprocess exercises the Phase 3.2
+// admission control through the real CLI binary. The first invocation
+// creates a mission with write_set [internal/foo/]; the second
+// invocation tries to create an overlapping mission with write_set
+// [internal/foo/bar.go] and must fail with exit code 1, with stderr
+// naming the existing mission and the overlapping path.
+//
+// The test runs in a subprocess because runMissionCreate calls
+// os.Exit on error — an in-process test would crash the test runner
+// when the conflict path fires.
+func TestMissionCreate_ConflictRejectedSubprocess(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	tmp := t.TempDir()
+
+	contractA := filepath.Join(tmp, "a.yaml")
+	require.NoError(t, os.WriteFile(contractA, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.6
+write_set:
+  - internal/foo/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	contractB := filepath.Join(tmp, "b.yaml")
+	require.NoError(t, os.WriteFile(contractB, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.6
+write_set:
+  - internal/foo/bar.go
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	// First create — must succeed.
+	cmd := exec.Command(ethosBinary, "mission", "create", "--file", contractA)
+	cmd.Env = env
+	var outA, errA bytes.Buffer
+	cmd.Stdout = &outA
+	cmd.Stderr = &errA
+	require.NoError(t, cmd.Run(), "first create failed: %s", errA.String())
+
+	// Find the created mission ID via List so the conflict assertion
+	// can check stderr names it.
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	listCmd.Stderr = os.Stderr
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	createdID, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, createdID)
+
+	// Second create — must fail with exit code 1.
+	cmd = exec.Command(ethosBinary, "mission", "create", "--file", contractB)
+	cmd.Env = env
+	var outB, errB bytes.Buffer
+	cmd.Stdout = &outB
+	cmd.Stderr = &errB
+	err := cmd.Run()
+	require.Error(t, err, "overlapping create must fail")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError, got %T: %v", err, err)
+	assert.Equal(t, 1, exitErr.ExitCode(), "exit code must be 1")
+
+	stderr := errB.String()
+	assert.Contains(t, stderr, "ethos: mission create:")
+	assert.Contains(t, stderr, "write_set conflict with mission")
+	assert.Contains(t, stderr, createdID)
+	assert.Contains(t, stderr, "internal/foo/bar.go")
 }

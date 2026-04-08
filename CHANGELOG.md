@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Write-set admission control** (Phase 3.2, `ethos-07m.6`) —
+  `Store.Create` rejects a new mission whose `write_set` overlaps any
+  currently-open mission's `write_set`. Overlap is segment-prefix on
+  cleaned paths: `internal/foo` blocks `internal/foo/bar.go` but
+  `internal/foo` does NOT block `internal/foobar`. Closed, failed,
+  and escalated missions are out of the registry. A new
+  directory-level create lock (`<missionsDir>/.create.lock`)
+  serializes the conflict scan and the write so two concurrent
+  Creates with disjoint mission IDs cannot both pass the scan and
+  both write. The error names every blocking mission by ID, worker,
+  and overlapping path — one line per blocker. CLI exit code is 1;
+  MCP returns a structured tool error.
 - `mission` subcommand for creating, listing, and closing mission
   contracts — the typed delegation artifact that is the foundation
   of Phase 3 workflow primitives (`ethos-07m.5`). Creation is

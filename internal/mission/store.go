@@ -94,6 +94,14 @@ func (s *Store) lockPath(missionID string) string {
 	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".lock")
 }
 
+// createLockPath returns the directory-level lock file used by
+// Store.Create to serialize cross-mission write_set conflict scans.
+// Stable filename, never renamed or unlinked, so the flock inode does
+// not race with concurrent acquirers.
+func (s *Store) createLockPath() string {
+	return filepath.Join(s.missionsDir(), ".create.lock")
+}
+
 func (s *Store) logPath(missionID string) string {
 	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".jsonl")
 }
@@ -135,39 +143,50 @@ func (s *Store) Create(c *Contract) error {
 		return fmt.Errorf("creating missions directory: %w", err)
 	}
 
-	err := s.withLock(staged.MissionID, func() error {
-		dest := s.contractPath(staged.MissionID)
-		// Refuse to overwrite an existing contract via Create — Update
-		// is the explicit mutation path.
-		if _, statErr := os.Stat(dest); statErr == nil {
-			return fmt.Errorf("mission %q already exists", staged.MissionID)
-		} else if !os.IsNotExist(statErr) {
-			return fmt.Errorf("checking mission existence: %w", statErr)
-		}
-		if err := s.writeContract(&staged); err != nil {
-			return err
-		}
-		if err := s.appendEventLocked(staged.MissionID, Event{
-			TS:    time.Now().UTC().Format(time.RFC3339),
-			Event: "create",
-			Actor: staged.Leader,
-			Details: map[string]any{
-				"worker":    staged.Worker,
-				"evaluator": staged.Evaluator.Handle,
-				"bead":      staged.Inputs.Bead,
-			},
-		}); err != nil {
-			// Rollback: remove the just-written contract so the
-			// operation is atomic from the caller's point of view.
-			// Without rollback, a retry after a log-append failure
-			// would hit "already exists" and the caller would have
-			// no clean recovery path.
-			if rbErr := os.Remove(dest); rbErr != nil && !os.IsNotExist(rbErr) {
-				return fmt.Errorf("create: event append failed: %w; rollback failed: %v", err, rbErr)
+	err := s.withCreateLock(func() error {
+		return s.withLock(staged.MissionID, func() error {
+			dest := s.contractPath(staged.MissionID)
+			// Refuse to overwrite an existing contract via Create — Update
+			// is the explicit mutation path.
+			if _, statErr := os.Stat(dest); statErr == nil {
+				return fmt.Errorf("mission %q already exists", staged.MissionID)
+			} else if !os.IsNotExist(statErr) {
+				return fmt.Errorf("checking mission existence: %w", statErr)
 			}
-			return fmt.Errorf("create: event append failed, contract rolled back: %w", err)
-		}
-		return nil
+			// Cross-mission write_set conflict check (Phase 3.2). The
+			// directory-level create lock above ensures the scan and
+			// the subsequent writeContract are atomic with respect to
+			// other concurrent Creates: no other Create can pass its
+			// own scan after this Create writes its file but before
+			// the create lock is released.
+			if err := s.checkWriteSetConflicts(&staged); err != nil {
+				return err
+			}
+			if err := s.writeContract(&staged); err != nil {
+				return err
+			}
+			if err := s.appendEventLocked(staged.MissionID, Event{
+				TS:    time.Now().UTC().Format(time.RFC3339),
+				Event: "create",
+				Actor: staged.Leader,
+				Details: map[string]any{
+					"worker":    staged.Worker,
+					"evaluator": staged.Evaluator.Handle,
+					"bead":      staged.Inputs.Bead,
+				},
+			}); err != nil {
+				// Rollback: remove the just-written contract so the
+				// operation is atomic from the caller's point of view.
+				// Without rollback, a retry after a log-append failure
+				// would hit "already exists" and the caller would have
+				// no clean recovery path.
+				if rbErr := os.Remove(dest); rbErr != nil && !os.IsNotExist(rbErr) {
+					return fmt.Errorf("create: event append failed: %w; rollback failed: %v", err, rbErr)
+				}
+				return fmt.Errorf("create: event append failed, contract rolled back: %w", err)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		return err
@@ -515,4 +534,73 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
 	return fn()
+}
+
+// withCreateLock executes fn while holding an exclusive flock on the
+// missions directory's create lock file. Used by Store.Create to
+// serialize Create attempts across cooperating processes so that the
+// cross-mission write_set conflict scan and the new mission's write
+// happen atomically with respect to other concurrent Creates.
+//
+// Update and Close do NOT acquire this lock — they mutate an existing
+// mission's status, which is unrelated to Create-vs-Create
+// serialization. The lock file is a stable filename that is never
+// renamed or unlinked, so concurrent acquirers always lock the same
+// inode.
+func (s *Store) withCreateLock(fn func() error) error {
+	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
+		return fmt.Errorf("creating missions directory: %w", err)
+	}
+	f, err := os.OpenFile(s.createLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening create lock file: %w", err)
+	}
+	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("acquiring create lock: %w", err)
+	}
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+
+	return fn()
+}
+
+// checkWriteSetConflicts loads every existing mission, filters to
+// open ones, and asks findWriteSetConflicts whether the new contract's
+// write_set overlaps any of them. Returns a non-nil error iff there
+// is at least one conflict.
+//
+// The caller must hold the directory-level create lock so that the
+// scan-then-write transition is atomic with respect to other Creates.
+//
+// A Load failure on any existing mission is fatal — silently skipping
+// a corrupt mission would defeat the conflict check.
+func (s *Store) checkWriteSetConflicts(c *Contract) error {
+	ids, err := s.List()
+	if err != nil {
+		return fmt.Errorf("create: listing existing missions: %w", err)
+	}
+	var openContracts []*Contract
+	for _, id := range ids {
+		// Skip self defensively. The Create caller has already
+		// verified the destination file does not exist, so this
+		// should never trigger pre-create — but if Create is ever
+		// reused for a re-validation path the self-skip prevents a
+		// false positive.
+		if id == c.MissionID {
+			continue
+		}
+		existing, err := s.Load(id)
+		if err != nil {
+			return fmt.Errorf("create: failed to load existing mission %q: %w", id, err)
+		}
+		if existing.Status == StatusOpen {
+			openContracts = append(openContracts, existing)
+		}
+	}
+	conflicts := findWriteSetConflicts(c.WriteSet, openContracts)
+	if len(conflicts) == 0 {
+		return nil
+	}
+	return formatConflictError(conflicts)
 }
