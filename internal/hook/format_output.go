@@ -8,6 +8,8 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/mission"
 )
 
 // formatResult is the JSON output of the format-output hook.
@@ -676,10 +678,13 @@ func formatRoleShow(w io.Writer, result string) error {
 // formatMission dispatches on method for the mission MCP tool. Each
 // mission method has a distinct result shape:
 //
-//   create        → a single Contract object
-//   show          → a single Contract object
-//   list          → an array of {mission_id, status, leader, ...} summaries
-//   close         → {mission_id, status}
+//	create        → a single Contract object
+//	show          → a single Contract object
+//	list          → an array of {mission_id, status, leader, ...} summaries
+//	close         → {mission_id, status}
+//	reflect       → {mission_id, round, recommendation, created_at}
+//	reflections   → an array of Reflection objects (one per round)
+//	advance       → {mission_id, current_round}
 func formatMission(w io.Writer, method, result string) error {
 	switch method {
 	case "create":
@@ -762,6 +767,12 @@ func formatMissionReflections(w io.Writer, result string) error {
 		converging, _ := e["converging"].(bool)
 		if i > 0 {
 			ctx.WriteString("\n")
+		}
+		// Uppercase terminal recommendations (stop, escalate) so the
+		// operator scanning a long reflection log spots a blocking
+		// decision at a glance.
+		if mission.IsTerminalRecommendation(rec) {
+			rec = strings.ToUpper(rec)
 		}
 		fmt.Fprintf(&ctx, "  - round %d (%s) by %s — converging=%t",
 			int(round), rec, author, converging)

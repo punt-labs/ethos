@@ -509,16 +509,37 @@ func (s *Store) List() ([]string, error) {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".yaml") {
-			continue
-		}
-		// Skip dotfiles like .counter-YYYY-MM-DD.
-		if strings.HasPrefix(name, ".") {
+		if !isContractFile(name) {
 			continue
 		}
 		ids = append(ids, strings.TrimSuffix(name, ".yaml"))
 	}
 	return ids, nil
+}
+
+// isContractFile reports whether a missions-directory entry name is a
+// mission contract YAML file. A contract file ends in ".yaml" but is
+// not a sibling file (".reflections.yaml", and any future
+// ".annotations.yaml" / ".notes.yaml" the package grows) and is not a
+// dotfile such as ".counter-YYYY-MM-DD" or ".create.lock".
+//
+// Centralizes the decision so future sibling file layouts add one
+// case here rather than re-finding the same filtering bug in every
+// reader. The catastrophic Phase 3.4 regression was a List() that
+// did not exclude ".reflections.yaml", which made every mission with
+// a reflection look like two missions — breaking Create's cross-
+// mission conflict scan, Show's prefix match, and List's decode.
+func isContractFile(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return false
+	}
+	if !strings.HasSuffix(name, ".yaml") {
+		return false
+	}
+	if strings.HasSuffix(name, ".reflections.yaml") {
+		return false
+	}
+	return true
 }
 
 // MatchByPrefix finds a mission ID from a prefix string. Mirrors
@@ -791,8 +812,11 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 			}
 			return fmt.Errorf("reflect: event append failed, reflection rolled back: %w", err)
 		}
-		// Reflect Author/CreatedAt back to the caller — these are the
-		// two fields AppendReflection is contracted to set.
+		// Reflect CreatedAt back to the caller — this is the one field
+		// AppendReflection is contracted to set. Author is always
+		// caller-supplied; the default-fill is restricted to CreatedAt
+		// so the caller's Reflection.Author never changes behind its
+		// back.
 		r.CreatedAt = staged.CreatedAt
 		return nil
 	})

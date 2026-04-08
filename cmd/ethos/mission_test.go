@@ -603,9 +603,12 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
 	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
 
-	// Advance — non-JSON mode prints "Advanced <id> to round 2".
+	// Advance — non-JSON mode is silent on success (matches every
+	// other mission subcommand: create, close, reflect). Exit code 0
+	// and a bumped CurrentRound on disk tell the whole story.
 	out := captureStdout(t, func() { runMissionAdvance(id) })
-	assert.Contains(t, out, "Advanced "+id+" to round 2")
+	assert.Empty(t, strings.TrimSpace(out),
+		"mission advance must be silent on success in non-JSON mode")
 
 	loaded, err := ms.Load(id)
 	require.NoError(t, err)

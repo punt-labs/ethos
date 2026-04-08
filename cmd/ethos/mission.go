@@ -62,7 +62,12 @@ mission(s) and the overlapping path(s).
 Creation also fails if the evaluator handle cannot be resolved to a
 valid identity with personality, writing style, and talent content;
 the error names the handle. Use ` + "`ethos identity list`" + ` to see
-available handles.`,
+available handles.
+
+budget.rounds is now a hard cap: after round N the operator must
+submit a reflection via ` + "`ethos mission reflect`" + ` and advance via
+` + "`ethos mission advance`" + ` before beginning round N+1; the round
+budget cannot be extended without re-scoping.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
@@ -138,7 +143,11 @@ current round; reflections are append-only and a duplicate is refused.
 After reflecting, run "ethos mission advance" to move to the next
 round. The advance gate refuses to proceed when the latest
 reflection recommends stop or escalate, or when the budget would be
-exceeded.`,
+exceeded.
+
+recommendation must be one of: continue, pivot, stop, escalate. The
+gate refuses to advance after a stop or escalate. signals must
+contain at least one entry.`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionReflect(args[0], missionReflectFile)
@@ -152,9 +161,10 @@ var missionReflectionsCmd = &cobra.Command{
 	Short: "Show the round-by-round reflection log",
 	Long: `Show the round-by-round reflection log for a mission.
 
-Mirrors "mission show" but emits only the reflections, never the
-contract. Use --json for a machine-readable array (always an array,
-even when there are no reflections yet — empty rather than null).`,
+Prints only the round-by-round reflection log for a mission; unlike
+"mission show", the contract header is omitted so the output parses
+as a single JSON array with --json (always an array, even when there
+are no reflections yet — empty rather than null).`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionReflections(args[0])
@@ -457,11 +467,16 @@ func runMissionAdvance(idOrPrefix string) {
 		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
 		os.Exit(1)
 	}
-	// Determine actor: prefer the resolved persona, fall back to
-	// the contract's leader if the resolver is unavailable. The
-	// store rejects an empty actor, so we never call AdvanceRound
-	// with a zero-value handle.
-	actor := resolveActor(ms, id)
+	// Resolve the actor to record on the round_advanced event. A
+	// load failure is fatal here — recording an "unknown" actor on
+	// the audit trail would pollute the event log with empty
+	// attribution and make post-hoc review of who advanced which
+	// round impossible.
+	actor, err := resolveActor(ms, id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
+		os.Exit(1)
+	}
 	newRound, err := ms.AdvanceRound(id, actor)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
@@ -474,19 +489,31 @@ func runMissionAdvance(idOrPrefix string) {
 		})
 		return
 	}
-	fmt.Printf("Advanced %s to round %d\n", id, newRound)
+	// Non-JSON mode is silent on success — matches every other
+	// mission subcommand (create, close, reflect). Exit code 0 tells
+	// the story; a chatty success message would be out of family.
+	_ = newRound
 }
 
 // resolveActor returns the handle to record on a round_advanced
 // event. The leader stored in the contract is the right answer for
 // 3.4 because every advance is a leader operation; future phases
 // may resolve the calling persona via /ethos:whoami.
-func resolveActor(ms *mission.Store, id string) string {
+//
+// A load failure is returned to the caller so it can surface a
+// concrete error. Falling back to an "unknown" string would pollute
+// the audit trail and mask a real problem — an unreadable contract
+// should fail loudly, not silently.
+func resolveActor(ms *mission.Store, id string) (string, error) {
 	c, err := ms.Load(id)
-	if err != nil || strings.TrimSpace(c.Leader) == "" {
-		return "unknown"
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve actor for mission %q: %w", id, err)
 	}
-	return c.Leader
+	leader := strings.TrimSpace(c.Leader)
+	if leader == "" {
+		return "", fmt.Errorf("cannot resolve actor for mission %q: contract has no leader", id)
+	}
+	return leader, nil
 }
 
 // printContract emits a human-readable summary of a contract. The
@@ -575,6 +602,11 @@ func printContract(c *mission.Contract) {
 // rendered as a small block: round number, recommendation, signals,
 // and reason (when present), so the operator can read the leader's
 // decision history without parsing YAML.
+//
+// Terminal recommendations (stop, escalate) are uppercased so an
+// operator scanning a long reflection log can spot a blocking
+// decision at a glance — a lowercase "stop" between two "continue"
+// rows is easy to miss.
 func printReflections(rs []mission.Reflection) {
 	if len(rs) == 0 {
 		return
@@ -582,8 +614,12 @@ func printReflections(rs []mission.Reflection) {
 	fmt.Println()
 	fmt.Println("Reflections:")
 	for _, r := range rs {
+		rec := r.Recommendation
+		if mission.IsTerminalRecommendation(rec) {
+			rec = strings.ToUpper(rec)
+		}
 		fmt.Printf("  - round %d (%s) by %s — converging=%t\n",
-			r.Round, r.Recommendation, r.Author, r.Converging)
+			r.Round, rec, r.Author, r.Converging)
 		for _, sig := range r.Signals {
 			fmt.Printf("      • %s\n", sig)
 		}

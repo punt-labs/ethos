@@ -1833,3 +1833,66 @@ func TestStore_CreateRejectsDotSegmentBypass(t *testing.T) {
 		})
 	}
 }
+
+// TestStore_ListSkipsReflectionsFile asserts the Phase 3.4 round-2
+// regression fix: Store.List must not treat the sibling
+// <id>.reflections.yaml file as a mission contract. The bug this test
+// exists to prevent was catastrophic: after any mission had a
+// reflection on disk, List returned "<id>" and "<id>.reflections",
+// which (a) emitted spurious "field reflections not found" warnings
+// on every list invocation, (b) made `mission show <prefix>` ambiguous
+// because two IDs matched the same prefix, and (c) — the showstopper
+// — caused every subsequent `mission create` to fail because
+// checkWriteSetConflicts loads every open mission and treats a load
+// failure as fatal, bringing the entire mission-create path down for
+// anyone who uses the round-advance gate.
+//
+// This single test exercises all three failure modes from the mdm
+// reproduction: list, show prefix match, and create after reflection.
+func TestStore_ListSkipsReflectionsFile(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.MissionID = "m-2026-04-08-001"
+	c.WriteSet = []string{"tests/list-skip-reflections/"}
+	require.NoError(t, s.Create(&c))
+
+	// Append a reflection so the sibling file exists on disk.
+	r := &Reflection{
+		Round:          1,
+		Author:         "claude",
+		Converging:     true,
+		Signals:        []string{"round 1 complete"},
+		Recommendation: RecommendationContinue,
+	}
+	require.NoError(t, s.AppendReflection(c.MissionID, r))
+
+	// Verify both files actually exist — the test is meaningless if
+	// the reflections file was not written.
+	_, err := os.Stat(s.reflectionsPath(c.MissionID))
+	require.NoError(t, err, "reflections file must exist for the test to be meaningful")
+
+	// Failure mode 1: List must return exactly one mission ID, not
+	// a phantom "<id>.reflections" entry.
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m-2026-04-08-001"}, ids,
+		"List must skip <id>.reflections.yaml")
+
+	// Failure mode 2: MatchByPrefix must resolve unambiguously. A
+	// reflections file masquerading as a contract would make the
+	// daily-prefix match return "ambiguous prefix".
+	id, err := s.MatchByPrefix("m-2026-04-08")
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-04-08-001", id)
+
+	// Failure mode 3: Create must succeed for a new mission. This is
+	// the one that takes ethos offline — checkWriteSetConflicts
+	// loads every existing mission, and a load failure on the
+	// phantom reflections file would bubble up as a fatal error for
+	// every new create attempt.
+	c2 := validContract()
+	c2.MissionID = "m-2026-04-08-002"
+	c2.WriteSet = []string{"tests/list-skip-reflections-2/"}
+	assert.NoError(t, s.Create(&c2),
+		"Create must not choke on the sibling reflections file")
+}

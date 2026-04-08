@@ -35,7 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Phase 3.1/3.2/3.3 primitives are untouched: existing `Validate`
   rules still hold, the cross-mission write_set conflict scan still
   runs, and the frozen-evaluator hash and verifier-spawn gate are
-  unchanged.
+  unchanged. To unblock a `stop`/`escalate` refusal or a
+  budget-exhausted refusal, close the mission via
+  `ethos mission close <id>` (optionally `--status failed` or
+  `--status escalated`) and create a replacement contract with a
+  revised scope or budget.
 - **Frozen evaluator with content hash pinning** (Phase 3.3,
   `ethos-07m.7`) — `Store.ApplyServerFields` now resolves the
   evaluator handle through the live identity, role, and team stores
