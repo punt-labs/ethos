@@ -3000,3 +3000,218 @@ dotfiles. A regression test exercises all three failure modes
   the submit path is where validation belongs. An operator who
   submits a malformed reflection should find out immediately, not
   discover it only when they try to advance.
+
+## DES-035: Verifier isolation (PROPOSED)
+
+**Status**: Proposed. Implemented 2026-04-08 as `ethos-07m.9` — the
+Phase 3.5 primitive that enforces verifier independence from the
+implementer. Two rounds: initial implementation plus local review
+fixes. Local reviewers: `feature-dev:code-reviewer` (correctness — 1
+HIGH, 1 MEDIUM) and `mdm` (CLI surface — 3 HIGH, 3 MEDIUM, 4 LOW).
+Frozen evaluator: `djb` (pinned at mission launch). Status flips
+SETTLED after djb's verdict and PR merge.
+
+### Problem
+
+When the same agent implements and verifies, the verifier is too
+invested in its own implementation. The verifier reads the
+implementer's scratch state and rationalizes it. Phase 3.1's mission
+contract records the verifier's handle, but nothing stops the
+verifier from receiving the worker's full context when the hook
+spawns them. Phase 3.3's frozen evaluator hash pinning prevents
+evaluator content drift mid-cycle, but a verifier that shares the
+worker's role framing can still give a biased verdict — the content
+is the same, but the lens is the same too.
+
+The architecture rule from `~/Documents/agents-architecture.tex`
+§"Evaluation Discipline": *"Use mixed verification tracks"* and *"A
+different worker, or the leader, checks the result with a fresh
+skeptical prompt."* Phase 3.5 operationalizes this at two layers:
+handle level (worker != evaluator) and role level (their role
+bindings cannot overlap) at create time, and context-injection
+level at spawn time (the verifier subagent receives only the
+mission contract, verification criteria, and a file allowlist).
+
+### Decision
+
+Two independent runtime gates:
+
+**1. Role-overlap check at `Store.Create` (mission creation time).**
+
+A new `RoleLister` interface and `Store.WithRoleLister(r)` opt-in
+method. When set, `Store.Create` refuses a contract whose worker
+and evaluator handles either (a) match literally or (b) share a
+team-scoped role binding under canonicalization. The check runs
+inside the existing per-mission flock after validation and before
+the write.
+
+Role overlap is defined as:
+
+- **Exact binding match.** `bwk` and `djb` both have a `team_handle:
+  engineering/role: go-specialist` record — same team, same role
+  slug. Refused.
+- **Canonicalized slug match.** `bwk` bound to `engineering/go-specialist`
+  and `djb` bound to `security/go-specialist` — different teams,
+  same role slug after canonicalization (take the substring after
+  the last `/`). Refused.
+- **Distinct role acceptance.** `bwk` bound to `engineering/go-specialist`
+  and `djb` bound to `engineering/security-reviewer` — same team,
+  different role slugs. Accepted. This is the canonical ethos
+  pattern: an implementer and a security reviewer on the same team
+  can verify each other's work.
+- **No-binding acceptance.** An identity with zero role bindings
+  (fresh install, no team membership) has no role to overlap.
+  Accepted.
+
+The opt-in pattern (`WithRoleLister(r)`) keeps the existing 50+
+unit tests that build a bare `mission.NewStore(root)` compiling
+without modification. Production wiring goes through the
+`missionStoreForCreate()` helper in `cmd/ethos/mission.go`, which
+constructs a live `RoleLister` from the identity, role, and team
+stores and fails fatally (`os.Exit(1)`) if the wiring cannot be
+built. Read-only mission subcommands (`show`, `list`, `close`,
+`reflect`, `advance`, `reflections`) use the bare `missionStore()`
+helper and never touch the lister — they don't need the overlap
+check, and construction is cheaper without the wiring pass.
+
+**2. Verifier context isolation at `SubagentStart` hook (spawn time).**
+
+When the hook detects a verifier spawn (the existing Phase 3.3
+`checkVerifierHash` discriminator — Phase 3.5 does NOT add a
+parallel "is this a verifier?" check), the hook REPLACES the
+subagent's additionalContext with a structured isolation block
+instead of the normal persona block. The block contains:
+
+- `## Verifier context (mission <id>)` — H2 root, consistent with
+  persona block's H2 convention
+- `### Mission contract` — byte-for-byte from disk via
+  `Store.ContractPath` + `os.ReadFile` (NOT re-marshaled, which
+  would reorder keys or drop YAML comments)
+- `### Verification criteria` — the contract's `success_criteria`
+  list, verbatim
+- `### File allowlist` — two labeled sub-sections:
+  - `Repo-relative paths (resolve from repo root):` lists the
+    write_set entries in declaration order
+  - `Absolute paths:` lists the contract file at its absolute path
+- A `MUST NOT` directive: the verifier may not read parent
+  transcript, worker scratch, or paths outside the allowlist
+- A `may` directive: "These are the only paths the verifier may
+  read" (restrictive semantics, RFC 2119 "may" not "MAY")
+
+For multi-mission evaluators (the same handle is evaluator on
+multiple open missions — the aggregated-drift case from Phase 3.3),
+the block concatenates one section per mission separated by
+`---`.
+
+The persona block is EXCLUDED for verifier spawns. Parent transcript
+is excluded by structural replacement (the hook's `additionalContext`
+field is overwritten, not appended). Worker scratch is excluded by
+not being referenced in the block at all.
+
+### What 3.5 deliberately does NOT do
+
+- **No mechanical file-allowlist enforcement** (SC6 of the mission
+  contract). The isolation block declares the allowlist as a prose
+  directive. A misbehaving verifier subagent could still call
+  `Read`, `Grep`, or `Glob` against a path outside the list. Phase
+  3.5's threat model is "the implementer shouldn't review their
+  own work" — specifically, an ethos sub-agent that has no incentive
+  to cheat but whose judgment is biased by shared role framing.
+  The prose directive is sufficient for a cooperating verifier.
+  Mechanical enforcement via a new `PreToolUse` hook handler is
+  defense-in-depth against an adversarial verifier, which is a
+  different threat model. Filed as a follow-up bead.
+
+- **No real git-diff computation of round deltas** (SC5). The
+  isolation block's file allowlist lists the static `write_set`
+  entries, not a walked diff of files actually touched by the
+  worker in the current round. A walked diff is more informative
+  (the verifier can see `filepath.WalkDir`-discovered files instead
+  of the pattern) but adds filesystem walking on every verifier
+  spawn. Filed as a follow-up bead.
+
+- **No change to Phase 3.3's `checkVerifierHash`.** Phase 3.5
+  REUSES the discriminator; it does not modify it. The same gate
+  fires, and Phase 3.5 layers the context isolation onto the
+  same branch.
+
+- **No change to Phase 3.2's `checkWriteSetConflicts`** or
+  `isContractFile` helper. Phase 3.5 is purely a validation-and-
+  injection change. No new sibling file layout, so no Phase 3.4
+  BLOCKER-class regression risk.
+
+- **No retroactive invalidation of pre-3.5 missions.** The
+  role-overlap check runs only at `Store.Create` time. Existing
+  open missions with role-coincident worker+evaluator pairs
+  continue to load and advance.
+
+- **No MCP tool description change.** The `mission` tool's
+  `create` method surfaces the new rejection through its existing
+  error path. No new MCP tool methods, no new enum values.
+
+- **No `validate.go` rule.** The worker!=evaluator check was
+  initially considered for `Contract.Validate()` (defense in depth
+  at every decode path) but was rejected for Phase 3.5 because:
+  (a) the stronger role-overlap check requires the role store,
+  which `Validate()` cannot depend on without a dependency cycle,
+  and (b) putting the weaker check in Validate and the stronger
+  check in Store.Create would split the invariant across two
+  files and create an artificial asymmetry. Both checks live in
+  `Store.Create` for now. A future phase could add a Validate-
+  level handle check once the store dependency is cleaner.
+
+### Rejected Alternatives
+
+- **Require a role overlap check even for bare `NewStore(root)`
+  (no opt-in).** Rejected because it would force every unit test
+  in the mission package to construct a real role store,
+  coupling the mission tests to the role package's fixture
+  layout. The opt-in pattern preserves test independence. The
+  production path is tested end-to-end by the new subprocess
+  test (`TestMissionCreate_RoleOverlapThroughLiveStoresSubprocess`),
+  so the check is exercised against real stores.
+
+- **Put the role-overlap check in the Phase 3.3 hash gate.**
+  Rejected because the hash gate runs at spawn time (too late —
+  the mission has already been created with an overlapping
+  verifier). Create-time enforcement is the right boundary.
+
+- **Canonicalize role slugs by fuzzy matching (e.g. Levenshtein
+  distance).** Rejected as over-engineering. Exact-match-after-
+  slash-split is precise and understandable. Operators bind
+  identities to roles deliberately; fuzzy matching would create
+  surprising rejections.
+
+- **Replace the verifier's additionalContext with ONLY the
+  contract** (strip even the verification criteria and allowlist).
+  Rejected because the verifier needs to know WHAT to verify and
+  WHICH files are in scope. The contract alone is ambiguous
+  without the success_criteria and write_set context.
+
+- **Inline the contract bytes via `yaml.Marshal(c)` in the
+  isolation block.** Rejected because yaml.Marshal is not
+  deterministic across Go releases (key ordering, indent style)
+  and would drop YAML comments. The byte-for-byte read from disk
+  preserves the operator's exact intent.
+
+- **Add a `--skip-role-overlap` flag** to `ethos mission create`
+  for recovery. Rejected: no runtime bypass path. An operator
+  who needs to relax the role-overlap rule should fix their
+  team/role bindings via `ethos team add-member`, not add a CLI
+  escape hatch. Matches DES-033's "no runtime bypass" posture
+  for the frozen-evaluator hash.
+
+- **Enforce the file allowlist via a `PreToolUse` hook in Phase
+  3.5**. Was the original success criterion 6. Scope-deferred to
+  a follow-up bead. See "What 3.5 deliberately does NOT do"
+  above for the full rationale.
+
+- **Walk the write_set on disk to produce a real file list** for
+  the isolation block's allowlist. Was success criterion 5.
+  Scope-deferred for the same reason: adds work on every verifier
+  spawn for marginal value, filed as a follow-up.
+
+- **Split the role-overlap check into a separate package**
+  (`internal/mission/overlap`). Rejected for round 1 — keep it
+  close to `Store.Create` where it's used. A future refactor
+  could extract if other callers need the check.
