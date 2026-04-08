@@ -49,6 +49,27 @@ func disjointContract(missionID string) *Contract {
 	return &c
 }
 
+// submitRoundResult persists a minimal valid result for a mission's
+// current round so the test can drive Store.Close through the
+// Phase 3.6 gate. The helper is a one-liner for every pre-3.6 test
+// whose only interest in the result artifact is "close is allowed".
+// A round-aware variant (submitResultForRound) covers the rarer case
+// of exercising the gate at a non-current round.
+func submitRoundResult(t *testing.T, s *Store, c *Contract, verdict string) {
+	t.Helper()
+	r := &Result{
+		Mission:    c.MissionID,
+		Round:      c.CurrentRound,
+		Author:     c.Worker,
+		Verdict:    verdict,
+		Confidence: 0.8,
+		Evidence: []EvidenceCheck{
+			{Name: "go test ./...", Status: EvidenceStatusPass},
+		},
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+}
+
 func TestStore_RoundTrip(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-001")
@@ -339,6 +360,7 @@ func TestStore_Close(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-003")
 	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
 
 	require.NoError(t, s.Close("m-2026-04-07-003", StatusClosed))
 
@@ -377,6 +399,7 @@ func TestStore_CloseRejectsAlreadyTerminal(t *testing.T) {
 		t.Run(firstStatus, func(t *testing.T) {
 			c := newContract(id)
 			require.NoError(t, s.Create(c))
+			submitRoundResult(t, s, c, VerdictPass)
 			require.NoError(t, s.Close(id, firstStatus))
 
 			// Second close must fail regardless of the target status.
@@ -484,6 +507,10 @@ func TestStore_CloseRollsBackOnEventAppendFailure(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-021")
 	require.NoError(t, s.Create(c))
+	// Phase 3.6: the close gate requires a result; submit one before
+	// sabotaging the log so the sabotage exercises the rollback path,
+	// not the gate refusal.
+	submitRoundResult(t, s, c, VerdictPass)
 
 	contractPath := s.contractPath(c.MissionID)
 	originalBytes, err := os.ReadFile(contractPath)
@@ -536,8 +563,9 @@ func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
 	s := testStore(t)
 	for status, id := range cases {
 		t.Run(status, func(t *testing.T) {
-			c := newContract(id)
+			c := disjointContract(id)
 			require.NoError(t, s.Create(c))
+			submitRoundResult(t, s, c, VerdictPass)
 			require.NoError(t, s.Close(id, status))
 			loaded, err := s.Load(id)
 			require.NoError(t, err)
@@ -825,6 +853,7 @@ func TestStore_CreateAllowsConflictAfterClose(t *testing.T) {
 
 			a := withWriteSet("m-2026-04-08-001", "internal/foo/")
 			require.NoError(t, s.Create(a))
+			submitRoundResult(t, s, a, VerdictPass)
 			require.NoError(t, s.Close(a.MissionID, terminal))
 
 			// Overlapping create must succeed: A is no longer active.
@@ -1532,6 +1561,7 @@ func TestStore_AppendReflection_RejectsClosedMission(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
 	require.NoError(t, s.Close(c.MissionID, StatusClosed))
 
 	err := s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue))
@@ -1683,6 +1713,7 @@ func TestStore_AdvanceRound_RefusesClosedMission(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
 	require.NoError(t, s.Close(c.MissionID, StatusClosed))
 
 	_, err := s.AdvanceRound(c.MissionID, "claude")
@@ -2149,5 +2180,837 @@ func TestCanonicalRoleSlug(t *testing.T) {
 		t.Run(tc.in, func(t *testing.T) {
 			assert.Equal(t, tc.want, canonicalRoleSlug(tc.in))
 		})
+	}
+}
+
+// --- Phase 3.6: result artifact and close gate ---
+
+// resultFor returns a minimal valid result for the given mission's
+// current round with the given verdict. Tests that only care about
+// the gate's presence/absence behavior use this; the more detailed
+// tests build results inline.
+func resultFor(c *Contract, verdict string) *Result {
+	return &Result{
+		Mission:    c.MissionID,
+		Round:      c.CurrentRound,
+		Author:     c.Worker,
+		Verdict:    verdict,
+		Confidence: 0.8,
+		Evidence: []EvidenceCheck{
+			{Name: "make check", Status: EvidenceStatusPass},
+		},
+	}
+}
+
+// TestStore_AppendResult_RoundTrip asserts success criterion 1 and 6:
+// a well-formed result is persisted and retrievable via LoadResult
+// after AppendResult succeeds.
+func TestStore_AppendResult_RoundTrip(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+	assert.NotEmpty(t, r.CreatedAt, "AppendResult must reflect CreatedAt back")
+
+	loaded, err := s.LoadResult(c.MissionID, 1)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, 1, loaded.Round)
+	assert.Equal(t, VerdictPass, loaded.Verdict)
+	assert.Equal(t, c.Worker, loaded.Author)
+}
+
+// TestStore_AppendResult_RejectsWrongRound asserts the round number
+// cross-check: submitting a result whose Round does not match
+// CurrentRound is refused so the operator sees the bug at submit
+// time, not at close time.
+func TestStore_AppendResult_RejectsWrongRound(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.Round = 2
+	err := s.AppendResult(c.MissionID, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "round 2")
+	assert.Contains(t, err.Error(), "current round 1")
+}
+
+// TestStore_AppendResult_RejectsMismatchedMissionID asserts that the
+// result's self-declared Mission field must match the target
+// missionID. A file renamed between missions cannot slip past the
+// gate by claiming the wrong parent.
+func TestStore_AppendResult_RejectsMismatchedMissionID(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.Mission = "m-2026-04-08-999"
+	err := s.AppendResult(c.MissionID, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match")
+}
+
+// TestStore_AppendResult_RejectsDuplicate asserts success criterion 3:
+// a second submission for the same round is refused with an
+// operator-readable error naming the mission and the round.
+func TestStore_AppendResult_RejectsDuplicate(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	require.NoError(t, s.AppendResult(c.MissionID, resultFor(c, VerdictPass)))
+
+	err := s.AppendResult(c.MissionID, resultFor(c, VerdictFail))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already exists")
+	assert.Contains(t, err.Error(), "append-only")
+	assert.Contains(t, err.Error(), c.MissionID)
+	assert.Contains(t, err.Error(), "round 1")
+}
+
+// TestStore_AppendResult_RejectsClosedMission asserts that results
+// cannot be recorded on a terminal mission.
+func TestStore_AppendResult_RejectsClosedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+	require.NoError(t, s.Close(c.MissionID, StatusClosed))
+
+	err := s.AppendResult(c.MissionID, resultFor(c, VerdictPass))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "terminal state")
+}
+
+// TestStore_AppendResult_RejectsMalformed asserts that AppendResult
+// runs Validate before any disk I/O. A malformed result (empty
+// evidence) is refused and the on-disk file is left unchanged.
+func TestStore_AppendResult_RejectsMalformed(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	bad := resultFor(c, VerdictPass)
+	bad.Evidence = nil
+	err := s.AppendResult(c.MissionID, bad)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "evidence")
+
+	_, statErr := os.Stat(s.resultsPath(c.MissionID))
+	assert.True(t, os.IsNotExist(statErr), "rejected result must leave no file")
+}
+
+// TestStore_AppendResult_FilesChangedContainment covers success
+// criterion 4: every equivalence class of files_changed containment
+// failure is rejected — direct violation, traversal, control
+// characters, absolute paths, empty segments, and root claims. This
+// is the "fix the class, not the instance" test: the result
+// validator must reject every variant the write_set admission rules
+// already reject at contract create time.
+//
+// Round 2 of Phase 3.6 extends the table with the parent-prefix
+// class. All four reviewers independently flagged the H1 bug in
+// round 1: the symmetric pathsOverlap helper accepted a result
+// claiming a parent directory of a write_set file entry. The new
+// cases below exercise every variant — parent of a file entry,
+// parent of a directory entry, top-level ancestor, and the
+// mixed-bag case with multiple paths where some are valid and some
+// are the exploit.
+func TestStore_AppendResult_FilesChangedContainment(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"internal/mission/", "cmd/ethos/mission.go"}
+	require.NoError(t, s.Create(c))
+
+	tests := []struct {
+		name    string
+		path    string
+		wantErr string
+	}{
+		{
+			name:    "direct violation",
+			path:    "cmd/other/file.go",
+			wantErr: "outside mission",
+		},
+		{
+			name:    "sibling prefix",
+			path:    "internal/missionary/foo.go",
+			wantErr: "outside mission",
+		},
+		{
+			name:    "traversal",
+			path:    "../etc/passwd",
+			wantErr: "path traversal",
+		},
+		{
+			name:    "absolute",
+			path:    "/etc/passwd",
+			wantErr: "relative path",
+		},
+		{
+			name:    "control character",
+			path:    "internal/mission/\nbad.go",
+			wantErr: "control character",
+		},
+		{
+			name:    "null byte",
+			path:    "internal/mission/\x00bypass",
+			wantErr: "null byte",
+		},
+		{
+			name:    "root claim",
+			path:    ".",
+			wantErr: "project root",
+		},
+		{
+			name:    "dot slash root claim",
+			path:    "./",
+			wantErr: "project root",
+		},
+		// --- Round 2: the parent-prefix class (H1). ---
+		{
+			// Parent of a file entry: contract allows
+			// cmd/ethos/mission.go, result claims cmd/ethos. Must
+			// refuse — the file entry is `cmd/ethos/mission.go`,
+			// not a directory, so cmd/ethos would quietly claim
+			// authority over every other file under cmd/ethos/.
+			name:    "parent-prefix of file entry",
+			path:    "cmd/ethos",
+			wantErr: "outside mission",
+		},
+		{
+			// Top-level ancestor of a file entry: result claims
+			// `cmd` against write_set `cmd/ethos/mission.go`.
+			name:    "top-level ancestor of file entry",
+			path:    "cmd",
+			wantErr: "outside mission",
+		},
+		{
+			// Top-level ancestor of a directory entry: result
+			// claims `internal` against write_set `internal/mission/`.
+			// Must refuse — the result would cover every other
+			// package under internal/.
+			name:    "top-level ancestor of directory entry",
+			path:    "internal",
+			wantErr: "outside mission",
+		},
+		{
+			// Parent of a directory entry with trailing slash.
+			// Write_set is `internal/mission/`; result claims
+			// `internal/missi` which is a STRING prefix but not a
+			// SEGMENT prefix — this case was already covered by
+			// "sibling prefix" but lock the intent here.
+			name:    "string-but-not-segment prefix",
+			path:    "internal/missi",
+			wantErr: "outside mission",
+		},
+		{
+			// Result claims a dot-syntax root. The per-entry
+			// validator rejects dot-root first — but the test
+			// locks the behavior in case the order ever changes.
+			name:    "dot-dot root claim",
+			path:    "./.",
+			wantErr: "project root",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := resultFor(c, VerdictPass)
+			r.FilesChanged = []FileChange{{Path: tt.path, Added: 1, Removed: 0}}
+			err := s.AppendResult(c.MissionID, r)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			// No results file should exist for the rejected input.
+			_, statErr := os.Stat(s.resultsPath(c.MissionID))
+			assert.True(t, os.IsNotExist(statErr),
+				"rejected result must leave no file for case %q", tt.name)
+		})
+	}
+}
+
+// TestStore_AppendResult_FilesChangedContainment_MixedBag asserts
+// the class fix applies to the multi-path case: a result with some
+// valid files_changed and some parent-prefix invalid entries must
+// be refused, and every invalid path must appear in the error
+// message. The operator needs the full fix list in one pass.
+//
+// Round 2 of Phase 3.6 added this test alongside the parent-prefix
+// cases above: fixing the single instance is not sufficient when
+// the exploit can land on any of several files in a single YAML.
+func TestStore_AppendResult_FilesChangedContainment_MixedBag(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"internal/mission/", "cmd/ethos/mission.go"}
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = []FileChange{
+		{Path: "internal/mission/result.go"}, // valid
+		{Path: "cmd/ethos/mission.go"},       // valid (exact match to file entry)
+		{Path: "cmd/ethos"},                  // INVALID (parent of file entry)
+		{Path: "cmd"},                        // INVALID (top-level ancestor)
+		{Path: "internal"},                   // INVALID (top-level ancestor of dir)
+	}
+	err := s.AppendResult(c.MissionID, r)
+	require.Error(t, err)
+	msg := err.Error()
+	// Every invalid path must be named in the error.
+	assert.Contains(t, msg, "cmd/ethos")
+	assert.Contains(t, msg, "cmd,")
+	assert.Contains(t, msg, "internal")
+	// The valid paths must not appear.
+	assert.NotContains(t, msg, "internal/mission/result.go")
+	assert.NotContains(t, msg, "cmd/ethos/mission.go,")
+	// Count: 3 out-of-bounds paths.
+	assert.Contains(t, msg, "3 path(s)")
+}
+
+// TestStore_AppendResult_FilesChangedContainment_TrailingSlash
+// asserts the round 2 fix preserved the trailing-slash equivalence
+// the normalization layer already provides. A write_set entry with
+// a trailing slash (`internal/mission/`) must still admit a result
+// path without one (`internal/mission/result.go`), and vice versa.
+func TestStore_AppendResult_FilesChangedContainment_TrailingSlash(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"internal/mission/"}
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = []FileChange{
+		{Path: "internal/mission/result.go"},
+		{Path: "internal/mission/store.go"},
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+}
+
+// TestStore_AppendResult_FilesChangedAcceptsValid asserts the positive
+// branch of the containment check: paths under a write_set entry
+// (exact, prefix, and dot-segment variants) are all admitted.
+func TestStore_AppendResult_FilesChangedAcceptsValid(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"internal/mission/", "cmd/ethos/mission.go"}
+	require.NoError(t, s.Create(c))
+
+	valid := []string{
+		"internal/mission/result.go",
+		"internal/mission/store.go",
+		"cmd/ethos/mission.go",
+		"./internal/mission/result.go",
+		"internal/./mission/store.go",
+	}
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = nil
+	for _, p := range valid {
+		r.FilesChanged = append(r.FilesChanged, FileChange{Path: p, Added: 1})
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+}
+
+// TestStore_AppendResult_FilesChangedReportsAllOutOfBounds asserts
+// that a result with multiple out-of-bounds paths lists every one in
+// the error message — operators need the full fix list in a single
+// pass, not one retry per path.
+func TestStore_AppendResult_FilesChangedReportsAllOutOfBounds(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"internal/mission/"}
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = []FileChange{
+		{Path: "cmd/foo.go"},
+		{Path: "cmd/bar.go"},
+		{Path: "internal/mission/ok.go"}, // this one is allowed
+	}
+	err := s.AppendResult(c.MissionID, r)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "cmd/foo.go")
+	assert.Contains(t, msg, "cmd/bar.go")
+	assert.NotContains(t, msg, "internal/mission/ok.go",
+		"error must not list the path that is inside the write_set")
+	assert.Contains(t, msg, "2 path(s)")
+}
+
+// TestStore_LoadResults_RejectsUnknownField asserts that a
+// hand-edited results file with a smuggled key is rejected on read,
+// symmetric with the contract and reflections decode trust boundaries.
+func TestStore_LoadResults_RejectsUnknownField(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	body := []byte(`results:
+  - mission: m-2026-04-08-001
+    round: 1
+    author: bwk
+    verdict: pass
+    confidence: 0.8
+    evidence:
+      - name: make check
+        status: pass
+    bogus: smuggled
+`)
+	require.NoError(t, os.WriteFile(s.resultsPath(c.MissionID), body, 0o600))
+
+	_, err := s.LoadResults(c.MissionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "field bogus not found")
+}
+
+// TestStore_LoadResults_RejectsMismatchedMissionID asserts the
+// on-disk trust symmetry Phase 3.6 round 5 added: a hand-edited
+// results file whose entry carries a Mission ID different from the
+// file's parent mission is rejected at read time, exactly as
+// AppendResult rejects it at write time.
+//
+// Before the fix, an attacker with local write access to
+// ~/.punt-labs/ethos/missions/<id>.results.yaml could drop a
+// forged result into mission A's sibling file claiming mission B.
+// decodeResultsFile ran r.Validate (which passes — the forged
+// entry is internally consistent) but never checked
+// r.Mission == missionID. The close gate then accepted the forged
+// result as long as the round matched, silently authorizing a
+// terminal transition on A based on work reported for B.
+//
+// The test seeds a results file under missionA containing a result
+// whose mission field is missionB, then drives two surfaces:
+//  1. LoadResults(missionA) must return an error naming both IDs.
+//  2. Close(missionA, StatusClosed) must refuse, propagating the
+//     load failure. Pre-fix, Close silently accepted because
+//     checkResultGateLocked only matched on round number.
+func TestStore_LoadResults_RejectsMismatchedMissionID(t *testing.T) {
+	s := testStore(t)
+	missionA := "m-2026-04-08-001"
+	missionB := "m-2026-04-08-002"
+	c := newContract(missionA)
+	require.NoError(t, s.Create(c))
+
+	// Hand-craft a results file under missionA whose single entry
+	// declares itself as belonging to missionB. Round 1 matches the
+	// freshly-created mission's current_round so the pre-fix gate
+	// would have been satisfied by the forgery.
+	body := []byte(`results:
+  - mission: ` + missionB + `
+    round: 1
+    author: bwk
+    verdict: pass
+    confidence: 0.8
+    evidence:
+      - name: make check
+        status: pass
+`)
+	require.NoError(t, os.WriteFile(s.resultsPath(missionA), body, 0o600))
+
+	// Surface 1: LoadResults names both IDs in the mismatch error.
+	_, err := s.LoadResults(missionA)
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "mission")
+	assert.Contains(t, msg, missionA, "error must name the target mission")
+	assert.Contains(t, msg, missionB, "error must name the forged mission")
+
+	// Surface 2: Close refuses, and the load failure is propagated
+	// through checkResultGateLocked rather than silently satisfied
+	// by the round match. Pre-fix this assertion fails — Close
+	// accepts the forgery and flips missionA to closed.
+	err = s.Close(missionA, StatusClosed)
+	require.Error(t, err, "close must refuse when the results file is forged")
+	assert.Contains(t, err.Error(), "mission")
+
+	// And the mission must still be open — the gate refusal must
+	// not leak any partial state through.
+	loaded, loadErr := s.Load(missionA)
+	require.NoError(t, loadErr)
+	assert.Equal(t, StatusOpen, loaded.Status,
+		"gate refusal must not flip the status on a forgery")
+	assert.Empty(t, loaded.ClosedAt)
+}
+
+// TestStore_LoadResults_EmptyForFreshMission asserts that a brand-new
+// mission has no results file on disk and LoadResults returns nil
+// with no error.
+func TestStore_LoadResults_EmptyForFreshMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	rs, err := s.LoadResults(c.MissionID)
+	require.NoError(t, err)
+	assert.Nil(t, rs)
+}
+
+// TestStore_LoadResult_MissingRoundReturnsNil asserts that
+// LoadResult returns (nil, nil) for a round with no result on file.
+// This is the shape the close gate relies on to decide refusal.
+func TestStore_LoadResult_MissingRoundReturnsNil(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r, err := s.LoadResult(c.MissionID, 1)
+	require.NoError(t, err)
+	assert.Nil(t, r)
+}
+
+// TestStore_CloseGate_RefusesWithoutResult covers success criterion 5:
+// every terminal status transition is refused unless a result
+// exists for the current round. The error names the mission, the
+// round, and the recovery command.
+func TestStore_CloseGate_RefusesWithoutResult(t *testing.T) {
+	for _, status := range []string{StatusClosed, StatusFailed, StatusEscalated} {
+		t.Run(status, func(t *testing.T) {
+			s := testStore(t)
+			c := disjointContract("m-2026-04-08-001")
+			require.NoError(t, s.Create(c))
+
+			err := s.Close(c.MissionID, status)
+			require.Error(t, err)
+			msg := err.Error()
+			assert.Contains(t, msg, c.MissionID)
+			assert.Contains(t, msg, "no result artifact for round 1")
+			assert.Contains(t, msg, "ethos mission result")
+
+			// No terminal transition should have happened.
+			loaded, loadErr := s.Load(c.MissionID)
+			require.NoError(t, loadErr)
+			assert.Equal(t, StatusOpen, loaded.Status,
+				"gate refusal must not flip the status")
+			assert.Empty(t, loaded.ClosedAt)
+		})
+	}
+}
+
+// TestStore_CloseGate_AcceptsWithResult covers success criterion 6:
+// a mission with a valid result for the current round closes
+// cleanly. Every terminal status is exercised.
+func TestStore_CloseGate_AcceptsWithResult(t *testing.T) {
+	cases := map[string]string{
+		StatusClosed:    VerdictPass,
+		StatusFailed:    VerdictFail,
+		StatusEscalated: VerdictEscalate,
+	}
+	for status, verdict := range cases {
+		t.Run(status, func(t *testing.T) {
+			s := testStore(t)
+			c := disjointContract("m-2026-04-08-001")
+			require.NoError(t, s.Create(c))
+			submitRoundResult(t, s, c, verdict)
+
+			require.NoError(t, s.Close(c.MissionID, status))
+
+			loaded, err := s.Load(c.MissionID)
+			require.NoError(t, err)
+			assert.Equal(t, status, loaded.Status)
+			assert.NotEmpty(t, loaded.ClosedAt)
+		})
+	}
+}
+
+// TestStore_CloseGate_RefusesWhenOnlyStaleRoundHasResult asserts that
+// the gate checks the CURRENT round, not any round. If a mission has
+// advanced from round 1 to round 2, the round-1 result no longer
+// satisfies the gate — the worker must submit a round-2 result.
+func TestStore_CloseGate_RefusesWhenOnlyStaleRoundHasResult(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	// Round 1: submit result and advance.
+	submitRoundResult(t, s, c, VerdictPass)
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	newRound, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	require.Equal(t, 2, newRound)
+
+	// Round 2 has no result yet; close must refuse.
+	err = s.Close(c.MissionID, StatusClosed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "round 2")
+}
+
+// TestStore_ListSkipsResultsFile is the Phase 3.6 regression test
+// for the Phase 3.4 round-2 BLOCKER. The bug Phase 3.4 round 2 fixed:
+// Store.List treated sibling YAML files as contracts, breaking
+// List itself, MatchByPrefix (ambiguous matches), and Create's
+// cross-mission conflict scan (fatal load failure). Phase 3.6 adds a
+// new sibling file (.results.yaml) and must not reproduce that
+// failure mode.
+//
+// The test creates a mission, submits a result, and drives all three
+// failure surfaces: List must return the contract only, MatchByPrefix
+// must resolve unambiguously, and a second Create must succeed.
+func TestStore_ListSkipsResultsFile(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.MissionID = "m-2026-04-08-001"
+	c.WriteSet = []string{"tests/list-skip-results/"}
+	require.NoError(t, s.Create(&c))
+
+	// Submit a result so the sibling file exists on disk.
+	r := &Result{
+		Mission:    c.MissionID,
+		Round:      1,
+		Author:     "bwk",
+		Verdict:    VerdictPass,
+		Confidence: 0.9,
+		Evidence: []EvidenceCheck{
+			{Name: "make check", Status: EvidenceStatusPass},
+		},
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+
+	// Verify the sibling file actually exists — the test is
+	// meaningless if AppendResult silently dropped the write.
+	_, err := os.Stat(s.resultsPath(c.MissionID))
+	require.NoError(t, err, "results file must exist for the test to be meaningful")
+
+	// Failure mode 1: List must return exactly one mission ID.
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m-2026-04-08-001"}, ids,
+		"List must skip <id>.results.yaml")
+
+	// Failure mode 2: MatchByPrefix must resolve unambiguously.
+	id, err := s.MatchByPrefix("m-2026-04-08")
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-04-08-001", id)
+
+	// Failure mode 3: Create must succeed for a new mission.
+	c2 := validContract()
+	c2.MissionID = "m-2026-04-08-002"
+	c2.WriteSet = []string{"tests/list-skip-results-2/"}
+	assert.NoError(t, s.Create(&c2),
+		"Create must not choke on the sibling results file")
+}
+
+// TestStore_ListSkipsResultsFile_CoexistsWithReflections asserts both
+// sibling files coexist with the contract: a mission with BOTH a
+// reflections file and a results file still lists as one mission.
+// This covers the interaction between Phase 3.4 and Phase 3.6 at the
+// List boundary — a regression that only surfaces when both sibling
+// files are present.
+func TestStore_ListSkipsResultsFile_CoexistsWithReflections(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	submitRoundResult(t, s, c, VerdictPass)
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"m-2026-04-08-001"}, ids,
+		"List must return exactly one mission ID when both sibling files exist")
+}
+
+// TestStore_NonTerminalTransitionsUnchanged covers success criterion 9:
+// the Phase 3.6 gate fires only on terminal close. Every other
+// transition — AppendReflection, AdvanceRound, Update — is unchanged.
+// A mission can go round 1 → round 2 → round 3 without ever
+// submitting a result.
+func TestStore_NonTerminalTransitionsUnchanged(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.Budget.Rounds = 3
+	require.NoError(t, s.Create(c))
+
+	// Round 1 → 2: reflection only, no result. The gate is
+	// close-specific; advance must work.
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	newRound, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	assert.Equal(t, 2, newRound)
+
+	// Round 2 → 3: same.
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(2, RecommendationContinue)))
+	newRound, err = s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	assert.Equal(t, 3, newRound)
+
+	// Update: the context field must round-trip without a result.
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	loaded.Context = "mid-round context update"
+	require.NoError(t, s.Update(loaded))
+
+	// The close gate fires only now, at round 3.
+	err = s.Close(c.MissionID, StatusClosed)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "round 3")
+}
+
+// TestStore_Close_EventLogRecordsRoundAndVerdict asserts the M3 fix:
+// the close event carries the round number and verdict of the
+// satisfying result so an auditor reading the JSONL does not have
+// to scan back across round_advanced events to reconstruct which
+// result authorized the terminal transition. Round 2 of Phase 3.6
+// added these fields to the close event's Details map.
+func TestStore_Close_EventLogRecordsRoundAndVerdict(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	// Submit a round-1 result with a specific verdict so the
+	// assertion can distinguish it from a default-filled value.
+	r := resultFor(c, VerdictFail)
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+
+	// Close with a terminal status that does not match the verdict
+	// — the gate does not require equality, but the event log must
+	// still record the result's OWN verdict, not the close status.
+	require.NoError(t, s.Close(c.MissionID, StatusFailed))
+
+	events := readLog(t, s, c.MissionID)
+	require.NotEmpty(t, events)
+	var closeEvent *Event
+	for i := range events {
+		if events[i].Event == "close" {
+			closeEvent = &events[i]
+			break
+		}
+	}
+	require.NotNil(t, closeEvent, "close event must exist in log")
+	assert.Equal(t, StatusFailed, closeEvent.Details["status"])
+	// Round is JSON-decoded as float64, same as the result event.
+	assert.Equal(t, float64(1), closeEvent.Details["round"],
+		"close event must carry the satisfying result's round")
+	assert.Equal(t, VerdictFail, closeEvent.Details["verdict"],
+		"close event must carry the satisfying result's verdict, not the close status")
+}
+
+// TestStore_AppendResult_LogsEvent asserts that a successful
+// AppendResult writes a `result` event with round and verdict
+// details so the audit trail is complete.
+func TestStore_AppendResult_LogsEvent(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	require.NoError(t, s.AppendResult(c.MissionID, resultFor(c, VerdictPass)))
+
+	events := readLog(t, s, c.MissionID)
+	require.Len(t, events, 2)
+	assert.Equal(t, "create", events[0].Event)
+	assert.Equal(t, "result", events[1].Event)
+	assert.Equal(t, float64(1), events[1].Details["round"])
+	assert.Equal(t, "pass", events[1].Details["verdict"])
+}
+
+// TestStore_AppendResult_NormalizesAuthor asserts the L2 fix:
+// whitespace around the author handle is trimmed at persist time so
+// the audit trail and event log do not carry `"  bwk"` values. The
+// round 2 fix is normalization in AppendResult, not tightening
+// Validate — Validate still accepts whitespace so pre-round-2
+// files on disk still load.
+func TestStore_AppendResult_NormalizesAuthor(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.Author = "  bwk  "
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+
+	loaded, err := s.LoadResult(c.MissionID, 1)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, "bwk", loaded.Author,
+		"AppendResult must persist the trimmed author")
+
+	// The event log must also carry the trimmed handle.
+	events := readLog(t, s, c.MissionID)
+	var resultEvent *Event
+	for i := range events {
+		if events[i].Event == "result" {
+			resultEvent = &events[i]
+			break
+		}
+	}
+	require.NotNil(t, resultEvent)
+	assert.Equal(t, "bwk", resultEvent.Actor,
+		"event log actor must be the trimmed author")
+}
+
+// TestStore_AppendReflection_NormalizesAuthor asserts the L2 class
+// fix is applied symmetrically to the reflection store. Fixing
+// only AppendResult would ship asymmetric behavior across the two
+// sibling stores — round 2 widened the fix to both.
+func TestStore_AppendReflection_NormalizesAuthor(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := reflectionFor(1, RecommendationContinue)
+	r.Author = "  claude  "
+	require.NoError(t, s.AppendReflection(c.MissionID, r))
+
+	rs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, "claude", rs[0].Author,
+		"AppendReflection must persist the trimmed author")
+
+	events := readLog(t, s, c.MissionID)
+	var reflectEvent *Event
+	for i := range events {
+		if events[i].Event == "reflect" {
+			reflectEvent = &events[i]
+			break
+		}
+	}
+	require.NotNil(t, reflectEvent)
+	assert.Equal(t, "claude", reflectEvent.Actor,
+		"event log actor must be the trimmed author")
+}
+
+// TestStore_AppendResult_ConcurrentSerialization asserts that two
+// concurrent AppendResult calls on the same mission/round cannot
+// both succeed: the per-mission flock serializes them so exactly one
+// wins and the other sees the append-only refusal.
+func TestStore_AppendResult_ConcurrentSerialization(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	const n = 10
+	var wg sync.WaitGroup
+	errs := make(chan error, n)
+	successes := make(chan struct{}, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.AppendResult(c.MissionID, resultFor(c, VerdictPass)); err != nil {
+				errs <- err
+				return
+			}
+			successes <- struct{}{}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	close(successes)
+
+	var wins int
+	for range successes {
+		wins++
+	}
+	var failures []error
+	for err := range errs {
+		failures = append(failures, err)
+	}
+	assert.Equal(t, 1, wins, "exactly one concurrent AppendResult must win")
+	assert.Len(t, failures, n-1)
+	for _, err := range failures {
+		assert.Contains(t, err.Error(), "append-only",
+			"failure must be the append-only refusal, not a lock error")
 	}
 }

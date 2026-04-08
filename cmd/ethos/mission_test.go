@@ -75,11 +75,13 @@ func missionTestEnv(t *testing.T) string {
 	missionCreateFile = ""
 	missionListStatus = "open"
 	missionCloseStatus = mission.StatusClosed
+	missionResultFile = ""
 	t.Cleanup(func() {
 		jsonOutput = false
 		missionCreateFile = ""
 		missionListStatus = "open"
 		missionCloseStatus = mission.StatusClosed
+		missionResultFile = ""
 	})
 	return tmp
 }
@@ -147,6 +149,41 @@ context: "smoke test contract"
 `
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
+}
+
+// writeResultFile drops a minimal valid result YAML into a temp file
+// and returns the path. The helper is parameterized by mission ID
+// and round so tests that exercise the CLI result path can drive
+// the Phase 3.6 close gate without re-typing the YAML at every call
+// site.
+func writeResultFile(t *testing.T, missionID string, round int) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "result.yaml")
+	body := fmt.Sprintf(`mission: %s
+round: %d
+author: bwk
+verdict: pass
+confidence: 0.9
+evidence:
+  - name: make check
+    status: pass
+`, missionID, round)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+// submitCLIResult runs the CLI result subcommand in-process so tests
+// that only care about the Phase 3.6 gate's presence can stay brief.
+// It always submits a pass/0.9/round-1 result — tests that need a
+// different shape build the YAML and invoke runMissionResult
+// directly.
+func submitCLIResult(t *testing.T, missionID string, round int) {
+	t.Helper()
+	oldFile := missionResultFile
+	missionResultFile = writeResultFile(t, missionID, round)
+	t.Cleanup(func() { missionResultFile = oldFile })
+	captureStdout(t, func() { runMissionResult(missionID, missionResultFile) })
 }
 
 // writeContractFileWithWriteSet writes a contract file with a custom
@@ -402,7 +439,10 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 3)
 
-	// Close one. The other two stay open.
+	// Close one. The other two stay open. Phase 3.6 requires a
+	// result artifact for the current round before the close gate
+	// will accept the terminal transition.
+	submitCLIResult(t, ids[0], 1)
 	require.NoError(t, ms.Close(ids[0], mission.StatusClosed))
 
 	// Default filter "open" returns the two open ones.
@@ -438,6 +478,11 @@ func TestMissionClose(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
+	// Phase 3.6: submit a result before closing so the gate is
+	// satisfied. The test exercises the close path, not the gate
+	// refusal — the refusal branch is covered separately.
+	submitCLIResult(t, ids[0], 1)
+
 	// Non-JSON mode is silent on success.
 	stdout := captureStdout(t, func() { runMissionClose(ids[0], mission.StatusClosed) })
 	assert.Empty(t, strings.TrimSpace(stdout), "close must be silent on success (non-JSON mode)")
@@ -457,6 +502,8 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 	ids, err := ms.List()
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
+
+	submitCLIResult(t, ids[0], 1)
 
 	prefix := ids[0][:9]
 	captureStdout(t, func() { runMissionClose(prefix, mission.StatusFailed) })
@@ -615,6 +662,420 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 	assert.Equal(t, 2, loaded.CurrentRound)
 }
 
+// TestMissionShow_IncludesResults asserts the H2 fix: `mission
+// show` surfaces the round-by-round result log under the contract
+// header so an operator can see the verdict that authorized a
+// close without `cat`-ing the sibling YAML file.
+//
+// Round 1 of Phase 3.6 rendered only the contract and reflections.
+// mdm flagged the gap: after a valid submit + close, `ethos mission
+// show` said nothing about the result. Round 2 added printResults
+// to runMissionShow and a top-level `results` field to the JSON
+// payload.
+func TestMissionShow_IncludesResults(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Submit a valid result and close the mission so show renders
+	// both the contract and the result.
+	submitCLIResult(t, id, 1)
+	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+
+	// Human mode: the Results section must appear with the round
+	// and verdict.
+	out := captureStdout(t, func() { runMissionShow(id) })
+	assert.Contains(t, out, "Results:")
+	assert.Contains(t, out, "round 1")
+	assert.Contains(t, out, "pass")
+	assert.Contains(t, out, "bwk")
+
+	// JSON mode: the payload must carry a `results` array with one
+	// entry whose verdict is "pass".
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must be a top-level array, got: %v", payload["results"])
+	require.Len(t, results, 1)
+	first, _ := results[0].(map[string]any)
+	assert.Equal(t, "pass", first["verdict"])
+	assert.Equal(t, float64(1), first["round"])
+}
+
+// TestMissionShow_EmptyResultsIsArray asserts the A2 round-3 fix:
+// `mission show --json` on a mission with no submitted result must
+// return `"results": []`, not `"results": null`. The round-2 guard
+// — `if payload["results"] == nil { ... }` — was dead code because
+// a typed-nil []mission.Result boxed into map[string]any produces
+// an `any` whose *type* is non-nil even though its value is nil.
+// Round 3 pre-initializes the slice before constructing the
+// payload so JSON-encodes an empty array.
+func TestMissionShow_EmptyResultsIsArray(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	// Raw text: `"results": []` must appear, `"results": null` must
+	// not. Both forms use the printJSON indent width so the exact
+	// substring is stable across runs.
+	assert.Contains(t, jsonOut, `"results": []`,
+		"empty results must serialize as [], got: %s", jsonOut)
+	assert.NotContains(t, jsonOut, `"results": null`,
+		"empty results must not serialize as null, got: %s", jsonOut)
+
+	// Parsed: results must be an []any{} (non-nil, empty), not nil.
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must be an array, got: %v", payload["results"])
+	assert.Equal(t, 0, len(results))
+}
+
+// TestMissionShow_JSONIncludesSessionAndRepo asserts the C1 round-3
+// fix: `mission show --json` round-trips the `session` and `repo`
+// Contract fields when the source contract sets them. Round 2's
+// hand-rolled payload map dropped both fields silently, causing
+// load-bearing cross-session identity data to vanish from the MCP
+// and CLI surfaces. Round 3 replaced the map with a ShowPayload
+// struct that embeds *Contract, so every Contract field — including
+// any added in the future — round-trips automatically.
+func TestMissionShow_JSONIncludesSessionAndRepo(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Mutate the persisted contract in place to set session and
+	// repo. The CLI create path does not accept these fields from
+	// the YAML today, but the store's Update path does — the
+	// round-trip test exercises what the show path sees, not the
+	// create path.
+	c, err := ms.Load(id)
+	require.NoError(t, err)
+	c.Session = "test-session-abc"
+	c.Repo = "punt-labs/ethos"
+	require.NoError(t, ms.Update(c))
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+	assert.Equal(t, "test-session-abc", payload["session"],
+		"session must round-trip through show JSON, got: %v", payload["session"])
+	assert.Equal(t, "punt-labs/ethos", payload["repo"],
+		"repo must round-trip through show JSON, got: %v", payload["repo"])
+}
+
+// TestMissionShow_JSONOmitsEmptyOptionalFields asserts the C1
+// round-3 fix preserves Contract json-tag `omitempty` semantics.
+// An open mission with no context, no tools, and no closed_at
+// must NOT emit those fields in JSON — the round-2 hand-rolled
+// map unconditionally emitted every field, leaking
+// "closed_at": "" and "context": "" into payloads for open
+// missions and muddying the distinction between "absent" and
+// "empty".
+func TestMissionShow_JSONOmitsEmptyOptionalFields(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Clear context and tools so the omitempty fields are truly
+	// empty. The fixture in writeContractFile sets context and
+	// tools; this test needs the opposite shape.
+	c, err := ms.Load(id)
+	require.NoError(t, err)
+	c.Context = ""
+	c.Tools = nil
+	require.NoError(t, ms.Update(c))
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	// An open mission never has closed_at; it must not appear in
+	// the payload.
+	assert.NotContains(t, jsonOut, `"closed_at"`,
+		"open mission must not emit closed_at (omitempty), got: %s", jsonOut)
+	// Empty context must not appear.
+	assert.NotContains(t, jsonOut, `"context"`,
+		"empty context must be omitted (omitempty), got: %s", jsonOut)
+	// Empty tools must not appear.
+	assert.NotContains(t, jsonOut, `"tools"`,
+		"empty tools must be omitted (omitempty), got: %s", jsonOut)
+}
+
+// TestMissionShow_JSONSurfacesCorruptResultsAsWarnings asserts the
+// D1 round-3 fix: when LoadResults returns an error (corrupt
+// sibling file on disk), `mission show --json` emits a top-level
+// `warnings` array with the load failure instead of silently
+// returning `"results": []`. Without this, a corrupt file was
+// indistinguishable from "no result submitted".
+func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Corrupt the sibling results file. The file path mirrors the
+	// store's resultsPath layout — <root>/missions/<id>.results.yaml.
+	resultsFile := filepath.Join(ms.Root(), "missions", id+".results.yaml")
+	require.NoError(t, os.WriteFile(resultsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+
+	// results must still be present (an empty array) so the
+	// payload remains parseable.
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must still be an array on load failure, got: %v", payload["results"])
+	assert.Equal(t, 0, len(results))
+
+	// warnings must carry the load failure.
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "warnings must be a top-level array, got: %v", payload["warnings"])
+	require.NotEmpty(t, warnings)
+	firstWarning, _ := warnings[0].(string)
+	assert.Contains(t, firstWarning, "loading results",
+		"warning must name the load failure, got: %s", firstWarning)
+}
+
+// TestMissionShow_PrintsEmptyResultsSection asserts the E1 round-3
+// fix: `mission show` on a mission with no submitted result
+// renders a "Results: (none)" block instead of printing nothing.
+// Round 2's printResults returned early on an empty slice; an
+// operator running show on a fresh mission saw no indication
+// results were even expected.
+func TestMissionShow_PrintsEmptyResultsSection(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	out := captureStdout(t, func() { runMissionShow(id) })
+	assert.Contains(t, out, "Results:",
+		"empty-results show must print the Results: header, got: %s", out)
+	assert.Contains(t, out, "(none)",
+		"empty-results show must print (none) marker, got: %s", out)
+}
+
+// TestMissionShow_CorruptResultsStillPrintsSection asserts the N1
+// round-4 fix: when LoadResults fails on a corrupt `.results.yaml`
+// sibling, `mission show` still renders the Results header and
+// `(none)` marker on stdout, and the load failure surfaces on
+// stderr. Without this, an operator piping `ethos mission show <id>
+// 2>/dev/null | less` would see the contract block but nothing where
+// the Results section should be, and the warning signal would be
+// lost. Runs in a subprocess so stdout and stderr can be asserted
+// independently — the in-process captureStdout helper only captures
+// stdout, and the symmetry bug is precisely about what each stream
+// carries.
+func TestMissionShow_CorruptResultsStillPrintsSection(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/corrupt-results/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	// Corrupt the sibling results file. The file path mirrors the
+	// store's resultsPath layout — <root>/missions/<id>.results.yaml.
+	resultsFile := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".results.yaml")
+	require.NoError(t, os.WriteFile(resultsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
+
+	showCmd := exec.Command(ethosBinary, "mission", "show", id)
+	showCmd.Env = env
+	var stdoutBuf, stderrBuf bytes.Buffer
+	showCmd.Stdout = &stdoutBuf
+	showCmd.Stderr = &stderrBuf
+	require.NoError(t, showCmd.Run(),
+		"mission show must exit 0 on corrupt results, got stderr: %s", stderrBuf.String())
+
+	stdout := stdoutBuf.String()
+	assert.Contains(t, stdout, "Results:",
+		"corrupt-results show must print the Results: header on stdout, got: %s", stdout)
+	assert.Contains(t, stdout, "(none)",
+		"corrupt-results show must print (none) marker on stdout, got: %s", stdout)
+
+	stderr := stderrBuf.String()
+	assert.Contains(t, stderr, "loading results",
+		"corrupt-results show must carry the load failure on stderr, got: %s", stderr)
+}
+
+// TestMissionShow_CorruptReflectionsStillPrintsSection asserts the
+// round-6 Bugbot fix: when LoadReflections fails on a corrupt
+// `.reflections.yaml` sibling, `mission show` still renders the
+// Reflections header and `(none)` marker on stdout, and the load
+// failure surfaces on stderr. Round 4 fixed the same class for
+// Results (mdm N1); this test closes the parallel miss. Without
+// this, an operator piping `ethos mission show <id> 2>/dev/null |
+// less` would see the contract block but nothing where the
+// Reflections section should be, and the warning signal would be
+// lost. Runs in a subprocess so stdout and stderr can be asserted
+// independently — the symmetry bug is precisely about what each
+// stream carries.
+func TestMissionShow_CorruptReflectionsStillPrintsSection(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/corrupt-reflections/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	// Corrupt the sibling reflections file. The file path mirrors
+	// the store's reflectionsPath layout —
+	// <root>/missions/<id>.reflections.yaml.
+	reflectionsFile := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".reflections.yaml")
+	require.NoError(t, os.WriteFile(reflectionsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
+
+	showCmd := exec.Command(ethosBinary, "mission", "show", id)
+	showCmd.Env = env
+	var stdoutBuf, stderrBuf bytes.Buffer
+	showCmd.Stdout = &stdoutBuf
+	showCmd.Stderr = &stderrBuf
+	require.NoError(t, showCmd.Run(),
+		"mission show must exit 0 on corrupt reflections, got stderr: %s", stderrBuf.String())
+
+	stdout := stdoutBuf.String()
+	assert.Contains(t, stdout, "Reflections:",
+		"corrupt-reflections show must print the Reflections: header on stdout, got: %s", stdout)
+	assert.Contains(t, stdout, "(none)",
+		"corrupt-reflections show must print (none) marker on stdout, got: %s", stdout)
+
+	stderr := stderrBuf.String()
+	assert.Contains(t, stderr, "loading reflections",
+		"corrupt-reflections show must carry the load failure on stderr, got: %s", stderr)
+}
+
+// TestMissionClose_HelpMentionsResultGate asserts the G1 round-3
+// fix: `mission close --help` documents that a result artifact is
+// required for the current round, mirroring `mission advance --help`.
+// Without this paragraph, an operator reading only the close help
+// is surprised by the "no result artifact for round N" refusal.
+func TestMissionClose_HelpMentionsResultGate(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission", "close", "--help")
+	require.NoError(t, err)
+	// The gate language must surface the prerequisite and the
+	// remediation path. Both pieces matter: the operator needs to
+	// know what is required AND how to satisfy it.
+	assert.Contains(t, stdout, "result",
+		"close help must mention the result prerequisite, got: %s", stdout)
+	assert.Contains(t, stdout, "ethos mission result",
+		"close help must link to the result subcommand, got: %s", stdout)
+}
+
 // TestMissionShow_RendersCurrentRound asserts that printContract
 // includes the new "Round: N of M" line so the operator can read
 // the mission's progress at a glance.
@@ -661,6 +1122,348 @@ func TestMissionReflections_JSON(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, 1, got[0].Round)
 	assert.Equal(t, "continue", got[0].Recommendation)
+}
+
+// --- 3.6: result submission and close gate ---
+
+// TestMissionResult_RoundTrip asserts success criterion 1 via the CLI
+// surface: a well-formed result YAML persists through runMissionResult
+// and comes back via LoadResult.
+func TestMissionResult_RoundTrip(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	missionResultFile = writeResultFile(t, id, 1)
+	stdout := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
+	assert.Empty(t, strings.TrimSpace(stdout), "result must be silent on success (non-JSON mode)")
+
+	loaded, err := ms.LoadResult(id, 1)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, 1, loaded.Round)
+	assert.Equal(t, mission.VerdictPass, loaded.Verdict)
+}
+
+// TestMissionResults_ListsSubmittedResults asserts the H3 fix:
+// `ethos mission results <id>` is a real subcommand, and it lists
+// the round-by-round worker result log in both human and JSON
+// modes. Round 1 shipped only `mission result` (the write path);
+// the sibling read path was MCP-only. mdm flagged the asymmetry
+// against `mission reflect`/`mission reflections`.
+func TestMissionResults_ListsSubmittedResults(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Empty case — no results yet, JSON mode must produce "[]"
+	// (never "null") so consumers can unmarshal into []Result
+	// without a nil guard.
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() { runMissionResults(id) })
+	assert.Equal(t, "[]", strings.TrimSpace(out))
+
+	// Submit a result and fetch again.
+	submitCLIResult(t, id, 1)
+	out = captureStdout(t, func() { runMissionResults(id) })
+	var got []mission.Result
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.Len(t, got, 1)
+	assert.Equal(t, 1, got[0].Round)
+	assert.Equal(t, mission.VerdictPass, got[0].Verdict)
+	assert.Equal(t, id, got[0].Mission)
+
+	// Human mode: the Results section header and a round 1 bullet
+	// must appear.
+	jsonOutput = false
+	humanOut := captureStdout(t, func() { runMissionResults(id) })
+	assert.Contains(t, humanOut, "Results:")
+	assert.Contains(t, humanOut, "round 1")
+	assert.Contains(t, humanOut, "pass")
+}
+
+// TestMissionResults_HelpListsSubcommand asserts the H3 discovery
+// fix: the `results` subcommand appears in `ethos mission --help`
+// so the operator can find it. Without this, the subcommand is a
+// ghost feature — present but undocumented.
+func TestMissionResults_HelpListsSubcommand(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "results")
+	assert.Contains(t, stdout, "Show the round-by-round result log")
+}
+
+// TestMissionResult_RefusesInvalidShapeNamesFilePath asserts the
+// M1 fix: a structural Validate failure (empty verdict,
+// out-of-range confidence, empty evidence) produces an error that
+// includes the --file path so the operator can locate the source
+// of the failure in one pass. Runs in a subprocess because
+// runMissionResult calls os.Exit on validation failure.
+func TestMissionResult_RefusesInvalidShapeNamesFilePath(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/m1-file-path/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+
+	// Write a result with an invalid verdict — structural
+	// Validate failure. The error must name the file path.
+	badFile := filepath.Join(tmp, "bad-result.yaml")
+	body := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: ""
+confidence: 0.5
+files_changed:
+  - path: tests/m1-file-path/
+    added: 1
+    removed: 0
+evidence:
+  - name: make check
+    status: pass
+`, id)
+	require.NoError(t, os.WriteFile(badFile, []byte(body), 0o600))
+
+	resultCmd := exec.Command(ethosBinary, "mission", "result", id, "--file", badFile)
+	resultCmd.Env = env
+	var stderrBuf bytes.Buffer
+	resultCmd.Stderr = &stderrBuf
+	err := resultCmd.Run()
+	require.Error(t, err)
+	stderr := stderrBuf.String()
+	assert.Contains(t, stderr, badFile,
+		"error must name the --file path, got: %s", stderr)
+	assert.Contains(t, stderr, "invalid verdict",
+		"error must still carry the Validate diagnostic, got: %s", stderr)
+}
+
+// TestMissionResult_JSON asserts the JSON output shape for the CLI
+// result subcommand.
+func TestMissionResult_JSON(t *testing.T) {
+	missionTestEnv(t)
+	jsonOutput = true
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	id := ids[0]
+
+	missionResultFile = writeResultFile(t, id, 1)
+	out := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, id, got["mission_id"])
+	assert.Equal(t, float64(1), got["round"])
+	assert.Equal(t, "pass", got["verdict"])
+	assert.Equal(t, 0.9, got["confidence"])
+	assert.NotEmpty(t, got["created_at"])
+}
+
+// TestMissionClose_GateRefusesWithoutResult asserts the CLI close
+// path surfaces the Phase 3.6 gate refusal verbatim. Runs in a
+// subprocess because runMissionClose calls os.Exit on gate refusal.
+func TestMissionClose_GateRefusesWithoutResult(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/close-gate/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	// Create the mission.
+	cmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	cmd.Env = env
+	require.NoError(t, cmd.Run())
+
+	// List to discover the ID.
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	// Try to close without a result — must exit 1 with the gate
+	// refusal message on stderr.
+	closeCmd := exec.Command(ethosBinary, "mission", "close", id)
+	closeCmd.Env = env
+	var closeErr bytes.Buffer
+	closeCmd.Stderr = &closeErr
+	err := closeCmd.Run()
+	require.Error(t, err)
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	stderr := closeErr.String()
+	assert.Contains(t, stderr, id)
+	assert.Contains(t, stderr, "no result artifact for round 1")
+	assert.Contains(t, stderr, "ethos mission result")
+}
+
+// TestMissionClose_GateAcceptsWithResult is the positive counterpart
+// to TestMissionClose_GateRefusesWithoutResult: submitting a result
+// via the CLI result subcommand and then closing via the CLI close
+// subcommand succeeds.
+func TestMissionClose_GateAcceptsWithResult(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	id := ids[0]
+
+	submitCLIResult(t, id, 1)
+	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+
+	loaded, err := ms.Load(id)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusClosed, loaded.Status)
+	assert.NotEmpty(t, loaded.ClosedAt)
+}
+
+// TestMissionResult_AppendOnlyViaCLI asserts success criterion 3
+// through the CLI surface: a duplicate submission for the same
+// round fails. Runs in a subprocess because the second invocation
+// calls os.Exit on the append-only refusal.
+func TestMissionResult_AppendOnlyViaCLI(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/append-only-cli/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	resultBody := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+evidence:
+  - name: make check
+    status: pass
+`, id)
+	resultFile := filepath.Join(tmp, "result.yaml")
+	require.NoError(t, os.WriteFile(resultFile, []byte(resultBody), 0o600))
+
+	first := exec.Command(ethosBinary, "mission", "result", id, "--file", resultFile)
+	first.Env = env
+	require.NoError(t, first.Run())
+
+	second := exec.Command(ethosBinary, "mission", "result", id, "--file", resultFile)
+	second.Env = env
+	var secondErr bytes.Buffer
+	second.Stderr = &secondErr
+	err := second.Run()
+	require.Error(t, err)
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	stderr := secondErr.String()
+	assert.Contains(t, stderr, "append-only")
+	assert.Contains(t, stderr, "round 1")
+	assert.Contains(t, stderr, id)
 }
 
 // TestMissionCreate_ConflictRejectedSubprocess exercises the Phase 3.2

@@ -655,6 +655,19 @@ func TestSubagentStart_VerifierGateNoOpForClosedMission(t *testing.T) {
 	c := validVerifierContract("djb")
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
+	// Phase 3.6: Close requires a result artifact for the current
+	// round. Submit one before closing so the test exercises the
+	// verifier-gate no-op path, not the Phase 3.6 gate refusal.
+	require.NoError(t, missions.AppendResult(c.MissionID, &mission.Result{
+		Mission:    c.MissionID,
+		Round:      c.CurrentRound,
+		Author:     c.Worker,
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence: []mission.EvidenceCheck{
+			{Name: "make check", Status: mission.EvidenceStatusPass},
+		},
+	}))
 	require.NoError(t, missions.Close(c.MissionID, mission.StatusClosed))
 
 	// Drift the personality. A closed mission must NOT block the spawn.
@@ -1054,6 +1067,19 @@ func TestSubagentStart_VerifierIsolationNoOpForClosedMission(t *testing.T) {
 	c := validVerifierContract("djb")
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
+	// Phase 3.6: the Close gate requires a result for the current
+	// round. Submit one before closing so the test exercises the
+	// verifier-isolation no-op path.
+	require.NoError(t, missions.AppendResult(c.MissionID, &mission.Result{
+		Mission:    c.MissionID,
+		Round:      c.CurrentRound,
+		Author:     c.Worker,
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence: []mission.EvidenceCheck{
+			{Name: "make check", Status: mission.EvidenceStatusPass},
+		},
+	}))
 	require.NoError(t, missions.Close(c.MissionID, mission.StatusClosed))
 
 	// Spawning djb now should fall through to the normal persona

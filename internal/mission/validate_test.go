@@ -336,6 +336,36 @@ func TestValidate_RejectsControlCharsInHandles(t *testing.T) {
 	}
 }
 
+// TestValidate_WriteSetErrorsNameTheField asserts the M2 parity
+// fix: the Contract.Validate path still names "write_set entry" in
+// the error so the operator can locate the field they can fix. The
+// result validator names "files_changed" instead — the two fields
+// share one helper but surface different contexts.
+func TestValidate_WriteSetErrorsNameTheField(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"traversal", "../etc/passwd"},
+		{"absolute", "/etc/passwd"},
+		{"null byte", "internal/\x00bad"},
+		{"control character", "internal/\nbad"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validContract()
+			c.WriteSet = []string{tc.path}
+			err := c.Validate()
+			require.Error(t, err)
+			msg := err.Error()
+			assert.Contains(t, msg, "write_set entry",
+				"Contract.Validate must name write_set entry, got: %s", msg)
+			assert.NotContains(t, msg, "files_changed",
+				"Contract.Validate must not name files_changed, got: %s", msg)
+		})
+	}
+}
+
 // TestValidate_AcceptsSingleDotSegment asserts that `./foo` is treated
 // as legitimate path syntax, not as path traversal. Single-dot segments
 // are a common shell convention and do not escape the base directory.

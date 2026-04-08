@@ -132,7 +132,7 @@ func (c *Contract) Validate() error {
 	}
 	for i, entry := range c.WriteSet {
 		if err := validateWriteSetEntry(entry); err != nil {
-			return fmt.Errorf("write_set[%d]: %w", i, err)
+			return fmt.Errorf("write_set[%d]: write_set entry: %w", i, err)
 		}
 	}
 
@@ -192,10 +192,17 @@ func containsControlChar(s string) bool {
 // flags the traversal but masks the original intent in the error
 // message. Rejecting the raw form gives cleaner diagnostics for the
 // reviewer auditing a malformed contract.
+//
+// The error messages name only the path — callers prepend the field
+// context ("write_set entry" vs "files_changed[i].path"). Phase 3.6
+// round 2 moved the field prefix out so the same helper can serve
+// both validators without either producing a contextually wrong
+// message ("write_set entry <path>" for a files_changed violation
+// was the M2 finding).
 func validateWriteSetEntry(entry string) error {
 	trimmed := strings.TrimSpace(entry)
 	if trimmed == "" {
-		return fmt.Errorf("write_set entry cannot be empty or whitespace")
+		return fmt.Errorf("cannot be empty or whitespace")
 	}
 
 	// Reject null bytes first with a specific message: any path
@@ -204,7 +211,7 @@ func validateWriteSetEntry(entry string) error {
 	// control-character check below would also catch this; keeping
 	// the special case gives the operator a clearer diagnostic.
 	if strings.ContainsRune(trimmed, 0) {
-		return fmt.Errorf("write_set entry %q contains null byte", trimmed)
+		return fmt.Errorf("%q contains null byte", trimmed)
 	}
 
 	// Reject any other control character (newline, CR, ESC, tab, etc.).
@@ -216,7 +223,7 @@ func validateWriteSetEntry(entry string) error {
 	// strings) are still worth rejecting at the trust boundary. See
 	// containsControlChar for the full rationale.
 	if containsControlChar(trimmed) {
-		return fmt.Errorf("write_set entry %q contains control character", trimmed)
+		return fmt.Errorf("%q contains control character", trimmed)
 	}
 
 	// Normalize backslashes to forward slashes first. This makes
@@ -230,7 +237,7 @@ func validateWriteSetEntry(entry string) error {
 	//   - UNC (post-normalize): `//server/share`
 	//   - Platform-specific forms via filepath.IsAbs
 	if strings.HasPrefix(normalized, "/") || filepath.IsAbs(trimmed) {
-		return fmt.Errorf("write_set entry %q must be a relative path", trimmed)
+		return fmt.Errorf("%q must be a relative path", trimmed)
 	}
 
 	// Reject Windows drive-letter prefixes (`C:\foo`, `D:/bar`).
@@ -238,7 +245,7 @@ func validateWriteSetEntry(entry string) error {
 	// so a future base-dir join could be bypassed.
 	if len(trimmed) >= 2 && trimmed[1] == ':' &&
 		((trimmed[0] >= 'A' && trimmed[0] <= 'Z') || (trimmed[0] >= 'a' && trimmed[0] <= 'z')) {
-		return fmt.Errorf("write_set entry %q must be a relative path (drive letter)", trimmed)
+		return fmt.Errorf("%q must be a relative path (drive letter)", trimmed)
 	}
 
 	// Reject root claims — entries that consist only of `.` segments
@@ -259,7 +266,7 @@ func validateWriteSetEntry(entry string) error {
 		}
 	}
 	if isRootClaim {
-		return fmt.Errorf("write_set entry %q claims the project root via dot syntax; specify the directories or files this mission writes", trimmed)
+		return fmt.Errorf("%q claims the project root via dot syntax; specify the directories or files this mission writes", trimmed)
 	}
 
 	// Scan every segment for literal `..`. This catches both leading
@@ -268,7 +275,7 @@ func validateWriteSetEntry(entry string) error {
 	// caught on Unix where filepath.ToSlash is a no-op.
 	for _, seg := range strings.Split(normalized, "/") {
 		if seg == ".." {
-			return fmt.Errorf("write_set entry %q contains path traversal", trimmed)
+			return fmt.Errorf("%q contains path traversal", trimmed)
 		}
 	}
 

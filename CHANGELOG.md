@@ -7,8 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`mission show --json` and MCP `mission show` payload shape**
+  (Phase 3.6 round 3, `ethos-07m.10`) — both surfaces now serialize
+  a new `mission.ShowPayload` struct that embeds `*Contract` and adds
+  sibling `results` (always an array, never `null`) and optional
+  `warnings` (omitempty) fields. This replaces the round-2 hand-rolled
+  `map[string]any` that silently dropped the Contract's `session` and
+  `repo` fields and unconditionally emitted every `omitempty`-tagged
+  field on open missions. Any consumer decoding directly into
+  `mission.Contract` still works — the embedded pointer serializes
+  the Contract fields identically, and `omitempty` is honored. A
+  consumer that was decoding the round-2 map into a custom struct
+  with an enumerated field list will now see `session`, `repo`, and
+  the omitted empty fields correctly. The new `warnings` field
+  surfaces corrupt sibling-file failures that previously returned
+  `"results": []` indistinguishable from "no result submitted", so
+  scripted MCP callers gain a signal the CLI-only stderr channel did
+  not carry. The `mission show` hook formatter
+  (`internal/hook/format_output.go`) now renders a `Results:` section
+  (and an empty-state `(none)` marker) and a `Warnings:` section when
+  non-empty — previously the agent-facing MCP rendering dropped the
+  results field entirely. Round 3 also makes the `mission show` CLI
+  empty-state render `Results: (none)` so an operator running `show`
+  on a fresh mission sees the section exists and is empty; adds a
+  paragraph to `ethos mission close --help` documenting the result
+  gate and the remediation path; and unifies the error-wrapper style
+  in `validateFileChange` and Contract `validate` so both read
+  `field: <cause>`. Round 4 (mdm finding N1) removes a stale early
+  `return` in `runMissionShow` so a corrupt `.results.yaml` still
+  renders the Results header and `(none)` marker on stdout — an
+  operator piping `ethos mission show <id> 2>/dev/null | less` no
+  longer loses the section entirely, and the stderr warning still
+  carries the load failure. Round 5 (Copilot finding) closes the
+  on-disk trust symmetry gap in `decodeResultsFile`: the write path
+  (`AppendResult`) has always refused a result whose self-declared
+  `mission` field disagrees with the target mission, but until now
+  the read path did not. An attacker with local write access to
+  `~/.punt-labs/ethos/missions/<id>.results.yaml` could hand-edit
+  the file to contain a forged result claiming a different mission,
+  and the close gate would accept it as long as the round number
+  matched. The decoder now rejects any `results[i].mission` that
+  does not equal the target, naming both IDs in the error —
+  symmetric with the Phase 3.1 round-3 `KnownFields(true)` fix.
+  Round 6 (Bugbot finding) closes the parallel miss of the round-4
+  Results fix on the Reflections side of `runMissionShow`: a corrupt
+  `.reflections.yaml` now still renders the `Reflections:` header
+  and `(none)` marker on stdout, with the load failure on stderr,
+  matching the symmetric Results behavior. `printReflections` on
+  empty input now emits the section header and `(none)` marker
+  instead of returning silently — parallel to the round-3 E1 fix
+  for `printResults`.
+
 ### Added
 
+- **Structured result artifacts and close gate** (Phase 3.6,
+  `ethos-07m.10`) — worker output is no longer prose. A new
+  `mission.Result` type in `internal/mission/result.go` pins a
+  closed schema (`mission`, `round`, `verdict`, `confidence`,
+  `files_changed`, `evidence`, `open_questions`, `prose`) with
+  strict `KnownFields(true)` decoding, full validation (verdict
+  enum, confidence in `[0.0, 1.0]` excluding NaN, evidence
+  non-empty, path containment, control-character rejection), and
+  append-only sibling storage at `<id>.results.yaml`. `Store.Close`
+  now gates every terminal transition (`closed`, `failed`,
+  `escalated`) on a valid result artifact for the mission's current
+  round; the refusal message names the mission, the round, and the
+  submission command, and the close event in the JSONL log records
+  the satisfying result's `round` and `verdict` so auditors can
+  reconstruct the gate decision without scanning back. The gate
+  lives at the store boundary so CLI and MCP fire it identically —
+  there is no override flag. New CLI subcommands `ethos mission
+  result <id> --file <path>` (write) and `ethos mission results
+  <id>` (read) and new MCP methods `mission result` and `mission
+  results` mirror the existing reflect/reflections surfaces; `ethos
+  mission show` and the MCP `mission show` method carry the result
+  log in their output payload so the operator sees the verdict
+  without `cat`-ing the sibling YAML. `files_changed` paths are
+  cross-checked against the contract's `write_set` via a new
+  asymmetric segment-prefix helper `pathContainedBy` — a result
+  cannot claim a parent directory of a write_set file entry, and
+  the same equivalence class of malformed paths (absolute,
+  traversal, control characters, drive letters, root claims,
+  parent-prefix) is rejected at both admission and result
+  submission. Author fields are normalized via `strings.TrimSpace`
+  in `AppendResult` and `AppendReflection` so whitespace does not
+  pollute the audit trail or event log. `Store.List` is taught
+  about the new `.results.yaml` sibling in `isContractFile`,
+  closing the Phase 3.4 round-2 regression surface for the new
+  file. The Phase 3.1–3.5 primitives are untouched: schema,
+  conflict check, frozen-evaluator hash, round-advance gate, and
+  verifier isolation are all preserved. To recover from the
+  close-gate refusal, submit a result via `ethos mission result
+  <id> --file <path>` (or the MCP `mission result` method); to
+  recover from a files_changed-containment refusal, edit the
+  result YAML so every declared path lives under an entry of the
+  mission's `write_set`, or update the contract via a new mission
+  if the write_set needs widening.
 - **Verifier isolation** (Phase 3.5, `ethos-07m.9`) — two new runtime
   gates layered on top of the Phase 3.1–3.4 primitives. At
   `Store.Create`, the contract is refused if `worker` and
