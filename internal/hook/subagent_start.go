@@ -166,11 +166,20 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 // invalidate the original mission's launch contract.
 //
 // Returns nil and is a no-op when:
-//   - Missions or Hash sources are unconfigured (legacy install)
+//   - Missions is nil (legacy install, no mission store)
 //   - agentType is empty
 //   - No open mission names agentType as evaluator
-//   - All matching open missions have current content matching their
-//     pinned hash
+//   - Every matching open mission is either legacy (empty pinned
+//     hash) or has current content matching its pinned hash
+//
+// Returns a fatal error when:
+//   - deps.Hash is misconfigured (Missions is non-nil but HashSources
+//     is incomplete). Silent skip would let stale evaluator content
+//     through under a configuration error.
+//   - A matching mission fails to load (corrupt or unparseable file).
+//   - The current hash recomputation itself fails.
+//   - Any matching open mission's pinned hash does not equal the
+//     recomputed current hash.
 //
 // On one or more real mismatches the error is a multi-line block
 // naming every drifted mission, the pinned and current rollup hash
@@ -199,9 +208,13 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 	}
 
 	// Breakdown is computed at most once per checkVerifierHash call,
-	// lazily, on the first matching open mission. All subsequent
-	// comparisons reuse the same struct: the evaluator handle is
-	// fixed by agentType, so the breakdown is too.
+	// lazily, on the first NON-LEGACY matching open mission. Legacy
+	// missions (empty pinned hash) must never trigger the compute:
+	// they cannot match any recomputed hash and the compute itself
+	// might fail (e.g. the evaluator's identity content was removed
+	// after the legacy mission was launched), which would wrongly
+	// block the spawn. The legacy check is therefore the first
+	// filter after status and handle match.
 	var (
 		breakdown       mission.EvaluatorHashBreakdown
 		breakdownLoaded bool
@@ -225,6 +238,20 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 		if c.Evaluator.Handle != agentType {
 			continue
 		}
+		if c.Evaluator.Hash == "" {
+			// Pre-3.3 mission with an empty pinned hash. Warn and
+			// continue; do not attempt to recompute the current
+			// hash. A legacy mission can never match a recomputed
+			// hash, and the recompute itself may fail against
+			// content that was valid at launch time but no longer
+			// resolves — which would wrongly refuse every spawn.
+			// The mission's launch predates the gate.
+			fmt.Fprintf(os.Stderr,
+				"ethos: subagent-start: warning: mission %s has empty Evaluator.Hash (pre-3.3); skipping gate\n",
+				c.MissionID,
+			)
+			continue
+		}
 		if !breakdownLoaded {
 			breakdown, err = mission.ComputeEvaluatorHashBreakdown(c.Evaluator.Handle, deps.Hash)
 			if err != nil {
@@ -234,17 +261,6 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 				)
 			}
 			breakdownLoaded = true
-		}
-		if c.Evaluator.Hash == "" {
-			// Pre-3.3 mission with an empty pinned hash. Refusing
-			// here would block legacy missions; logging and
-			// allowing keeps the upgrade path open. The mission's
-			// launch predates the gate.
-			fmt.Fprintf(os.Stderr,
-				"ethos: subagent-start: warning: mission %s has empty Evaluator.Hash (pre-3.3); skipping gate\n",
-				c.MissionID,
-			)
-			continue
 		}
 		if c.Evaluator.Hash != breakdown.Rollup {
 			mismatches = append(mismatches, driftedMission{

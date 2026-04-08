@@ -18,10 +18,13 @@ import (
 // reads. Three fields are scalar attribute slugs (personality, writing
 // style); Talents is a positionally indexed pair of slug + content lists.
 //
-// The struct mirrors `internal/identity.Identity` exactly enough for the
-// hash to be computed without importing that package — keeping the
-// mission package a leaf in the dependency graph and the hash function
-// trivially testable with hand-built fixtures.
+// The struct keeps the hash *algorithm* decoupled from the concrete
+// identity package: ComputeEvaluatorHash operates on this reduced
+// shape, not on identity.Identity directly, so the algorithm is
+// trivially testable with hand-built fixtures. The live-store
+// adapters (NewLiveHashSources, liveIdentityLoader) import
+// internal/identity, internal/role, and internal/team — the
+// algorithm core does not touch them.
 type EvaluatorIdentity struct {
 	Handle              string
 	PersonalityContent  string
@@ -87,12 +90,14 @@ func (h HashSources) Validate() error {
 }
 
 // Field separators for the hash serialization. Bytes 0x1E (Record
-// Separator) and 0x1F (Unit Separator) are non-printable ASCII control
-// codes that cannot legally appear inside a slug, handle, or markdown
-// content body the way ethos uses them — and identity validation
-// already rejects control characters in handles. Using them as
-// section/field delimiters keeps the format unambiguous: a stray
-// newline in a personality file does not collide with a section break.
+// Separator) and 0x1F (Unit Separator) are ASCII control codes that
+// ethos identity validation rejects from handles and slugs, and that
+// are uncommon as delimiter bytes in markdown bodies. Markdown
+// content MAY contain these bytes — the format remains unambiguous
+// because the serialization is length-prefixed: a stray 0x1F inside a
+// personality body is counted by the byte length, not interpreted as
+// a field boundary. The length prefix is what carries the safety
+// property, not the rarity of the separator.
 const (
 	fieldSep   = "\x1f" // between (label, value) pairs
 	sectionSep = "\x1e" // between sections
@@ -342,18 +347,32 @@ func writeField(buf *strings.Builder, label, value string) {
 //     evaluator's handle. Roles are returned unsorted;
 //     ComputeEvaluatorHash sorts before serialization.
 //
-// A nil role or team store is treated as "no role assignments" so a
-// stripped-down install (or a test fixture) can still hash the
-// personality + writing style + talents portion of an identity.
+// All three stores are required. A nil store is a programmer error
+// and returns an explicit error rather than silently producing a
+// HashSources whose role coverage depends on which caller built it.
+// Divergent role coverage between two callers (say, CLI wires the
+// team store and MCP does not) would cause the CLI-pinned hash to
+// disagree with the MCP-pinned hash for the same evaluator content —
+// which breaks the entire frozen-evaluator gate. Fail loudly at the
+// boundary instead.
 func NewLiveHashSources(
 	identities identity.IdentityStore,
 	roles *role.LayeredStore,
 	teams *team.LayeredStore,
-) HashSources {
+) (HashSources, error) {
+	if identities == nil {
+		return HashSources{}, errors.New("new live hash sources: identity store is nil")
+	}
+	if roles == nil {
+		return HashSources{}, errors.New("new live hash sources: role store is nil")
+	}
+	if teams == nil {
+		return HashSources{}, errors.New("new live hash sources: team store is nil")
+	}
 	return HashSources{
 		Identities: &liveIdentityLoader{store: identities},
 		Roles:      &liveRoleLister{teams: teams, roles: roles},
-	}
+	}, nil
 }
 
 // liveIdentityLoader wraps an identity.IdentityStore and exposes the
@@ -406,7 +425,7 @@ type liveRoleLister struct {
 }
 
 // ListRoles returns every (team, role) assignment for the given
-// handle, with content. A nil team or role store yields a nil slice.
+// handle, with content.
 //
 // Failures from the role store on a role that IS referenced by a team
 // membership are fatal — a missing role .yaml when the team file
@@ -417,9 +436,13 @@ type liveRoleLister struct {
 // identical role names on different teams are distinguishable in the
 // hash. Without the team prefix, an evaluator on two teams could lose
 // one assignment to map de-duplication after the sort step.
+//
+// The liveRoleLister is always built with non-nil stores via
+// NewLiveHashSources — a nil store is rejected at the adapter
+// boundary, not silently ignored here.
 func (a *liveRoleLister) ListRoles(handle string) ([]EvaluatorRole, error) {
 	if a.teams == nil || a.roles == nil {
-		return nil, nil
+		return nil, errors.New("list roles: team or role store is nil")
 	}
 	teamNames, err := a.teams.List()
 	if err != nil {

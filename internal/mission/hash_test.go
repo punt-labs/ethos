@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -519,6 +522,76 @@ func TestComputeEvaluatorHashBreakdown_PerSectionEditDetection(t *testing.T) {
 				"%s: unexpected sections changed: %v", tc.name, changed)
 		})
 	}
+}
+
+// TestNewLiveHashSources_RejectsNilStores is the round 4 Bugbot
+// regression test for the adapter boundary. Prior to this fix
+// NewLiveHashSources accepted nil role/team stores and silently
+// produced a HashSources whose role lister reported "no roles" — a
+// hash that disagreed with any caller that wired the real stores.
+//
+// Three rows (nil identities, nil roles, nil teams) prove the
+// boundary fails loudly on every missing input. Adding a fourth
+// input in the future means adding a fourth row — this is the
+// "completeness" half of the hash invariant recast as a constructor
+// contract.
+func TestNewLiveHashSources_RejectsNilStores(t *testing.T) {
+	dir := t.TempDir()
+	is := identity.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	cases := []struct {
+		name   string
+		ids    identity.IdentityStore
+		roles  *role.LayeredStore
+		teams  *team.LayeredStore
+		errSub string
+	}{
+		{
+			name:   "nil identity store",
+			ids:    nil,
+			roles:  rs,
+			teams:  ts,
+			errSub: "identity store is nil",
+		},
+		{
+			name:   "nil role store",
+			ids:    is,
+			roles:  nil,
+			teams:  ts,
+			errSub: "role store is nil",
+		},
+		{
+			name:   "nil team store",
+			ids:    is,
+			roles:  rs,
+			teams:  nil,
+			errSub: "team store is nil",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewLiveHashSources(tc.ids, tc.roles, tc.teams)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.errSub)
+		})
+	}
+}
+
+// TestNewLiveHashSources_AcceptsAllNonNil proves the happy path: all
+// three stores non-nil produces a HashSources that passes Validate()
+// and can be handed straight to ComputeEvaluatorHash.
+func TestNewLiveHashSources_AcceptsAllNonNil(t *testing.T) {
+	dir := t.TempDir()
+	is := identity.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	sources, err := NewLiveHashSources(is, rs, ts)
+	require.NoError(t, err)
+	assert.NoError(t, sources.Validate())
 }
 
 // TestComputeEvaluatorHashBreakdown_TalentSectionDistinguishable proves

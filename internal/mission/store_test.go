@@ -3,6 +3,7 @@
 package mission
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -1068,6 +1071,46 @@ func TestApplyServerFields_RejectsUnresolvableEvaluator(t *testing.T) {
 	assert.Empty(t, ids)
 }
 
+// errNotExistLoader is a tiny IdentityLoader that always returns a
+// wrapped os.ErrNotExist. It exercises ApplyServerFields' error
+// collapse path — the one that turns the 6-level wrapped chain from
+// hash.go into a single-line ErrEvaluatorNotFound with the recovery
+// hint.
+type errNotExistLoader struct{}
+
+func (errNotExistLoader) LoadEvaluator(handle string) (*EvaluatorIdentity, error) {
+	return nil, fmt.Errorf("reading identity %q: %w", handle, os.ErrNotExist)
+}
+
+// TestApplyServerFields_RejectsUnresolvableEvaluator_NotExistCollapse
+// asserts the error collapse that store.go performs when the hash
+// loader returns an os.ErrNotExist-wrapped chain. The operator-facing
+// error must match the ErrEvaluatorNotFound sentinel AND carry the
+// `ethos identity list` recovery hint — without the collapse the
+// operator sees six levels of wrap and no actionable guidance.
+func TestApplyServerFields_RejectsUnresolvableEvaluator_NotExistCollapse(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.Evaluator.Handle = "ghost"
+
+	sources := HashSources{
+		Identities: errNotExistLoader{},
+		Roles:      &mapRoleLister{m: nil},
+	}
+	err := s.ApplyServerFields(&c, time.Now(), sources)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrEvaluatorNotFound),
+		"errors.Is(err, ErrEvaluatorNotFound) must be true for the collapse path")
+	assert.Contains(t, err.Error(), "ghost")
+	assert.Contains(t, err.Error(), "ethos identity list",
+		"operator-facing error must carry the recovery hint")
+
+	// No mission file was created.
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+}
+
 // TestApplyServerFields_RejectsNilSources asserts that a misconfigured
 // caller (nil identity loader or nil role lister) fails fast with an
 // explicit error rather than silently producing an empty hash.
@@ -1129,7 +1172,8 @@ func TestApplyServerFields_LiveStoresRoundTrip(t *testing.T) {
 	}))
 
 	ms := NewStore(dir)
-	sources := NewLiveHashSources(is, nil, nil)
+	sources, err := NewLiveHashSources(is, role.NewLayeredStore("", dir), team.NewLayeredStore("", dir))
+	require.NoError(t, err)
 
 	c := validContract()
 	c.MissionID = ""
@@ -1216,7 +1260,8 @@ func TestApplyServerFields_LiveStoresEachSourceMatters(t *testing.T) {
 				Talents:      []string{"security"},
 			}))
 
-			sources := NewLiveHashSources(is, nil, nil)
+			sources, err := NewLiveHashSources(is, role.NewLayeredStore("", dir), team.NewLayeredStore("", dir))
+			require.NoError(t, err)
 			baselineHash, err := ComputeEvaluatorHash("djb", sources)
 			require.NoError(t, err)
 
@@ -1242,6 +1287,96 @@ func TestApplyServerFields_LiveStoresEachSourceMatters(t *testing.T) {
 				"%s: live-store hash must change after .md edit", tc.name)
 		})
 	}
+}
+
+// TestApplyServerFields_LiveStoresRolesCovered is the round 4 Bugbot
+// regression test. It seeds an evaluator whose only distinguishing
+// content is a team-based role assignment, then proves two things:
+//
+//  1. Editing the role .yaml file between two ApplyServerFields calls
+//     changes the pinned hash. Without the team walk, the role edit
+//     would be invisible to the hash and the "role content is part
+//     of the evaluator" invariant would silently regress.
+//
+//  2. Two NewLiveHashSources constructions rooted at the same directory
+//     yield byte-identical hashes. This is the parity invariant the
+//     MCP and CLI create paths rely on: every caller that wires the
+//     full set of stores must produce the same hash for the same
+//     on-disk content.
+//
+// The earlier LiveStoresEachSourceMatters test covers personality,
+// writing style, and talent content but does NOT seed a role — a
+// silently-dropped role section would have slipped past it. This
+// test closes that gap.
+func TestApplyServerFields_LiveStoresRolesCovered(t *testing.T) {
+	dir := t.TempDir()
+	is := identity.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	// Minimal identity — no personality, no writing style, no talents.
+	// Everything that can influence the hash comes from the role.
+	require.NoError(t, is.Save(&identity.Identity{
+		Name:   "Dan B",
+		Handle: "djb",
+		Kind:   "agent",
+	}))
+
+	// Seed the role and a team that binds djb to it. Without this the
+	// liveRoleLister would return an empty list and the role section
+	// would be absent from the hash regardless of what's in the role
+	// file on disk.
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "verifier",
+		Responsibilities: []string{"baseline responsibility"},
+	}))
+	identityExists := func(h string) bool { return h == "djb" }
+	roleExists := func(n string) bool { return rs.Exists(n) }
+	require.NoError(t, ts.Save(&team.Team{
+		Name: "frozen-verifier",
+		Members: []team.Member{
+			{Identity: "djb", Role: "verifier"},
+		},
+	}, identityExists, roleExists))
+
+	// Parity: two fresh NewLiveHashSources rooted at the same dir must
+	// produce byte-identical hashes. This is the Bugbot finding in
+	// test form — MCP and CLI wire fresh sources on every call, and
+	// any hidden state (map iteration order, silent nil fallbacks)
+	// would surface here.
+	sourcesA, err := NewLiveHashSources(is, role.NewLayeredStore("", dir), team.NewLayeredStore("", dir))
+	require.NoError(t, err)
+	sourcesB, err := NewLiveHashSources(is, role.NewLayeredStore("", dir), team.NewLayeredStore("", dir))
+	require.NoError(t, err)
+
+	hashA, err := ComputeEvaluatorHash("djb", sourcesA)
+	require.NoError(t, err)
+	hashB, err := ComputeEvaluatorHash("djb", sourcesB)
+	require.NoError(t, err)
+	assert.Equal(t, hashA, hashB,
+		"two fresh NewLiveHashSources rooted at the same directory must produce identical hashes")
+
+	// Role edit detection: rewrite the role .yaml directly on disk and
+	// assert the hash changes. A silent-nil role lister would return
+	// an empty list regardless of the edit and the hash would be
+	// stable — which is exactly the bug this test exists to catch.
+	//
+	// The role store's Save refuses to overwrite, so the edit is
+	// delete-plus-save. The team binding is unaffected — the team
+	// file still names "verifier" and the new role file still has
+	// the same name, so referential integrity holds.
+	require.NoError(t, rs.Delete("verifier"))
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "verifier",
+		Responsibilities: []string{"edited responsibility"},
+	}))
+
+	sourcesC, err := NewLiveHashSources(is, role.NewLayeredStore("", dir), team.NewLayeredStore("", dir))
+	require.NoError(t, err)
+	hashC, err := ComputeEvaluatorHash("djb", sourcesC)
+	require.NoError(t, err)
+	assert.NotEqual(t, hashA, hashC,
+		"editing the bound role's content must change the evaluator hash")
 }
 
 // TestApplyServerFields_HashRoundTripsThroughCreate asserts that the

@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/team"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,10 +93,22 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 		Talents:      []string{"security"},
 	}))
 
+	// Role and team stores are wired even though no team binds djb to
+	// a role in these fixtures — the MCP handler's mission create path
+	// calls NewLiveHashSources which rejects nil role/team stores. A
+	// handler built without the full set cannot create missions. This
+	// is the Phase 3.3 parity invariant: MCP and CLI must produce
+	// identical hashes for the same evaluator, which requires both
+	// sides to wire the same stores.
+	rs := role.NewLayeredStore("", root)
+	ts := team.NewLayeredStore("", root)
+
 	return NewHandlerWithOptions(s,
 		talents,
 		personalities,
 		writingStyles,
+		WithRoleStore(rs),
+		WithTeamStore(ts),
 		WithMissionStore(ms),
 	)
 }
@@ -473,5 +488,121 @@ func TestHandleMission_CreateRejectsCrossMissionConflict(t *testing.T) {
 	assert.Contains(t, msg, created.MissionID)
 	assert.Contains(t, msg, "worker: bwk")
 	assert.Contains(t, msg, "internal/foo/bar.go")
+}
+
+// TestHandleMission_CreateMatchesCLIHashWithRoles is the round 4
+// Bugbot regression test. It proves the Phase 3.3 parity invariant:
+// the MCP create path and the CLI create path produce identical
+// evaluator hashes for the same evaluator content, including
+// team-based role assignments.
+//
+// Before round 4's fix, the MCP handler's NewLiveHashSources call
+// could silently receive nil role/team stores (the options are
+// individually optional), producing a hash that omitted role content.
+// The CLI and verifier hook always wire both stores, so the CLI-
+// computed hash would include roles. Divergent hashes permanently
+// block every verifier spawn for missions created via the broken MCP
+// handler.
+//
+// The fix makes NewLiveHashSources reject nil stores at construction
+// and makes the test fixture wire both. This test proves the parity
+// holds under the richest possible content — a team that binds the
+// evaluator to a role whose content participates in the hash.
+func TestHandleMission_CreateMatchesCLIHashWithRoles(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	root := s.Root()
+	ms := mission.NewStore(root)
+
+	// Seed djb with personality and writing style so the test path
+	// exercises every hash input, not just the role section.
+	personalities := attribute.NewStore(root, attribute.Personalities)
+	require.NoError(t, personalities.Save(&attribute.Attribute{
+		Slug:    "bernstein",
+		Content: "# Bernstein\n",
+	}))
+	writingStyles := attribute.NewStore(root, attribute.WritingStyles)
+	require.NoError(t, writingStyles.Save(&attribute.Attribute{
+		Slug:    "bernstein-prose",
+		Content: "# Bernstein Prose\n",
+	}))
+	talents := attribute.NewStore(root, attribute.Talents)
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:         "Dan B",
+		Handle:       "djb",
+		Kind:         "agent",
+		Personality:  "bernstein",
+		WritingStyle: "bernstein-prose",
+	}))
+
+	// Seed a role and bind djb to it via a team. Without this the
+	// test would silently pass because the hash would have no role
+	// section to disagree on — defeating the purpose of the
+	// regression.
+	rs := role.NewLayeredStore("", root)
+	require.NoError(t, rs.Save(&role.Role{
+		Name:             "verifier",
+		Responsibilities: []string{"review changes"},
+	}))
+	ts := team.NewLayeredStore("", root)
+	identityExists := func(h string) bool { return h == "djb" }
+	roleExists := func(n string) bool { return rs.Exists(n) }
+	require.NoError(t, ts.Save(&team.Team{
+		Name: "frozen-verifier",
+		Members: []team.Member{
+			{Identity: "djb", Role: "verifier"},
+		},
+	}, identityExists, roleExists))
+
+	h := NewHandlerWithOptions(s,
+		talents,
+		personalities,
+		writingStyles,
+		WithRoleStore(rs),
+		WithTeamStore(ts),
+		WithMissionStore(ms),
+	)
+
+	// Create the mission via the MCP handler.
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "MCP create must succeed: %s", resultText(t, result))
+
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &created))
+	require.NotEmpty(t, created.Evaluator.Hash, "MCP create must populate the hash")
+
+	// Simulate the CLI path by building a fresh HashSources against
+	// the same stores and computing the hash the same way CLI and the
+	// verifier hook do. A byte-mismatch here is exactly the Bugbot
+	// finding this test exists to catch.
+	cliSources, err := mission.NewLiveHashSources(s, rs, ts)
+	require.NoError(t, err)
+	cliHash, err := mission.ComputeEvaluatorHash("djb", cliSources)
+	require.NoError(t, err)
+	assert.Equal(t, created.Evaluator.Hash, cliHash,
+		"MCP-pinned hash must equal the hash CLI would compute for the same evaluator content")
+
+	// And a belt-and-braces parity check: create a "parallel" mission
+	// via the same ApplyServerFields entry point the CLI uses, and
+	// assert the two pinned hashes match byte-for-byte. The mission
+	// IDs and timestamps will differ (counter advances, write_set
+	// must be disjoint to bypass Phase 3.2 conflict detection), but
+	// the evaluator hash is independent of both.
+	parallel := mission.Contract{
+		Leader:          "claude",
+		Worker:          "bwk",
+		Evaluator:       mission.Evaluator{Handle: "djb"},
+		Inputs:          mission.Inputs{Bead: "ethos-07m.5"},
+		WriteSet:        []string{"tests/parity-cli/"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget:          mission.Budget{Rounds: 3, ReflectionAfterEach: true},
+	}
+	require.NoError(t, ms.ApplyServerFields(&parallel, time.Now(), cliSources))
+	assert.Equal(t, created.Evaluator.Hash, parallel.Evaluator.Hash,
+		"MCP-created and CLI-created missions with identical evaluator content must have identical pinned hashes")
 }
 

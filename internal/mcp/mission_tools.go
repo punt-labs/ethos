@@ -88,7 +88,15 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	// of where the YAML came from. Hash sources resolve the evaluator
 	// against the live identity, role, and team stores; an
 	// unresolvable handle is fatal — see DES-033.
-	sources := mission.NewLiveHashSources(h.store, h.roles, h.teams)
+	//
+	// NewLiveHashSources rejects nil role or team stores so an MCP
+	// handler built without WithRoleStore/WithTeamStore fails loudly
+	// here instead of silently pinning a role-free hash that the
+	// verifier hook (always wired with both stores) could never match.
+	sources, err := mission.NewLiveHashSources(h.store, h.roles, h.teams)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	if err := h.missionStore.ApplyServerFields(&c, time.Now(), sources); err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}

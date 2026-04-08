@@ -111,7 +111,11 @@ func runHookSubagentStart() {
 	// subagent spawn. A drift between mission create and verifier
 	// spawn refuses the spawn with a fatal, operator-readable error.
 	ms := missionStore()
-	hashSources := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
+	hashSources, err := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
+		os.Exit(1)
+	}
 	deps := hook.SubagentStartDeps{
 		Identities: s,
 		Sessions:   ss,

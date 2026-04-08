@@ -173,7 +173,11 @@ func runMissionCreate() {
 	// the live identity, role, and team stores; an unresolvable
 	// evaluator is fatal — see DES-033.
 	is := identityStore()
-	sources := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
+		os.Exit(1)
+	}
 	if err := ms.ApplyServerFields(&c, time.Now(), sources); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
 		os.Exit(1)

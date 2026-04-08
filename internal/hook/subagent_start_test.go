@@ -14,7 +14,9 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -373,7 +375,12 @@ func setupVerifierTest(t *testing.T, evaluator string) (
 		Talents:      []string{"security"},
 	}))
 
-	hashSources = mission.NewLiveHashSources(idStore, nil, nil)
+	hs, err := mission.NewLiveHashSources(idStore,
+		role.NewLayeredStore("", dir),
+		team.NewLayeredStore("", dir),
+	)
+	require.NoError(t, err)
+	hashSources = hs
 	return
 }
 
@@ -670,6 +677,51 @@ func TestSubagentStart_VerifierGateLegacyMissionAllowsSpawn(t *testing.T) {
 
 	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
 	require.NoError(t, err, "legacy missions with empty hash must not block spawn")
+}
+
+// TestSubagentStart_VerifierGateLegacyMissionSkipsRecompute is the
+// round 4 Copilot-CP1 regression test. It proves the legacy-mission
+// path never triggers the current-hash recompute, even when the
+// recompute would itself fail.
+//
+// The scenario: a pre-3.3 mission has an empty pinned hash and is
+// open. The operator deletes the evaluator's personality .md file
+// (which would make the live-store hash compute fail with an
+// "unresolved attribute warnings" error). Prior to round 4, the
+// handler computed the breakdown before the empty-hash check, so the
+// recompute would fail and block every verifier spawn. Round 4
+// reorders the check: empty-hash legacy missions skip recompute
+// entirely, and the spawn is allowed.
+//
+// A silent-skip on a legacy mission whose content has been damaged
+// is the correct behavior: the operator must upgrade by relaunching,
+// not by fighting the gate.
+func TestSubagentStart_VerifierGateLegacyMissionSkipsRecompute(t *testing.T) {
+	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// Create a legacy (empty-hash) mission.
+	c := validVerifierContract("djb")
+	c.MissionID = "m-2026-04-08-098"
+	c.Status = mission.StatusOpen
+	now := time.Now().UTC().Format(time.RFC3339)
+	c.CreatedAt = now
+	c.UpdatedAt = now
+	c.Evaluator.PinnedAt = now
+	c.Evaluator.Hash = "" // pre-3.3 placeholder
+	require.NoError(t, missions.Create(&c))
+
+	// Break the hash recompute by deleting the personality file. The
+	// identity loader will surface "unresolved attribute warnings"
+	// for this handle and ComputeEvaluatorHashBreakdown will fail. If
+	// the legacy check runs AFTER the recompute, the hook returns
+	// this error and blocks the spawn. If the legacy check runs
+	// BEFORE the recompute (CP1 fix), the spawn is allowed because
+	// the legacy mission short-circuits the loop before compute.
+	require.NoError(t, os.Remove(filepath.Join(dir, "personalities", "bernstein.md")))
+
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err,
+		"legacy mission must skip recompute; a broken recompute on a pre-3.3 mission must not block the spawn")
 }
 
 // TestSubagentStart_VerifierGateNoMissionStoreIsLegacy asserts that
