@@ -2309,14 +2309,18 @@ rounds with a clean djb verdict.
   `AppendEvent` from inside a locked block would deadlock on Linux
   flock. Round 3 unexported it; 3.7 will re-export if needed.
 
-## DES-032: Cross-mission write_set admission control (PROPOSED)
+## DES-032: Cross-mission write_set admission control (SETTLED)
 
-**Status**: Proposed. Implemented 2026-04-08 as `ethos-07m.6` — the
-Phase 3.2 primitive on top of DES-031. Three rounds: initial
-implementation, local-review fixes, leader-found defense-in-depth.
+**Status**: Settled. Implemented 2026-04-08 as `ethos-07m.6` — the
+Phase 3.2 primitive on top of DES-031. Four rounds: initial
+implementation, local-review fixes, leader-found double-slash
+defense-in-depth, evaluator-found dot-segment defense-in-depth.
 Local reviewers: `feature-dev:code-reviewer` (correctness) and `mdm`
 (CLI surface). Frozen evaluator: `djb` (pinned at mission launch).
-Status flips to SETTLED after djb's verdict and PR merge.
+djb's final verdict: PASS (0.97) after round 4. The S1 finding
+(dot-segment bypass) was caught by the frozen evaluator and not by
+the leader's round 3 self-review — a vindication of the
+frozen-evaluator discipline from DES-031.
 
 ### Problem
 
@@ -2448,6 +2452,30 @@ just tried to claim, not a normalized form.
   `internal/foo`. The per-entry validator does not reject double
   slashes, so the conflict check must normalize them. One-line fix
   in `splitSegments` plus 4 new test rows locking the behavior.
+
+- **Round 4.** Evaluator-found defense-in-depth: djb's frozen-review
+  verdict on round 3 was FAIL (0.95) for finding S1: `splitSegments`
+  filtered empty segments but did NOT filter `.` segments. The
+  per-entry validator deliberately accepts single-dot segments as
+  legitimate path syntax (Phase 3.1's `TestValidate_AcceptsSingleDotSegment`,
+  recorded as a rejected alternative in DES-031). A contract with
+  write_set `[./internal/mission/store.go]` therefore split to
+  `[".", "internal", "mission", "store.go"]` and bypassed the prefix
+  comparison against `internal/mission/store.go` — segment 0
+  mismatched and `pathsOverlap` returned false. Same class of bug
+  as round 3, different variant in the equivalence class. Fix:
+  extend the existing empty-segment filter to also drop `.` segments
+  (one condition added). 8 new `TestPathsOverlap` rows lock the dot
+  cases at the unit level; new `TestStore_CreateRejectsDotSegmentBypass`
+  exercises four dot variants end-to-end through `Store.Create`.
+  Leader independently verified the equivalence class against the
+  compiled binary across 8 cases (5 dot variants, 1 double-slash
+  regression, 2 negative cases): all 8 passed. djb re-verified
+  on the round 4 commit: PASS, 0.97.
+
+  The lesson — fix the equivalence class, not the visible instance —
+  is recorded as a feedback memory for the COO. djb's catch is the
+  load-bearing example of why the frozen evaluator exists.
 
 ### What 3.2 deliberately does NOT do
 
