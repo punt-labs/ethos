@@ -213,6 +213,134 @@ func TestPathsOverlap(t *testing.T) {
 	}
 }
 
+// TestPathContainedBy covers the asymmetric segment-prefix helper
+// Phase 3.6 uses for result containment. Unlike pathsOverlap, this
+// helper answers "is file inside entry?" — a directional subset
+// check that refuses a parent-prefix even if the two paths share
+// segments at the front.
+//
+// Round 2 of Phase 3.6 added this helper after all four reviewers
+// flagged the H1 bug: the symmetric pathsOverlap helper accepted a
+// result claiming a parent directory of a write_set file entry.
+func TestPathContainedBy(t *testing.T) {
+	tests := []struct {
+		name  string
+		file  string
+		entry string
+		want  bool
+	}{
+		{
+			name:  "exact match file",
+			file:  "cmd/ethos/mission.go",
+			entry: "cmd/ethos/mission.go",
+			want:  true,
+		},
+		{
+			name:  "exact match directory",
+			file:  "internal/mission",
+			entry: "internal/mission",
+			want:  true,
+		},
+		{
+			name:  "file inside directory entry",
+			file:  "internal/mission/store.go",
+			entry: "internal/mission",
+			want:  true,
+		},
+		{
+			name:  "file inside directory entry with trailing slash",
+			file:  "internal/mission/store.go",
+			entry: "internal/mission/",
+			want:  true,
+		},
+		{
+			// The H1 exploit: result claims a strict parent of a
+			// file entry. Must be rejected. The symmetric helper
+			// pathsOverlap returns true here; pathContainedBy
+			// returns false because the file has fewer segments
+			// than the entry.
+			name:  "parent of file entry (H1 exploit)",
+			file:  "cmd/ethos",
+			entry: "cmd/ethos/mission.go",
+			want:  false,
+		},
+		{
+			// Top-level ancestor of a file entry.
+			name:  "top-level ancestor of file entry",
+			file:  "cmd",
+			entry: "cmd/ethos/mission.go",
+			want:  false,
+		},
+		{
+			// Top-level ancestor of a directory entry.
+			name:  "top-level ancestor of directory entry",
+			file:  "internal",
+			entry: "internal/mission",
+			want:  false,
+		},
+		{
+			// Parent of a directory entry.
+			name:  "parent of directory entry",
+			file:  "internal/mission",
+			entry: "internal/mission/store.go",
+			want:  false,
+		},
+		{
+			name:  "sibling at same depth",
+			file:  "internal/mission",
+			entry: "internal/session",
+			want:  false,
+		},
+		{
+			name:  "substring of segment is not a prefix",
+			file:  "internal/foobar",
+			entry: "internal/foo",
+			want:  false,
+		},
+		{
+			// Subdirectory file inside a directory entry.
+			name:  "deep file inside directory entry",
+			file:  "internal/mission/sub/pkg/file.go",
+			entry: "internal/mission/",
+			want:  true,
+		},
+		{
+			// Dot segment normalization equivalence.
+			name:  "dot segment equivalence",
+			file:  "./internal/mission/result.go",
+			entry: "internal/mission",
+			want:  true,
+		},
+		{
+			// Empty segment lists match nothing — the per-entry
+			// validator rejects these upstream but the helper
+			// behavior is locked explicitly.
+			name:  "empty file",
+			file:  "",
+			entry: "internal/mission",
+			want:  false,
+		},
+		{
+			name:  "empty entry",
+			file:  "internal/mission/store.go",
+			entry: "",
+			want:  false,
+		},
+		{
+			name:  "case sensitivity",
+			file:  "Internal/mission",
+			entry: "internal/mission",
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, pathContainedBy(tt.file, tt.entry),
+				"pathContainedBy(%q, %q)", tt.file, tt.entry)
+		})
+	}
+}
+
 // TestFindWriteSetConflicts exercises the cross-mission conflict
 // detector against a list of existing contracts. Each row sets up a
 // new contract's write_set plus zero or more existing contracts and

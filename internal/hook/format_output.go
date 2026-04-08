@@ -685,6 +685,8 @@ func formatRoleShow(w io.Writer, result string) error {
 //	reflect       → {mission_id, round, recommendation, created_at}
 //	reflections   → an array of Reflection objects (one per round)
 //	advance       → {mission_id, current_round}
+//	result        → {mission_id, round, verdict, confidence, created_at}
+//	results       → an array of Result objects (one per round)
 func formatMission(w io.Writer, method, result string) error {
 	switch method {
 	case "create":
@@ -701,9 +703,83 @@ func formatMission(w io.Writer, method, result string) error {
 		return formatMissionReflections(w, result)
 	case "advance":
 		return formatMissionAdvance(w, result)
+	case "result":
+		return formatMissionResult(w, result)
+	case "results":
+		return formatMissionResults(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
+}
+
+// formatMissionResult renders the result method's confirmation:
+// "<mission_id> round N (<verdict>)". Short enough for a single
+// tool-result row but specific enough to confirm the verdict the
+// worker submitted.
+func formatMissionResult(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	verdict, _ := c["verdict"].(string)
+	round, ok := c["round"].(float64)
+	if missionID == "" || !ok {
+		return emitSimple(w, truncate(result, 200))
+	}
+	return emitSimple(w, fmt.Sprintf("Result %s round %d (%s)", missionID, int(round), verdict))
+}
+
+// formatMissionResults renders the results method's array as one
+// bullet per round. The summary line counts the entries; an empty
+// array becomes "(none)" so the operator distinguishes "no results
+// yet" from a tool error.
+func formatMissionResults(w io.Writer, result string) error {
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(result), &entries); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	n := len(entries)
+	noun := "results"
+	if n == 1 {
+		noun = "result"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+	var ctx strings.Builder
+	for i, e := range entries {
+		round, _ := e["round"].(float64)
+		verdict, _ := e["verdict"].(string)
+		author, _ := e["author"].(string)
+		confidence, _ := e["confidence"].(float64)
+		if i > 0 {
+			ctx.WriteString("\n")
+		}
+		fmt.Fprintf(&ctx, "  - round %d (%s) by %s — confidence=%.2f",
+			int(round), verdict, author, confidence)
+		if files, ok := e["files_changed"].([]any); ok && len(files) > 0 {
+			for _, f := range files {
+				if fc, ok := f.(map[string]any); ok {
+					path, _ := fc["path"].(string)
+					added, _ := fc["added"].(float64)
+					removed, _ := fc["removed"].(float64)
+					fmt.Fprintf(&ctx, "\n      • %s: +%d -%d", path, int(added), int(removed))
+				}
+			}
+		}
+		if evidence, ok := e["evidence"].([]any); ok && len(evidence) > 0 {
+			for _, ev := range evidence {
+				if em, ok := ev.(map[string]any); ok {
+					name, _ := em["name"].(string)
+					status, _ := em["status"].(string)
+					fmt.Fprintf(&ctx, "\n      • %s: %s", name, status)
+				}
+			}
+		}
+	}
+	return emit(w, summary, ctx.String())
 }
 
 // formatMissionReflect renders the reflect method's confirmation:
@@ -793,7 +869,11 @@ func formatMissionReflections(w io.Writer, result string) error {
 // formatMissionShow renders a single contract in a tabwriter-aligned
 // field block. The summary line is "<mission_id> (<status>)"; the
 // context is the field block plus write_set / tools / success_criteria
-// as bullet lists.
+// as bullet lists, and — when round 2 of Phase 3.6 landed the
+// results field on the show payload — a round-by-round Results
+// section below the contract so the MCP hook surface does not hide
+// the verdict that authorized a close. The pattern parallels
+// formatMissionResults; the two share one bullet shape.
 func formatMissionShow(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -809,8 +889,75 @@ func formatMissionShow(w io.Writer, result string) error {
 
 	var ctx strings.Builder
 	writeMissionFields(&ctx, c)
+	// The show payload (round 2+) carries a top-level `results`
+	// array; render it under the contract block. Missing or nil
+	// means a pre-3.6 consumer fed us a bare contract — no
+	// results section, no error. An empty array renders "(none)"
+	// so the operator sees the section exists and is empty.
+	if raw, ok := c["results"]; ok {
+		writeMissionResults(&ctx, raw)
+	}
+	// Surface any warnings from a corrupt sibling file. Round 3
+	// added this — without it, a corrupted results file was
+	// indistinguishable from "no results yet" for MCP callers.
+	if raw, ok := c["warnings"]; ok {
+		writeMissionWarnings(&ctx, raw)
+	}
 
 	return emit(w, summary, ctx.String())
+}
+
+// writeMissionResults renders the top-level `results` array from a
+// show payload as a Results section under the contract block. Empty
+// or missing arrays render "(none)" so the operator distinguishes
+// "no result submitted yet" from "formatter forgot to render the
+// section". The per-round bullet shape matches formatMissionResults'
+// array method — one helper, one visual convention.
+func writeMissionResults(ctx *strings.Builder, raw any) {
+	entries, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	ctx.WriteString("\n\nResults:")
+	if len(entries) == 0 {
+		ctx.WriteString("\n  (none)")
+		return
+	}
+	for _, e := range entries {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		round, _ := em["round"].(float64)
+		verdict, _ := em["verdict"].(string)
+		author, _ := em["author"].(string)
+		confidence, _ := em["confidence"].(float64)
+		fmt.Fprintf(ctx, "\n  - round %d (%s) by %s — confidence=%.2f",
+			int(round), verdict, author, confidence)
+		if prose, _ := em["prose"].(string); prose != "" {
+			// First line of prose only; multi-line narrative
+			// belongs in the dedicated `mission results` call.
+			line := strings.SplitN(prose, "\n", 2)[0]
+			fmt.Fprintf(ctx, "\n      %s", line)
+		}
+	}
+}
+
+// writeMissionWarnings renders a top-level `warnings` array (when
+// non-empty) as a Warnings section. The show payload emits this
+// only when an advisory sibling load failed; the operator must see
+// the failure even in JSON-parsed MCP mode.
+func writeMissionWarnings(ctx *strings.Builder, raw any) {
+	entries, ok := raw.([]any)
+	if !ok || len(entries) == 0 {
+		return
+	}
+	ctx.WriteString("\n\nWarnings:")
+	for _, e := range entries {
+		if s, ok := e.(string); ok {
+			ctx.WriteString("\n  - " + s)
+		}
+	}
 }
 
 // formatMissionCreate reuses the show layout — create returns the full

@@ -931,6 +931,121 @@ func TestFormatOutput_Mission_Reflections_Multiple(t *testing.T) {
 	assert.Contains(t, ctx, "reason: new approach")
 }
 
+// TestFormatOutput_MissionShow_RendersResults asserts the A1
+// round-3 fix: formatMissionShow renders the round-by-round
+// results array under the contract block. Round 2 added the
+// `results` field to the show payload but the hook formatter
+// dropped it silently; an agent reading `mission show` through
+// the MCP hook saw the contract and no verdict — undoing H2 for
+// the MCP surface. The walker mirrors formatMissionResults' bullet
+// shape so the two rendering paths stay visually consistent.
+func TestFormatOutput_MissionShow_RendersResults(t *testing.T) {
+	result := `{
+  "mission_id": "m-2026-04-07-001",
+  "status": "closed",
+  "created_at": "2026-04-07T21:30:00Z",
+  "updated_at": "2026-04-07T22:00:00Z",
+  "closed_at": "2026-04-07T22:00:00Z",
+  "leader": "claude",
+  "worker": "bwk",
+  "evaluator": {"handle":"djb","pinned_at":"2026-04-07T21:30:00Z"},
+  "inputs": {},
+  "write_set": ["internal/mission/"],
+  "success_criteria": ["make check passes"],
+  "budget": {"rounds": 3, "reflection_after_each": true},
+  "current_round": 1,
+  "results": [
+    {
+      "mission": "m-2026-04-07-001",
+      "round": 1,
+      "author": "bwk",
+      "verdict": "pass",
+      "confidence": 0.95,
+      "files_changed": [],
+      "evidence": [{"name":"make check","status":"pass"}],
+      "prose": "Round 1 delivered the typed result artifact."
+    }
+  ]
+}`
+	payload := makeToolPayload("mission", "show", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Results:",
+		"mission show must render a Results: header, got: %s", ctx)
+	assert.Contains(t, ctx, "round 1",
+		"mission show must render the round number, got: %s", ctx)
+	assert.Contains(t, ctx, "pass",
+		"mission show must render the verdict, got: %s", ctx)
+	assert.Contains(t, ctx, "bwk",
+		"mission show must render the author, got: %s", ctx)
+	assert.Contains(t, ctx, "confidence=0.95",
+		"mission show must render the confidence, got: %s", ctx)
+}
+
+// TestFormatOutput_MissionShow_EmptyResultsSection asserts the A1
+// round-3 fix empty-state: a show payload with `results: []`
+// renders "Results:" + "(none)" so the operator sees the section
+// exists and is empty. Without this, the formatter would either
+// print nothing or print a dangling Results: header with no body.
+func TestFormatOutput_MissionShow_EmptyResultsSection(t *testing.T) {
+	result := `{
+  "mission_id": "m-2026-04-07-001",
+  "status": "open",
+  "created_at": "2026-04-07T21:30:00Z",
+  "updated_at": "2026-04-07T21:30:00Z",
+  "leader": "claude",
+  "worker": "bwk",
+  "evaluator": {"handle":"djb","pinned_at":"2026-04-07T21:30:00Z"},
+  "inputs": {},
+  "write_set": ["internal/mission/"],
+  "success_criteria": ["make check passes"],
+  "budget": {"rounds": 3, "reflection_after_each": true},
+  "current_round": 1,
+  "results": []
+}`
+	payload := makeToolPayload("mission", "show", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Results:",
+		"empty results must still render the Results: header, got: %s", ctx)
+	assert.Contains(t, ctx, "(none)",
+		"empty results must render the (none) marker, got: %s", ctx)
+}
+
+// TestFormatOutput_MissionShow_RendersWarnings asserts the D1
+// round-3 fix: formatMissionShow surfaces a top-level `warnings`
+// array in the show payload (emitted when LoadResults fails) so
+// the MCP caller sees the corruption signal even through the hook
+// formatter's re-rendering layer.
+func TestFormatOutput_MissionShow_RendersWarnings(t *testing.T) {
+	result := `{
+  "mission_id": "m-2026-04-07-001",
+  "status": "open",
+  "created_at": "2026-04-07T21:30:00Z",
+  "updated_at": "2026-04-07T21:30:00Z",
+  "leader": "claude",
+  "worker": "bwk",
+  "evaluator": {"handle":"djb","pinned_at":"2026-04-07T21:30:00Z"},
+  "inputs": {},
+  "write_set": ["internal/mission/"],
+  "success_criteria": ["make check passes"],
+  "budget": {"rounds": 3, "reflection_after_each": true},
+  "current_round": 1,
+  "results": [],
+  "warnings": ["loading results: invalid yaml in sibling file"]
+}`
+	payload := makeToolPayload("mission", "show", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Warnings:",
+		"warnings must render a Warnings: header, got: %s", ctx)
+	assert.Contains(t, ctx, "loading results",
+		"warnings must carry the load-failure message, got: %s", ctx)
+}
+
 // TestFormatOutput_Mission_Show_RendersRound asserts that the show
 // formatter surfaces the new "Round: N of M" line. The contract
 // JSON gains a current_round field; the formatter must include it.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -328,9 +330,10 @@ func TestHandleMission_ListFilterStatus(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, listResult)), &openEntries))
 	require.Len(t, openEntries, 2)
 
-	// Close one.
+	// Close one. The close gate requires a result first.
 	firstID, _ := openEntries[0]["mission_id"].(string)
 	require.NotEmpty(t, firstID)
+	submitResultForMCP(t, h, firstID)
 	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "close",
 		"mission_id": firstID,
@@ -374,6 +377,35 @@ func TestHandleMission_ListRejectsUnknownStatus(t *testing.T) {
 	assert.Contains(t, resultText(t, result), `invalid status filter "bogus"`)
 }
 
+// validResultYAMLFor returns a minimal valid result body for the given
+// mission, matching the contract's default write_set. Tests use it
+// to drive Close through the Phase 3.6 gate.
+func validResultYAMLFor(missionID string) string {
+	return fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+evidence:
+  - name: make check
+    status: pass
+`, missionID)
+}
+
+// submitResultForMCP is a helper that submits a valid result for the
+// mission's current round via the MCP result method. It keeps each
+// close-gate test to the operation under test, not the scaffolding.
+func submitResultForMCP(t *testing.T, h *Handler, missionID string) {
+	t.Helper()
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": missionID,
+		"result":     validResultYAMLFor(missionID),
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "result submission must succeed: %s", resultText(t, result))
+}
+
 func TestHandleMission_Close(t *testing.T) {
 	h := testHandlerWithMissions(t)
 
@@ -385,6 +417,7 @@ func TestHandleMission_Close(t *testing.T) {
 
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
 
 	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "close",
@@ -416,6 +449,7 @@ func TestHandleMission_CloseFailedAndEscalated(t *testing.T) {
 			require.NoError(t, err)
 			var c mission.Contract
 			require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &c))
+			submitResultForMCP(t, h, c.MissionID)
 
 			closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 				"method":     "close",
@@ -827,5 +861,509 @@ func TestHandleMission_CreateMatchesCLIHashWithRoles(t *testing.T) {
 	require.NoError(t, ms.ApplyServerFields(&parallel, time.Now(), cliSources))
 	assert.Equal(t, created.Evaluator.Hash, parallel.Evaluator.Hash,
 		"MCP-created and CLI-created missions with identical evaluator content must have identical pinned hashes")
+}
+
+// --- 3.6: result submission, close gate, CLI+MCP parity ---
+
+// TestHandleMission_Result_RoundTrip asserts success criterion 1 via
+// MCP: a well-formed result body persists and comes back through the
+// results method.
+func TestHandleMission_Result_RoundTrip(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": created.MissionID,
+		"result":     validResultYAMLFor(created.MissionID),
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "result submission must succeed: %s", resultText(t, result))
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &got))
+	assert.Equal(t, created.MissionID, got["mission_id"])
+	assert.Equal(t, float64(1), got["round"])
+	assert.Equal(t, "pass", got["verdict"])
+}
+
+func TestHandleMission_Result_RequiresMissionID(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method": "result",
+		"result": validResultYAMLFor("m-2026-04-08-001"),
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mission_id is required")
+}
+
+func TestHandleMission_Result_RequiresBody(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": "m-2026-04-08-001",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "result YAML body is required")
+}
+
+func TestHandleMission_Result_RejectsUnknownField(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	body := validResultYAMLFor(created.MissionID) + "bogus: smuggled\n"
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": created.MissionID,
+		"result":     body,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "field bogus not found")
+}
+
+// TestHandleMission_Result_AppendOnlyViaMCP asserts success
+// criterion 3 through the MCP surface: a duplicate submission via
+// MCP for the same round fails with the append-only error. The
+// companion test in store_test.go covers the direct store surface;
+// this one closes the MCP-specific regression surface.
+func TestHandleMission_Result_AppendOnlyViaMCP(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	first, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": created.MissionID,
+		"result":     validResultYAMLFor(created.MissionID),
+	}))
+	require.NoError(t, err)
+	require.False(t, first.IsError)
+
+	second, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": created.MissionID,
+		"result":     validResultYAMLFor(created.MissionID),
+	}))
+	require.NoError(t, err)
+	require.True(t, second.IsError, "duplicate result submission via MCP must fail")
+	msg := resultText(t, second)
+	assert.Contains(t, msg, "append-only")
+	assert.Contains(t, msg, "round 1")
+}
+
+// TestHandleMission_Result_RejectsOutOfWriteSet asserts success
+// criterion 4 through MCP: a result with a path outside the
+// contract's write_set is refused with a clear operator-facing
+// error.
+func TestHandleMission_Result_RejectsOutOfWriteSet(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	body := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+files_changed:
+  - path: /etc/passwd
+    added: 1
+    removed: 0
+evidence:
+  - name: make check
+    status: pass
+`, created.MissionID)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": created.MissionID,
+		"result":     body,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	// The per-entry validator rejects absolute paths before the
+	// containment check runs — either message is acceptable, but
+	// both cleanly identify the reason.
+	msg := resultText(t, result)
+	assert.True(t,
+		strings.Contains(msg, "relative path") || strings.Contains(msg, "outside mission"),
+		"expected path rejection, got: %s", msg)
+}
+
+// TestHandleMission_Results_EmptyReturnsArray asserts that the
+// results method returns [] (not null) for a mission with no
+// results yet, symmetric with the reflections path.
+func TestHandleMission_Results_EmptyReturnsArray(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "results",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	assert.Equal(t, "[]", resultText(t, result))
+}
+
+// TestHandleMission_Results_ReturnsAfterResult asserts that a
+// submitted result comes back via the results method with the same
+// fields that went in.
+func TestHandleMission_Results_ReturnsAfterResult(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	submitResultForMCP(t, h, created.MissionID)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "results",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var rs []mission.Result
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &rs))
+	require.Len(t, rs, 1)
+	assert.Equal(t, 1, rs[0].Round)
+	assert.Equal(t, mission.VerdictPass, rs[0].Verdict)
+	assert.Equal(t, created.MissionID, rs[0].Mission)
+}
+
+// TestHandleMission_CloseGate_RefusesViaMCP covers success criterion
+// 7 (the load-bearing CLI+MCP parity test): the close method via
+// MCP fires the same Phase 3.6 gate as the CLI close path. Without
+// this test, a regression that wired the gate into only one surface
+// would ship silently.
+func TestHandleMission_CloseGate_RefusesViaMCP(t *testing.T) {
+	for _, status := range []string{mission.StatusClosed, mission.StatusFailed, mission.StatusEscalated} {
+		t.Run(status, func(t *testing.T) {
+			h := testHandlerWithMissions(t)
+			createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+				"method":   "create",
+				"contract": validContractYAML,
+			}))
+			require.NoError(t, err)
+			var created mission.Contract
+			require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+			closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+				"method":     "close",
+				"mission_id": created.MissionID,
+				"status":     status,
+			}))
+			require.NoError(t, err)
+			require.True(t, closeResult.IsError,
+				"MCP close must refuse without a result for status %q", status)
+			msg := resultText(t, closeResult)
+			assert.Contains(t, msg, created.MissionID)
+			assert.Contains(t, msg, "no result artifact for round 1")
+			assert.Contains(t, msg, "ethos mission result")
+
+			// Mission must still be open.
+			showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+				"method":     "show",
+				"mission_id": created.MissionID,
+			}))
+			require.NoError(t, err)
+			var loaded mission.Contract
+			require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+			assert.Equal(t, mission.StatusOpen, loaded.Status)
+		})
+	}
+}
+
+// TestHandleMission_CloseGate_AcceptsViaMCP asserts the positive
+// branch of the MCP close gate: submitting a result via MCP and
+// then closing via MCP succeeds. Together with
+// TestHandleMission_CloseGate_RefusesViaMCP, this proves the MCP
+// close path fires the gate with the same semantics as the direct
+// store path.
+func TestHandleMission_CloseGate_AcceptsViaMCP(t *testing.T) {
+	cases := map[string]string{
+		mission.StatusClosed:    mission.VerdictPass,
+		mission.StatusFailed:    mission.VerdictFail,
+		mission.StatusEscalated: mission.VerdictEscalate,
+	}
+	for status, verdict := range cases {
+		t.Run(status, func(t *testing.T) {
+			h := testHandlerWithMissions(t)
+			createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+				"method":   "create",
+				"contract": validContractYAML,
+			}))
+			require.NoError(t, err)
+			var created mission.Contract
+			require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+			body := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: %s
+confidence: 0.8
+evidence:
+  - name: make check
+    status: pass
+`, created.MissionID, verdict)
+			resultRes, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+				"method":     "result",
+				"mission_id": created.MissionID,
+				"result":     body,
+			}))
+			require.NoError(t, err)
+			require.False(t, resultRes.IsError, "result must succeed: %s", resultText(t, resultRes))
+
+			closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+				"method":     "close",
+				"mission_id": created.MissionID,
+				"status":     status,
+			}))
+			require.NoError(t, err)
+			require.False(t, closeResult.IsError,
+				"MCP close with a valid result must succeed: %s", resultText(t, closeResult))
+
+			// Verify the mission is in the requested terminal state.
+			showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+				"method":     "show",
+				"mission_id": created.MissionID,
+			}))
+			require.NoError(t, err)
+			var loaded mission.Contract
+			require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+			assert.Equal(t, status, loaded.Status)
+		})
+	}
+}
+
+// TestHandleMission_Show_IncludesResults asserts the H2 MCP parity
+// fix: the show method's payload carries the round-by-round result
+// log as a top-level `results` array. Without this, a leader
+// reading `mission show` via MCP has the same invisible-verdict
+// gap mdm flagged at the CLI.
+//
+// Round 2 of Phase 3.6 added the results field to
+// handleShowMission.
+func TestHandleMission_Show_IncludesResults(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	// Submit a result so show has something to render.
+	submitResultForMCP(t, h, created.MissionID)
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &payload))
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "show payload must carry a top-level results array")
+	require.Len(t, results, 1)
+	first, _ := results[0].(map[string]any)
+	assert.Equal(t, "pass", first["verdict"])
+	assert.Equal(t, float64(1), first["round"])
+	assert.Equal(t, created.MissionID, first["mission"])
+}
+
+// TestHandleMission_Show_EmptyResultsReturnsArray asserts the
+// empty-state of the H2 fix: a mission with no submitted result
+// shows with `results: []`, never `null`. MCP clients can always
+// decode the field without a nil guard.
+func TestHandleMission_Show_EmptyResultsReturnsArray(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	// The JSON encoder emits an empty slice as `[]`, never `null`.
+	// The formatter uses json.MarshalIndent (pretty output) so the
+	// value appears as `"results": []`.
+	msg := resultText(t, showResult)
+	assert.Contains(t, msg, `"results": []`,
+		"empty results must render as [], not null; got: %s", msg)
+}
+
+// TestHandleMission_Show_JSONIncludesSessionAndRepo asserts the
+// C1 round-3 MCP parity fix: the show payload round-trips the
+// Contract's session and repo fields. Round 2 dropped them from
+// the hand-rolled payload map on both the CLI and the MCP paths;
+// round 3 replaced both with a ShowPayload struct that embeds
+// *Contract, so every Contract field auto-propagates to both
+// surfaces.
+func TestHandleMission_Show_JSONIncludesSessionAndRepo(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	// The test harness' handler shares a mission store with the
+	// NewLiveHashSources path; mutate session and repo directly on
+	// the persisted contract via the store's Update method.
+	c, err := h.missionStore.Load(created.MissionID)
+	require.NoError(t, err)
+	c.Session = "mcp-session-xyz"
+	c.Repo = "punt-labs/test"
+	require.NoError(t, h.missionStore.Update(c))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &payload))
+	assert.Equal(t, "mcp-session-xyz", payload["session"],
+		"MCP show payload must round-trip session, got: %v", payload["session"])
+	assert.Equal(t, "punt-labs/test", payload["repo"],
+		"MCP show payload must round-trip repo, got: %v", payload["repo"])
+}
+
+// TestHandleMission_Show_JSONOmitsEmptyOptionalFields asserts the
+// C1 round-3 MCP parity fix preserves Contract json-tag omitempty
+// semantics. The struct-embedding payload must NOT emit closed_at,
+// context, or tools on an open minimal mission — round 2's
+// hand-rolled map emitted every field unconditionally.
+func TestHandleMission_Show_JSONOmitsEmptyOptionalFields(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	msg := resultText(t, showResult)
+	assert.NotContains(t, msg, `"closed_at"`,
+		"open mission must not emit closed_at, got: %s", msg)
+	assert.NotContains(t, msg, `"tools"`,
+		"missing tools must be omitted, got: %s", msg)
+}
+
+// TestHandleMission_Show_SurfacesCorruptResultsAsWarnings asserts
+// the D1 round-3 fix: when LoadResults returns an error from a
+// corrupt sibling file, handleShowMission emits a top-level
+// `warnings` array so the MCP caller has a signal that the results
+// file is broken. Without this, the corrupt file was
+// indistinguishable from "no result submitted" — the inline
+// comment promised the corruption would "surface in a future
+// mission results call" but gave the caller no reason to make it.
+func TestHandleMission_Show_SurfacesCorruptResultsAsWarnings(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	// Corrupt the sibling results file directly on disk.
+	resultsFile := fmt.Sprintf("%s/missions/%s.results.yaml",
+		h.missionStore.Root(), created.MissionID)
+	require.NoError(t, os.WriteFile(resultsFile, []byte("not: : valid: yaml\n  [}\n"), 0o600))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError,
+		"corrupt sibling file must not fail the show; got: %s", resultText(t, showResult))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &payload))
+
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must still be an array, got: %v", payload["results"])
+	assert.Equal(t, 0, len(results), "corrupt load must yield empty results slice")
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "warnings must be a top-level array, got: %v", payload["warnings"])
+	require.NotEmpty(t, warnings)
+	firstWarning, _ := warnings[0].(string)
+	assert.Contains(t, firstWarning, "loading results",
+		"warning must name the load failure, got: %s", firstWarning)
+}
+
+// TestHandleMission_Result_UnknownIDReturnsError asserts that
+// submitting a result for a mission that does not exist produces
+// a structured tool error rather than silently creating one.
+func TestHandleMission_Result_UnknownIDReturnsError(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "result",
+		"mission_id": "m-9999-12-31-001",
+		"result":     validResultYAMLFor("m-9999-12-31-001"),
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
 }
 

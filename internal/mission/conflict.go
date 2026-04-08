@@ -91,6 +91,14 @@ func findWriteSetConflicts(newWriteSet []string, existing []*Contract) []Conflic
 // The per-entry validator has already rejected `..`, absolute paths,
 // control characters, drive letters, and UNC paths upstream — this
 // helper does no defense-in-depth re-validation.
+//
+// pathsOverlap is symmetric: it answers "do these two paths intersect
+// in either direction?" That is the right primitive for Phase 3.2's
+// cross-mission conflict check (two workers declaring `internal/` and
+// `internal/mission/store.go` are in conflict regardless of which
+// side is the ancestor). For the Phase 3.6 result containment check —
+// "is the result's reported file inside the contract's write_set?" —
+// use pathContainedBy, which is directional.
 func pathsOverlap(a, b string) bool {
 	as := splitSegments(a)
 	bs := splitSegments(b)
@@ -106,6 +114,43 @@ func pathsOverlap(a, b string) bool {
 	}
 	for i := 0; i < n; i++ {
 		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// pathContainedBy reports whether a file path lives inside a
+// write_set entry. The predicate is asymmetric: the entry's
+// normalized segment list must be a prefix of the file's normalized
+// segment list, AND the file must have at least as many segments as
+// the entry. "Equal" counts as contained.
+//
+// This is the right primitive for Phase 3.6 result containment —
+// "is the result's files_changed path inside the contract's
+// write_set?" A contract declaring `cmd/ethos/serve.go` and a
+// result claiming `cmd` must be refused: the result would otherwise
+// quietly claim authority over every file under `cmd/`, not just
+// the one file the contract allowed. pathsOverlap answers the wrong
+// question here — it would accept both directions.
+//
+// Round 2 of Phase 3.6 added this helper after all four reviewers
+// independently flagged the symmetric check as the load-bearing bug.
+// See m-2026-04-08-005-round2.md for the exploit table.
+//
+// An empty segment list on either side matches nothing. The per-
+// entry validator has already rejected the malformed forms upstream.
+func pathContainedBy(file, entry string) bool {
+	fs := splitSegments(file)
+	es := splitSegments(entry)
+	if len(fs) == 0 || len(es) == 0 {
+		return false
+	}
+	if len(fs) < len(es) {
+		return false
+	}
+	for i, seg := range es {
+		if fs[i] != seg {
 			return false
 		}
 	}

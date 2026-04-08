@@ -140,13 +140,20 @@ func TestStoreCloseAppendsCloseEvent(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-001")
 	require.NoError(t, s.Create(c))
+	// Phase 3.6: Close refuses without a result for the current
+	// round. Submit one so the test exercises the close event append,
+	// not the gate refusal.
+	submitRoundResult(t, s, c, VerdictPass)
 	require.NoError(t, s.Close("m-2026-04-07-001", StatusClosed))
 
 	events := readLog(t, s, "m-2026-04-07-001")
-	require.Len(t, events, 2)
+	// Phase 3.6 adds a "result" event for the submitted artifact —
+	// the sequence is create, result, close.
+	require.Len(t, events, 3)
 	assert.Equal(t, "create", events[0].Event)
-	assert.Equal(t, "close", events[1].Event)
-	assert.Equal(t, "closed", events[1].Details["status"])
+	assert.Equal(t, "result", events[1].Event)
+	assert.Equal(t, "close", events[2].Event)
+	assert.Equal(t, "closed", events[2].Details["status"])
 }
 
 func TestStoreUpdateAppendsUpdateEvent(t *testing.T) {
