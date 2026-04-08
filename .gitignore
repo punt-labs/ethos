@@ -49,5 +49,10 @@ docs/*.pdf
 
 # Worktrees
 .worktrees/
+.claude/worktrees/
+
+# Bead daemon runtime state — issues.jsonl is the tracked source of truth
+.beads/bd.sock*
+.beads/daemon-error
 
 .envrc.local
