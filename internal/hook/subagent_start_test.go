@@ -463,6 +463,13 @@ func runHookForVerifier(
 // path: a freshly created mission has its evaluator's content
 // unchanged on disk, so the recomputed hash matches the pinned hash
 // and the spawn is allowed (no error returned).
+//
+// Phase 3.5 changes the shape of the successful injection: instead of
+// the normal persona block, a verifier spawn receives the isolation
+// block containing the mission contract, verification criteria, and
+// file allowlist. The persona block is deliberately suppressed — the
+// verifier operates against the pinned contract, not against worker
+// scratch or parent context derived from the persona chain.
 func TestSubagentStart_VerifierMatchingHashAllowsSpawn(t *testing.T) {
 	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
 
@@ -472,7 +479,16 @@ func TestSubagentStart_VerifierMatchingHashAllowsSpawn(t *testing.T) {
 
 	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
 	require.NoError(t, err, "matching hash must allow the spawn")
-	assert.Contains(t, out, "Dan B", "persona block must still be emitted on a successful spawn")
+	// Phase 3.5 isolation block replaces the persona block for
+	// verifier spawns. The block identifies the mission and the
+	// verifier, lists the contract, verification criteria, and the
+	// allowlist. The persona identity (name, personality body) is
+	// deliberately suppressed.
+	assert.Contains(t, out, "Verifier context", "isolation block header must be emitted")
+	assert.Contains(t, out, c.MissionID, "isolation block must name the mission")
+	assert.Contains(t, out, "frozen verifier", "isolation block must name the verifier role")
+	assert.NotContains(t, out, "Dan B",
+		"Phase 3.5: the persona block is suppressed on verifier spawns")
 }
 
 // TestSubagentStart_VerifierDriftedPersonalityRefusesSpawn asserts the
@@ -818,4 +834,316 @@ func TestSubagentStart_VerifierGateCorruptMissionIsFatal(t *testing.T) {
 		"error must label the load failure so the operator knows which layer broke")
 	assert.Contains(t, msg, "m-2026-04-08-999",
 		"error must name the offending mission ID so the operator can find the file")
+}
+
+// --- Phase 3.5 verifier context isolation tests ---
+//
+// These tests exercise the additionalContext shape the hook emits
+// when the spawned subagent matches an open mission's evaluator
+// handle. The isolation block replaces the normal persona/extension
+// blocks and contains ONLY the mission contract (byte-for-byte from
+// disk), the success criteria, and the file allowlist derived from
+// the write_set. Parent transcript, worker scratch, and prior
+// reasoning are excluded by virtue of never being added.
+
+// TestSubagentStart_VerifierIsolationBlockShape asserts the full
+// shape of the isolation block: header, verifier role line, contract
+// YAML block, verification criteria list, allowlist list, and the
+// explicit "MUST NOT read outside the allowlist" directive. This is
+// the contract the verifier subagent sees on its first prompt.
+func TestSubagentStart_VerifierIsolationBlockShape(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	c.WriteSet = []string{"internal/test/", "cmd/ethos/mission.go"}
+	c.SuccessCriteria = []string{
+		"all new tests pass",
+		"no files touched outside write_set",
+	}
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+
+	// Parse the JSON envelope.
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+	require.NotEmpty(t, ctx, "verifier spawn must emit an additionalContext block")
+
+	// Header + role line.
+	assert.Contains(t, ctx, "# Verifier context",
+		"isolation block must begin with a clearly labeled header")
+	assert.Contains(t, ctx, c.MissionID,
+		"isolation block must name the mission in the header")
+	assert.Contains(t, ctx, `frozen verifier "djb"`,
+		"isolation block must name the verifier role with the handle")
+
+	// Explicit isolation directives.
+	assert.Contains(t, ctx, "context isolation")
+	assert.Contains(t, ctx, "MUST NOT read")
+	assert.Contains(t, ctx, "parent transcript")
+	assert.Contains(t, ctx, "outside the allowlist")
+
+	// Contract YAML block (byte-for-byte from disk), fenced so the
+	// verifier can read the whole thing without it smearing into
+	// surrounding prose.
+	assert.Contains(t, ctx, "Mission contract (byte-for-byte from disk)")
+	assert.Contains(t, ctx, "```yaml")
+	assert.Contains(t, ctx, "mission_id: "+c.MissionID)
+	assert.Contains(t, ctx, "evaluator:")
+	assert.Contains(t, ctx, "    handle: djb")
+
+	// Verification criteria list — every entry from the contract.
+	assert.Contains(t, ctx, "Verification criteria")
+	for _, sc := range c.SuccessCriteria {
+		assert.Contains(t, ctx, sc,
+			"every success criterion must appear verbatim in the block")
+	}
+
+	// File allowlist — every write_set entry plus the contract file.
+	assert.Contains(t, ctx, "File allowlist")
+	for _, entry := range c.WriteSet {
+		assert.Contains(t, ctx, entry,
+			"every write_set entry must appear in the allowlist")
+	}
+	contractPath := missions.ContractPath(c.MissionID)
+	assert.Contains(t, ctx, contractPath,
+		"contract file path must be in the allowlist so the verifier can reread it")
+}
+
+// TestSubagentStart_VerifierIsolationContractBytesExactMatch asserts
+// the byte-for-byte invariant from Phase 3.5: the contract block
+// inside the isolation injection is read from disk, not re-marshaled
+// from the parsed Contract struct. A re-marshal could produce
+// different bytes (key reordering, comment loss) than the originally
+// pinned contract, which would let the operator smuggle content past
+// the trust boundary.
+//
+// The test reads the contract file from disk, strips the code fence,
+// and compares the bytes directly.
+func TestSubagentStart_VerifierIsolationContractBytesExactMatch(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	contractBytes, err := os.ReadFile(missions.ContractPath(c.MissionID))
+	require.NoError(t, err)
+
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+	// The block wraps contract bytes in a ```yaml fence; assert the
+	// raw bytes appear inside it as-is.
+	assert.Contains(t, ctx, string(contractBytes),
+		"contract YAML inside the isolation block must be byte-for-byte identical to the on-disk file")
+}
+
+// TestSubagentStart_VerifierIsolationExcludesParentIdentity asserts
+// the load-bearing Phase 3.5 rule: the isolation block does NOT
+// contain the persona block, the identity name, the personality
+// body, the writing style, or the extension context. A verifier
+// spawn is a clean slate against the contract — not a continuation
+// of the worker's scratch state.
+//
+// The setupVerifierTest fixture seeds identity "djb" with full
+// personality and writing-style content. Without the isolation
+// path, the hook would emit "Dan B", the personality body, and the
+// "You report to" line from the parent resolution. The test asserts
+// none of that leaks.
+func TestSubagentStart_VerifierIsolationExcludesParentIdentity(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+
+	// None of the persona-identity material leaks into the verifier's
+	// context. The isolation block is the only thing injected.
+	assert.NotContains(t, ctx, "Dan B",
+		"Phase 3.5: the persona name is suppressed on verifier spawns")
+	assert.NotContains(t, ctx, "Methodical security review",
+		"Phase 3.5: the personality body is suppressed on verifier spawns")
+	assert.NotContains(t, ctx, "You report to",
+		"Phase 3.5: the parent-reports-to line is suppressed on verifier spawns")
+	assert.NotContains(t, ctx, "## Personality",
+		"Phase 3.5: the persona block header is suppressed on verifier spawns")
+	assert.NotContains(t, ctx, "## Writing Style",
+		"Phase 3.5: the writing style block is suppressed on verifier spawns")
+}
+
+// TestSubagentStart_VerifierIsolationSkippedForNonEvaluator is the
+// backwards-compatibility anchor: a subagent spawn whose agentType is
+// NOT the evaluator handle of any open mission gets the normal
+// persona/extension block, not the isolation block. Phase 3.5's
+// isolation fires only when the discriminator matches.
+func TestSubagentStart_VerifierIsolationSkippedForNonEvaluator(t *testing.T) {
+	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// Seed a second identity (`bwk`) with its own persona content so
+	// the normal injection path has something to render.
+	require.NoError(t, attribute.NewStore(dir, attribute.Personalities).Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n",
+	}))
+	require.NoError(t, attribute.NewStore(dir, attribute.WritingStyles).Save(&attribute.Attribute{
+		Slug:    "kernighan-prose",
+		Content: "# Kernighan Prose\n\nShort declarative sentences.\n",
+	}))
+	require.NoError(t, idStore.Save(&identity.Identity{
+		Name:         "Brian K",
+		Handle:       "bwk",
+		Kind:         "agent",
+		Personality:  "kernighan",
+		WritingStyle: "kernighan-prose",
+	}))
+
+	// Create a mission with djb as evaluator; bwk is the worker.
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// Now spawn a subagent as bwk — bwk is the worker, not the
+	// evaluator, so the isolation path does NOT fire and the normal
+	// persona block is emitted.
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk")
+	require.NoError(t, err)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+
+	assert.Contains(t, ctx, "Brian K",
+		"non-verifier spawn must still receive its persona block")
+	assert.Contains(t, ctx, "A methodical systems programmer",
+		"non-verifier spawn must still receive its personality body")
+	assert.NotContains(t, ctx, "Verifier context",
+		"non-verifier spawn must NOT receive the isolation block")
+}
+
+// TestSubagentStart_VerifierIsolationNoOpForClosedMission asserts
+// that a subagent whose handle MATCHES a closed mission's evaluator
+// gets the normal persona block, not the isolation block. The
+// isolation gate's discriminator is "open missions only" — closed,
+// failed, or escalated missions are out of Phase 3.5's purview.
+func TestSubagentStart_VerifierIsolationNoOpForClosedMission(t *testing.T) {
+	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// Create and close the only mission.
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+	require.NoError(t, missions.Close(c.MissionID, mission.StatusClosed))
+
+	// Spawning djb now should fall through to the normal persona
+	// path — the fixture seeds djb with a personality body.
+	_ = dir // silence unused warning on some refactor paths
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err, "closed mission must not block or isolate the spawn")
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Dan B",
+		"closed mission must not suppress the persona block")
+	assert.NotContains(t, ctx, "Verifier context",
+		"closed mission must not emit the isolation block")
+}
+
+// TestSubagentStart_VerifierIsolationWriteSetIsAllowlist asserts
+// that the file allowlist block in the isolation context contains
+// every write_set entry from the contract AND the contract file
+// path itself. The test exercises a write_set with multiple entries
+// so the allowlist rendering handles the list case, not just a
+// single-entry edge.
+func TestSubagentStart_VerifierIsolationWriteSetIsAllowlist(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	c.WriteSet = []string{
+		"internal/mission/store.go",
+		"internal/mission/validate.go",
+		"internal/hook/subagent_start.go",
+	}
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+
+	for _, entry := range c.WriteSet {
+		assert.Contains(t, ctx, entry,
+			"allowlist must include every write_set entry")
+	}
+	assert.Contains(t, ctx, missions.ContractPath(c.MissionID),
+		"allowlist must include the contract file path")
+}
+
+// TestVerifierAllowlist_Deduplicates asserts that if a mission's
+// write_set accidentally lists the contract file path, the allowlist
+// does not produce a double entry. Unit test of the pure helper.
+func TestVerifierAllowlist_Deduplicates(t *testing.T) {
+	tmpRoot := t.TempDir()
+	store := mission.NewStore(tmpRoot)
+	contractPath := store.ContractPath("m-2026-04-08-001")
+
+	c := &mission.Contract{
+		MissionID: "m-2026-04-08-001",
+		WriteSet: []string{
+			"internal/foo/",
+			contractPath, // accidental inclusion
+			"internal/bar/",
+		},
+	}
+	list := verifierAllowlist(c, store)
+
+	// One entry per distinct path; contract path appears once even
+	// though it was in the write_set.
+	count := 0
+	for _, entry := range list {
+		if entry == contractPath {
+			count++
+		}
+	}
+	assert.Equal(t, 1, count, "contract path must appear exactly once")
+}
+
+// TestVerifierAllowlist_PreservesOrder asserts that write_set
+// entries retain their declaration order in the allowlist. The
+// operator wrote them in that order for a reason and the verifier's
+// injection must reflect that ordering stably.
+func TestVerifierAllowlist_PreservesOrder(t *testing.T) {
+	store := mission.NewStore(t.TempDir())
+	c := &mission.Contract{
+		MissionID: "m-2026-04-08-001",
+		WriteSet: []string{
+			"z-last",
+			"a-first",
+			"m-middle",
+		},
+	}
+	list := verifierAllowlist(c, store)
+	// First three entries should be the write_set in declaration
+	// order; the contract file path is appended last.
+	require.GreaterOrEqual(t, len(list), 3)
+	assert.Equal(t, "z-last", list[0])
+	assert.Equal(t, "a-first", list[1])
+	assert.Equal(t, "m-middle", list[2])
 }

@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Verifier isolation** (Phase 3.5, `ethos-07m.9`) — two new runtime
+  gates layered on top of the Phase 3.1–3.4 primitives. At
+  `Store.Create`, the contract is refused if `worker` and
+  `evaluator.handle` resolve to the same handle, OR if a wired
+  `RoleLister` reports that the worker and evaluator share a
+  team-scoped role binding (`team/role`) or a role slug after
+  canonicalization. Both refusal modes name both handles, the
+  conflicting binding(s), and the recovery path. The role-overlap
+  check is opt-in via the new `Store.WithRoleLister` method; the CLI
+  and MCP wire it from the same live identity, role, and team stores
+  the frozen-evaluator hash uses. At `SubagentStart`, when the
+  spawning subagent matches the evaluator handle of any open mission,
+  the hook REPLACES the normal persona/extension injection with a
+  Phase 3.5 isolation block: the mission contract YAML
+  byte-for-byte from disk, the success criteria pinned at launch,
+  and a file allowlist derived from the mission's `write_set` plus
+  the contract file path. The isolation block carries an explicit
+  directive that the verifier must NOT read the worker's scratch
+  state, the parent transcript, or any file outside the allowlist.
+  Non-verifier spawns and spawns whose only matching missions are
+  closed are unchanged — the isolation gate fires only for open
+  missions whose evaluator handle matches the spawning agent. The
+  Phase 3.1/3.2/3.3/3.4 primitives are untouched: schema, conflict
+  check, frozen-evaluator hash, round-advance gate, and reflection
+  storage are all preserved exactly.
 - **Bounded rounds with mandatory reflection** (Phase 3.4,
   `ethos-07m.8`) — `Contract` gains a `current_round` field, and a
   new `Reflection` type plus the `Store.AdvanceRound` gate make

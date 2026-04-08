@@ -14,14 +14,41 @@ import (
 )
 
 // missionStore returns the default mission store rooted at
-// ~/.punt-labs/ethos. Mirrors sessionStore() — global-only, no layering.
+// ~/.punt-labs/ethos, with the Phase 3.5 role-overlap RoleLister
+// wired from the live identity, role, and team stores. Mirrors
+// sessionStore() — global-only, no layering.
+//
+// Wiring the lister here keeps the CLI and the MCP server (`serve.go`)
+// in lockstep: both paths call missionStore(), and both therefore
+// enforce the role-overlap check at Store.Create. A test that builds
+// its own store directly via mission.NewStore can still opt out of
+// the overlap check by skipping WithRoleLister.
+//
+// If NewLiveHashSources fails (nil underlying store), the mission
+// store is returned without a lister so the CLI still starts — the
+// failure is surfaced at the create path where the operator's
+// diagnostic is the actionable error. Silently crashing every
+// `ethos mission show` because a role file is missing would be the
+// worse outcome.
 func missionStore() *mission.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission: cannot determine home directory: %v\n", err)
 		os.Exit(1)
 	}
-	return mission.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	ms := mission.NewStore(root)
+	// Phase 3.5: wire the RoleLister so Store.Create enforces the
+	// worker/verifier role-overlap check. Uses the same live stores
+	// NewLiveHashSources does for the frozen-evaluator hash so both
+	// gates see identical role bindings.
+	is := identityStore()
+	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission: role overlap check disabled: %v\n", err)
+		return ms
+	}
+	return ms.WithRoleLister(sources.Roles)
 }
 
 // --- mission (bare command) ---

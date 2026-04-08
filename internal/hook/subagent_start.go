@@ -88,7 +88,14 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	// the operator's diagnostic must be the hash mismatch, not a
 	// confusing post-join failure. The check is a no-op when the
 	// installation has no mission store wired in (legacy hook flow).
-	if err := checkVerifierHash(agentType, deps); err != nil {
+	//
+	// Phase 3.5: the hash gate also returns the set of open missions
+	// that name this agentType as evaluator. A non-empty list is the
+	// single source of truth for "is this a verifier spawn?" — the
+	// context-isolation path below and the hash gate both consume it
+	// without re-scanning the mission store.
+	verifierMissions, err := checkVerifierHash(agentType, deps)
+	if err != nil {
 		// Return a non-nil error so cmd/ethos/hook.go's runner exits
 		// non-zero, which Claude Code surfaces to the operator as a
 		// fatal subagent launch failure. The error string carries
@@ -112,6 +119,33 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 
 	if joinErr := deps.Sessions.Join(sessionID, p); joinErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to join session %s: %v\n", sessionID, joinErr)
+	}
+
+	// Phase 3.5: verifier context isolation. When at least one open
+	// mission names this agentType as its evaluator, REPLACE the
+	// normal persona/extension injection with an isolation block
+	// containing only the mission contract (byte-for-byte from
+	// disk), the file allowlist derived from the write_set, the
+	// explicit verification criteria, and the file-level delta.
+	// Parent transcript, worker scratch, and prior reasoning are
+	// excluded by virtue of never being added.
+	//
+	// The verifier spawn's agent definition is loaded by Claude Code
+	// from the agent's `.md` file on disk — the hook does not touch
+	// that. The isolation block is additionalContext on top of that
+	// agent definition.
+	if len(verifierMissions) > 0 {
+		block, blockErr := buildVerifierIsolationBlock(verifierMissions, deps.Missions)
+		if blockErr != nil {
+			// Refuse the spawn rather than silently fall through to
+			// the normal persona path: a verifier with the wrong
+			// context is exactly the bug Phase 3.5 exists to prevent.
+			return fmt.Errorf("verifier context isolation: %w", blockErr)
+		}
+		result := SubagentStartResult{}
+		result.HookSpecificOutput.HookEventName = "SubagentStart"
+		result.HookSpecificOutput.AdditionalContext = block
+		return json.NewEncoder(os.Stdout).Encode(result)
 	}
 
 	// If no persona matched, nothing more to do.
@@ -155,6 +189,156 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
+// buildVerifierIsolationBlock renders the additionalContext injected
+// into a verifier subagent spawn. One mission produces one block;
+// multiple missions (the rare case where one agent is evaluator for
+// several concurrent missions) concatenate with a clear separator.
+//
+// The block shape is deliberately narrow — exactly the four
+// invariants Phase 3.5 promises the verifier subagent will see:
+//
+//  1. "You are the frozen verifier …" opener anchored to the
+//     evaluator handle and mission ID — the verifier knows its role
+//     and its scope on the first line.
+//  2. The mission contract YAML, read BYTE-FOR-BYTE from disk. The
+//     hook does not re-marshal the Contract struct; a re-marshal
+//     could produce different bytes than the originally pinned
+//     contract (different key ordering, comment loss), which would
+//     let the operator smuggle content through the trust boundary.
+//     ContractPath + os.ReadFile is the one true path.
+//  3. Success criteria repeated explicitly, so the verifier's
+//     verdict cannot "drift" to a different rubric than the one
+//     pinned at launch.
+//  4. The file allowlist — the write_set plus the contract file
+//     itself. This is the list of files the verifier is permitted
+//     to inspect; files outside the allowlist are the worker's
+//     scratch or the parent transcript and must not be read.
+//
+// The block explicitly says what the verifier must NOT do:
+// read parent transcript, read worker scratch outside the
+// write_set, or trust prior reasoning from the worker. Prose is
+// the weakest layer of enforcement — a PreToolUse hook is the
+// mechanical enforcement — but the prose carries the contract into
+// the verifier's first prompt so the intent is unambiguous.
+//
+// Returns an error if the contract file is missing or unreadable;
+// the caller refuses the spawn. A successful build always returns
+// non-empty bytes.
+func buildVerifierIsolationBlock(missions []*mission.Contract, store *mission.Store) (string, error) {
+	if len(missions) == 0 {
+		return "", fmt.Errorf("no verifier missions")
+	}
+	if store == nil {
+		return "", fmt.Errorf("mission store is nil")
+	}
+	var blocks []string
+	for _, m := range missions {
+		body, err := renderVerifierBlock(m, store)
+		if err != nil {
+			return "", err
+		}
+		blocks = append(blocks, body)
+	}
+	return strings.Join(blocks, "\n\n---\n\n"), nil
+}
+
+// renderVerifierBlock renders one mission's verifier isolation block.
+// Factored out of buildVerifierIsolationBlock so the per-mission
+// render logic is unit-testable without a multi-mission harness.
+func renderVerifierBlock(m *mission.Contract, store *mission.Store) (string, error) {
+	if m == nil {
+		return "", fmt.Errorf("mission contract is nil")
+	}
+	// Byte-for-byte contract from disk. A re-marshal from the
+	// already-parsed Contract would diverge from the pinned bytes;
+	// the contract file is the trust anchor.
+	contractBytes, err := os.ReadFile(store.ContractPath(m.MissionID))
+	if err != nil {
+		return "", fmt.Errorf("reading contract %q: %w", m.MissionID, err)
+	}
+
+	allowlist := verifierAllowlist(m, store)
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Verifier context (mission %s)\n\n", m.MissionID)
+	fmt.Fprintf(&b, "You are the frozen verifier %q for mission %s.\n",
+		m.Evaluator.Handle, m.MissionID)
+	b.WriteString("\n")
+	b.WriteString("You operate under Phase 3.5 context isolation:\n")
+	b.WriteString("  - Your only inputs are this mission contract and the files listed in the allowlist below.\n")
+	b.WriteString("  - You MUST NOT read the worker's scratch state, the parent transcript, or any file outside the allowlist.\n")
+	b.WriteString("  - Your verdict is scored against the success criteria pinned in the contract, not against any rubric you invent.\n")
+	b.WriteString("\n")
+
+	b.WriteString("## Mission contract (byte-for-byte from disk)\n\n")
+	b.WriteString("```yaml\n")
+	b.Write(contractBytes)
+	if len(contractBytes) == 0 || contractBytes[len(contractBytes)-1] != '\n' {
+		b.WriteString("\n")
+	}
+	b.WriteString("```\n\n")
+
+	b.WriteString("## Verification criteria\n\n")
+	if len(m.SuccessCriteria) == 0 {
+		b.WriteString("(the contract declares no success criteria; refuse the spawn)\n\n")
+	} else {
+		for _, sc := range m.SuccessCriteria {
+			fmt.Fprintf(&b, "  - %s\n", sc)
+		}
+		b.WriteString("\n")
+	}
+
+	b.WriteString("## File allowlist\n\n")
+	b.WriteString("The verifier MAY read these paths (and nothing else):\n\n")
+	for _, entry := range allowlist {
+		fmt.Fprintf(&b, "  - %s\n", entry)
+	}
+	b.WriteString("\n")
+	b.WriteString("Any Read, Grep, or Glob against a path outside this list must be\n")
+	b.WriteString("refused as out-of-scope for this verification pass.\n")
+
+	return b.String(), nil
+}
+
+// verifierAllowlist returns the ordered file-access allowlist for a
+// verifier subagent. Derived from the mission contract's write_set
+// plus the contract file itself. The allowlist is what the verifier
+// sees in its injection and (in Phase 3.5+) what a PreToolUse hook
+// enforces against tool calls.
+//
+// Order: write_set entries first (in declaration order — the
+// operator wrote them in that order for a reason), followed by the
+// contract file path. Duplicates are dropped so a contract that
+// accidentally lists the contract file in its write_set does not
+// produce a double entry.
+//
+// The contract path is an absolute filesystem path (as returned by
+// Store.ContractPath) so a verifier that resolves paths against
+// the repo root still finds it. Write_set entries are relative
+// per the per-entry validator in validate.go — the verifier's
+// working directory is the repo root.
+func verifierAllowlist(m *mission.Contract, store *mission.Store) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, entry := range m.WriteSet {
+		if entry == "" {
+			continue
+		}
+		if _, ok := seen[entry]; ok {
+			continue
+		}
+		seen[entry] = struct{}{}
+		out = append(out, entry)
+	}
+	if store != nil {
+		contractPath := store.ContractPath(m.MissionID)
+		if _, ok := seen[contractPath]; !ok {
+			out = append(out, contractPath)
+		}
+	}
+	return out
+}
+
 // checkVerifierHash recomputes the evaluator hash for every open
 // mission whose Evaluator.Handle matches agentType and returns a
 // single fatal error aggregating every mismatch.
@@ -165,14 +349,19 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 // silently allowing the spawn against a stale pinned hash would
 // invalidate the original mission's launch contract.
 //
-// Returns nil and is a no-op when:
+// Returns (nil, nil) and is a no-op when:
 //   - Missions is nil (legacy install, no mission store)
 //   - agentType is empty
 //   - No open mission names agentType as evaluator
-//   - Every matching open mission is either legacy (empty pinned
-//     hash) or has current content matching its pinned hash
 //
-// Returns a fatal error when:
+// Returns (matching open missions, nil) when every matching open
+// mission is either legacy (empty pinned hash) or has current content
+// matching its pinned hash. The returned slice is what Phase 3.5's
+// context-isolation path uses to build the verifier's injection
+// block — a non-empty slice is the single source of truth for "this
+// IS a verifier spawn".
+//
+// Returns (nil, fatal error) when:
 //   - deps.Hash is misconfigured (Missions is non-nil but HashSources
 //     is incomplete). Silent skip would let stale evaluator content
 //     through under a configuration error.
@@ -187,24 +376,24 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 // operator can cross-reference which file they edited, and two
 // recovery options (revert the edit to preserve the missions, or
 // close and relaunch to accept the new content).
-func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
+func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]*mission.Contract, error) {
 	if deps.Missions == nil {
-		return nil // legacy install: no mission store
+		return nil, nil // legacy install: no mission store
 	}
 	if err := deps.Hash.Validate(); err != nil {
 		// Misconfiguration: a mission store is present but the hash
 		// sources are not. Refusing spawns on misconfiguration is
 		// the safe default — silently skipping the gate would let
 		// stale evaluator content through.
-		return fmt.Errorf("verifier hash gate misconfigured: %w", err)
+		return nil, fmt.Errorf("verifier hash gate misconfigured: %w", err)
 	}
 	if strings.TrimSpace(agentType) == "" {
-		return nil
+		return nil, nil
 	}
 
 	ids, err := deps.Missions.List()
 	if err != nil {
-		return fmt.Errorf("verifier hash gate: listing missions: %w", err)
+		return nil, fmt.Errorf("verifier hash gate: listing missions: %w", err)
 	}
 
 	// Breakdown is computed at most once per checkVerifierHash call,
@@ -216,9 +405,10 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 	// block the spawn. The legacy check is therefore the first
 	// filter after status and handle match.
 	var (
-		breakdown       mission.EvaluatorHashBreakdown
-		breakdownLoaded bool
-		mismatches      []driftedMission
+		breakdown        mission.EvaluatorHashBreakdown
+		breakdownLoaded  bool
+		mismatches       []driftedMission
+		verifierMissions []*mission.Contract
 	)
 
 	for _, id := range ids {
@@ -227,7 +417,7 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 			// A corrupt or unparseable mission file blocks the gate.
 			// Silently skipping it would let an attacker bypass the
 			// frozen evaluator by hand-corrupting the contract.
-			return fmt.Errorf(
+			return nil, fmt.Errorf(
 				"verifier hash gate: failed to load mission %q: %w",
 				id, loadErr,
 			)
@@ -238,6 +428,13 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 		if c.Evaluator.Handle != agentType {
 			continue
 		}
+		// Phase 3.5: this mission names agentType as its evaluator
+		// and is still open — it IS a verifier spawn target,
+		// regardless of whether the hash is legacy or matches. The
+		// context-isolation path uses the full list to decide what
+		// to inject; the hash mismatch check only filters those
+		// with a mismatched pinned hash.
+		verifierMissions = append(verifierMissions, c)
 		if c.Evaluator.Hash == "" {
 			// Pre-3.3 mission with an empty pinned hash. Warn and
 			// continue; do not attempt to recompute the current
@@ -255,7 +452,7 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 		if !breakdownLoaded {
 			breakdown, err = mission.ComputeEvaluatorHashBreakdown(c.Evaluator.Handle, deps.Hash)
 			if err != nil {
-				return fmt.Errorf(
+				return nil, fmt.Errorf(
 					"verifier hash gate: recomputing hash for evaluator %q: %w",
 					c.Evaluator.Handle, err,
 				)
@@ -270,9 +467,9 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) error {
 		}
 	}
 	if len(mismatches) == 0 {
-		return nil
+		return verifierMissions, nil
 	}
-	return errors.New(formatDriftError(agentType, breakdown, mismatches))
+	return nil, errors.New(formatDriftError(agentType, breakdown, mismatches))
 }
 
 // driftedMission is an internal record collected during checkVerifierHash
