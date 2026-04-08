@@ -3221,3 +3221,129 @@ not being referenced in the block at all.
   (`internal/mission/overlap`). Rejected for round 1 — keep it
   close to `Store.Create` where it's used. A future refactor
   could extract if other callers need the check.
+
+## DES-036: Result artifacts and close gate (SETTLED)
+
+**Status**: Settled. Implemented 2026-04-08 as `ethos-07m.10` — the
+Phase 3.6 primitive that turns worker output from prose into a
+typed artifact and gates terminal mission transitions on its
+presence. Six worker rounds total: 1 implementation (round 1), 3
+local-review-fix rounds (rounds 2, 3, 4 — driven by 4-reviewer
+local cycles after rounds 1, 2, and 3), and 2 PR-side-fix rounds
+(round 5 for Copilot, round 6 for Bugbot). Fourteen reviewer agent
+invocations across the four local review cycles. Local reviewers:
+`djb` (frozen
+evaluator — 0.92, 0.95, 0.98 across the three rounds he reviewed),
+`mdm` (CLI specialist — caught the dead-code nil-slice guard, the
+hand-rolled-payload data loss, the missing `mission close --help`
+gate language, and the corrupt-reflections symmetry miss),
+`feature-dev:code-reviewer` (correctness — caught the symmetric
+`pathsOverlap` directionality bug independently, and the
+hook-formatter `results` drop), `silent-failure-hunter` (the
+`handleShowMission` swallowed `LoadResults` error and the
+`formatMissionShow` drop). Plus PR-side: Copilot (the read-side
+mission ID trust symmetry gap on `decodeResultsFile`), Bugbot (the
+fix-the-class miss between corrupt-results and corrupt-reflections
+in `runMissionShow`).
+
+### Problem
+
+Phase 3.1 shipped the mission contract with a Result artifact
+intended but unimplemented; `Store.Close` accepted any mission into
+a terminal status without proof of what the worker delivered. The
+JSONL event log recorded transitions but not verdicts. At fan-out
+(five workers → one leader synthesis), prose output is the leader's
+hardest job — every worker's report has to be read and interpreted
+to extract the structured fields the synthesis decision actually
+needs.
+
+### Decision
+
+A typed `mission.Result` artifact with strict YAML decoding
+(`KnownFields(true)`), full validation (verdict enum, confidence in
+[0.0, 1.0] excluding NaN, files_changed paths cross-checked against
+the contract write_set, evidence non-empty, control-character
+rejection on author/name/open_questions, prose accepting `\n\r\t`
+only), and append-only sibling storage at `<id>.results.yaml` —
+parallel to the Phase 3.4 reflections sibling pattern.
+
+`Store.Close` refuses every terminal transition (`closed`, `failed`,
+`escalated`) unless `LoadResults` returns a valid artifact for the
+mission's current round. The refusal message names the mission, the
+round, and the submission command. The gate lives at the store
+boundary so CLI and MCP fire it identically — no override flag, no
+bypass.
+
+`files_changed` containment uses a NEW `pathContainedBy(file, entry)`
+helper in `internal/mission/conflict.go`, NOT a reuse of the
+existing `pathsOverlap`. `pathsOverlap` is symmetric (correct for
+Phase 3.2's cross-mission conflict check); `pathContainedBy` is
+asymmetric (the entry's segment list must be a prefix of the file's,
+and the file must have at least as many segments — the only correct
+shape for "the file lives inside the allowlist entry"). All four
+reviewers caught the original symmetric implementation as a HIGH
+finding in round 1; djb verified the exploit end-to-end against the
+binary.
+
+`mission.ShowPayload` (in `internal/mission/mission.go`) embeds
+`*Contract` so the show JSON shape auto-propagates any future
+Contract field to both CLI and MCP without hand-rolling field
+lists. Plus a `Results []Result` and an optional `Warnings
+[]string` (omitempty) so a `LoadResults` error surfaces as
+structured signal instead of being silently dropped (round 3 D1).
+
+### Rejected alternatives
+
+- **Add a `Result` field to the `Contract` struct.** Rejected — the
+  Phase 3.1 contract schema is frozen, and contract + result have
+  different lifecycle invariants (contract is pinned at create
+  time; results are appended per round). Sibling files preserve the
+  invariants and avoid breaking on-disk compatibility with Phase
+  3.1 missions.
+
+- **Use the symmetric `pathsOverlap` for files_changed containment.**
+  Round 1 implementation. Rejected when all four reviewers caught
+  the parent-prefix exploit end-to-end. The fix was a new
+  asymmetric helper, not a tightening of the existing one — the
+  symmetric semantics are still correct for Phase 3.2's
+  cross-mission conflict check, where any direction of overlap is
+  a clash.
+
+- **Hand-rolled `map[string]any` for the show JSON payload.** Round
+  2 implementation. Rejected when djb caught it dropping the
+  Contract's `session` and `repo` fields and inverting `omitempty`
+  semantics. The struct-embedding fix (round 3) makes future
+  Contract fields auto-propagate.
+
+- **Return early on `LoadResults` failure in `runMissionShow`.** The
+  pre-round-4 shape. Rejected when mdm caught the asymmetry between
+  clean-empty (rendered `Results: (none)`) and corrupt
+  (silently rendered nothing). Round 4 deleted the `return`. Round
+  6 caught the parallel asymmetry that round 4 missed —
+  `LoadReflections` had the same `else { ... }` shape — and applied
+  the symmetric fix. Two-round proof of the
+  `feedback_fix_the_class_not_the_instance.md` lesson.
+
+- **Trust on-disk results files at decode time.** Round 5 Copilot
+  finding. Rejected because `AppendResult` enforces
+  `staged.Mission == missionID` on write but `LoadResults` did not
+  enforce the same on read — the same trust-boundary asymmetry
+  Phase 3.1 round 3 fixed with `KnownFields(true)`. Round 5 added
+  the read-side check.
+
+- **Override flag on `Store.Close` for emergency terminal
+  transitions without a valid result.** Considered for the round 1
+  spec; rejected because the gate is the entire point of Phase 3.6.
+  An override flag would let any caller bypass the invariant the
+  primitive exists to enforce. If a mission must close without a
+  result, the operator can submit a minimal valid result first (one
+  evidence entry, prose explaining why) — the audit trail then
+  records the unusual close instead of hiding it.
+
+### Scope deferred / filed as follow-up beads
+
+- **`AppendResult` / `AppendReflection` rollback on event-log
+  failure writes empty file instead of removing.** Inherited
+  pattern from Phase 3.4 — both append paths use the same shape.
+  Filed as `ethos-2a6` (P3) for a coordinated fix across both
+  sibling stores in a separate PR scoped to rollback semantics.
