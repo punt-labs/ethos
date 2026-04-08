@@ -67,17 +67,25 @@ func TestStore_CreateRejectsInvalid(t *testing.T) {
 // a Create that fails Validate() leaves the caller's struct untouched.
 // Create uses a shallow-copy pattern so UpdatedAt's default-fill never
 // leaks back to the caller on a failure path.
+//
+// The test explicitly clears UpdatedAt to exercise the default-fill
+// path: if Create were to mutate the caller's struct (by setting
+// UpdatedAt = CreatedAt before the shallow copy), the post-failure
+// assertion would catch it because the observed UpdatedAt would have
+// been replaced with CreatedAt.
 func TestStore_CreateDoesNotMutateCallerOnValidationFailure(t *testing.T) {
 	s := testStore(t)
-	// Start with a valid contract, then break it by emptying WriteSet.
+	// Start with a valid contract, clear UpdatedAt so the default-fill
+	// path is exercised, then break it by emptying WriteSet so Validate
+	// rejects it.
 	c := newContract("m-2026-04-07-030")
-	c.WriteSet = nil          // validation will reject this
-	originalUpdatedAt := c.UpdatedAt // caller has "" here
+	c.UpdatedAt = "" // force the default-fill code path
+	c.WriteSet = nil // validation will reject this
 
 	err := s.Create(c)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "write_set")
-	assert.Equal(t, originalUpdatedAt, c.UpdatedAt, "Create must not default-fill UpdatedAt on failure")
+	assert.Equal(t, "", c.UpdatedAt, "Create must not default-fill UpdatedAt on failure")
 }
 
 // TestStore_CreateSuccessReflectsUpdatedAt asserts that a successful

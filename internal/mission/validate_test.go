@@ -263,8 +263,11 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 
 // TestValidate_RejectsControlCharsInHandles asserts that Leader,
 // Worker, and Evaluator.Handle reject any value containing a C0
-// control character. A leader value with a newline could break the
-// JSONL log's one-line-per-event invariant by forging a fake event.
+// control character. json.Marshal escapes control characters inside
+// strings, so a newline in a handle doesn't literally forge a new
+// JSONL log line; the real concerns are terminal/CLI injection via
+// ANSI escape sequences in display output and downstream tools that
+// don't unescape JSON. Reject at the trust boundary regardless.
 func TestValidate_RejectsControlCharsInHandles(t *testing.T) {
 	tests := []struct {
 		name   string

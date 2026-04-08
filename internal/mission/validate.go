@@ -28,7 +28,8 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules:
+// Validation rules (12 total — must match the numbered list below
+// exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
 //  3. created_at is parseable as RFC3339
@@ -192,8 +193,13 @@ func validateWriteSetEntry(entry string) error {
 	}
 
 	// Reject any other control character (newline, CR, ESC, tab, etc.).
-	// A path with a newline would break the append-only log invariant
-	// when an event is written that references it.
+	// JSON marshaling escapes these inside strings, so a newline in a
+	// write_set entry doesn't literally forge a new JSONL log line —
+	// but the real risks (terminal injection via ANSI escape sequences
+	// in `ethos mission show` output, log readers that don't unescape
+	// JSON, downstream tooling that concatenates paths into unsanitized
+	// strings) are still worth rejecting at the trust boundary. See
+	// containsControlChar for the full rationale.
 	if containsControlChar(trimmed) {
 		return fmt.Errorf("write_set entry %q contains control character", trimmed)
 	}

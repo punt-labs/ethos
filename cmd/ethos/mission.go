@@ -44,10 +44,15 @@ var missionCreateCmd = &cobra.Command{
 	Short: "Create a mission contract from a YAML file",
 	Long: `Create a mission contract from a complete YAML file.
 
-All required fields (leader, worker, evaluator, inputs, write_set,
-success_criteria, budget) must be present in the file. Unknown fields
-are rejected (KnownFields strict decode). Validation runs before the
-contract is persisted.`,
+Required fields: leader, worker, evaluator, write_set,
+success_criteria, and budget. Optional fields: inputs, context,
+session, repo. Server-controlled fields (mission_id, status,
+created_at, updated_at, closed_at, evaluator.pinned_at) are
+overwritten regardless of what the file supplies.
+
+Unknown fields are rejected (KnownFields strict decode), and
+multi-document YAML or trailing content after the first document is
+also rejected. Validation runs before the contract is persisted.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
