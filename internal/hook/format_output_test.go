@@ -868,6 +868,95 @@ func TestFormatOutput_Mission_Close_Escalated(t *testing.T) {
 	assert.Equal(t, "Closed m-2026-04-07-001 as escalated", r.HookSpecificOutput.UpdatedMCPToolOutput)
 }
 
+// --- 3.4: reflect, advance, reflections formatter tests ---
+
+func TestFormatOutput_Mission_Reflect(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","round":1,"recommendation":"continue","created_at":"2026-04-08T08:00:00Z"}`
+	payload := makeToolPayload("mission", "reflect", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Reflected m-2026-04-07-001 round 1 (continue)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_Mission_Reflect_Stop(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","round":2,"recommendation":"stop","created_at":"2026-04-08T08:00:00Z"}`
+	payload := makeToolPayload("mission", "reflect", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Reflected m-2026-04-07-001 round 2 (stop)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_Mission_Advance(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","current_round":2}`
+	payload := makeToolPayload("mission", "advance", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Advanced m-2026-04-07-001 to round 2", r.HookSpecificOutput.UpdatedMCPToolOutput)
+}
+
+func TestFormatOutput_Mission_Reflections_Empty(t *testing.T) {
+	payload := makeToolPayload("mission", "reflections", `[]`)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 reflections", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t, "(none)", r.HookSpecificOutput.AdditionalContext)
+}
+
+func TestFormatOutput_Mission_Reflections_Singular(t *testing.T) {
+	result := `[{"round":1,"author":"claude","converging":true,"signals":["tests pass"],"recommendation":"continue","reason":"ok"}]`
+	payload := makeToolPayload("mission", "reflections", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "1 reflection", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "round 1 (continue) by claude")
+	assert.Contains(t, ctx, "tests pass")
+	assert.Contains(t, ctx, "reason: ok")
+}
+
+func TestFormatOutput_Mission_Reflections_Multiple(t *testing.T) {
+	result := `[
+{"round":1,"author":"claude","converging":true,"signals":["a"],"recommendation":"continue","reason":""},
+{"round":2,"author":"claude","converging":false,"signals":["b","c"],"recommendation":"pivot","reason":"new approach"}
+]`
+	payload := makeToolPayload("mission", "reflections", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "2 reflections", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "round 1 (continue)")
+	assert.Contains(t, ctx, "round 2 (pivot)")
+	assert.Contains(t, ctx, "converging=true")
+	assert.Contains(t, ctx, "converging=false")
+	assert.Contains(t, ctx, "reason: new approach")
+}
+
+// TestFormatOutput_Mission_Show_RendersRound asserts that the show
+// formatter surfaces the new "Round: N of M" line. The contract
+// JSON gains a current_round field; the formatter must include it.
+func TestFormatOutput_Mission_Show_RendersRound(t *testing.T) {
+	result := `{
+  "mission_id": "m-2026-04-07-001",
+  "status": "open",
+  "created_at": "2026-04-07T21:30:00Z",
+  "updated_at": "2026-04-07T21:30:00Z",
+  "leader": "claude",
+  "worker": "bwk",
+  "evaluator": {"handle":"djb","pinned_at":"2026-04-07T21:30:00Z"},
+  "inputs": {},
+  "write_set": ["internal/mission/"],
+  "success_criteria": ["make check passes"],
+  "budget": {"rounds": 3, "reflection_after_each": true},
+  "current_round": 2
+}`
+	payload := makeToolPayload("mission", "show", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Round:")
+	assert.Contains(t, ctx, "2 of 3")
+}
+
 func TestFormatOutput_Mission_UnknownMethod(t *testing.T) {
 	payload := makeToolPayload("mission", "bogus", `{"mission_id":"x"}`)
 	out := runFormat(t, payload)
