@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Frozen evaluator with content hash pinning** (Phase 3.3,
+  `ethos-07m.7`) — `Store.ApplyServerFields` now resolves the
+  evaluator handle through the live identity, role, and team stores
+  and pins a sha256 of the resolved content (DES-033) into
+  `Contract.Evaluator.Hash`. The hash covers personality, writing
+  style, talents (in declaration order), and every (team, role)
+  assignment for the evaluator (sorted lexicographically). Resolution
+  failure is fatal: a mission whose evaluator cannot be loaded fails
+  create with no on-disk artifacts. The SubagentStart hook
+  (`HandleSubagentStartWithDeps`) recomputes the hash on every
+  verifier spawn and refuses spawns whose pinned hash disagrees with
+  the current content. The mismatch error names the mission, the
+  evaluator handle, the pinned and current hash prefixes, and the
+  relaunch instruction. Pre-3.3 missions with empty `Evaluator.Hash`
+  are allowed through with a stderr warning so the upgrade path
+  remains clean. Closed/failed/escalated missions are out of the
+  gate's purview. New `internal/mission/hash.go` defines the
+  deterministic hash function and the `IdentityLoader`/`RoleLister`
+  interfaces; `NewLiveHashSources` adapts the live stores. CLI and
+  MCP create paths build the same `HashSources` so contracts launched
+  from either surface produce identical hashes.
 - **Write-set admission control** (Phase 3.2, `ethos-07m.6`) —
   `Store.Create` rejects a new mission whose `write_set` overlaps any
   currently-open mission's `write_set`. Overlap is segment-prefix on

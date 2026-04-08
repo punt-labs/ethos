@@ -57,12 +57,28 @@ func (s *Store) Root() string { return s.root }
 //   - Evaluator.PinnedAt: set equal to CreatedAt — the evaluator is
 //     pinned AT mission launch by definition; any caller-supplied
 //     timestamp would be incoherent
+//   - Evaluator.Hash: computed via ComputeEvaluatorHash from the live
+//     identity, attribute, and role stores (DES-033). An unresolvable
+//     evaluator handle is fatal — Phase 3.1 left this field empty as
+//     a placeholder; Phase 3.3 fills it. The hash is the trust anchor
+//     the verifier subagent (3.5) compares against on every spawn.
 //
-// Returns an error only if NewID fails to allocate a mission ID
-// (daily counter exhausted or poisoned counter file).
-func (s *Store) ApplyServerFields(c *Contract, now time.Time) error {
+// Returns an error if NewID fails to allocate a mission ID (daily
+// counter exhausted or poisoned counter file) or if the evaluator
+// handle cannot be resolved to identity content.
+func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSources) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
+	}
+	if err := sources.Validate(); err != nil {
+		return fmt.Errorf("apply server fields: %w", err)
+	}
+	if strings.TrimSpace(c.Evaluator.Handle) == "" {
+		return fmt.Errorf("apply server fields: evaluator.handle is required before hashing")
+	}
+	hash, err := ComputeEvaluatorHash(c.Evaluator.Handle, sources)
+	if err != nil {
+		return fmt.Errorf("apply server fields: %w", err)
 	}
 	id, err := NewID(s.root, now)
 	if err != nil {
@@ -75,6 +91,7 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time) error {
 	c.UpdatedAt = created
 	c.ClosedAt = ""
 	c.Evaluator.PinnedAt = created
+	c.Evaluator.Hash = hash
 	return nil
 }
 

@@ -59,10 +59,41 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 	s := identity.NewStore(dir)
 	root := s.Root()
 	ms := mission.NewStore(root)
+
+	// Phase 3.3 (DES-033) requires the evaluator handle to resolve to
+	// real identity content at create time so the contract's evaluator
+	// hash is non-empty. Seed the canonical `djb` identity that every
+	// test contract names as evaluator. The personality and writing
+	// style files exist with placeholder content; the hash function
+	// only requires that resolution succeed.
+	personalities := attribute.NewStore(root, attribute.Personalities)
+	require.NoError(t, personalities.Save(&attribute.Attribute{
+		Slug:    "bernstein",
+		Content: "# Bernstein\n\nFrozen-evaluator placeholder.\n",
+	}))
+	writingStyles := attribute.NewStore(root, attribute.WritingStyles)
+	require.NoError(t, writingStyles.Save(&attribute.Attribute{
+		Slug:    "bernstein-prose",
+		Content: "# Bernstein Prose\n\nPlaceholder.\n",
+	}))
+	talents := attribute.NewStore(root, attribute.Talents)
+	require.NoError(t, talents.Save(&attribute.Attribute{
+		Slug:    "security",
+		Content: "# Security\n",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:         "Dan B",
+		Handle:       "djb",
+		Kind:         "agent",
+		Personality:  "bernstein",
+		WritingStyle: "bernstein-prose",
+		Talents:      []string{"security"},
+	}))
+
 	return NewHandlerWithOptions(s,
-		attribute.NewStore(root, attribute.Talents),
-		attribute.NewStore(root, attribute.Personalities),
-		attribute.NewStore(root, attribute.WritingStyles),
+		talents,
+		personalities,
+		writingStyles,
 		WithMissionStore(ms),
 	)
 }

@@ -161,10 +161,15 @@ func runMissionCreate() {
 	c := *parsed
 
 	// Apply server-controlled fields (mission_id, status, timestamps,
-	// evaluator.pinned_at). Shared with the MCP create path via
-	// Store.ApplyServerFields so any caller-supplied values for these
-	// fields are overwritten identically regardless of entry point.
-	if err := ms.ApplyServerFields(&c, time.Now()); err != nil {
+	// evaluator.pinned_at, evaluator.hash). Shared with the MCP create
+	// path via Store.ApplyServerFields so any caller-supplied values
+	// for these fields are overwritten identically regardless of entry
+	// point. The hash sources resolve the evaluator handle through
+	// the live identity, role, and team stores; an unresolvable
+	// evaluator is fatal — see DES-033.
+	is := identityStore()
+	sources := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	if err := ms.ApplyServerFields(&c, time.Now(), sources); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
 		os.Exit(1)
 	}

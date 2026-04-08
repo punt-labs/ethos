@@ -9,7 +9,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -954,6 +957,315 @@ func TestStore_CreateConcurrentConflictSerialization(t *testing.T) {
 		assert.Contains(t, err.Error(), "write_set conflict",
 			"failure must be the conflict error, not a lock error")
 	}
+}
+
+// fakeHashSources returns a HashSources that resolves the given handle
+// to a stub identity with deterministic content. Tests use this to
+// exercise ApplyServerFields without depending on the live identity,
+// role, or team stores.
+//
+// The stub content is fixed (`<handle>-personality`, etc.) so two
+// successive ApplyServerFields calls against the same fake produce
+// the same hash — exactly the determinism invariant the tests assert.
+func fakeHashSources(handles ...string) HashSources {
+	ids := make(map[string]*EvaluatorIdentity, len(handles))
+	for _, h := range handles {
+		ids[h] = &EvaluatorIdentity{
+			Handle:              h,
+			PersonalityContent:  h + "-personality",
+			WritingStyleContent: h + "-writing-style",
+			Talents:             []string{"engineering"},
+			TalentContents:      []string{h + "-engineering-content"},
+		}
+	}
+	return HashSources{
+		Identities: &mapIdentityLoader{m: ids},
+		Roles:      &mapRoleLister{m: nil},
+	}
+}
+
+// mapIdentityLoader is a tiny in-memory IdentityLoader for store tests.
+type mapIdentityLoader struct {
+	m map[string]*EvaluatorIdentity
+}
+
+func (l *mapIdentityLoader) LoadEvaluator(handle string) (*EvaluatorIdentity, error) {
+	id, ok := l.m[handle]
+	if !ok {
+		return nil, fmt.Errorf("identity %q not found", handle)
+	}
+	return id, nil
+}
+
+// mapRoleLister is a tiny in-memory RoleLister for store tests.
+type mapRoleLister struct {
+	m map[string][]EvaluatorRole
+}
+
+func (l *mapRoleLister) ListRoles(handle string) ([]EvaluatorRole, error) {
+	return l.m[handle], nil
+}
+
+// TestApplyServerFields_PopulatesEvaluatorHash asserts that the
+// fix-it-now invariant from DES-033 holds: every contract created via
+// ApplyServerFields carries a non-empty Evaluator.Hash equal to the
+// deterministic recomputation of the seeded content.
+func TestApplyServerFields_PopulatesEvaluatorHash(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.MissionID = ""
+	c.CreatedAt = ""
+	c.UpdatedAt = ""
+	c.Evaluator.PinnedAt = ""
+	c.Evaluator.Hash = ""
+
+	sources := fakeHashSources("djb")
+	require.NoError(t, s.ApplyServerFields(&c, time.Now(), sources))
+
+	assert.NotEmpty(t, c.Evaluator.Hash, "ApplyServerFields must populate Evaluator.Hash")
+	assert.Len(t, c.Evaluator.Hash, 64, "Evaluator.Hash must be a 64-char hex sha256")
+
+	// Recompute against the same sources and assert exact equality.
+	expected, err := ComputeEvaluatorHash("djb", sources)
+	require.NoError(t, err)
+	assert.Equal(t, expected, c.Evaluator.Hash)
+}
+
+// TestApplyServerFields_DeterministicAcrossCalls asserts the
+// determinism invariant: two ApplyServerFields calls against
+// byte-identical sources yield byte-identical hashes. The mission_id
+// differs (counter advances), so the test compares only the hash field.
+func TestApplyServerFields_DeterministicAcrossCalls(t *testing.T) {
+	s := testStore(t)
+	sources := fakeHashSources("djb")
+
+	a := validContract()
+	require.NoError(t, s.ApplyServerFields(&a, time.Now(), sources))
+	b := validContract()
+	require.NoError(t, s.ApplyServerFields(&b, time.Now(), sources))
+
+	assert.Equal(t, a.Evaluator.Hash, b.Evaluator.Hash,
+		"two ApplyServerFields calls against identical sources must produce identical hashes")
+}
+
+// TestApplyServerFields_RejectsUnresolvableEvaluator asserts that an
+// evaluator handle the loader cannot resolve fails ApplyServerFields
+// with a wrapped error AND leaves no on-disk artifacts (the mission
+// is not created).
+func TestApplyServerFields_RejectsUnresolvableEvaluator(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.Evaluator.Handle = "ghost"
+
+	sources := fakeHashSources("djb") // ghost is not in the source map
+	err := s.ApplyServerFields(&c, time.Now(), sources)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ghost")
+
+	// No mission file was created.
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Empty(t, ids)
+}
+
+// TestApplyServerFields_RejectsNilSources asserts that a misconfigured
+// caller (nil identity loader or nil role lister) fails fast with an
+// explicit error rather than silently producing an empty hash.
+func TestApplyServerFields_RejectsNilSources(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	err := s.ApplyServerFields(&c, time.Now(), HashSources{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Identities loader is nil")
+}
+
+// TestApplyServerFields_RejectsEmptyEvaluatorHandle asserts that an
+// empty handle is caught at the boundary so the hash function never
+// receives a zero-value handle. The contract Validate() also rejects
+// it, but ApplyServerFields' early check produces a clearer
+// diagnostic for the operator.
+func TestApplyServerFields_RejectsEmptyEvaluatorHandle(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.Evaluator.Handle = ""
+	sources := fakeHashSources("djb")
+	err := s.ApplyServerFields(&c, time.Now(), sources)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "evaluator.handle is required")
+}
+
+// TestApplyServerFields_LiveStoresRoundTrip is the success-criterion-1
+// integration test from DES-033: seed a minimal identity through the
+// real identity, attribute, and role stores; create a mission naming
+// the seeded handle; assert the recorded hash is non-empty and equal
+// to a deterministic recomputation against the same content.
+//
+// This is the end-to-end shape the live CLI/MCP path takes — fake
+// loaders verify the algorithm, this test verifies the wiring.
+func TestApplyServerFields_LiveStoresRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	is := identity.NewStore(dir)
+
+	// Seed personality, writing-style, and talent files.
+	require.NoError(t, attribute.NewStore(dir, attribute.Personalities).Save(&attribute.Attribute{
+		Slug:    "bernstein",
+		Content: "# Bernstein\n\nMethodical security review.\n",
+	}))
+	require.NoError(t, attribute.NewStore(dir, attribute.WritingStyles).Save(&attribute.Attribute{
+		Slug:    "bernstein-prose",
+		Content: "# Bernstein Prose\n\nShort declarative sentences.\n",
+	}))
+	require.NoError(t, attribute.NewStore(dir, attribute.Talents).Save(&attribute.Attribute{
+		Slug:    "security",
+		Content: "# Security\n\nThreat modeling.\n",
+	}))
+	require.NoError(t, is.Save(&identity.Identity{
+		Name:         "Dan B",
+		Handle:       "djb",
+		Kind:         "agent",
+		Personality:  "bernstein",
+		WritingStyle: "bernstein-prose",
+		Talents:      []string{"security"},
+	}))
+
+	ms := NewStore(dir)
+	sources := NewLiveHashSources(is, nil, nil)
+
+	c := validContract()
+	c.MissionID = ""
+	c.CreatedAt = ""
+	c.UpdatedAt = ""
+	c.Evaluator.PinnedAt = ""
+	c.Evaluator.Hash = ""
+
+	require.NoError(t, ms.ApplyServerFields(&c, time.Now(), sources))
+	require.NoError(t, ms.Create(&c))
+
+	// Hash is non-empty and matches a fresh recomputation against
+	// the same live sources.
+	require.NotEmpty(t, c.Evaluator.Hash)
+	require.Len(t, c.Evaluator.Hash, 64)
+	expected, err := ComputeEvaluatorHash("djb", sources)
+	require.NoError(t, err)
+	assert.Equal(t, expected, c.Evaluator.Hash)
+
+	// And the hash survives the YAML round trip.
+	loaded, err := ms.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, c.Evaluator.Hash, loaded.Evaluator.Hash)
+}
+
+// TestApplyServerFields_LiveStoresEachSourceMatters reproduces the
+// edit-detection table from hash_test.go but against real on-disk
+// stores: each .md file is rewritten between two ApplyServerFields
+// calls and the resulting hashes are asserted to differ. This is the
+// integration-level proof of success criterion 3.
+func TestApplyServerFields_LiveStoresEachSourceMatters(t *testing.T) {
+	type fixture struct {
+		personality  string
+		writingStyle string
+		talent       string
+	}
+	baseline := fixture{
+		personality:  "# Bernstein\n\nbaseline\n",
+		writingStyle: "# Prose\n\nbaseline\n",
+		talent:       "# Security\n\nbaseline\n",
+	}
+	cases := []struct {
+		name   string
+		mutate func(*fixture)
+	}{
+		{
+			name:   "personality edit",
+			mutate: func(f *fixture) { f.personality = "# Bernstein\n\nedited\n" },
+		},
+		{
+			name:   "writing style edit",
+			mutate: func(f *fixture) { f.writingStyle = "# Prose\n\nedited\n" },
+		},
+		{
+			name:   "talent edit",
+			mutate: func(f *fixture) { f.talent = "# Security\n\nedited\n" },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			is := identity.NewStore(dir)
+			ps := attribute.NewStore(dir, attribute.Personalities)
+			ws := attribute.NewStore(dir, attribute.WritingStyles)
+			ts := attribute.NewStore(dir, attribute.Talents)
+
+			// Seed baseline.
+			require.NoError(t, ps.Save(&attribute.Attribute{
+				Slug: "bernstein", Content: baseline.personality,
+			}))
+			require.NoError(t, ws.Save(&attribute.Attribute{
+				Slug: "bernstein-prose", Content: baseline.writingStyle,
+			}))
+			require.NoError(t, ts.Save(&attribute.Attribute{
+				Slug: "security", Content: baseline.talent,
+			}))
+			require.NoError(t, is.Save(&identity.Identity{
+				Name:         "Dan B",
+				Handle:       "djb",
+				Kind:         "agent",
+				Personality:  "bernstein",
+				WritingStyle: "bernstein-prose",
+				Talents:      []string{"security"},
+			}))
+
+			sources := NewLiveHashSources(is, nil, nil)
+			baselineHash, err := ComputeEvaluatorHash("djb", sources)
+			require.NoError(t, err)
+
+			// Apply the mutation by overwriting the .md file on disk.
+			f := baseline
+			tc.mutate(&f)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dir, "personalities", "bernstein.md"),
+				[]byte(f.personality), 0o600,
+			))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dir, "writing-styles", "bernstein-prose.md"),
+				[]byte(f.writingStyle), 0o600,
+			))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dir, "talents", "security.md"),
+				[]byte(f.talent), 0o600,
+			))
+
+			driftedHash, err := ComputeEvaluatorHash("djb", sources)
+			require.NoError(t, err)
+			assert.NotEqual(t, baselineHash, driftedHash,
+				"%s: live-store hash must change after .md edit", tc.name)
+		})
+	}
+}
+
+// TestApplyServerFields_HashRoundTripsThroughCreate asserts that the
+// hash set by ApplyServerFields survives Store.Create unchanged and
+// loads back exactly. This is the end-to-end happy path: launch a
+// mission, reload it, and verify the pinned hash is the bytes the
+// caller saw.
+func TestApplyServerFields_HashRoundTripsThroughCreate(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.MissionID = ""
+	c.CreatedAt = ""
+	c.UpdatedAt = ""
+	c.Evaluator.PinnedAt = ""
+
+	sources := fakeHashSources("djb")
+	require.NoError(t, s.ApplyServerFields(&c, time.Now(), sources))
+	wantHash := c.Evaluator.Hash
+	require.NoError(t, s.Create(&c))
+
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, wantHash, loaded.Evaluator.Hash,
+		"Evaluator.Hash must survive the YAML round trip byte-for-byte")
 }
 
 // TestStore_CreateRejectsDotSegmentBypass asserts that dot-segment

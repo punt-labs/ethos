@@ -82,11 +82,14 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	c := *parsed
 
 	// Apply server-controlled fields (mission_id, status, timestamps,
-	// evaluator.pinned_at) via the shared helper. CLI and MCP entry
-	// points are in lockstep: any caller-supplied values for these
-	// fields are overwritten identically regardless of where the YAML
-	// came from.
-	if err := h.missionStore.ApplyServerFields(&c, time.Now()); err != nil {
+	// evaluator.pinned_at, evaluator.hash) via the shared helper.
+	// CLI and MCP entry points are in lockstep: any caller-supplied
+	// values for these fields are overwritten identically regardless
+	// of where the YAML came from. Hash sources resolve the evaluator
+	// against the live identity, role, and team stores; an
+	// unresolvable handle is fatal — see DES-033.
+	sources := mission.NewLiveHashSources(h.store, h.roles, h.teams)
+	if err := h.missionStore.ApplyServerFields(&c, time.Now(), sources); err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
 
