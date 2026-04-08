@@ -2554,18 +2554,22 @@ just tried to claim, not a normalized form.
   hardening pass on `validate.go` could reject double slashes
   outright; out of scope for 3.2.
 
-## DES-033: Frozen evaluator — content hash pinning (PROPOSED)
+## DES-033: Frozen evaluator — content hash pinning (SETTLED)
 
-**Status**: Proposed. Implemented 2026-04-08 as `ethos-07m.7` — the
+**Status**: Settled. Implemented 2026-04-08 as `ethos-07m.7` — the
 Phase 3.3 primitive that makes DES-031's "frozen evaluator" actually
-enforceable at runtime. Two rounds: initial implementation plus local
-review fixes. Local reviewers: `mdm` (CLI surface — nine findings
-across high, medium, and low severity, all addressed).
+enforceable at runtime. Three rounds: initial implementation, local
+review fixes, and djb-review regression tests plus micro-optimization.
+Local reviewers: `mdm` (CLI surface — nine findings across high,
+medium, and low severity, all addressed).
 `feature-dev:code-reviewer` was
 attempted twice but hit transient API overload; leader supplemented
 with a targeted self-review that turned up no additional findings
 beyond mdm's list. Frozen evaluator: `djb` (pinned at mission launch).
-Status flips SETTLED after djb's verdict and PR merge.
+djb's final verdict: PASS (0.96), with three LOW follow-up items
+addressed in round 3 rather than deferred — per Phase 3.1 precedent,
+the leader's fix-it-now discipline overrides djb's "file as follow-
+up" procedural recommendation.
 
 ### Problem
 
