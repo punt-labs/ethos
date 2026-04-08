@@ -127,7 +127,15 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 }
 
 // handleShowMission resolves the requested mission by exact ID or
-// prefix and returns its contract.
+// prefix and returns its contract plus the round-by-round result
+// log. Round 2 of Phase 3.6 added results to the show payload so
+// the MCP surface carries the same verdict information as the CLI —
+// otherwise a leader reading `mission show` via MCP would have the
+// same invisible-verdict gap mdm flagged at the CLI.
+//
+// Results load is advisory: a corrupt sibling file produces a
+// warning but the show still succeeds with the contract visible,
+// matching the CLI's behavior.
 func (h *Handler) handleShowMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	idArg := stringArg(req, "mission_id", "")
 	if idArg == "" {
@@ -141,7 +149,40 @@ func (h *Handler) handleShowMission(req mcplib.CallToolRequest) (*mcplib.CallToo
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to load mission: %v", err)), nil
 	}
-	return jsonResult(c)
+	// Load results as an advisory extension to the payload. A missing
+	// or empty sibling file becomes `[]` in the output (never null)
+	// so MCP clients can decode into []mission.Result without a
+	// nil guard.
+	results, loadErr := h.missionStore.LoadResults(id)
+	if loadErr != nil {
+		// Do not block the show on a corrupt results file — the
+		// contract is still the trust boundary and the operator
+		// deserves to see it. The corrupted file surfaces in a
+		// future `mission results` call.
+		results = nil
+	}
+	if results == nil {
+		results = []mission.Result{}
+	}
+	payload := map[string]any{
+		"mission_id":       c.MissionID,
+		"status":           c.Status,
+		"created_at":       c.CreatedAt,
+		"updated_at":       c.UpdatedAt,
+		"closed_at":        c.ClosedAt,
+		"leader":           c.Leader,
+		"worker":           c.Worker,
+		"evaluator":        c.Evaluator,
+		"inputs":           c.Inputs,
+		"write_set":        c.WriteSet,
+		"tools":            c.Tools,
+		"success_criteria": c.SuccessCriteria,
+		"budget":           c.Budget,
+		"current_round":    c.CurrentRound,
+		"context":          c.Context,
+		"results":          results,
+	}
+	return jsonResult(payload)
 }
 
 // handleListMissions returns the missions matching the status filter.

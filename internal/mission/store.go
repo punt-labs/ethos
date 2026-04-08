@@ -490,7 +490,14 @@ func (s *Store) Close(missionID, status string) error {
 		// artifact on disk. The gate is the whole point of the phase:
 		// the leader's final verdict must be backed by the worker's
 		// structured output, not prose left in chat.
-		if err := s.checkResultGateLocked(c); err != nil {
+		//
+		// The gate returns the satisfying result so the close event
+		// can record the round number and verdict — round 2 of Phase
+		// 3.6 added this so an auditor reading the JSONL does not
+		// have to scan back across round_advanced events to
+		// reconstruct which result authorized the terminal transition.
+		satisfying, err := s.checkResultGateLocked(c)
+		if err != nil {
 			return err
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
@@ -503,13 +510,16 @@ func (s *Store) Close(missionID, status string) error {
 		if err := s.writeContract(c); err != nil {
 			return err
 		}
+		closeDetails := map[string]any{
+			"status":  status,
+			"round":   satisfying.Round,
+			"verdict": satisfying.Verdict,
+		}
 		if err := s.appendEventLocked(missionID, Event{
-			TS:    now,
-			Event: "close",
-			Actor: c.Leader,
-			Details: map[string]any{
-				"status": status,
-			},
+			TS:      now,
+			Event:   "close",
+			Actor:   c.Leader,
+			Details: closeDetails,
 		}); err != nil {
 			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
 				return fmt.Errorf("close: event append failed: %w; rollback failed: %v", err, rbErr)
@@ -846,6 +856,11 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 		return fmt.Errorf("reflection is nil")
 	}
 	staged := *r
+	// Normalize Author before persisting so whitespace around the
+	// handle does not pollute the audit trail or the event log.
+	// Parity with AppendResult — Phase 3.6 round 2 widened the class
+	// fix to both sibling stores so the two surfaces stay symmetric.
+	staged.Author = strings.TrimSpace(staged.Author)
 	if strings.TrimSpace(staged.CreatedAt) == "" {
 		staged.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -1368,10 +1383,12 @@ func decodeResultsFile(data []byte, missionID string) ([]Result, error) {
 // slip past the gate by claiming the wrong parent.
 //
 // files_changed paths are cross-checked against the contract's
-// write_set using pathsOverlap (the same segment-prefix helper Phase
-// 3.2 uses for cross-mission conflict detection). A path outside
-// the allowlist is a fatal error; the error names every offending
-// path so the operator sees the full picture in one pass.
+// write_set using pathContainedBy (asymmetric segment-prefix). A
+// path outside the allowlist is a fatal error; the error names every
+// offending path so the operator sees the full picture in one pass.
+// Phase 3.2's pathsOverlap is deliberately NOT used here — the two
+// primitives answer different questions, and symmetric overlap would
+// accept a parent-prefix of a file entry.
 //
 // Validate runs before any disk I/O. CreatedAt is set to now if the
 // caller left it blank. The result event is appended to the JSONL
@@ -1385,6 +1402,13 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 		return fmt.Errorf("result is nil")
 	}
 	staged := *r
+	// Normalize Author before persisting so whitespace around the
+	// handle does not pollute the audit trail or the event log. The
+	// Validate call only checks that the trimmed form is non-empty;
+	// it does not reject surrounding whitespace, which would break
+	// backwards compatibility with round 1 files that stored an
+	// untrimmed author. Normalizing in Append is purely additive.
+	staged.Author = strings.TrimSpace(staged.Author)
 	if strings.TrimSpace(staged.CreatedAt) == "" {
 		staged.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -1422,8 +1446,9 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 		// inside at least one entry of the contract's write_set.
 		// This is the third use of the write_set cross-check pattern
 		// (Phase 3.2 admission, Phase 3.5 verifier allowlist, now
-		// Phase 3.6 result containment); the shared helper is
-		// pathContainedByWriteSet, which delegates to pathsOverlap.
+		// Phase 3.6 result containment). Uses pathContainedBy, the
+		// asymmetric segment-prefix helper — a parent-prefix of a
+		// write_set file entry must NOT be admitted.
 		if err := checkFilesChangedContainment(c, &staged); err != nil {
 			return err
 		}
@@ -1511,29 +1536,47 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 // unless a valid result artifact exists for the mission's current
 // round.
 //
+// On success it returns the satisfying result so the caller can
+// record the round number and verdict on the close event's
+// Details map. This was added in round 2 so the audit trail
+// directly links the close transition to the result that authorized
+// it, instead of forcing an auditor to scan back across
+// round_advanced events.
+//
 // The refusal message names the mission, the missing round, and
 // the submission command so the operator sees the recovery path in
 // the error itself, not in separate documentation.
-func (s *Store) checkResultGateLocked(c *Contract) error {
+func (s *Store) checkResultGateLocked(c *Contract) (*Result, error) {
 	results, err := s.loadResultsLocked(c.MissionID)
 	if err != nil {
-		return fmt.Errorf("close: loading results for gate: %w", err)
+		return nil, fmt.Errorf("close: loading results for gate: %w", err)
 	}
 	for i := range results {
 		if results[i].Round == c.CurrentRound {
-			return nil
+			// Return a pointer into a local copy so the caller
+			// cannot mutate the on-disk cache by accident.
+			r := results[i]
+			return &r, nil
 		}
 	}
-	return fmt.Errorf(
+	return nil, fmt.Errorf(
 		"mission %q cannot close: no result artifact for round %d; run `ethos mission result %s --file <path>` to submit one",
 		c.MissionID, c.CurrentRound, c.MissionID,
 	)
 }
 
 // checkFilesChangedContainment verifies every FilesChanged entry in
-// r lives under at least one entry of c.WriteSet. Reuses pathsOverlap
-// (the Phase 3.2 segment-prefix helper) so the containment rule is
-// byte-identical to the cross-mission conflict check.
+// r lives under at least one entry of c.WriteSet. Uses
+// pathContainedBy (asymmetric) so a result cannot quietly claim
+// authority over a parent directory of a write_set entry.
+//
+// Phase 3.6 round 1 used the symmetric pathsOverlap helper; all four
+// reviewers flagged the bug independently. A contract declaring
+// `cmd/ethos/serve.go` with a result claiming `cmd` overlaps in one
+// direction only — the file `cmd` has fewer segments than the entry
+// `cmd/ethos/serve.go` — and the symmetric check accepted it. The
+// asymmetric check correctly refuses: the entry's segment list must
+// be a prefix of the file's segment list.
 //
 // The helper collects every out-of-bounds path before returning, so
 // the operator sees the complete fix list in a single error rather
@@ -1547,7 +1590,7 @@ func checkFilesChangedContainment(c *Contract, r *Result) error {
 	for _, fc := range r.FilesChanged {
 		contained := false
 		for _, entry := range c.WriteSet {
-			if pathsOverlap(fc.Path, entry) {
+			if pathContainedBy(fc.Path, entry) {
 				contained = true
 				break
 			}

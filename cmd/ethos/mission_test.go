@@ -662,6 +662,55 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 	assert.Equal(t, 2, loaded.CurrentRound)
 }
 
+// TestMissionShow_IncludesResults asserts the H2 fix: `mission
+// show` surfaces the round-by-round result log under the contract
+// header so an operator can see the verdict that authorized a
+// close without `cat`-ing the sibling YAML file.
+//
+// Round 1 of Phase 3.6 rendered only the contract and reflections.
+// mdm flagged the gap: after a valid submit + close, `ethos mission
+// show` said nothing about the result. Round 2 added printResults
+// to runMissionShow and a top-level `results` field to the JSON
+// payload.
+func TestMissionShow_IncludesResults(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Submit a valid result and close the mission so show renders
+	// both the contract and the result.
+	submitCLIResult(t, id, 1)
+	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+
+	// Human mode: the Results section must appear with the round
+	// and verdict.
+	out := captureStdout(t, func() { runMissionShow(id) })
+	assert.Contains(t, out, "Results:")
+	assert.Contains(t, out, "round 1")
+	assert.Contains(t, out, "pass")
+	assert.Contains(t, out, "bwk")
+
+	// JSON mode: the payload must carry a `results` array with one
+	// entry whose verdict is "pass".
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "results must be a top-level array, got: %v", payload["results"])
+	require.Len(t, results, 1)
+	first, _ := results[0].(map[string]any)
+	assert.Equal(t, "pass", first["verdict"])
+	assert.Equal(t, float64(1), first["round"])
+}
+
 // TestMissionShow_RendersCurrentRound asserts that printContract
 // includes the new "Round: N of M" line so the operator can read
 // the mission's progress at a glance.
@@ -735,6 +784,138 @@ func TestMissionResult_RoundTrip(t *testing.T) {
 	require.NotNil(t, loaded)
 	assert.Equal(t, 1, loaded.Round)
 	assert.Equal(t, mission.VerdictPass, loaded.Verdict)
+}
+
+// TestMissionResults_ListsSubmittedResults asserts the H3 fix:
+// `ethos mission results <id>` is a real subcommand, and it lists
+// the round-by-round worker result log in both human and JSON
+// modes. Round 1 shipped only `mission result` (the write path);
+// the sibling read path was MCP-only. mdm flagged the asymmetry
+// against `mission reflect`/`mission reflections`.
+func TestMissionResults_ListsSubmittedResults(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Empty case — no results yet, JSON mode must produce "[]"
+	// (never "null") so consumers can unmarshal into []Result
+	// without a nil guard.
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() { runMissionResults(id) })
+	assert.Equal(t, "[]", strings.TrimSpace(out))
+
+	// Submit a result and fetch again.
+	submitCLIResult(t, id, 1)
+	out = captureStdout(t, func() { runMissionResults(id) })
+	var got []mission.Result
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.Len(t, got, 1)
+	assert.Equal(t, 1, got[0].Round)
+	assert.Equal(t, mission.VerdictPass, got[0].Verdict)
+	assert.Equal(t, id, got[0].Mission)
+
+	// Human mode: the Results section header and a round 1 bullet
+	// must appear.
+	jsonOutput = false
+	humanOut := captureStdout(t, func() { runMissionResults(id) })
+	assert.Contains(t, humanOut, "Results:")
+	assert.Contains(t, humanOut, "round 1")
+	assert.Contains(t, humanOut, "pass")
+}
+
+// TestMissionResults_HelpListsSubcommand asserts the H3 discovery
+// fix: the `results` subcommand appears in `ethos mission --help`
+// so the operator can find it. Without this, the subcommand is a
+// ghost feature — present but undocumented.
+func TestMissionResults_HelpListsSubcommand(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "results")
+	assert.Contains(t, stdout, "Show the round-by-round result log")
+}
+
+// TestMissionResult_RefusesInvalidShapeNamesFilePath asserts the
+// M1 fix: a structural Validate failure (empty verdict,
+// out-of-range confidence, empty evidence) produces an error that
+// includes the --file path so the operator can locate the source
+// of the failure in one pass. Runs in a subprocess because
+// runMissionResult calls os.Exit on validation failure.
+func TestMissionResult_RefusesInvalidShapeNamesFilePath(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/m1-file-path/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+
+	// Write a result with an invalid verdict — structural
+	// Validate failure. The error must name the file path.
+	badFile := filepath.Join(tmp, "bad-result.yaml")
+	body := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: ""
+confidence: 0.5
+files_changed:
+  - path: tests/m1-file-path/
+    added: 1
+    removed: 0
+evidence:
+  - name: make check
+    status: pass
+`, id)
+	require.NoError(t, os.WriteFile(badFile, []byte(body), 0o600))
+
+	resultCmd := exec.Command(ethosBinary, "mission", "result", id, "--file", badFile)
+	resultCmd.Env = env
+	var stderrBuf bytes.Buffer
+	resultCmd.Stderr = &stderrBuf
+	err := resultCmd.Run()
+	require.Error(t, err)
+	stderr := stderrBuf.String()
+	assert.Contains(t, stderr, badFile,
+		"error must name the --file path, got: %s", stderr)
+	assert.Contains(t, stderr, "invalid verdict",
+		"error must still carry the Validate diagnostic, got: %s", stderr)
 }
 
 // TestMissionResult_JSON asserts the JSON output shape for the CLI

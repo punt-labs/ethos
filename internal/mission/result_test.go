@@ -1,6 +1,7 @@
 package mission
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -104,6 +105,14 @@ func TestResult_Validate(t *testing.T) {
 			name:    "confidence above range",
 			mutate:  func(r *Result) { r.Confidence = 1.01 },
 			wantErr: "invalid confidence",
+		},
+		{
+			// L1 fix: NaN compares false against every bound, so a
+			// bare range check silently admits it. YAML `.nan`
+			// decodes to math.NaN(). Round 2 added the IsNaN check.
+			name:    "confidence NaN",
+			mutate:  func(r *Result) { r.Confidence = math.NaN() },
+			wantErr: "invalid confidence NaN",
 		},
 		{
 			name:    "files_changed absolute path",
@@ -230,6 +239,36 @@ func TestResult_Validate_ConfidenceBoundaries(t *testing.T) {
 	}
 }
 
+// TestResult_Validate_ConfidenceRejectsNaN asserts the L1 fix: the
+// YAML `.nan` form decodes to math.NaN() and the range check alone
+// silently admits it. Validate now explicitly rejects NaN before
+// the range check.
+func TestResult_Validate_ConfidenceRejectsNaN(t *testing.T) {
+	// Direct struct case.
+	r := validResult()
+	r.Confidence = math.NaN()
+	err := r.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NaN")
+
+	// YAML `.nan` decode case — lock the on-disk trust boundary.
+	body := []byte(`mission: m-2026-04-07-001
+round: 1
+author: bwk
+verdict: pass
+confidence: .nan
+evidence:
+  - name: make check
+    status: pass
+`)
+	parsed, err := DecodeResultStrict(body, "test.yaml")
+	require.NoError(t, err, "decode must succeed; Validate rejects later")
+	require.True(t, math.IsNaN(parsed.Confidence))
+	err = parsed.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NaN")
+}
+
 // TestResult_Validate_EmptyFilesChangedAllowed asserts that a result
 // with no file changes is valid. A round that only inspected code
 // without writing is a legitimate outcome — the worker verified
@@ -238,6 +277,40 @@ func TestResult_Validate_EmptyFilesChangedAllowed(t *testing.T) {
 	r := validResult()
 	r.FilesChanged = nil
 	require.NoError(t, r.Validate())
+}
+
+// TestResult_Validate_FilesChangedErrorsNameTheField asserts the M2
+// fix: errors about a malformed files_changed entry name the field
+// "files_changed[i].path", not "write_set entry". The user edited
+// files_changed, so the error must point at files_changed.
+//
+// Round 1 shipped the helper with "write_set entry" baked into the
+// error string, which was contextually wrong for the result
+// validator. Round 2 moved the field prefix out of
+// validateWriteSetEntry and into the callers.
+func TestResult_Validate_FilesChangedErrorsNameTheField(t *testing.T) {
+	cases := []struct {
+		name string
+		path string
+	}{
+		{"traversal", "../etc/passwd"},
+		{"absolute", "/etc/passwd"},
+		{"null byte", "internal/mission/\x00bypass"},
+		{"control character", "internal/mission/\nbad.go"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := validResult()
+			r.FilesChanged = []FileChange{{Path: tc.path, Added: 1}}
+			err := r.Validate()
+			require.Error(t, err)
+			msg := err.Error()
+			assert.Contains(t, msg, "files_changed",
+				"error must name files_changed, got: %s", msg)
+			assert.NotContains(t, msg, "write_set entry",
+				"error must not name write_set entry (wrong field), got: %s", msg)
+		})
+	}
 }
 
 // TestResult_Validate_ProseAcceptsMultiLine asserts that prose

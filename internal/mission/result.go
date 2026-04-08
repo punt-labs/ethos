@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -193,6 +194,12 @@ func (r *Result) Validate() error {
 	if !validVerdicts[r.Verdict] {
 		return fmt.Errorf("invalid verdict %q: must be one of pass, fail, escalate", r.Verdict)
 	}
+	// NaN compares false against every bound, so a bare `< 0 || > 1`
+	// check silently admits it. YAML `.nan` decodes to math.NaN(), so
+	// the rejection must happen before the range check.
+	if math.IsNaN(r.Confidence) {
+		return fmt.Errorf("invalid confidence NaN: must be in [0.0, 1.0]")
+	}
 	if r.Confidence < 0.0 || r.Confidence > 1.0 {
 		return fmt.Errorf("invalid confidence %v: must be in [0.0, 1.0]", r.Confidence)
 	}
@@ -239,9 +246,14 @@ func (r *Result) Validate() error {
 // equivalence class enumerated in Phase 3.2 (absolute paths, drive
 // letters, traversal, control characters, root claims, empty
 // segments) across both admission and result submission.
+//
+// The field prefix is "path" rather than "write_set entry" — the
+// user is editing files_changed, not write_set, and the error must
+// name the field they can fix. Round 2 of Phase 3.6 moved the field
+// prefix out of validateWriteSetEntry for exactly this reason.
 func validateFileChange(fc FileChange) error {
 	if err := validateWriteSetEntry(fc.Path); err != nil {
-		return fmt.Errorf("path: %w", err)
+		return fmt.Errorf("path %w", err)
 	}
 	if fc.Added < 0 {
 		return fmt.Errorf("added %d must be non-negative", fc.Added)

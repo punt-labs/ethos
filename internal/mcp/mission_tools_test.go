@@ -1168,6 +1168,74 @@ evidence:
 	}
 }
 
+// TestHandleMission_Show_IncludesResults asserts the H2 MCP parity
+// fix: the show method's payload carries the round-by-round result
+// log as a top-level `results` array. Without this, a leader
+// reading `mission show` via MCP has the same invisible-verdict
+// gap mdm flagged at the CLI.
+//
+// Round 2 of Phase 3.6 added the results field to
+// handleShowMission.
+func TestHandleMission_Show_IncludesResults(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	// Submit a result so show has something to render.
+	submitResultForMCP(t, h, created.MissionID)
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &payload))
+	results, ok := payload["results"].([]any)
+	require.True(t, ok, "show payload must carry a top-level results array")
+	require.Len(t, results, 1)
+	first, _ := results[0].(map[string]any)
+	assert.Equal(t, "pass", first["verdict"])
+	assert.Equal(t, float64(1), first["round"])
+	assert.Equal(t, created.MissionID, first["mission"])
+}
+
+// TestHandleMission_Show_EmptyResultsReturnsArray asserts the
+// empty-state of the H2 fix: a mission with no submitted result
+// shows with `results: []`, never `null`. MCP clients can always
+// decode the field without a nil guard.
+func TestHandleMission_Show_EmptyResultsReturnsArray(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, showResult.IsError)
+
+	// The JSON encoder emits an empty slice as `[]`, never `null`.
+	// The formatter uses json.MarshalIndent (pretty output) so the
+	// value appears as `"results": []`.
+	msg := resultText(t, showResult)
+	assert.Contains(t, msg, `"results": []`,
+		"empty results must render as [], not null; got: %s", msg)
+}
+
 // TestHandleMission_Result_UnknownIDReturnsError asserts that
 // submitting a result for a mission that does not exist produces
 // a structured tool error rather than silently creating one.

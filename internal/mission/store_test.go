@@ -2312,6 +2312,15 @@ func TestStore_AppendResult_RejectsMalformed(t *testing.T) {
 // is the "fix the class, not the instance" test: the result
 // validator must reject every variant the write_set admission rules
 // already reject at contract create time.
+//
+// Round 2 of Phase 3.6 extends the table with the parent-prefix
+// class. All four reviewers independently flagged the H1 bug in
+// round 1: the symmetric pathsOverlap helper accepted a result
+// claiming a parent directory of a write_set file entry. The new
+// cases below exercise every variant — parent of a file entry,
+// parent of a directory entry, top-level ancestor, and the
+// mixed-bag case with multiple paths where some are valid and some
+// are the exploit.
 func TestStore_AppendResult_FilesChangedContainment(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-08-001")
@@ -2363,6 +2372,51 @@ func TestStore_AppendResult_FilesChangedContainment(t *testing.T) {
 			path:    "./",
 			wantErr: "project root",
 		},
+		// --- Round 2: the parent-prefix class (H1). ---
+		{
+			// Parent of a file entry: contract allows
+			// cmd/ethos/mission.go, result claims cmd/ethos. Must
+			// refuse — the file entry is `cmd/ethos/mission.go`,
+			// not a directory, so cmd/ethos would quietly claim
+			// authority over every other file under cmd/ethos/.
+			name:    "parent-prefix of file entry",
+			path:    "cmd/ethos",
+			wantErr: "outside mission",
+		},
+		{
+			// Top-level ancestor of a file entry: result claims
+			// `cmd` against write_set `cmd/ethos/mission.go`.
+			name:    "top-level ancestor of file entry",
+			path:    "cmd",
+			wantErr: "outside mission",
+		},
+		{
+			// Top-level ancestor of a directory entry: result
+			// claims `internal` against write_set `internal/mission/`.
+			// Must refuse — the result would cover every other
+			// package under internal/.
+			name:    "top-level ancestor of directory entry",
+			path:    "internal",
+			wantErr: "outside mission",
+		},
+		{
+			// Parent of a directory entry with trailing slash.
+			// Write_set is `internal/mission/`; result claims
+			// `internal/missi` which is a STRING prefix but not a
+			// SEGMENT prefix — this case was already covered by
+			// "sibling prefix" but lock the intent here.
+			name:    "string-but-not-segment prefix",
+			path:    "internal/missi",
+			wantErr: "outside mission",
+		},
+		{
+			// Result claims a dot-syntax root. The per-entry
+			// validator rejects dot-root first — but the test
+			// locks the behavior in case the order ever changes.
+			name:    "dot-dot root claim",
+			path:    "./.",
+			wantErr: "project root",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2377,6 +2431,62 @@ func TestStore_AppendResult_FilesChangedContainment(t *testing.T) {
 				"rejected result must leave no file for case %q", tt.name)
 		})
 	}
+}
+
+// TestStore_AppendResult_FilesChangedContainment_MixedBag asserts
+// the class fix applies to the multi-path case: a result with some
+// valid files_changed and some parent-prefix invalid entries must
+// be refused, and every invalid path must appear in the error
+// message. The operator needs the full fix list in one pass.
+//
+// Round 2 of Phase 3.6 added this test alongside the parent-prefix
+// cases above: fixing the single instance is not sufficient when
+// the exploit can land on any of several files in a single YAML.
+func TestStore_AppendResult_FilesChangedContainment_MixedBag(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"internal/mission/", "cmd/ethos/mission.go"}
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = []FileChange{
+		{Path: "internal/mission/result.go"}, // valid
+		{Path: "cmd/ethos/mission.go"},       // valid (exact match to file entry)
+		{Path: "cmd/ethos"},                  // INVALID (parent of file entry)
+		{Path: "cmd"},                        // INVALID (top-level ancestor)
+		{Path: "internal"},                   // INVALID (top-level ancestor of dir)
+	}
+	err := s.AppendResult(c.MissionID, r)
+	require.Error(t, err)
+	msg := err.Error()
+	// Every invalid path must be named in the error.
+	assert.Contains(t, msg, "cmd/ethos")
+	assert.Contains(t, msg, "cmd,")
+	assert.Contains(t, msg, "internal")
+	// The valid paths must not appear.
+	assert.NotContains(t, msg, "internal/mission/result.go")
+	assert.NotContains(t, msg, "cmd/ethos/mission.go,")
+	// Count: 3 out-of-bounds paths.
+	assert.Contains(t, msg, "3 path(s)")
+}
+
+// TestStore_AppendResult_FilesChangedContainment_TrailingSlash
+// asserts the round 2 fix preserved the trailing-slash equivalence
+// the normalization layer already provides. A write_set entry with
+// a trailing slash (`internal/mission/`) must still admit a result
+// path without one (`internal/mission/result.go`), and vice versa.
+func TestStore_AppendResult_FilesChangedContainment_TrailingSlash(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"internal/mission/"}
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = []FileChange{
+		{Path: "internal/mission/result.go"},
+		{Path: "internal/mission/store.go"},
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
 }
 
 // TestStore_AppendResult_FilesChangedAcceptsValid asserts the positive
@@ -2668,6 +2778,45 @@ func TestStore_NonTerminalTransitionsUnchanged(t *testing.T) {
 	assert.Contains(t, err.Error(), "round 3")
 }
 
+// TestStore_Close_EventLogRecordsRoundAndVerdict asserts the M3 fix:
+// the close event carries the round number and verdict of the
+// satisfying result so an auditor reading the JSONL does not have
+// to scan back across round_advanced events to reconstruct which
+// result authorized the terminal transition. Round 2 of Phase 3.6
+// added these fields to the close event's Details map.
+func TestStore_Close_EventLogRecordsRoundAndVerdict(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	// Submit a round-1 result with a specific verdict so the
+	// assertion can distinguish it from a default-filled value.
+	r := resultFor(c, VerdictFail)
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+
+	// Close with a terminal status that does not match the verdict
+	// — the gate does not require equality, but the event log must
+	// still record the result's OWN verdict, not the close status.
+	require.NoError(t, s.Close(c.MissionID, StatusFailed))
+
+	events := readLog(t, s, c.MissionID)
+	require.NotEmpty(t, events)
+	var closeEvent *Event
+	for i := range events {
+		if events[i].Event == "close" {
+			closeEvent = &events[i]
+			break
+		}
+	}
+	require.NotNil(t, closeEvent, "close event must exist in log")
+	assert.Equal(t, StatusFailed, closeEvent.Details["status"])
+	// Round is JSON-decoded as float64, same as the result event.
+	assert.Equal(t, float64(1), closeEvent.Details["round"],
+		"close event must carry the satisfying result's round")
+	assert.Equal(t, VerdictFail, closeEvent.Details["verdict"],
+		"close event must carry the satisfying result's verdict, not the close status")
+}
+
 // TestStore_AppendResult_LogsEvent asserts that a successful
 // AppendResult writes a `result` event with round and verdict
 // details so the audit trail is complete.
@@ -2684,6 +2833,73 @@ func TestStore_AppendResult_LogsEvent(t *testing.T) {
 	assert.Equal(t, "result", events[1].Event)
 	assert.Equal(t, float64(1), events[1].Details["round"])
 	assert.Equal(t, "pass", events[1].Details["verdict"])
+}
+
+// TestStore_AppendResult_NormalizesAuthor asserts the L2 fix:
+// whitespace around the author handle is trimmed at persist time so
+// the audit trail and event log do not carry `"  bwk"` values. The
+// round 2 fix is normalization in AppendResult, not tightening
+// Validate — Validate still accepts whitespace so pre-round-2
+// files on disk still load.
+func TestStore_AppendResult_NormalizesAuthor(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.Author = "  bwk  "
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+
+	loaded, err := s.LoadResult(c.MissionID, 1)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, "bwk", loaded.Author,
+		"AppendResult must persist the trimmed author")
+
+	// The event log must also carry the trimmed handle.
+	events := readLog(t, s, c.MissionID)
+	var resultEvent *Event
+	for i := range events {
+		if events[i].Event == "result" {
+			resultEvent = &events[i]
+			break
+		}
+	}
+	require.NotNil(t, resultEvent)
+	assert.Equal(t, "bwk", resultEvent.Actor,
+		"event log actor must be the trimmed author")
+}
+
+// TestStore_AppendReflection_NormalizesAuthor asserts the L2 class
+// fix is applied symmetrically to the reflection store. Fixing
+// only AppendResult would ship asymmetric behavior across the two
+// sibling stores — round 2 widened the fix to both.
+func TestStore_AppendReflection_NormalizesAuthor(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := reflectionFor(1, RecommendationContinue)
+	r.Author = "  claude  "
+	require.NoError(t, s.AppendReflection(c.MissionID, r))
+
+	rs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, "claude", rs[0].Author,
+		"AppendReflection must persist the trimmed author")
+
+	events := readLog(t, s, c.MissionID)
+	var reflectEvent *Event
+	for i := range events {
+		if events[i].Event == "reflect" {
+			reflectEvent = &events[i]
+			break
+		}
+	}
+	require.NotNil(t, reflectEvent)
+	assert.Equal(t, "claude", reflectEvent.Actor,
+		"event log actor must be the trimmed author")
 }
 
 // TestStore_AppendResult_ConcurrentSerialization asserts that two
