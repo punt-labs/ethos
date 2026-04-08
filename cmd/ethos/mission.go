@@ -178,6 +178,34 @@ event log.`,
 	},
 }
 
+// --- mission result ---
+
+var missionResultFile string
+
+var missionResultCmd = &cobra.Command{
+	Use:   "result <id-or-prefix>",
+	Short: "Submit a structured worker result for the current round",
+	Long: `Submit a structured worker result for the mission's current round.
+
+The result is read from a YAML file containing mission, round, author,
+verdict, confidence, files_changed, evidence, and (optionally)
+open_questions and prose. The mission and round number must match
+the mission's current state; results are append-only and a second
+submission for the same round is refused.
+
+verdict must be one of: pass, fail, escalate. confidence must be in
+[0.0, 1.0]. evidence must contain at least one entry. Every
+files_changed path must live inside the contract's write_set.
+
+Submitting a result is a prerequisite for closing the mission. The
+close gate (ethos mission close) refuses the terminal transition
+until a valid result exists for the current round.`,
+	Args: cobra.ExactArgs(1),
+	Run: func(cmd *cobra.Command, args []string) {
+		runMissionResult(args[0], missionResultFile)
+	},
+}
+
 // --- mission reflect ---
 
 var missionReflectFile string
@@ -257,6 +285,9 @@ func init() {
 	missionReflectCmd.Flags().StringVarP(&missionReflectFile, "file", "f", "", "Read reflection YAML from file (required)")
 	_ = missionReflectCmd.MarkFlagRequired("file")
 
+	missionResultCmd.Flags().StringVarP(&missionResultFile, "file", "f", "", "Read result YAML from file (required)")
+	_ = missionResultCmd.MarkFlagRequired("file")
+
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
@@ -265,6 +296,7 @@ func init() {
 		missionReflectCmd,
 		missionReflectionsCmd,
 		missionAdvanceCmd,
+		missionResultCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -508,6 +540,50 @@ func runMissionReflect(idOrPrefix, file string) {
 		return
 	}
 	// Non-JSON mode is silent on success — matches session.go pattern.
+}
+
+// runMissionResult handles `ethos mission result <id> --file <path>`.
+//
+// The result YAML is decoded strictly, validated, and appended via
+// Store.AppendResult. The mission is resolved by ID or unambiguous
+// prefix to match the show/close/reflect convention. The caller's
+// result round and mission ID must match the mission's current
+// state — passing a stale round or a mismatched mission ID produces
+// a precise error at submit time rather than a vague one at close
+// time.
+func runMissionResult(idOrPrefix, file string) {
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
+		os.Exit(1)
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
+		os.Exit(1)
+	}
+	r, err := mission.DecodeResultStrict(data, file)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
+		os.Exit(1)
+	}
+	if err := ms.AppendResult(id, r); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOutput {
+		printJSON(map[string]any{
+			"mission_id": id,
+			"round":      r.Round,
+			"verdict":    r.Verdict,
+			"confidence": r.Confidence,
+			"created_at": r.CreatedAt,
+		})
+		return
+	}
+	// Non-JSON mode is silent on success — matches every other
+	// mission subcommand.
 }
 
 // runMissionAdvance handles `ethos mission advance <id>`. The gate

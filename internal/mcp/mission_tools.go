@@ -17,19 +17,22 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, reflect, reflections, advance. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, reflect, reflections, advance, result, results. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("create", "show", "list", "close", "reflect", "reflections", "advance"),
+			mcplib.Enum("create", "show", "list", "close", "reflect", "reflections", "advance", "result", "results"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("mission_id",
-			mcplib.Description("Mission ID or unique prefix. Required for show, close, reflect, reflections, and advance."),
+			mcplib.Description("Mission ID or unique prefix. Required for show, close, reflect, reflections, advance, result, and results."),
 		),
 		mcplib.WithString("contract",
 			mcplib.Description("Full contract YAML body. Required for create."),
 		),
 		mcplib.WithString("reflection",
 			mcplib.Description("Full reflection YAML body. Required for reflect."),
+		),
+		mcplib.WithString("result",
+			mcplib.Description("Full result YAML body. Required for result."),
 		),
 		mcplib.WithString("actor",
 			mcplib.Description("Optional handle to record on the round_advanced event for advance. Defaults to the contract's leader."),
@@ -68,6 +71,10 @@ func (h *Handler) handleMission(_ context.Context, req mcplib.CallToolRequest) (
 		return h.handleReflectionsMission(req)
 	case "advance":
 		return h.handleAdvanceMission(req)
+	case "result":
+		return h.handleResultMission(req)
+	case "results":
+		return h.handleResultsMission(req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
@@ -279,5 +286,66 @@ func (h *Handler) handleAdvanceMission(req mcplib.CallToolRequest) (*mcplib.Call
 		"mission_id":    id,
 		"current_round": newRound,
 	})
+}
+
+// handleResultMission parses the result YAML and appends it to the
+// mission's round-by-round result log via the store. The result
+// argument is the trust boundary; the strict decoder rejects unknown
+// keys, multi-document YAML, and trailing content the same way the
+// contract and reflection create paths do.
+//
+// Phase 3.6: this is the MCP parallel of the CLI `mission result`
+// subcommand. The CLI+MCP parity test covers both surfaces to
+// prevent either from regressing in isolation.
+func (h *Handler) handleResultMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	idArg := stringArg(req, "mission_id", "")
+	if idArg == "" {
+		return mcplib.NewToolResultError("mission_id is required for result"), nil
+	}
+	body := stringArg(req, "result", "")
+	if strings.TrimSpace(body) == "" {
+		return mcplib.NewToolResultError("result YAML body is required for result"), nil
+	}
+	id, err := h.missionStore.MatchByPrefix(idArg)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	r, err := mission.DecodeResultStrict([]byte(body), "mcp result request")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	if err := h.missionStore.AppendResult(id, r); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to record result: %v", err)), nil
+	}
+	return jsonResult(map[string]any{
+		"mission_id": id,
+		"round":      r.Round,
+		"verdict":    r.Verdict,
+		"confidence": r.Confidence,
+		"created_at": r.CreatedAt,
+	})
+}
+
+// handleResultsMission returns the round-by-round result log for a
+// mission. Always returns an array, never null, so MCP clients can
+// decode into a typed slice without a presence check — the same
+// convention handleReflectionsMission uses for reflections.
+func (h *Handler) handleResultsMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	idArg := stringArg(req, "mission_id", "")
+	if idArg == "" {
+		return mcplib.NewToolResultError("mission_id is required for results"), nil
+	}
+	id, err := h.missionStore.MatchByPrefix(idArg)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	rs, err := h.missionStore.LoadResults(id)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to load results: %v", err)), nil
+	}
+	if rs == nil {
+		rs = []mission.Result{}
+	}
+	return jsonResult(rs)
 }
 

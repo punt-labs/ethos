@@ -75,11 +75,13 @@ func missionTestEnv(t *testing.T) string {
 	missionCreateFile = ""
 	missionListStatus = "open"
 	missionCloseStatus = mission.StatusClosed
+	missionResultFile = ""
 	t.Cleanup(func() {
 		jsonOutput = false
 		missionCreateFile = ""
 		missionListStatus = "open"
 		missionCloseStatus = mission.StatusClosed
+		missionResultFile = ""
 	})
 	return tmp
 }
@@ -147,6 +149,41 @@ context: "smoke test contract"
 `
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
+}
+
+// writeResultFile drops a minimal valid result YAML into a temp file
+// and returns the path. The helper is parameterized by mission ID
+// and round so tests that exercise the CLI result path can drive
+// the Phase 3.6 close gate without re-typing the YAML at every call
+// site.
+func writeResultFile(t *testing.T, missionID string, round int) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "result.yaml")
+	body := fmt.Sprintf(`mission: %s
+round: %d
+author: bwk
+verdict: pass
+confidence: 0.9
+evidence:
+  - name: make check
+    status: pass
+`, missionID, round)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+// submitCLIResult runs the CLI result subcommand in-process so tests
+// that only care about the Phase 3.6 gate's presence can stay brief.
+// It always submits a pass/0.9/round-1 result — tests that need a
+// different shape build the YAML and invoke runMissionResult
+// directly.
+func submitCLIResult(t *testing.T, missionID string, round int) {
+	t.Helper()
+	oldFile := missionResultFile
+	missionResultFile = writeResultFile(t, missionID, round)
+	t.Cleanup(func() { missionResultFile = oldFile })
+	captureStdout(t, func() { runMissionResult(missionID, missionResultFile) })
 }
 
 // writeContractFileWithWriteSet writes a contract file with a custom
@@ -402,7 +439,10 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 3)
 
-	// Close one. The other two stay open.
+	// Close one. The other two stay open. Phase 3.6 requires a
+	// result artifact for the current round before the close gate
+	// will accept the terminal transition.
+	submitCLIResult(t, ids[0], 1)
 	require.NoError(t, ms.Close(ids[0], mission.StatusClosed))
 
 	// Default filter "open" returns the two open ones.
@@ -438,6 +478,11 @@ func TestMissionClose(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
+	// Phase 3.6: submit a result before closing so the gate is
+	// satisfied. The test exercises the close path, not the gate
+	// refusal — the refusal branch is covered separately.
+	submitCLIResult(t, ids[0], 1)
+
 	// Non-JSON mode is silent on success.
 	stdout := captureStdout(t, func() { runMissionClose(ids[0], mission.StatusClosed) })
 	assert.Empty(t, strings.TrimSpace(stdout), "close must be silent on success (non-JSON mode)")
@@ -457,6 +502,8 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 	ids, err := ms.List()
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
+
+	submitCLIResult(t, ids[0], 1)
 
 	prefix := ids[0][:9]
 	captureStdout(t, func() { runMissionClose(prefix, mission.StatusFailed) })
@@ -661,6 +708,216 @@ func TestMissionReflections_JSON(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, 1, got[0].Round)
 	assert.Equal(t, "continue", got[0].Recommendation)
+}
+
+// --- 3.6: result submission and close gate ---
+
+// TestMissionResult_RoundTrip asserts success criterion 1 via the CLI
+// surface: a well-formed result YAML persists through runMissionResult
+// and comes back via LoadResult.
+func TestMissionResult_RoundTrip(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	missionResultFile = writeResultFile(t, id, 1)
+	stdout := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
+	assert.Empty(t, strings.TrimSpace(stdout), "result must be silent on success (non-JSON mode)")
+
+	loaded, err := ms.LoadResult(id, 1)
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+	assert.Equal(t, 1, loaded.Round)
+	assert.Equal(t, mission.VerdictPass, loaded.Verdict)
+}
+
+// TestMissionResult_JSON asserts the JSON output shape for the CLI
+// result subcommand.
+func TestMissionResult_JSON(t *testing.T) {
+	missionTestEnv(t)
+	jsonOutput = true
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	id := ids[0]
+
+	missionResultFile = writeResultFile(t, id, 1)
+	out := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, id, got["mission_id"])
+	assert.Equal(t, float64(1), got["round"])
+	assert.Equal(t, "pass", got["verdict"])
+	assert.Equal(t, 0.9, got["confidence"])
+	assert.NotEmpty(t, got["created_at"])
+}
+
+// TestMissionClose_GateRefusesWithoutResult asserts the CLI close
+// path surfaces the Phase 3.6 gate refusal verbatim. Runs in a
+// subprocess because runMissionClose calls os.Exit on gate refusal.
+func TestMissionClose_GateRefusesWithoutResult(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/close-gate/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	// Create the mission.
+	cmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	cmd.Env = env
+	require.NoError(t, cmd.Run())
+
+	// List to discover the ID.
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	// Try to close without a result — must exit 1 with the gate
+	// refusal message on stderr.
+	closeCmd := exec.Command(ethosBinary, "mission", "close", id)
+	closeCmd.Env = env
+	var closeErr bytes.Buffer
+	closeCmd.Stderr = &closeErr
+	err := closeCmd.Run()
+	require.Error(t, err)
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	stderr := closeErr.String()
+	assert.Contains(t, stderr, id)
+	assert.Contains(t, stderr, "no result artifact for round 1")
+	assert.Contains(t, stderr, "ethos mission result")
+}
+
+// TestMissionClose_GateAcceptsWithResult is the positive counterpart
+// to TestMissionClose_GateRefusesWithoutResult: submitting a result
+// via the CLI result subcommand and then closing via the CLI close
+// subcommand succeeds.
+func TestMissionClose_GateAcceptsWithResult(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	id := ids[0]
+
+	submitCLIResult(t, id, 1)
+	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+
+	loaded, err := ms.Load(id)
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusClosed, loaded.Status)
+	assert.NotEmpty(t, loaded.ClosedAt)
+}
+
+// TestMissionResult_AppendOnlyViaCLI asserts success criterion 3
+// through the CLI surface: a duplicate submission for the same
+// round fails. Runs in a subprocess because the second invocation
+// calls os.Exit on the append-only refusal.
+func TestMissionResult_AppendOnlyViaCLI(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.10
+write_set:
+  - tests/append-only-cli/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	resultBody := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+evidence:
+  - name: make check
+    status: pass
+`, id)
+	resultFile := filepath.Join(tmp, "result.yaml")
+	require.NoError(t, os.WriteFile(resultFile, []byte(resultBody), 0o600))
+
+	first := exec.Command(ethosBinary, "mission", "result", id, "--file", resultFile)
+	first.Env = env
+	require.NoError(t, first.Run())
+
+	second := exec.Command(ethosBinary, "mission", "result", id, "--file", resultFile)
+	second.Env = env
+	var secondErr bytes.Buffer
+	second.Stderr = &secondErr
+	err := second.Run()
+	require.Error(t, err)
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok)
+	assert.Equal(t, 1, exitErr.ExitCode())
+	stderr := secondErr.String()
+	assert.Contains(t, stderr, "append-only")
+	assert.Contains(t, stderr, "round 1")
+	assert.Contains(t, stderr, id)
 }
 
 // TestMissionCreate_ConflictRejectedSubprocess exercises the Phase 3.2

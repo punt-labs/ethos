@@ -9,6 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Structured result artifacts and close gate** (Phase 3.6,
+  `ethos-07m.10`) — worker output is no longer prose. A new
+  `mission.Result` type in `internal/mission/result.go` pins a
+  closed schema (`mission`, `round`, `verdict`, `confidence`,
+  `files_changed`, `evidence`, `open_questions`, `prose`) with
+  strict `KnownFields(true)` decoding, full validation (verdict
+  enum, confidence in `[0.0, 1.0]`, evidence non-empty, path
+  containment, control-character rejection), and append-only sibling
+  storage at `<id>.results.yaml`. `Store.Close` now gates every
+  terminal transition (`closed`, `failed`, `escalated`) on a valid
+  result artifact for the mission's current round; the refusal
+  message names the mission, the round, and the submission command.
+  The gate lives at the store boundary so CLI and MCP fire it
+  identically — there is no override flag. New CLI subcommand
+  `ethos mission result <id> --file <path>` and new MCP methods
+  `mission result` and `mission results` mirror the existing reflect
+  and reflections surfaces. `files_changed` paths are cross-checked
+  against the contract's `write_set` via the same segment-prefix
+  helper that Phase 3.2's cross-mission conflict check uses, so the
+  same equivalence class of malformed paths (absolute, traversal,
+  control characters, drive letters, root claims) is rejected at
+  both admission and result submission. `Store.List` is taught about
+  the new `.results.yaml` sibling in `isContractFile`, closing the
+  Phase 3.4 round-2 regression surface for the new file. The
+  Phase 3.1–3.5 primitives are untouched: schema, conflict check,
+  frozen-evaluator hash, round-advance gate, and verifier isolation
+  are all preserved. To recover from the close-gate refusal, submit
+  a result via `ethos mission result <id> --file <path>` (or the
+  MCP `mission result` method); to recover from a
+  files_changed-containment refusal, edit the result YAML so every
+  declared path lives under an entry of the mission's `write_set`,
+  or update the contract via a new mission if the write_set needs
+  widening.
 - **Verifier isolation** (Phase 3.5, `ethos-07m.9`) — two new runtime
   gates layered on top of the Phase 3.1–3.4 primitives. At
   `Store.Create`, the contract is refused if `worker` and

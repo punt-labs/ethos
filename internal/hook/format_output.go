@@ -685,6 +685,8 @@ func formatRoleShow(w io.Writer, result string) error {
 //	reflect       → {mission_id, round, recommendation, created_at}
 //	reflections   → an array of Reflection objects (one per round)
 //	advance       → {mission_id, current_round}
+//	result        → {mission_id, round, verdict, confidence, created_at}
+//	results       → an array of Result objects (one per round)
 func formatMission(w io.Writer, method, result string) error {
 	switch method {
 	case "create":
@@ -701,9 +703,83 @@ func formatMission(w io.Writer, method, result string) error {
 		return formatMissionReflections(w, result)
 	case "advance":
 		return formatMissionAdvance(w, result)
+	case "result":
+		return formatMissionResult(w, result)
+	case "results":
+		return formatMissionResults(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
+}
+
+// formatMissionResult renders the result method's confirmation:
+// "<mission_id> round N (<verdict>)". Short enough for a single
+// tool-result row but specific enough to confirm the verdict the
+// worker submitted.
+func formatMissionResult(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	verdict, _ := c["verdict"].(string)
+	round, ok := c["round"].(float64)
+	if missionID == "" || !ok {
+		return emitSimple(w, truncate(result, 200))
+	}
+	return emitSimple(w, fmt.Sprintf("Result %s round %d (%s)", missionID, int(round), verdict))
+}
+
+// formatMissionResults renders the results method's array as one
+// bullet per round. The summary line counts the entries; an empty
+// array becomes "(none)" so the operator distinguishes "no results
+// yet" from a tool error.
+func formatMissionResults(w io.Writer, result string) error {
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(result), &entries); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	n := len(entries)
+	noun := "results"
+	if n == 1 {
+		noun = "result"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+	var ctx strings.Builder
+	for i, e := range entries {
+		round, _ := e["round"].(float64)
+		verdict, _ := e["verdict"].(string)
+		author, _ := e["author"].(string)
+		confidence, _ := e["confidence"].(float64)
+		if i > 0 {
+			ctx.WriteString("\n")
+		}
+		fmt.Fprintf(&ctx, "  - round %d (%s) by %s — confidence=%.2f",
+			int(round), verdict, author, confidence)
+		if files, ok := e["files_changed"].([]any); ok && len(files) > 0 {
+			for _, f := range files {
+				if fc, ok := f.(map[string]any); ok {
+					path, _ := fc["path"].(string)
+					added, _ := fc["added"].(float64)
+					removed, _ := fc["removed"].(float64)
+					fmt.Fprintf(&ctx, "\n      • %s: +%d -%d", path, int(added), int(removed))
+				}
+			}
+		}
+		if evidence, ok := e["evidence"].([]any); ok && len(evidence) > 0 {
+			for _, ev := range evidence {
+				if em, ok := ev.(map[string]any); ok {
+					name, _ := em["name"].(string)
+					status, _ := em["status"].(string)
+					fmt.Fprintf(&ctx, "\n      • %s: %s", name, status)
+				}
+			}
+		}
+	}
+	return emit(w, summary, ctx.String())
 }
 
 // formatMissionReflect renders the reflect method's confirmation:
