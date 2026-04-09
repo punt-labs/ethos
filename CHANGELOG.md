@@ -498,6 +498,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `internal/mission/filter.go` — shared `StatusMatches` helper used by
   both the CLI and the MCP list handlers.
 
+### Fixed
+
+- **`GenerateAgentFiles` swallowed `LoadRepoConfig` errors**
+  (`ethos-9ai.6`) — the SessionStart hook silently returned nil for
+  any non-nil error from `resolve.LoadRepoConfig`, so a malformed
+  `.punt-labs/ethos.yaml`, a permission-denied read, or any other
+  I/O error produced no signal to the user. `LoadRepoConfig` already
+  distinguishes "file not found" (returns `nil, nil`) from real
+  errors, so the caller now propagates every non-nil error as
+  `fmt.Errorf("loading repo config: %w", err)` and the
+  "unconfigured repo" case stays silent via the existing
+  `cfg == nil` branch. The comment on the nil branch moves with the
+  code so it correctly documents the not-found condition.
+- **`GenerateAgentFiles` reported success on partial failure**
+  (`ethos-9ai.7`) — the partial-failure check
+  `expected > 0 && generated == 0` only caught the total-failure
+  case, so a team where 5 of 10 agents failed at mkdir or WriteFile
+  returned nil and the user saw 5 stderr warnings plus a clean exit
+  code. The SessionStart hook could not distinguish "everything
+  worked" from "half the team failed." The check is now
+  `generated < expected` and the error message names both counts
+  honestly: `generated %d of %d expected agent files`. The existing
+  per-failure stderr warnings still fire; the returned error is the
+  single authoritative signal a caller can gate on.
+
 ## [2.8.0] - 2026-04-04
 
 ### Fixed

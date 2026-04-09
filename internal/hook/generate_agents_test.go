@@ -1321,3 +1321,195 @@ func TestYamlQuote(t *testing.T) {
 		})
 	}
 }
+
+// TestGenerateAgentFiles_MalformedConfig covers bug ethos-9ai.6: a
+// malformed .punt-labs/ethos.yaml must propagate the parse error wrapped
+// with "loading repo config". Before the fix, yaml.Unmarshal failures
+// were swallowed and the generator returned nil — the user had no
+// signal that their config was broken.
+func TestGenerateAgentFiles_MalformedConfig(t *testing.T) {
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	// Unclosed bracket — yaml.Unmarshal fails. The file exists and is
+	// readable, so the not-found and permission branches in
+	// LoadRepoConfig are bypassed; this is the parse-error path.
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cfgDir, "ethos.yaml"),
+		[]byte("team: [unclosed bracket\n"), 0o644))
+
+	ethosDir := filepath.Join(cfgDir, "ethos")
+	ids := identity.NewLayeredStore(
+		identity.NewStore(ethosDir),
+		identity.NewStore(ethosDir),
+	)
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+	roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+	err := GenerateAgentFiles(root, ids, teams, roles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading repo config",
+		"error must be wrapped with the caller's operation context")
+	// The chain must include LoadRepoConfig's own parse-error wrapper,
+	// so a user reading the message sees both layers: which caller
+	// failed, and which underlying operation failed inside the loader.
+	assert.Contains(t, err.Error(), "parsing repo config",
+		"error chain must surface the underlying yaml parse failure")
+}
+
+// TestGenerateAgentFiles_UnreadableConfig covers bug ethos-9ai.6 on the
+// I/O-error path: a .punt-labs/ethos.yaml with 0o000 permissions must
+// propagate the read error wrapped with "loading repo config". Running
+// as root defeats chmod, so this test skips in that case. Mirrors
+// TestLoadRepoConfig_PermissionError in internal/resolve.
+func TestGenerateAgentFiles_UnreadableConfig(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-denied test is meaningless as root")
+	}
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o755))
+	cfgPath := filepath.Join(cfgDir, "ethos.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("agent: claude\nteam: engineering\n"), 0o644))
+	require.NoError(t, os.Chmod(cfgPath, 0o000))
+	// Restore permissions so t.TempDir cleanup can remove the file.
+	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o644) })
+
+	ethosDir := filepath.Join(cfgDir, "ethos")
+	ids := identity.NewLayeredStore(
+		identity.NewStore(ethosDir),
+		identity.NewStore(ethosDir),
+	)
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+	roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+	err := GenerateAgentFiles(root, ids, teams, roles)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loading repo config",
+		"error must be wrapped with the caller's operation context")
+	// LoadRepoConfig wraps os.ReadFile errors with "reading <path>: %w".
+	// Surface that layer too so the user sees which file failed.
+	assert.Contains(t, err.Error(), "reading",
+		"error chain must surface the underlying read failure")
+}
+
+// TestGenerateAgentFiles_NoConfigFile covers invariant 1: when neither
+// .punt-labs/ethos.yaml nor the legacy config path exists, LoadRepoConfig
+// returns (nil, nil) and GenerateAgentFiles returns nil. This is the
+// "ethos is installed but the repo isn't configured" case and must stay
+// silent. The test is explicit rather than implicit so a future change
+// that breaks the cfg == nil branch cannot hide behind other tests.
+func TestGenerateAgentFiles_NoConfigFile(t *testing.T) {
+	root := t.TempDir()
+	// Intentionally do NOT create .punt-labs/ethos.yaml or
+	// .punt-labs/ethos/config.yaml. LoadRepoConfig must return
+	// (nil, nil) for this case.
+
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	ids := identity.NewLayeredStore(
+		identity.NewStore(ethosDir),
+		identity.NewStore(ethosDir),
+	)
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+	roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+	err := GenerateAgentFiles(root, ids, teams, roles)
+	require.NoError(t, err,
+		"missing repo config is not an error — it is the unconfigured case")
+
+	// No agents directory should have been created either, because
+	// the function returns before the generation loop.
+	_, statErr := os.Stat(filepath.Join(root, ".claude", "agents"))
+	assert.True(t, os.IsNotExist(statErr),
+		".claude/agents must not be created when there is no repo config")
+}
+
+// TestGenerateAgentFiles_PartialWriteFailure covers bug ethos-9ai.7: when
+// some agent files fail to write and others succeed, the function must
+// return an error naming both counts. Before the fix, the narrow check
+// `expected > 0 && generated == 0` only caught the total-failure case,
+// so a team of 10 with 5 write failures returned nil and the user saw a
+// clean exit code plus 5 stderr warnings — no way for a caller to gate
+// on partial success.
+//
+// Force technique: pre-create one destination path as a directory. The
+// generator's ReadFile returns EISDIR (not nil), so the idempotent-skip
+// branch is bypassed; MkdirAll(destDir, 0o755) succeeds because the
+// parent already exists; and os.WriteFile(destPath, ...) fails with
+// EISDIR because you cannot open a directory with O_WRONLY. The other
+// agent's write path is untouched and succeeds.
+func TestGenerateAgentFiles_PartialWriteFailure(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+
+	// Add a second agent identity that shares bwk's personality, writing
+	// style, and role so expected == 2 with no new fixture scaffolding.
+	// The team membership rewrite below puts both agents in the roster.
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	writeYAML(t, filepath.Join(ethosDir, "identities", "bwk2.yaml"), map[string]interface{}{
+		"name":          "Brian K Two",
+		"handle":        "bwk2",
+		"kind":          "agent",
+		"personality":   "kernighan",
+		"writing_style": "kernighan-prose",
+		"talents":       []string{"engineering"},
+	})
+	writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+		"name":         "engineering",
+		"repositories": []string{"punt-labs/ethos"},
+		"members": []map[string]string{
+			{"identity": "claude", "role": "coo"},
+			{"identity": "bwk", "role": "go-specialist"},
+			{"identity": "bwk2", "role": "go-specialist"},
+		},
+	})
+
+	// Pre-create bwk.md as a directory. WriteFile will fail with
+	// EISDIR when the generator tries to open it for writing; bwk2's
+	// write path is untouched and will succeed.
+	destDir := filepath.Join(root, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(filepath.Join(destDir, "bwk.md"), 0o755))
+
+	// Rebuild stores so the new bwk2 identity and the updated team are
+	// visible. Matches the setup-modification pattern used elsewhere in
+	// this file.
+	ids = identity.NewLayeredStore(
+		identity.NewStore(ethosDir),
+		identity.NewStore(ethosDir),
+	)
+	teams = team.NewLayeredStore(ethosDir, ethosDir)
+	roles = role.NewLayeredStore(ethosDir, ethosDir)
+
+	stderr := captureStderr(t, func() {
+		err := GenerateAgentFiles(root, ids, teams, roles)
+		require.Error(t, err,
+			"partial write failure must return an error, not swallow it")
+		assert.Contains(t, err.Error(), "generated 1 of 2",
+			"error must name both counts honestly")
+	})
+
+	// The stderr warning for the failed bwk write must still fire — it
+	// is the per-failure signal. Without this, a user cannot tell which
+	// agent failed even though the summary error reports the count.
+	assert.Contains(t, stderr, "writing agent file",
+		"per-failure stderr warning must fire for the EISDIR write path")
+	assert.Contains(t, stderr, "bwk",
+		"stderr warning must name the failing member")
+
+	// The successful agent's file must exist with correct content. A
+	// regression that aborted the loop on the first failure would leave
+	// bwk2.md absent, so this is the complementary anchor to the error
+	// assertion above.
+	bwk2Data, readErr := os.ReadFile(filepath.Join(destDir, "bwk2.md"))
+	require.NoError(t, readErr, "successful agent's file must still be written")
+	assert.Contains(t, string(bwk2Data), "name: bwk2")
+	assert.Contains(t, string(bwk2Data), "You are Brian K Two (bwk2)")
+
+	// The pre-created directory is still a directory — the failing
+	// write did not silently convert it. This locks the EISDIR path
+	// against a future change that might `os.RemoveAll` before
+	// retrying, which would hide the failure instead of propagating it.
+	info, statErr := os.Stat(filepath.Join(destDir, "bwk.md"))
+	require.NoError(t, statErr)
+	assert.True(t, info.IsDir(),
+		"pre-created directory at bwk.md must stay a directory")
+}

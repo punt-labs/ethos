@@ -23,10 +23,10 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 
 	cfg, err := resolve.LoadRepoConfig(repoRoot)
 	if err != nil {
-		return nil // no repo config — nothing to generate
+		return fmt.Errorf("loading repo config: %w", err)
 	}
 	if cfg == nil {
-		return nil
+		return nil // neither .punt-labs/ethos.yaml nor the legacy path exists
 	}
 
 	mainAgent := cfg.Agent
@@ -97,8 +97,8 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 		generated++
 	}
 
-	if expected > 0 && generated == 0 {
-		return fmt.Errorf("generated 0 of %d expected agent files", expected)
+	if generated < expected {
+		return fmt.Errorf("generated %d of %d expected agent files", generated, expected)
 	}
 
 	return nil
