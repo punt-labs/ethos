@@ -271,7 +271,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// against the repo Makefile even if the sub-agent has cd'd into
 		// a subdirectory before the Write or Edit tool fires. The
 		// subshell keeps the cd from leaking to the outer shell, and
-		// the quoted expansion handles paths with spaces. `head -60`
+		// the quoted expansion handles paths with spaces. `head -n 60`
 		// (not `tail -20`) catches the FIRST failure. `make check` is
 		// a sequence of quiet-on-success stages — go vet, staticcheck,
 		// shellcheck, markdownlint, then non-verbose
@@ -291,8 +291,10 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// has no --skip-hook escape hatch. The command must stay
 		// POSIX-sh compatible (it runs under /bin/sh, which is dash
 		// on Debian/Ubuntu): no `set -o pipefail`, no process
-		// substitution, no ${VAR:-default}.
-		b.WriteString("          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -60\"\n")
+		// substitution. `head -n 60` uses the POSIX-canonical `-n N`
+		// form rather than the BSD shortcut `-N` for the same reason
+		// — portability is the whole point of the pin.
+		b.WriteString("          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -n 60\"\n")
 	}
 	b.WriteString("---\n")
 

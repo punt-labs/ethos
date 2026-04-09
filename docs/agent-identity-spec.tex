@@ -462,7 +462,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -60"
+          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -n 60"
 \end{lstlisting}
 
 This runs \cmd{make check} after every file write and surfaces
@@ -487,15 +487,17 @@ the first failing package on failure, which is typically tens of
 lines --- well inside the 60-line window. \cmd{tail -20} would
 lose the first \texttt{FAIL:} to the trailing
 \cmd{make: *** [check] Error 1} summary and the last test's
-cleanup lines; \cmd{head -60} keeps the first failure visible.
-The subshell and \field{\$CLAUDE\_PROJECT\_DIR} expansion pin
-cwd to the project root so \cmd{make check} resolves against
-the repo Makefile even if the sub-agent has cd'd into a
-subdirectory before the Write or Edit tool fires. The command
-runs under \fpath{/bin/sh} (which is \cmd{dash} on
+cleanup lines; \cmd{head -n 60} keeps the first failure
+visible. The subshell and \field{\$CLAUDE\_PROJECT\_DIR}
+expansion pin cwd to the project root so \cmd{make check}
+resolves against the repo Makefile even if the sub-agent has
+cd'd into a subdirectory before the Write or Edit tool fires.
+The command runs under \fpath{/bin/sh} (which is \cmd{dash} on
 Debian/Ubuntu); use POSIX-sh syntax only. Bashisms like
-\cmd{set -o pipefail}, process substitution, and
-\field{\$\{VAR:-default\}} are not portable and must be avoided.
+\cmd{set -o pipefail} and process substitution are not portable
+and must be avoided. The \cmd{-n 60} form of \cmd{head} is
+POSIX-canonical; the BSD shortcut \cmd{-60} is not specified by
+POSIX and should not be used for the same reason.
 
 \subsection{Review Agents}
 

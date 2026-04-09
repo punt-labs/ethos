@@ -280,9 +280,7 @@ pre-execution safety checks.
 frontmatter. The command pins cwd to `$CLAUDE_PROJECT_DIR` so `make
 check` resolves against the repo Makefile even if the sub-agent has
 cd'd into a subdirectory, and pipes the first 60 lines of output
-through `head -60` so compile errors and the first failing test surface
-before 500+ lines of verbose test output would push a tail window off
-the relevant error:
+through `head -n 60` so the first failure is always visible:
 
 ```yaml
 hooks:
@@ -290,14 +288,27 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -60"
+          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -n 60"
 ```
 
-The hook is advisory, not blocking — the pipe to `head` masks the
-exit code, so Claude Code does not gate the next Write on a broken
-build. The command runs under `/bin/sh`; use POSIX-sh syntax only.
-Review-only roles get no hooks (tool restrictions already prevent
-writes).
+The 60-line window fits this repo's `make check` shape: the target is
+a sequence of quiet-on-success stages (`go vet`, `staticcheck`,
+`shellcheck`, `markdownlint`, then non-verbose
+`go test -race -count=1 ./...` — no `-v` flag), so the first failure
+always lands near the top. A clean run is about 18 lines; a failing
+run is tens to low hundreds, well inside the window. Go compile
+errors short-circuit the whole sequence in 5-30 lines and land at the
+top. A failing lint or test stage is equally visible because every
+preceding stage was silent on success. Non-verbose `go test` prints
+one line per package on success and a single `--- FAIL:` block for
+the first failing package on failure. `tail -20` would lose the first
+`FAIL:` to the trailing `make: *** [check] Error 1` summary; `head -n
+60` keeps it visible. The hook is advisory, not blocking — the pipe
+to `head` masks the exit code, so Claude Code does not gate the next
+Write on a broken build. The command runs under `/bin/sh`; use
+POSIX-sh syntax only (the `-n N` form of `head` is POSIX-canonical;
+the BSD `-N` shortcut is not). Review-only roles get no hooks (tool
+restrictions already prevent writes).
 
 **Delivery**: Hook templates per role category in `GenerateAgentFiles()`.
 
