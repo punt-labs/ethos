@@ -847,11 +847,24 @@ Returns an error when no step matches.
 
 \subsection{Agent Resolution}
 
-\texttt{resolve.ResolveAgent(repoRoot)} reads the repo-local
-configuration file at \fpath{.punt-labs/ethos.yaml}.  The
-\texttt{RepoConfig} struct also carries a \field{team} field, used
-by \texttt{ResolveTeam()} to determine which team owns the current
-repository.
+\texttt{resolve.ResolveAgent(repoRoot) (string, error)} reads the
+repo-local configuration file at \fpath{.punt-labs/ethos.yaml}.
+The \texttt{RepoConfig} struct also carries a \field{team} field,
+used by \texttt{resolve.ResolveTeam(repoRoot) (string, error)} to
+determine which team owns the current repository.  Both functions
+return \texttt{("", nil)} when the repository is not configured or
+when \texttt{repoRoot} is empty; non-nil errors propagate YAML
+parse failures and permission errors from the underlying
+\texttt{LoadRepoConfig} call with a \texttt{"resolve agent"} or
+\texttt{"resolve team"} wrap prefix.  Callers decide fail-open vs
+fail-closed per operational role: \texttt{HandleSessionStart}
+propagates the error up (fail-closed at the binary level, with
+the shell wrapper's \texttt{|| true} preserving Claude Code
+session fail-open semantics), \texttt{BuildTeamSection} in the
+pre-compact hook logs and returns an empty string (fail-open per
+its documented contract), \cmd{ethos resolve-agent} exits
+non-zero, and \texttt{CheckDefaultAgent} in the doctor package
+surfaces the error as a diagnostic state (ethos-dc0).
 
 % ===================================================================
 \section{Process Tree Walker}

@@ -205,7 +205,11 @@ func runWhoami() {
 
 func runResolveAgent() {
 	repoRoot := resolve.FindRepoRoot()
-	handle := resolve.ResolveAgent(repoRoot)
+	handle, err := resolve.ResolveAgent(repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		os.Exit(1)
+	}
 	if handle != "" {
 		fmt.Println(handle)
 	}

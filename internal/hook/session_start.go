@@ -73,9 +73,18 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: cleaned %d stale PID file(s)\n", len(purged))
 	}
 
-	// Resolve agent persona from repo config.
+	// Resolve agent persona from repo config. A non-nil error means
+	// the config file exists but cannot be read or parsed — a loud
+	// failure mode the user needs to see. Propagate fail-closed, same
+	// pattern as the GenerateAgentFiles wrap below (ethos-9ai.6 C1).
+	// The shell wrapper's `|| true` keeps Claude Code session startup
+	// fail-open (cli.md §Hook Architecture); the non-zero exit code is
+	// the signal for direct CLI invocation and `ethos doctor`.
 	repoRoot := resolve.FindRepoRoot()
-	agentPersona := resolve.ResolveAgent(repoRoot)
+	agentPersona, err := resolve.ResolveAgent(repoRoot)
+	if err != nil {
+		return fmt.Errorf("resolving agent: %w", err)
+	}
 
 	// Create session roster if we have a session ID.
 	if sessionID != "" {

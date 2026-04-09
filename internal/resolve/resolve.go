@@ -162,37 +162,42 @@ func LoadRepoConfig(repoRoot string) (*RepoConfig, error) {
 
 // ResolveAgent returns the default agent identity handle for the repo.
 // Reads .punt-labs/ethos.yaml first, falls back to legacy
-// .punt-labs/ethos/config.yaml. Returns empty string if not configured.
-func ResolveAgent(repoRoot string) string {
+// .punt-labs/ethos/config.yaml.
+//
+// Returns ("", nil) when not in a git repo (repoRoot == "") or when
+// no repo config exists (cfg == nil) — neither is an error condition.
+// Returns ("", err) when the config file exists but cannot be read
+// or parsed: the caller decides whether to fail-closed, fail-open, or
+// surface the error diagnostically.
+func ResolveAgent(repoRoot string) (string, error) {
 	if repoRoot == "" {
-		return ""
+		return "", nil
 	}
 	cfg, err := LoadRepoConfig(repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: loading repo config: %v\n", err)
-		return ""
+		return "", fmt.Errorf("resolve agent: %w", err)
 	}
 	if cfg == nil {
-		return ""
+		return "", nil
 	}
-	return cfg.Agent
+	return cfg.Agent, nil
 }
 
-// ResolveTeam returns the team name from repo config. Returns empty
-// string if not configured or on error.
-func ResolveTeam(repoRoot string) string {
+// ResolveTeam returns the team name from repo config. Same error
+// contract as ResolveAgent: ("", nil) for no-repo and not-configured,
+// ("", err) for read or parse failures.
+func ResolveTeam(repoRoot string) (string, error) {
 	if repoRoot == "" {
-		return ""
+		return "", nil
 	}
 	cfg, err := LoadRepoConfig(repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: loading repo config: %v\n", err)
-		return ""
+		return "", fmt.Errorf("resolve team: %w", err)
 	}
 	if cfg == nil {
-		return ""
+		return "", nil
 	}
-	return cfg.Team
+	return cfg.Team, nil
 }
 
 // FindRepoRoot walks from the current working directory upward looking
