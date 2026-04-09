@@ -114,7 +114,15 @@ func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identi
 	}
 
 	repoRoot := resolve.FindRepoRoot()
-	teamName := resolve.ResolveTeam(repoRoot)
+	teamName, err := resolve.ResolveTeam(repoRoot)
+	if err != nil {
+		// Fail-open per this function's documented contract
+		// ("Returns empty string ... on any load error"). The log
+		// preserves the visibility the old ResolveTeam's Fprintf gave
+		// us before its signature change propagated the error here.
+		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %v\n", err)
+		return ""
+	}
 	if teamName == "" {
 		return ""
 	}

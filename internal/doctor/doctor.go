@@ -95,13 +95,20 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) (string, bo
 }
 
 // CheckDefaultAgent checks whether a default agent is configured for the
-// current repository.
+// current repository. Three states: not-in-a-repo and not-configured
+// are both "OK" (empty repos and repos without an agent field are
+// legitimate). A ResolveAgent error — unreadable or malformed
+// `.punt-labs/ethos.yaml` — is a diagnostic failure the user needs to
+// see, same pattern as CheckDuplicateFields.
 func CheckDefaultAgent(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	repoRoot := resolve.FindRepoRoot()
 	if repoRoot == "" {
 		return "not in a git repo", true
 	}
-	handle := resolve.ResolveAgent(repoRoot)
+	handle, err := resolve.ResolveAgent(repoRoot)
+	if err != nil {
+		return fmt.Sprintf("error: %v", err), false
+	}
 	if handle == "" {
 		return "not configured", true
 	}

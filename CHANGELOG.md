@@ -563,6 +563,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and swallows malformed-config errors before `HandleSessionStart`
   reaches `GenerateAgentFiles`. Filed as `ethos-dc0` for a parallel
   fix.
+- **`resolve.ResolveAgent` and `resolve.ResolveTeam` swallowed
+  `LoadRepoConfig` errors** (`ethos-dc0`) — the 9ai.6 r2 fix closed the
+  silent-swallow class at the `GenerateAgentFiles` → `HandleSessionStart`
+  boundary, but a broken `.punt-labs/ethos.yaml` never reached that
+  boundary: both resolve functions logged to stderr and returned `""`,
+  and `HandleSessionStart`'s `if agentPersona == ""` early-return fell
+  back to the human one-liner before the `GenerateAgentFiles` call site
+  was executed. Users with a malformed config saw a one-line "Ethos
+  session started. Active identity: ..." in the Claude Code session
+  and nothing else — the full error chain (`yaml: line ...: did not
+  find expected ...`) was hidden on stderr, which Claude Code does not
+  surface. Both functions now have signature `(string, error)` and
+  return the wrapped error — `"resolving agent: %w"` and
+  `"resolving team: %w"` — while preserving the `("", nil)` contract
+  for the legitimate no-repo (`repoRoot == ""`) and not-configured
+  (`cfg == nil`) cases. Callers handle the error per their operational
+  role: `HandleSessionStart` fail-closes (matches the 9ai.6 r2 C1
+  pattern, wraps again as `"resolving agent: %w"` and returns the
+  error up the stack); `BuildTeamSection` fail-opens with a stderr
+  log (its documented contract is "Returns empty string ... on any
+  load error"); `runResolveAgent` in `cmd/ethos/main.go` prints to
+  stderr and exits 1 so `ethos doctor` and manual debugging surface
+  the failure; `CheckDefaultAgent` in `internal/doctor/doctor.go`
+  returns `"error: %v", false` as a diagnostic state, matching the
+  existing `CheckDuplicateFields` pattern. The shell wrapper's
+  `|| true` still keeps Claude Code session startup fail-open at the
+  process boundary (per `cli.md` §Hook Architecture); the new
+  fail-closed binary behavior is the signal for direct CLI invocation.
+  Closes the "known gap" note on the 9ai.6+9ai.7 r2 entry above, and
+  the 9ai.6 r2 regression test
+  (`TestHandleSessionStart_GenerateAgentsErrorPropagates`) gains a
+  companion test (`TestHandleSessionStart_ResolveAgentErrorPropagates`)
+  that now exercises the malformed-yaml path the original spec
+  intended but had to substitute with a missing-team fixture.
 
 ## [2.8.0] - 2026-04-04
 

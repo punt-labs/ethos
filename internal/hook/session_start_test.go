@@ -471,19 +471,16 @@ func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {
 // exist. ResolveAgent succeeds (cfg parses), store.Load(agentPersona)
 // succeeds (identity exists), then GenerateAgentFiles calls
 // teams.Load(teamName) which returns a not-found error. That error
-// wraps as "loading team %q: %w"; HandleSessionStart's new wrap
+// wraps as "loading team %q: %w"; HandleSessionStart's wrap
 // "generating agents: %w" sits on top.
 //
-// Note: the spec asked for a malformed-.punt-labs/ethos.yaml test, but
-// that path is unreachable from HandleSessionStart because
-// resolve.ResolveAgent calls LoadRepoConfig first, logs-and-swallows
-// any error, and returns "" — the agentPersona == "" branch returns
-// early before GenerateAgentFiles is reached. The ResolveAgent
-// log-and-swallow is a separate silent-failure bug (out of scope per
-// the spec anti-scope) that hides the config parse error from this
-// caller path entirely. The missing-team path is the cleanest way to
-// force a GenerateAgentFiles error with a config that ResolveAgent
-// can still parse.
+// The companion test TestHandleSessionStart_ResolveAgentErrorPropagates
+// (ethos-dc0) covers the malformed-ethos.yaml path that was unreachable
+// from HandleSessionStart before dc0 — at the time 9ai.6 r2 landed,
+// resolve.ResolveAgent silently swallowed LoadRepoConfig errors and
+// returned "", so the agentPersona == "" branch fell back to the human
+// one-liner before GenerateAgentFiles was reached. Post-dc0 that path
+// IS reachable and the dc0 test exercises it directly.
 func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
@@ -580,4 +577,96 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 		"HandleSessionStart wrap must use %%w; errors.Unwrap returned nil")
 	assert.Contains(t, inner.Error(), "loading team",
 		"depth-1 error must be GenerateAgentFiles's teams.Load wrap")
+}
+
+// TestHandleSessionStart_ResolveAgentErrorPropagates covers ethos-dc0:
+// a malformed .punt-labs/ethos.yaml must now cause HandleSessionStart
+// to return a non-nil error with the full wrap chain. This is the test
+// case that 9ai.6 r2 could not use — at that point resolve.ResolveAgent
+// silently swallowed LoadRepoConfig errors and returned "", and
+// HandleSessionStart's early-return on agentPersona == "" fell back to
+// the human one-liner before GenerateAgentFiles was reached.
+//
+// Post-dc0, ResolveAgent returns (string, error) and HandleSessionStart
+// propagates the error as fmt.Errorf("resolving agent: %w", err). The
+// inner LoadRepoConfig wrap "parsing repo config: %w" and the innermost
+// yaml decoder error are preserved all the way up.
+//
+// Exercise path: valid human identity; fake repo root with
+// .punt-labs/ethos.yaml containing unparseable YAML ("agent: [unclosed").
+// LoadRepoConfig's yaml.Unmarshal fails, LoadRepoConfig wraps it as
+// "parsing repo config", ResolveAgent wraps that as "resolving agent",
+// and HandleSessionStart wraps the whole thing again (yes, the outer
+// wrap repeats "resolving agent" — a minor cosmetic quirk the spec
+// accepts; the test matches on substring, not on exact wrap count).
+func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	// Human identity — needed for resolve.Resolve to succeed before
+	// the ResolveAgent call so the test doesn't short-circuit on an
+	// earlier failure mode.
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Jim Freeman",
+		Handle: "jfreeman",
+		Kind:   "human",
+	}))
+
+	// Fake repo root with a .git dir and a malformed ethos.yaml.
+	// "agent: [unclosed" is an unterminated flow sequence — the yaml
+	// decoder rejects it unambiguously with "did not find expected node
+	// content" or similar. Any unambiguously-broken yaml would do; this
+	// shape matches the spec's suggested fixture.
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(puntDir, "ethos.yaml"),
+		[]byte("agent: [unclosed\n"),
+		0o644))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	isolateGitConfig(t, "jfreeman")
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    rs,
+	}
+
+	// Suppress stdout the same way the 9ai.6 r2 test does — no JSON
+	// output is expected on the error path, but a regression that
+	// writes partial JSON before returning the error would leak into
+	// test output without the redirect.
+	oldStdout := os.Stdout
+	devNull, openErr := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	require.NoError(t, openErr)
+	os.Stdout = devNull
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		devNull.Close()
+	})
+
+	err = HandleSessionStart(bytes.NewReader([]byte(`{"session_id":"s-dc0"}`)), deps)
+	require.Error(t, err,
+		"HandleSessionStart must return the wrapped ResolveAgent error, not swallow it")
+	assert.Contains(t, err.Error(), "resolving agent",
+		"HandleSessionStart must wrap the ResolveAgent error with its operation context")
+	assert.Contains(t, err.Error(), "parsing repo config",
+		"the wrapped chain must include LoadRepoConfig's yaml.Unmarshal wrap")
+
+	// %w chain must unwrap — guard against a regression that drops
+	// the outer wrap to %v and leaves only a rendered string.
+	inner := errors.Unwrap(err)
+	require.NotNil(t, inner,
+		"HandleSessionStart wrap must use %%w; errors.Unwrap returned nil")
 }
