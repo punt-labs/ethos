@@ -22,6 +22,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Writer-role `output_format` templates aligned with
+  `mission.Result` strict schema (`ethos-r6o`)** — the
+  `implementer.yaml` and `test-engineer.yaml` sidecar role templates
+  previously described an informal `RESULT: <task-id>` block with a
+  `worker:` field, inline `+N -M` files_changed strings, and inline
+  `pass | fail` evidence strings. Phase 3.1 landed the mission
+  contract primitive (7274f0b) and Phase 3.x will wire the mission
+  result submit path through `mission.DecodeResultStrict` +
+  `Result.Validate()`; a worker who copy-pasted the old template into
+  a `.results.yaml` file would have hit `KnownFields(true)` errors
+  for `worker`, type errors for inline-string `files_changed`, and
+  missing-required errors for `mission`, `round`, `created_at`, and
+  `author`. Both templates are now raw YAML bodies whose keys and
+  value types match `mission.Result` exactly — `mission`, `round`,
+  `created_at`, `author`, `verdict`, `confidence`, `files_changed`
+  (list of `{path, added, removed}` maps), `evidence` (list of
+  `{name, status}` maps), optional `open_questions`. Placeholder
+  values are concrete enough to parse: a real mission ID
+  (`m-2026-04-09-001`), a real RFC3339 timestamp, a valid verdict
+  enum, a numeric confidence, and relative file paths that pass
+  `validateWriteSetEntry`. A two-line instructional comment at the
+  top of each body (`# Fill in the placeholder values below, then
+  submit as your mission result.` plus a strict-decoder caveat)
+  preserves the "fill me in" cue without breaking YAML parsing —
+  comments round-trip through `DecodeResultStrict`. A new
+  `internal/seed/output_format_schema_test.go` round-trip test loads
+  each template through the embedded `Roles` FS, runs the body
+  through `DecodeResultStrict` + `Validate`, and asserts both pass;
+  a negative case injects `worker: test` into the implementer body
+  and asserts strict decode rejects it with a message naming the
+  unknown field. The tripwire is CI-enforced: a future edit that
+  reverts to `worker:` or any other unknown key fails here with a
+  clear diagnostic instead of shipping to workers and failing at
+  submit time. Reviewer-style roles (`reviewer`, `architect`,
+  `security-reviewer`) and `researcher` are deliberately out of
+  scope — their FINDINGS and RESEARCH output shapes describe
+  different workflows with different verdict enums
+  (`{approve, iterate, reject}`) and different sub-field layouts;
+  aligning them with `Result` would semantically distort them. The
+  generator (`internal/hook/generate_agents.go`) is untouched — the
+  existing `TrimSpace` guard at `buildAgentFile:386-390` renders the
+  new raw-YAML body verbatim under the generator-owned
+  `## Output Format` heading. No agent in the engineering team
+  currently uses either role, so the null-effect verification shows
+  zero md5 changes across `.claude/agents/*.md` after SessionStart
+  regeneration; the template change lands invisibly until a future
+  team member adopts `implementer` or `test-engineer` as their role.
+
 - **Role-based `PostToolUse` hook command changed from `tail -20`
   to `head -n 60`** (`ethos-b5g`) — the 9ai.2 hook ran
   `(cd "$CLAUDE_PROJECT_DIR" && make check) 2>&1 | tail -20`
