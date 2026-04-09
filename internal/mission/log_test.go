@@ -5,6 +5,7 @@ package mission
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -720,6 +721,92 @@ func TestDecodeEventLog_SanitizesRawControlBytes(t *testing.T) {
 		assert.True(t,
 			b == '\t' || b == ' ' || (b >= 0x20 && b < 0x7f) || b >= 0xa0,
 			"raw control byte 0x%02x survived sanitization in %q", b, warnings[0])
+	}
+}
+
+// scriptedReader is a test-only io.Reader that hands out fixed chunks
+// on successive Read calls, then surfaces a caller-supplied error on
+// the chunk after the payload. It exists because decodeEventLog's
+// production path always feeds a bytes.NewReader, which only returns
+// io.EOF — the non-EOF read-error branch is defensive for a future
+// file-backed caller. The only way to exercise the branch is to
+// inject a reader that lies about the underlying transport.
+type scriptedReader struct {
+	chunks [][]byte
+	err    error
+	i      int
+}
+
+func (r *scriptedReader) Read(p []byte) (int, error) {
+	if r.i < len(r.chunks) {
+		n := copy(p, r.chunks[r.i])
+		r.i++
+		return n, nil
+	}
+	return 0, r.err
+}
+
+// TestDecodeEventLog_NonEOFReadErrorReportsAttemptedLine pins the
+// line attribution in the two shapes a non-EOF read error can hit:
+//
+//  1. Partial line + error: ReadString returns a non-empty tail
+//     along with the error. lineNo has already been bumped for that
+//     attempted line in the `hadPartial` branch above the error
+//     check, so the warning must say `line N`, not `line N+1`.
+//  2. Empty line + error: ReadString returns no bytes plus the
+//     error. lineNo still points at the last successfully-read line,
+//     so the attempted line is `lineNo + 1`.
+//
+// The bug before round 5 was that case (1) unconditionally wrote
+// `lineNo+1`, misattributing the failing byte by one.
+func TestDecodeEventLog_NonEOFReadErrorReportsAttemptedLine(t *testing.T) {
+	boom := errors.New("simulated mid-stream I/O failure")
+	cases := []struct {
+		name         string
+		chunks       [][]byte
+		wantWarnLine string // substring that must appear in the warning
+	}{
+		{
+			name: "partial line plus error reports the partial lineNo",
+			chunks: [][]byte{
+				// Two clean lines, then a partial third without a
+				// trailing newline. bufio.Reader buffers all of this
+				// before ReadString's next call hits the scripted err.
+				[]byte(`{"ts":"2026-04-08T00:00:00Z","event":"create","actor":"a"}` + "\n" +
+					`{"ts":"2026-04-08T00:00:01Z","event":"update","actor":"a"}` + "\n" +
+					`{"ts":"2026-04-08T00:00:02Z","event":"close","actor":`),
+			},
+			wantWarnLine: "line 3: reading:",
+		},
+		{
+			name: "clean final newline plus error reports next line",
+			chunks: [][]byte{
+				[]byte(`{"ts":"2026-04-08T00:00:00Z","event":"create","actor":"a"}` + "\n" +
+					`{"ts":"2026-04-08T00:00:01Z","event":"update","actor":"a"}` + "\n"),
+			},
+			wantWarnLine: "line 3: reading:",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := &scriptedReader{chunks: tc.chunks, err: boom}
+			events, warnings, err := decodeEventLogFromReader(r)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "reading event log")
+			// Events read before the failure must still be returned —
+			// the reader is a post-mortem tool. The partial case
+			// surfaces the two clean predecessors, the empty-final
+			// case surfaces both.
+			assert.Len(t, events, 2,
+				"pre-failure events should survive the mid-stream error")
+			// The read-error warning is always the last entry; earlier
+			// entries (if any) would be per-line decode failures, and
+			// neither sub-case plants one.
+			require.NotEmpty(t, warnings)
+			last := warnings[len(warnings)-1]
+			assert.Contains(t, last, tc.wantWarnLine,
+				"attempted line number mis-attributed in warning %q", last)
+		})
 	}
 }
 

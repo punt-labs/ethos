@@ -266,17 +266,30 @@ func decodeEventLog(data []byte) ([]Event, []string, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return []Event{}, nil, nil
 	}
+	return decodeEventLogFromReader(bytes.NewReader(data))
+}
+
+// decodeEventLogFromReader is the line walker behind decodeEventLog,
+// split out so tests can inject a reader that returns a non-EOF error
+// mid-stream. Production callers always enter through decodeEventLog
+// with a bytes.NewReader, which only returns io.EOF — the read-error
+// path below is exercised only by the test harness today. Keeping
+// the two entry points separate lets the byte-slice fast path short
+// circuit an empty input without constructing a Reader, while the
+// helper is still available for the defensive test.
+func decodeEventLogFromReader(r io.Reader) ([]Event, []string, error) {
 	events := []Event{}
 	var warnings []string
-	reader := bufio.NewReader(bytes.NewReader(data))
+	reader := bufio.NewReader(r)
 	lineNo := 0
 	for {
 		line, readErr := reader.ReadString('\n')
 		// ReadString returns whatever it has read even when it also
-		// returns io.EOF. Process the final non-terminated line (if
-		// any) before honoring the EOF so a file with no trailing
-		// newline is still fully walked.
-		if len(line) > 0 {
+		// returns io.EOF (or any other error). Process the final
+		// non-terminated line (if any) before honoring the error so a
+		// file with no trailing newline is still fully walked.
+		hadPartial := len(line) > 0
+		if hadPartial {
 			lineNo++
 			// Strip the trailing \n and an optional \r (Windows-written
 			// logs) so the downstream decoder sees a clean line body.
@@ -306,8 +319,21 @@ func decodeEventLog(data []byte) ([]Event, []string, error) {
 			// future caller wiring a file-backed reader cannot
 			// accidentally forward raw bytes from an OS error string
 			// through to operator terminals.
+			//
+			// Attribution: if ReadString handed us a partial line
+			// along with the error, lineNo was already bumped above
+			// for that attempted line, so the attempted line number
+			// IS lineNo. Otherwise (empty line + error) the failure
+			// is on the next line after the last successful read,
+			// which is lineNo + 1. Without this split the partial
+			// case misreports as lineNo + 1 — off by one on the
+			// exact byte the reader stumbled over.
+			attemptedLine := lineNo + 1
+			if hadPartial {
+				attemptedLine = lineNo
+			}
 			warnings = append(warnings, sanitizeWarning(
-				fmt.Sprintf("line %d: reading: %v", lineNo+1, readErr)))
+				fmt.Sprintf("line %d: reading: %v", attemptedLine, readErr)))
 			return events, warnings, errors.New(sanitizeWarning(
 				fmt.Sprintf("reading event log: %v", readErr)))
 		}

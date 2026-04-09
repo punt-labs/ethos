@@ -166,6 +166,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tripwire for any future reader (B2). One new test,
   `TestFilterEvents_WhitespaceOnlyTypesActsAsNoFilter`, covers
   three whitespace-only input variants plus the empty-slice
+  regression. Round 5 (Copilot finding, LOW, defensive): the
+  non-EOF read-error path in `decodeEventLog` now derives the
+  attempted line number from whether `bufio.Reader.ReadString`
+  handed back a partial line along with the error. Before the fix,
+  a partial-line + non-EOF error unconditionally reported
+  `line lineNo+1: reading: ...`, but `lineNo` had already been
+  bumped above for that same partial line — off by one on the
+  exact byte the reader stumbled over. This is dead code against
+  the production `bytes.NewReader` path (which only returns
+  `io.EOF`), but a future caller wiring a file-backed reader would
+  have seen mis-attributed post-mortem warnings. The helper
+  `decodeEventLogFromReader(io.Reader)` is split out from
+  `decodeEventLog([]byte)` so a test-only `scriptedReader` can
+  inject the non-EOF branch; the byte-slice entry point keeps its
+  empty-input fast path. One new test,
+  `TestDecodeEventLog_NonEOFReadErrorReportsAttemptedLine`, pins
+  both the partial-line case (load-bearing) and the empty-line
   regression.
 - **Structured result artifacts and close gate** (Phase 3.6,
   `ethos-07m.10`) — worker output is no longer prose. A new
