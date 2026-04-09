@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -457,4 +458,126 @@ func TestHandleSessionStart_LegacyConfigPath(t *testing.T) {
 
 	ctx := result.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, "Active identity: Claude Agento (claude)")
+}
+
+// TestHandleSessionStart_GenerateAgentsErrorPropagates covers ethos-9ai.6
+// C1: the only production caller of GenerateAgentFiles (HandleSessionStart)
+// must return the wrapped error, not log-and-continue. Before the fix,
+// a broken team reference (or any GenerateAgentFiles failure) was logged
+// to stderr and swallowed; `ethos hook session-start` exited zero and
+// `ethos doctor` had no signal to gate on.
+//
+// Exercise path: a valid config that names a team file that doesn't
+// exist. ResolveAgent succeeds (cfg parses), store.Load(agentPersona)
+// succeeds (identity exists), then GenerateAgentFiles calls
+// teams.Load(teamName) which returns a not-found error. That error
+// wraps as "loading team %q: %w"; HandleSessionStart's new wrap
+// "generating agents: %w" sits on top.
+//
+// Note: the spec asked for a malformed-.punt-labs/ethos.yaml test, but
+// that path is unreachable from HandleSessionStart because
+// resolve.ResolveAgent calls LoadRepoConfig first, logs-and-swallows
+// any error, and returns "" — the agentPersona == "" branch returns
+// early before GenerateAgentFiles is reached. The ResolveAgent
+// log-and-swallow is a separate silent-failure bug (out of scope per
+// the spec anti-scope) that hides the config parse error from this
+// caller path entirely. The missing-team path is the cleanest way to
+// force a GenerateAgentFiles error with a config that ResolveAgent
+// can still parse.
+func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+	rs := role.NewLayeredStore("", dir)
+	ts := team.NewLayeredStore("", dir)
+
+	// Human identity — needed for resolve.Resolve to succeed.
+	require.NoError(t, s.Save(&identity.Identity{
+		Name:   "Jim Freeman",
+		Handle: "jfreeman",
+		Kind:   "human",
+	}))
+	// Agent identity — the config points at this handle, and
+	// store.Load(agentPersona) must succeed so the flow reaches
+	// GenerateAgentFiles.
+	agentID := &identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "calm-engineer",
+		WritingStyle: "concise-quant",
+	}
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "calm-engineer",
+		Content: "# Calm Engineer\n\nA calm and methodical engineer.\n\n- Stay focused",
+	}))
+	ws := attribute.NewStore(dir, attribute.WritingStyles)
+	require.NoError(t, ws.Save(&attribute.Attribute{
+		Slug:    "concise-quant",
+		Content: "# Concise Quantified\n\nShort and data-driven.\n\n- Under 30 words",
+	}))
+	require.NoError(t, s.Save(agentID))
+
+	// Repo root with a config that names a team file that does NOT
+	// exist on disk. ResolveAgent parses the config and returns
+	// "claude"; GenerateAgentFiles parses the same config, reads
+	// cfg.Team == "missing-team", calls teams.Load("missing-team"),
+	// and returns a wrapped not-found error.
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(puntDir, "ethos.yaml"),
+		[]byte("agent: claude\nteam: missing-team\n"),
+		0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(puntDir, "ethos"), 0o755))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	isolateGitConfig(t, "jfreeman")
+
+	deps := SessionStartDeps{
+		Store:    s,
+		Sessions: ss,
+		Teams:    ts,
+		Roles:    rs,
+	}
+
+	// Direct call — captureSessionStartOutput asserts NoError, which
+	// is the exact opposite of what we want to verify here. Suppress
+	// stdout so an unexpected JSON write in a regression path does
+	// not leak into test output.
+	oldStdout := os.Stdout
+	devNull, openErr := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	require.NoError(t, openErr)
+	os.Stdout = devNull
+	t.Cleanup(func() {
+		os.Stdout = oldStdout
+		devNull.Close()
+	})
+
+	err = HandleSessionStart(bytes.NewReader([]byte(`{"session_id":"s-propagate"}`)), deps)
+	require.Error(t, err,
+		"HandleSessionStart must return the wrapped GenerateAgentFiles error, not swallow it")
+	assert.Contains(t, err.Error(), "generating agents",
+		"HandleSessionStart must wrap the downstream error with its operation context")
+	assert.Contains(t, err.Error(), "loading team",
+		"the wrapped chain must include GenerateAgentFiles's teams.Load wrap")
+	assert.Contains(t, err.Error(), "missing-team",
+		"the error must name the team that failed to load so a user can debug the config")
+
+	// %w chain must unwrap to the inner error, not just render. A
+	// regression that drops the outer wrap to %v would still produce a
+	// rendered string containing the substrings above, but the unwrap
+	// would return nil at depth 1. Guard against that.
+	inner := errors.Unwrap(err)
+	require.NotNil(t, inner,
+		"HandleSessionStart wrap must use %%w; errors.Unwrap returned nil")
+	assert.Contains(t, inner.Error(), "loading team",
+		"depth-1 error must be GenerateAgentFiles's teams.Load wrap")
 }

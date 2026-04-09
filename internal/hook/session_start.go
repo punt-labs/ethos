@@ -149,9 +149,15 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 
 	// Generate .claude/agents/<handle>.md from ethos identity data.
+	// Propagates: the returned error is the single authoritative
+	// signal the CLI can gate on. The shell wrapper's `|| true` keeps
+	// Claude Code session startup fail-open (cli.md §Hook Architecture)
+	// so a broken config does not brick sessions, but `ethos hook
+	// session-start` invoked directly exits non-zero — useful for
+	// `ethos doctor` and manual debugging.
 	if repoRoot != "" && deps.Teams != nil && deps.Roles != nil {
 		if genErr := GenerateAgentFiles(repoRoot, store, deps.Teams, deps.Roles); genErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: session-start: agent generation failed: %v\n", genErr)
+			return fmt.Errorf("generating agents: %w", genErr)
 		}
 	}
 

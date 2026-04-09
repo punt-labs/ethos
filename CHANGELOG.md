@@ -498,6 +498,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `internal/mission/filter.go` — shared `StatusMatches` helper used by
   both the CLI and the MCP list handlers.
 
+### Fixed
+
+- **`GenerateAgentFiles` swallowed `LoadRepoConfig` errors**
+  (`ethos-9ai.6`) — the SessionStart hook silently returned nil for
+  any non-nil error from `resolve.LoadRepoConfig`, so a malformed
+  `.punt-labs/ethos.yaml`, a permission-denied read, or any other
+  I/O error produced no signal. `LoadRepoConfig` already distinguishes
+  "file not found" (returns `nil, nil`) from real errors, so the
+  caller now propagates every non-nil error as
+  `fmt.Errorf("generate agents: %w", err)` and the "unconfigured
+  repo" case stays silent via the existing `cfg == nil` branch.
+- **`GenerateAgentFiles` reported success on partial failure**
+  (`ethos-9ai.7`) — the partial-failure check
+  `expected > 0 && generated == 0` only caught the total-failure
+  case, so a team where 5 of 10 agents failed at mkdir or WriteFile
+  returned nil. The check is now `generated < expected` and the
+  error message names both counts and the failed members:
+  `generated %d of %d expected agent files (failed: bwk, mdm)`.
+- **`HandleSessionStart` discarded `GenerateAgentFiles` errors**
+  (`ethos-9ai.6`, `ethos-9ai.7`, round 2) — the two fixes above
+  closed the bug at the library boundary, but the only production
+  caller (`internal/hook/session_start.go`) logged the returned
+  error to stderr and continued, so `ethos hook session-start`
+  still exited 0 on a broken config and the end-to-end silent-
+  failure class stayed open. `HandleSessionStart` now propagates
+  the error up as `fmt.Errorf("generating agents: %w", err)`. The
+  shell wrapper's `|| true` still means Claude Code session startup
+  is fail-open (correct per `cli.md` §Hook Architecture), but
+  direct CLI invocation now surfaces a non-zero exit code for
+  `ethos doctor` and manual debugging. Known gap: `resolve.ResolveAgent`
+  has the same silent-swallow pattern at `internal/resolve/resolve.go:170-174`
+  and swallows malformed-config errors before `HandleSessionStart`
+  reaches `GenerateAgentFiles`. Filed as `ethos-dc0` for a parallel
+  fix.
+
 ## [2.8.0] - 2026-04-04
 
 ### Fixed
