@@ -583,19 +583,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and nothing else — the full error chain (`yaml: line ...: did not
   find expected ...`) was hidden on stderr, which Claude Code does not
   surface. Both functions now have signature `(string, error)` and
-  return the wrapped error — `"resolving agent: %w"` and
-  `"resolving team: %w"` — while preserving the `("", nil)` contract
-  for the legitimate no-repo (`repoRoot == ""`) and not-configured
-  (`cfg == nil`) cases. Callers handle the error per their operational
-  role: `HandleSessionStart` fail-closes (matches the 9ai.6 r2 C1
-  pattern, wraps again as `"resolving agent: %w"` and returns the
-  error up the stack); `BuildTeamSection` fail-opens with a stderr
-  log (its documented contract is "Returns empty string ... on any
-  load error"); `runResolveAgent` in `cmd/ethos/main.go` prints to
-  stderr and exits 1 so `ethos doctor` and manual debugging surface
-  the failure; `CheckDefaultAgent` in `internal/doctor/doctor.go`
-  returns `"error: %v", false` as a diagnostic state, matching the
-  existing `CheckDuplicateFields` pattern. The shell wrapper's
+  return the wrapped error — `"resolve agent: %w"` and
+  `"resolve team: %w"` (operation-noun form) — while preserving the
+  `("", nil)` contract for the legitimate no-repo (`repoRoot == ""`)
+  and not-configured (`cfg == nil`) cases. Callers handle the error
+  per their operational role: `HandleSessionStart` fail-closes
+  (matches the 9ai.6 r2 C1 pattern, wraps the inner error as
+  `"resolving agent: %w"` — gerund outer, operation-noun inner, the
+  same distinct-verbs convention 9ai.6 uses for `generate agents`
+  vs `generating agents` — and returns up the stack);
+  `BuildTeamSection` fail-opens with a stderr log (its documented
+  contract is "Returns empty string ... on any load error");
+  `runResolveAgent` in `cmd/ethos/main.go` prints to stderr and
+  exits 1 so `ethos doctor` and manual debugging surface the
+  failure; `CheckDefaultAgent` in `internal/doctor/doctor.go`
+  returns `err.Error(), false` as a diagnostic state (no `"error: "`
+  prefix — doctor's FAIL status column already signals the failure).
+  The shell wrapper's
   `|| true` still keeps Claude Code session startup fail-open at the
   process boundary (per `cli.md` §Hook Architecture); the new
   fail-closed binary behavior is the signal for direct CLI invocation.
