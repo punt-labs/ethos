@@ -201,6 +201,18 @@ func joinWithOxford(names []string) string {
 	}
 }
 
+// hasWriteTool reports whether the role's tools list contains Write or
+// Edit — the signal for a role that modifies files and should run
+// quality gates after every write.
+func hasWriteTool(tools []string) bool {
+	for _, t := range tools {
+		if t == "Write" || t == "Edit" {
+			return true
+		}
+	}
+	return false
+}
+
 // buildAgentFile assembles a .claude/agents/<handle>.md from identity,
 // personality, writing-style, and role data. antiResps is the flat list
 // of responsibilities belonging to roles this agent reports to; when
@@ -225,6 +237,20 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	}
 	b.WriteString("skills:\n")
 	b.WriteString("  - baseline-ops\n")
+	if hasWriteTool(r.Tools) {
+		b.WriteString("hooks:\n")
+		b.WriteString("  PostToolUse:\n")
+		b.WriteString("    - matcher: \"Write|Edit\"\n")
+		b.WriteString("      hooks:\n")
+		b.WriteString("        - type: command\n")
+		// Pin cwd to the project root via $CLAUDE_PROJECT_DIR (exposed
+		// by Claude Code to hook commands) so `make check` resolves
+		// against the repo Makefile even if the sub-agent has cd'd into
+		// a subdirectory before the Write or Edit tool fires. The
+		// subshell keeps the cd from leaking to the outer shell, and
+		// the quoted expansion handles paths with spaces.
+		b.WriteString("          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | tail -20\"\n")
+	}
 	b.WriteString("---\n")
 
 	// Body.
