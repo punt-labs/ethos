@@ -483,6 +483,136 @@ func TestGenerateAgentFiles(t *testing.T) {
 			},
 		},
 		{
+			// Role with output_format set — generator must emit a
+			// `## Output Format` section at the END of the body, after
+			// `Talents:`. The role provides only the body; the heading
+			// is generator-owned. The exact byte-for-byte block is
+			// asserted, plus the section's trailing position is locked
+			// with HasSuffix so a future regression that emits another
+			// section after Output Format fails this case.
+			name: "role with output_format emits section",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "with-format.yaml"), map[string]interface{}{
+					"name":             "with-format",
+					"responsibilities": []string{"do work"},
+					"tools":            []string{"Read", "Write", "Bash"},
+					"output_format":    "Worker report template:\n- field1\n- field2\n",
+				})
+				writeYAML(t, filepath.Join(ethosDir, "identities", "wfm.yaml"), map[string]interface{}{
+					"name":          "With Format",
+					"handle":        "wfm",
+					"kind":          "agent",
+					"personality":   "kernighan",
+					"writing_style": "kernighan-prose",
+					"talents":       []string{"engineering"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "wfm", "role": "with-format"},
+					},
+				})
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "wfm.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+
+				// Byte-for-byte: the heading is generator-owned, the
+				// body is the role's literal content, and a single
+				// terminal newline ends the section.
+				want := "\n## Output Format\n\n" +
+					"Worker report template:\n" +
+					"- field1\n" +
+					"- field2\n"
+				assert.Contains(t, content, want)
+
+				// Exactly-once: the HasSuffix anchor below catches a
+				// regression that puts the section somewhere other
+				// than the end, but would still pass if the block got
+				// emitted twice (once mid-body, once at the end).
+				// Count locks the count.
+				assert.Equal(t, 1, strings.Count(content, "## Output Format"),
+					"Output Format section must appear exactly once")
+
+				// Last-position anchor: Output Format must be the
+				// final section in the file. TrimRight strips any
+				// trailing newlines so HasSuffix can match the bare
+				// final bullet.
+				assert.True(t,
+					strings.HasSuffix(strings.TrimRight(content, "\n"), "- field2"),
+					"## Output Format must be the last section in the file; got tail:\n%s",
+					content[max(0, len(content)-80):])
+
+				// Coexistence with the 9ai.2 hooks block: wfm's role
+				// has Write in its tools list, so the PostToolUse
+				// block must still be in the frontmatter alongside
+				// the new Output Format section. A regression that
+				// made the two mutually exclusive would break the
+				// production case — every write-enabled worker needs
+				// both.
+				assert.Contains(t, content,
+					"skills:\n"+
+						"  - baseline-ops\n"+
+						"hooks:\n"+
+						"  PostToolUse:\n",
+					"write-enabled role must still emit hooks block when output_format is set")
+				assert.Contains(t, content, "---\n",
+					"frontmatter must still close with --- delimiter")
+
+				// Idempotency: regenerating against the same repo
+				// root must produce a byte-identical file. This
+				// catches normalization drift — e.g., a future
+				// change that sorts or re-cases any section on every
+				// run would fail here even though a single run
+				// looks correct. Rebuild the stores from scratch so
+				// the second call reloads every YAML from disk, the
+				// same way the session-start hook does in
+				// production.
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				ids2 := identity.NewLayeredStore(
+					identity.NewStore(ethosDir),
+					identity.NewStore(ethosDir),
+				)
+				teams2 := team.NewLayeredStore(ethosDir, ethosDir)
+				roles2 := role.NewLayeredStore(ethosDir, ethosDir)
+				require.NoError(t, GenerateAgentFiles(root, ids2, teams2, roles2))
+				secondData, readErr2 := os.ReadFile(agentPath)
+				require.NoError(t, readErr2)
+				assert.Equal(t, content, string(secondData),
+					"GenerateAgentFiles must be idempotent for roles with output_format")
+			},
+		},
+		{
+			// Role with no output_format — generator must NOT emit a
+			// `## Output Format` heading, no blank lines, no trailing
+			// section. bwk's default fixture has no output_format set,
+			// so this case reuses the default setup (nil) and asserts
+			// the absence on bwk.md. The heading-anchored form is the
+			// only invariant under test here; a personality or
+			// writing-style edit that mentions the words "Output
+			// Format" elsewhere in prose is not a regression.
+			name: "role without output_format omits section",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				assert.NotContains(t, content, "## Output Format")
+			},
+		},
+		{
 			// Edit-only role — tools list has Edit but not Write — still
 			// gets the hook block. The matcher `Write|Edit` is unchanged;
 			// what gates emission is the helper's OR test over the tools
@@ -729,6 +859,88 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 					"- interface stability (architect)\n" +
 					"\nTalents: engineering\n"
 				assert.Contains(t, content, want)
+			},
+		},
+		{
+			// All four body sections stacked in the production order:
+			// Responsibilities, reports_to anti-responsibilities,
+			// Talents, Output Format. This is the shape every
+			// write-enabled agent will have once the Punt Labs team
+			// roles opt into output_format. The byte-anchor locks the
+			// blank-line discipline between every boundary so a
+			// regression that fused any pair would fail here.
+			name: "all four body sections: responsibilities + anti + talents + output_format",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+					},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
+					"name": "coo",
+					"responsibilities": []string{
+						"release management",
+					},
+				})
+				// Reuse go-specialist from setupTestRepo but add
+				// output_format. The responsibilities list stays
+				// byte-identical so the tail anchor below can
+				// include the bullet list verbatim.
+				writeYAML(t, filepath.Join(ethosDir, "roles", "go-specialist.yaml"), map[string]interface{}{
+					"name": "go-specialist",
+					"responsibilities": []string{
+						"Go package implementation with tests",
+						"code review for Go projects",
+						"adherence to punt-kit/standards/go.md",
+					},
+					"tools":         []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
+					"output_format": "Report template:\n- item1\n- item2\n",
+				})
+			},
+			assert: func(t *testing.T, content string) {
+				// Byte-for-byte tail anchor: every section boundary
+				// gets exactly one blank line above and below, and
+				// the file ends at the final bullet.
+				want := "\n## Responsibilities\n\n" +
+					"- Go package implementation with tests\n" +
+					"- code review for Go projects\n" +
+					"- adherence to punt-kit/standards/go.md\n" +
+					"\n## What You Don't Do\n\n" +
+					"You report to coo. These are not yours:\n\n" +
+					"- release management (coo)\n" +
+					"\nTalents: engineering\n" +
+					"\n## Output Format\n\n" +
+					"Report template:\n" +
+					"- item1\n" +
+					"- item2\n"
+				assert.Contains(t, content, want)
+
+				// Output Format is still the last section in the file.
+				assert.True(t,
+					strings.HasSuffix(strings.TrimRight(content, "\n"), "- item2"),
+					"combined-sections case: Output Format must remain last; tail was:\n%s",
+					content[max(0, len(content)-120):])
+
+				// Section ordering anchors: each ## heading index
+				// must strictly increase down the file.
+				respIdx := strings.Index(content, "## Responsibilities")
+				antiIdx := strings.Index(content, "## What You Don't Do")
+				talentsIdx := strings.Index(content, "\nTalents:")
+				outputIdx := strings.Index(content, "## Output Format")
+				require.True(t,
+					respIdx >= 0 && antiIdx >= 0 && talentsIdx >= 0 && outputIdx >= 0,
+					"every section must be present: resp=%d anti=%d talents=%d output=%d",
+					respIdx, antiIdx, talentsIdx, outputIdx)
+				assert.Less(t, respIdx, antiIdx)
+				assert.Less(t, antiIdx, talentsIdx)
+				assert.Less(t, talentsIdx, outputIdx)
 			},
 		},
 	}

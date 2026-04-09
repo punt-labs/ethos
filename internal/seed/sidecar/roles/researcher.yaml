@@ -11,3 +11,18 @@ tools:
   - Glob
   - WebFetch
   - WebSearch
+output_format: |
+  Return research using this structure:
+
+  ```text
+  RESEARCH: <question>          # e.g., "Which YAML library preserves comments on round-trip?"
+    researcher: <handle>
+    sources:
+      - <url or file:line>: <what was found>
+    findings:
+      - <structured finding with evidence>
+    options:
+      - <option name>: <tradeoffs>
+    open_questions:
+      - [if any]
+  ```
