@@ -77,8 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Generated agent files include a `## What You Don't Do` section
   derived from `reports_to` edges in the team graph (`ethos-9ai.1`)** —
-  for each edge from an agent's role to a target role, the target's
-  `responsibilities` are listed under "What You Don't Do" with
+  for each `reports_to` edge from an agent's role to a target role,
+  the target's `responsibilities` are listed under "What You Don't Do" with
   parenthetical attribution: `- release management (coo)`. The
   preamble names the reporting target(s) with Oxford comma joining:
   `You report to coo.`, `You report to coo and ceo.`, or
