@@ -39,18 +39,25 @@ func ValidateName(name string) error {
 
 // validCollabTypes enumerates the allowed collaboration types.
 var validCollabTypes = map[string]bool{
-	"reports_to":       true,
+	"reports_to":        true,
 	"collaborates_with": true,
-	"delegates_to":     true,
+	"delegates_to":      true,
 }
 
-// Validate checks all Z-spec invariants on a team.
-// The identityExists and roleExists callbacks check referential integrity
-// without importing other packages.
-func Validate(t *Team, identityExists func(string) bool, roleExists func(string) bool) error {
-	if identityExists == nil || roleExists == nil {
-		return fmt.Errorf("identityExists and roleExists callbacks must not be nil")
-	}
+// ValidateStructural checks every invariant on a team that does not
+// require cross-package lookups. Store.Load calls this after
+// yaml.Unmarshal to reject malformed team files at load time, closing
+// the silent-drop class for typo'd collaboration roles that 9ai.1 r3
+// surfaced. Callers that also need identity and role existence
+// checks — Save, in particular — should call Validate instead.
+//
+// The checks here are a strict subset of Validate: team name slug
+// rules, at-least-one-member, non-empty identity and role per member,
+// no duplicate (identity, role) pair, collaboration from/to non-empty,
+// no self-collaboration, valid Type, and from/to filled by a team
+// member. Error messages are byte-for-byte identical to Validate so
+// callers that match on error text still work.
+func ValidateStructural(t *Team) error {
 	if err := ValidateName(t.Name); err != nil {
 		return fmt.Errorf("invalid team name: %w", err)
 	}
@@ -58,7 +65,8 @@ func Validate(t *Team, identityExists func(string) bool, roleExists func(string)
 		return fmt.Errorf("team %q must have at least one member", t.Name)
 	}
 
-	// Check each member references a valid identity and role, no duplicates.
+	// Per-member checks: non-empty fields and no duplicate
+	// (identity, role) assignments.
 	seen := make(map[string]bool)
 	for i, m := range t.Members {
 		if m.Identity == "" {
@@ -72,21 +80,16 @@ func Validate(t *Team, identityExists func(string) bool, roleExists func(string)
 			return fmt.Errorf("member %d: duplicate assignment (%s, %s)", i, m.Identity, m.Role)
 		}
 		seen[key] = true
-		if !identityExists(m.Identity) {
-			return fmt.Errorf("member %d: identity %q not found", i, m.Identity)
-		}
-		if !roleExists(m.Role) {
-			return fmt.Errorf("member %d: role %q not found", i, m.Role)
-		}
 	}
 
-	// Build set of roles filled by members on this team.
+	// Build the set of roles filled by members on this team.
 	filledRoles := make(map[string]bool)
 	for _, m := range t.Members {
 		filledRoles[m.Role] = true
 	}
 
-	// Validate collaborations.
+	// Collaboration checks: structure, type membership, and
+	// referential integrity against filledRoles.
 	for i, c := range t.Collaborations {
 		if c.From == "" || c.To == "" {
 			return fmt.Errorf("collaboration %d: from and to are required", i)
@@ -105,6 +108,29 @@ func Validate(t *Team, identityExists func(string) bool, roleExists func(string)
 		}
 	}
 
+	return nil
+}
+
+// Validate checks all Z-spec invariants on a team, including
+// referential integrity against identity and role stores (via
+// callbacks). Structural invariants are delegated to ValidateStructural
+// so callers that cannot supply the callbacks (Store.Load, for
+// example) still have a reachable subset.
+func Validate(t *Team, identityExists func(string) bool, roleExists func(string) bool) error {
+	if identityExists == nil || roleExists == nil {
+		return fmt.Errorf("identityExists and roleExists callbacks must not be nil")
+	}
+	if err := ValidateStructural(t); err != nil {
+		return err
+	}
+	for i, m := range t.Members {
+		if !identityExists(m.Identity) {
+			return fmt.Errorf("member %d: identity %q not found", i, m.Identity)
+		}
+		if !roleExists(m.Role) {
+			return fmt.Errorf("member %d: role %q not found", i, m.Role)
+		}
+	}
 	return nil
 }
 
