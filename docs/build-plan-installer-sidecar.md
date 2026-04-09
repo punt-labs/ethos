@@ -1,5 +1,19 @@
 # Build Plan: Installer Deploys Sidecar Starter Content
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes the Phase 1 implementation work for `ethos-zx2.4` (the
+> installer deploying sidecar starter content: roles, talents,
+> baseline-ops skill). That feature shipped as part of Phase 1 —
+> Batteries Included. See [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md) §1 for
+> the phase definition and [`../CHANGELOG.md`](../CHANGELOG.md) for the
+> release notes.
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 Bead: ethos-zx2.4
 Parent epic: ethos-zx2 (Phase 1: Batteries Included)
 

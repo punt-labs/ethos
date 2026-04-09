@@ -1,5 +1,17 @@
 # Build Plan: Repo-Scoped Identity Configuration
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes pre-Phase-1 design work for `ethos-uld` (repo-scoped
+> identity configuration). That feature shipped and is documented in
+> [`architecture.tex`](architecture.tex) under Identity Resolution
+> and in the ADR archive at [`../DESIGN.md`](../DESIGN.md).
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 Bead: ethos-uld. Status: design reviewed by architect, revised.
 
 ## Problem

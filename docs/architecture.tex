@@ -2,7 +2,8 @@
 % architecture.tex
 %
 % Ethos: Technical Architecture Specification
-% Written for engineers integrating identity into AI agent systems.
+% Written for engineers integrating identity, workflow, and
+% cross-tool integration into AI agent systems.
 %
 % Compile: pdflatex architecture.tex
 %
@@ -38,8 +39,8 @@
 \begin{document}
 
 \title{Ethos: Technical Architecture Specification}
-\author{Identity Binding for Humans and AI Agents}
-\date{April 2026 --- v2.6.1}
+\author{Identity, Workflow, and Integration for Humans and AI Agents}
+\date{April 2026 --- v3.0}
 \hypersetup{
   pdftitle={Ethos: Technical Architecture Specification},
   pdfauthor={Punt Labs},
@@ -55,34 +56,129 @@
 \section{Overview}
 % ===================================================================
 
-Ethos unifies a name, email, GitHub handle, writing style,
-personality, and talents into a single identity that other tools
-optionally read.  It is written in Go and ships as a CLI binary plus
-a Claude Code plugin with an MCP server.
+Ethos is the runtime that makes AI agents first-class citizens of an
+engineering organization.  It binds three pillars into a single
+system: a durable \emph{identity} (who the agent is), a typed
+\emph{workflow} contract (how the agent works), and cross-tool
+\emph{integration} (how the agent participates in email, chat, code
+review, and voice).  Each pillar reinforces the others.  The identity
+is the anchor; the mission contract is the operational primitive
+that turns delegation into a runtime artifact; the integration layer
+makes the same agent show up correctly in every channel.
 
-Identity data lives in two layers: repo-local (git-tracked via the
-\fpath{.punt-labs/ethos/} submodule) and user-global
-(\fpath{\~{}/.punt-labs/ethos/}).  The repo layer takes priority for
-identity lookup; extensions always resolve from the global layer.
+\paragraph{Pillar 1 --- Identity.} One YAML file per persona.  Same
+schema for humans and agents; the \field{kind} field is the only
+structural difference.  An identity binds a persona (personality,
+writing style, talents), a role (tools, responsibilities,
+anti-responsibilities, team position), and channel bindings (email,
+GitHub, voice, agent definition).  Identity data lives in two
+layers: repo-local (git-tracked via the \fpath{.punt-labs/ethos/}
+submodule) and user-global (\fpath{\~{}/.punt-labs/ethos/}).  Repo
+takes priority for identity, attribute, role, and team lookup;
+extensions always resolve from the global layer.
 
-The system serves three roles:
+\paragraph{Pillar 2 --- Workflow.} The mission primitive turns
+delegation from free-form prose into a typed runtime contract per
+DES-031.  A mission contract carries a write-set (the file allowlist
+the worker may touch), a frozen evaluator (pinned at launch,
+content-hashed per DES-033), a round budget (bounded, with mandatory
+reflection between rounds per DES-034), typed result artifacts
+(schema-validated, append-only sibling files per DES-036), and an
+append-only JSONL event log (every state transition, post-mortem
+auditable per DES-037).  The store refuses operations that violate
+the contract.  CLI and MCP surfaces are symmetric: every gate fires
+identically regardless of how the contract reached the store.
 
-\begin{enumerate}
-  \item \textbf{Identity registry} --- CRUD operations on identity
-    YAML files with layered resolution across repo-local and global
-    stores.  Humans and agents share the same schema.
-  \item \textbf{Session roster} --- multi-participant awareness for
-    Claude Code sessions.  Tracks who is present (human, primary
-    agent, subagents), their personas, and parent-child relationships.
-  \item \textbf{Persona animation} --- hooks inject personality,
-    writing style, team context, and extension data into Claude Code
-    sessions at start, before context compaction, and when subagents
-    spawn.  Agent definition files are generated from identity data.
-\end{enumerate}
+\paragraph{Pillar 3 --- Integration.} Agent definition files in
+\fpath{.claude/agents/<handle>.md} are generated from identity data,
+augmented with anti-responsibilities derived from the team
+collaboration graph, role-based behavioral hooks, structured output
+formats, and the \texttt{baseline-ops} skill.  Operational hooks
+inject working context at session start, enforce role-based
+pre-tool safety constraints, and audit every tool invocation.
+Cross-tool integration means an agent impersonating the COO sends
+email from \texttt{claude@punt-labs.com} with the right GPG key
+(Beadle), signs commits as \texttt{Claude Agento} with the right
+SSH key (Biff), and speaks with the right voice (Vox) --- the
+identity binds the channels and each tool reads ethos state to
+configure itself.
 
-Ethos is a \emph{sidecar}, not a dependency.  Other tools (Vox,
-Beadle, Biff) read ethos state from known filesystem paths.  They do
-not import ethos.  The file format is the contract.
+Ethos is written in Go and ships as a CLI binary plus a Claude Code
+plugin with an MCP server.  It is a \emph{sidecar}, not a
+dependency.  Other tools (Vox, Beadle, Biff) read ethos state from
+known filesystem paths.  They do not import ethos.  The file format
+is the contract.
+
+% ===================================================================
+\section{Status at a Glance}
+% ===================================================================
+
+Ethos is built in phases.  Phase 1 (the identity layer) and Phase 3
+(the workflow primitives) are shipped.  Phase 2 (production-quality
+agent generation), Phase 4 (operational hooks), and the cross-tool
+integration deepening are planned.  This section is the single
+authoritative status statement; the remainder of the document
+describes the system in present tense as a coherent whole.
+
+\begin{center}
+\begin{longtable}{@{}lllll@{}}
+\toprule
+\textbf{Subsystem} & \textbf{Phase} & \textbf{ADR} & \textbf{Bead} &
+  \textbf{Status} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Subsystem} & \textbf{Phase} & \textbf{ADR} & \textbf{Bead} &
+  \textbf{Status} \\
+\midrule
+\endhead
+Identity registry              & 1   & DES-001--019 & ---            & SHIPPED \\
+Attribute system               & 1   & DES-005      & ---            & SHIPPED \\
+Extension system               & 1   & DES-009, 022 & ---            & SHIPPED \\
+Session roster                 & 1   & DES-007, 023 & ---            & SHIPPED \\
+Process tree walker            & 1   & DES-014      & ---            & SHIPPED \\
+Layered store + resolution     & 1   & DES-013, 016 & ---            & SHIPPED \\
+Persona animation hooks        & 1   & DES-008, 015 & ---            & SHIPPED \\
+Teams and roles                & 1   & DES-024--028 & ---            & SHIPPED \\
+Agent file generation          & 1   & DES-026      & ---            & SHIPPED \\
+Starter content (10 talents,
+  6 roles, baseline-ops skill) & 1   & DES-029, 030 & \texttt{ethos-l9d} & SHIPPED \\
+\midrule
+Anti-responsibility derivation & 2.1 & ---          & \texttt{ethos-9ai.1} & PLANNED \\
+Role-based hook frontmatter    & 2.2 & ---          & \texttt{ethos-9ai.2} & PLANNED \\
+Structured output for handoff  & 2.3 & ---          & \texttt{ethos-9ai.3} & PLANNED \\
+Baseline-ops skill injection   & 2.4 & ---          & \texttt{ethos-9ai.4} & PLANNED \\
+Mission skill (\cmd{/mission}) & 2.5/2.6 & ---      & \texttt{ethos-9ai.5} & PLANNED \\
+\midrule
+Mission contract               & 3.1 & DES-031      & \texttt{ethos-07m.5} & SHIPPED \\
+Write-set admission control    & 3.2 & DES-032      & \texttt{ethos-07m.6} & SHIPPED \\
+Frozen evaluator (content hash)& 3.3 & DES-033      & \texttt{ethos-07m.7} & SHIPPED \\
+Bounded rounds + reflection    & 3.4 & DES-034      & \texttt{ethos-07m.8} & SHIPPED \\
+Verifier isolation             & 3.5 & DES-035      & \texttt{ethos-07m.9} & SHIPPED \\
+Result artifacts + close gate  & 3.6 & DES-036      & \texttt{ethos-07m.10} & SHIPPED \\
+Event log reader API           & 3.7 & DES-037      & \texttt{ethos-07m.11} & SHIPPED \\
+\midrule
+SessionStart working context   & 4.1 & ---          & \texttt{ethos-gcq.1} & PLANNED \\
+Role-based pre-tool safety     & 4.2 & ---          & \texttt{ethos-gcq.2} & PLANNED \\
+PostToolUse audit logging      & 4.3 & ---          & \texttt{ethos-gcq.3} & PLANNED \\
+\midrule
+Biff identity-aware messaging  & Integration & ---  & \texttt{ethos-wb4} & PLANNED \\
+Beadle identity-aware email    & Integration & ---  & \texttt{ethos-g2f} & PLANNED \\
+Vox voice config via extension & Integration & ---  & ---            & SHIPPED \\
+\midrule
+Starter team templates         & 5.1 & ---          & ---            & FUTURE \\
+Agent marketplace              & 5.2 & ---          & ---            & FUTURE \\
+Cross-tool orchestration       & 5.3 & ---          & ---            & FUTURE \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\textbf{Phase 3 complete.} After DES-037 shipped, the four
+architecture rules from \texttt{\~{}/Documents/agents-architecture.tex}
+are runtime-enforced for the first time in the project's history:
+roles are interfaces, understanding centralizes while execution
+decentralizes, hooks and policies enforce what documentation only
+suggests, and subagents do not inherit ambient context.
 
 % ===================================================================
 \section{Design Principles}
@@ -103,15 +199,33 @@ not import ethos.  The file format is the contract.
     own namespace files in the extension directory.
   \item \textbf{Fast.}  Go's $\sim$10\,ms cold start (vs Python's
     $\sim$200\,ms) keeps hook latency invisible.  Ethos is queried on
-    session start, on every \cmd{/who}, and before every TTS call.
+    session start, on every \cmd{/who}, on every TTS call, and on
+    every mission state transition.
   \item \textbf{No daemon.}  All concurrency uses \texttt{flock}
     on lock files.  No background process, no database.
   \item \textbf{Preserve identity content.}  Source \texttt{.md}
     files are the authority on personality, writing style, and talent
-    content.  Hooks and persona blocks may restructure (strip leading
-    headings, fold the first paragraph into the opening line, list
-    talents as slugs) but must not discard or summarize the underlying
-    meaning.
+    content.  Hooks and persona blocks may restructure but must not
+    discard or summarize the underlying meaning.
+  \item \textbf{Discipline is a runtime contract, not text.}
+    (DES-031.)  Anything that sounds like ``every time,'' ``before,''
+    or ``after'' belongs in a hook or a typed primitive, not in a
+    personality file.  The mission contract enforces what CLAUDE.md
+    can only suggest.
+  \item \textbf{Trust-boundary symmetry between read and write paths.}
+    (DES-031, DES-036, DES-037.)  Every gate that fires on the write
+    path also fires on the read path.  Strict YAML decode
+    (\texttt{KnownFields(true)}) applies on \texttt{Save}, on
+    \texttt{Load}, and on every sibling-file decode.  An attacker
+    with local write access cannot bypass a contract by hand-editing
+    a file ethos was about to read.
+  \item \textbf{Append-only audit trails are the source of truth;
+    derived summaries are convenience.}  (DES-037.)  Memory is
+    advisory recall.  Beads track work items.  Mission JSONL event
+    logs are the authoritative substrate when something goes wrong:
+    one corrupt line does not erase the log, one oversized line does
+    not truncate the tail, and the reader degrades line-by-line with
+    line-numbered warnings rather than failing whole-file.
 \end{enumerate}
 
 % ===================================================================
@@ -123,7 +237,7 @@ CLI entry point lives in \pkg{cmd/ethos}.  Module path:
 \texttt{github.com/punt-labs/ethos}.
 
 \begin{center}
-\begin{longtable}{@{}lp{7.5cm}@{}}
+\begin{longtable}{@{}lp{8.5cm}@{}}
 \toprule
 \textbf{Package} & \textbf{Responsibility} \\
 \midrule
@@ -133,8 +247,8 @@ CLI entry point lives in \pkg{cmd/ethos}.  Module path:
 \midrule
 \endhead
 \pkg{cmd/ethos/}        & CLI entry point: identity, attribute,
-                          session, role, team, hook, and admin
-                          subcommands; global \cmd{--json} flag \\
+                          session, role, team, mission, hook, and
+                          admin subcommands; global \cmd{--json} flag \\
 \pkg{internal/identity/} & Core identity model (\texttt{Identity}
                           struct), validation, CRUD via \texttt{Store},
                           \texttt{LayeredStore} (repo + global),
@@ -152,27 +266,35 @@ CLI entry point lives in \pkg{cmd/ethos}.  Module path:
 \pkg{internal/process/}  & Process tree walker: find topmost
                           \texttt{claude} ancestor PID via
                           \texttt{/proc} (Linux), \texttt{sysctl}
-                          \texttt{kern.proc.pid} and
-                          \texttt{kern.procargs2} (macOS); result
-                          cached via \texttt{sync.Once} \\
+                          (macOS); result cached via
+                          \texttt{sync.Once} \\
 \pkg{internal/resolve/}  & 4-step human resolution chain (iam
                           $\to$ git user.name $\to$ git user.email
                           $\to$ \$USER) plus agent resolution from
                           repo config \\
-\pkg{internal/hook/}     & 6~hook handlers (\texttt{SessionStart},
+\pkg{internal/hook/}     & Hook handlers (\texttt{SessionStart},
                           \texttt{PreCompact},
                           \texttt{SubagentStart/Stop},
-                          \texttt{SessionEnd},
-                          \texttt{FormatOutput} (PostToolUse event
-                          handler)); persona builder,
-                          team context, extension context, agent
-                          file generation, agent definition
-                          installation \\
+                          \texttt{SessionEnd}, \texttt{FormatOutput});
+                          persona builder, team context, extension
+                          context, agent file generation, frozen
+                          evaluator hash gate (DES-033), verifier
+                          context isolation (DES-035) \\
+\pkg{internal/mission/}  & Mission contract primitive: typed
+                          \texttt{Contract}, flock-protected
+                          \texttt{Store}, daily monotonic ID
+                          generator, append-only JSONL event log,
+                          write-set admission control (DES-032),
+                          evaluator hash computation (DES-033),
+                          bounded rounds + reflection (DES-034),
+                          result artifacts + close gate (DES-036),
+                          event log reader (DES-037).  Trust boundary
+                          for every Phase 3 invariant. \\
 \pkg{internal/mcp/}      & MCP tool definitions and handlers
-                          (9~tools via method dispatch);
+                          (10~tools via method dispatch);
                           \texttt{Handler} struct with injected
-                          identity, session, attribute, role, and
-                          team stores \\
+                          identity, session, attribute, role, team,
+                          and mission stores \\
 \pkg{internal/doctor/}   & Installation health checks: identity
                           directory, human identity, default agent,
                           duplicate fields \\
@@ -194,33 +316,32 @@ above it in this ordering.
 
 \begin{verbatim}
                        cmd/ethos
-           /    /    |    |    \    \    \
-          /    /     |    |     \    \    \
-       mcp  hook  resolve doctor role team attribute
-       / \   |  \    |
-      /   \  |   \   |
-  identity session process
-      |
-  attribute
+       /    /     |    |     |     \    \    \
+      /    /      |    |     |      \    \    \
+   mcp  hook  mission resolve doctor role team attribute
+    | \   | \    |       |
+    |  \  |  \   |       |
+identity session process |
+    |                    |
+attribute                |
+    +--------------------+
 \end{verbatim}
 
 \pkg{cmd/ethos} imports all internal packages directly.
 \pkg{internal/mcp} depends on \pkg{identity}, \pkg{session},
-\pkg{attribute}, \pkg{role}, \pkg{team}, \pkg{resolve},
-\pkg{doctor}, \pkg{hook}, and \pkg{process}.
+\pkg{attribute}, \pkg{role}, \pkg{team}, \pkg{mission},
+\pkg{resolve}, \pkg{doctor}, \pkg{hook}, and \pkg{process}.
 \pkg{internal/hook} depends on \pkg{identity}, \pkg{session},
-\pkg{resolve}, \pkg{process}, \pkg{role}, and \pkg{team}.
+\pkg{resolve}, \pkg{process}, \pkg{role}, \pkg{team}, and
+\pkg{mission} (the verifier hash gate from DES-033 reads open
+missions; the verifier context isolator from DES-035 reads the
+matching contract).  \pkg{internal/mission} depends only on
+standard library and the YAML decoder; it is a leaf package on
+purpose so the trust boundary stays in one place.
 \pkg{internal/identity} depends on \pkg{attribute} for slug
 validation and content resolution.
 \pkg{internal/resolve} depends on \pkg{identity}, \pkg{session},
-and \pkg{process}.  \pkg{internal/doctor} imports
-\pkg{internal/identity} for health checks.
-\pkg{internal/session}, \pkg{internal/process},
-\pkg{internal/role}, and \pkg{internal/team} are leaf or near-leaf
-packages.
-
-The diagram is simplified; \pkg{mcp} also depends on \pkg{doctor}
-and \pkg{hook}, and \pkg{doctor} imports \pkg{identity}.
+and \pkg{process}.
 
 % ===================================================================
 \section{Identity Model}
@@ -233,7 +354,7 @@ An identity is a YAML file at
 \fpath{\~{}/.punt-labs/ethos/identities/<handle>.yaml} (global).
 
 \begin{center}
-\begin{longtable}{@{}llp{5.5cm}@{}}
+\begin{longtable}{@{}llp{6cm}@{}}
 \toprule
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
@@ -300,7 +421,7 @@ Validation errors are returned as a structured
 \texttt{Store} takes a root directory path and provides:
 
 \begin{center}
-\begin{tabular}{@{}lp{6.5cm}@{}}
+\begin{tabular}{@{}lp{7cm}@{}}
 \toprule
 \textbf{Method} & \textbf{Behavior} \\
 \midrule
@@ -311,25 +432,21 @@ Validation errors are returned as a structured
 \texttt{Load(handle)}    & Read YAML, resolve attributes (personality,
                            writing style, talents) to markdown content,
                            assemble extensions from
-                           \fpath{<handle>.ext/}.  Pass
-                           \texttt{Reference(true)} to skip content
-                           resolution. \\
-\texttt{List()}           & Return all identities in reference mode
+                           \fpath{<handle>.ext/}. \\
+\texttt{List()}          & Return all identities in reference mode
                            (slugs only).  Non-loadable files are
                            reported as warnings. \\
 \texttt{FindBy(f, v)}    & Search identities where field \texttt{f}
                            matches value \texttt{v}.  Supported fields:
                            \texttt{handle}, \texttt{email},
-                           \texttt{github}.  Returns nil, nil on no
-                           match. \\
-\texttt{Exists(handle)}   & Check file existence. \\
+                           \texttt{github}. \\
+\texttt{Exists(handle)}  & Check file existence. \\
 \texttt{Update(h, fn)}   & Read-modify-write with flock.  Applies
                            mutation function \texttt{fn}, validates
                            attribute references, writes atomically
                            via temp file + rename. \\
-\texttt{ValidateRefs(id)} & Check that all attribute slugs
-                           (personality, writing style, talents)
-                           resolve to existing \texttt{.md} files. \\
+\texttt{ValidateRefs(id)} & Check that all attribute slugs resolve to
+                           existing \texttt{.md} files. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -357,10 +474,6 @@ is optional (nil when not inside a git repository).
     (repo if it exists there, otherwise global).  Uses cross-layer
     \texttt{ValidateRefs} so attribute references in either store
     are accepted.
-  \item \textbf{Voice migration (legacy only)}: pre-DES-019 identity
-    files may contain a \field{voice} field.  On load, the field is
-    relocated to the global ext store
-    (\fpath{<handle>.ext/vox.yaml}) and stripped from the YAML.
 \end{itemize}
 
 \subsection{IdentityStore Interface}
@@ -368,13 +481,9 @@ is optional (nil when not inside a git repository).
 The \texttt{IdentityStore} interface abstracts over both
 \texttt{Store} (single-root) and \texttt{LayeredStore} (repo +
 global).  All consumers --- MCP handlers, hooks, CLI commands ---
-accept \texttt{IdentityStore} rather than a concrete type.
-
-Methods: \texttt{Load}, \texttt{Save}, \texttt{List},
-\texttt{FindBy}, \texttt{Exists}, \texttt{Update},
-\texttt{ValidateRefs}, \texttt{Root}, \texttt{IdentitiesDir},
-\texttt{Path}, \texttt{ExtDir}, \texttt{ExtGet}, \texttt{ExtSet},
-\texttt{ExtDel}, \texttt{ExtList}.
+accept \texttt{IdentityStore} rather than a concrete type.  This
+also lets the mission package's \texttt{NewLiveHashSources}
+(DES-033) consume the same interface as the persona-animation hooks.
 
 % ===================================================================
 \section{Attribute System}
@@ -409,9 +518,7 @@ plural name.  \texttt{Store} provides \texttt{Save}, \texttt{Load},
 
 \texttt{Store} supports an optional fallback store.  When set,
 read operations check the fallback (repo layer) first, then the
-primary store (global layer).  \texttt{List} merges results from
-both layers with the fallback winning on slug collision.  Writes
-always go to the primary store.
+primary store (global layer).  Writes always go to the primary store.
 
 \subsection{Slug Validation}
 
@@ -485,11 +592,6 @@ Extensions exist at two independent scopes with different types:
     values).  Deleted when the session ends.
 \end{enumerate}
 
-The two scopes are structurally different.  Persona-level extensions
-enforce flat string values; session-level extensions accept arbitrary
-YAML structures.  A tool may store durable defaults at the persona
-level and ephemeral session state at the participant level.
-
 \subsection{Session Context (DES-022)}
 
 Any extension namespace may include a \texttt{session\_context} key.
@@ -497,9 +599,8 @@ During \texttt{SessionStart}, \texttt{PreCompact}, and
 \texttt{SubagentStart} hooks, ethos collects all
 \texttt{session\_context} values from the agent's persona-level
 extensions, joins them, and emits the result alongside the persona
-block.  This allows consumers (e.g., Biff, Quarry) to inject
-behavioral instructions into the model's context without ethos
-understanding the content.
+block.  Consumers (Biff, Quarry, Vox) inject behavioral instructions
+into the model's context without ethos understanding the content.
 
 % ===================================================================
 \section{Session Roster}
@@ -527,8 +628,7 @@ Stored at \fpath{\~{}/.punt-labs/ethos/sessions/<session-id>.yaml}:
 \field{started}      & Roster creation   & RFC~3339 timestamp \\
 \field{repo}         & Git remote        & Repository name
                                            (org/repo) \\
-\field{host}         & \texttt{os.Hostname()} & Short hostname (no
-                                           domain) \\
+\field{host}         & \texttt{os.Hostname()} & Short hostname \\
 \field{participants} & Hook lifecycle    & Ordered list of
                                            \texttt{Participant}
                                            records \\
@@ -536,30 +636,9 @@ Stored at \fpath{\~{}/.punt-labs/ethos/sessions/<session-id>.yaml}:
 \end{longtable}
 \end{center}
 
-Each participant record:
-
-\begin{center}
-\begin{longtable}{@{}llp{5cm}@{}}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\endfirsthead
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\endhead
-\field{agent\_id}    & string  & OS login, Claude PID, or subagent ID \\
-\field{persona}      & string  & Ethos handle; empty when no identity \\
-\field{agent\_type}  & string  & Raw type (e.g., \texttt{Explore},
-                                 \texttt{code-reviewer}) \\
-\field{parent}       & string  & Parent's \field{agent\_id}; empty for
-                                 root \\
-\field{joined}       & string  & RFC~3339 timestamp of join \\
-\field{ext}          & \texttt{map[string]any}  & Tool-scoped ephemeral
-                                 metadata \\
-\bottomrule
-\end{longtable}
-\end{center}
+Each participant record carries \field{agent\_id}, \field{persona},
+\field{agent\_type}, \field{parent}, \field{joined}, and a
+tool-scoped ephemeral \field{ext} map.
 
 \subsection{Tree Structure}
 
@@ -585,22 +664,26 @@ to \field{parent:~empty}), initiator (my \field{parent}), delegates
 \begin{center}
 \begin{tabular}{@{}llp{4.5cm}@{}}
 \toprule
-\textbf{Hook Event} & \textbf{Roster Operation} & \textbf{Data
-  Available} \\
+\textbf{Hook Event} & \textbf{Roster Operation} & \textbf{Data} \\
 \midrule
-\texttt{SessionStart}  & Create roster, join root + primary;
-                          emit persona block + team context;
-                          generate agent files
+\texttt{SessionStart}  & Create roster, join root + primary; emit
+                          persona block, team context, working
+                          context (Phase 4.1); generate agent files
                         & \field{session\_id}, \texttt{\$USER},
                           Claude PID \\
-\texttt{SubagentStart}  & Join subagent; emit persona if matched
+\texttt{SubagentStart}  & Join subagent; gate verifier spawns
+                          (DES-033, DES-035); emit persona OR
+                          verifier isolation block
                         & \field{session\_id}, \field{agent\_id},
                           \field{agent\_type} \\
 \texttt{SubagentStop}   & Leave subagent
                         & \field{session\_id}, \field{agent\_id} \\
-\texttt{PreCompact}     & Re-emit full persona block + team context
-                          (survives compaction)
+\texttt{PreCompact}     & Re-emit full persona block, team context,
+                          extension context
                         & \field{session\_id} \\
+\texttt{PostToolUse}    & Format MCP tool output; audit log (Phase
+                          4.3)
+                        & tool name, output \\
 \texttt{SessionEnd}     & Delete roster + PID-keyed session file
                         & \field{session\_id} \\
 \bottomrule
@@ -637,11 +720,9 @@ ID.  The \texttt{SessionEnd} hook deletes the file.
     participant).
   \item If numeric: check whether the PID is alive via
     \texttt{os.FindProcess} + signal~0.  If dead, treat as stale
-    immediately (no TTL fallback).
-  \item If non-numeric (parse fails): age-based fallback (24-hour
-    TTL on the \field{started} timestamp).
-  \item Rosters with fewer than 2~participants are always stale
-    (malformed).
+    immediately.
+  \item If non-numeric: age-based fallback (24-hour TTL).
+  \item Rosters with fewer than 2~participants are always stale.
 \end{enumerate}
 
 \texttt{PurgeCurrent()} additionally cleans stale PID-keyed files
@@ -654,28 +735,33 @@ process is no longer alive.
 
 \subsection{Role Model}
 
-A role is a named YAML file at
-\fpath{roles/<slug>.yaml}.
+A role is a named YAML file at \fpath{roles/<slug>.yaml}.
 
 \begin{center}
-\begin{tabular}{@{}llp{6cm}@{}}
+\begin{tabular}{@{}llp{6.5cm}@{}}
 \toprule
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
 \field{name}             & string       & Slug-format name \\
-\field{model}            & string (optional) & Claude model for agents in
-                                          this role; one of \texttt{opus},
+\field{model}            & string (optional) & Claude model preference;
+                                          one of \texttt{opus},
                                           \texttt{sonnet}, \texttt{haiku},
                                           \texttt{inherit}, or a full
-                                          \texttt{claude-*} ID.  Empty means
-                                          inherit.  Validated by
-                                          \texttt{ValidateModel()} on save
-                                          and load. \\
+                                          \texttt{claude-*} ID. \\
 \field{responsibilities} & []string     & What the role does \\
 \field{permissions}      & []string     & What the role may access \\
 \field{tools}            & []string     & MCP tools available to agents
                                           in this role (used in agent
                                           file generation) \\
+\field{anti\_responsibilities} & []string & What the role does NOT do
+                                          (Phase 2.1; derived from the
+                                          team collaboration graph
+                                          when omitted) \\
+\field{output\_format}   & string (optional) & Markdown template for
+                                          structured handoff (Phase
+                                          2.3) \\
+\field{safety\_constraints} & []string  & Pre-tool denylist
+                                          patterns (Phase 4.2) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -687,8 +773,7 @@ integrity: a role cannot be deleted if any team references it.
 
 \subsection{Team Model}
 
-A team is a named YAML file at
-\fpath{teams/<slug>.yaml}.
+A team is a named YAML file at \fpath{teams/<slug>.yaml}.
 
 \begin{center}
 \begin{tabular}{@{}llp{5.5cm}@{}}
@@ -720,10 +805,8 @@ callback functions (no circular imports):
 \begin{itemize}
   \item Team name follows slug rules.
   \item At least one member.
-  \item Every member's identity exists (via \texttt{identityExists}
-    callback).
-  \item Every member's role exists (via \texttt{roleExists}
-    callback).
+  \item Every member's identity exists.
+  \item Every member's role exists.
   \item No duplicate identity/role pairs.
   \item Every collaboration's \field{from} and \field{to} roles are
     filled by at least one member.
@@ -732,6 +815,9 @@ callback functions (no circular imports):
 \end{itemize}
 
 These invariants are checked on team creation and member addition.
+Phase 3.5 (DES-035) adds an additional cross-cutting check: a
+mission's worker and evaluator handles cannot share a team-scoped
+role binding under canonicalization.
 
 % ===================================================================
 \section{Identity Resolution}
@@ -749,15 +835,12 @@ at the first match:
     the roster, find the matching participant.  If found with a
     persona, return it.  If found with no persona, stop (do not fall
     through --- this is an explicit ``no identity'').
-  \item \textbf{git config user.name} --- run
-    \texttt{git config user.name}, match against identity
-    \field{github} field via \texttt{FindBy("github", name)}.
-  \item \textbf{git config user.email} --- run
-    \texttt{git config user.email}, match against identity
-    \field{email} field via \texttt{FindBy("email", email)}.
-  \item \textbf{\$USER} --- read the \texttt{USER} environment
-    variable, match against identity \field{handle} field via
-    \texttt{FindBy("handle", user)}.
+  \item \textbf{git config user.name} --- match against identity
+    \field{github} field.
+  \item \textbf{git config user.email} --- match against identity
+    \field{email} field.
+  \item \textbf{\$USER} --- match against identity \field{handle}
+    field.
 \end{enumerate}
 
 Returns an error when no step matches.
@@ -765,14 +848,10 @@ Returns an error when no step matches.
 \subsection{Agent Resolution}
 
 \texttt{resolve.ResolveAgent(repoRoot)} reads the repo-local
-configuration file.  Tries \fpath{.punt-labs/ethos.yaml} first,
-falls back to the legacy path \fpath{.punt-labs/ethos/config.yaml}.
-Returns the \field{agent} handle from the config, or empty string
-if not configured.
-
-The \texttt{RepoConfig} struct also carries a \field{team} field,
-used by \texttt{ResolveTeam()} to determine which team owns the
-current repository.
+configuration file at \fpath{.punt-labs/ethos.yaml}.  The
+\texttt{RepoConfig} struct also carries a \field{team} field, used
+by \texttt{ResolveTeam()} to determine which team owns the current
+repository.
 
 % ===================================================================
 \section{Process Tree Walker}
@@ -786,14 +865,7 @@ PID-keyed session files.
 \begin{enumerate}
   \item Read the process table using native OS interfaces:
     \texttt{/proc/<pid>/stat} on Linux,
-    \texttt{sysctl kern.proc.pid} on macOS.  On macOS,
-    \texttt{readProc} uses \texttt{kern.proc.pid} for the parent PID,
-    and \texttt{kern.procargs2} as the primary source of the full
-    executable path and command name (via the executable basename,
-    used for version-named binary normalization), falling back to
-    \texttt{kern.proc.pid}'s \texttt{P\_comm} when the path cannot
-    be read.
-    No subprocess spawning.
+    \texttt{sysctl kern.proc.pid} on macOS.  No subprocess spawning.
   \item Walk from the current PID upward, following parent pointers.
   \item Track the topmost PID where the command name is
     \texttt{claude}.
@@ -802,7 +874,7 @@ PID-keyed session files.
   \item If no \texttt{claude} ancestor is found, fall back to
     \texttt{os.Getppid()}.
   \item Cache the result for the lifetime of the process via
-    \texttt{sync.Once} (the answer does not change).
+    \texttt{sync.Once}.
 \end{enumerate}
 
 \subsection{Version-Named Binary Handling}
@@ -811,7 +883,6 @@ Claude Code installs version-named binaries under
 \fpath{\~{}/.local/share/claude/versions/<version>}.  The process
 command name for these binaries is the version string (e.g.,
 \texttt{2.1.86}), not \texttt{claude}.
-
 \texttt{normalizeClaudeComm(comm, exePath)} detects this pattern:
 if the executable path contains \texttt{/claude/versions/}, the
 command name is normalized to \texttt{claude}.  On Linux, the exe
@@ -824,30 +895,69 @@ from \texttt{kern.procargs2}.
 
 Persona animation is the process of injecting identity context into
 Claude Code sessions so the model behaves according to the defined
-personality, writing style, and team role.
+personality, writing style, team role, and (per DES-031) the active
+mission contract.
 
-\subsection{Three Layers}
+\subsection{Four Layers}
+
+The complete agent context has four layers, each with a different
+lifecycle:
+
+\begin{enumerate}
+  \item \textbf{Persona} (durable; identity) --- personality, writing
+    style, talents.  Survives across tasks and sessions.  Pinned
+    via DES-033 hash for evaluators.
+  \item \textbf{Role} (semi-durable; team) --- tools,
+    responsibilities, anti-responsibilities, team position.
+    Changes when the team changes.
+  \item \textbf{Mission} (ephemeral; per-task) --- typed I/O contract,
+    write-set, success criteria, evaluator, budget, and the
+    appended event log.  One delegation, then closed.  See
+    \S\ref{sec:mission}.
+  \item \textbf{Session} (ephemeral; per-process) --- the participant
+    roster, working context (Phase 4.1: git branch, uncommitted
+    changes, recent issues), and ephemeral session-participant ext.
+\end{enumerate}
+
+The first three are emitted by hooks; the fourth is derived from
+the runtime.
+
+\subsection{Hook Phases}
 
 \begin{enumerate}
   \item \textbf{SessionStart} --- emits the full persona block for
     the repo's default agent.  Includes personality (with opening
     line fold), writing style, talents, extension context
-    (\texttt{session\_context} keys), and team context (team members,
-    their roles, personalities, collaborations).  Also generates
+    (\texttt{session\_context} keys), team context (team members,
+    their roles, personalities, collaborations), and (Phase 4.1)
+    working context.  Also generates
     \fpath{.claude/agents/<handle>.md} files from identity data and
     installs static agent definitions from the ethos agents
     directory.
 
   \item \textbf{PreCompact} --- fires before context compaction.
     Re-emits the full persona block, extension context, and team
-    context.  This ensures behavioral instructions survive
-    compaction.
+    context so behavioral instructions survive compaction.
 
   \item \textbf{SubagentStart} --- auto-matches the subagent's
-    \field{agent\_type} against ethos identities.  If a match is
-    found, emits the subagent's persona block and extension context.
-    Includes a ``You report to'' line referencing the parent agent
-    from the session roster.
+    \field{agent\_type} against ethos identities.  Three branches:
+    \begin{itemize}
+      \item \emph{Verifier spawn (DES-033, DES-035)}: the hook
+        detects that the spawning identity is the
+        \field{Evaluator.Handle} of one or more open missions.  It
+        recomputes the evaluator content hash and compares against
+        every matching pinned hash.  On mismatch the spawn is
+        REFUSED with a multi-line drift error naming every drifted
+        mission.  On match it REPLACES the persona block with a
+        verifier isolation block (mission contract bytes,
+        verification criteria, file allowlist) and a MUST-NOT
+        directive against parent transcript and worker scratch.
+      \item \emph{Persona spawn}: emits the subagent's persona
+        block, extension context, and a ``You report to'' line
+        referencing the parent agent from the session roster.
+      \item \emph{Unmatched spawn}: no injection; the subagent
+        operates with its definition file alone.
+    \end{itemize}
 \end{enumerate}
 
 \subsection{Persona Block Construction}
@@ -877,16 +987,6 @@ responsibilities, and talent slugs.  The self entry is compact (role
 and responsibilities only) since the full persona block was already
 emitted.  Collaborations are listed as compact directed edges.
 
-\subsection{Agent File Generation}
-
-\texttt{GenerateAgentFiles()} creates \fpath{.claude/agents/<handle>.md}
-files from ethos identity, personality, writing style, and role data.
-Files include YAML frontmatter (name, description, tools from the
-role) and a markdown body (opening line, personality, writing style,
-responsibilities, talents).  The main agent and human identities are
-skipped.  Writes are idempotent: files are only written when content
-differs from the existing file.
-
 \subsection{Constraints}
 
 \begin{itemize}
@@ -898,7 +998,711 @@ differs from the existing file.
     Agents work normally.
   \item Talent content is not injected inline --- talents are listed as
     slugs.  Full content is available on demand via MCP.
+  \item Verifier spawns receive ONLY the mission contract,
+    verification criteria, and file allowlist --- the persona block
+    is suppressed for evaluator subagents to enforce DES-035's
+    independence requirement.
 \end{itemize}
+
+% ===================================================================
+\section{Mission Primitive}
+\label{sec:mission}
+% ===================================================================
+
+The mission primitive is the workflow half of ethos.  Where the
+identity layer answers ``who is the agent,'' the mission contract
+answers ``what is this delegation, what is the worker allowed to
+touch, and how do we verify the result.''  Phase 3 (DES-031 through
+DES-037) ships seven primitives that compose into a single typed
+runtime contract enforced at the store boundary.
+
+\subsection{Why a Contract}
+
+Free-form delegation between agents fails three concrete ways: the
+leader changes the success criteria mid-cycle and the worker
+implements to a moving target; the reviewer at round 3 is a
+different agent than the reviewer at round 1, with a different
+threshold; and two workers edit the same file concurrently because
+no mechanism declared the conflict.  These failures map onto the
+four architecture rules from
+\texttt{\~{}/Documents/agents-architecture.tex} (roles are
+interfaces, centralize understanding, hooks enforce, subagents do
+not inherit ambient context) --- but the rules are unenforceable as
+prose in CLAUDE.md.  The mission contract turns each rule into a
+runtime check at the \pkg{internal/mission} store boundary.
+
+\subsection{Schema}
+
+A mission contract is a YAML file at
+\fpath{\~{}/.punt-labs/ethos/missions/<id>.yaml}.
+
+\begin{center}
+\begin{longtable}{@{}llp{7cm}@{}}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\endhead
+\field{mission\_id}    & string         & \verb|m-YYYY-MM-DD-NNN|.
+                                          Server-controlled. \\
+\field{status}         & string         & \texttt{open} on create;
+                                          terminal states are
+                                          \texttt{closed},
+                                          \texttt{failed},
+                                          \texttt{escalated}. \\
+\field{created\_at}    & RFC3339        & Server-controlled. \\
+\field{updated\_at}    & RFC3339        & Server-controlled. \\
+\field{closed\_at}     & RFC3339        & Server-controlled on
+                                          terminal transition. \\
+\field{leader}         & handle         & Who launched the mission. \\
+\field{worker}         & handle         & Who executes. \\
+\field{evaluator}      & object         & \field{handle},
+                                          \field{pinned\_at},
+                                          \field{hash}.  Server
+                                          fills timestamp and hash. \\
+\field{inputs}         & object         & Bead ID, files the worker
+                                          MUST read, references the
+                                          worker MAY read. \\
+\field{write\_set}     & []string       & File allowlist; non-empty;
+                                          per-entry validated for
+                                          traversal, absolute paths,
+                                          control bytes; segment
+                                          normalization for conflict
+                                          detection. \\
+\field{tools}          & []string       & Optional tool allowlist. \\
+\field{success\_criteria} & []string    & Non-empty; free-form
+                                          strings the evaluator
+                                          interprets. \\
+\field{budget}         & object         & \field{rounds} (1--10,
+                                          default 3) and
+                                          \field{reflection\_after\_each}
+                                          (bool). \\
+\field{current\_round} & int            & 1-indexed; advances via
+                                          \cmd{mission advance}
+                                          gate (DES-034). \\
+\field{context}        & string         & Optional prose context. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+\subsection{Storage Layout}
+
+\begin{verbatim}
+~/.punt-labs/ethos/missions/
+  m-2026-04-08-005.yaml          # contract (Phase 3.1)
+  m-2026-04-08-005.jsonl         # append-only event log (3.1)
+  m-2026-04-08-005.lock          # per-mission flock target (3.1)
+  m-2026-04-08-005.reflections.yaml  # round-by-round reflections (3.4)
+  m-2026-04-08-005.results.yaml      # round-by-round results (3.6)
+  .counter-2026-04-08            # daily ID counter, flock-protected
+  .create.lock                   # directory create-lock (3.2)
+\end{verbatim}
+
+The contract, the JSONL event log, and the two sibling YAML files
+all live under the same per-mission flock at \fpath{<id>.lock}.
+Contract+reflection and contract+result operations are atomic with
+respect to concurrent readers.  The directory-level
+\fpath{.create.lock} is a separate stable inode acquired by
+\texttt{Store.Create} for the duration of the conflict scan and the
+new mission's write --- two concurrent creates with disjoint mission
+IDs cannot race past the conflict scan (DES-032).
+
+\subsection{Lifecycle}
+
+\begin{enumerate}
+  \item \textbf{Create.}  The leader writes a complete YAML file
+    and runs \cmd{ethos mission create -f mission.yaml} (or calls
+    the MCP \tool{mission} tool with \field{method} \texttt{create}).
+    The store decodes strictly (\texttt{KnownFields(true)}, no
+    unknown fields, no multi-document YAML, no trailing content),
+    runs \texttt{Validate()}, fills server-controlled fields, runs
+    the write-set conflict scan against every open mission, runs
+    the role-overlap check against worker and evaluator, computes
+    the evaluator content hash from the live identity store, and
+    appends a \texttt{create} event to the JSONL log.  Any
+    rejection burns a daily counter slot but commits no other
+    state.
+  \item \textbf{Round 1.}  The worker executes against the contract.
+    \texttt{CurrentRound} starts at 1; no advance gate fires for
+    the first round.
+  \item \textbf{Reflect.}  At the end of each round the leader runs
+    \cmd{ethos mission reflect -f reflection.yaml} to submit a
+    typed reflection (\field{round}, \field{converging},
+    \field{signals}, \field{recommendation},
+    optional \field{reason}).  Reflections are append-only;
+    duplicates and out-of-order rounds are refused.  A
+    \texttt{reflect} event lands in the JSONL log.
+  \item \textbf{Advance.}  \cmd{ethos mission advance} bumps
+    \field{current\_round}.  The advance gate refuses if the
+    current round has no reflection on file, if the reflection's
+    recommendation is terminal (\texttt{stop} or \texttt{escalate}),
+    or if \field{current\_round} would exceed \field{budget.rounds}.
+    The order of these checks is load-bearing: the operator sees
+    ``close and re-scope'' on budget exhaustion, not ``submit one
+    more reflection'' on the last round.  A
+    \texttt{round\_advanced} event lands in the JSONL log.
+  \item \textbf{Result.}  At any point in the current round, the
+    worker submits a typed result via \cmd{ethos mission result -f
+    result.yaml} (\field{verdict}, \field{confidence},
+    \field{files\_changed}, \field{evidence},
+    \field{open\_questions}, \field{prose}).  Results are
+    append-only and per-round unique.  Each result's
+    \field{files\_changed} paths are validated against the
+    contract's write-set via the asymmetric
+    \texttt{pathContainedBy} helper (DES-036).  A \texttt{result}
+    event lands in the JSONL log.
+  \item \textbf{Close.}  \cmd{ethos mission close} transitions to
+    a terminal status.  The close gate (DES-036) refuses every
+    terminal transition without a valid result artifact for the
+    current round.  The refusal message names the mission, the
+    round, and the submission command.  No override flag exists.
+    A \texttt{close} event lands in the JSONL log carrying the
+    satisfying result's round and verdict.
+\end{enumerate}
+
+\subsection{Write-Set Admission Control (DES-032)}
+
+\texttt{Store.Create} rejects a new mission whose \field{write\_set}
+overlaps any currently-open mission's \field{write\_set}.  The check
+runs at create time, not at first edit, so the conflict surfaces
+before the worker runs.
+
+\textbf{Conflict semantics: segment-prefix overlap on cleaned paths.}
+Two paths overlap when, after normalization (trim whitespace, replace
+backslashes, trim trailing slash, split on \texttt{/}, drop empty
+segments, drop \texttt{.} segments), one path's segment list is a
+prefix of the other's.  \texttt{internal/foo} overlaps
+\texttt{internal/foo/bar.go} (forward prefix); \texttt{internal/foo}
+does NOT overlap \texttt{internal/foobar} (segment boundary).
+Comparison is case-sensitive (POSIX).  Round 3 added empty-segment
+filtering (\texttt{internal//foo} normalizes to
+\texttt{[internal foo]}); round 4 added single-dot filtering
+(\texttt{./internal/foo} normalizes to \texttt{[internal foo]}) ---
+the equivalence-class fix that the frozen evaluator caught and the
+leader's earlier review missed.
+
+\textbf{Active mission set.}  Only \texttt{Status == StatusOpen}
+missions enter the conflict scan.  Closing a mission is the explicit
+way to release its write-set claim.
+
+\textbf{Two-level locking.}  The per-mission flock from DES-031
+serializes writes to a single mission.  DES-032 adds a directory-
+level \fpath{.create.lock} acquired by \texttt{Store.Create} for the
+conflict scan AND the new mission's write.  Without the directory
+lock, two concurrent creates with disjoint mission IDs would each
+acquire their own per-mission lock, both pass the conflict scan, and
+both write --- a TOCTOU race the per-mission lock cannot close.
+
+\textbf{Fatal load failure.}  If \texttt{Store.Load} fails on any
+existing mission during the scan (file corrupted, permission denied,
+hand-edited beyond strict YAML), the entire create call fails with a
+wrapped error naming the unloadable mission.  Silently skipping a
+corrupt mission would defeat the gate --- an attacker could bypass
+the check by breaking exactly the existing mission whose write-set
+blocks them.
+
+\subsection{Frozen Evaluator (DES-033)}
+
+The mission contract names its evaluator at launch.  At create time,
+\texttt{Store.ApplyServerFields} resolves the evaluator handle to its
+full identity content (personality, writing\_style, talents, role),
+computes a deterministic SHA-256 over every content source, and
+writes the hex-encoded result into \field{Evaluator.Hash}.  An
+unresolvable evaluator handle fails the create --- an empty hash is
+not a valid outcome.
+
+At verifier subagent spawn time, the \texttt{SubagentStart} hook
+recomputes the hash from current identity content and compares
+against every open mission whose \field{Evaluator.Handle} matches
+the spawning subagent.  Any mismatch is a fatal refusal.  The
+mismatch error names every drifted mission, the pinned and current
+hash prefixes, a per-section breakdown of the current content, and
+both recovery paths (revert the edit, or close and relaunch).
+
+\textbf{Hash algorithm} (\texttt{ethos-evaluator-hash-v1}, version-
+prefixed for future format changes):
+
+\begin{itemize}
+  \item Format version included in the hash input so a bump
+    invalidates every prior pinned hash.
+  \item Field separators 0x1F (Unit Separator) between label and
+    value, 0x1E (Record Separator) between sections.  Both are ASCII
+    control bytes that ethos identity validation already rejects from
+    handles and slugs.
+  \item Length prefixes in BYTES, not runes, to prevent field-
+    boundary attacks.
+  \item Section order: handle, personality content, writing style
+    content, talents (declaration order), roles (lexicographic by
+    \texttt{team/role\_name}).
+  \item Canonical role content rendered as \texttt{key=value$\backslash$n},
+    NOT \texttt{yaml.Marshal} (which is nondeterministic across
+    releases).
+\end{itemize}
+
+\textbf{Role binding semantics.}  Ethos identities have no direct
+role field --- roles bind via team membership.
+\texttt{NewLiveHashSources} walks every team, collects every
+\texttt{(team, role)} assignment for the evaluator handle, and
+includes each with the team name as a prefix so two identical role
+names on different teams stay distinguishable.
+
+\textbf{Verifier hook enforcement.}
+
+\begin{itemize}
+  \item Runs BEFORE joining the session roster.  A refused spawn
+    leaves no roster trace.
+  \item Computes the current hash ONCE per hook invocation (cached
+    across all matching missions) and aggregates every mismatch into
+    a single multi-line error.
+  \item A corrupt or unloadable mission is fatal, not silently
+    skipped.  Misconfiguration (non-nil mission store, nil
+    \texttt{HashSources}) is fatal.  Silent skip would let stale
+    evaluator content through under a configuration error.
+  \item No runtime bypass.  No flag, no environment variable, no
+    configuration option to disable the gate.  The only ways to
+    proceed after a mismatch are: revert the edit, close the
+    mission, or fix the misconfigured installation.
+\end{itemize}
+
+\subsection{Bounded Rounds with Reflection (DES-034)}
+
+A typed \texttt{Reflection} artifact sits between round N and round
+N+1.  The round-advance gate in \texttt{Store.AdvanceRound} refuses
+to begin round N+1 until the reflection for round N is on disk AND
+its recommendation is non-terminal AND the budget isn't exhausted.
+
+\textbf{Reflection schema} (\fpath{internal/mission/reflection.go}):
+
+\begin{itemize}
+  \item \field{round} --- integer, the round just ended
+  \item \field{created\_at} --- RFC3339 server-filled at append time
+  \item \field{author} --- leader handle recording the reflection
+  \item \field{converging} --- bool
+  \item \field{signals} --- list of observations (at least one,
+    each non-empty, no control characters)
+  \item \field{recommendation} --- enum:
+    \texttt{continue} $|$ \texttt{pivot} $|$ \texttt{stop} $|$
+    \texttt{escalate}
+  \item \field{reason} --- prose, required when recommendation is
+    terminal
+\end{itemize}
+
+\textbf{Recommendation semantics.}
+
+\begin{itemize}
+  \item \texttt{continue} --- advance permitted, same approach
+  \item \texttt{pivot} --- advance permitted, worker takes a
+    different approach in round N+1
+  \item \texttt{stop} --- advance refused, mission must close
+  \item \texttt{escalate} --- advance refused, mission must be
+    re-scoped or escalated to a human
+\end{itemize}
+
+\textbf{Sibling-file storage.}  Reflections live in
+\fpath{<id>.reflections.yaml}, NOT inside the contract.  Two
+reasons: the contract is pinned at launch per DES-031 and an
+unbounded reflection slice inside it would force every
+\texttt{Store.Update} to rewrite an unbounded history; and the
+reflections file grows as rounds happen, while the contract file
+stays structurally stable.
+
+\textbf{Append-only invariant.}  \texttt{AppendReflection} refuses
+to overwrite an existing round's reflection.  The reflections file
+is monotone-sorted by round number at decode time; a hand-edited or
+corrupt out-of-order file is rejected.
+
+\textbf{Round tracking.}  \field{Contract.CurrentRound} is a small
+integer cached on the contract.  Default-filled to 1 on Create and
+Load so pre-3.4 contracts upgrade cleanly.  Validation enforces
+\texttt{CurrentRound in [1, Budget.Rounds]}.  Phase 3.7's event log
+reader can reconstruct the round history from events for audit ---
+the field is a cache of derivable state, not a source of truth.
+
+\subsection{Verifier Isolation (DES-035)}
+
+Two independent runtime gates enforce verifier independence from the
+implementer:
+
+\textbf{1. Role-overlap check at \texttt{Store.Create}.}  A
+\texttt{RoleLister} interface and \texttt{Store.WithRoleLister(r)}
+opt-in method.  When set, \texttt{Store.Create} refuses a contract
+whose worker and evaluator handles either match literally or share
+a team-scoped role binding under canonicalization (substring after
+the last \texttt{/}).  Distinct roles on the same team are accepted
+--- the canonical ethos pattern is an implementer and a security
+reviewer on the same team verifying each other's work.
+
+\textbf{2. Verifier context isolation at \texttt{SubagentStart}.}
+When the hook detects a verifier spawn (the existing DES-033
+\texttt{checkVerifierHash} discriminator), the hook REPLACES the
+subagent's \texttt{additionalContext} with a structured isolation
+block instead of the normal persona block.  The block contains:
+
+\begin{itemize}
+  \item \texttt{\#\# Verifier context (mission <id>)}
+  \item \texttt{\#\#\# Mission contract} --- byte-for-byte from disk
+    via \texttt{Store.ContractPath} + \texttt{os.ReadFile}, NOT
+    re-marshaled (which would reorder keys or drop YAML comments)
+  \item \texttt{\#\#\# Verification criteria} --- the contract's
+    \field{success\_criteria} list, verbatim
+  \item \texttt{\#\#\# File allowlist} --- two labeled sub-sections:
+    repo-relative paths and absolute paths
+  \item A \texttt{MUST NOT} directive: the verifier may not read
+    parent transcript, worker scratch, or paths outside the
+    allowlist
+\end{itemize}
+
+The persona block is EXCLUDED for verifier spawns.  Parent
+transcript is excluded by structural replacement (the hook's
+\texttt{additionalContext} field is overwritten, not appended).
+For multi-mission evaluators, the block concatenates one section
+per mission separated by \texttt{---}.
+
+\subsection{Result Artifacts and Close Gate (DES-036)}
+
+A typed \texttt{mission.Result} artifact pins a closed schema with
+strict YAML decoding, full validation, and append-only sibling
+storage at \fpath{<id>.results.yaml}.
+
+\textbf{Schema.}
+
+\begin{itemize}
+  \item \field{mission} --- mission ID; must equal the target file's
+    mission (DES-036 round 5 trust-symmetry fix)
+  \item \field{round} --- integer; must equal the contract's current
+    round
+  \item \field{author} --- worker handle
+  \item \field{verdict} --- enum: \texttt{pass} $|$ \texttt{fail}
+    $|$ \texttt{escalate}
+  \item \field{confidence} --- float in $[0.0, 1.0]$ excluding NaN
+  \item \field{files\_changed} --- list of \texttt{(path, added,
+    removed)} tuples; every path validated against the contract's
+    write-set via the asymmetric \texttt{pathContainedBy} helper
+  \item \field{evidence} --- non-empty list of \texttt{(name,
+    status)} tuples
+  \item \field{open\_questions} --- optional list of strings
+  \item \field{prose} --- optional human-facing summary; accepts
+    \texttt{$\backslash$n$\backslash$r$\backslash$t} only
+\end{itemize}
+
+\textbf{Asymmetric containment.}  \texttt{pathContainedBy(file,
+entry)} requires the entry's segment list to be a prefix of the
+file's, AND the file to have at least as many segments --- the only
+correct shape for ``the file lives inside the allowlist entry.''
+The earlier symmetric \texttt{pathsOverlap} (correct for DES-032's
+cross-mission conflict check) was caught by all four reviewers as a
+parent-prefix exploit and replaced with the new helper.
+
+\textbf{Close gate.}  \texttt{Store.Close} refuses every terminal
+transition (\texttt{closed}, \texttt{failed}, \texttt{escalated})
+unless \texttt{LoadResults} returns a valid artifact for the
+mission's current round.  The refusal message names the mission,
+the round, and the submission command.  The gate lives at the store
+boundary so CLI and MCP fire it identically --- no override flag.
+
+\textbf{Show payload.}  \texttt{mission.ShowPayload} (in
+\fpath{internal/mission/mission.go}) embeds \texttt{*Contract} so
+the show JSON shape auto-propagates any future Contract field to
+both CLI and MCP without hand-rolling field lists.  Plus
+\field{Results} (always an array, never \texttt{null}) and
+\field{Warnings} (omitempty) so a \texttt{LoadResults} error
+surfaces as structured signal instead of being silently dropped.
+
+\subsection{Append-Only Event Log Reader (DES-037)}
+
+The mission package writes a JSONL event log per mission via a
+private \texttt{appendEvent} helper from DES-031.  Every state
+transition lands as one line: \texttt{create}, \texttt{update},
+\texttt{result}, \texttt{reflect}, \texttt{round\_advanced},
+\texttt{verify}, \texttt{close}.  The writer is frozen ---
+DES-031 round 3 unexported \texttt{AppendEvent} as a deadlock
+footgun, and DES-037 does not re-introduce one.  DES-037 ships the
+\emph{reader}.
+
+\textbf{Public API.}
+\texttt{Store.LoadEvents(missionID) ([]Event, []string, error)} ---
+events in on-disk order, warnings naming any unparseable line
+numbers, error for unrecoverable I/O failures.  The 3-tuple shape
+departs from \texttt{LoadResults} and \texttt{LoadReflections}
+because JSONL degrades per-line by construction --- a single
+corrupt line must not fail the whole read.
+
+\textbf{Design pressure: post-mortem first.}  Show as much of what
+happened as possible, even if the file is partially damaged.
+
+\begin{itemize}
+  \item One corrupt line does not erase the log.  Each line is
+    decoded independently with \texttt{DisallowUnknownFields}
+    (trust-boundary symmetric with reflection and result loaders);
+    a failing line produces a warning while the rest of the file
+    decodes.
+  \item One oversized line does not truncate the tail.
+    \texttt{bufio.Reader.ReadString} replaces \texttt{bufio.Scanner}
+    so a line larger than any fixed cap no longer silently truncates
+    every subsequent line; memory is bounded by the 16 MiB
+    whole-file cap instead.
+  \item One attacker-planted ESC sequence does not reach the
+    operator terminal.  A \texttt{sanitizeWarning} helper walks
+    warning strings rune-by-rune, escaping bytes \texttt{< 0x20}
+    (except tab/space), DEL, and C1 (U+007F--U+009F) while
+    preserving legitimate multi-byte UTF-8.  Sanitization runs at
+    every warning append site in \texttt{decodeEventLog} --- the
+    source --- so CLI, MCP, and the DES-020 formatter all consume
+    clean strings without double-escaping.
+  \item TOCTOU-resistant whole-file cap.  A single-fd \texttt{os.Open}
+    $\to$ \texttt{f.Stat()} $\to$
+    \texttt{io.ReadAll(io.LimitReader(f, maxLogSize+1))} sequence
+    pins the inode so a concurrent writer cannot replace or
+    redirect the file between stat and read; the \texttt{+1}
+    overflow byte turns silent cap-bypass-via-race into a distinct
+    ``grew past cap'' error.
+\end{itemize}
+
+\textbf{Trust boundary.}  Per-line strict decode
+(\texttt{DisallowUnknownFields}), \field{ts} parseability check at
+decode time, \texttt{missionIDPattern} validation at API entry,
+directory rejection via \texttt{info.IsDir}, whole-file size cap at
+16 MiB.  Every defense the Phase 3.4 / 3.6 loaders enforce, the
+Phase 3.7 reader enforces --- and two the siblings don't (line-
+length resilience and attacker-controlled-byte sanitization).
+
+\textbf{Forward-compat for unknown event types.}  Event type strings
+are preserved as opaque during decode.  A future phase
+(\texttt{worker\_spawned}, \texttt{round\_started}, etc.) can emit
+new types without a reader change.  The \texttt{--event <type,list>}
+CLI filter accepts arbitrary strings and simply returns empty if no
+events match --- it does not validate against a closed enum.
+
+\subsection{Evaluator Discipline}
+
+Three Phase 3 invariants together close the ``silent drift'' failure
+modes the architecture documents named:
+
+\begin{enumerate}
+  \item \textbf{Evaluator content drift} (DES-033) --- the verifier
+    content hash gate refuses spawns when the evaluator's identity
+    files have changed since pinning.
+  \item \textbf{Round drift} (DES-034) --- the round-advance gate
+    refuses to begin round N+1 without a reflection for round N
+    and refuses to exceed \field{budget.rounds}.
+  \item \textbf{Worker bias} (DES-035) --- the role-overlap check
+    refuses missions where the worker and evaluator share a role,
+    and the verifier context isolator strips parent transcript and
+    worker scratch from the verifier subagent.
+\end{enumerate}
+
+The mission close gate (DES-036) is the fourth, structural one:
+no terminal transition without a typed result artifact.  The
+event log reader (DES-037) is the post-mortem substrate that lets
+an operator reconstruct what happened when any of the above fired.
+
+% ===================================================================
+\section{Agent Generation}
+% ===================================================================
+
+Generated agent definition files in \fpath{.claude/agents/<handle>.md}
+are produced by \texttt{GenerateAgentFiles()} from ethos identity,
+personality, writing style, role, and team data.  The result is a
+standard Claude Code agent definition that another agent
+(\texttt{Task} or \texttt{Agent} primitive) can spawn directly.
+
+\subsection{Frontmatter}
+
+YAML frontmatter carries:
+
+\begin{itemize}
+  \item \field{name} --- identity handle
+  \item \field{description} --- the opening line of the persona
+    block, suitable for an agent picker
+  \item \field{tools} --- the role's \field{tools} field, transformed
+    into the Claude Code agent tools allowlist
+  \item \field{model} --- the role's \field{model} field
+    (\texttt{opus}, \texttt{sonnet}, \texttt{haiku},
+    \texttt{inherit}, or full \texttt{claude-*} ID); empty means
+    inherit from the parent session
+  \item \field{skills} --- always includes \texttt{baseline-ops}
+    (Phase 2.4) so every generated agent gets the operational
+    discipline subset (Read instead of cat, no commits without
+    permission, scope discipline, security basics)
+  \item \field{hooks} --- role-based PostToolUse hooks (Phase 2.2):
+    implementation roles get \texttt{make check} after every
+    \texttt{Write} or \texttt{Edit}; review-only roles get no
+    hooks because tool restrictions already prevent writes
+\end{itemize}
+
+\subsection{Anti-Responsibility Derivation (Phase 2.1)}
+
+The agent body includes a ``What You Don't Do'' section derived
+from the team collaboration graph.  If \texttt{implementer}
+\texttt{reports\_to} \texttt{coo}, the implementer's generated
+definition includes ``Don't make architectural decisions --- the
+COO handles that.''  If the team has a \texttt{reviewer} and an
+\texttt{implementer}, the reviewer gets ``Don't fix code --- report
+findings for the implementer.''  Anti-responsibilities prevent
+scope creep and enforce the architecture rule that a role is
+defined by its inputs, outputs, and \emph{what it doesn't touch}.
+
+\subsection{Structured Output Format (Phase 2.3)}
+
+Roles with an \field{output\_format} field include the template in
+the agent body as an ``Output Format'' section.  Output formats
+include structured fields (files changed, verdict, confidence,
+open questions) alongside human-readable prose --- the same shape
+the mission contract's \texttt{Result} artifact uses, so worker
+output composes cleanly into a \cmd{ethos mission result}
+submission.
+
+\subsection{Mission Skill (Phase 2.5/2.6)}
+
+The \cmd{/mission} skill (deployed at
+\fpath{\~{}/.claude/skills/mission/SKILL.md}) scaffolds mission-
+shaped delegations interactively:
+
+\begin{enumerate}
+  \item Resolve the agent from the team roster (show available
+    agents, roles, status via the \tool{team} and \tool{identity}
+    MCP tools).
+  \item Build the mission contract: task, inputs, outputs, success
+    criteria, write-set, constraints --- pre-populated from
+    conversation context, presented as confirmable options.
+  \item Check for write-set conflicts with running missions via the
+    \tool{mission} MCP tool's \texttt{list} method (Phase 3.2).
+  \item Spawn the agent via Claude Code's \texttt{Agent} primitive
+    with the structured prompt that includes the mission ID.
+  \item Optionally track the mission in beads.
+\end{enumerate}
+
+The skill sits at the structured layer between CLAUDE.md guidance
+(``delegate to specialists'') and the raw \texttt{Agent} primitive,
+turning mission discipline into a single command instead of an ad
+hoc paragraph.
+
+\subsection{Idempotence}
+
+\texttt{GenerateAgentFiles} is idempotent: a generated file is only
+written when its content differs from the existing file on disk.
+This prevents unnecessary file churn and git noise on every
+\texttt{SessionStart}.  The main agent and human identities are
+skipped --- humans don't get \fpath{.claude/agents} entries, and
+the main agent is whatever the user is currently running as.
+
+% ===================================================================
+\section{Operational Hooks}
+% ===================================================================
+
+Phase 4 deepens the hook system with three additions: working
+context at \texttt{SessionStart}, role-based pre-tool safety
+constraints, and \texttt{PostToolUse} audit logging.  These are
+additive --- they layer onto the existing persona-animation
+infrastructure without changing it.
+
+\subsection{Working Context at SessionStart (Phase 4.1)}
+
+\texttt{HandleSessionStart} emits a \texttt{\#\# Working Context}
+block alongside the persona and team blocks.  Contents:
+
+\begin{itemize}
+  \item Current git branch and short commit
+  \item Uncommitted changes (file count and basic shape)
+  \item Recent issues from the bead store (open beads assigned to
+    the resolved persona)
+  \item Recent missions from \cmd{ethos mission list --status open}
+\end{itemize}
+
+The block is generated server-side in the hook and included in the
+\texttt{additionalContext} payload for the SessionStart event.  No
+network calls, no subprocess spawning beyond what
+\texttt{git status --porcelain} already costs.
+
+\subsection{Role-Based Pre-Tool Safety (Phase 4.2)}
+
+Roles carry an optional \field{safety\_constraints} field --- a
+list of pattern strings that the pre-tool hook reads.  A
+\texttt{reviewer} role denies \texttt{Write}, \texttt{Edit}, and
+\texttt{NotebookEdit}.  A \texttt{researcher} role denies
+destructive \texttt{Bash} patterns (\texttt{rm -rf},
+\texttt{git push --force}).  An \texttt{architect} role denies all
+write tools.
+
+The hook reads the active subagent's role from the session roster,
+loads the role's \field{safety\_constraints}, and refuses the tool
+invocation with a structured error.  Tool restrictions in the
+generated agent's frontmatter (Phase 2.2) are the first line of
+defense; the safety constraints field is the second, enforced even
+when an agent is invoked without a generated definition file.
+
+\subsection{PostToolUse Audit Logging (Phase 4.3)}
+
+\texttt{HandleFormatOutput} (the existing \texttt{PostToolUse} hook
+that produces DES-020 two-channel formatted output) gains an
+optional audit log writer.  Every tool invocation appends a JSON
+line to \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}:
+
+\begin{verbatim}
+{"ts":"2026-04-08T15:23:00Z","tool":"Write","persona":"bwk",
+ "mission":"m-2026-04-08-005","args_summary":"path=internal/foo.go"}
+\end{verbatim}
+
+The audit log is per-session, append-only, and uses the same
+\texttt{flock}-protected write pattern as the mission event log.
+Mission attribution comes from the active session participant's
+ext map.  Like the mission event log, sanitization runs at the
+write site so no attacker-controlled byte reaches a downstream
+consumer.
+
+% ===================================================================
+\section{Cross-Tool Integration}
+% ===================================================================
+
+Ethos is the identity anchor.  Other Punt Labs tools read ethos
+state from the filesystem to configure themselves.  No tool imports
+ethos as a Go library --- the file format is the contract.
+
+\subsection{Vox: Voice Configuration via Extensions}
+
+Vox stores voice configuration in
+\fpath{<handle>.ext/vox.yaml}.  Keys include \field{default\_mood},
+\field{voice\_id}, and \field{session\_context} (a behavioral
+instruction injected into the model's context at SessionStart per
+DES-022).  Vox reads its own namespace; ethos validates the
+namespace structure but never interprets the values.
+
+\subsection{Beadle: Identity-Aware Email}
+
+Beadle reads \fpath{<handle>.ext/beadle.yaml} for IMAP credentials,
+GPG key bindings, and signature blocks.  When an agent
+impersonating the COO sends email, Beadle resolves the active
+identity via \texttt{ethos whoami}, loads the COO's email and GPG
+key from the identity's beadle ext namespace, and signs the message
+with the right key.  The same identity that ships commits as
+\texttt{Claude Agento} signs email as \texttt{claude@punt-labs.com}
+--- one persona, multiple channels.
+
+\subsection{Biff: Identity-Aware Team Messaging}
+
+Biff reads \fpath{<handle>.ext/biff.yaml} for the agent's preferred
+TTY and presence configuration.  Biff's \cmd{/who} and
+\cmd{/finger} commands resolve identities through ethos so a
+broadcast like \cmd{biff write @bwk ``rebase done''} routes to the
+session where \texttt{bwk} is currently active.  Biff also reads
+the team registry under \fpath{teams/} for collaboration graphs ---
+the same data that drives anti-responsibility derivation in
+generated agent files.
+
+\subsection{Pattern: Identity-Aware Channel Binding}
+
+The cross-tool pattern is \emph{identity-aware channel binding}:
+the identity is durable, the channel binding is the verb (sends
+email, signs commits, broadcasts a message, speaks aloud), and
+ethos owns the binding's storage.  When the same agent shows up in
+five tools, the user sees one persona --- the same name, the same
+voice, the same writing style, the same email address --- because
+each tool reads the same identity record.  This is the operational
+half of the ``AI agents as first-class engineering citizens''
+vision.
 
 % ===================================================================
 \section{Storage Layout}
@@ -950,11 +1754,31 @@ Global roles       & \fpath{\~{}/.punt-labs/ethos/roles/<slug>.yaml}
                    & No \\
 Global teams       & \fpath{\~{}/.punt-labs/ethos/teams/<slug>.yaml}
                    & No \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Sessions and missions
+  (operational state):}} \\
+\midrule
 Sessions           & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
                    & No \\
 Session locks      & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
                    & No \\
 Current session    & \fpath{\~{}/.punt-labs/ethos/sessions/current/<pid>}
+                   & No \\
+Session audit log  & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
+                   & No \\
+Mission contracts  & \fpath{\~{}/.punt-labs/ethos/missions/<id>.yaml}
+                   & No \\
+Mission event logs & \fpath{\~{}/.punt-labs/ethos/missions/<id>.jsonl}
+                   & No \\
+Mission reflections & \fpath{\~{}/.punt-labs/ethos/missions/<id>.reflections.yaml}
+                   & No \\
+Mission results    & \fpath{\~{}/.punt-labs/ethos/missions/<id>.results.yaml}
+                   & No \\
+Mission locks      & \fpath{\~{}/.punt-labs/ethos/missions/<id>.lock}
+                   & No \\
+Mission counter    & \fpath{\~{}/.punt-labs/ethos/missions/.counter-<date>}
+                   & No \\
+Mission create lock & \fpath{\~{}/.punt-labs/ethos/missions/.create.lock}
                    & No \\
 Generated agents   & \fpath{.claude/agents/<handle>.md}
                    & No \\
@@ -965,8 +1789,8 @@ Generated agents   & \fpath{.claude/agents/<handle>.md}
 All user-global state lives under \fpath{\~{}/.punt-labs/ethos/}.
 Repo-scoped state lives under \fpath{.punt-labs/ethos/} in the
 repository root (typically a git submodule of the team registry).
-The repo config file \fpath{.punt-labs/ethos.yaml} lives one level
-up from the submodule and is tracked in the consuming repository.
+Mission state is operational (per-machine, short-lived, not
+configuration) and lives under the global root.
 
 % ===================================================================
 \section{CLI Surface}
@@ -1057,6 +1881,65 @@ Three parallel command groups: \cmd{talent}, \cmd{personality},
 \end{tabular}
 \end{center}
 
+\subsection{Mission Commands}
+
+\begin{center}
+\begin{tabular}{@{}lp{6.5cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{mission create -f <yaml>}      & Create a mission contract.
+                                       Strict YAML decode; runs
+                                       write-set conflict scan,
+                                       role-overlap check, and
+                                       evaluator hash computation. \\
+\cmd{mission show <id-or-prefix>}   & Show contract, current round,
+                                       reflection log, and result
+                                       log.  \cmd{--json} emits
+                                       \texttt{ShowPayload}. \\
+\cmd{mission list}                  & List missions.  \cmd{--status
+                                       open$|$closed$|$failed$|$escalated$|$all}
+                                       (default: open). \\
+\cmd{mission close <id>}            & Transition to terminal status.
+                                       Refused without a valid
+                                       result artifact for the
+                                       current round. \\
+\cmd{mission reflect <id> -f <yaml>} & Submit a typed reflection
+                                       for the current round.
+                                       Append-only. \\
+\cmd{mission advance <id>}          & Bump current round.  Refused
+                                       without a non-terminal
+                                       reflection for the current
+                                       round, and refused on budget
+                                       exhaustion. \\
+\cmd{mission reflections <id>}      & Print the round-by-round
+                                       reflection log. \\
+\cmd{mission result <id> -f <yaml>}  & Submit a typed result for the
+                                       current round.  Append-only.
+                                       Validates files\_changed
+                                       against the contract
+                                       write-set. \\
+\cmd{mission results <id>}          & Print the round-by-round
+                                       result log. \\
+\cmd{mission log <id>}              & Print the JSONL event log
+                                       in on-disk order.
+                                       \cmd{--event <type,list>},
+                                       \cmd{--since <RFC3339>}.
+                                       Warnings appended on
+                                       partial decode. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The mission subcommands form the operational interface to Phase 3
+discipline.  Read-only subcommands (\cmd{show}, \cmd{list},
+\cmd{reflections}, \cmd{results}, \cmd{log}) use the bare
+\texttt{missionStore} helper.  \cmd{mission create} uses
+\texttt{missionStoreForCreate}, which constructs a live
+\texttt{RoleLister} and \texttt{HashSources} so the role-overlap
+check (DES-035) and the evaluator content hash (DES-033) fire on
+the production path.
+
 \subsection{Extension Commands}
 
 \begin{center}
@@ -1108,10 +1991,14 @@ Three parallel command groups: \cmd{talent}, \cmd{personality},
 \midrule
 \cmd{hook session-start}    & SessionStart hook handler. \\
 \cmd{hook session-end}      & SessionEnd hook handler. \\
-\cmd{hook subagent-start}   & SubagentStart hook handler. \\
+\cmd{hook subagent-start}   & SubagentStart hook handler.
+                              Includes the DES-033 verifier hash
+                              gate and the DES-035 verifier
+                              context isolator. \\
 \cmd{hook subagent-stop}    & SubagentStop hook handler. \\
 \cmd{hook pre-compact}      & PreCompact hook handler. \\
-\cmd{hook format-output}    & PostToolUse output formatter. \\
+\cmd{hook format-output}    & PostToolUse output formatter and
+                              (Phase 4.3) audit log writer. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1128,14 +2015,10 @@ invoked by Claude Code hook configuration, not by users.
 \midrule
 \cmd{version}              & Print version string. \\
 \cmd{resolve-agent}        & Print the default agent handle from repo
-                             config (\fpath{.punt-labs/ethos.yaml}).
-                             Hidden from help output. \\
-\cmd{doctor}               & Check installation health (identity
-                             directory, human identity, default agent,
-                             duplicate fields). \\
+                             config. \\
+\cmd{doctor}               & Check installation health. \\
 \cmd{serve}                & Start MCP server (stdio transport). \\
-\cmd{completion <shell>}   & Generate shell completion script
-                             (bash, zsh, fish). \\
+\cmd{completion <shell>}   & Generate shell completion script. \\
 \cmd{uninstall [--purge]}  & Remove plugin; \cmd{--purge} also
                              removes binary and data. \\
 \bottomrule
@@ -1147,15 +2030,15 @@ invoked by Claude Code hook configuration, not by users.
 % ===================================================================
 
 \texttt{ethos serve} starts a stdio-transport MCP server that
-registers up to 9~tools via \texttt{Handler.RegisterTools()}.
-The role and team tools are registered only when their stores are
-configured; in a full deployment (the normal case), all 9 are
-present.  Each tool
+registers up to 10~tools via \texttt{Handler.RegisterTools()}.
+The role, team, and mission tools are registered when their stores
+are configured; in a full deployment all 10 are present.  Each tool
 is a consolidated endpoint that accepts a \field{method} parameter
 for dispatch.  The \texttt{Handler} struct holds injected stores:
 \texttt{identity.IdentityStore}, \texttt{session.Store},
 \texttt{attribute.Store} (talents, personalities, writing styles),
-\texttt{role.LayeredStore}, and \texttt{team.LayeredStore}.
+\texttt{role.LayeredStore}, \texttt{team.LayeredStore}, and
+\texttt{mission.Store}.
 
 \subsection{Identity Tool}
 
@@ -1206,24 +2089,9 @@ for dispatch.  The \texttt{Handler} struct holds injected stores:
 \subsection{Attribute Tools}
 
 Three tools --- \tool{talent}, \tool{personality},
-\tool{writing\_style} --- each with:
-
-\begin{center}
-\begin{tabular}{@{}lp{6cm}@{}}
-\toprule
-\textbf{Method} & \textbf{Description} \\
-\midrule
-\texttt{create}  & Create a new attribute \texttt{.md} file. \\
-\texttt{list}    & List all slugs from both stores. \\
-\texttt{show}    & Read attribute content. \\
-\texttt{delete}  & Remove the \texttt{.md} file. \\
-\texttt{set}     & Bind slug to identity (personality, writing
-                   style). \\
-\texttt{add}     & Add slug to identity (talent only). \\
-\texttt{remove}  & Remove slug from identity (talent only). \\
-\bottomrule
-\end{tabular}
-\end{center}
+\tool{writing\_style} --- each with \texttt{create}, \texttt{list},
+\texttt{show}, \texttt{delete}, \texttt{set}, \texttt{add},
+\texttt{remove}.
 
 \subsection{Role Tool}
 
@@ -1259,6 +2127,43 @@ Three tools --- \tool{talent}, \tool{personality},
 \end{tabular}
 \end{center}
 
+\subsection{Mission Tool}
+
+\begin{center}
+\begin{tabular}{@{}lp{6.5cm}@{}}
+\toprule
+\textbf{Method} & \textbf{Description} \\
+\midrule
+\texttt{create}      & Create a contract from a YAML payload.
+                       Symmetric with the CLI \cmd{create}: same
+                       strict decode, same write-set conflict scan,
+                       same role-overlap check, same hash
+                       computation. \\
+\texttt{show}        & Load contract, results, and warnings as a
+                       \texttt{ShowPayload}. \\
+\texttt{list}        & List missions filtered by status. \\
+\texttt{close}       & Terminal transition.  Refused without a
+                       valid result artifact for the current
+                       round. \\
+\texttt{reflect}     & Append a typed reflection. \\
+\texttt{reflections} & Read the round-by-round reflection log. \\
+\texttt{advance}     & Bump current round.  Same gate as the CLI
+                       \cmd{advance}. \\
+\texttt{result}      & Append a typed result.  Same validation as
+                       the CLI \cmd{result}. \\
+\texttt{results}     & Read the round-by-round result log. \\
+\texttt{log}         & Read the JSONL event log.  \field{event} and
+                       \field{since} filters; wrapped JSON envelope
+                       \texttt{\{events: [...], warnings: [...]\}}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The MCP \tool{mission} tool is the symmetric counterpart of the CLI
+\cmd{mission} subcommands.  Every gate fires identically regardless
+of which surface called the store: an MCP caller cannot bypass the
+write-set conflict scan, the evaluator hash, or the close gate.
+
 \subsection{Doctor Tool}
 
 Standalone admin tool with no methods.  Runs all health checks
@@ -1267,12 +2172,15 @@ fields) and returns a formatted status table.
 
 \subsection{Output Formatting}
 
-The \texttt{FormatOutput} hook provides two-channel display for
-every MCP tool response: a compact summary in
+The \texttt{FormatOutput} hook (DES-020) provides two-channel
+display for every MCP tool response: a compact summary in
 \texttt{updatedMCPToolOutput} and full data in
 \texttt{additionalContext}.  Each tool has a dedicated formatter
-that produces columnar tables (identity list, session roster,
-role/team details) or structured summaries.
+in \fpath{internal/hook/format\_output.go} that produces columnar
+tables (identity list, session roster, role/team details, mission
+list, reflection log, result log, event log) or structured
+summaries.  New tools must ship with a formatter before the MCP
+tool is registered --- DES-020 makes this a hard rule.
 
 % ===================================================================
 \section{Design Invariants}
@@ -1283,8 +2191,7 @@ all operations:
 
 \begin{enumerate}
   \item \textbf{Sidecar contract.}  No consumer imports ethos.
-    The contract is file paths and YAML formats.  Upgrading ethos
-    never forces consumer upgrades.
+    The contract is file paths and YAML formats.
 
   \item \textbf{Unified schema.}  Humans and agents use the same
     \texttt{Identity} struct.  The \field{kind} field is the only
@@ -1301,32 +2208,29 @@ all operations:
   \item \textbf{Atomic roster writes.}  Roster files are written to
     a temp file, then renamed.  No reader sees a partial roster.
 
-  \item \textbf{Flock concurrency.}  All roster mutations acquire
-    \texttt{flock(LOCK\_EX)} on a per-session lock file.  No daemon,
-    no database, no race conditions on concurrent subagent hooks.
-    Identity updates also use flock on per-identity lock files.
+  \item \textbf{Flock concurrency.}  All roster, identity, and
+    mission mutations acquire \texttt{flock(LOCK\_EX)} on a
+    per-target lock file.  No daemon, no database, no race
+    conditions on concurrent hooks or concurrent CLI invocations.
 
   \item \textbf{Extension isolation.}  Each consumer's extension
     data lives in its own YAML file.  Concurrent writes by different
-    tools cannot corrupt each other's data.  Extensions always live
-    in global, even for repo-local identities.
+    tools cannot corrupt each other's data.
 
   \item \textbf{Process tree caching.}  \texttt{FindClaudePID()}
     caches the result for the process lifetime via
-    \texttt{sync.Once}.  The Claude ancestor PID does not change
-    during a session.
+    \texttt{sync.Once}.
 
   \item \textbf{No shell execution.}  All subprocess invocations use
     argument lists, never shell interpretation.
 
   \item \textbf{Depth-bounded tree walk.}  The process tree walk
-    caps at 10~iterations to prevent infinite loops in degenerate
-    process tables.
+    caps at 10~iterations.
 
   \item \textbf{Layered resolution.}  Repo-local takes priority for
-    identity, attribute, role, and team lookup.  Global is the
-    fallback.  Extensions are always global.  This mirrors Git's
-    resolution: local config overrides global config.
+    identity, attribute, role, and team lookup.  Extensions are
+    always global.  Mission state is always global (operational,
+    not configuration).
 
   \item \textbf{Referential integrity.}  Teams enforce that every
     member's identity and role exist at creation and mutation time.
@@ -1334,8 +2238,47 @@ all operations:
     Collaborations must reference roles filled by current members.
 
   \item \textbf{Idempotent agent generation.}  Generated agent files
-    are only written when their content differs from the existing file
-    on disk.  This prevents unnecessary file churn and git noise.
+    are only written when their content differs from the existing
+    file on disk.
+
+  \item \textbf{Mission contract totality} (DES-031).  Every
+    contract has a non-empty write-set, a non-empty success
+    criteria list, an evaluator handle pinned with a server-
+    controlled timestamp, and a budget in $[1, 10]$.  Every
+    mission ID matches \verb|^m-\d{4}-\d{2}-\d{2}-\d{3}$|.
+
+  \item \textbf{Append-only event log} (DES-031, DES-037).  The
+    JSONL event log is the source of truth for what happened to a
+    mission.  Every state transition lands as one line under the
+    per-mission flock with \texttt{O\_APPEND}.  The writer is
+    private and frozen; the reader degrades line-by-line and
+    sanitizes warning strings at source.
+
+  \item \textbf{Trust-boundary symmetry} (DES-031, DES-036, DES-037).
+    Every gate that fires on the write path also fires on the read
+    path.  \texttt{KnownFields(true)} on every YAML decode;
+    \texttt{DisallowUnknownFields} on every JSONL decode;
+    \texttt{missionIDPattern} validation at API entry.
+
+  \item \textbf{Frozen evaluator content hash} (DES-033).  The
+    evaluator's personality, writing style, talents, and team-scoped
+    role bindings are content-hashed at mission create time and
+    re-hashed at every verifier subagent spawn.  Any drift refuses
+    the spawn.
+
+  \item \textbf{Bounded rounds} (DES-034).  \field{Budget.Rounds}
+    is a hard cap.  No round N+1 begins without a non-terminal
+    reflection for round N.  No silent seventh round.
+
+  \item \textbf{Verifier independence} (DES-035).  Worker and
+    evaluator handles cannot share a team-scoped role binding.
+    Verifier subagents receive only the mission contract,
+    verification criteria, and file allowlist --- the persona block,
+    parent transcript, and worker scratch are excluded.
+
+  \item \textbf{Close gate totality} (DES-036).  No mission
+    transitions to a terminal status without a valid result
+    artifact for the current round.  No override flag.
 \end{enumerate}
 
 % ===================================================================
@@ -1346,8 +2289,8 @@ all operations:
 
 \begin{itemize}
   \item \textbf{User-global state}: \fpath{\~{}/.punt-labs/ethos/} ---
-    identities, extensions, sessions.  Standard user-mode file
-    permissions.
+    identities, extensions, sessions, missions.  Standard user-mode
+    file permissions.
   \item \textbf{Repo-local state}: \fpath{.punt-labs/ethos/} ---
     identities, attributes, roles, teams, agents.  Git-tracked;
     visible to collaborators.
@@ -1362,8 +2305,7 @@ all operations:
   \item \textbf{MCP}: stdio transport.  No network listener.
   \item \textbf{Native proc reading}: \texttt{/proc/<pid>/stat} on
     Linux, \texttt{sysctl kern.proc.pid} on macOS.  Read-only.
-    Signal~0 for process liveness checks (no side effects).  No
-    subprocess spawning for process table queries.
+    Signal~0 for process liveness checks (no side effects).
 \end{itemize}
 
 \subsection{Trust Boundary}
@@ -1373,14 +2315,59 @@ all operations:
     verify that the email, GitHub handle, or voice binding is
     authentic.  Verification is the responsibility of consumers
     (Beadle verifies PGP, Biff verifies GitHub tokens).
-  \item \textbf{Extension data is opaque.}  Ethos enforces structural
-    constraints (namespace format, key format, size limits) but does
-    not validate or interpret values.
-  \item \textbf{Path traversal prevention.}  Attribute slugs are
-    validated against a strict pattern and resolved paths are
-    checked to remain within the target directory.  Handle-based
-    file paths use \texttt{filepath.Base} to prevent directory
-    escape.
+  \item \textbf{Extension data is opaque.}  Ethos enforces
+    structural constraints (namespace format, key format, size
+    limits) but does not validate or interpret values.
+  \item \textbf{Path traversal prevention.}  Attribute slugs and
+    mission IDs are validated against strict patterns and resolved
+    paths are checked to remain within the target directory.
+    Handle-based file paths use \texttt{filepath.Base} to prevent
+    directory escape.
+\end{itemize}
+
+\subsection{Phase 3 Trust Boundaries}
+
+The mission primitive adds a small number of new trust boundaries.
+Each is enforced symmetrically on read and write paths.
+
+\begin{itemize}
+  \item \textbf{Write-set admission} (DES-032).  A new mission whose
+    \field{write\_set} segment-prefix-overlaps any open mission's
+    \field{write\_set} is rejected at \texttt{Store.Create}.  The
+    overlap normalization filters empty segments
+    (\texttt{internal//foo}) and single-dot segments
+    (\texttt{./internal/foo}) so the equivalence class is closed.
+  \item \textbf{Strict on-disk YAML decode} (DES-031).
+    \texttt{Store.Load} and \texttt{Store.loadLocked} call
+    \texttt{Validate()} for defense in depth on reads.  Both the
+    CLI and MCP create paths and the load path use
+    \texttt{KnownFields(true)} so an attacker with local write
+    access cannot smuggle extra fields.
+  \item \textbf{Control-byte sanitization} (DES-031, DES-037).
+    Identity handles, slugs, and mission IDs reject ASCII control
+    bytes.  Mission write-set entries reject \texttt{..}, absolute
+    paths, drive letters, UNC, null bytes, and C0 control
+    characters.  The event log reader sanitizes warning strings at
+    source so no attacker-controlled byte reaches operator
+    terminals or MCP consumers.
+  \item \textbf{Mission ID pattern validation} (DES-037).  Every
+    mission loader validates the mission ID against
+    \verb|^m-\d{4}-\d{2}-\d{2}-\d{3}$| at API entry, before any
+    \texttt{filepath.Base} collapse, so raw attacker-controlled
+    bytes never reach a downstream \texttt{*fs.PathError} string.
+  \item \textbf{Symmetric file-trust on results and events} (DES-036
+    round 5, DES-037).  Both \texttt{LoadResults} and
+    \texttt{LoadEvents} cross-check the on-disk mission identity
+    against the requested ID --- the same trust-boundary symmetry
+    DES-031 round 3 introduced for the contract itself.
+  \item \textbf{Symlink follow weakness (filed as
+    \texttt{ethos-jjm}).}  All four mission loaders
+    (\texttt{LoadEvents}, \texttt{LoadReflections},
+    \texttt{LoadResults}, \texttt{Store.Load}) currently follow
+    symlinks via \texttt{os.ReadFile} or \texttt{os.Open} without
+    checking whether the resolved target is inside the missions
+    directory.  Fixed in a coordinated change across all four
+    loaders.
 \end{itemize}
 
 % ===================================================================
@@ -1392,39 +2379,75 @@ inspection and testing:
 
 \begin{enumerate}
   \item \textbf{Resolution totality}: \texttt{Resolve()} always
-    returns a handle or an error.  There is no silent empty-string
-    fallback.
+    returns a handle or an error.  No silent empty-string fallback.
 
   \item \textbf{Extension namespace isolation}: concurrent writes by
-    different tools target different files.  No merge conflicts.
+    different tools target different files.
 
   \item \textbf{Session liveness}: \texttt{Purge()} uses process
     signal~0 for numeric PIDs and age-based TTL for non-numeric IDs.
-    \texttt{PurgeCurrent()} cleans stale PID-keyed files.  Every
-    stale roster is eventually cleaned up.
 
   \item \textbf{Hook-driven lifecycle}: the session roster is fully
-    managed by six Claude Code hook events.  No polling, no daemon,
-    no manual intervention.
+    managed by Claude Code hook events.  No polling, no daemon, no
+    manual intervention.
 
   \item \textbf{Cold start performance}: Go binary with no runtime
     dependencies.  $\sim$10\,ms cold start measured on Apple~M2.
-    Hooks are invisible to the user.
 
   \item \textbf{Store injectability}: all CRUD operations accept a
-    store with a configurable root path (or an
-    \texttt{IdentityStore} interface).  Tests use
+    store with a configurable root path.  Tests use
     \texttt{t.TempDir()}.  No hardcoded \texttt{\$HOME}.
 
-  \item \textbf{Persona survivability}: the \texttt{PreCompact} hook
-    re-injects the full persona block, extension context, and team
-    context before context compaction.  Behavioral instructions are
-    never lost to compaction.
+  \item \textbf{Persona survivability}: \texttt{PreCompact} re-injects
+    the full persona block, extension context, and team context.
 
-  \item \textbf{Team integrity}: Z-spec invariants (identity
-    existence, role existence, no duplicates, collaboration
-    validity) are enforced on every write operation.  A team is
-    never persisted in an invalid state.
+  \item \textbf{Team integrity}: Z-spec invariants are enforced on
+    every team write operation.  A team is never persisted in an
+    invalid state.
+
+  \item \textbf{Mission contract totality} (DES-031): every contract
+    that survives \texttt{Validate()} has a non-empty write-set, a
+    non-empty success-criteria list, a pinned evaluator, and a
+    budget in $[1, 10]$.
+
+  \item \textbf{Event log append-only guarantee} (DES-031, DES-037):
+    every state transition appends one line under the per-mission
+    flock.  Concurrent writers cannot interleave because the lock
+    serializes them; the writer is private and unexported so no
+    external caller can deadlock by appending from inside another
+    locked block.
+
+  \item \textbf{Close gate totality} (DES-036): no mission
+    transitions to a terminal status without a valid result
+    artifact for the current round.  This holds for CLI and MCP
+    callers identically because the gate lives at the store
+    boundary.
+
+  \item \textbf{Evaluator reproducibility} (DES-033): two verifier
+    spawns of the same evaluator handle against the same identity
+    files compute the same content hash.  Hash inputs use byte-
+    length prefixes (not rune counts) and ASCII control-byte
+    separators that ethos identity validation rejects from handles
+    and slugs, so no field-boundary collision is reachable from
+    legal identity content.
+
+  \item \textbf{Round budget enforceability} (DES-034): no round
+    N+1 begins without a non-terminal reflection for round N.  The
+    advance gate is the single point of enforcement; an operator
+    cannot bypass it by editing the contract on disk because
+    \texttt{Validate()} re-fires on every load.
+
+  \item \textbf{Verifier independence} (DES-035): a worker handle
+    and an evaluator handle that share a team-scoped role under
+    canonicalization cannot be paired in a single mission.  The
+    verifier subagent receives no parent transcript and no worker
+    scratch; the persona block is replaced by a structured
+    isolation block.
+
+  \item \textbf{Post-mortem readability} (DES-037): the JSONL
+    event log reader returns every parseable line plus a
+    line-numbered warnings list, even when the file is partially
+    damaged or contains attacker-planted control sequences.
 \end{enumerate}
 
 \end{document}

@@ -2,18 +2,105 @@
 
 Where ethos is going. Organized into phases that build on each other.
 
+## Current Status (2026-04-09)
+
+Ethos is at **v3.0**. Two of five roadmap phases are complete.
+
+| Phase | Status | Summary |
+|---|---|---|
+| **Phase 1 — Batteries Included** | SHIPPED | 10 starter talents, 6 starter roles, baseline-ops skill, model field on Role |
+| **Phase 2 — Production-Quality Agents** | PLANNED | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill (beads `ethos-9ai.1`–`9ai.7`) |
+| **Phase 3 — Workflow Primitives** | **SHIPPED** | All 7 primitives: mission contract, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log reader (beads `ethos-07m.5`–`07m.11`, ADRs DES-031 through DES-037) |
+| **Phase 4 — Operational Excellence** | PLANNED | SessionStart working context, role-based pre-tool safety, audit logging (beads `ethos-gcq.1`–`gcq.3`) |
+| **Phase 5 — Ecosystem** | FUTURE | Starter team templates, agent marketplace |
+
+Phase 3 shipped 2026-04-08 on PR #184, merge `c16715f`. The four
+architecture rules from `~/Documents/agents-architecture.tex` are
+runtime-enforced for the first time in the project's history. See
+DES-037 for the Phase 3.7 ADR and the Phase 3 completion narrative.
+
+## What's next: `ethos-9ai.5` — the `/mission` skill MVP
+
+Phase 3 built the rails. `ethos-9ai.5` puts a train on them. The
+mission primitive is in production, but there is no user-facing
+interface to drive it — every mission contract today is a 281–393
+line markdown file the leader writes by hand and pastes into a
+delegation prompt. The `/mission` skill closes that gap: it
+scaffolds mission contracts from team data, checks for write-set
+conflicts with running missions, and spawns workers via the
+existing primitive. Without it, Phase 3 is impressive plumbing
+without a faucet.
+
+**Why `9ai.5` specifically is the strategic unlock:**
+
+1. **It validates the Phase 3 abstractions.** Until an agent uses
+   the `/mission` skill end-to-end to drive a real workflow, we do
+   not know whether the abstractions Phase 3 built are usable. The
+   skill is the proof point. If the abstractions are wrong, we find
+   out building `9ai.5` — not after building `9ai.1`–`9ai.4` on top
+   of them.
+
+2. **It is the smallest meaningful step.** The MVP shape is a pure
+   markdown skill file at `~/.claude/skills/mission/SKILL.md` — no
+   Go code required. Phase A from
+   [`docs/mission-skill-design.md`](mission-skill-design.md) is
+   self-contained and can ship in a single cycle.
+
+3. **It tests our own dogfooding.** Phase 3.7's 6-round cycle
+   exposed friction in the manual contract pattern every round.
+   The skill is the user-facing fix for that friction.
+
+4. **It unblocks the rest of Phase 2.** Beads `9ai.1` through
+   `9ai.4` generate better agents that USE the mission primitive.
+   They need the skill in place first so the workflow they
+   generate has somewhere to land.
+
+5. **It maps to the three-pillar vision.** Identity (shipped),
+   workflow (shipped), integration (next). The `/mission` skill is
+   the first deliverable on the integration pillar — it is what
+   makes the workflow primitive accessible, not just available.
+
+### Recommended sequence
+
+| # | Bead | What | Phase | Effort |
+|---|---|---|---|---|
+| 1 | **`ethos-9ai.5`** | `/mission` skill MVP (Phase A: skill file, no Go) | 2.6 | Small |
+| 2 | `ethos-9ai.4` | Baseline-ops skill injection in generated agents | 2.4 | Trivial |
+| 3 | `ethos-9ai.1` | Anti-responsibility generation from team graph | 2.1 | Medium |
+| 4 | `ethos-9ai.2` | Role-based hooks in generated agent frontmatter | 2.2 | Medium |
+| 5 | `ethos-9ai.3` | `output_format` field on Role | 2.3 | Small |
+| — | `ethos-jjm` | Symlink hardening across all 4 mission loaders (Phase 3 follow-up, parallel — security debt closure) | 3 | Small |
+| — | `ethos-56a` | Investigate Agent `isolation:worktree` regression (parallel — DX tax: 6 incidents in Phase 3.7 alone) | ops | Unknown |
+| — | `ethos-9ai.6`, `.7` | `GenerateAgentFiles` error-handling fixes | 2 | Cleanup |
+| — | Phase 4 hooks (`ethos-gcq.1`–`.3`) | After Phase 2 ships | 4 | — |
+| — | Cross-tool integration (`ethos-wb4`, `ethos-g2f`) | After Phase 2 + Phase 4 ship | Integration | High coordination |
+
+Cross-tool integration (agents with team messaging via biff, agents
+with email via beadle) is deliberately sequenced last because it
+requires coordinated changes across multiple repos and should wait
+until ethos itself is solidly anchored. Call this Phase 5 work in
+everything but name.
+
 ## Context
 
-Ethos v2.6.1 ships the **mechanism** for identity binding: identities,
-personalities, writing styles, talents, roles, teams, sessions, persona
-animation, agent file generation, extension session context. The
-architecture is sound.
+Ethos v2.6.1 shipped the **mechanism** for identity binding:
+identities, personalities, writing styles, talents, roles, teams,
+sessions, persona animation, agent file generation, extension
+session context. Phase 3 (v2.7–v3.0) added the **workflow primitive
+layer** on top: typed mission contracts, runtime-enforced
+write-set admission, frozen evaluators, bounded rounds, verifier
+isolation, typed result artifacts, append-only event log.
 
-What's missing is **content**, **workflow**, and **delegation
-discipline**. The directories are empty. The generated agents are
-functional but minimal. The development workflow is manual and
-inconsistent. There is no structured model for how leaders delegate
-to agents.
+What is missing is **content integration** (Phase 2), **operational
+hooks** (Phase 4), and **cross-tool identity binding**
+(ethos+biff, ethos+beadle). Generated agents are functional but
+minimal. The development workflow is manual in the seams between
+CLAUDE.md guidance and the Phase 3 primitives. Agents are not yet
+first-class participants in team messaging or email.
+
+The sections below describe each phase in detail, preserved as the
+source of truth for phase definitions, evidence, and delivery
+notes.
 
 ### Three-Layer Model
 
@@ -304,7 +391,11 @@ specification including flow, contract format, and examples.
 
 ---
 
-## Phase 3: Workflow Primitives
+## Phase 3: Workflow Primitives (SHIPPED 2026-04-08)
+
+**Status**: Complete. All 7 primitives shipped across PRs #176–#184
+between 2026-04-07 and 2026-04-08. Settled ADRs: DES-031 through
+DES-037. Beads `ethos-07m.5` through `ethos-07m.11` all closed.
 
 Build the structured workflow primitives that turn ethos identities and
 roles into runtime contracts. The source material is `agents-architecture.tex`

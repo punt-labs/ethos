@@ -1,5 +1,18 @@
 # Build Plan: Identity Resolution — DES-011
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes the implementation work for DES-011 (identity resolution
+> chain: iam → git → OS user). That feature shipped; the current
+> implementation is documented in [`architecture.tex`](architecture.tex)
+> under Identity Resolution, and DES-011 is SETTLED in
+> [`../DESIGN.md`](../DESIGN.md).
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 ## Goal
 
 Replace the global active identity file with environment-based human
