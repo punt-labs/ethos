@@ -99,9 +99,9 @@ The body has five sections, assembled in this order:
 
 **3. Working Style.** (hand-written) Operational methodology -- how this agent approaches work. This is the primary hand-written section. Covers workflow, tool preferences, testing approach, verification habits.
 
-**4. What You Do.** (generated from role responsibilities) Derived from role responsibilities. Concrete list of what the agent owns.
+**4. Responsibilities.** (generated from role responsibilities) Rendered as a `## Responsibilities` section. Concrete list of what the agent owns, one bullet per entry in the role's `responsibilities` list.
 
-**5. What You Don't Do.** (hand-written, future: generated from collaboration graph) Explicit scope boundaries. See Anti-Responsibilities below.
+**5. What You Don't Do.** (generated from the team graph's `reports_to` edges) Explicit scope boundaries. See Anti-Responsibilities below.
 
 Example (from `bwk.md`):
 
@@ -126,50 +126,72 @@ From *The Practice of Programming* (Kernighan & Pike):
 - `make check` must pass before you consider anything done
 - Race detection mandatory (`-race` flag)
 
-## What You Do
+## Responsibilities
 
-- Implement Go packages: structs, interfaces, functions, tests
-- Write clean, idiomatic Go following the project's standards in CLAUDE.md
-- Focus on correctness first, then performance if needed
+- Go package implementation with tests
+- code review for Go projects
+- adherence to punt-kit/standards/go.md
 
 ## What You Don't Do
 
-- Don't make architectural decisions -- those come from your spec
-- Don't modify files outside your assigned scope
-- Don't skip tests
-- Don't add features not in the spec
+You report to coo. These are not yours:
+
+- execution quality and velocity across all engineering (coo)
+- sub-agent delegation and review (coo)
+- release management (coo)
+- operational decisions (coo)
+
+Talents: engineering
 ```
 
 ## Anti-Responsibilities
 
-Every agent should explicitly state what it does not do. Without this, agents drift into adjacent domains. The pattern is: "Don't [action] -- [who handles it instead]."
+Every agent has an explicit list of things it does not do. These are
+derived mechanically from the team graph: for each `reports_to` edge
+from the agent's role to a target role, the target role's
+`responsibilities` are listed in the generated `## What You Don't Do`
+section with parenthetical attribution to the target.
 
-Examples by agent type:
+The shape is fixed:
 
-**Implementation agents** (bwk, rmh, adb):
+- A section heading `## What You Don't Do` with a blank line below it
+- A preamble line naming the target role(s) the agent reports to,
+  using Oxford comma for three or more: `You report to coo, ceo, and
+  cto. These are not yours:`
+- A flat bullet list of the target roles' responsibilities with
+  parenthetical attribution on every bullet, regardless of how many
+  targets contributed
 
-- Don't make architectural decisions -- those come from your spec
-- Don't modify files outside your assigned scope
-- Don't add features not in the spec
+Degraded cases:
 
-**CLI agents** (mdm):
+- **Zero `reports_to` edges from the agent's role** — no section is
+  emitted. The file ends at `## Responsibilities` (or wherever the
+  previous section was).
+- **All target roles have empty `responsibilities` lists** — no section
+  is emitted.
+- **Some targets populated, some empty** — section is emitted; the
+  preamble names only the targets that contributed bullets.
+- **Missing target role** (team graph references a role that fails to
+  load) — the missing target's bullets are absent and a stderr warning
+  is emitted at generation time; other targets still contribute.
 
-- Don't add interactive prompts unless the spec requires them
-- Don't make architectural decisions -- those come from your spec
+Scope limits in the current MVP:
 
-**Review agents** (djb):
+- Only the `reports_to` edge type contributes anti-responsibilities.
+  `collaborates_with` and `delegates_to` edges from the agent's role
+  produce a stderr warning and no bullets. Their semantics (peer,
+  downward) deserve different phrasing and are deferred to future beads.
+- No schema change: `Role` has no `anti_responsibilities` field. The
+  derivation reads the team graph and the target roles' own
+  `responsibilities` lists.
+- No pattern matching, LLM rewriting, or verb-phrase transformation.
+  Responsibility strings are emitted verbatim (after whitespace
+  normalization: leading/trailing whitespace is trimmed, embedded
+  newlines collapse to spaces, empty-after-trim strings are skipped).
 
-- Don't fix code -- report findings for the implementation agent
-- Don't make architectural decisions -- present findings with evidence
-
-*These are illustrative patterns. Actual agent definitions may vary.*
-
-**Research agents**:
-
-- Don't write code -- return findings for delegation
-- Don't make design decisions -- present options with tradeoffs
-
-Anti-responsibilities serve two purposes: they prevent the agent from exceeding its scope, and they tell the delegator which agent handles the excluded work.
+Anti-responsibilities serve two purposes: they prevent the agent from
+exceeding its scope, and they tell the agent which role handles the
+excluded work so it can escalate rather than improvise.
 
 ## Tool Restrictions
 

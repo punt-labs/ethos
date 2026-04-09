@@ -1536,14 +1536,50 @@ YAML frontmatter carries:
 \subsection{Anti-Responsibility Derivation (Phase 2.1)}
 
 The agent body includes a ``What You Don't Do'' section derived
-from the team collaboration graph.  If \texttt{implementer}
-\texttt{reports\_to} \texttt{coo}, the implementer's generated
-definition includes ``Don't make architectural decisions --- the
-COO handles that.''  If the team has a \texttt{reviewer} and an
-\texttt{implementer}, the reviewer gets ``Don't fix code --- report
-findings for the implementer.''  Anti-responsibilities prevent
-scope creep and enforce the architecture rule that a role is
-defined by its inputs, outputs, and \emph{what it doesn't touch}.
+mechanically from the team collaboration graph.  For each
+\texttt{reports\_to} edge from the agent's role to a target role,
+the target role's \field{responsibilities} list contributes one
+bullet to the generated section, with parenthetical attribution to
+the target.
+
+Concretely, if \texttt{go-specialist} \texttt{reports\_to}
+\texttt{coo} and \texttt{coo}'s responsibilities include
+``execution quality and velocity across all engineering'', the
+generated \texttt{bwk.md} contains:
+
+\begin{verbatim}
+## What You Don't Do
+
+You report to coo. These are not yours:
+
+- execution quality and velocity across all engineering (coo)
+- sub-agent delegation and review (coo)
+- release management (coo)
+- operational decisions (coo)
+\end{verbatim}
+
+The preamble names the target(s) with Oxford comma joining for
+three or more.  Bullet attribution is emitted on every bullet
+including the $N{=}1$ case for consistency and grep-ability.
+
+The derivation is mechanical --- no pattern matching, no LLM, no
+verb-phrase transformation.  Responsibility strings are emitted
+verbatim after whitespace normalization (trimmed edges, internal
+newlines collapsed to spaces, empty-after-trim entries skipped
+with a stderr warning).  The MVP handles only \texttt{reports\_to}
+edges; \texttt{collaborates\_with} and \texttt{delegates\_to}
+edges from the agent's role produce a stderr warning and no
+bullets --- their semantics (peer, downward) deserve different
+phrasing and are deferred.  Missing target roles are skipped with a
+stderr warning at generation time; the rest of the file still
+renders.
+
+Anti-responsibilities prevent scope creep and enforce the
+architecture rule that a role is defined by its inputs, outputs,
+and \emph{what it does not touch}.  No schema change is required:
+the \field{Role} struct has no \field{anti\_responsibilities}
+field --- the generator reads the team graph and the target
+roles' own \field{responsibilities} lists.
 
 \subsection{Structured Output Format (Phase 2.3)}
 
