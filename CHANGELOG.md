@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ethos resolve-agent` now exits 1 on config read/parse errors**
+  (`ethos-dc0`) — previously exited 0 with the error on stderr, which
+  made the exit code meaningless for shell scripts gating on it.
+  Post-fix, a malformed `.punt-labs/ethos.yaml` or a permission error
+  produces a non-zero exit. Scripts that invoke `ethos resolve-agent`
+  in a pipeline under `set -e` should either use `|| true` to preserve
+  the old fail-open behavior (matching `hooks/session-start.sh`) or
+  check the exit code explicitly.
 - **`mission show --json` and MCP `mission show` payload shape**
   (Phase 3.6 round 3, `ethos-07m.10`) — both surfaces now serialize
   a new `mission.ShowPayload` struct that embeds `*Contract` and adds
