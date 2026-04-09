@@ -525,7 +525,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because `ValidateStructural` rejects those at Load. Three hook
   test fixtures that relied on the silent-accept behavior were
   fixed by adding a dummy team member to fill the previously-
-  unfilled collaboration role.
+  unfilled collaboration role. **Operational note**: a single
+  corrupt team YAML now fails mission-hash computation across all
+  evaluators (because `internal/mission/hash.go` walks every team);
+  this is fail-closed by design per DES-033 (silent-hash-bypass is
+  the worse failure mode) — the remediation is to fix or remove the
+  broken team file, not to delete the blocked mission.
 - **`GenerateAgentFiles` swallowed `LoadRepoConfig` errors**
   (`ethos-9ai.6`) — the SessionStart hook silently returned nil for
   any non-nil error from `resolve.LoadRepoConfig`, so a malformed
