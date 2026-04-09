@@ -15,7 +15,7 @@ tools:
 output_format: |
   Report results using this structure:
 
-  ```text
+  ```yaml
   RESULT: <task-id>
     worker: <handle>
     verdict: pass | fail | escalate

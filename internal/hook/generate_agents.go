@@ -328,14 +328,17 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	// Output format — the structured-handoff template the worker emits
 	// when it reports back to the leader. Role-owned body, generator-
 	// owned heading. Last thing in the file so it is the worker's final
-	// reference when producing the result artifact. TrimRight + an
-	// explicit "\n" normalizes the YAML-loaded string to exactly one
-	// terminal newline regardless of how the role author terminated the
-	// block scalar, matching the Writing Style and Responsibilities
-	// trailing-newline discipline.
-	if r.OutputFormat != "" {
+	// reference when producing the result artifact. The TrimSpace guard
+	// drops whitespace-only bodies ("\n", "   ") so a role YAML that
+	// sets the key with a degenerate value omits the section entirely
+	// instead of emitting an empty heading. TrimRight with "\r\n" as
+	// the cutset normalizes trailing whitespace to exactly one terminal
+	// "\n", regardless of whether the YAML was authored on Unix or
+	// Windows with core.autocrlf — bare CR bytes would otherwise leak
+	// through and leave a stray "^M" at the end of the generated file.
+	if strings.TrimSpace(r.OutputFormat) != "" {
 		b.WriteString("\n## Output Format\n\n")
-		b.WriteString(strings.TrimRight(r.OutputFormat, "\n"))
+		b.WriteString(strings.TrimRight(r.OutputFormat, "\r\n"))
 		b.WriteString("\n")
 	}
 

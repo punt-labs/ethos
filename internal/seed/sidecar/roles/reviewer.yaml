@@ -13,9 +13,9 @@ tools:
 output_format: |
   Report findings using this structure:
 
-  ```text
+  ```yaml
   FINDINGS: <target>
-    reviewer: <handle>
+    author: <handle>
     verdict: approve | iterate | reject
     confidence: <0.0-1.0>
     findings:
