@@ -140,6 +140,8 @@ You report to coo. These are not yours:
 - sub-agent delegation and review (coo)
 - release management (coo)
 - operational decisions (coo)
+
+Talents: engineering
 ```
 
 ## Anti-Responsibilities
