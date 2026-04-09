@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -1324,9 +1325,9 @@ func TestYamlQuote(t *testing.T) {
 
 // TestGenerateAgentFiles_MalformedConfig covers bug ethos-9ai.6: a
 // malformed .punt-labs/ethos.yaml must propagate the parse error wrapped
-// with "loading repo config". Before the fix, yaml.Unmarshal failures
-// were swallowed and the generator returned nil — the user had no
-// signal that their config was broken.
+// with "generate agents". Before the fix, yaml.Unmarshal failures were
+// swallowed and the generator returned nil — the user had no signal
+// that their config was broken.
 func TestGenerateAgentFiles_MalformedConfig(t *testing.T) {
 	root := t.TempDir()
 	cfgDir := filepath.Join(root, ".punt-labs")
@@ -1348,19 +1349,47 @@ func TestGenerateAgentFiles_MalformedConfig(t *testing.T) {
 
 	err := GenerateAgentFiles(root, ids, teams, roles)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "loading repo config",
+	assert.Contains(t, err.Error(), "generate agents",
 		"error must be wrapped with the caller's operation context")
 	// The chain must include LoadRepoConfig's own parse-error wrapper,
 	// so a user reading the message sees both layers: which caller
 	// failed, and which underlying operation failed inside the loader.
 	assert.Contains(t, err.Error(), "parsing repo config",
 		"error chain must surface the underlying yaml parse failure")
+
+	// %w chain must unwrap, not just render. This protects the caller
+	// and LoadRepoConfig wraps against a future refactor that drops
+	// either one to a plain %v — the rendered string would still
+	// contain the substrings above but errors.Unwrap would return nil
+	// at the wrong layer. Count the layers explicitly:
+	//   outer = "generate agents: ..."            (GenerateAgentFiles)
+	//   mid   = "parsing repo config: ..."        (LoadRepoConfig)
+	//   leaf  = "yaml: line 1: did not find ..."  (yaml.v3 scanner)
+	// yaml.v3 returns a plain *errors.errorString for scanner errors
+	// (TypeError is only for type-conversion failures), so we probe
+	// the chain by depth, not by target type.
+	mid := errors.Unwrap(err)
+	require.NotNil(t, mid,
+		"outer wrap must use %%w; errors.Unwrap returned nil at depth 1")
+	assert.Contains(t, mid.Error(), "parsing repo config",
+		"depth-1 error must be LoadRepoConfig's parse-error wrap")
+	leaf := errors.Unwrap(mid)
+	require.NotNil(t, leaf,
+		"LoadRepoConfig parse wrap must use %%w; errors.Unwrap returned nil at depth 2")
+	assert.Contains(t, leaf.Error(), "yaml:",
+		"depth-2 error must be the yaml.v3 scanner error")
+	// The chain terminates here — yaml.v3's scanner error is a leaf
+	// string error with no further wrapping. Unwrapping a third time
+	// must return nil; any non-nil result would mean an unexpected
+	// wrap layer snuck into the chain.
+	assert.Nil(t, errors.Unwrap(leaf),
+		"yaml scanner error must be a leaf; unexpected wrap at depth 3")
 }
 
 // TestGenerateAgentFiles_UnreadableConfig covers bug ethos-9ai.6 on the
 // I/O-error path: a .punt-labs/ethos.yaml with 0o000 permissions must
-// propagate the read error wrapped with "loading repo config". Running
-// as root defeats chmod, so this test skips in that case. Mirrors
+// propagate the read error wrapped with "generate agents". Running as
+// root defeats chmod, so this test skips in that case. Mirrors
 // TestLoadRepoConfig_PermissionError in internal/resolve.
 func TestGenerateAgentFiles_UnreadableConfig(t *testing.T) {
 	if os.Geteuid() == 0 {
@@ -1385,12 +1414,18 @@ func TestGenerateAgentFiles_UnreadableConfig(t *testing.T) {
 
 	err := GenerateAgentFiles(root, ids, teams, roles)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "loading repo config",
+	assert.Contains(t, err.Error(), "generate agents",
 		"error must be wrapped with the caller's operation context")
 	// LoadRepoConfig wraps os.ReadFile errors with "reading <path>: %w".
 	// Surface that layer too so the user sees which file failed.
 	assert.Contains(t, err.Error(), "reading",
 		"error chain must surface the underlying read failure")
+	// The wrapped path must identify the exact file that failed, so a
+	// user debugging a permission mishap does not have to guess whether
+	// the new or the legacy config path is at fault. LoadRepoConfig's
+	// "reading %s: %w" format means the full path is in the message.
+	assert.Contains(t, err.Error(), filepath.Join(".punt-labs", "ethos.yaml"),
+		"error must name the file that failed to read")
 }
 
 // TestGenerateAgentFiles_NoConfigFile covers invariant 1: when neither
@@ -1444,6 +1479,15 @@ func TestGenerateAgentFiles_PartialWriteFailure(t *testing.T) {
 	// Add a second agent identity that shares bwk's personality, writing
 	// style, and role so expected == 2 with no new fixture scaffolding.
 	// The team membership rewrite below puts both agents in the roster.
+	//
+	// Loop-ordering assumption: the team roster is [claude, bwk, bwk2].
+	// claude is the main agent and the first loop iteration skips it;
+	// bwk is processed second and hits the pre-created-directory EISDIR
+	// write failure; bwk2 is processed third and writes successfully.
+	// The "generated 1 of 2" and "failed: bwk" assertions below depend
+	// on this ordering, which is deterministic because YAML sequences
+	// preserve order and team.Load preserves the sequence order into
+	// t.Members, and GenerateAgentFiles iterates t.Members sequentially.
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
 	writeYAML(t, filepath.Join(ethosDir, "identities", "bwk2.yaml"), map[string]interface{}{
 		"name":          "Brian K Two",
@@ -1485,6 +1529,17 @@ func TestGenerateAgentFiles_PartialWriteFailure(t *testing.T) {
 			"partial write failure must return an error, not swallow it")
 		assert.Contains(t, err.Error(), "generated 1 of 2",
 			"error must name both counts honestly")
+		// The summary error must also name the failing member(s) so a
+		// caller reading only the returned error can identify which
+		// agents failed without cross-referencing the stderr warnings.
+		// bwk is the member whose write path hit EISDIR in this case;
+		// bwk2 wrote successfully, so only bwk should be listed. The
+		// anchor "(failed: bwk)" includes the closing paren so a
+		// regression that listed "bwk2" alone (matching "failed: bwk"
+		// as a prefix) would still fail this test — the paren is the
+		// membership boundary.
+		assert.Contains(t, err.Error(), "(failed: bwk)",
+			"error must name exactly the failing member, closed by a paren")
 	})
 
 	// The stderr warning for the failed bwk write must still fire — it

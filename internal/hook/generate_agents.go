@@ -23,7 +23,7 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 
 	cfg, err := resolve.LoadRepoConfig(repoRoot)
 	if err != nil {
-		return fmt.Errorf("loading repo config: %w", err)
+		return fmt.Errorf("generate agents: %w", err)
 	}
 	if cfg == nil {
 		return nil // neither .punt-labs/ethos.yaml nor the legacy path exists
@@ -43,6 +43,15 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 	destDir := filepath.Join(repoRoot, ".claude", "agents")
 
 	var expected, generated int
+	// failedMembers records identity handles whose write path failed
+	// after they passed every preflight check (identity, role, kind,
+	// tools, personality) and incremented expected. The final error
+	// names them so a caller reading only the returned error can
+	// identify which members failed without cross-referencing stderr.
+	// Pre-expected skips (identity-load, role-load, empty tools, empty
+	// personality) deliberately do not contribute — they are not
+	// partial failures but by-design conditions.
+	var failedMembers []string
 
 	for _, m := range t.Members {
 		if m.Identity == mainAgent {
@@ -87,10 +96,12 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: creating agents dir: %v\n", m.Identity, err)
+			failedMembers = append(failedMembers, m.Identity)
 			continue
 		}
 		if err := os.WriteFile(destPath, []byte(content), 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: writing agent file: %v\n", m.Identity, err)
+			failedMembers = append(failedMembers, m.Identity)
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "ethos: generate-agents: wrote %s\n", destPath)
@@ -98,7 +109,8 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 	}
 
 	if generated < expected {
-		return fmt.Errorf("generated %d of %d expected agent files", generated, expected)
+		return fmt.Errorf("generated %d of %d expected agent files (failed: %s)",
+			generated, expected, strings.Join(failedMembers, ", "))
 	}
 
 	return nil
