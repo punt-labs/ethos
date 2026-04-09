@@ -67,8 +67,8 @@ func TestWriterRoleOutputFormat_RejectsUnknownField(t *testing.T) {
 		t.Fatal("expected strict decode to reject unknown field worker")
 	}
 	msg := err.Error()
-	if !strings.Contains(msg, "worker") && !strings.Contains(msg, "field") {
-		t.Fatalf("expected rejection message to name the unknown field; got: %v", err)
+	if !strings.Contains(msg, "field worker not found") {
+		t.Fatalf("expected rejection message to name the unknown field worker; got: %v", err)
 	}
 }
 

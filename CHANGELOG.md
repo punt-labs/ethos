@@ -69,6 +69,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero md5 changes across `.claude/agents/*.md` after SessionStart
   regeneration; the template change lands invisibly until a future
   team member adopts `implementer` or `test-engineer` as their role.
+  Round 2 of `ethos-r6o` closes four same-class drift findings from
+  the pre-alignment Result shape. (1) `docs/ETHOS-ROADMAP.md` §3.6
+  shipped a canonical Result example using the old `lines_added` /
+  `lines_removed` / `test:` / `duration_ms:` field names under a
+  top-level `result:` wrapper; the example is rewritten to match the
+  real `mission.Result` shape (`added`/`removed`, `name`/`status`,
+  flat top-level keys) with distinct placeholder values so a reader
+  copying from the roadmap produces YAML that `DecodeResultStrict`
+  accepts. (2) `internal/role/store_test.go`'s
+  `TestStore_OutputFormatRoundTrip` carried a `RESULT: <task-id>`
+  block with a `worker:` field as its body; replaced with opaque
+  multi-line text that exercises YAML encoding fidelity (colons,
+  indentation, code fences, pipes) without implying any canonical
+  schema, since the store does not parse OutputFormat. (3) The
+  negative-case assertion in
+  `internal/seed/output_format_schema_test.go` was
+  `strings.Contains(msg, "worker") || strings.Contains(msg, "field")`
+  — the `"field"` disjunct was wide enough that any unrelated
+  missing-required error would satisfy it; tightened to
+  `strings.Contains(msg, "field worker not found")`, the exact
+  yaml.v3 strict-decode format already asserted by three other tests
+  in `internal/mission/`. (4) Both `implementer.yaml` and
+  `test-engineer.yaml` shipped `open_questions: ["omit this key
+  entirely if you have no unresolved questions"]` — instructional
+  text that parses as a valid entry; a worker who submitted the
+  template verbatim would ship the instruction as a real open
+  question. The `open_questions` key is removed from both template
+  bodies (`omitempty` on the struct makes its absence valid) and
+  the guidance is folded into the leading YAML comment block.
 
 - **Role-based `PostToolUse` hook command changed from `tail -20`
   to `head -n 60`** (`ethos-b5g`) — the 9ai.2 hook ran
