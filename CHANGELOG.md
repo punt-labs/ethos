@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 
+- **Phase 4 status block drift fixed (`ethos-zve`)** — Three stale
+  "Designed, not yet implemented" / "not yet active" references in
+  `docs/agent-identity-spec.tex` and `docs/agent-definitions.md`
+  are updated to reflect that Phase 4 role-based hooks shipped in
+  `ethos-9ai.2` (PR #190) and were updated by `ethos-b5g` (PR #195).
+  The spec's §Phase 4 now reads "Shipped --- Unreleased, PR #190"
+  with a sentence describing the `PostToolUse` hook for
+  write-enabled roles; §Phase 5 no longer claims role-based hooks
+  are inactive. The `agent-definitions.md` frontmatter table row
+  for `hooks` changes from "Manual / future: Role-based" to
+  "Generated from `role.tools`". Same-class fix: a stale `head -60`
+  reference at CHANGELOG.md:163 (historical 9ai.2 entry qualifier)
+  is updated to `head -n 60` to match the current command.
+  Identified by silent-failure hunter M2 during `ethos-b5g` round 1
+  and deferred out of that scope to keep b5g focused.
 - **`DES-038`: worktree isolation investigation (`ethos-56a`)** —
   Documents the investigation that closed `ethos-56a` after 8+
   failed worker rounds misused `isolation: worktree`. The flag
@@ -160,7 +175,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching `Write|Edit` and running the command
   `(cd "$CLAUDE_PROJECT_DIR" && make check) 2>&1 | tail -20` (the
   originally-shipped form; superseded by `ethos-b5g` which changed
-  the window to `head -60` — see the `### Changed` section above). The
+  the window to `head -n 60` — see the `### Changed` section above). The
   command pins cwd to the project root via `$CLAUDE_PROJECT_DIR`
   (exposed to hook commands by Claude Code) so `make check` never
   fails with "No rule to make target" when the sub-agent has cd'd

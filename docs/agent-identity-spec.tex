@@ -708,19 +708,30 @@ behavior, and idempotency are all implemented in
 \subsection{Phase 4: Role-Based Hook Generation}
 \label{sec:phase4}
 
-\textbf{Status: Designed, not yet implemented.} Hook templates per
-role category (implementation vs review) are specified in
-\S\ref{sec:hooks} but are not yet included in generated agent
-frontmatter. Generated agents currently receive no hooks.
+\textbf{Status: Shipped --- Unreleased, PR \#190, bead
+\cmd{ethos-9ai.2}. Updated by PR \#195 (bead \cmd{ethos-b5g}).}
+Write-enabled roles (those whose \field{tools} list contains
+\cmd{Write} or \cmd{Edit}) receive a \field{PostToolUse} hook in
+their generated frontmatter that runs
+\cmd{(cd "\$CLAUDE\_PROJECT\_DIR" \&\& make check) 2>\&1 | head -n 60}
+after every Write or Edit call. Review-only roles receive no
+\field{hooks} block. Detection is exact-string membership on the
+\field{tools} list with no inference from related names like
+\cmd{MultiEdit} or \cmd{WriteFile}. See \S\ref{sec:hooks} for the
+full command rationale, POSIX-sh pin, and the \cmd{head -n 60}
+window-size justification.
 
 \subsection{Phase 5: Rollout}
 \label{sec:phase5}
 
 \textbf{Status: Partially complete.} Agent definitions are generated
-automatically by the SessionStart hook across repos. The baseline-ops
-skill (Phase~1) and role-based hooks (Phase~4) are not yet active,
-so generated agents rely on CLAUDE.md and agent definition bodies
-for operational guidance and behavioral enforcement.
+automatically by the SessionStart hook across repos. Role-based
+hooks (Phase~4) are active for write-enabled roles as of
+\cmd{ethos-9ai.2}, so generated agents now receive visible
+quality-gate enforcement after every Write or Edit in addition to
+the textual operational guidance carried in CLAUDE.md and their
+agent definition bodies. The baseline-ops skill (Phase~1) remains
+pending.
 
 % ===================================================================
 \section{Context Budget Analysis}
