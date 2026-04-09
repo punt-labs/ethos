@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/role"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestSeedEmptyDir(t *testing.T) {
@@ -23,6 +25,28 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "roles", "security-reviewer.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "roles", "researcher.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "roles", "test-engineer.yaml"))
+
+	// Every starter role must ship with an `output_format` template so
+	// the generator emits the `## Output Format` section in the agent
+	// file. Parsing the deployed YAML into a real role.Role catches
+	// regressions where `output_format:` appears as a comment or as
+	// part of a responsibility string — a substring check would miss
+	// both. The check is per-file so the failure message points at
+	// the specific role that lost it.
+	for _, name := range []string{
+		"implementer", "test-engineer",
+		"reviewer", "architect", "security-reviewer",
+		"researcher",
+	} {
+		path := filepath.Join(dest, "roles", name+".yaml")
+		data, readErr := os.ReadFile(path)
+		require.NoError(t, readErr, "reading %s.yaml", name)
+		var r role.Role
+		require.NoError(t, yaml.Unmarshal(data, &r),
+			"deployed role %q must parse", name)
+		assert.NotEmpty(t, r.OutputFormat,
+			"deployed role %q must have output_format after seed", name)
+	}
 
 	// Should have deployed all 10 talents
 	assert.FileExists(t, filepath.Join(dest, "talents", "go.md"))

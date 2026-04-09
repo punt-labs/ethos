@@ -12,3 +12,18 @@ tools:
   - Bash
   - Grep
   - Glob
+output_format: |
+  Report results using this structure:
+
+  ```text
+  RESULT: <task-id>
+    worker: <handle>
+    verdict: pass | fail | escalate
+    confidence: <0.0-1.0>
+    files_changed:
+      - <path>: +N -M lines
+    evidence:
+      - <check name>: pass | fail
+    open_questions:
+      - [if any]
+  ```

@@ -33,6 +33,12 @@ func TestSidecarRolesLoad(t *testing.T) {
 			assert.NotEmpty(t, r.Tools)
 			assert.NotEmpty(t, r.Model, "sidecar role %q should have a model", name)
 			assert.NoError(t, ValidateModel(r.Model), "role %q has invalid model", name)
+			// Every shipped sidecar role carries a structured-handoff
+			// template. A future edit that strips output_format from
+			// one role surfaces as a per-subtest failure naming the
+			// role, not a single aggregate error.
+			assert.NotEmpty(t, r.OutputFormat,
+				"sidecar role %q must ship with an output_format template", name)
 		})
 	}
 

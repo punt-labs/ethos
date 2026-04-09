@@ -9,12 +9,21 @@ import (
 )
 
 // Role defines a named set of responsibilities and permissions.
+//
+// OutputFormat is a free-form markdown body emitted as the final
+// section of the generated agent file. The generator owns the
+// `## Output Format` heading; the role provides only the body. When
+// empty, no section is emitted at all. The field is trusted source —
+// role YAML is git-tracked and human-reviewed — so no validation runs
+// against it, matching the trust boundary already in place for
+// Responsibilities and the other string fields.
 type Role struct {
 	Name             string   `yaml:"name" json:"name"`
 	Model            string   `yaml:"model,omitempty" json:"model,omitempty"`
 	Responsibilities []string `yaml:"responsibilities,omitempty" json:"responsibilities,omitempty"`
 	Permissions      []string `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 	Tools            []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	OutputFormat     string   `yaml:"output_format,omitempty" json:"output_format,omitempty"`
 }
 
 // ValidateName checks that a role name follows the same slug rules as attributes.

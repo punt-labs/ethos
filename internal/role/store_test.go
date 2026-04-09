@@ -1,6 +1,8 @@
 package role
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -149,4 +151,51 @@ func TestStore_MinimalRole(t *testing.T) {
 	assert.Equal(t, "minimal", loaded.Name)
 	assert.Nil(t, loaded.Responsibilities)
 	assert.Nil(t, loaded.Permissions)
+	assert.Empty(t, loaded.OutputFormat)
+}
+
+// TestStore_OutputFormatRoundTrip locks the new field's behavior end
+// to end: a role with a multi-line `OutputFormat` survives a save to
+// disk and a fresh load with the content preserved byte-for-byte. The
+// test deliberately uses a body that contains every character class
+// the field is expected to carry — newlines, code fences, indentation,
+// `<...>` placeholders, and the `|` separators from the verdict list —
+// so a future encoder change that mangles any of them fails here.
+func TestStore_OutputFormatRoundTrip(t *testing.T) {
+	s := testStore(t)
+
+	body := "Report results using this structure:\n" +
+		"\n" +
+		"```text\n" +
+		"RESULT: <task-id>\n" +
+		"  worker: <handle>\n" +
+		"  verdict: pass | fail | escalate\n" +
+		"```\n"
+
+	r := &Role{
+		Name:         "implementer-test",
+		Tools:        []string{"Read", "Write"},
+		OutputFormat: body,
+	}
+	require.NoError(t, s.Save(r))
+
+	loaded, err := s.Load("implementer-test")
+	require.NoError(t, err)
+	assert.Equal(t, body, loaded.OutputFormat)
+}
+
+// TestStore_OutputFormatOmittedWhenEmpty confirms the YAML tag's
+// `,omitempty` clause: a role saved with no OutputFormat must not
+// emit an `output_format:` key on disk. Without this, the field would
+// add a `output_format: ""` line to every legacy role file the next
+// time it round-trips through the store.
+func TestStore_OutputFormatOmittedWhenEmpty(t *testing.T) {
+	s := testStore(t)
+
+	r := &Role{Name: "no-output-format"}
+	require.NoError(t, s.Save(r))
+
+	data, err := os.ReadFile(filepath.Join(s.Dir(), "no-output-format.yaml"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "output_format")
 }
