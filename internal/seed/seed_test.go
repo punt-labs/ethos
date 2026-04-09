@@ -38,6 +38,7 @@ func TestSeedEmptyDir(t *testing.T) {
 
 	// Should have deployed skills
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
+	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))
 
 	// Should have deployed all 7 READMEs (sessions excluded)
 	assert.FileExists(t, filepath.Join(dest, "identities", "README.md"))
@@ -151,6 +152,68 @@ func TestSeedSkillsPath(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "## Tool Usage")
 	assert.Contains(t, string(data), "## Verification")
+}
+
+// TestSeedMissionSkill checks that the mission skill is deployed
+// to the right path with the Phase 3 schema content. The skill is
+// the only user-facing surface for driving the mission primitive
+// and its absence would silently degrade the leader workflow.
+func TestSeedMissionSkill(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	_, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	skillPath := filepath.Join(skills, "mission", "SKILL.md")
+	assert.FileExists(t, skillPath)
+
+	data, err := os.ReadFile(skillPath)
+	require.NoError(t, err)
+	content := string(data)
+
+	// Structural anchors: every step plus the worked example must
+	// be present. A future edit that drops a section fails here.
+	assert.Contains(t, content, "## Step 1 — Resolve the worker")
+	assert.Contains(t, content, "## Step 2 — Scaffold the contract YAML")
+	assert.Contains(t, content, "## Step 3 — Pick the evaluator")
+	assert.Contains(t, content, "## Step 4 — Create the mission")
+	assert.Contains(t, content, "## Step 5 — Spawn the worker")
+	assert.Contains(t, content, "## Step 6 — Track and review")
+	assert.Contains(t, content, "## Worked example")
+
+	// Phase 3 schema anchors: every required field name from
+	// mission.Contract must appear so a future schema drift
+	// surfaces as a test failure, not as a SKILL.md that teaches
+	// the wrong shape.
+	assert.Contains(t, content, "leader:")
+	assert.Contains(t, content, "worker:")
+	assert.Contains(t, content, "evaluator:")
+	assert.Contains(t, content, "write_set:")
+	assert.Contains(t, content, "success_criteria:")
+	assert.Contains(t, content, "budget:")
+
+	// context is a TOP-LEVEL field on mission.Contract, NOT a
+	// subfield of Inputs. An earlier draft nested it under inputs;
+	// Phase 3.1's strict YAML decode (KnownFields true) would have
+	// rejected the worked example at `ethos mission create` time.
+	// Assert top-level placement so future drift fails here
+	// instead of at the store boundary.
+	assert.Contains(t, content, "\ncontext: |",
+		"worked example must have top-level `context: |`, not nested under inputs")
+	assert.NotContains(t, content, "  context: |",
+		"`context: |` must NOT be indented under inputs — mission.Contract has Context at the top level")
+
+	// Command anchors: the real CLI surfaces the skill teaches.
+	assert.Contains(t, content, "ethos mission create --file")
+	assert.Contains(t, content, "ethos mission show")
+	assert.Contains(t, content, "ethos mission log")
+	assert.Contains(t, content, "ethos mission result")
+	assert.Contains(t, content, "ethos mission close")
+
+	// Background-spawn discipline: the Agent call MUST be
+	// described as run_in_background.
+	assert.Contains(t, content, "run_in_background")
 }
 
 func TestSeedIntegrationWithRoleStore(t *testing.T) {
