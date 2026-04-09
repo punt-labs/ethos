@@ -29,6 +29,9 @@ lives.
 | Subsystem | Phase | Status | ADR / Bead |
 |-----------|-------|--------|------------|
 | Identity, sessions, persona animation, teams, roles, starter content | 1 | SHIPPED | v2.7.0 |
+| Anti-responsibility generation, role-based hooks, structured output, baseline-ops injection | 2.1–2.4 | SHIPPED | `ethos-9ai.1`–`.4` |
+| Mission skill (`/mission`) Phase A | 2.5 | SHIPPED | `ethos-9ai.5` |
+| Mission skill (`/mission`) Phase B–C | 2.6 | PLANNED | `ethos-9ai.5` |
 | Mission contract | 3.1 | SHIPPED | DES-031, `ethos-07m.5` |
 | Write-set admission | 3.2 | SHIPPED | DES-032, `ethos-07m.6` |
 | Frozen evaluator | 3.3 | SHIPPED | DES-033, `ethos-07m.7` |
@@ -36,13 +39,11 @@ lives.
 | Verifier isolation | 3.5 | SHIPPED | DES-035, `ethos-07m.9` |
 | Result artifacts and close gate | 3.6 | SHIPPED | DES-036, `ethos-07m.10` |
 | Event log reader API | 3.7 | SHIPPED | DES-037, `ethos-07m.11` |
-| Anti-responsibility generation, role-based hooks, structured output, baseline-ops injection | 2.1–2.4 | PLANNED | `ethos-9ai.1`–`.4` |
-| Mission skill (`/mission`) | 2.5–2.6 | PLANNED | `ethos-9ai.5` |
 | SessionStart working context, role-based pre-tool safety, session audit log | 4.1–4.3 | PLANNED | `ethos-gcq.1`–`.3` |
 | ethos + biff: identity-aware messaging | Integration | PLANNED | `ethos-wb4` |
 | ethos + beadle: identity-aware email | Integration | PLANNED | `ethos-g2f` |
 
-Phase 1 and Phase 3 ship today. The four architecture rules — roles as
+Phases 1, 2, and 3 ship today. The four architecture rules — roles as
 interfaces, centralized understanding with decentralized execution,
 hooks as enforcement, no ambient context inheritance — are
 runtime-enforced for the first time in the project's history.
