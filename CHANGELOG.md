@@ -82,10 +82,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role `tools` list contains `Write` or `Edit`. The block is fixed
   shape with no per-role customization: a single `PostToolUse` entry
   matching `Write|Edit` and running the command
-  `make check 2>&1 | tail -20`. Claude Code loads the block when it
-  spawns the sub-agent, so vet/lint/test failures surface at the
-  point of the write instead of three rounds later. Review-only roles
-  whose tools list excludes both `Write` and `Edit` (e.g., the
+  `(cd "$CLAUDE_PROJECT_DIR" && make check) 2>&1 | tail -20`. The
+  command pins cwd to the project root via `$CLAUDE_PROJECT_DIR`
+  (exposed to hook commands by Claude Code) so `make check` never
+  fails with "No rule to make target" when the sub-agent has cd'd
+  into a subdirectory. Claude Code loads the block when it spawns
+  the sub-agent, so vet/lint/test failures surface at the point of
+  the write instead of three rounds later. Review-only roles whose
+  tools list excludes both `Write` and `Edit` (e.g., the
   `security-engineer` role used by djb with `Read, Grep, Glob, Bash`)
   emit no `hooks:` block at all — their tool restrictions already
   prevent the matcher from firing. Detection is exact-string
