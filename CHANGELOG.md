@@ -33,8 +33,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Result.Validate()`; a worker who copy-pasted the old template into
   a `.results.yaml` file would have hit `KnownFields(true)` errors
   for `worker`, type errors for inline-string `files_changed`, and
-  missing-required errors for `mission`, `round`, `created_at`, and
-  `author`. Both templates are now raw YAML bodies whose keys and
+  missing-required errors for `mission`, `round`, and `author`
+  (`created_at` is optional — `Result.Validate()` parses it when
+  set and `Store.AppendResult` default-fills it when empty). Both
+  templates are now raw YAML bodies whose keys and
   value types match `mission.Result` exactly — `mission`, `round`,
   `created_at`, `author`, `verdict`, `confidence`, `files_changed`
   (list of `{path, added, removed}` maps), `evidence` (list of
@@ -46,7 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top of each body (`# Fill in the placeholder values below, then
   submit as your mission result.` plus a strict-decoder caveat)
   preserves the "fill me in" cue without breaking YAML parsing —
-  comments round-trip through `DecodeResultStrict`. A new
+  comments are accepted (and silently dropped) by
+  `DecodeResultStrict`. A new
   `internal/seed/output_format_schema_test.go` round-trip test loads
   each template through the embedded `Roles` FS, runs the body
   through `DecodeResultStrict` + `Validate`, and asserts both pass;
