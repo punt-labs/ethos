@@ -52,8 +52,9 @@ work in everything but name.
 Ethos v2.6.1 shipped the **mechanism** for identity binding:
 identities, personalities, writing styles, talents, roles, teams,
 sessions, persona animation, agent file generation, extension
-session context. Phase 3 (v2.7–v2.8.0) added the **workflow primitive
-layer** on top: typed mission contracts, runtime-enforced
+session context. Phase 3 (unreleased — PR #184, merge `c16715f`)
+added the **workflow primitive layer** on top: typed mission
+contracts, runtime-enforced
 write-set admission, frozen evaluators, bounded rounds, verifier
 isolation, typed result artifacts, append-only event log.
 
