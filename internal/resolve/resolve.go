@@ -175,7 +175,7 @@ func ResolveAgent(repoRoot string) (string, error) {
 	}
 	cfg, err := LoadRepoConfig(repoRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolving agent: %w", err)
+		return "", fmt.Errorf("resolve agent: %w", err)
 	}
 	if cfg == nil {
 		return "", nil
@@ -192,7 +192,7 @@ func ResolveTeam(repoRoot string) (string, error) {
 	}
 	cfg, err := LoadRepoConfig(repoRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolving team: %w", err)
+		return "", fmt.Errorf("resolve team: %w", err)
 	}
 	if cfg == nil {
 		return "", nil

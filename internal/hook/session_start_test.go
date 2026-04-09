@@ -659,8 +659,26 @@ func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
 	err = HandleSessionStart(bytes.NewReader([]byte(`{"session_id":"s-dc0"}`)), deps)
 	require.Error(t, err,
 		"HandleSessionStart must return the wrapped ResolveAgent error, not swallow it")
+
+	// Distinct-verbs invariant (dc0 r2, fixing the doubled-prefix
+	// collision 4 of 4 reviewers flagged on round 1). The chain has
+	// four layers; the outer two use distinct verb forms so a reader
+	// sees context added at each step, not the same word twice:
+	//
+	//   ethos hook session-start:            (main.go wrapper)
+	//     resolving agent:                   (HandleSessionStart, gerund)
+	//       resolve agent:                   (ResolveAgent, operation noun)
+	//         parsing repo config:           (LoadRepoConfig)
+	//           yaml: line ...               (yaml decoder root cause)
+	//
+	// Matches the 9ai.6 r2 precedent: inner uses the operation noun
+	// ("generate agents"), outer uses the gerund ("generating agents").
+	// A future regression that collapses them back to a single form
+	// fails one of the two assertions below.
 	assert.Contains(t, err.Error(), "resolving agent",
-		"HandleSessionStart must wrap the ResolveAgent error with its operation context")
+		"HandleSessionStart's outer wrap (gerund) must be present")
+	assert.Contains(t, err.Error(), "resolve agent",
+		"ResolveAgent's inner wrap (operation noun) must be preserved by the %w chain")
 	assert.Contains(t, err.Error(), "parsing repo config",
 		"the wrapped chain must include LoadRepoConfig's yaml.Unmarshal wrap")
 

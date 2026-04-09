@@ -302,7 +302,7 @@ func TestResolveAgent_NoAgentField(t *testing.T) {
 
 // TestResolveAgent_MalformedYAML verifies that a .punt-labs/ethos.yaml
 // that exists but cannot be parsed produces an error containing both
-// the "resolving agent" outer wrap and the inner "parsing repo config"
+// the "resolve agent" outer wrap and the inner "parsing repo config"
 // wrap from LoadRepoConfig. Pre-dc0, this path silently logged to
 // stderr and returned the empty string, making every caller treat
 // "broken config" and "not configured" as the same case.
@@ -317,7 +317,7 @@ func TestResolveAgent_MalformedYAML(t *testing.T) {
 	handle, err := ResolveAgent(root)
 	require.Error(t, err)
 	assert.Equal(t, "", handle)
-	assert.Contains(t, err.Error(), "resolving agent",
+	assert.Contains(t, err.Error(), "resolve agent",
 		"outer wrap must name the operation")
 	assert.Contains(t, err.Error(), "parsing repo config",
 		"inner wrap from LoadRepoConfig must be preserved")
@@ -342,7 +342,7 @@ func TestResolveAgent_PermissionError(t *testing.T) {
 	handle, err := ResolveAgent(root)
 	require.Error(t, err)
 	assert.Equal(t, "", handle)
-	assert.Contains(t, err.Error(), "resolving agent")
+	assert.Contains(t, err.Error(), "resolve agent")
 	assert.Contains(t, err.Error(), "reading")
 }
 
@@ -388,7 +388,7 @@ func TestResolveTeam_EmptyRoot(t *testing.T) {
 
 // TestResolveTeam_MalformedYAML mirrors TestResolveAgent_MalformedYAML
 // for the team path. Same wrap chain, different outer prefix:
-// "resolving team" instead of "resolving agent".
+// "resolve team" instead of "resolve agent".
 func TestResolveTeam_MalformedYAML(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, ".punt-labs")
@@ -400,7 +400,7 @@ func TestResolveTeam_MalformedYAML(t *testing.T) {
 	team, err := ResolveTeam(root)
 	require.Error(t, err)
 	assert.Equal(t, "", team)
-	assert.Contains(t, err.Error(), "resolving team",
+	assert.Contains(t, err.Error(), "resolve team",
 		"outer wrap must name the operation")
 	assert.Contains(t, err.Error(), "parsing repo config",
 		"inner wrap from LoadRepoConfig must be preserved")
@@ -423,7 +423,7 @@ func TestResolveTeam_PermissionError(t *testing.T) {
 	team, err := ResolveTeam(root)
 	require.Error(t, err)
 	assert.Equal(t, "", team)
-	assert.Contains(t, err.Error(), "resolving team")
+	assert.Contains(t, err.Error(), "resolve team")
 	assert.Contains(t, err.Error(), "reading")
 }
 

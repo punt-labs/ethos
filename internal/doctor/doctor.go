@@ -99,7 +99,9 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) (string, bo
 // are both "OK" (empty repos and repos without an agent field are
 // legitimate). A ResolveAgent error — unreadable or malformed
 // `.punt-labs/ethos.yaml` — is a diagnostic failure the user needs to
-// see, same pattern as CheckDuplicateFields.
+// see. The detail string is the raw error text with no "error: " prefix
+// — doctor's output already prints a FAIL status column derived from
+// the returned bool, so prepending "error: " would double-label.
 func CheckDefaultAgent(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	repoRoot := resolve.FindRepoRoot()
 	if repoRoot == "" {
@@ -107,7 +109,7 @@ func CheckDefaultAgent(s identity.IdentityStore, _ *session.Store) (string, bool
 	}
 	handle, err := resolve.ResolveAgent(repoRoot)
 	if err != nil {
-		return fmt.Sprintf("error: %v", err), false
+		return err.Error(), false
 	}
 	if handle == "" {
 		return "not configured", true
