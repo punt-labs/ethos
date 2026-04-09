@@ -22,6 +22,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Role-based `PostToolUse` hook command changed from `tail -20` to
+  `head -60`** (`ethos-b5g`) — the 9ai.2 hook ran
+  `make check 2>&1 | tail -20` after every Write or Edit by a
+  write-enabled role. Go compile errors fire at the top of
+  `make check` output (short-circuiting the rest of the run), and
+  `-race -count=1 -v` test failures surface the first `FAIL:` near
+  the top before 500+ lines of verbose test output. `tail -20`
+  caught the compile-error case but missed the first-failing-test
+  case. `head -60` catches both. The command now reads
+  `(cd "$CLAUDE_PROJECT_DIR" && make check) 2>&1 | head -60`. Hook
+  stays advisory, not blocking — the pipe to `head` still masks
+  the exit code, so Claude Code does not gate the next Write on a
+  broken build. This is the intentional shape: blocking the next
+  Write would create user-hostile friction during refactors where
+  intermediate states are knowingly broken, and Claude Code has no
+  `--skip-hook` escape hatch. The canonical example and language
+  in `docs/agent-identity-spec.tex` §Role-Based Hooks are updated
+  in sync: "behavioral enforcement" softens to "visible
+  enforcement" and a POSIX-sh pin note documents that the command
+  runs under `/bin/sh` and must avoid bashisms like
+  `set -o pipefail`, process substitution, and `${VAR:-default}`.
+  Write-enabled agent files (bwk, mdm, adb, rmh) will regenerate
+  with the new command on the next SessionStart; review-only agent
+  files (djb) are unchanged because they have no hooks block.
 - **`ethos resolve-agent` now exits 1 on config read/parse errors**
   (`ethos-dc0`) — previously exited 0 with the error on stderr, which
   made the exit code meaningless for shell scripts gating on it.

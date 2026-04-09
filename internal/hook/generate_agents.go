@@ -271,8 +271,22 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// against the repo Makefile even if the sub-agent has cd'd into
 		// a subdirectory before the Write or Edit tool fires. The
 		// subshell keeps the cd from leaking to the outer shell, and
-		// the quoted expansion handles paths with spaces.
-		b.WriteString("          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | tail -20\"\n")
+		// the quoted expansion handles paths with spaces. `head -60`
+		// (not `tail -20`) catches the FIRST failure: Go compile errors
+		// fire at the top of `make check` output and short-circuit the
+		// rest of the run, and `-race -count=1 -v` test runs surface
+		// the first `FAIL:` near the top before 500+ lines of verbose
+		// test output that would push a tail window off the relevant
+		// error. The pipe to `head` masks the exit code, so the hook
+		// stays advisory: Claude Code does not gate the next Write on
+		// a broken build. This is the intentional shape — a blocking
+		// hook would create friction during refactors where
+		// intermediate states are knowingly broken, and Claude Code
+		// has no --skip-hook escape hatch. The command must stay
+		// POSIX-sh compatible (it runs under /bin/sh, which is dash
+		// on Debian/Ubuntu): no `set -o pipefail`, no process
+		// substitution, no ${VAR:-default}.
+		b.WriteString("          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -60\"\n")
 	}
 	b.WriteString("---\n")
 

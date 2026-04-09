@@ -446,8 +446,9 @@ Default for all generated agents: \field{memory: project}.
 % ===================================================================
 
 Agent frontmatter supports lifecycle hooks scoped to the agent's
-execution \coderef{DOC-5}. These provide behavioral enforcement
-beyond what system prompt instructions can guarantee.
+execution \coderef{DOC-5}. These make quality gates visible at the
+point of the file write instead of leaving them as instructions the
+agent may forget to run.
 
 \subsection{Implementation Agents}
 
@@ -461,12 +462,29 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "make check 2>&1 | tail -20"
+          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -60"
 \end{lstlisting}
 
-This enforces \cmd{make check} after every file write ---
-behavioral enforcement, not instruction. The hook runs
-automatically; the agent does not need to remember to run it.
+This runs \cmd{make check} after every file write and surfaces the
+first 60 lines of output in the tool-result stream --- visible
+enforcement, not blocking enforcement. The pipe to \cmd{head} masks
+the exit code, so Claude Code does not gate the next Write on a
+broken build. The hook runs automatically; the agent does not need
+to remember to run it, and can still proceed through intermediate
+states during a refactor. The window size (60 lines) catches both
+the compile-error case --- Go compile errors fire at the top of
+\cmd{make check} output and short-circuit the rest --- and the
+first-failing-test case, since \cmd{-race -count=1 -v} test runs
+surface the first \texttt{FAIL:} near the top before the 500+
+lines of trailing verbose output that would push a \cmd{tail -20}
+window off the relevant error. The subshell and
+\field{\$CLAUDE\_PROJECT\_DIR} expansion pin cwd to the project
+root so \cmd{make check} resolves against the repo Makefile even
+if the sub-agent has cd'd into a subdirectory before the Write or
+Edit tool fires. The command runs under \fpath{/bin/sh} (which is
+\cmd{dash} on Debian/Ubuntu); use POSIX-sh syntax only. Bashisms
+like \cmd{set -o pipefail}, process substitution, and
+\field{\$\{VAR:-default\}} are not portable and must be avoided.
 
 \subsection{Review Agents}
 
