@@ -973,7 +973,8 @@ func printReflections(rs []mission.Reflection) {
 // `null`) so scripted consumers can decode into []Event without a
 // nil guard. In human mode the events render as one-per-line with
 // timestamp, actor, type, and a short payload summary; warnings
-// go to stderr so stdout remains clean for piping.
+// render as an in-band "Warnings:" footer on stdout so a caller
+// piping the output to a file still sees damage.
 //
 // Both filter flags are optional and AND-composed. `--event`
 // accepts a comma-separated list; unknown types are not rejected

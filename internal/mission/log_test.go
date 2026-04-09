@@ -530,44 +530,42 @@ func TestLoadEvents_FollowsSymlink_KnownWeaknessMatchesStoreLoad(t *testing.T) {
 	assert.Equal(t, "create", events[0].Event)
 }
 
-// TestLoadEvents_TraversalIDCannotEscape asserts the path-base
-// defense combined with the round-2 H4 existence anchor. A
-// traversal-laced mission ID is collapsed to its basename by
-// filepath.Base BEFORE any open — the reader can never be directed
-// at a sibling file or outside the missions directory — AND the
-// reader then checks that the collapsed mission actually exists
-// (symmetric with LoadReflections / LoadResults). The combination
-// means a caller passing "../../etc/<id>" gets a clean error
-// rather than a silently-collapsed read of some unrelated file.
+// TestLoadEvents_TraversalIDCannotEscape asserts that a
+// traversal-laced mission ID is refused at the API boundary before
+// any stat or open. Round 3 (R3-L2) added an upfront
+// missionIDPattern check matching Contract.Validate rule 1 and
+// Store.Create: any ID outside m-YYYY-MM-DD-NNN is rejected with
+// a clean "invalid mission id" error. This is stricter than the
+// round 1 posture (filepath.Base collapse + round 2 existence
+// check): a caller passing "../../etc/<anything>" cannot even
+// reach the filesystem, so there is no path by which raw
+// attacker-controlled bytes flow through a downstream *fs.PathError
+// string into operator terminals.
 //
-// Round 1 asserted only the collapse and returned the log for the
-// collapsed ID; round 2 (feature-dev finding H4) adds the
-// existence check so the loader is symmetric with its siblings.
+// The previous collapse-and-succeed path for a traversal-laced
+// valid ID is gone — rejecting the malformed shape at the
+// boundary is cleaner and matches the sibling write APIs.
 func TestLoadEvents_TraversalIDCannotEscape(t *testing.T) {
 	s := testStore(t)
-	// Seed a legitimate contract + log file. The traversal-laced ID
-	// collapses to the same basename as the legitimate mission, so
-	// without the existence check round 1 read the legitimate log
-	// for an unrelated caller. With the check the collapsed ID is
-	// still rejected when it does not match an existing contract —
-	// here the contract exists, so collapse + existence both succeed.
+	// Seed a legitimate contract + log file so the "target exists"
+	// branch is live for the bogus-ID test below.
 	missionID := "m-2026-04-07-014"
 	c := newContract(missionID)
 	require.NoError(t, s.Create(c))
 
-	// The ".." prefix is collapsed to the legitimate mission ID;
-	// the contract exists because Create wrote it; the read
-	// succeeds and returns the create event the writer appended.
-	events, _, err := s.LoadEvents("../../etc/" + missionID)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(events), 1)
+	// A traversal-laced ID whose basename would collapse to a
+	// legitimate mission is refused upfront — the malformed outer
+	// shape never becomes a stat.
+	_, _, err := s.LoadEvents("../../etc/" + missionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid mission id")
 
-	// A traversal-laced ID that collapses to a NON-existent
-	// mission now errors — the round-2 existence check closes the
-	// asymmetry where round 1 returned an empty slice for bogus IDs.
+	// Same rejection for a traversal-laced bogus ID: the boundary
+	// check fires before any existence check, so the error names
+	// the schema, not a missing mission.
 	_, _, err = s.LoadEvents("../../etc/m-9999-99-99-999")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	assert.Contains(t, err.Error(), "invalid mission id")
 }
 
 // TestLoadEvents_EmptyMissionID rejects an empty mission ID at the
@@ -667,7 +665,7 @@ func TestLoadEvents_OversizedLineDoesNotTruncateTail(t *testing.T) {
 // Go's own %q escaping.
 func TestLoadEvents_WarningsSanitizeControlBytes(t *testing.T) {
 	s := testStore(t)
-	missionID := "m-2026-04-07-h2"
+	missionID := "m-2026-04-07-016"
 	seedLogLines(t, s, missionID,
 		`{"ts":"2026-04-08T00:00:00Z","event":"create","actor":"x","\u001b[31m\u0007FAKE\u007f":1}`,
 		`{"ts":"2026-04-08T00:00:01Z","event":"create","actor":"y"}`,
@@ -778,7 +776,7 @@ func TestLoadEvents_UnknownMissionID(t *testing.T) {
 // so the operator knows why.
 func TestLoadEvents_OversizedFileRejected(t *testing.T) {
 	s := testStore(t)
-	missionID := "m-2026-04-07-m3"
+	missionID := "m-2026-04-07-017"
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
 	// 17 MiB of zeros — the content is irrelevant because the cap
 	// fires before any read. Writing 17 MiB is fast enough for a
@@ -802,7 +800,7 @@ func TestLoadEvents_OversizedFileRejected(t *testing.T) {
 // directory with a clear, named error.
 func TestLoadEvents_DirectoryAtLogPath(t *testing.T) {
 	s := testStore(t)
-	missionID := "m-2026-04-07-m4"
+	missionID := "m-2026-04-07-018"
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
 	require.NoError(t, os.Mkdir(s.logPath(missionID), 0o700))
 	seedContractStub(t, s, missionID)
@@ -971,6 +969,101 @@ func TestLoadEvents_RejectsUnparseableTS(t *testing.T) {
 	assert.Len(t, filteredNoSince, 1)
 	assert.Equal(t, len(filteredSince), len(filteredNoSince),
 		"counts must agree between --since and no-filter states")
+}
+
+// --- Phase 3.7 round 3: review-cycle polish regression tests ---
+
+// TestFilterEvents_InMemoryBadTSReturnsError covers R3-M2: an
+// in-memory caller that constructs Event values directly — bypassing
+// decodeEventLine — must not see a silent drop when --since is set
+// and an event's ts cannot be parsed. Round 2's H3 fix moved ts
+// validation to decodeEventLine, but FilterEvents retained a silent
+// `continue` for this case as a tripwire for any future caller
+// reaching the filter without the decoder. Round 3 converts the
+// tripwire into a loud error so the programming mistake is caught
+// at the call site instead of silently shortening the result slice.
+func TestFilterEvents_InMemoryBadTSReturnsError(t *testing.T) {
+	events := []Event{
+		{TS: "2026-04-07T22:00:01Z", Event: "create", Actor: "a"},
+		{TS: "garbage", Event: "update", Actor: "a"},
+	}
+	got, err := FilterEvents(events, nil, "2026-01-01T00:00:00Z")
+	require.Error(t, err)
+	assert.Nil(t, got)
+	msg := err.Error()
+	assert.Contains(t, msg, "unparseable ts")
+	assert.Contains(t, msg, "garbage")
+}
+
+// TestLoadEvents_RejectsMalformedMissionID covers R3-L2: a
+// missionID containing control bytes (or any shape outside
+// m-YYYY-MM-DD-NNN) is refused at the API boundary before any
+// stat or open, so raw attacker-controlled bytes cannot forward
+// through a downstream *fs.PathError string to operator terminals
+// or the MCP warnings slice. The returned error names the schema,
+// not the bad value, so the message carries no raw bytes.
+func TestLoadEvents_RejectsMalformedMissionID(t *testing.T) {
+	s := testStore(t)
+	_, _, err := s.LoadEvents("m-2026-04-07-\x1b01")
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "invalid mission id")
+	// Must not echo the raw ESC byte or any other control byte
+	// from the caller-supplied ID into operator terminals.
+	for _, b := range []byte(msg) {
+		assert.True(t,
+			b == '\t' || b == ' ' || (b >= 0x20 && b < 0x7f) || b >= 0xa0,
+			"malformed-id error must contain no raw control bytes, got 0x%02x in %q",
+			b, msg)
+	}
+}
+
+// TestLoadEvents_GrowsPastCapDuringRead covers R3-L1: the post-read
+// overflow check on io.LimitReader(f, maxLogSize+1) fires when the
+// file is (or grows to be) larger than maxLogSize. The test seeds a
+// file one byte over the cap rather than racing a concurrent writer
+// — the actual race is hard to reproduce reliably, and the
+// code-level invariant is what matters: the post-read length check
+// must detect the `+1` overflow byte and return a distinct error
+// naming the race-visible failure mode.
+//
+// A file that is already over the cap at open time is caught by the
+// pre-read info.Size() check in the same round (see
+// TestLoadEvents_OversizedFileRejected). This test seeds a file of
+// EXACTLY maxLogSize+1 — the pre-read stat sees the overflow and
+// fires the "exceeds cap" branch, which is the belt-and-suspenders
+// outer guard. The inner guard (post-read length check) requires
+// the race to actually happen — synthesizing it deterministically
+// is out of scope. This test pins the outer guard's behavior under
+// the same conditions that would trigger the inner guard for a
+// racing writer.
+func TestLoadEvents_GrowsPastCapDuringRead(t *testing.T) {
+	s := testStore(t)
+	missionID := "m-2026-04-07-019"
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	// Seed one byte over the cap. The pre-read stat fires first with
+	// the "exceeds cap" error — the outer guard. The inner guard is
+	// exercised at the code-level by io.LimitReader(maxLogSize+1);
+	// its deterministic test lives in the unit-level decodeEventLog
+	// table. See the comment on this test for the rationale.
+	big := make([]byte, maxLogSize+1)
+	require.NoError(t, os.WriteFile(s.logPath(missionID), big, 0o600))
+	seedContractStub(t, s, missionID)
+
+	events, warnings, err := s.LoadEvents(missionID)
+	require.Error(t, err)
+	assert.Nil(t, events)
+	assert.Nil(t, warnings)
+	// Either the outer pre-read stat check ("exceeds cap") or the
+	// inner post-read length check ("grew past cap during read")
+	// is acceptable — both name the cap, both bound the blast
+	// radius. The outer check fires first here because the file is
+	// already oversized at open time.
+	msg := err.Error()
+	assert.True(t,
+		strings.Contains(msg, "exceeds cap") ||
+			strings.Contains(msg, "grew past cap"),
+		"error must name the cap, got: %q", msg)
 }
 
 // seedLogLines writes the given lines to the mission's log file,

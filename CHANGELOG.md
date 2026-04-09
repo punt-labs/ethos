@@ -63,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Phase 3.7: append-only mission event log reader API**
-  (`ethos-07m.11`, rounds 1–2) — a public `Store.LoadEvents(missionID)`
+  (`ethos-07m.11`, rounds 1–3) — a public `Store.LoadEvents(missionID)`
   method, a new `ethos mission log <id>` CLI subcommand, and a new
   MCP `mission log` method expose the JSONL event audit trail every
   Phase 3.1+ writer has been quietly appending to. The reader is
@@ -124,7 +124,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Details` map is opaque payload, not identity, so the reader
   preserves it untouched. There is no public writer path: DES-031
   round 3 unexported the writer as a deadlock footgun, and 3.7
-  does not re-introduce one.
+  does not re-introduce one. Round 3 review-cycle polish (1 MEDIUM +
+  4 LOW findings carried from round 2's own fix work): the
+  `runMissionLog` godoc (`cmd/ethos/mission.go`) no longer claims
+  warnings go to stderr — the comment now matches the M2 fix that
+  routes them to the stdout footer (R3-M1); `FilterEvents` converts
+  its silent `continue` on an unparseable in-memory ts into a loud
+  error (`event N has unparseable ts "..."`) so a future caller
+  constructing `Event` values directly and bypassing the decoder
+  gets a programmatic signal instead of a shorter-than-expected
+  result slice (R3-M2); `LoadEvents` opens the log file once and
+  reads through `io.LimitReader(f, maxLogSize+1)` with a post-read
+  length check for the overflow byte, closing the TOCTOU window
+  where a concurrent writer could grow the file past the 16 MiB
+  cap between the old `os.Stat` and `os.ReadFile` pair (R3-L1);
+  `LoadEvents` now rejects a malformed `missionID` at the API
+  boundary via `missionIDPattern.MatchString` before any stat or
+  open, so raw attacker-controlled bytes never reach a downstream
+  `*fs.PathError` string that the CLI or MCP walker forwards to
+  operator terminals (R3-L2) — this aligns the reader with
+  `Store.Create` and the other sibling write APIs and tightens
+  `TestLoadEvents_TraversalIDCannotEscape` to assert the new
+  upfront refusal rather than the old collapse-and-succeed path;
+  and the reader-error wrap inside `decodeEventLog` now routes the
+  error string through `sanitizeWarning` as belt-and-suspenders
+  for the file-handle reader introduced by R3-L1 (R3-L3). Three
+  new round 3 tests:
+  `TestFilterEvents_InMemoryBadTSReturnsError`,
+  `TestLoadEvents_RejectsMalformedMissionID`, and
+  `TestLoadEvents_GrowsPastCapDuringRead`.
 - **Structured result artifacts and close gate** (Phase 3.6,
   `ethos-07m.10`) — worker output is no longer prose. A new
   `mission.Result` type in `internal/mission/result.go` pins a

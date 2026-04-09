@@ -176,6 +176,17 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, nil, fmt.Errorf("missionID is required")
 	}
+	// Reject malformed IDs at the API boundary before any stat/open.
+	// Matches Contract.Validate (rule 1) and Store.Create: an ID
+	// with control bytes, traversal segments, or any other shape
+	// outside m-YYYY-MM-DD-NNN cannot name a legitimate mission, and
+	// rejecting here keeps attacker-controlled bytes out of any
+	// downstream *fs.PathError string that flows to operator
+	// terminals via the CLI's stderr path or the MCP warnings slice.
+	if !missionIDPattern.MatchString(missionID) {
+		return nil, nil, fmt.Errorf(
+			"invalid mission id: must match m-YYYY-MM-DD-NNN")
+	}
 	// Existence check on the contract file first — symmetric with
 	// LoadReflections and LoadResults, which implicitly require the
 	// mission to exist because they both rely on Store.Load or a
@@ -188,15 +199,24 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 		}
 		return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, err)
 	}
-	// Stat the log file next: distinguish missing file (normal, returns
-	// empty), directory at path (attacker-planted), and oversized file
-	// (pathological) before committing to a full read.
+	// Open, stat, and read the log file through a single fd so there
+	// is no TOCTOU window between a path-level stat and a path-level
+	// read: a concurrent writer growing the file past the cap would
+	// otherwise silently bypass the cap. io.LimitReader enforces the
+	// cap at read time regardless of any growth after the stat, and
+	// the post-read length check turns the `+1` overflow byte into a
+	// distinct error naming the race.
 	logPath := s.logPath(missionID)
-	info, err := os.Stat(logPath)
+	f, err := os.Open(logPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return []Event{}, nil, nil
 		}
+		return nil, nil, fmt.Errorf("opening event log for %q: %w", missionID, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
 		return nil, nil, fmt.Errorf("stat event log for %q: %w", missionID, err)
 	}
 	if info.IsDir() {
@@ -207,15 +227,14 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 			"event log for %q: %d bytes exceeds cap %d",
 			missionID, info.Size(), maxLogSize)
 	}
-	data, err := os.ReadFile(logPath)
+	data, err := io.ReadAll(io.LimitReader(f, maxLogSize+1))
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			// Raced with a delete between stat and read. Treat as
-			// missing file — the caller sees the same empty state as
-			// if the stat had caught it first.
-			return []Event{}, nil, nil
-		}
 		return nil, nil, fmt.Errorf("reading events for %q: %w", missionID, err)
+	}
+	if int64(len(data)) > maxLogSize {
+		return nil, nil, fmt.Errorf(
+			"event log for %q: grew past cap %d during read",
+			missionID, maxLogSize)
 	}
 	return decodeEventLog(data)
 }
@@ -281,9 +300,16 @@ func decodeEventLog(data []byte) ([]Event, []string, error) {
 			// failure. Surface what we decoded before the failure as
 			// a warning with the line number just attempted, then
 			// return the error so the caller sees the distinction.
+			// The underlying reader in decodeEventLog today is
+			// bytes.NewReader which only returns io.EOF, so this path
+			// is defensive. Sanitize the error string regardless: a
+			// future caller wiring a file-backed reader cannot
+			// accidentally forward raw bytes from an OS error string
+			// through to operator terminals.
 			warnings = append(warnings, sanitizeWarning(
 				fmt.Sprintf("line %d: reading: %v", lineNo+1, readErr)))
-			return events, warnings, fmt.Errorf("reading event log: %w", readErr)
+			return events, warnings, errors.New(sanitizeWarning(
+				fmt.Sprintf("reading event log: %v", readErr)))
 		}
 	}
 	return events, warnings, nil
@@ -434,23 +460,23 @@ func FilterEvents(events []Event, types []string, since string) ([]Event, error)
 		}
 	}
 	out := []Event{}
-	for _, e := range events {
+	for i, e := range events {
 		if typeSet != nil {
 			if _, ok := typeSet[e.Event]; !ok {
 				continue
 			}
 		}
 		if hasCutoff {
-			// ts is guaranteed to be RFC3339 by decodeEventLine, so a
-			// parse failure here indicates an event that came from a
-			// caller bypassing the decoder — a programming error, not
-			// an input-trust failure. Drop such events so an in-memory
-			// caller constructing Event values with a malformed ts
-			// does not crash the filter; the LoadEvents path is the
-			// trust-boundary guarantee.
+			// decodeEventLine guarantees a valid RFC3339 ts on every
+			// event that flows through LoadEvents, so a parse failure
+			// here means the caller constructed Event values directly
+			// and skipped the decoder. Return a loud error rather than
+			// silently dropping the row: the silent drop was a
+			// tripwire for any future in-process caller.
 			ts, err := time.Parse(time.RFC3339, e.TS)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf(
+					"event %d has unparseable ts %q: %w", i, e.TS, err)
 			}
 			if ts.Before(cutoff) {
 				continue
