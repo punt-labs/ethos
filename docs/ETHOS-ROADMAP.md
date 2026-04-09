@@ -608,22 +608,25 @@ decision is the leader's hardest job.
 fixed:
 
 ```yaml
-result:
-  mission: m-2026-04-07-001
-  verdict: pass | fail | escalate
-  confidence: 0.0-1.0
-  files_changed:
-    - path: internal/hook/stdin.go
-      lines_added: 23
-      lines_removed: 4
-  evidence:
-    - test: TestShellScript_SessionStart
-      status: pass
-      duration_ms: 12
-  open_questions:
-    - "Should we backport this to v2.7.x?"
-  prose: |
-    Optional human-facing summary, not the coordination substrate.
+mission: m-2026-04-01-007
+round: 1
+created_at: 2026-04-01T16:30:00Z
+author: worker-handle
+verdict: pass
+confidence: 0.9
+files_changed:
+  - path: internal/hook/stdin.go
+    added: 23
+    removed: 4
+evidence:
+  - name: TestShellScript_SessionStart
+    status: pass
+  - name: make check
+    status: pass
+open_questions:
+  - "Should we backport this to v2.7.x?"
+prose: |
+  Optional human-facing summary, not the coordination substrate.
 ```
 
 The leader's synthesis step reads structured fields, not prose. Prose
