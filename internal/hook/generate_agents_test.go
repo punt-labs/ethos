@@ -28,11 +28,16 @@ import (
 //
 // Not suitable for subprocesses — see feedback_subprocess_tests.md.
 //
-// A drain goroutine reads from the pipe concurrently with fn so
-// stderr output larger than the pipe buffer (~64 KiB on Linux)
-// cannot deadlock. The read end is always closed via defer so no
-// file descriptor is leaked on test panics.
-func captureStderr(t *testing.T, fn func()) string {
+// A drain goroutine reads from the pipe concurrently with fn so stderr
+// output larger than the pipe buffer (~64 KiB on Linux) cannot
+// deadlock. Cleanup happens in a single deferred path so the helper
+// is panic-safe: os.Stderr is restored first (any write after this
+// point goes to the real stderr, not the pipe), then the writer is
+// closed to unblock the drain goroutine, the drain is joined, the
+// reader is closed, and the drained buffer is copied into the named
+// return value. Both file descriptors are always freed, even if fn
+// panics.
+func captureStderr(t *testing.T, fn func()) (out string) {
 	t.Helper()
 	old := os.Stderr
 	r, w, err := os.Pipe()
@@ -48,13 +53,14 @@ func captureStderr(t *testing.T, fn func()) string {
 
 	defer func() {
 		os.Stderr = old
+		_ = w.Close()
+		<-done
 		_ = r.Close()
+		out = buf.String()
 	}()
 
 	fn()
-	require.NoError(t, w.Close())
-	<-done
-	return buf.String()
+	return
 }
 
 // setupTestRepo creates a temp directory tree with repo config, team,
@@ -680,9 +686,13 @@ func TestDeriveAntiResponsibilities_UnsupportedEdgeType(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	assert.Contains(t, stderr, "unsupported type")
+	// The warning must name the From role, the To role, and the
+	// offending type so a user grepping stderr can locate the exact
+	// edge in the YAML without scanning every outgoing edge from From.
+	assert.Contains(t, stderr, "unsupported edge")
 	assert.Contains(t, stderr, "collaborates_with")
-	assert.Contains(t, stderr, "go-specialist")
+	assert.Contains(t, stderr, `"go-specialist"`)
+	assert.Contains(t, stderr, `"coo"`)
 
 	data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
 	require.NoError(t, readErr)

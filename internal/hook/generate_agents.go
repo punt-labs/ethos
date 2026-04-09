@@ -159,8 +159,8 @@ func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, r
 		}
 		if c.Type != "reports_to" {
 			fmt.Fprintf(os.Stderr,
-				"ethos: generate-agents: anti-responsibilities: role %q has edge with unsupported type %q (expected \"reports_to\") — skipping\n",
-				roleName, c.Type)
+				"ethos: generate-agents: anti-responsibilities: unsupported edge from %q to %q with type %q (expected \"reports_to\") — skipping\n",
+				c.From, c.To, c.Type)
 			continue
 		}
 		target, err := roles.Load(c.To)
