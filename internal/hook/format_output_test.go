@@ -721,11 +721,13 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	// section, not as a header row. No top-level Bead: field any more.
 	assert.Contains(t, ctx, "bead: ethos-07m.5")
 	assert.NotContains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
-	// Created uses local-time formatting; the layout
-	// "2026-01-02 15:04 MST" contains the year-month pair 2026-04
-	// regardless of which local timezone the test runs in (a TZ shift
-	// can move the day of month but not the month within a 24h
-	// window, and the year is absolute).
+	// Created uses local-time formatting; the Go reference layout
+	// "2006-01-02 15:04 MST" renders the input 2026-04-07T21:30:00Z
+	// with year-month "2026-04" in any local timezone. A TZ shift
+	// can move the day of month but, for an input that sits well
+	// inside April, cannot move the rendered month or year. The
+	// assertion relies on the fact that 2026-04-07 is mid-April,
+	// not on the layout being timezone-invariant in general.
 	assert.Contains(t, ctx, "2026-04-")
 	assert.Contains(t, ctx, "Write set:")
 	assert.Contains(t, ctx, "- internal/mission/")

@@ -1236,13 +1236,15 @@ func writeMissionInputs(ctx *strings.Builder, raw any) {
 
 // FormatLocalTime converts an RFC3339 timestamp to a local-time
 // display form (`2006-01-02 15:04 MST`). The year and zone
-// abbreviation are present so two operators in different timezones
-// reading the same mission log identify the same event without
-// ambiguity. Exported so cmd/ethos can share the same formatter
-// across session, mission, and any future command that renders a
-// timestamp to the user — one implementation, one visual convention.
-// If parsing fails, returns the raw string unchanged so the caller
-// still gets something displayable.
+// (abbreviation when the local zone has an IANA name, numeric
+// offset such as `+0530` otherwise) are present so two operators
+// in different timezones reading the same mission log identify
+// the same event without ambiguity. Exported so cmd/ethos can
+// share the same formatter across session, mission, and any
+// future command that renders a timestamp to the user — one
+// implementation, one visual convention. If parsing fails,
+// returns the raw string unchanged so the caller still gets
+// something displayable.
 func FormatLocalTime(raw string) string {
 	t, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
