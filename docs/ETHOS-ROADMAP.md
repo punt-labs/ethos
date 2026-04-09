@@ -268,15 +268,19 @@ collaboration graph and emits a "What You Don't Do" section.
 ### 2.2 Role-Based Hooks in Generated Frontmatter
 
 **Problem**: Implementation agents should run `make check` after every
-file write. This is behavioral enforcement, not instruction — a hook
-guarantees it happens.
+file write. This is visible enforcement, not instruction — a hook
+surfaces the output at the point of the write so the agent sees it
+without having to remember to run the command.
 
 **Evidence**: agent-identity-spec.tex §6 designs PostToolUse hooks for
 implementation roles. claude-config-template uses `pre_tool_use.py` for
 pre-execution safety checks.
 
 **Solution**: Roles with write tools get a PostToolUse hook in generated
-frontmatter:
+frontmatter. The command pins cwd to `$CLAUDE_PROJECT_DIR` so `make
+check` resolves against the repo Makefile even if the sub-agent has
+cd'd into a subdirectory, and pipes the first 60 lines of output
+through `head -n 60` so the first failure is always visible:
 
 ```yaml
 hooks:
@@ -284,11 +288,27 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "make check 2>&1 | tail -20"
+          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -n 60"
 ```
 
-Review-only roles get no hooks (tool restrictions already prevent
-writes).
+The 60-line window fits this repo's `make check` shape: the target is
+a sequence of quiet-on-success stages (`go vet`, `staticcheck`,
+`shellcheck`, `markdownlint`, then non-verbose
+`go test -race -count=1 ./...` — no `-v` flag), so the first failure
+always lands near the top. A clean run is about 18 lines; a failing
+run is tens to low hundreds, well inside the window. Go compile
+errors short-circuit the whole sequence in 5-30 lines and land at the
+top. A failing lint or test stage is equally visible because every
+preceding stage was silent on success. Non-verbose `go test` prints
+one line per package on success and a single `--- FAIL:` block for
+the first failing package on failure. `tail -20` would lose the first
+`FAIL:` to the trailing `make: *** [check] Error 1` summary; `head -n
+60` keeps it visible. The hook is advisory, not blocking — the pipe
+to `head` masks the exit code, so Claude Code does not gate the next
+Write on a broken build. The command runs under `/bin/sh`; use
+POSIX-sh syntax only (the `-n N` form of `head` is POSIX-canonical;
+the BSD `-N` shortcut is not). Review-only roles get no hooks (tool
+restrictions already prevent writes).
 
 **Delivery**: Hook templates per role category in `GenerateAgentFiles()`.
 

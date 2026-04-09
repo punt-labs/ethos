@@ -446,8 +446,9 @@ Default for all generated agents: \field{memory: project}.
 % ===================================================================
 
 Agent frontmatter supports lifecycle hooks scoped to the agent's
-execution \coderef{DOC-5}. These provide behavioral enforcement
-beyond what system prompt instructions can guarantee.
+execution \coderef{DOC-5}. These make quality gates visible at the
+point of the file write instead of leaving them as instructions the
+agent may forget to run.
 
 \subsection{Implementation Agents}
 
@@ -461,12 +462,42 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "make check 2>&1 | tail -20"
+          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -n 60"
 \end{lstlisting}
 
-This enforces \cmd{make check} after every file write ---
-behavioral enforcement, not instruction. The hook runs
-automatically; the agent does not need to remember to run it.
+This runs \cmd{make check} after every file write and surfaces
+the first 60 lines of output wherever Claude Code routes
+\field{PostToolUse} command-hook stdout (typically into the
+agent's tool-result stream) --- visible enforcement, not blocking
+enforcement. The pipe to \cmd{head} masks the exit code, so
+Claude Code does not gate the next Write on a broken build. The
+hook runs automatically; the agent does not need to remember to
+run it, and can still proceed through intermediate states during
+a refactor. The window size (60 lines) fits this repo's
+\cmd{make check} shape: the target is a sequence of
+quiet-on-success stages (\cmd{go vet}, \cmd{staticcheck},
+\cmd{shellcheck}, \cmd{markdownlint}, then non-verbose
+\cmd{go test -race -count=1 ./...} --- no \cmd{-v} flag), so the
+first failure always lands near the top. Go compile errors
+short-circuit the whole sequence in 5--30 lines. A failing lint
+or test stage is equally visible because every preceding stage
+was silent on success. Non-verbose \cmd{go test} prints one line
+per package on success and a single \texttt{--- FAIL:} block for
+the first failing package on failure, which is typically tens of
+lines --- well inside the 60-line window. \cmd{tail -20} would
+lose the first \texttt{FAIL:} to the trailing
+\cmd{make: *** [check] Error 1} summary and the last test's
+cleanup lines; \cmd{head -n 60} keeps the first failure
+visible. The subshell and \field{\$CLAUDE\_PROJECT\_DIR}
+expansion pin cwd to the project root so \cmd{make check}
+resolves against the repo Makefile even if the sub-agent has
+cd'd into a subdirectory before the Write or Edit tool fires.
+The command runs under \fpath{/bin/sh} (which is \cmd{dash} on
+Debian/Ubuntu); use POSIX-sh syntax only. Bashisms like
+\cmd{set -o pipefail} and process substitution are not portable
+and must be avoided. The \cmd{-n 60} form of \cmd{head} is
+POSIX-canonical; the BSD shortcut \cmd{-60} is not specified by
+POSIX and should not be used for the same reason.
 
 \subsection{Review Agents}
 
