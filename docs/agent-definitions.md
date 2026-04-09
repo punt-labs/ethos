@@ -331,38 +331,68 @@ If the personality is missing, the SubagentStart hook failed to match the `agent
 
 **Stale agent reuse.** Reusing a sub-agent across unrelated tasks saves one startup but carries context that confuses the model. See [Context Hygiene](#context-hygiene). When in doubt, spawn fresh.
 
-## Writing Effective Delegation Prompts (Missions)
+## Writing Effective Delegation Prompts
 
 The agent definition defines who the agent is and what it can do. The
-delegation prompt defines what it should do *right now*. This is the
-mission — a typed contract for a single task.
+delegation prompt defines what it should do *right now*. Two artifacts
+carry that "right now" payload, and they are not interchangeable:
+
+- The **delegation prompt** is the freeform string the leader passes
+  to the `Agent` tool (or equivalent). It is prose. It frames the
+  task, recaps prior research, names the bead, and tells the worker
+  what to read first. Leadership thinking lives here.
+- The **mission contract** is the typed YAML artifact created via
+  `ethos mission create --file <yaml>` and stored at
+  `~/.punt-labs/ethos/missions/<id>.yaml`. Schema-validated at parse
+  time, runtime-enforced by the Phase 3 hooks. Identity, write set,
+  success criteria, and budget live here.
+
+Both exist per delegation. The prompt can — and should — reference
+the mission ID and tell the worker to load the contract via
+`ethos mission show <id>`. The contract pins the typed fields; the
+prompt carries the prose context. They reinforce each other.
 
 ### Mission Structure
 
-A good delegation prompt contains:
+The mission contract is a typed YAML artifact, not freeform prose.
+The leader writes it once, registers it via
+`ethos mission create --file <path>`, and ethos stores it under
+`~/.punt-labs/ethos/missions/<id>.yaml` where the runtime can
+enforce it. See DES-031 and the architecture spec's "Mission
+Primitive" section for the full runtime model.
 
-```text
-Task: [one-sentence description of what to build/find/review]
-
-Inputs:
-  - [specific files, data, or context the agent needs]
-  - [relevant findings from prior research — synthesized, not raw]
-
-Outputs:
-  - [what the agent should produce — files, findings, a report]
-  - [format if structured output is needed]
-
-Success criteria:
-  - [concrete, verifiable conditions]
-  - [tests that must pass, checks that must be green]
-
-files_owned:
-  - [specific paths the agent may create or modify]
-
-Constraints:
-  - [what the agent must NOT do]
-  - [design decisions already made that the agent must respect]
+```yaml
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-9ai.x
+  context: |
+    Add Model field to internal/role/role.go and wire through
+    GenerateAgentFiles. Default to "inherit" when empty.
+write_set:
+  - internal/role/role.go
+  - internal/role/role_test.go
+  - internal/hook/generate_agents.go
+  - internal/hook/generate_agents_test.go
+success_criteria:
+  - Role struct has Model string field with yaml/json tags
+  - GenerateAgentFiles emits model in frontmatter when non-empty
+  - Default is "inherit" when Model is empty
+  - make check passes
+  - Tests cover: model set, empty, inherit
+budget:
+  rounds: 2
+  reflection_after_each: true
 ```
+
+Task framing, constraints, and expected outputs are leadership
+*thinking* — they shape the delegation prompt's prose and the
+worker's understanding. The contract is the *artifact*: typed
+fields the runtime can enforce. The leader's freeform prompt then
+tells the worker something like "read mission `m-2026-04-09-001`
+via `ethos mission show` before you start."
 
 ### Mission Anti-Patterns
 
