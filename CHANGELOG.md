@@ -500,6 +500,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`team.Store.Load` silently accepted structurally-invalid team
+  YAML** (`ethos-2z2`) — the loader unmarshaled a team file and
+  returned it without calling `Validate`, so a hand-edited team
+  with a typo'd `collaboration.from` (e.g. `go-speciallist` instead
+  of `go-specialist`) silently matched zero members at derivation
+  time and produced no warning. The 9ai.1 round 2 fix added a
+  narrow typo check for `collaboration.Type` in the anti-
+  responsibility generator, but the symmetric check for typo'd
+  `From` values was deferred to this bead because the right fix is
+  at the store layer, not the consumer. `team.Validate` is now
+  split into `ValidateStructural` (pure function: slug rules,
+  member and collaboration invariants — no cross-package lookups)
+  and the full `Validate` (calls `ValidateStructural` first, then
+  runs the identity and role existence callbacks). `Store.Load`
+  calls `ValidateStructural` after `yaml.Unmarshal` and wraps any
+  error as `validating team %q: %w`. Every previously-valid team
+  YAML still loads unchanged; only files that were silently-
+  malformed now fail loudly. The anti-responsibility generator's
+  `c.Type != "reports_to"` branch is kept because it still fires
+  for valid-but-deferred types (`collaborates_with`, `delegates_to`),
+  which are a semantic-level "not handled by MVP" decision — but
+  the branch can no longer fire for typo'd or unknown types,
+  because `ValidateStructural` rejects those at Load. Three hook
+  test fixtures that relied on the silent-accept behavior were
+  fixed by adding a dummy team member to fill the previously-
+  unfilled collaboration role. **Operational note**: a single
+  corrupt team YAML now fails mission-hash computation across all
+  evaluators (because `internal/mission/hash.go` walks every team);
+  this is fail-closed by design per DES-033 (silent-hash-bypass is
+  the worse failure mode) — the remediation is to fix or remove the
+  broken team file, not to delete the blocked mission.
 - **`GenerateAgentFiles` swallowed `LoadRepoConfig` errors**
   (`ethos-9ai.6`) — the SessionStart hook silently returned nil for
   any non-nil error from `resolve.LoadRepoConfig`, so a malformed

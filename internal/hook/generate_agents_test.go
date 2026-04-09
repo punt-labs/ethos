@@ -771,6 +771,13 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 			// therefore never sees ceo-empty and cannot name it in the
 			// preamble. The edge is not "filtered out" by preamble logic —
 			// it simply never enters the derived data in the first place.
+			//
+			// Post-ethos-2z2: ValidateStructural requires every
+			// collaboration from/to role to be filled by a team member.
+			// jfreeman (kind: human in setupTestRepo) fills ceo-empty
+			// here so the team passes Load. jfreeman's human kind means
+			// the main generator loop skips building a jfreeman.md
+			// file; no cross-test contamination.
 			name: "multiple reports_to, mixed emptiness",
 			setup: func(t *testing.T, root string) {
 				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
@@ -785,6 +792,7 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 					"members": []map[string]string{
 						{"identity": "claude", "role": "coo"},
 						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "jfreeman", "role": "ceo-empty"},
 					},
 					"collaborations": []map[string]string{
 						{"from": "go-specialist", "to": "ceo-empty", "type": "reports_to"},
@@ -821,6 +829,11 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 			// against a regression that reverts to iterating antiResps
 			// in walk order, which would interleave bullets if a future
 			// change reordered collaborations.
+			// Post-ethos-2z2: jfreeman (kind: human from setupTestRepo)
+			// fills the architect role so ValidateStructural passes on
+			// Load. The generator skips jfreeman because kind != agent,
+			// so no jfreeman.md is produced and the assertion anchors
+			// below still match bwk.md byte-for-byte.
 			name: "two non-empty targets, bullets grouped by target",
 			setup: func(t *testing.T, root string) {
 				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
@@ -837,6 +850,7 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 					"members": []map[string]string{
 						{"identity": "claude", "role": "coo"},
 						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "jfreeman", "role": "architect"},
 					},
 					"collaborations": []map[string]string{
 						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
@@ -977,17 +991,35 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 // overall derivation. The other target's bullets still appear, and
 // the stderr warning is captured and asserted so a future refactor
 // that silently drops the warning will fail this test.
+//
+// Post-ethos-2z2 Store.Load calls ValidateStructural, which rejects
+// any collaboration whose from/to role is not filled by a team
+// member. To preserve the "role file is missing" semantic under
+// test, the fixture adds jfreeman (a kind: human identity from
+// setupTestRepo) as a member with role "ghost" — that makes "ghost"
+// a filled role on the roster so Load accepts the team, but the
+// on-disk .punt-labs/ethos/roles/ghost.yaml file still does not
+// exist, so roles.Load("ghost") inside deriveAntiResponsibilities
+// still fails with the same "not found" error the test asserts.
+// jfreeman being kind human means the main generator loop skips
+// building a jfreeman.md file; no cross-test contamination.
 func TestDeriveAntiResponsibilities_MissingTarget(t *testing.T) {
 	root, _, _, _ := setupTestRepo(t)
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
 
-	// Wire two reports_to edges, one pointing at a nonexistent role.
+	// Wire two reports_to edges, one pointing at a role whose YAML
+	// file does not exist on disk.
 	writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
 		"name":         "engineering",
 		"repositories": []string{"punt-labs/ethos"},
 		"members": []map[string]string{
 			{"identity": "claude", "role": "coo"},
 			{"identity": "bwk", "role": "go-specialist"},
+			// jfreeman fills "ghost" so ValidateStructural passes.
+			// The ghost role YAML is deliberately not created, so
+			// roles.Load("ghost") downstream still fails — the
+			// invariant under test.
+			{"identity": "jfreeman", "role": "ghost"},
 		},
 		"collaborations": []map[string]string{
 			{"from": "go-specialist", "to": "ghost", "type": "reports_to"},
@@ -1028,11 +1060,19 @@ func TestDeriveAntiResponsibilities_MissingTarget(t *testing.T) {
 }
 
 // TestDeriveAntiResponsibilities_UnsupportedEdgeType verifies that a
-// non-reports_to edge from the agent's role (a typo like "report_to"
-// or a deferred type like "collaborates_with") is warned about and
-// skipped, not silently dropped. The team package's Load does not
-// call Validate, so hand-edited YAML with an invalid type can reach
-// the generator — the user must see the warning.
+// non-reports_to edge from the agent's role is warned about and
+// skipped, not silently dropped.
+//
+// Post-ethos-2z2: team.Store.Load calls ValidateStructural, which
+// rejects any collaboration type not in validCollabTypes. So the
+// only way a non-reports_to edge reaches the generator is if it is
+// a valid-but-deferred type — collaborates_with or delegates_to.
+// Those are semantic-level "not handled by MVP" decisions, not
+// structural errors, and deriveAntiResponsibilities warns on them
+// and continues. The fixture uses collaborates_with specifically to
+// exercise the valid-but-deferred path; a typo'd type like
+// "report_to" would be rejected at Load time and could never reach
+// this test.
 func TestDeriveAntiResponsibilities_UnsupportedEdgeType(t *testing.T) {
 	root, _, _, _ := setupTestRepo(t)
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")

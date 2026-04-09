@@ -93,7 +93,12 @@ func (s *Store) save(t *Team) error {
 	return nil
 }
 
-// Load reads a team by name.
+// Load reads a team by name. After unmarshaling, ValidateStructural
+// runs to reject teams with silently-broken invariants (typo'd
+// collaboration roles, invalid type, duplicate members) that Save
+// would have caught on the way in. Identity and role existence
+// checks remain on the Save path because they require cross-package
+// callbacks Store cannot supply without a circular import.
 func (s *Store) Load(name string) (*Team, error) {
 	p, err := s.path(name)
 	if err != nil {
@@ -109,6 +114,9 @@ func (s *Store) Load(name string) (*Team, error) {
 	var t Team
 	if err := yaml.Unmarshal(data, &t); err != nil {
 		return nil, fmt.Errorf("parsing team %q: %w", name, err)
+	}
+	if err := ValidateStructural(&t); err != nil {
+		return nil, fmt.Errorf("validating team %q: %w", name, err)
 	}
 	return &t, nil
 }
