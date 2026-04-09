@@ -257,7 +257,9 @@ func TestResolveAgent_ConfigSet(t *testing.T) {
 		filepath.Join(dir, "ethos.yaml"),
 		[]byte("agent: claude\n"), 0o644))
 
-	assert.Equal(t, "claude", ResolveAgent(root))
+	handle, err := ResolveAgent(root)
+	require.NoError(t, err)
+	assert.Equal(t, "claude", handle)
 }
 
 func TestResolveAgent_LegacyFallback(t *testing.T) {
@@ -268,15 +270,21 @@ func TestResolveAgent_LegacyFallback(t *testing.T) {
 		filepath.Join(dir, "config.yaml"),
 		[]byte("agent: legacy\n"), 0o644))
 
-	assert.Equal(t, "legacy", ResolveAgent(root))
+	handle, err := ResolveAgent(root)
+	require.NoError(t, err)
+	assert.Equal(t, "legacy", handle)
 }
 
 func TestResolveAgent_NoConfig(t *testing.T) {
-	assert.Equal(t, "", ResolveAgent(t.TempDir()))
+	handle, err := ResolveAgent(t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "", handle)
 }
 
 func TestResolveAgent_EmptyRoot(t *testing.T) {
-	assert.Equal(t, "", ResolveAgent(""))
+	handle, err := ResolveAgent("")
+	require.NoError(t, err)
+	assert.Equal(t, "", handle)
 }
 
 func TestResolveAgent_NoAgentField(t *testing.T) {
@@ -287,7 +295,55 @@ func TestResolveAgent_NoAgentField(t *testing.T) {
 		filepath.Join(dir, "ethos.yaml"),
 		[]byte("# empty config\n"), 0o644))
 
-	assert.Equal(t, "", ResolveAgent(root))
+	handle, err := ResolveAgent(root)
+	require.NoError(t, err)
+	assert.Equal(t, "", handle)
+}
+
+// TestResolveAgent_MalformedYAML verifies that a .punt-labs/ethos.yaml
+// that exists but cannot be parsed produces an error containing both
+// the "resolve agent" outer wrap and the inner "parsing repo config"
+// wrap from LoadRepoConfig. Pre-dc0, this path silently logged to
+// stderr and returned the empty string, making every caller treat
+// "broken config" and "not configured" as the same case.
+func TestResolveAgent_MalformedYAML(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "ethos.yaml"),
+		[]byte("agent: [unclosed\n"), 0o644))
+
+	handle, err := ResolveAgent(root)
+	require.Error(t, err)
+	assert.Equal(t, "", handle)
+	assert.Contains(t, err.Error(), "resolve agent",
+		"outer wrap must name the operation")
+	assert.Contains(t, err.Error(), "parsing repo config",
+		"inner wrap from LoadRepoConfig must be preserved")
+}
+
+// TestResolveAgent_PermissionError verifies the non-parse read-error
+// path. Uses the same skip-as-root pattern as
+// TestLoadRepoConfig_PermissionError — root bypasses file mode bits,
+// so the chmod 0o000 has no effect and the test would fail spuriously.
+func TestResolveAgent_PermissionError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("cannot test permission errors as root")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	f := filepath.Join(dir, "ethos.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("agent: claude\n"), 0o644))
+	require.NoError(t, os.Chmod(f, 0o000))
+	t.Cleanup(func() { os.Chmod(f, 0o644) }) //nolint:errcheck
+
+	handle, err := ResolveAgent(root)
+	require.Error(t, err)
+	assert.Equal(t, "", handle)
+	assert.Contains(t, err.Error(), "resolve agent")
+	assert.Contains(t, err.Error(), "reading")
 }
 
 // --- ResolveTeam tests ---
@@ -311,17 +367,64 @@ func TestResolveTeam(t *testing.T) {
 				filepath.Join(dir, "ethos.yaml"),
 				[]byte(tt.yaml), 0o644))
 
-			assert.Equal(t, tt.wantTeam, ResolveTeam(root))
+			team, err := ResolveTeam(root)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantTeam, team)
 		})
 	}
 }
 
 func TestResolveTeam_MissingConfig(t *testing.T) {
-	assert.Equal(t, "", ResolveTeam(t.TempDir()))
+	team, err := ResolveTeam(t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "", team)
 }
 
 func TestResolveTeam_EmptyRoot(t *testing.T) {
-	assert.Equal(t, "", ResolveTeam(""))
+	team, err := ResolveTeam("")
+	require.NoError(t, err)
+	assert.Equal(t, "", team)
+}
+
+// TestResolveTeam_MalformedYAML mirrors TestResolveAgent_MalformedYAML
+// for the team path. Same wrap chain, different outer prefix:
+// "resolve team" instead of "resolve agent".
+func TestResolveTeam_MalformedYAML(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "ethos.yaml"),
+		[]byte("team: [unclosed\n"), 0o644))
+
+	team, err := ResolveTeam(root)
+	require.Error(t, err)
+	assert.Equal(t, "", team)
+	assert.Contains(t, err.Error(), "resolve team",
+		"outer wrap must name the operation")
+	assert.Contains(t, err.Error(), "parsing repo config",
+		"inner wrap from LoadRepoConfig must be preserved")
+}
+
+// TestResolveTeam_PermissionError mirrors TestResolveAgent_PermissionError
+// for the team path.
+func TestResolveTeam_PermissionError(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("cannot test permission errors as root")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	f := filepath.Join(dir, "ethos.yaml")
+	require.NoError(t, os.WriteFile(f, []byte("team: engineering\n"), 0o644))
+	require.NoError(t, os.Chmod(f, 0o000))
+	t.Cleanup(func() { os.Chmod(f, 0o644) }) //nolint:errcheck
+
+	team, err := ResolveTeam(root)
+	require.Error(t, err)
+	assert.Equal(t, "", team)
+	assert.Contains(t, err.Error(), "resolve team")
+	assert.Contains(t, err.Error(), "reading")
 }
 
 // --- FindRepoRoot tests ---
