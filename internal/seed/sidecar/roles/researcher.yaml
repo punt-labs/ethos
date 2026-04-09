@@ -14,7 +14,7 @@ tools:
 output_format: |
   Return research using this structure:
 
-  ```yaml
+  ```text
   RESEARCH: <question>          # e.g., "Which YAML library preserves comments on round-trip?"
     researcher: <handle>
     sources:

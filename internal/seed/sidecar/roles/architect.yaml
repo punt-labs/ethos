@@ -12,7 +12,7 @@ tools:
 output_format: |
   Report design decisions using this structure:
 
-  ```yaml
+  ```text
   FINDINGS: <target>
     author: <handle>
     verdict: approve | iterate | reject
