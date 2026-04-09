@@ -587,18 +587,22 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 // HandleSessionStart's early-return on agentPersona == "" fell back to
 // the human one-liner before GenerateAgentFiles was reached.
 //
-// Post-dc0, ResolveAgent returns (string, error) and HandleSessionStart
-// propagates the error as fmt.Errorf("resolving agent: %w", err). The
-// inner LoadRepoConfig wrap "parsing repo config: %w" and the innermost
-// yaml decoder error are preserved all the way up.
+// Post-dc0, ResolveAgent returns (string, error) and wraps the
+// LoadRepoConfig error with the operation-noun prefix "resolve agent".
+// HandleSessionStart then wraps that with the gerund prefix
+// "resolving agent". Two distinct verb forms at the two layers —
+// the dc0 r2 distinct-verbs invariant, matching the 9ai.6 r2
+// precedent. The inner LoadRepoConfig wrap "parsing repo config:
+// %w" and the innermost yaml decoder error are preserved all the
+// way up.
 //
 // Exercise path: valid human identity; fake repo root with
 // .punt-labs/ethos.yaml containing unparseable YAML ("agent: [unclosed").
 // LoadRepoConfig's yaml.Unmarshal fails, LoadRepoConfig wraps it as
-// "parsing repo config", ResolveAgent wraps that as "resolving agent",
-// and HandleSessionStart wraps the whole thing again (yes, the outer
-// wrap repeats "resolving agent" — a minor cosmetic quirk the spec
-// accepts; the test matches on substring, not on exact wrap count).
+// "parsing repo config", ResolveAgent wraps that as "resolve agent",
+// and HandleSessionStart adds the outer "resolving agent" layer.
+// The final chain reads: "resolving agent: resolve agent: parsing
+// repo config: yaml: ...".
 func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
