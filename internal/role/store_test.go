@@ -157,20 +157,20 @@ func TestStore_MinimalRole(t *testing.T) {
 // TestStore_OutputFormatRoundTrip locks the new field's behavior end
 // to end: a role with a multi-line `OutputFormat` survives a save to
 // disk and a fresh load with the content preserved byte-for-byte. The
-// test deliberately uses a body that contains every character class
-// the field is expected to carry — newlines, code fences, indentation,
-// `<...>` placeholders, and the `|` separators from the verdict list —
-// so a future encoder change that mangles any of them fails here.
+// body is deliberately opaque — the store does not parse or interpret
+// OutputFormat, so the fixture exercises YAML encoding fidelity
+// (newlines, indentation, code fences, `<...>` placeholders, colons
+// inside values) without implying any canonical shape.
 func TestStore_OutputFormatRoundTrip(t *testing.T) {
 	s := testStore(t)
 
-	body := "Report results using this structure:\n" +
+	body := "line one with a colon: present\n" +
 		"\n" +
 		"```text\n" +
-		"RESULT: <task-id>\n" +
-		"  worker: <handle>\n" +
-		"  verdict: pass | fail | escalate\n" +
-		"```\n"
+		"  indented <placeholder>\n" +
+		"  another indented line | with | pipes\n" +
+		"```\n" +
+		"trailing line\n"
 
 	r := &Role{
 		Name:         "implementer-test",
