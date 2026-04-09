@@ -461,13 +461,21 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.NoError(t, readErr)
 
 				content := string(data)
-				// No hooks block at all — not a key, not the matcher
-				// string.
-				assert.NotContains(t, content, "hooks:")
-				assert.NotContains(t, content, "PostToolUse")
+				// Anchor the absence checks to the frontmatter only,
+				// so a future personality or writing-style edit that
+				// happens to mention the literal "hooks:" or
+				// "PostToolUse" in the body cannot cause a false
+				// positive. The invariant under test is strictly
+				// about the YAML header.
+				parts := strings.SplitN(content, "---", 3)
+				require.Len(t, parts, 3, "expected frontmatter delimiters")
+				frontmatter := parts[1]
+				assert.NotContains(t, frontmatter, "hooks:")
+				assert.NotContains(t, frontmatter, "PostToolUse")
 
 				// Frontmatter must still close cleanly: skills block
-				// directly followed by `---\n`.
+				// directly followed by `---\n`. This anchor straddles
+				// the closing delimiter, so it runs against `content`.
 				assert.Contains(t, content,
 					"skills:\n"+
 						"  - baseline-ops\n"+
