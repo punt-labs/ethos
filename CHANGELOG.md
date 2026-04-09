@@ -183,7 +183,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty-input fast path. One new test,
   `TestDecodeEventLog_NonEOFReadErrorReportsAttemptedLine`, pins
   both the partial-line case (load-bearing) and the empty-line
-  regression.
+  regression. Round 6 (two Copilot findings on PR #184, both
+  trivial): the `runMissionLog` comment that explained the round 2
+  M2 stdout-footer fix no longer reads `silent-failure silent-
+  failure-hunter` — the duplicated phrase collapsed the noun
+  (`silent failure`) into the reviewer agent name
+  (`silent-failure-hunter`) and broke reading flow (C1); and the
+  `ethos-07m.11` bead description in `.beads/issues.jsonl` no
+  longer claims the log path ends in `.log` with an aspirational
+  event list (`worker_spawned`, `round_started`, `round_ended`,
+  `reflection_recorded`, `evaluator_spawned`, `evaluator_finished`,
+  `mission_closed`) that DES-037 and the Phase 3.1 writer
+  explicitly deferred — it now names the actual `.jsonl` sibling
+  file and the actual emitted event set (`create`, `update`,
+  `close`, `reflect`, `verify`, `result`) phase by phase, and
+  credits Phase 3.7 with the reader API rather than the CLI alone
+  (C2). No code changes beyond the comment edit; no test changes.
 - **Structured result artifacts and close gate** (Phase 3.6,
   `ethos-07m.10`) — worker output is no longer prose. A new
   `mission.Result` type in `internal/mission/result.go` pins a

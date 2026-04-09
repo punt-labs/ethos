@@ -1014,7 +1014,7 @@ func runMissionLog(idOrPrefix, eventFilter, sinceFilter string) {
 	// so an operator piping `ethos mission log <id> > events.txt`
 	// still sees the damage. Round 1 routed warnings to stderr
 	// only, which hid corruption from any stdout-only consumer —
-	// exactly the silent-failure silent-failure-hunter flagged.
+	// exactly the silent failure silent-failure-hunter flagged.
 	// The footer format matches the MCP walker's convention in
 	// internal/hook/format_output.go: a blank line separator,
 	// `Warnings:` header, one `  - <warning>` bullet per entry.
