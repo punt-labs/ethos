@@ -203,7 +203,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"make check 2>&1 | tail -20\"\n"+
+						"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | tail -20\"\n"+
 						"---\n")
 
 				// Body checks.
@@ -384,7 +384,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"make check 2>&1 | tail -20\"\n")
+						"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | tail -20\"\n")
 
 				// Log the generated file so binary verification is visible
 				// in -v test output (spec success criterion 5).
@@ -413,7 +413,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"make check 2>&1 | tail -20\"\n" +
+					"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | tail -20\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -520,7 +520,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"make check 2>&1 | tail -20\"\n" +
+					"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | tail -20\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},

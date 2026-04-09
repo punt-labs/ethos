@@ -243,7 +243,13 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		b.WriteString("    - matcher: \"Write|Edit\"\n")
 		b.WriteString("      hooks:\n")
 		b.WriteString("        - type: command\n")
-		b.WriteString("          command: \"make check 2>&1 | tail -20\"\n")
+		// Pin cwd to the project root via $CLAUDE_PROJECT_DIR (exposed
+		// by Claude Code to hook commands) so `make check` resolves
+		// against the repo Makefile even if the sub-agent has cd'd into
+		// a subdirectory before the Write or Edit tool fires. The
+		// subshell keeps the cd from leaking to the outer shell, and
+		// the quoted expansion handles paths with spaces.
+		b.WriteString("          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | tail -20\"\n")
 	}
 	b.WriteString("---\n")
 
