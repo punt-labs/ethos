@@ -436,6 +436,12 @@ func (h *Handler) handleLogMission(req mcplib.CallToolRequest) (*mcplib.CallTool
 // parsing into the trust-boundary package for no gain. The two
 // copies are identical and test coverage on both surfaces keeps
 // them in lockstep.
+//
+// mirror: cmd/ethos/mission.go parseEventTypes — add or remove in
+// both places. Round 2 K1: kept as a deliberate 13-line
+// duplication rather than a shared helper, per mdm's argument
+// against coupling the trust-boundary package to CLI argument
+// parsing. If a third call site lands, hoist then.
 func parseEventTypeList(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

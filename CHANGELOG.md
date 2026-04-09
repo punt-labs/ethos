@@ -63,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Phase 3.7: append-only mission event log reader API**
-  (`ethos-07m.11`, round 1) — a public `Store.LoadEvents(missionID)`
+  (`ethos-07m.11`, rounds 1–2) — a public `Store.LoadEvents(missionID)`
   method, a new `ethos mission log <id>` CLI subcommand, and a new
   MCP `mission log` method expose the JSONL event audit trail every
   Phase 3.1+ writer has been quietly appending to. The reader is
@@ -75,8 +75,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   independently with `DisallowUnknownFields` (trust-boundary
   symmetric with the reflection and result loaders), and a failing
   line produces a warning while the rest of the file still decodes.
-  Missing file and empty file both return `[]Event{}, nil, nil`,
-  matching `LoadResults` convention. The CLI subcommand accepts
+  Round 2 hardening (four reviewers, 4 HIGH + 5 MEDIUM + 4 LOW):
+  the line scanner uses `bufio.Reader.ReadString` instead of
+  `bufio.Scanner` so a single line larger than any fixed cap no
+  longer silently truncates the tail of the log (H1); warnings are
+  sanitized at source via a new `sanitizeWarning` helper so an
+  attacker with local write access cannot forward terminal control
+  sequences through decode-error strings to operator terminals or
+  MCP consumers (H2); a non-RFC3339 `ts` is rejected at decode time
+  with a warning rather than silently dropped at `--since` filter
+  time, closing a count mismatch between the same audit trail read
+  with and without `--since` (H3); `LoadEvents` adds an
+  `os.Stat(contractPath)` existence check before any log read so a
+  bogus mission ID errors symmetrically with `LoadReflections` and
+  `LoadResults` (H4); the log file is stat-checked before read and
+  rejected if larger than 16 MiB or if a directory sits at the
+  expected path (M3, M4); the CLI `printEventLog` now emits a
+  leading `-` bullet prefix matching the MCP walker and sibling
+  subcommands (M1); warnings render as an in-band `Warnings:`
+  footer on stdout in human mode so an operator piping the output
+  to a file still sees damage (M2); the long `--help` text
+  documents the wrapped `{"events": [...], "warnings": [...]}`
+  JSON shape and the empty-`--event` semantics (M5, L4); the
+  `--since` error carries a human-readable RFC3339 hint without
+  leaking the Go time reference layout (L1); the symlink test is
+  renamed to flag the known weakness and cross-references bead
+  `ethos-jjm` for the follow-up that hardens all four loaders
+  together (L3); and the two `parseEventTypes`/`parseEventTypeList`
+  helpers carry cross-reference comments pinning the intentional
+  13-line duplication (K1). Two new equivalence classes (27
+  oversized-line, 28 unparseable-ts) join the round 1 26-class
+  test table. Missing file and empty file both still return
+  `[]Event{}, nil, nil`, matching `LoadResults` convention. The
+  CLI subcommand accepts
   `--json` for a `mission.LogPayload` wire shape (events slice plus
   omitempty warnings), `--event <type,list>` for event-type
   filtering, and `--since <RFC3339>` for time filtering; both

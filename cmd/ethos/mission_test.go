@@ -2102,3 +2102,155 @@ func TestMissionLog_HelpListsSubcommand(t *testing.T) {
 	assert.Contains(t, stdout, "log")
 	assert.Contains(t, stdout, "Show the append-only mission event log")
 }
+
+// --- Round 2 regression guards ---
+
+// TestMissionLog_HumanMode_BulletPrefix covers M1: the CLI
+// printEventLog now emits `  - ` before each event row, matching
+// the MCP formatter walker and the sibling subcommands (mission
+// show, mission results, mission reflections). Round 1 shipped
+// without the dash, which mdm flagged as family drift.
+func TestMissionLog_HumanMode_BulletPrefix(t *testing.T) {
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = false
+	out := captureStdout(t, func() {
+		runMissionLog(id, "", "")
+	})
+	// Every rendered event line must carry the "  - " prefix. Grep
+	// the output for lines that mention an event type but lack the
+	// dash — any such line is a regression.
+	lines := strings.Split(out, "\n")
+	var eventLines int
+	for _, line := range lines {
+		if strings.Contains(line, "create") ||
+			strings.Contains(line, "result") ||
+			strings.Contains(line, "close") {
+			if strings.HasPrefix(line, "Events:") {
+				continue
+			}
+			eventLines++
+			assert.True(t, strings.HasPrefix(line, "  - "),
+				"event line must begin with bullet prefix, got: %q", line)
+		}
+	}
+	assert.GreaterOrEqual(t, eventLines, 3, "must render at least create+result+close rows")
+}
+
+// TestMissionLog_HumanMode_WarningsFooterOnStdout covers M2: when
+// the on-disk log has a corrupt line, the warnings print as a
+// trailing Warnings section on stdout (not stderr). Round 1
+// routed warnings to stderr only, which hid damage from any
+// `ethos mission log > events.txt` consumer. The footer format
+// matches the MCP walker's convention.
+func TestMissionLog_HumanMode_WarningsFooterOnStdout(t *testing.T) {
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	home := os.Getenv("HOME")
+	logPath := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".jsonl")
+	raw, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	require.GreaterOrEqual(t, len(lines), 3)
+	corrupted := []string{lines[0], "{garbage", lines[1], lines[2]}
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
+
+	jsonOutput = false
+	out := captureStdout(t, func() {
+		runMissionLog(id, "", "")
+	})
+	// The events section still renders the three good lines.
+	assert.Contains(t, out, "Events:")
+	assert.Contains(t, out, "create")
+	// The warnings footer must appear on stdout, naming the bad line.
+	assert.Contains(t, out, "Warnings:")
+	assert.Contains(t, out, "line 2")
+	// Warnings bullets must use the same prefix as the events.
+	assert.Regexp(t, `(?m)^  - line 2`, out)
+}
+
+// TestMissionLog_InvalidSinceFlag_HumanReadableError covers L1:
+// the error message for an invalid --since value must name the
+// bad input and offer an RFC3339 hint without leaking the Go
+// time reference layout string. Round 1 forwarded the bare
+// time.Parse error which included "2006-01-02T15:04:05Z07:00".
+func TestMissionLog_InvalidSinceFlag_HumanReadableError(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.11
+write_set:
+  - tests/log-bad-since-hr/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+	env := append(os.Environ(), "HOME="+home)
+
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+
+	cmd := exec.Command(ethosBinary, "mission", "log", id, "--since", "tomorrow")
+	cmd.Env = env
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+	err := cmd.Run()
+	require.Error(t, err, "invalid --since must exit non-zero")
+	msg := stderrBuf.String()
+	assert.Contains(t, msg, "tomorrow", "error must name the bad input")
+	assert.Contains(t, msg, "RFC3339", "error must suggest RFC3339")
+	assert.NotContains(t, msg, "2006-01-02", "Go layout reference must not leak")
+	assert.NotContains(t, msg, "Z07:00", "Go layout reference must not leak")
+}
+
+// TestMissionLog_Help_DocumentsJSONShape covers M5: the --help
+// long text now documents the wrapped `{"events": [...],
+// "warnings": [...]}` shape so an operator doing
+// `ethos mission log $id --json | jq '.[]'` understands why the
+// shape departs from the bare-array siblings.
+func TestMissionLog_Help_DocumentsJSONShape(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission", "log", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "JSON output shape")
+	assert.Contains(t, stdout, `{"events"`)
+	assert.Contains(t, stdout, `"warnings"`)
+}
+
+// TestMissionLog_Help_DocumentsEmptyEventFilter covers L4: the
+// help text explicitly notes that --event "" (empty string) or
+// an omitted flag returns all event types — the silent-degradation
+// case a scripted consumer could hit on an empty
+// user-supplied value.
+func TestMissionLog_Help_DocumentsEmptyEventFilter(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission", "log", "--help")
+	require.NoError(t, err)
+	// The help text mentions "empty" + "all event types" somewhere
+	// in the --event description.
+	assert.Contains(t, strings.ToLower(stdout), "empty")
+	assert.Contains(t, strings.ToLower(stdout), "all event types")
+}

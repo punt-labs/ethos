@@ -1159,6 +1159,43 @@ func TestFormatOutput_MissionLog_EmptyWithWarnings(t *testing.T) {
 	assert.Contains(t, ctx, "line 1")
 }
 
+// TestFormatOutput_MissionLog_SanitizedWarningsPassThrough asserts
+// that the formatter forwards pre-sanitized warnings unchanged. The
+// mission package sanitizes at source (H2), so the formatter never
+// sees raw control bytes in a warning — but if one ever slipped
+// through, the formatter has no extra protection and would forward
+// it to the MCP payload. This test pins the pass-through contract:
+// a warning that ALREADY contains the escaped form (e.g. "\x1b")
+// must render as ASCII characters, not get double-escaped.
+func TestFormatOutput_MissionLog_SanitizedWarningsPassThrough(t *testing.T) {
+	// The warning body contains the ASCII characters `\`, `x`, `1`,
+	// `b` — the sanitized form a mission-package warning would
+	// carry after sanitizeWarning processed a raw ESC byte.
+	result := `{
+  "events": [
+    {"ts":"2026-04-08T22:00:00Z","event":"create","actor":"claude"}
+  ],
+  "warnings": ["line 2: decoding event: unknown field \"\\x1b[31mFAKE\""]
+}`
+	payload := makeToolPayload("mission", "log", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Warnings:")
+	assert.Contains(t, ctx, `\x1b`)
+	// And the rendered context must not contain any raw control
+	// bytes — pass-through only.
+	for i := 0; i < len(ctx); i++ {
+		b := ctx[i]
+		if b == '\t' || b == '\n' || b == '\r' || b == ' ' {
+			continue
+		}
+		assert.False(t,
+			b < 0x20 || (b >= 0x7f && b <= 0x9f),
+			"formatter rendered raw control byte 0x%02x at offset %d", b, i)
+	}
+}
+
 func TestFormatMissionTime(t *testing.T) {
 	tests := []struct {
 		name string

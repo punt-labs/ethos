@@ -334,13 +334,23 @@ update, result, reflect, round_advanced, close, and any future
 event types the writer grows. Use --json for a machine-readable
 payload, --event to filter by type (comma-separated), and --since
 to filter by RFC3339 timestamp. Both filters are optional and
-AND-composed.
+AND-composed. An empty --event value (or an omitted flag) returns
+all event types.
 
 One corrupt line does not erase the log: the reader returns every
 parseable event plus a warnings list naming the failing line
-numbers. In JSON mode the warnings surface as a top-level
-` + "`warnings`" + ` field (omitempty when absent); in human mode
-warnings go to stderr.
+numbers. In human mode the warnings print as a trailing Warnings
+section on stdout so a caller piping to a file still sees damage.
+In JSON mode the warnings surface as a top-level ` + "`warnings`" + `
+field (omitempty when absent).
+
+JSON output shape:
+  {"events": [...], "warnings": [...]}
+  events is always present (empty array if no matches); warnings
+  is omitted when the log is clean. This wrapping departs from
+  the bare array shape of mission list/results/reflections because
+  warnings must travel with events and a bare array cannot carry
+  them.
 
 Event type filter values are forward-compatible — an unknown type
 is accepted and simply returns no rows, not a flag-parse error.
@@ -999,17 +1009,44 @@ func runMissionLog(idOrPrefix, eventFilter, sinceFilter string) {
 		printJSON(payload)
 		return
 	}
-	// Human mode: warnings to stderr first so they are not hidden
-	// by a long event list, then the events themselves.
-	for _, warn := range warnings {
-		fmt.Fprintf(os.Stderr, "ethos: warning: %s\n", warn)
-	}
+	// Human mode: events first, then a Warnings footer on stdout
+	// so an operator piping `ethos mission log <id> > events.txt`
+	// still sees the damage. Round 1 routed warnings to stderr
+	// only, which hid corruption from any stdout-only consumer —
+	// exactly the silent-failure silent-failure-hunter flagged.
+	// The footer format matches the MCP walker's convention in
+	// internal/hook/format_output.go: a blank line separator,
+	// `Warnings:` header, one `  - <warning>` bullet per entry.
 	printEventLog(filtered)
+	printEventWarnings(warnings)
+}
+
+// printEventWarnings emits a trailing Warnings section for the
+// human-mode mission log output. The section is omitted on a
+// clean log (nil or empty warnings slice). The format mirrors
+// the MCP walker in internal/hook/format_output.go so post-mortem
+// tooling that scrapes either surface sees the same shape.
+func printEventWarnings(warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println("Warnings:")
+	for _, w := range warnings {
+		fmt.Printf("  - %s\n", w)
+	}
 }
 
 // parseEventTypes splits a comma-separated --event flag into
 // trimmed, non-empty slugs. Returns nil for an empty string so
 // FilterEvents treats the filter as absent (include all types).
+//
+// mirror: internal/mcp/mission_tools.go parseEventTypeList — the
+// MCP package cannot import cmd/ethos and hoisting into
+// internal/mission would drag string-list parsing into the
+// trust-boundary package. Round 2 (K1): the two copies stay in
+// lockstep via explicit cross-reference comments; add or remove
+// in both places.
 func parseEventTypes(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -1027,9 +1064,9 @@ func parseEventTypes(raw string) []string {
 	return out
 }
 
-// printEventLog renders the event slice as one line per event:
+// printEventLog renders the event slice as one bullet per event:
 //
-//	<local time>  <type>  by <actor>  <short details>
+//	  - <local time>  <type>  by <actor>  <short details>
 //
 // Empty input renders "Events: (none)" so an operator running the
 // command on a brand-new mission — or a mission whose log has been
@@ -1037,6 +1074,12 @@ func parseEventTypes(raw string) []string {
 // The short-details column picks the two or three fields that
 // matter for the current event type; anything else is elided to
 // keep the column narrow. Full payload is visible via --json.
+//
+// The leading "  - " dash matches the MCP formatter walker in
+// internal/hook/format_output.go and the sibling subcommands
+// (mission show, mission results, mission reflections). Round 1
+// shipped without the dash; round 2 aligns the prefix so every
+// mission-family subcommand renders the same bullet shape.
 func printEventLog(events []mission.Event) {
 	fmt.Println("Events:")
 	if len(events) == 0 {
@@ -1047,9 +1090,9 @@ func printEventLog(events []mission.Event) {
 		ts := hook.FormatLocalTime(e.TS)
 		details := summarizeEventDetails(e)
 		if details == "" {
-			fmt.Printf("  %s  %s  by %s\n", ts, e.Event, e.Actor)
+			fmt.Printf("  - %s  %s  by %s\n", ts, e.Event, e.Actor)
 		} else {
-			fmt.Printf("  %s  %s  by %s  %s\n", ts, e.Event, e.Actor, details)
+			fmt.Printf("  - %s  %s  by %s  %s\n", ts, e.Event, e.Actor, details)
 		}
 	}
 }

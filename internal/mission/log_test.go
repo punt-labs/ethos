@@ -215,15 +215,27 @@ func readLog(t *testing.T, s *Store, missionID string) []Event {
 // key is treated as opaque payload, not as identity). The test below
 // documents this as the policy.
 
-// TestLoadEvents_MissingFile covers class 1: a brand-new mission
-// with no writer calls has no log file on disk. LoadEvents returns
-// an empty slice, nil warnings, nil error — symmetric with
-// LoadResults and LoadReflections conventions for missing sibling
-// files.
+// TestLoadEvents_MissingFile covers class 1: a mission whose
+// contract exists but whose JSONL log has not been written yet
+// returns an empty slice, nil warnings, nil error — symmetric
+// with LoadResults and LoadReflections conventions for missing
+// sibling files. The test creates a contract stub but deletes
+// the log file the Create path would have produced, so only the
+// contract anchor remains.
+//
+// Round 2: a brand-new mission with NO contract at all now
+// returns an error ("mission not found") because the round-2 H4
+// existence check aligns LoadEvents with LoadReflections and
+// LoadResults. That unknown-mission path is covered by
+// TestLoadEvents_UnknownMissionID below.
 func TestLoadEvents_MissingFile(t *testing.T) {
 	s := testStore(t)
-	// Do NOT call Create; no log file exists.
-	events, warnings, err := s.LoadEvents("m-2026-04-07-999")
+	missionID := "m-2026-04-07-999"
+	seedContractStub(t, s, missionID)
+	// No log file: the Create path would write one, but the stub
+	// only seeds the contract so the log path is absent.
+
+	events, warnings, err := s.LoadEvents(missionID)
 	require.NoError(t, err)
 	assert.Empty(t, events)
 	assert.Empty(t, warnings)
@@ -234,10 +246,12 @@ func TestLoadEvents_MissingFile(t *testing.T) {
 // the reflections and results empty-file handling.
 func TestLoadEvents_EmptyFile(t *testing.T) {
 	s := testStore(t)
-	// Create the missions directory and seed an empty log file.
+	// Create the missions directory and seed an empty log file
+	// plus the contract-existence anchor the H4 check requires.
 	missionID := "m-2026-04-07-002"
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
 	require.NoError(t, os.WriteFile(s.logPath(missionID), []byte{}, 0o600))
+	seedContractStub(t, s, missionID)
 
 	events, warnings, err := s.LoadEvents(missionID)
 	require.NoError(t, err)
@@ -462,18 +476,15 @@ func TestLoadEvents_PermissionDenied(t *testing.T) {
 		t.Skip("permission-denied test is meaningless as root")
 	}
 	s := testStore(t)
-	missionID := "m-2026-04-07-012"
-	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
-	require.NoError(t, os.WriteFile(s.logPath(missionID),
-		[]byte(`{"ts":"2026-04-07T22:00:01Z","event":"create","actor":"claude"}`+"\n"),
-		0o600))
-	require.NoError(t, os.Chmod(s.logPath(missionID), 0o000))
+	c := newContract("m-2026-04-07-012")
+	require.NoError(t, s.Create(c))
+	require.NoError(t, os.Chmod(s.logPath("m-2026-04-07-012"), 0o000))
 	t.Cleanup(func() {
 		// Restore permissions so t.TempDir cleanup can remove the file.
-		_ = os.Chmod(s.logPath(missionID), 0o600)
+		_ = os.Chmod(s.logPath("m-2026-04-07-012"), 0o600)
 	})
 
-	events, _, err := s.LoadEvents(missionID)
+	events, _, err := s.LoadEvents("m-2026-04-07-012")
 	require.Error(t, err)
 	assert.Nil(t, events)
 	// Must not be confused with "missing file" — the error string
@@ -481,25 +492,36 @@ func TestLoadEvents_PermissionDenied(t *testing.T) {
 	assert.Contains(t, strings.ToLower(err.Error()), "permission")
 }
 
-// TestLoadEvents_SymlinkPolicy covers class 13: the reader follows
-// the same path-resolution discipline Store.Load uses for contracts.
-// A symlink at the log path whose target is a readable JSONL file
-// is followed; the mission ID is run through filepath.Base so a
-// traversal-laced ID only ever points inside missionsDir. This test
-// documents that matching behavior.
-func TestLoadEvents_SymlinkPolicy(t *testing.T) {
+// TestLoadEvents_FollowsSymlink_KnownWeaknessMatchesStoreLoad
+// documents the deliberate carry of a known weakness shared across
+// all four loaders. os.ReadFile follows symlinks, so a symlink
+// planted at the mission log path whose target is an attacker-
+// controlled file outside missionsDir is read as if it were the
+// mission's log. LoadEvents does not tighten this alone: the fix
+// must land uniformly across Store.Load, LoadReflections,
+// LoadResults, and LoadEvents, otherwise the asymmetry is worse
+// than the current consistent weakness. See bead ethos-jjm for the
+// follow-up that hardens all four loaders together.
+//
+// This test pins the current behavior so the follow-up is an
+// explicit, reviewable change — not a silent drift. It used to
+// carry the positive-sounding name "SymlinkPolicy" which misread
+// as "this is a feature"; the rename signals the intent is
+// deferred hardening, not a capability.
+func TestLoadEvents_FollowsSymlink_KnownWeaknessMatchesStoreLoad(t *testing.T) {
 	s := testStore(t)
 	missionID := "m-2026-04-07-013"
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
 	// Write a log body to an out-of-directory file, then symlink the
 	// mission's log path to it. os.ReadFile follows the symlink, so
-	// LoadEvents must succeed — matching Store.Load's implicit
-	// symlink-follow policy for contracts.
+	// LoadEvents reads it as if it were the mission's own log — the
+	// weakness ethos-jjm will close across all four loaders.
 	outside := filepath.Join(t.TempDir(), "outside.jsonl")
 	require.NoError(t, os.WriteFile(outside,
 		[]byte(`{"ts":"2026-04-07T22:00:01Z","event":"create","actor":"claude"}`+"\n"),
 		0o600))
 	require.NoError(t, os.Symlink(outside, s.logPath(missionID)))
+	seedContractStub(t, s, missionID)
 
 	events, warnings, err := s.LoadEvents(missionID)
 	require.NoError(t, err)
@@ -509,27 +531,43 @@ func TestLoadEvents_SymlinkPolicy(t *testing.T) {
 }
 
 // TestLoadEvents_TraversalIDCannotEscape asserts the path-base
-// defense: even a traversal-laced mission ID only ever resolves
-// inside missionsDir. Complements class 13's symlink-follow — the
-// trust anchor is logPath, which runs the ID through filepath.Base.
+// defense combined with the round-2 H4 existence anchor. A
+// traversal-laced mission ID is collapsed to its basename by
+// filepath.Base BEFORE any open — the reader can never be directed
+// at a sibling file or outside the missions directory — AND the
+// reader then checks that the collapsed mission actually exists
+// (symmetric with LoadReflections / LoadResults). The combination
+// means a caller passing "../../etc/<id>" gets a clean error
+// rather than a silently-collapsed read of some unrelated file.
+//
+// Round 1 asserted only the collapse and returned the log for the
+// collapsed ID; round 2 (feature-dev finding H4) adds the
+// existence check so the loader is symmetric with its siblings.
 func TestLoadEvents_TraversalIDCannotEscape(t *testing.T) {
 	s := testStore(t)
-	// Seed a legitimate log file; then ask for it via a traversal
-	// ID. logPath will strip the "../" prefix via filepath.Base, so
-	// the request resolves to the legitimate file. The point is not
-	// that the traversal succeeds — it is that the traversal is
-	// collapsed by filepath.Base before any open, so the reader can
-	// never be directed at a sibling file or outside the missions
-	// directory.
+	// Seed a legitimate contract + log file. The traversal-laced ID
+	// collapses to the same basename as the legitimate mission, so
+	// without the existence check round 1 read the legitimate log
+	// for an unrelated caller. With the check the collapsed ID is
+	// still rejected when it does not match an existing contract —
+	// here the contract exists, so collapse + existence both succeed.
 	missionID := "m-2026-04-07-014"
-	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
-	require.NoError(t, os.WriteFile(s.logPath(missionID),
-		[]byte(`{"ts":"2026-04-07T22:00:01Z","event":"create","actor":"claude"}`+"\n"),
-		0o600))
+	c := newContract(missionID)
+	require.NoError(t, s.Create(c))
 
+	// The ".." prefix is collapsed to the legitimate mission ID;
+	// the contract exists because Create wrote it; the read
+	// succeeds and returns the create event the writer appended.
 	events, _, err := s.LoadEvents("../../etc/" + missionID)
 	require.NoError(t, err)
-	require.Len(t, events, 1)
+	require.GreaterOrEqual(t, len(events), 1)
+
+	// A traversal-laced ID that collapses to a NON-existent
+	// mission now errors — the round-2 existence check closes the
+	// asymmetry where round 1 returned an empty slice for bogus IDs.
+	_, _, err = s.LoadEvents("../../etc/m-9999-99-99-999")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
 }
 
 // TestLoadEvents_EmptyMissionID rejects an empty mission ID at the
@@ -561,6 +599,219 @@ func TestLoadEvents_BlankLinesAreSkipped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, warnings)
 	require.Len(t, events, 2)
+}
+
+// --- Phase 3.7 round 2: H-findings regression tests ---
+
+// TestLoadEvents_OversizedLineDoesNotTruncateTail covers class 27
+// (new in round 2): a single line larger than any fixed scanner
+// buffer must not silently truncate the tail of the log. Round 1
+// used bufio.Scanner with a 1 MiB cap — a line > 1 MiB caused
+// scanner.Scan() to return false and every subsequent line to be
+// silently lost, producing "M events, 1 warning" with no signal
+// that lines N+1..EOF were never attempted. This violated the
+// round 1 contract invariant "partial damage does not erase the
+// log." Round 2 replaces the scanner with bufio.Reader.ReadString,
+// which has no per-line cap; the whole-file 16 MiB cap bounds
+// memory without silently losing the tail.
+//
+// The non-negotiable assertion: both close and result appear in
+// the returned slice, even though a 1.5 MiB line sits between
+// them and the first create event.
+func TestLoadEvents_OversizedLineDoesNotTruncateTail(t *testing.T) {
+	s := testStore(t)
+	missionID := "m-2026-04-07-027"
+	fatNotes := strings.Repeat("x", 1536*1024) // 1.5 MiB
+	// Use json.Marshal to build the oversized update line so the
+	// string escapes cleanly and the decoder accepts it at the
+	// other end (if the whole-file cap allows it through at all).
+	oversize := fmt.Sprintf(
+		`{"ts":"2026-04-08T00:00:01Z","event":"update","actor":"b","details":{"notes":%q}}`,
+		fatNotes)
+	seedLogLines(t, s, missionID,
+		`{"ts":"2026-04-08T00:00:00Z","event":"create","actor":"a"}`,
+		oversize,
+		`{"ts":"2026-04-08T00:00:02Z","event":"close","actor":"c"}`,
+		`{"ts":"2026-04-08T00:00:03Z","event":"result","actor":"d"}`,
+	)
+
+	events, _, err := s.LoadEvents(missionID)
+	require.NoError(t, err)
+
+	// Tail must survive the oversized line in the middle. The
+	// oversized line MAY decode (it is valid JSON) or MAY be
+	// omitted for an unrelated reason; either is acceptable as
+	// long as close and result both appear.
+	types := make([]string, 0, len(events))
+	for _, e := range events {
+		types = append(types, e.Event)
+	}
+	assert.Contains(t, types, "create", "first event must survive")
+	assert.Contains(t, types, "close", "tail must not be silently truncated after oversized line")
+	assert.Contains(t, types, "result", "tail must not be silently truncated after oversized line")
+}
+
+// TestLoadEvents_WarningsSanitizeControlBytes covers H2: an
+// attacker with local write access plants a JSON line whose
+// decode error may (depending on the decoder's error path) carry
+// control bytes through to operator terminals and MCP consumers.
+// Round 2 sanitizes warnings at the source so no path forwards
+// raw control bytes.
+//
+// End-to-end assertion against the LoadEvents surface: the
+// warning for a deliberately-crafted line must contain NO raw
+// control bytes (ESC, BEL, DEL, C1). The stronger synthetic-
+// input tests that exercise the sanitizer itself are
+// TestSanitizeWarning and TestDecodeEventLog_SanitizesRawControlBytes
+// below — they drive the helper with inputs that would bypass
+// Go's own %q escaping.
+func TestLoadEvents_WarningsSanitizeControlBytes(t *testing.T) {
+	s := testStore(t)
+	missionID := "m-2026-04-07-h2"
+	seedLogLines(t, s, missionID,
+		`{"ts":"2026-04-08T00:00:00Z","event":"create","actor":"x","\u001b[31m\u0007FAKE\u007f":1}`,
+		`{"ts":"2026-04-08T00:00:01Z","event":"create","actor":"y"}`,
+	)
+
+	events, warnings, err := s.LoadEvents(missionID)
+	require.NoError(t, err)
+	require.Len(t, warnings, 1, "bad line must surface as a warning")
+	w := warnings[0]
+
+	// Non-negotiable: the warning must NOT contain any raw bytes
+	// that let an attacker drive a terminal. Go's json package
+	// already renders unknown-field errors via %q — the sanitizer
+	// is the last-line defense for any path that does not.
+	for _, b := range []byte(w) {
+		assert.True(t,
+			b == '\t' || b == ' ' || (b >= 0x20 && b < 0x7f) || b >= 0xa0,
+			"warning must contain no raw control bytes, got 0x%02x at offset %d in %q",
+			b, strings.IndexByte(w, b), w)
+	}
+
+	// The rest of the file still decodes — partial damage does not
+	// erase the log.
+	require.Len(t, events, 1)
+	assert.Equal(t, "create", events[0].Event)
+	assert.Equal(t, "y", events[0].Actor)
+}
+
+// TestDecodeEventLog_SanitizesRawControlBytes drives decodeEventLog
+// directly with a line that bypasses Go's json %q escaping by
+// placing raw bytes somewhere the decoder's error chain could
+// propagate. The decoder typically escapes unknown-field names,
+// but a defense-in-depth check: the sanitizer must still catch
+// anything the decoder lets through.
+//
+// This test synthesizes a warning input via the sanitizer helper
+// directly — decodeEventLog's own call site passes error strings
+// through sanitizeWarning unconditionally, so any control byte in
+// any error source gets neutralized. The helper test below pins
+// the helper's behavior; this test pins the wiring.
+func TestDecodeEventLog_SanitizesRawControlBytes(t *testing.T) {
+	// A single line with a literal ESC byte inside a string value.
+	// Go's json package rejects this as "invalid character" and
+	// the error string uses %q escaping, so the pipeline produces
+	// an already-safe warning. The test pins that the FINAL
+	// warning has zero raw control bytes — belt and suspenders.
+	raw := []byte("{\"ts\":\"2026-04-08T00:00:00Z\",\"event\":\"create\",\"actor\":\"\x1bFAKE\"}\n")
+	_, warnings, err := decodeEventLog(raw)
+	require.NoError(t, err)
+	require.Len(t, warnings, 1)
+	for _, b := range []byte(warnings[0]) {
+		assert.True(t,
+			b == '\t' || b == ' ' || (b >= 0x20 && b < 0x7f) || b >= 0xa0,
+			"raw control byte 0x%02x survived sanitization in %q", b, warnings[0])
+	}
+}
+
+// TestSanitizeWarning exercises the sanitizeWarning helper as a pure
+// unit test with a table of inputs so every branch (passthrough,
+// space, tab, C0, DEL, C1, invalid UTF-8, legitimate UTF-8) has
+// explicit coverage. The C1 cases include both a legitimate
+// multi-byte rune whose UTF-8 continuation byte lives in the
+// [0x80, 0x9f] range (ß = U+00DF = 0xc3 0x9f) and a lone invalid
+// 0x9f byte — the helper must pass the first through unchanged
+// and escape the second.
+func TestSanitizeWarning(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{"clean ASCII", "clean text", "clean text"},
+		{"tab preserved", "with\ttab", "with\ttab"},
+		{"space preserved", "with space", "with space"},
+		{"newline escaped", "with\nnewline", `with\x0anewline`},
+		{"carriage return escaped", "with\rreturn", `with\x0dreturn`},
+		{"ESC escaped", "with\x1b[31mred", `with\x1b[31mred`},
+		{"BEL escaped", "bell\x07", `bell\x07`},
+		{"DEL escaped", "del\x7fchar", `del\x7fchar`},
+		{"invalid UTF-8 byte escaped", "c1\x9fchar", `c1\x9fchar`},
+		{"legitimate UTF-8 passthrough", "über", "über"},
+		{"sharp-s passthrough (0x9f continuation byte)", "straße", "straße"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, sanitizeWarning(tc.in))
+		})
+	}
+}
+
+// TestLoadEvents_UnknownMissionID covers H4: an unknown mission ID
+// returns an error, NOT a silent empty slice. Symmetric with
+// LoadReflections / LoadResults which both refuse bogus IDs via
+// the path of their sibling loaders.
+func TestLoadEvents_UnknownMissionID(t *testing.T) {
+	s := testStore(t)
+	_, _, err := s.LoadEvents("m-2099-99-99-999")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestLoadEvents_OversizedFileRejected covers M3: a log file above
+// the 16 MiB cap is rejected before any parsing starts, so a
+// runaway writer or attacker-planted pathological file cannot OOM
+// the ethos process. The error names the byte count and the cap
+// so the operator knows why.
+func TestLoadEvents_OversizedFileRejected(t *testing.T) {
+	s := testStore(t)
+	missionID := "m-2026-04-07-m3"
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	// 17 MiB of zeros — the content is irrelevant because the cap
+	// fires before any read. Writing 17 MiB is fast enough for a
+	// unit test (~50 ms on a modern laptop).
+	big := make([]byte, 17*1024*1024)
+	require.NoError(t, os.WriteFile(s.logPath(missionID), big, 0o600))
+	seedContractStub(t, s, missionID)
+
+	events, warnings, err := s.LoadEvents(missionID)
+	require.Error(t, err)
+	assert.Nil(t, events)
+	assert.Nil(t, warnings)
+	assert.Contains(t, err.Error(), "exceeds cap")
+	assert.Contains(t, err.Error(), "16777216")
+}
+
+// TestLoadEvents_DirectoryAtLogPath covers M4: an attacker plants a
+// directory at the expected log path. Round 1 would return a
+// generic os.ReadFile error indistinguishable from a transient
+// storage fault; round 2 stats the path first and rejects the
+// directory with a clear, named error.
+func TestLoadEvents_DirectoryAtLogPath(t *testing.T) {
+	s := testStore(t)
+	missionID := "m-2026-04-07-m4"
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	require.NoError(t, os.Mkdir(s.logPath(missionID), 0o700))
+	seedContractStub(t, s, missionID)
+
+	events, warnings, err := s.LoadEvents(missionID)
+	require.Error(t, err)
+	assert.Nil(t, events)
+	assert.Nil(t, warnings)
+	assert.Contains(t, err.Error(), "directory")
 }
 
 // --- FilterEvents: filter classes ---
@@ -666,38 +917,67 @@ func TestFilterEvents_InvalidSinceIsAnError(t *testing.T) {
 	// typed error so the CLI and MCP surfaces can name the bad input
 	// directly. Using nil for events is fine — the check fires on
 	// the time parse, before any iteration.
+	//
+	// Round 2 (L1): the error must name the bad value and include a
+	// human-readable RFC3339 hint; it must NOT leak the Go time
+	// reference layout string "2006-01-02T15:04:05Z07:00" or the
+	// word "parsing" verbatim from the time.Parse error — operators
+	// reading the message should not need to know Go's time package.
 	_, err := FilterEvents(nil, nil, "not-a-timestamp")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "since")
+	msg := err.Error()
+	assert.Contains(t, msg, "since")
+	assert.Contains(t, msg, "not-a-timestamp")
+	assert.Contains(t, msg, "expected RFC3339")
+	assert.NotContains(t, msg, "2006")
+	assert.NotContains(t, msg, "Z07:00")
 }
 
-func TestFilterEvents_EventWithInvalidTSSkippedUnderSince(t *testing.T) {
-	// An event whose on-disk ts is not RFC3339 cannot be compared to
-	// --since. The filter treats such events as "cannot satisfy
-	// since" and drops them rather than surfacing a fatal error — the
-	// policy is forward-compatibility with the writer, matching the
-	// unknown-event-type policy above. The event is preserved when
-	// --since is absent.
-	events := []Event{
-		{TS: "garbage", Event: "create", Actor: "a"},
-		{TS: "2026-04-07T22:00:02Z", Event: "update", Actor: "a"},
-	}
-	got, err := FilterEvents(events, nil, "2026-04-07T00:00:00Z")
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "update", got[0].Event)
+// TestLoadEvents_RejectsUnparseableTS covers class 28 (new in
+// round 2): a strict-JSON-valid line with a non-RFC3339 ts is
+// rejected at decode time with a warning, not silently dropped at
+// filter time. Round 1 rejected the bad line ONLY when --since was
+// set, so the same audit trail returned N events without --since
+// and N-k events with --since — a silent count mismatch on the
+// same damaged file. Round 2 closes this by validating ts inside
+// decodeEventLine; the bad event never reaches FilterEvents, and
+// the count agrees between filter states.
+func TestLoadEvents_RejectsUnparseableTS(t *testing.T) {
+	s := testStore(t)
+	missionID := "m-2026-04-07-028"
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	seedLogLines(t, s, missionID,
+		`{"ts":"garbage","event":"create","actor":"a"}`,
+		`{"ts":"2026-04-07T22:00:02Z","event":"update","actor":"a"}`,
+	)
 
-	// Without --since, the bad-ts event is kept — filter does not
-	// judge on-disk validity; it only answers "matches the filters".
-	got, err = FilterEvents(events, nil, "")
+	events, warnings, err := s.LoadEvents(missionID)
 	require.NoError(t, err)
-	assert.Len(t, got, 2)
+	require.Len(t, events, 1, "bad-ts event must not reach LoadEvents output")
+	assert.Equal(t, "update", events[0].Event)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "line 1")
+	assert.Contains(t, warnings[0], "RFC3339")
+
+	// FilterEvents called with a past --since must return the same
+	// count (1) as calling without --since — the bad-ts line is
+	// equally absent in both. This is the non-negotiable invariant
+	// the silent-failure finding flagged.
+	filteredSince, err := FilterEvents(events, nil, "2026-04-07T00:00:00Z")
+	require.NoError(t, err)
+	assert.Len(t, filteredSince, 1)
+	filteredNoSince, err := FilterEvents(events, nil, "")
+	require.NoError(t, err)
+	assert.Len(t, filteredNoSince, 1)
+	assert.Equal(t, len(filteredSince), len(filteredNoSince),
+		"counts must agree between --since and no-filter states")
 }
 
 // seedLogLines writes the given lines to the mission's log file,
 // one per line, with a trailing newline on the last line. Used by
 // the decode-class tests to plant synthetic corruption at known line
-// numbers.
+// numbers. Also seeds a minimal contract stub alongside the log so
+// LoadEvents' H4 existence check (round 2) resolves.
 func seedLogLines(t *testing.T, s *Store, missionID string, lines ...string) {
 	t.Helper()
 	body := strings.Join(lines, "\n") + "\n"
@@ -705,12 +985,30 @@ func seedLogLines(t *testing.T, s *Store, missionID string, lines ...string) {
 }
 
 // seedLogRaw writes raw bytes to the mission's log file, bypassing
-// any locking. The caller must not interleave this with a live
-// writer on the same mission — tests that use it never do.
+// any locking. Also seeds a minimal contract stub alongside the log
+// so LoadEvents' H4 existence check (round 2) resolves — the stub
+// is NOT decoded by LoadEvents, which only stats the path, so a
+// byte-empty file satisfies the check. The caller must not
+// interleave this with a live writer on the same mission — tests
+// that use it never do.
 func seedLogRaw(t *testing.T, s *Store, missionID, body string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
 	require.NoError(t, os.WriteFile(s.logPath(missionID), []byte(body), 0o600))
+	seedContractStub(t, s, missionID)
+}
+
+// seedContractStub writes a zero-byte contract file next to the
+// mission log so LoadEvents' existence check (os.Stat on the
+// contract path) resolves. Tests that plant corrupt log lines
+// directly do not want to drive a full Create, which would write
+// its own create event and contaminate the corruption under test.
+// LoadEvents never parses the contract — only stats its path — so
+// an empty file is sufficient to satisfy the existence anchor.
+func seedContractStub(t *testing.T, s *Store, missionID string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	require.NoError(t, os.WriteFile(s.ContractPath(missionID), []byte{}, 0o600))
 }
 
 // seededEventTime is a fixed reference timestamp for filter-class

@@ -1542,3 +1542,47 @@ func TestHandleMission_Log_EmptyFilteredIsArrayNotNull(t *testing.T) {
 	assert.NotContains(t, text, `"events": null`)
 }
 
+// TestHandleMission_Log_WarningsNoRawControlBytes covers H2 on the
+// MCP surface: a planted JSON line whose decode error would
+// otherwise forward attacker-controlled control bytes to the MCP
+// client must not surface ANY raw control bytes in the warnings
+// payload. Parallel to the CLI test in
+// internal/mission/log_test.go — the mission package sanitizes
+// at source, so the MCP surface is tested for pipeline integrity.
+func TestHandleMission_Log_WarningsNoRawControlBytes(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := seedLogMission(t, h)
+
+	// Plant a line whose unknown field name is an ESC sequence
+	// (hidden via \u001b so the JSON is strict-valid).
+	logPath := strings.TrimSuffix(h.missionStore.ContractPath(id), ".yaml") + ".jsonl"
+	raw, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	require.GreaterOrEqual(t, len(lines), 3)
+	attack := `{"ts":"2026-04-08T00:00:00Z","event":"create","actor":"x","\u001b[31m\u0007FAKE":1}`
+	corrupted := []string{lines[0], attack, lines[1], lines[2]}
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": id,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	// The JSON payload must not carry any raw bytes below 0x20
+	// (except tab, LF, CR which the json encoder uses for
+	// whitespace) or in [0x7f, 0x9f]. Walk the bytes directly.
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		if b == '\t' || b == '\n' || b == '\r' || b == ' ' {
+			continue
+		}
+		assert.False(t,
+			b < 0x20 || (b >= 0x7f && b <= 0x9f),
+			"MCP log payload must not carry raw control byte 0x%02x at offset %d", b, i)
+	}
+}
+

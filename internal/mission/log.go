@@ -9,10 +9,22 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+// maxLogSize bounds the total bytes LoadEvents will read from a
+// single mission log. 16 MiB is well above realistic operational
+// usage — the writer appends small events and a long-running mission
+// with ten rounds produces on the order of 40–80 lines — but small
+// enough to reject a runaway writer or an attacker planting a
+// pathological file before it OOMs the ethos process. The cap is
+// defensive, not ergonomic; an operator who legitimately hits it is
+// already in post-mortem territory.
+const maxLogSize = 16 * 1024 * 1024
 
 // Event is a single line in a mission's append-only event log.
 //
@@ -121,19 +133,33 @@ func (s *Store) appendEventLocked(missionID string, e Event) error {
 // DisallowUnknownFields — symmetric with the reflection and result
 // decoders — and a failing line produces a warning identifying the
 // line number. A hand-edited file that plants an unknown top-level
-// field, an empty required field, or garbage bytes on a single line
-// degrades to "that line is missing from the output, the rest of
-// the file is still readable."
+// field, an empty required field, a non-RFC3339 ts value, or garbage
+// bytes on a single line degrades to "that line is missing from the
+// output, the rest of the file is still readable."
 //
 // Missing file → empty slice, nil warnings, nil error. Symmetric
 // with LoadResults and LoadReflections: the absence of any event is
 // the normal state for a brand-new mission whose Store.Create has
 // not yet been called. Empty file (zero bytes) → same shape.
 //
-// Permission-denied and other I/O failures on the log file itself
-// are distinguishable from "missing file": the reader returns a
-// typed error, nil events, nil warnings. The caller can
-// errors.Is(err, os.ErrPermission) or inspect the wrapped chain.
+// The mission must exist: LoadEvents calls os.Stat on the contract
+// file first and returns a "mission not found" error when the
+// contract is absent, symmetric with LoadReflections and LoadResults.
+// A traversal-laced ID that filepath.Base collapses to a legitimate
+// filename is still rejected unless the corresponding contract
+// exists. This closes the asymmetry where LoadEvents alone would
+// return an empty slice for a bogus ID.
+//
+// The log file must be smaller than 16 MiB. Larger files return an
+// error instead of exhausting memory: missions with huge logs are
+// operationally pathological, and the cap bounds the blast radius
+// of a runaway writer or a pre-attack forensic read.
+//
+// Permission-denied, directory-at-log-path, and other I/O failures
+// on the log file itself are distinguishable from "missing file":
+// the reader returns a typed error, nil events, nil warnings. The
+// caller can errors.Is(err, os.ErrPermission) or inspect the wrapped
+// chain.
 //
 // Mission identity is enforced via the file path, not a per-line
 // field. The Event schema has no mission_id — the log file IS
@@ -150,9 +176,43 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, nil, fmt.Errorf("missionID is required")
 	}
-	data, err := os.ReadFile(s.logPath(missionID))
+	// Existence check on the contract file first — symmetric with
+	// LoadReflections and LoadResults, which implicitly require the
+	// mission to exist because they both rely on Store.Load or a
+	// sibling path anchored at a known-good contract. os.Stat is the
+	// light-weight option: we do not need to parse or validate the
+	// contract, only confirm the mission was ever created.
+	if _, err := os.Stat(s.ContractPath(missionID)); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, fmt.Errorf("mission %q not found", missionID)
+		}
+		return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, err)
+	}
+	// Stat the log file next: distinguish missing file (normal, returns
+	// empty), directory at path (attacker-planted), and oversized file
+	// (pathological) before committing to a full read.
+	logPath := s.logPath(missionID)
+	info, err := os.Stat(logPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
+			return []Event{}, nil, nil
+		}
+		return nil, nil, fmt.Errorf("stat event log for %q: %w", missionID, err)
+	}
+	if info.IsDir() {
+		return nil, nil, fmt.Errorf("event log for %q: path is a directory", missionID)
+	}
+	if info.Size() > maxLogSize {
+		return nil, nil, fmt.Errorf(
+			"event log for %q: %d bytes exceeds cap %d",
+			missionID, info.Size(), maxLogSize)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			// Raced with a delete between stat and read. Treat as
+			// missing file — the caller sees the same empty state as
+			// if the stat had caught it first.
 			return []Event{}, nil, nil
 		}
 		return nil, nil, fmt.Errorf("reading events for %q: %w", missionID, err)
@@ -173,48 +233,129 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 //
 // Blank lines (runs of whitespace or empty) are silently skipped —
 // the writer never emits them, but hand-edited files might. Missing
-// required fields (ts, event, actor) reject the line with a warning.
+// required fields (ts, event, actor) or a non-RFC3339 ts value
+// reject the line with a warning.
+//
+// Uses bufio.Reader.ReadString rather than bufio.Scanner so a single
+// line exceeding any fixed buffer does not silently truncate the
+// tail of the log. The whole-file 16 MiB cap (enforced in
+// LoadEvents) bounds the memory a pathological line can consume;
+// there is no per-line cap. A mid-stream read error is a genuine
+// I/O failure and surfaces as the returned error, not as a silent
+// partial result.
 func decodeEventLog(data []byte) ([]Event, []string, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return []Event{}, nil, nil
 	}
 	events := []Event{}
 	var warnings []string
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	// Bump the scanner buffer so a long Details payload does not
-	// truncate — the default 64 KiB is small enough to clip a
-	// realistic event with a big files_changed map. Ceiling is 1 MiB,
-	// matching readLog in log_test.go.
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	reader := bufio.NewReader(bytes.NewReader(data))
 	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		raw := scanner.Bytes()
-		if len(bytes.TrimSpace(raw)) == 0 {
-			continue
+	for {
+		line, readErr := reader.ReadString('\n')
+		// ReadString returns whatever it has read even when it also
+		// returns io.EOF. Process the final non-terminated line (if
+		// any) before honoring the EOF so a file with no trailing
+		// newline is still fully walked.
+		if len(line) > 0 {
+			lineNo++
+			// Strip the trailing \n and an optional \r (Windows-written
+			// logs) so the downstream decoder sees a clean line body.
+			line = strings.TrimRight(line, "\n")
+			line = strings.TrimRight(line, "\r")
+			if strings.TrimSpace(line) != "" {
+				e, err := decodeEventLine([]byte(line))
+				if err != nil {
+					warnings = append(warnings,
+						sanitizeWarning(fmt.Sprintf("line %d: %v", lineNo, err)))
+				} else {
+					events = append(events, e)
+				}
+			}
 		}
-		e, err := decodeEventLine(raw)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("line %d: %v", lineNo, err))
-			continue
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			// Any other read failure is an I/O error, not a decode
+			// failure. Surface what we decoded before the failure as
+			// a warning with the line number just attempted, then
+			// return the error so the caller sees the distinction.
+			warnings = append(warnings, sanitizeWarning(
+				fmt.Sprintf("line %d: reading: %v", lineNo+1, readErr)))
+			return events, warnings, fmt.Errorf("reading event log: %w", readErr)
 		}
-		events = append(events, e)
-	}
-	if err := scanner.Err(); err != nil {
-		// A scanner error is a genuine read failure (I/O, buffer
-		// overflow). Surface it as a warning on the last line
-		// attempted so partial output is still useful — the caller
-		// can see what was successfully decoded before the failure.
-		warnings = append(warnings, fmt.Sprintf("line %d: scanner: %v", lineNo+1, err))
 	}
 	return events, warnings, nil
 }
 
+// sanitizeWarning replaces control characters in a warning string
+// with their escaped hex form so that operator terminals and MCP
+// consumers cannot be misled by attacker-controlled bytes in line
+// contents or JSON field names. The strict JSON decoder echoes
+// unknown top-level field names verbatim into its error message;
+// an attacker with local write access to a mission log can plant
+// a line like `{..., "\u001b[2J...": 1}` whose decode error string
+// contains literal ESC sequences. Without sanitization, those
+// bytes forward to terminals via the CLI's stderr path and to MCP
+// consumers via the warnings slice, letting an attacker clear the
+// screen and paint a spoofed "no corruption detected" message at
+// the exact moment the post-mortem operator is looking for damage.
+//
+// Tab and space are preserved so wrapped error messages still read
+// naturally. Every other rune < 0x20 and the DEL + C1 control
+// block (U+007F–U+009F) are rendered as \xHH so operators can
+// still see what was attempted. Runes above U+009F pass through
+// unchanged — warning strings are UTF-8 and we do not want to
+// fight with legitimate non-ASCII content.
+//
+// Rune-level iteration is deliberate: byte-level checking would
+// mangle legitimate multi-byte UTF-8 because continuation bytes
+// overlap the C1 byte range (ß = 0xc3 0x9f, for instance). But
+// naive rune iteration also hides malformed UTF-8 behind the
+// replacement rune U+FFFD, which an attacker could exploit to
+// smuggle control bytes past the sanitizer. The walker uses
+// utf8.DecodeRuneInString and detects RuneError + width 1 — the
+// signal that the byte at the cursor is not part of a valid
+// UTF-8 sequence — and escapes the raw byte directly. A
+// legitimate U+FFFD in input (encoded as 0xef 0xbf 0xbd, width 3)
+// passes through unchanged.
+func sanitizeWarning(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			// Invalid UTF-8 byte at this position — escape it
+			// directly so an attacker cannot hide a control byte
+			// behind a RuneError decode.
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+			i++
+			continue
+		}
+		switch {
+		case r == '\t' || r == ' ':
+			b.WriteRune(r)
+		case r < 0x20, r >= 0x7f && r <= 0x9f:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			b.WriteRune(r)
+		}
+		i += size
+	}
+	return b.String()
+}
+
 // decodeEventLine strictly decodes a single JSONL line into an
-// Event. Unknown top-level fields are rejected, and empty mandatory
-// fields (ts, event, actor) produce a typed error so
-// decodeEventLog can attach the line number. The Details map is
-// free-form: any shape the writer chose is preserved as-is.
+// Event. Unknown top-level fields are rejected, empty mandatory
+// fields (ts, event, actor) produce a typed error so decodeEventLog
+// can attach the line number, and a non-RFC3339 ts value is
+// rejected at decode time — NOT silently dropped at filter time.
+// Rejecting bad timestamps at decode closes the silent
+// count-mismatch vector where the same audit trail returned N
+// events without --since and N-k events with --since, where k was
+// the number of lines with unparseable ts values. The Details map
+// is free-form: any shape the writer chose is preserved as-is.
 func decodeEventLine(raw []byte) (Event, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -233,6 +374,9 @@ func decodeEventLine(raw []byte) (Event, error) {
 	}
 	if strings.TrimSpace(e.TS) == "" {
 		return Event{}, fmt.Errorf("event missing ts")
+	}
+	if _, err := time.Parse(time.RFC3339, e.TS); err != nil {
+		return Event{}, fmt.Errorf("event ts %q is not RFC3339: %w", e.TS, err)
 	}
 	if strings.TrimSpace(e.Event) == "" {
 		return Event{}, fmt.Errorf("event missing event type")
@@ -258,17 +402,22 @@ func decodeEventLine(raw []byte) (Event, error) {
 // `null`.
 //
 // since uses RFC3339 parsing; an invalid value produces a typed
-// error naming the field. Events whose on-disk ts is not RFC3339
-// are dropped when since is set (they cannot satisfy the cutoff)
-// and preserved when since is blank (the filter only answers
-// "matches the filters", not "is the file well-formed").
+// error with a human-readable hint ("expected RFC3339 (e.g.
+// 2026-04-08T12:00:00Z)") rather than leaking the Go time layout
+// reference string. Events reaching FilterEvents are guaranteed
+// to have an RFC3339 ts — decodeEventLine rejects any line whose
+// ts cannot be parsed — so the count agrees between --since and
+// no-filter states of the same audit trail. A bad-ts line never
+// appears in either count.
 func FilterEvents(events []Event, types []string, since string) ([]Event, error) {
 	var cutoff time.Time
 	hasCutoff := false
 	if strings.TrimSpace(since) != "" {
 		t, err := time.Parse(time.RFC3339, since)
 		if err != nil {
-			return nil, fmt.Errorf("invalid since %q: %w", since, err)
+			return nil, fmt.Errorf(
+				"invalid since %q: expected RFC3339 (e.g. 2026-04-08T12:00:00Z)",
+				since)
 		}
 		cutoff = t
 		hasCutoff = true
@@ -292,13 +441,15 @@ func FilterEvents(events []Event, types []string, since string) ([]Event, error)
 			}
 		}
 		if hasCutoff {
+			// ts is guaranteed to be RFC3339 by decodeEventLine, so a
+			// parse failure here indicates an event that came from a
+			// caller bypassing the decoder — a programming error, not
+			// an input-trust failure. Drop such events so an in-memory
+			// caller constructing Event values with a malformed ts
+			// does not crash the filter; the LoadEvents path is the
+			// trust-boundary guarantee.
 			ts, err := time.Parse(time.RFC3339, e.TS)
 			if err != nil {
-				// Event with an unparseable ts cannot satisfy the
-				// cutoff; drop it. Without --since the same event
-				// would be included. See the test
-				// TestFilterEvents_EventWithInvalidTSSkippedUnderSince
-				// for the documented policy.
 				continue
 			}
 			if ts.Before(cutoff) {
