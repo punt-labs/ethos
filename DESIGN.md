@@ -3629,16 +3629,16 @@ each worker would operate on an isolated filesystem copy of the
 branch could work in parallel without fighting each other's
 writes.
 
-That expectation produced eight compounding failures:
+That expectation produced eight incidents across four phases,
+falling into six categories of failure:
 
 1. **Worker commits never reached the leader's feature branch.**
    bwk and mdm reported "worktree on `worktree-agent-<id>`, not on
    `feat/X`" in every round. The leader's branch never advanced.
 2. **Workers fell back to the leader checkout via absolute paths.**
-   The delegation prompts used absolute paths throughout
-   (`/home/jfreeman/Coding/punt-labs/ethos/...`), so workers wrote
-   directly into the leader checkout, bypassing the worktree
-   entirely.
+   The delegation prompts used absolute paths throughout (e.g.,
+   `<repo-root>/internal/mission/...`), so workers wrote directly
+   into the leader checkout, bypassing the worktree entirely.
 3. **Shared `.git/index` race.** Two workers in the same leader
    checkout shared the staging area. During Phase 9ai.5, mdm
    caught bwk's concurrent `git add` interleaving into mdm's
