@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+
+- **`DES-038`: worktree isolation investigation (`ethos-56a`)** —
+  Documents the investigation that closed `ethos-56a` after 8+
+  failed worker rounds misused `isolation: worktree`. The flag
+  creates a worktree on a new `worktree-agent-<id>` branch
+  (scratch-and-merge isolation), NOT on the leader's current
+  feature branch (same-branch isolation). The COO's protocol now
+  defaults OFF for single-worker feature delivery and reserves
+  the flag for exploratory/parallel-fan-out/snapshot work only.
+  No code changes — ethos has no worktree-creation logic to
+  modify; the Claude Code behavior is working as designed.
+
 ### Changed
 
 - **`mission show --json` and MCP `mission show` payload shape**
