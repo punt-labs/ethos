@@ -122,6 +122,8 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 	if r.Model != "" {
 		fmt.Fprintf(&b, "model: %s\n", yamlQuote(r.Model))
 	}
+	b.WriteString("skills:\n")
+	b.WriteString("  - baseline-ops\n")
 	b.WriteString("---\n")
 
 	// Body.
