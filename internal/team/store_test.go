@@ -2,6 +2,8 @@ package team
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -611,4 +613,133 @@ func TestStore_FindByRepo(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStore_LoadRejectsStructurallyInvalidTeam covers ethos-2z2: a
+// team file that passes yaml.Unmarshal but fails ValidateStructural
+// must be rejected at Load time, not silently returned as a broken
+// team. The bug class came from the 9ai.1 round 3 silent-failure
+// hunt: a typo in a collaboration's from field (e.g., go-speciallist
+// instead of go-specialist) silently matched zero members at
+// derivation time and produced no warning. After 2z2, Store.Load
+// itself refuses the file.
+//
+// The fixture bypasses Save by calling os.WriteFile directly so the
+// on-disk bytes contain an invariant violation Save would have
+// rejected. This is the only way to get a structurally-invalid team
+// on disk in practice: a hand-edit of the YAML file or a pre-2z2
+// agent that wrote corrupt content.
+func TestStore_LoadRejectsStructurallyInvalidTeam(t *testing.T) {
+	tests := []struct {
+		name      string
+		yaml      string
+		wantError string
+	}{
+		{
+			name: "typo'd collaboration.from",
+			yaml: "name: eng\n" +
+				"members:\n" +
+				"  - identity: alice\n" +
+				"    role: go-specialist\n" +
+				"  - identity: bob\n" +
+				"    role: coo\n" +
+				"collaborations:\n" +
+				"  - from: go-speciallist\n" + // typo: extra 'l'
+				"    to: coo\n" +
+				"    type: reports_to\n",
+			wantError: `collaboration 0: role "go-speciallist" not filled by any member`,
+		},
+		{
+			name: "typo'd collaboration.to",
+			yaml: "name: eng\n" +
+				"members:\n" +
+				"  - identity: alice\n" +
+				"    role: dev\n" +
+				"  - identity: bob\n" +
+				"    role: lead\n" +
+				"collaborations:\n" +
+				"  - from: dev\n" +
+				"    to: leed\n" + // typo
+				"    type: reports_to\n",
+			wantError: `collaboration 0: role "leed" not filled by any member`,
+		},
+		{
+			name: "self-collaboration",
+			yaml: "name: eng\n" +
+				"members:\n" +
+				"  - identity: alice\n" +
+				"    role: dev\n" +
+				"collaborations:\n" +
+				"  - from: dev\n" +
+				"    to: dev\n" +
+				"    type: reports_to\n",
+			wantError: "collaboration 0: self-collaboration not allowed (dev)",
+		},
+		{
+			name: "invalid type",
+			yaml: "name: eng\n" +
+				"members:\n" +
+				"  - identity: alice\n" +
+				"    role: dev\n" +
+				"  - identity: bob\n" +
+				"    role: lead\n" +
+				"collaborations:\n" +
+				"  - from: dev\n" +
+				"    to: lead\n" +
+				"    type: manages\n", // not in validCollabTypes
+			wantError: `collaboration 0: invalid type "manages"`,
+		},
+		{
+			name: "no members",
+			yaml: "name: eng\n" +
+				"repositories:\n" +
+				"  - punt-labs/ethos\n",
+			wantError: `team "eng" must have at least one member`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testStore(t)
+			// Plant the corrupt file directly on disk — os.WriteFile
+			// bypasses Save's Validate and simulates a hand-edit or a
+			// pre-2z2 agent that wrote a broken file.
+			require.NoError(t, os.MkdirAll(s.Dir(), 0o755))
+			p := filepath.Join(s.Dir(), "eng.yaml")
+			require.NoError(t, os.WriteFile(p, []byte(tc.yaml), 0o600))
+
+			_, err := s.Load("eng")
+			require.Error(t, err, "Load must reject a structurally-invalid team")
+			assert.Contains(t, err.Error(), `validating team "eng"`,
+				"Load must wrap the structural error with its operation context")
+			assert.Contains(t, err.Error(), tc.wantError,
+				"error chain must surface the underlying structural failure")
+		})
+	}
+}
+
+// TestStore_LoadAcceptsStructurallyValidTeam is the backwards-compat
+// anchor: a team file that passed Save's Validate pre-2z2 must still
+// Load unchanged. If this test breaks, a fix to ValidateStructural
+// introduced a regression that rejects previously-valid data.
+func TestStore_LoadAcceptsStructurallyValidTeam(t *testing.T) {
+	s := testStore(t)
+	tm := &Team{
+		Name:         "eng",
+		Repositories: []string{"punt-labs/ethos"},
+		Members: []Member{
+			{Identity: "alice", Role: "dev"},
+			{Identity: "bob", Role: "lead"},
+		},
+		Collaborations: []Collaboration{
+			{From: "dev", To: "lead", Type: "reports_to"},
+		},
+	}
+	require.NoError(t, s.Save(tm, alwaysTrue, alwaysTrue))
+
+	loaded, err := s.Load("eng")
+	require.NoError(t, err)
+	assert.Equal(t, "eng", loaded.Name)
+	assert.Len(t, loaded.Members, 2)
+	assert.Len(t, loaded.Collaborations, 1)
 }

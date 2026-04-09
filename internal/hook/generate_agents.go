@@ -159,16 +159,27 @@ func normalizeResponsibility(s string) string {
 // whitespace is trimmed, and strings empty after normalization are
 // dropped with a stderr warning. Targets whose role fails to load are
 // also skipped with a warning. Non-reports_to edges from roleName are
-// warned about — this catches typos ("report_to", "reports-to") and
-// future edge types (collaborates_with, delegates_to) that the team
-// package's Load does not validate. Returns nil if roleName has no
-// outgoing reports_to edges or every target contributes zero bullets.
+// warned about and skipped — post-ethos-2z2 this branch only fires for
+// collaborates_with and delegates_to, which are valid types at the
+// structural level but are a semantic-level "not handled by the MVP"
+// decision. Typo'd types (e.g. "report_to") and truly unknown types
+// are rejected at Load time by team.ValidateStructural, so they
+// cannot reach this function. Returns nil if roleName has no outgoing
+// reports_to edges or every target contributes zero bullets.
 func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, roles *role.LayeredStore) []antiResponsibility {
 	var out []antiResponsibility
 	for _, c := range collabs {
 		if c.From != roleName {
 			continue
 		}
+		// Post-ethos-2z2 invariant: c.Type is one of
+		// {reports_to, collaborates_with, delegates_to}. Anything
+		// else would have been rejected at Load time by
+		// team.ValidateStructural. This branch handles the two
+		// known-but-deferred types by warning the user that the
+		// edge is valid-but-unhandled, so a fixture with a valid
+		// collaborates_with edge from roleName still produces a
+		// visible signal instead of silent drop.
 		if c.Type != "reports_to" {
 			fmt.Fprintf(os.Stderr,
 				"ethos: generate-agents: anti-responsibilities: unsupported edge from %q to %q with type %q (expected \"reports_to\") — skipping\n",
