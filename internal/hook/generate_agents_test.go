@@ -1060,11 +1060,19 @@ func TestDeriveAntiResponsibilities_MissingTarget(t *testing.T) {
 }
 
 // TestDeriveAntiResponsibilities_UnsupportedEdgeType verifies that a
-// non-reports_to edge from the agent's role (a typo like "report_to"
-// or a deferred type like "collaborates_with") is warned about and
-// skipped, not silently dropped. The team package's Load does not
-// call Validate, so hand-edited YAML with an invalid type can reach
-// the generator — the user must see the warning.
+// non-reports_to edge from the agent's role is warned about and
+// skipped, not silently dropped.
+//
+// Post-ethos-2z2: team.Store.Load calls ValidateStructural, which
+// rejects any collaboration type not in validCollabTypes. So the
+// only way a non-reports_to edge reaches the generator is if it is
+// a valid-but-deferred type — collaborates_with or delegates_to.
+// Those are semantic-level "not handled by MVP" decisions, not
+// structural errors, and deriveAntiResponsibilities warns on them
+// and continues. The fixture uses collaborates_with specifically to
+// exercise the valid-but-deferred path; a typo'd type like
+// "report_to" would be rejected at Load time and could never reach
+// this test.
 func TestDeriveAntiResponsibilities_UnsupportedEdgeType(t *testing.T) {
 	root, _, _, _ := setupTestRepo(t)
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
