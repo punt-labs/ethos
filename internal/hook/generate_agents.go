@@ -272,12 +272,18 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// a subdirectory before the Write or Edit tool fires. The
 		// subshell keeps the cd from leaking to the outer shell, and
 		// the quoted expansion handles paths with spaces. `head -60`
-		// (not `tail -20`) catches the FIRST failure: Go compile errors
-		// fire at the top of `make check` output and short-circuit the
-		// rest of the run, and `-race -count=1 -v` test runs surface
-		// the first `FAIL:` near the top before 500+ lines of verbose
-		// test output that would push a tail window off the relevant
-		// error. The pipe to `head` masks the exit code, so the hook
+		// (not `tail -20`) catches the FIRST failure. `make check` is
+		// a sequence of quiet-on-success stages — go vet, staticcheck,
+		// shellcheck, markdownlint, then non-verbose
+		// `go test -race -count=1 ./...` (no -v flag). Go compile
+		// errors short-circuit the whole sequence and land at the top
+		// in 5-30 lines, so head catches them trivially. A failing
+		// lint or test stage also surfaces at the top because every
+		// preceding stage was silent on success. Non-verbose `go test`
+		// prints one line per package on the success path and a
+		// single `--- FAIL:` block for the first failing package,
+		// which is typically tens of lines — still inside the 60-line
+		// window. The pipe to `head` masks the exit code, so the hook
 		// stays advisory: Claude Code does not gate the next Write on
 		// a broken build. This is the intentional shape — a blocking
 		// hook would create friction during refactors where
