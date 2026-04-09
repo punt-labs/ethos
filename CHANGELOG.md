@@ -19,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   write-enabled roles; §Phase 5 no longer claims role-based hooks
   are inactive. The `agent-definitions.md` frontmatter table row
   for `hooks` changes from "Manual / future: Role-based" to
-  "Generated from `role.tools`". Same-class fix: a stale `head -60`
-  reference at CHANGELOG.md:163 (historical 9ai.2 entry qualifier)
+  "Generated from `role.tools`". Same-class fix: the stale `head -60`
+  reference in the historical `ethos-9ai.2` changelog entry qualifier
   is updated to `head -n 60` to match the current command.
   Identified by silent-failure hunter M2 during `ethos-b5g` round 1
   and deferred out of that scope to keep b5g focused.
