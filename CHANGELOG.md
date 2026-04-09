@@ -62,6 +62,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`/mission` skill MVP (Phase A, `ethos-9ai.5`)** — a new
+  `~/.claude/skills/mission/SKILL.md` is deployed by `ethos seed`
+  alongside the existing `baseline-ops/SKILL.md`. The skill teaches
+  Claude how to scaffold a Phase 3 mission contract from
+  conversation context, register it via `ethos mission create
+  --file <path>`, and spawn the worker with `Agent(subagent_type,
+  prompt, run_in_background=true)`. Every field in the scaffolded
+  YAML maps to the typed `mission.Contract` schema (DES-031); the
+  skill walks through the six-step flow (resolve worker, scaffold
+  YAML, pick evaluator, create, spawn, track) and includes a
+  marquee worked example. This closes the last gap in Phase 3:
+  the runtime (write-set admission, frozen evaluator, bounded
+  rounds, result artifacts, event log) was enforced at the store
+  boundary, but there was no user-facing interface to drive it.
+  `docs/mission-skill-design.md` is rewritten to match the
+  Phase 3 schema (the prior version predated Phase 3.1 and
+  described a freeform contract format that never shipped).
+  Phases B (slash command) and C (write-set conflict detection,
+  bead integration) remain PLANNED.
+
 - **Phase 3.7: append-only mission event log reader API**
   (`ethos-07m.11`, rounds 1–3) — a public `Store.LoadEvents(missionID)`
   method, a new `ethos mission log <id>` CLI subcommand, and a new
