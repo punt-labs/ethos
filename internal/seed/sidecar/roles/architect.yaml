@@ -9,3 +9,19 @@ tools:
   - Read
   - Grep
   - Glob
+output_format: |
+  Report findings using this structure:
+
+  ```text
+  FINDINGS: <target>
+    reviewer: <handle>
+    verdict: approve | iterate | reject
+    confidence: <0.0-1.0>
+    findings:
+      - severity: critical | high | medium | low | nit
+        location: <file>:<line>
+        issue: <what is wrong>
+        suggestion: <how to fix>
+    open_questions:
+      - [if any]
+  ```

@@ -75,6 +75,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`Role.OutputFormat` field for structured agent handoff
+  (`ethos-9ai.3`)** — `internal/role/role.go` gains an optional
+  `OutputFormat string` field with YAML tag `output_format,omitempty`
+  and matching JSON tag. When set, `internal/hook/generate_agents.go`
+  emits a new `## Output Format` section as the LAST block of the
+  generated `.claude/agents/<handle>.md` body — after the `Talents:`
+  line, after `## What You Don't Do`, after every other section. The
+  role provides only the body; the generator owns the heading. Empty
+  field omits the section entirely (no empty heading, no trailing
+  blank line). The field is free-form markdown with no validation —
+  same trust boundary as `responsibilities` and the other string
+  fields, since role YAML is git-tracked and human-reviewed. All six
+  starter sidecar roles in `internal/seed/sidecar/roles/*.yaml` ship
+  with templates tailored to their category: writer roles
+  (`implementer`, `test-engineer`) get a `RESULT`-shaped template
+  with `files_changed` and `evidence`; review roles (`reviewer`,
+  `architect`, `security-reviewer`) get a `FINDINGS`-shaped template
+  with `severity` and `location`; the `researcher` role gets a
+  `RESEARCH`-shaped template with `sources` and `options`. The
+  schema change is purely additive — existing role YAML without the
+  field loads identically to before, and the Punt Labs team roles in
+  `.punt-labs/ethos/roles/*.yaml` deliberately do NOT set the field
+  in this bead (a follow-up against `punt-labs/team` will populate
+  them, so this PR is null-effect on the regenerated `.claude/agents/`
+  files in this repo).
+
 - **Generated agent files include a `PostToolUse` hook that runs
   `make check` after every Write or Edit (`ethos-9ai.2`)** —
   `internal/hook/generate_agents.go` injects a `hooks:` block in the

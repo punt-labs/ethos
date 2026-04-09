@@ -325,6 +325,20 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		fmt.Fprintf(&b, "\nTalents: %s\n", strings.Join(id.Talents, ", "))
 	}
 
+	// Output format — the structured-handoff template the worker emits
+	// when it reports back to the leader. Role-owned body, generator-
+	// owned heading. Last thing in the file so it is the worker's final
+	// reference when producing the result artifact. TrimRight + an
+	// explicit "\n" normalizes the YAML-loaded string to exactly one
+	// terminal newline regardless of how the role author terminated the
+	// block scalar, matching the Writing Style and Responsibilities
+	// trailing-newline discipline.
+	if r.OutputFormat != "" {
+		b.WriteString("\n## Output Format\n\n")
+		b.WriteString(strings.TrimRight(r.OutputFormat, "\n"))
+		b.WriteString("\n")
+	}
+
 	return b.String()
 }
 

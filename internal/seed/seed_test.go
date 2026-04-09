@@ -24,6 +24,23 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "roles", "researcher.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "roles", "test-engineer.yaml"))
 
+	// Every starter role must ship with an `output_format` template so
+	// the generator emits the `## Output Format` section in the agent
+	// file. A future edit that strips the field from any sidecar role
+	// fails here. The check is per-file rather than aggregate so the
+	// failure message points at the specific role that lost it.
+	for _, name := range []string{
+		"implementer", "test-engineer",
+		"reviewer", "architect", "security-reviewer",
+		"researcher",
+	} {
+		path := filepath.Join(dest, "roles", name+".yaml")
+		data, readErr := os.ReadFile(path)
+		require.NoError(t, readErr, "reading %s.yaml", name)
+		assert.Contains(t, string(data), "output_format:",
+			"sidecar role %s must ship with an output_format template", name)
+	}
+
 	// Should have deployed all 10 talents
 	assert.FileExists(t, filepath.Join(dest, "talents", "go.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "python.md"))

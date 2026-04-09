@@ -483,6 +483,88 @@ func TestGenerateAgentFiles(t *testing.T) {
 			},
 		},
 		{
+			// Role with output_format set — generator must emit a
+			// `## Output Format` section at the END of the body, after
+			// `Talents:`. The role provides only the body; the heading
+			// is generator-owned. The exact byte-for-byte block is
+			// asserted, plus the section's trailing position is locked
+			// with HasSuffix so a future regression that emits another
+			// section after Output Format fails this case.
+			name: "role with output_format emits section",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "with-format.yaml"), map[string]interface{}{
+					"name":             "with-format",
+					"responsibilities": []string{"do work"},
+					"tools":            []string{"Read", "Write", "Bash"},
+					"output_format":    "Worker report template:\n- field1\n- field2\n",
+				})
+				writeYAML(t, filepath.Join(ethosDir, "identities", "wfm.yaml"), map[string]interface{}{
+					"name":          "With Format",
+					"handle":        "wfm",
+					"kind":          "agent",
+					"personality":   "kernighan",
+					"writing_style": "kernighan-prose",
+					"talents":       []string{"engineering"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "wfm", "role": "with-format"},
+					},
+				})
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "wfm.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+
+				// Byte-for-byte: the heading is generator-owned, the
+				// body is the role's literal content, and a single
+				// terminal newline ends the section.
+				want := "\n## Output Format\n\n" +
+					"Worker report template:\n" +
+					"- field1\n" +
+					"- field2\n"
+				assert.Contains(t, content, want)
+
+				// Last-position anchor: Output Format must be the
+				// final section in the file. TrimRight strips any
+				// trailing newlines so HasSuffix can match the bare
+				// final bullet.
+				assert.True(t,
+					strings.HasSuffix(strings.TrimRight(content, "\n"), "- field2"),
+					"## Output Format must be the last section in the file; got tail:\n%s",
+					content[max(0, len(content)-80):])
+			},
+		},
+		{
+			// Role with no output_format — generator must NOT emit a
+			// `## Output Format` heading, no blank lines, no trailing
+			// section. bwk's default fixture has no output_format set,
+			// so this case reuses the default setup (nil) and asserts
+			// the absence on bwk.md.
+			name: "role without output_format omits section",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				assert.NotContains(t, content, "## Output Format")
+				assert.NotContains(t, content, "Output Format")
+			},
+		},
+		{
 			// Edit-only role — tools list has Edit but not Write — still
 			// gets the hook block. The matcher `Write|Edit` is unchanged;
 			// what gates emission is the helper's OR test over the tools
