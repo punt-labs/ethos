@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Role-based `PostToolUse` hook command changed from `tail -20` to
-  `head -60`** (`ethos-b5g`) — the 9ai.2 hook ran
+- **Role-based `PostToolUse` hook command changed from `tail -20`
+  to `head -n 60`** (`ethos-b5g`) — the 9ai.2 hook ran
   `(cd "$CLAUDE_PROJECT_DIR" && make check) 2>&1 | tail -20`
   (originally-shipped form, superseded by this entry) after every
   Write or Edit by a write-enabled role. `make check` is a sequence
@@ -37,21 +37,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failing test — non-verbose `go test` still prints one line per
   package on success before the failing package's `--- FAIL:`
   block, and with 13 packages the FAIL block can land past the
-  20-line tail window. `head -60` catches both cases: compile
+  20-line tail window. `head -n 60` catches both cases: compile
   errors at the top and the first-failing-stage output within 60
   lines. The command now reads
-  `(cd "$CLAUDE_PROJECT_DIR" && make check) 2>&1 | head -60`. Hook
-  stays advisory, not blocking — the pipe to `head` still masks
-  the exit code, so Claude Code does not gate the next Write on a
-  broken build. This is the intentional shape: blocking the next
-  Write would create user-hostile friction during refactors where
-  intermediate states are knowingly broken, and Claude Code has no
-  `--skip-hook` escape hatch. The canonical example and language
-  in `docs/agent-identity-spec.tex` §Role-Based Hooks are updated
-  in sync: "behavioral enforcement" softens to "visible
-  enforcement" and a POSIX-sh pin note documents that the command
-  runs under `/bin/sh` and must avoid bashisms like
-  `set -o pipefail`, process substitution, and `${VAR:-default}`.
+  `(cd "$CLAUDE_PROJECT_DIR" && make check) 2>&1 | head -n 60`
+  — `-n 60` is the POSIX-canonical form; the BSD legacy shortcut
+  `-60` is avoided to match the POSIX-sh pin on the rest of the
+  command. Hook stays advisory, not blocking — the pipe to `head`
+  still masks the exit code, so Claude Code does not gate the next
+  Write on a broken build. This is the intentional shape: blocking
+  the next Write would create user-hostile friction during
+  refactors where intermediate states are knowingly broken, and
+  Claude Code has no `--skip-hook` escape hatch. The canonical
+  example and language in `docs/agent-identity-spec.tex`
+  §Role-Based Hooks are updated in sync: "behavioral enforcement"
+  softens to "visible enforcement" and a POSIX-sh pin note
+  documents that the command runs under `/bin/sh` and must avoid
+  bashisms like `set -o pipefail` and process substitution.
   Write-enabled agent files (bwk, mdm, adb, rmh) regenerate with
   the new command on the next SessionStart; review-only agent
   files (djb) are unchanged because they have no hooks block.
