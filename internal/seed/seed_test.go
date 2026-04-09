@@ -193,6 +193,17 @@ func TestSeedMissionSkill(t *testing.T) {
 	assert.Contains(t, content, "success_criteria:")
 	assert.Contains(t, content, "budget:")
 
+	// context is a TOP-LEVEL field on mission.Contract, NOT a
+	// subfield of Inputs. An earlier draft nested it under inputs;
+	// Phase 3.1's strict YAML decode (KnownFields true) would have
+	// rejected the worked example at `ethos mission create` time.
+	// Assert top-level placement so future drift fails here
+	// instead of at the store boundary.
+	assert.Contains(t, content, "\ncontext: |",
+		"worked example must have top-level `context: |`, not nested under inputs")
+	assert.NotContains(t, content, "  context: |",
+		"`context: |` must NOT be indented under inputs — mission.Contract has Context at the top level")
+
 	// Command anchors: the real CLI surfaces the skill teaches.
 	assert.Contains(t, content, "ethos mission create --file")
 	assert.Contains(t, content, "ethos mission show")

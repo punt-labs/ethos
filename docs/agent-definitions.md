@@ -370,9 +370,9 @@ evaluator:
   handle: djb
 inputs:
   bead: ethos-9ai.x
-  context: |
-    Add Model field to internal/role/role.go and wire through
-    GenerateAgentFiles. Default to "inherit" when empty.
+context: |
+  Add Model field to internal/role/role.go and wire through
+  GenerateAgentFiles. Default to "inherit" when empty.
 write_set:
   - internal/role/role.go
   - internal/role/role_test.go

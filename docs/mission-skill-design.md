@@ -132,12 +132,12 @@ evaluator:
   handle: djb                  # frozen reviewer
 inputs:
   bead: ethos-9ai.5            # optional bead binding
-  context: |                   # optional free-text design notes
-    Add a Model field to the Role struct.
   files:                       # optional — files the worker MUST read
     - internal/role/role.go
   references:                  # optional — supporting docs
     - DESIGN.md
+context: |                     # optional, TOP-LEVEL free-text design notes
+  Add a Model field to the Role struct.
 write_set:                     # required — at least one repo-relative path
   - internal/role/role.go
   - internal/role/role_test.go
@@ -221,10 +221,10 @@ evaluator:
   handle: djb
 inputs:
   bead: ethos-9ai.x
-  context: |
-    Add a Model field to internal/role/role.go and wire it through
-    GenerateAgentFiles. Default to "inherit" when empty so
-    pre-existing roles round-trip without loss.
+context: |
+  Add a Model field to internal/role/role.go and wire it through
+  GenerateAgentFiles. Default to "inherit" when empty so
+  pre-existing roles round-trip without loss.
 write_set:
   - internal/role/role.go
   - internal/role/role_test.go
