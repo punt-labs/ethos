@@ -17,13 +17,13 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, reflect, reflections, advance, result, results. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, reflect, reflections, advance, result, results, log. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("create", "show", "list", "close", "reflect", "reflections", "advance", "result", "results"),
+			mcplib.Enum("create", "show", "list", "close", "reflect", "reflections", "advance", "result", "results", "log"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("mission_id",
-			mcplib.Description("Mission ID or unique prefix. Required for show, close, reflect, reflections, advance, result, and results."),
+			mcplib.Description("Mission ID or unique prefix. Required for show, close, reflect, reflections, advance, result, results, and log."),
 		),
 		mcplib.WithString("contract",
 			mcplib.Description("Full contract YAML body. Required for create."),
@@ -44,6 +44,12 @@ func (h *Handler) missionTool() mcplib.Tool {
 			// enum would advertise "open" and "all" as valid for close,
 			// which is wrong. Each handler validates its own input.
 			mcplib.Description("Filter for list (open|closed|failed|escalated|all) or terminal status for close (closed|failed|escalated)."),
+		),
+		mcplib.WithString("event",
+			mcplib.Description("Optional comma-separated list of event types for log (e.g. create,close). Unknown types are accepted and return empty."),
+		),
+		mcplib.WithString("since",
+			mcplib.Description("Optional RFC3339 timestamp for log; events on or after the cutoff are included."),
 		),
 	)
 }
@@ -75,6 +81,8 @@ func (h *Handler) handleMission(_ context.Context, req mcplib.CallToolRequest) (
 		return h.handleResultMission(req)
 	case "results":
 		return h.handleResultsMission(req)
+	case "log":
+		return h.handleLogMission(req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
@@ -375,5 +383,79 @@ func (h *Handler) handleResultsMission(req mcplib.CallToolRequest) (*mcplib.Call
 		rs = []mission.Result{}
 	}
 	return jsonResult(rs)
+}
+
+// handleLogMission returns the append-only mission event log for
+// post-mortem analysis. Phase 3.7 parallel of the CLI `mission log`
+// subcommand — the two surfaces share FilterEvents and emit the
+// same LogPayload wire shape so CLI and MCP consumers see the same
+// audit trail.
+//
+// Filters AND-compose: `event` is a comma-separated list of types,
+// `since` is an RFC3339 cutoff. Both are optional. An invalid
+// `since` is a structured tool error so the caller can fix the
+// timestamp and retry; an unknown event type in `event` is not
+// rejected because event types are forward-compatible.
+//
+// A corrupt line in the on-disk log does not fail the call — the
+// payload carries a warnings slice naming the failing line numbers,
+// and events contains every parseable line before and after. An
+// I/O failure reading the file (permission denied, other os.Open
+// errors) is a structured tool error with the operator-facing
+// reason.
+func (h *Handler) handleLogMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	idArg := stringArg(req, "mission_id", "")
+	if idArg == "" {
+		return mcplib.NewToolResultError("mission_id is required for log"), nil
+	}
+	id, err := h.missionStore.MatchByPrefix(idArg)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	events, warnings, err := h.missionStore.LoadEvents(id)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to load events: %v", err)), nil
+	}
+	types := parseEventTypeList(stringArg(req, "event", ""))
+	since := stringArg(req, "since", "")
+	filtered, err := mission.FilterEvents(events, types, since)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	if filtered == nil {
+		filtered = []mission.Event{}
+	}
+	payload := mission.LogPayload{Events: filtered, Warnings: warnings}
+	return jsonResult(payload)
+}
+
+// parseEventTypeList splits a comma-separated event filter into
+// trimmed, non-empty slugs. Mirrors the CLI's parseEventTypes but
+// lives here because the MCP package cannot import cmd/ethos —
+// and a shared helper in internal/mission would drag string-list
+// parsing into the trust-boundary package for no gain. The two
+// copies are identical and test coverage on both surfaces keeps
+// them in lockstep.
+//
+// mirror: cmd/ethos/mission.go parseEventTypes — add or remove in
+// both places. Round 2 K1: kept as a deliberate 13-line
+// duplication rather than a shared helper, per mdm's argument
+// against coupling the trust-boundary package to CLI argument
+// parsing. If a third call site lands, hoist then.
+func parseEventTypeList(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 

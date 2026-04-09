@@ -122,3 +122,24 @@ type ShowPayload struct {
 	Results  []Result `json:"results"`
 	Warnings []string `json:"warnings,omitempty"`
 }
+
+// LogPayload is the wire shape the CLI `mission log --json` and the
+// MCP `mission log` handler return: the round-by-round event slice
+// and an optional warnings list when one or more lines in the
+// on-disk JSONL file failed to decode.
+//
+// Events is always emitted: empty state serializes as [] (the
+// caller pre-initializes to []Event{} so a typed-nil slice never
+// leaks through the map[string]any boxing trap Phase 3.6 round 2
+// hit for the results show payload). Warnings is omitempty so a
+// healthy log produces no noise; when any line failed to decode,
+// the caller populates Warnings with the line-numbered failure so
+// scripted consumers see the corruption in JSON mode without
+// requiring a stderr channel the MCP surface does not have.
+//
+// Symmetric with ShowPayload's warnings field — the two surfaces
+// share one degradation convention.
+type LogPayload struct {
+	Events   []Event  `json:"events"`
+	Warnings []string `json:"warnings,omitempty"`
+}

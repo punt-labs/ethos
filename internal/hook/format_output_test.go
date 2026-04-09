@@ -1081,6 +1081,121 @@ func TestFormatOutput_Mission_UnknownMethod(t *testing.T) {
 	assert.Contains(t, r.HookSpecificOutput.UpdatedMCPToolOutput, "mission_id")
 }
 
+// TestFormatOutput_MissionLog_RendersEventRows asserts that the
+// Phase 3.7 log formatter renders every event as one bullet row
+// with timestamp, type, actor, and a short details summary. The
+// walker parallels formatMissionResults so the two rendering
+// paths stay visually consistent.
+func TestFormatOutput_MissionLog_RendersEventRows(t *testing.T) {
+	result := `{
+  "events": [
+    {"ts":"2026-04-08T22:00:00Z","event":"create","actor":"claude","details":{"worker":"bwk","evaluator":"djb","bead":"ethos-07m.11"}},
+    {"ts":"2026-04-08T22:00:05Z","event":"result","actor":"bwk","details":{"round":1,"verdict":"pass"}},
+    {"ts":"2026-04-08T22:00:10Z","event":"close","actor":"claude","details":{"status":"closed","round":1,"verdict":"pass"}}
+  ]
+}`
+	payload := makeToolPayload("mission", "log", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "3 events", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "create")
+	assert.Contains(t, ctx, "by claude")
+	assert.Contains(t, ctx, "worker=bwk")
+	assert.Contains(t, ctx, "evaluator=djb")
+	assert.Contains(t, ctx, "bead=ethos-07m.11")
+	assert.Contains(t, ctx, "result")
+	assert.Contains(t, ctx, "verdict=pass")
+	assert.Contains(t, ctx, "close")
+	assert.Contains(t, ctx, "status=closed")
+}
+
+// TestFormatOutput_MissionLog_Empty_RendersNone asserts an empty
+// events array renders "(none)" so the operator sees a clean
+// "no events yet" signal instead of a bare header.
+func TestFormatOutput_MissionLog_Empty_RendersNone(t *testing.T) {
+	result := `{"events": []}`
+	payload := makeToolPayload("mission", "log", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 events", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Contains(t, r.HookSpecificOutput.AdditionalContext, "(none)")
+}
+
+// TestFormatOutput_MissionLog_Warnings asserts that a corrupt-line
+// warnings slice surfaces under a Warnings section even when the
+// events array is non-empty. Symmetric with the show formatter's
+// D1 warnings handling.
+func TestFormatOutput_MissionLog_Warnings(t *testing.T) {
+	result := `{
+  "events": [
+    {"ts":"2026-04-08T22:00:00Z","event":"create","actor":"claude"}
+  ],
+  "warnings": ["line 2: decoding event: invalid character 'g'"]
+}`
+	payload := makeToolPayload("mission", "log", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Warnings:")
+	assert.Contains(t, ctx, "line 2")
+}
+
+// TestFormatOutput_MissionLog_EmptyWithWarnings asserts that a
+// fully-corrupt log (zero good events, one or more warnings) still
+// surfaces the warnings so the operator does not see a bare
+// "(none)" and assume the log is simply empty.
+func TestFormatOutput_MissionLog_EmptyWithWarnings(t *testing.T) {
+	result := `{
+  "events": [],
+  "warnings": ["line 1: decoding event: invalid"]
+}`
+	payload := makeToolPayload("mission", "log", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "(none)")
+	assert.Contains(t, ctx, "Warnings:")
+	assert.Contains(t, ctx, "line 1")
+}
+
+// TestFormatOutput_MissionLog_SanitizedWarningsPassThrough asserts
+// that the formatter forwards pre-sanitized warnings unchanged. The
+// mission package sanitizes at source (H2), so the formatter never
+// sees raw control bytes in a warning — but if one ever slipped
+// through, the formatter has no extra protection and would forward
+// it to the MCP payload. This test pins the pass-through contract:
+// a warning that ALREADY contains the escaped form (e.g. "\x1b")
+// must render as ASCII characters, not get double-escaped.
+func TestFormatOutput_MissionLog_SanitizedWarningsPassThrough(t *testing.T) {
+	// The warning body contains the ASCII characters `\`, `x`, `1`,
+	// `b` — the sanitized form a mission-package warning would
+	// carry after sanitizeWarning processed a raw ESC byte.
+	result := `{
+  "events": [
+    {"ts":"2026-04-08T22:00:00Z","event":"create","actor":"claude"}
+  ],
+  "warnings": ["line 2: decoding event: unknown field \"\\x1b[31mFAKE\""]
+}`
+	payload := makeToolPayload("mission", "log", result)
+	out := runFormat(t, payload)
+	r := parseFormatResult(t, out)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Warnings:")
+	assert.Contains(t, ctx, `\x1b`)
+	// And the rendered context must not contain any raw control
+	// bytes — pass-through only.
+	for i := 0; i < len(ctx); i++ {
+		b := ctx[i]
+		if b == '\t' || b == '\n' || b == '\r' || b == ' ' {
+			continue
+		}
+		assert.False(t,
+			b < 0x20 || (b >= 0x7f && b <= 0x9f),
+			"formatter rendered raw control byte 0x%02x at offset %d", b, i)
+	}
+}
+
 func TestFormatMissionTime(t *testing.T) {
 	tests := []struct {
 		name string
