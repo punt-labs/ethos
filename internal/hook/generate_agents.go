@@ -111,19 +111,33 @@ type antiResponsibility struct {
 	TargetRole     string
 }
 
-// respNormalizer collapses embedded CR/LF sequences in a responsibility
-// string to single spaces. Trim is applied separately by the caller so
-// the result is a single line of text regardless of YAML block-scalar
-// quirks or accidental multi-line entries.
-var respNormalizer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+// respNormalizer collapses every line-break character a YAML
+// double-quoted scalar can legally contain down to a single space:
+// LF, CRLF, bare CR, Unicode line separator U+2028, and Unicode
+// paragraph separator U+2029. Caller collapses the resulting runs
+// of whitespace and trims.
+var respNormalizer = strings.NewReplacer(
+	"\r\n", " ",
+	"\n", " ",
+	"\r", " ",
+	"\u2028", " ",
+	"\u2029", " ",
+)
 
 // normalizeResponsibility applies whitespace-only cleanup to a
-// responsibility string: embedded newlines become spaces, then outer
-// whitespace is trimmed. Content is never rewritten — a responsibility
-// string containing markdown metacharacters (e.g. a leading "- ") is
-// the role author's choice and passes through verbatim.
+// responsibility string: every line-break form becomes a space, runs
+// of whitespace collapse to a single space, and outer whitespace is
+// trimmed. The result is always a single line. Content is never
+// otherwise rewritten — a responsibility string containing markdown
+// metacharacters (e.g. a leading "- ") is the role author's choice
+// and passes through verbatim.
 func normalizeResponsibility(s string) string {
-	return strings.TrimSpace(respNormalizer.Replace(s))
+	s = respNormalizer.Replace(s)
+	// strings.Fields splits on any Unicode whitespace run and drops
+	// leading/trailing whitespace in one pass. Rejoining with a single
+	// space collapses every internal run — tabs, double spaces, and
+	// the indentation that follows a replaced newline.
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // deriveAntiResponsibilities walks the team's collaboration edges

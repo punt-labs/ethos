@@ -17,24 +17,43 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// captureStderr redirects os.Stderr through an os.Pipe for the duration
-// of fn and returns whatever was written. Per feedback_subprocess_tests:
-// in-process pipes are sufficient for same-process stderr assertions
-// where no subprocess is involved.
+// captureStderr redirects os.Stderr to an in-memory buffer for the
+// duration of fn and returns everything fn wrote to stderr.
+//
+// WARNING: this mutates the package-global os.Stderr. Tests that use
+// this helper must NOT call t.Parallel(), and no other test in the
+// package may run concurrently with one that uses it. Adding parallel
+// tests to this file requires reworking this helper to use a per-test
+// file descriptor (not a global swap).
+//
+// Not suitable for subprocesses — see feedback_subprocess_tests.md.
+//
+// A drain goroutine reads from the pipe concurrently with fn so
+// stderr output larger than the pipe buffer (~64 KiB on Linux)
+// cannot deadlock. The read end is always closed via defer so no
+// file descriptor is leaked on test panics.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stderr
 	r, w, err := os.Pipe()
 	require.NoError(t, err)
 	os.Stderr = w
-	defer func() { os.Stderr = old }()
+
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(done)
+	}()
+
+	defer func() {
+		os.Stderr = old
+		_ = r.Close()
+	}()
 
 	fn()
-
 	require.NoError(t, w.Close())
-	var buf bytes.Buffer
-	_, err = io.Copy(&buf, r)
-	require.NoError(t, err)
+	<-done
 	return buf.String()
 }
 
@@ -753,11 +772,17 @@ func TestNormalizeResponsibility(t *testing.T) {
 		{"leading and trailing whitespace", "  release management  ", "release management"},
 		{"empty", "", ""},
 		{"whitespace only", "   \t  ", ""},
+		{"bare newline", "\n", ""},
 		{"embedded LF", "line1\nline2", "line1 line2"},
 		{"embedded CRLF", "line1\r\nline2", "line1 line2"},
 		{"embedded CR", "line1\rline2", "line1 line2"},
+		{"line separator U+2028", "line1\u2028line2", "line1 line2"},
+		{"paragraph separator U+2029", "line1\u2029line2", "line1 line2"},
 		{"newline then trim", "\n line with lf \n", "line with lf"},
 		{"multiple embedded newlines", "a\nb\nc", "a b c"},
+		{"newline with indented continuation", "hello\n  world", "hello world"},
+		{"double newline", "a\n\nb", "a b"},
+		{"trailing whitespace before newline", "hello  \n  world", "hello world"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
