@@ -458,6 +458,18 @@ func FilterEvents(events []Event, types []string, since string) ([]Event, error)
 			}
 			typeSet[t] = struct{}{}
 		}
+		// A non-nil types slice whose entries all trim to empty would
+		// leave typeSet non-nil and empty — the event loop below would
+		// then match zero event types and silently drop every event,
+		// violating the "empty types slice or nil means all types"
+		// contract documented on this function. Collapse the empty map
+		// back to nil so the loop's `typeSet != nil` guard treats the
+		// whitespace-only input as "no type filter." Sibling to the
+		// round 3 R3-M2 fix that closed the other silent-drop path in
+		// this same filter.
+		if len(typeSet) == 0 {
+			typeSet = nil
+		}
 	}
 	out := []Event{}
 	for i, e := range events {

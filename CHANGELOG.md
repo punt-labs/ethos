@@ -152,7 +152,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new round 3 tests:
   `TestFilterEvents_InMemoryBadTSReturnsError`,
   `TestLoadEvents_RejectsMalformedMissionID`, and
-  `TestLoadEvents_GrowsPastCapDuringRead`.
+  `TestLoadEvents_GrowsPastCapDuringRead`. Round 4 (two Bugbot
+  findings on PR #184, both LOW): `FilterEvents` now collapses a
+  non-nil-but-empty `typeSet` back to `nil` after trimming the
+  caller's `types` slice, so a whitespace-only filter input (e.g.
+  `[]string{"  "}` or `[]string{"", "\t"}`) behaves as "no type
+  filter" — matching the godoc's "empty types slice or nil means
+  all types" contract instead of silently dropping every event
+  (B1, sibling to the round 3 R3-M2 silent-drop closure);
+  `formatMissionLog` in `internal/hook/format_output.go` renames
+  its inner `summary` variable to `detailSummary` so it no longer
+  shadows the outer panel-title `summary`, removing a maintenance
+  tripwire for any future reader (B2). One new test,
+  `TestFilterEvents_WhitespaceOnlyTypesActsAsNoFilter`, covers
+  three whitespace-only input variants plus the empty-slice
+  regression.
 - **Structured result artifacts and close gate** (Phase 3.6,
   `ethos-07m.10`) — worker output is no longer prose. A new
   `mission.Result` type in `internal/mission/result.go` pins a

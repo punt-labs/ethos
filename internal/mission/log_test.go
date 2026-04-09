@@ -910,6 +910,46 @@ func TestFilterEvents_NilInputs(t *testing.T) {
 	assert.NotNil(t, got)
 }
 
+// TestFilterEvents_WhitespaceOnlyTypesActsAsNoFilter covers round 4
+// B1: a non-nil types slice whose entries all trim to empty must
+// behave as "no type filter" — matching the godoc's "empty types
+// slice or nil means all types" contract. Earlier rounds built a
+// non-nil-but-empty typeSet from such input, and the event loop then
+// silently dropped every event because no type string could match.
+// Round 4 collapses an empty typeSet back to nil so the filter
+// becomes a no-op, symmetric with a literal nil or empty slice.
+//
+// Sibling to round 3 R3-M2 (silent drop on in-memory bad ts) — both
+// findings were silent-drop paths in FilterEvents. Fix-the-class
+// reminder: when closing one silent drop, enumerate the rest.
+func TestFilterEvents_WhitespaceOnlyTypesActsAsNoFilter(t *testing.T) {
+	events := []Event{
+		{TS: "2026-04-07T22:00:01Z", Event: "create", Actor: "a"},
+		{TS: "2026-04-07T22:00:02Z", Event: "update", Actor: "a"},
+		{TS: "2026-04-07T22:00:03Z", Event: "close", Actor: "a"},
+	}
+	cases := []struct {
+		name  string
+		types []string
+	}{
+		{"single whitespace entry", []string{"  "}},
+		{"multiple whitespace entries", []string{"", "  ", "\t"}},
+		{"empty slice", []string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := FilterEvents(events, tc.types, "")
+			require.NoError(t, err)
+			require.Len(t, got, len(events),
+				"whitespace-only types must behave as no-filter")
+			for i := range events {
+				assert.Equal(t, events[i].Event, got[i].Event)
+				assert.Equal(t, events[i].TS, got[i].TS)
+			}
+		})
+	}
+}
+
 func TestFilterEvents_InvalidSinceIsAnError(t *testing.T) {
 	// The filter helper is pure; invalid since values must produce a
 	// typed error so the CLI and MCP surfaces can name the bad input

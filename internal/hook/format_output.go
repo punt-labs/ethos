@@ -761,8 +761,14 @@ func formatMissionLog(w io.Writer, result string) error {
 		}
 		fmt.Fprintf(&ctx, "  - %s  %s  by %s", FormatLocalTime(ts), evType, actor)
 		details, _ := em["details"].(map[string]any)
-		if summary := summarizeEventDetailsRaw(evType, details); summary != "" {
-			fmt.Fprintf(&ctx, "  %s", summary)
+		// Inner variable is intentionally named detailSummary, not
+		// summary, so it does not shadow the outer function-scope
+		// `summary` (the panel title like "3 events"). Go's scoping
+		// rules make the shadow harmless today, but the reused name
+		// is a maintenance tripwire for any future reader — flagged
+		// by Bugbot on PR #184 (round 4 B2).
+		if detailSummary := summarizeEventDetailsRaw(evType, details); detailSummary != "" {
+			fmt.Fprintf(&ctx, "  %s", detailSummary)
 		}
 	}
 	if warnings, _ := payload["warnings"].([]any); len(warnings) > 0 {
