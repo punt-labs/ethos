@@ -62,6 +62,143 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 3.7: append-only mission event log reader API**
+  (`ethos-07m.11`, rounds 1–3) — a public `Store.LoadEvents(missionID)`
+  method, a new `ethos mission log <id>` CLI subcommand, and a new
+  MCP `mission log` method expose the JSONL event audit trail every
+  Phase 3.1+ writer has been quietly appending to. The reader is
+  additive: the writer (`appendEvent`, `appendEventLocked`, every
+  existing caller) is unchanged. `LoadEvents` returns `([]Event,
+  []string, error)` — events in on-disk order, warnings naming any
+  unparseable line numbers, error for unrecoverable I/O failures.
+  One corrupt line does not erase the log: each line is decoded
+  independently with `DisallowUnknownFields` (trust-boundary
+  symmetric with the reflection and result loaders), and a failing
+  line produces a warning while the rest of the file still decodes.
+  Round 2 hardening (four reviewers, 4 HIGH + 5 MEDIUM + 4 LOW):
+  the line scanner uses `bufio.Reader.ReadString` instead of
+  `bufio.Scanner` so a single line larger than any fixed cap no
+  longer silently truncates the tail of the log (H1); warnings are
+  sanitized at source via a new `sanitizeWarning` helper so an
+  attacker with local write access cannot forward terminal control
+  sequences through decode-error strings to operator terminals or
+  MCP consumers (H2); a non-RFC3339 `ts` is rejected at decode time
+  with a warning rather than silently dropped at `--since` filter
+  time, closing a count mismatch between the same audit trail read
+  with and without `--since` (H3); `LoadEvents` adds an
+  `os.Stat(contractPath)` existence check before any log read so a
+  bogus mission ID errors symmetrically with `LoadReflections` and
+  `LoadResults` (H4); the log file is stat-checked before read and
+  rejected if larger than 16 MiB or if a directory sits at the
+  expected path (M3, M4); the CLI `printEventLog` now emits a
+  leading `-` bullet prefix matching the MCP walker and sibling
+  subcommands (M1); warnings render as an in-band `Warnings:`
+  footer on stdout in human mode so an operator piping the output
+  to a file still sees damage (M2); the long `--help` text
+  documents the wrapped `{"events": [...], "warnings": [...]}`
+  JSON shape and the empty-`--event` semantics (M5, L4); the
+  `--since` error carries a human-readable RFC3339 hint without
+  leaking the Go time reference layout (L1); the symlink test is
+  renamed to flag the known weakness and cross-references bead
+  `ethos-jjm` for the follow-up that hardens all four loaders
+  together (L3); and the two `parseEventTypes`/`parseEventTypeList`
+  helpers carry cross-reference comments pinning the intentional
+  13-line duplication (K1). Two new equivalence classes (27
+  oversized-line, 28 unparseable-ts) join the round 1 26-class
+  test table. Missing file and empty file both still return
+  `[]Event{}, nil, nil`, matching `LoadResults` convention. The
+  CLI subcommand accepts
+  `--json` for a `mission.LogPayload` wire shape (events slice plus
+  omitempty warnings), `--event <type,list>` for event-type
+  filtering, and `--since <RFC3339>` for time filtering; both
+  filters are AND-composed. Unknown event type strings are
+  accepted (event types are forward-compatible — future phases may
+  add `worker_spawned`, `round_started`, etc. without a reader
+  change). The new DES-020 `formatMissionLog` walker in
+  `internal/hook/format_output.go` renders the events list for the
+  MCP hook surface with one bullet per event plus a Warnings
+  section on partial decode. Mission identity is enforced via the
+  file path (the `Event` schema has no top-level mission_id field —
+  `logPath` runs the ID through `filepath.Base` as defense in
+  depth); a caller-supplied `mission` key inside the free-form
+  `Details` map is opaque payload, not identity, so the reader
+  preserves it untouched. There is no public writer path: DES-031
+  round 3 unexported the writer as a deadlock footgun, and 3.7
+  does not re-introduce one. Round 3 review-cycle polish (1 MEDIUM +
+  4 LOW findings carried from round 2's own fix work): the
+  `runMissionLog` godoc (`cmd/ethos/mission.go`) no longer claims
+  warnings go to stderr — the comment now matches the M2 fix that
+  routes them to the stdout footer (R3-M1); `FilterEvents` converts
+  its silent `continue` on an unparseable in-memory ts into a loud
+  error (`event N has unparseable ts "..."`) so a future caller
+  constructing `Event` values directly and bypassing the decoder
+  gets a programmatic signal instead of a shorter-than-expected
+  result slice (R3-M2); `LoadEvents` opens the log file once and
+  reads through `io.LimitReader(f, maxLogSize+1)` with a post-read
+  length check for the overflow byte, closing the TOCTOU window
+  where a concurrent writer could grow the file past the 16 MiB
+  cap between the old `os.Stat` and `os.ReadFile` pair (R3-L1);
+  `LoadEvents` now rejects a malformed `missionID` at the API
+  boundary via `missionIDPattern.MatchString` before any stat or
+  open, so raw attacker-controlled bytes never reach a downstream
+  `*fs.PathError` string that the CLI or MCP walker forwards to
+  operator terminals (R3-L2) — this aligns the reader with
+  `Store.Create` and the other sibling write APIs and tightens
+  `TestLoadEvents_TraversalIDCannotEscape` to assert the new
+  upfront refusal rather than the old collapse-and-succeed path;
+  and the reader-error wrap inside `decodeEventLog` now routes the
+  error string through `sanitizeWarning` as belt-and-suspenders
+  for the file-handle reader introduced by R3-L1 (R3-L3). Three
+  new round 3 tests:
+  `TestFilterEvents_InMemoryBadTSReturnsError`,
+  `TestLoadEvents_RejectsMalformedMissionID`, and
+  `TestLoadEvents_GrowsPastCapDuringRead`. Round 4 (two Bugbot
+  findings on PR #184, both LOW): `FilterEvents` now collapses a
+  non-nil-but-empty `typeSet` back to `nil` after trimming the
+  caller's `types` slice, so a whitespace-only filter input (e.g.
+  `[]string{"  "}` or `[]string{"", "\t"}`) behaves as "no type
+  filter" — matching the godoc's "empty types slice or nil means
+  all types" contract instead of silently dropping every event
+  (B1, sibling to the round 3 R3-M2 silent-drop closure);
+  `formatMissionLog` in `internal/hook/format_output.go` renames
+  its inner `summary` variable to `detailSummary` so it no longer
+  shadows the outer panel-title `summary`, removing a maintenance
+  tripwire for any future reader (B2). One new test,
+  `TestFilterEvents_WhitespaceOnlyTypesActsAsNoFilter`, covers
+  three whitespace-only input variants plus the empty-slice
+  regression. Round 5 (Copilot finding, LOW, defensive): the
+  non-EOF read-error path in `decodeEventLog` now derives the
+  attempted line number from whether `bufio.Reader.ReadString`
+  handed back a partial line along with the error. Before the fix,
+  a partial-line + non-EOF error unconditionally reported
+  `line lineNo+1: reading: ...`, but `lineNo` had already been
+  bumped above for that same partial line — off by one on the
+  exact byte the reader stumbled over. This is dead code against
+  the production `bytes.NewReader` path (which only returns
+  `io.EOF`), but a future caller wiring a file-backed reader would
+  have seen mis-attributed post-mortem warnings. The helper
+  `decodeEventLogFromReader(io.Reader)` is split out from
+  `decodeEventLog([]byte)` so a test-only `scriptedReader` can
+  inject the non-EOF branch; the byte-slice entry point keeps its
+  empty-input fast path. One new test,
+  `TestDecodeEventLog_NonEOFReadErrorReportsAttemptedLine`, pins
+  both the partial-line case (load-bearing) and the empty-line
+  regression. Round 6 (two Copilot findings on PR #184, both
+  trivial): the `runMissionLog` comment that explained the round 2
+  M2 stdout-footer fix no longer reads `silent-failure silent-
+  failure-hunter` — the duplicated phrase collapsed the noun
+  (`silent failure`) into the reviewer agent name
+  (`silent-failure-hunter`) and broke reading flow (C1); and the
+  `ethos-07m.11` bead description in `.beads/issues.jsonl` no
+  longer claims the log path ends in `.log` with an aspirational
+  event list (`worker_spawned`, `round_started`, `round_ended`,
+  `reflection_recorded`, `evaluator_spawned`, `evaluator_finished`,
+  `mission_closed`) that DES-037 and the Phase 3.1 writer
+  explicitly deferred — it now names the actual `.jsonl` sibling
+  file and the actual emitted event set (`create`, `update`,
+  `close`, `reflect`, `verify`, `result`) phase by phase, and
+  credits Phase 3.7 with the reader API rather than the CLI alone
+  (C2). No code changes beyond the comment edit; no test changes.
 - **Structured result artifacts and close gate** (Phase 3.6,
   `ethos-07m.10`) — worker output is no longer prose. A new
   `mission.Result` type in `internal/mission/result.go` pins a

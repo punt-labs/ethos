@@ -1367,3 +1367,222 @@ func TestHandleMission_Result_UnknownIDReturnsError(t *testing.T) {
 	assert.True(t, result.IsError)
 }
 
+// --- Phase 3.7: mission log (classes 24-26) ---
+//
+// seedLogMission creates a mission via MCP, submits a result, and
+// closes it — so the on-disk JSONL log carries create + result +
+// close events. Helper so every log test stays focused on the
+// method under test.
+func seedLogMission(t *testing.T, h *Handler) string {
+	t.Helper()
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, createResult.IsError, "create must succeed: %s", resultText(t, createResult))
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	submitResultForMCP(t, h, created.MissionID)
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError, "close must succeed: %s", resultText(t, closeResult))
+	return created.MissionID
+}
+
+// TestHandleMission_Log_MissingID covers class 24: a log call with
+// no mission_id returns a structured error with an actionable
+// message, not a panic or empty payload.
+func TestHandleMission_Log_MissingID(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method": "log",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mission_id is required for log")
+}
+
+// TestHandleMission_Log_CleanRoundTrip covers the happy path: a
+// mission with a clean log returns every event, no warnings. Both
+// this and the filter tests seed the same three-event log so the
+// class 25 test below can AND-compose filters against a known shape.
+func TestHandleMission_Log_CleanRoundTrip(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := seedLogMission(t, h)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": id,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "log must succeed: %s", resultText(t, result))
+
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	require.Len(t, payload.Events, 3)
+	assert.Equal(t, "create", payload.Events[0].Event)
+	assert.Equal(t, "result", payload.Events[1].Event)
+	assert.Equal(t, "close", payload.Events[2].Event)
+	assert.Empty(t, payload.Warnings)
+}
+
+// TestHandleMission_Log_AllFilters covers class 25: the log
+// method accepts both filters and AND-composes them, parallel to
+// the CLI path. Submitting one of each event type and filtering
+// for `result` since epoch returns exactly the result row.
+func TestHandleMission_Log_AllFilters(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := seedLogMission(t, h)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": id,
+		"event":      "result",
+		"since":      "2020-01-01T00:00:00Z",
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	require.Len(t, payload.Events, 1)
+	assert.Equal(t, "result", payload.Events[0].Event)
+}
+
+// TestHandleMission_Log_UnparseableLinesCarryWarnings covers
+// class 26: corrupting the on-disk log mid-file must surface as a
+// warnings entry in the payload, and events must still contain
+// every parseable line before and after the corruption. Load
+// errors stay non-fatal — the reader is a post-mortem tool, not
+// a strict validator.
+func TestHandleMission_Log_UnparseableLinesCarryWarnings(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := seedLogMission(t, h)
+
+	// Plant a garbage line in the middle of the on-disk log. The
+	// handler's missionStore is the one testHandlerWithMissions
+	// wired; find its logPath via the store helper.
+	logPath := h.missionStore.ContractPath(id)
+	// ContractPath returns <root>/missions/<id>.yaml — the log
+	// is a sibling at <root>/missions/<id>.jsonl. Swap the suffix.
+	logPath = strings.TrimSuffix(logPath, ".yaml") + ".jsonl"
+	raw, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	require.GreaterOrEqual(t, len(lines), 3)
+	corrupted := []string{lines[0], "{garbage", lines[1], lines[2]}
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": id,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "partial damage must not fail the call")
+
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	assert.Len(t, payload.Events, 3, "three good lines must still decode")
+	require.Len(t, payload.Warnings, 1)
+	assert.Contains(t, payload.Warnings[0], "line 2")
+}
+
+// TestHandleMission_Log_InvalidSince returns a structured error
+// naming the bad timestamp so the caller can fix and retry.
+func TestHandleMission_Log_InvalidSince(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := seedLogMission(t, h)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": id,
+		"since":      "not-a-timestamp",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "since")
+	assert.Contains(t, resultText(t, result), "not-a-timestamp")
+}
+
+// TestHandleMission_Log_UnknownMissionID_Errors asserts that the
+// log method reports a resolution failure on an unknown ID with
+// the same MatchByPrefix error the other methods surface.
+func TestHandleMission_Log_UnknownMissionID_Errors(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": "m-9999-12-31-777",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "no mission matching prefix")
+}
+
+// TestHandleMission_Log_EmptyFilteredIsArrayNotNull asserts the
+// A2-style regression guard for the log surface: filtering to
+// zero rows must still emit `"events": []`, not `"events": null`.
+func TestHandleMission_Log_EmptyFilteredIsArrayNotNull(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := seedLogMission(t, h)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": id,
+		"event":      "no-such-event",
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+	text := resultText(t, result)
+	assert.Contains(t, text, `"events": []`)
+	assert.NotContains(t, text, `"events": null`)
+}
+
+// TestHandleMission_Log_WarningsNoRawControlBytes covers H2 on the
+// MCP surface: a planted JSON line whose decode error would
+// otherwise forward attacker-controlled control bytes to the MCP
+// client must not surface ANY raw control bytes in the warnings
+// payload. Parallel to the CLI test in
+// internal/mission/log_test.go — the mission package sanitizes
+// at source, so the MCP surface is tested for pipeline integrity.
+func TestHandleMission_Log_WarningsNoRawControlBytes(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := seedLogMission(t, h)
+
+	// Plant a line whose unknown field name is an ESC sequence
+	// (hidden via \u001b so the JSON is strict-valid).
+	logPath := strings.TrimSuffix(h.missionStore.ContractPath(id), ".yaml") + ".jsonl"
+	raw, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	require.GreaterOrEqual(t, len(lines), 3)
+	attack := `{"ts":"2026-04-08T00:00:00Z","event":"create","actor":"x","\u001b[31m\u0007FAKE":1}`
+	corrupted := []string{lines[0], attack, lines[1], lines[2]}
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "log",
+		"mission_id": id,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError)
+
+	text := resultText(t, result)
+	// The JSON payload must not carry any raw bytes below 0x20
+	// (except tab, LF, CR which the json encoder uses for
+	// whitespace) or in [0x7f, 0x9f]. Walk the bytes directly.
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		if b == '\t' || b == '\n' || b == '\r' || b == ' ' {
+			continue
+		}
+		assert.False(t,
+			b < 0x20 || (b >= 0x7f && b <= 0x9f),
+			"MCP log payload must not carry raw control byte 0x%02x at offset %d", b, i)
+	}
+}
+
