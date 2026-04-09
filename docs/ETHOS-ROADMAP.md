@@ -4,12 +4,12 @@ Where ethos is going. Organized into phases that build on each other.
 
 ## Current Status (2026-04-09)
 
-Ethos is at **v2.8.0**. Three of five roadmap phases are complete (Phase 1, Phase 2, Phase 3).
+Ethos is at **v2.8.0**. Phase 1 is shipped, Phase 3 is complete and merged, and Phase 2 is at 5 of 6 subphases (2.1–2.5 complete, 2.6 planned).
 
 | Phase | Status | Summary |
 |---|---|---|
 | **Phase 1 — Batteries Included** | SHIPPED | 10 starter talents, 6 starter roles, baseline-ops skill, model field on Role |
-| **Phase 2 — Production-Quality Agents** | SHIPPED | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill Phase A (beads `ethos-9ai.1`–`.5`). `/mission` Phase B–C (conflict detection, dry-run) remains in `ethos-9ai.5`. |
+| **Phase 2 — Production-Quality Agents** | SHIPPED (2.1–2.5) | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill Phase A (beads `ethos-9ai.1`–`.5`). `/mission` Phase B–C (conflict detection, dry-run) remains in `ethos-9ai.5`. |
 | **Phase 3 — Workflow Primitives** | **SHIPPED** | All 7 primitives: mission contract, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log reader (beads `ethos-07m.5`–`07m.11`, ADRs DES-031 through DES-037) |
 | **Phase 4 — Operational Excellence** | PLANNED | SessionStart working context, role-based pre-tool safety, audit logging (beads `ethos-gcq.1`–`gcq.3`) |
 | **Phase 5 — Ecosystem** | FUTURE | Starter team templates, agent marketplace |
