@@ -84,7 +84,7 @@ generation):
 | `effort` | Manual | `low`, `medium`, `high`, `max` |
 | `memory` | Manual | `user`, `project`, or `local` |
 | `skills` | Manual / future: generated | Claude Code skills preloaded at startup |
-| `hooks` | Manual / future: Role-based | Lifecycle hooks scoped to this agent |
+| `hooks` | Generated from `role.tools` | `PostToolUse` hook on `Write\|Edit` runs `make check` for write-enabled roles; review-only roles emit no block |
 | `isolation` | Manual | `worktree` for git worktree isolation |
 | `maxTurns` | Manual | Cap on agentic turns |
 | `background` | Manual | Always run as background task |
