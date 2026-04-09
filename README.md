@@ -43,8 +43,9 @@ lives.
 | ethos + biff: identity-aware messaging | Integration | PLANNED | `ethos-wb4` |
 | ethos + beadle: identity-aware email | Integration | PLANNED | `ethos-g2f` |
 
-Phases 1, 2, and 3 ship today. The four architecture rules — roles as
-interfaces, centralized understanding with decentralized execution,
+Phase 1 shipped in v2.7.0. Phases 2 and 3 are merged to `main` and
+pending the next tagged release. The four architecture rules — roles
+as interfaces, centralized understanding with decentralized execution,
 hooks as enforcement, no ambient context inheritance — are
 runtime-enforced for the first time in the project's history.
 
