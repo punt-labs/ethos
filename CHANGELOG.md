@@ -77,25 +77,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Generated agent files include a `## What You Don't Do` section
   derived from `reports_to` edges in the team graph (`ethos-9ai.1`)** —
-  `internal/hook/generate_agents.go` walks the team's `collaborations`
-  slice for edges whose `from` matches the agent's role and `type` is
-  `reports_to`, loads each target role, and emits one bullet per entry
-  in the target's `responsibilities` list. The section sits after
-  `## Responsibilities` and before the `Talents:` line. A preamble
-  names the reporting target(s) with English joining
-  (`You report to coo.` / `You report to coo and ceo.` /
-  `You report to coo, ceo, and cto.`) and lists bullets in walk order
-  with parenthetical attribution: `- release management (coo)`. Every
-  subordinate sub-agent now sees exactly which decisions belong to its
-  superior and should be pushed upward. Mechanical derivation: no
-  schema changes, no NLP, no pattern matching — the raw responsibility
-  strings are emitted byte-for-byte. Roles with zero `reports_to` edges
-  or whose every target has an empty responsibilities list produce no
-  section. Target roles that fail to load log a stderr warning and are
-  skipped; other targets' bullets still appear. MVP handles
-  `reports_to` only; `collaborates_with` and `delegates_to` are
-  deferred to future beads because their semantics (peer, downward)
-  require different phrasing and different section placement.
+  for each edge from an agent's role to a target role, the target's
+  `responsibilities` are listed under "What You Don't Do" with
+  parenthetical attribution: `- release management (coo)`. The
+  preamble names the reporting target(s) with Oxford comma joining:
+  `You report to coo.`, `You report to coo and ceo.`, or
+  `You report to coo, ceo, and cto.`. Roles with no `reports_to` edges
+  get no section. Responsibility strings are normalized (whitespace
+  trimmed, embedded newlines collapsed, empty entries skipped). Missing
+  target roles and non-`reports_to` edges from the agent's role log a
+  stderr warning at generation time. Only `reports_to` is honored;
+  `collaborates_with` and `delegates_to` are future work. This round
+  also tightens blank-line discipline in the generated body — every
+  `##` heading now has a blank line below it, and every list has a
+  blank line between its last bullet and the following `Talents:` line.
 
 - **Generated agent files now include a `skills:` block listing
   `baseline-ops` in frontmatter (`ethos-9ai.4`)** —

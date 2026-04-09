@@ -187,8 +187,10 @@ identity binds three layers of context onto one durable anchor:
 
 - **Persona** — personality, writing style, talents. Reusable `.md`
   files referenced by slug. Defines judgment and voice.
-- **Role** — tools, responsibilities, anti-responsibilities, model
-  preference, team position. Defines what the agent can and must not do.
+- **Role** — tools, responsibilities, model preference, team position.
+  Defines what the agent can and must not do. Anti-responsibilities —
+  the things the agent should push upward — are derived from the team
+  graph's `reports_to` edges, not stored on the role itself.
 - **Channel bindings** — email (Beadle), GitHub (Biff), voice (Vox
   extension), Claude Code agent definition. Defines where the agent
   shows up.
