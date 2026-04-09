@@ -74,7 +74,8 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 
 		expected++
 
-		content := buildAgentFile(id, r)
+		antiResps := deriveAntiResponsibilities(m.Role, t.Collaborations, roles)
+		content := buildAgentFile(id, r, antiResps)
 
 		destPath := filepath.Join(destDir, id.Handle+".md")
 
@@ -103,9 +104,76 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 	return nil
 }
 
+// antiResponsibility is a responsibility belonging to a role the agent
+// reports to — i.e., something explicitly not the agent's job.
+type antiResponsibility struct {
+	Responsibility string
+	TargetRole     string
+}
+
+// deriveAntiResponsibilities walks the team's reports_to edges from
+// roleName and returns the target roles' responsibilities as a flat
+// list in walk order. Targets whose role fails to load are skipped
+// with a stderr warning. Returns nil if roleName has no outgoing
+// reports_to edges or every target has an empty Responsibilities list.
+func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, roles *role.LayeredStore) []antiResponsibility {
+	var out []antiResponsibility
+	for _, c := range collabs {
+		if c.Type != "reports_to" || c.From != roleName {
+			continue
+		}
+		target, err := roles.Load(c.To)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: generate-agents: anti-responsibilities: target role %q: %v\n", c.To, err)
+			continue
+		}
+		for _, resp := range target.Responsibilities {
+			out = append(out, antiResponsibility{
+				Responsibility: resp,
+				TargetRole:     c.To,
+			})
+		}
+	}
+	return out
+}
+
+// uniqueTargetsInOrder returns the distinct TargetRole values from ars
+// in their first-occurrence order.
+func uniqueTargetsInOrder(ars []antiResponsibility) []string {
+	seen := make(map[string]struct{}, len(ars))
+	var out []string
+	for _, ar := range ars {
+		if _, ok := seen[ar.TargetRole]; ok {
+			continue
+		}
+		seen[ar.TargetRole] = struct{}{}
+		out = append(out, ar.TargetRole)
+	}
+	return out
+}
+
+// joinWithOxford joins names in English. Two items: "a and b". Three or
+// more: Oxford-comma "a, b, and c". One item returns as-is. Zero items
+// returns the empty string.
+func joinWithOxford(names []string) string {
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	case 2:
+		return names[0] + " and " + names[1]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + ", and " + names[len(names)-1]
+	}
+}
+
 // buildAgentFile assembles a .claude/agents/<handle>.md from identity,
-// personality, writing-style, and role data.
-func buildAgentFile(id *identity.Identity, r *role.Role) string {
+// personality, writing-style, and role data. antiResps is the flat list
+// of responsibilities belonging to roles this agent reports to; when
+// non-empty, it is rendered as a "## What You Don't Do" section between
+// Responsibilities and Talents.
+func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiResponsibility) string {
 	var b strings.Builder
 
 	// Extract description: first non-heading content line from personality.
@@ -164,6 +232,17 @@ func buildAgentFile(id *identity.Identity, r *role.Role) string {
 		b.WriteString("\n## Responsibilities\n")
 		for _, resp := range r.Responsibilities {
 			fmt.Fprintf(&b, "- %s\n", resp)
+		}
+	}
+
+	// Anti-responsibilities — what this agent does NOT do, derived
+	// from the target roles of reports_to edges.
+	if len(antiResps) > 0 {
+		b.WriteString("\n## What You Don't Do\n\n")
+		targets := uniqueTargetsInOrder(antiResps)
+		fmt.Fprintf(&b, "You report to %s. These are not yours:\n\n", joinWithOxford(targets))
+		for _, ar := range antiResps {
+			fmt.Fprintf(&b, "- %s (%s)\n", ar.Responsibility, ar.TargetRole)
 		}
 	}
 

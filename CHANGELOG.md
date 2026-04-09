@@ -75,6 +75,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Generated agent files include a `## What You Don't Do` section
+  derived from `reports_to` edges in the team graph (`ethos-9ai.1`)** —
+  `internal/hook/generate_agents.go` walks the team's `collaborations`
+  slice for edges whose `from` matches the agent's role and `type` is
+  `reports_to`, loads each target role, and emits one bullet per entry
+  in the target's `responsibilities` list. The section sits after
+  `## Responsibilities` and before the `Talents:` line. A preamble
+  names the reporting target(s) with English joining
+  (`You report to coo.` / `You report to coo and ceo.` /
+  `You report to coo, ceo, and cto.`) and lists bullets in walk order
+  with parenthetical attribution: `- release management (coo)`. Every
+  subordinate sub-agent now sees exactly which decisions belong to its
+  superior and should be pushed upward. Mechanical derivation: no
+  schema changes, no NLP, no pattern matching — the raw responsibility
+  strings are emitted byte-for-byte. Roles with zero `reports_to` edges
+  or whose every target has an empty responsibilities list produce no
+  section. Target roles that fail to load log a stderr warning and are
+  skipped; other targets' bullets still appear. MVP handles
+  `reports_to` only; `collaborates_with` and `delegates_to` are
+  deferred to future beads because their semantics (peer, downward)
+  require different phrasing and different section placement.
+
 - **Generated agent files now include a `skills:` block listing
   `baseline-ops` in frontmatter (`ethos-9ai.4`)** —
   `internal/hook/generate_agents.go` unconditionally emits a

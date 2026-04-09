@@ -328,6 +328,246 @@ func TestGenerateAgentFiles(t *testing.T) {
 }
 
 
+// TestGenerateAgentFiles_AntiResponsibilities covers the "## What You
+// Don't Do" section derived from reports_to edges (ethos-9ai.1).
+func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(t *testing.T, root string)
+		assert func(t *testing.T, content string)
+	}{
+		{
+			// Mirrors the real engineering team: go-specialist reports_to coo,
+			// and coo has the byte-for-byte responsibilities from the real
+			// .punt-labs/ethos/roles/coo.yaml. The assertion doubles as the
+			// worked-example verification.
+			name: "single reports_to, non-empty target",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+					},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
+					"name": "coo",
+					"responsibilities": []string{
+						"execution quality and velocity across all engineering",
+						"sub-agent delegation and review",
+						"release management",
+						"operational decisions",
+					},
+				})
+			},
+			assert: func(t *testing.T, content string) {
+				want := "## What You Don't Do\n\n" +
+					"You report to coo. These are not yours:\n\n" +
+					"- execution quality and velocity across all engineering (coo)\n" +
+					"- sub-agent delegation and review (coo)\n" +
+					"- release management (coo)\n" +
+					"- operational decisions (coo)\n"
+				assert.Contains(t, content, want)
+				// Section must sit after Responsibilities and before Talents.
+				respIdx := strings.Index(content, "## Responsibilities")
+				antiIdx := strings.Index(content, "## What You Don't Do")
+				talentsIdx := strings.Index(content, "Talents:")
+				require.True(t, respIdx >= 0 && antiIdx >= 0 && talentsIdx >= 0,
+					"all three anchors must be present")
+				assert.Less(t, respIdx, antiIdx, "anti-responsibilities must follow Responsibilities")
+				assert.Less(t, antiIdx, talentsIdx, "anti-responsibilities must precede Talents")
+				// Binary verification visible in -v output.
+				t.Logf("generated bwk.md:\n%s", content)
+			},
+		},
+		{
+			// No collaborations in the fixture => no reports_to => no
+			// section. Default setupTestRepo has no collaborations already,
+			// so the default state is sufficient.
+			name:  "no reports_to edges",
+			setup: func(t *testing.T, root string) {},
+			assert: func(t *testing.T, content string) {
+				assert.NotContains(t, content, "## What You Don't Do")
+				assert.NotContains(t, content, "These are not yours:")
+			},
+		},
+		{
+			// go-specialist reports_to BOTH coo (non-empty) and ceo-empty
+			// (zero responsibilities). Preamble must name only coo; bullets
+			// come only from coo.
+			name: "multiple reports_to, mixed emptiness",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				// Add an empty-responsibilities target role.
+				writeYAML(t, filepath.Join(ethosDir, "roles", "ceo-empty.yaml"), map[string]interface{}{
+					"name":             "ceo-empty",
+					"responsibilities": []string{},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "ceo-empty", "type": "reports_to"},
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+					},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
+					"name": "coo",
+					"responsibilities": []string{
+						"execution quality and velocity across all engineering",
+						"sub-agent delegation and review",
+					},
+				})
+			},
+			assert: func(t *testing.T, content string) {
+				assert.Contains(t, content, "## What You Don't Do\n\n")
+				// Preamble must name only coo — ceo-empty contributed no
+				// bullets, so it must not appear in "You report to ...".
+				assert.Contains(t, content, "You report to coo. These are not yours:")
+				assert.NotContains(t, content, "ceo-empty. These are")
+				assert.NotContains(t, content, "and ceo-empty")
+				assert.NotContains(t, content, "ceo-empty,")
+				// Bullets from coo present; none attributed to ceo-empty.
+				assert.Contains(t, content, "- execution quality and velocity across all engineering (coo)\n")
+				assert.Contains(t, content, "- sub-agent delegation and review (coo)\n")
+				assert.NotContains(t, content, "(ceo-empty)")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, _, _, _ := setupTestRepo(t)
+			tt.setup(t, root)
+
+			// Rebuild stores after setup modifications.
+			ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+			ids := identity.NewLayeredStore(
+				identity.NewStore(ethosDir),
+				identity.NewStore(ethosDir),
+			)
+			teams := team.NewLayeredStore(ethosDir, ethosDir)
+			roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+			err := GenerateAgentFiles(root, ids, teams, roles)
+			require.NoError(t, err)
+
+			agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+			data, readErr := os.ReadFile(agentPath)
+			require.NoError(t, readErr)
+
+			tt.assert(t, string(data))
+		})
+	}
+}
+
+// TestDeriveAntiResponsibilities_MissingTarget verifies that a load
+// failure on a target role is logged-and-skipped without failing the
+// overall derivation. The other target's bullets still appear.
+func TestDeriveAntiResponsibilities_MissingTarget(t *testing.T) {
+	root, _, _, _ := setupTestRepo(t)
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+
+	// Wire two reports_to edges, one pointing at a nonexistent role.
+	writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+		"name":         "engineering",
+		"repositories": []string{"punt-labs/ethos"},
+		"members": []map[string]string{
+			{"identity": "claude", "role": "coo"},
+			{"identity": "bwk", "role": "go-specialist"},
+		},
+		"collaborations": []map[string]string{
+			{"from": "go-specialist", "to": "ghost", "type": "reports_to"},
+			{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+		},
+	})
+	writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
+		"name":             "coo",
+		"responsibilities": []string{"release management"},
+	})
+
+	ids := identity.NewLayeredStore(
+		identity.NewStore(ethosDir),
+		identity.NewStore(ethosDir),
+	)
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+	roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+	err := GenerateAgentFiles(root, ids, teams, roles)
+	require.NoError(t, err)
+
+	data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
+	require.NoError(t, readErr)
+	content := string(data)
+
+	assert.Contains(t, content, "## What You Don't Do")
+	assert.Contains(t, content, "You report to coo. These are not yours:")
+	assert.Contains(t, content, "- release management (coo)\n")
+	assert.NotContains(t, content, "ghost")
+}
+
+func TestJoinWithOxford(t *testing.T) {
+	tests := []struct {
+		name  string
+		names []string
+		want  string
+	}{
+		{"empty", nil, ""},
+		{"one", []string{"coo"}, "coo"},
+		{"two", []string{"coo", "ceo"}, "coo and ceo"},
+		{"three", []string{"coo", "ceo", "cto"}, "coo, ceo, and cto"},
+		{"four", []string{"a", "b", "c", "d"}, "a, b, c, and d"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := joinWithOxford(tt.names)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestUniqueTargetsInOrder(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []antiResponsibility
+		want []string
+	}{
+		{"empty", nil, nil},
+		{
+			"single target, multiple bullets",
+			[]antiResponsibility{
+				{Responsibility: "a", TargetRole: "coo"},
+				{Responsibility: "b", TargetRole: "coo"},
+			},
+			[]string{"coo"},
+		},
+		{
+			"two targets interleaved",
+			[]antiResponsibility{
+				{Responsibility: "a", TargetRole: "coo"},
+				{Responsibility: "x", TargetRole: "ceo"},
+				{Responsibility: "b", TargetRole: "coo"},
+			},
+			[]string{"coo", "ceo"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := uniqueTargetsInOrder(tt.in)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestExtractDescription(t *testing.T) {
 	tests := []struct {
 		name    string
