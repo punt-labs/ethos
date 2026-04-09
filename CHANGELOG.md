@@ -62,12 +62,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Generated agent files now include `skills: [baseline-ops]` in
-  frontmatter (`ethos-9ai.4`)** — `internal/hook/generate_agents.go`
-  unconditionally emits a `skills:` block with `baseline-ops` as the
-  sole entry, placed after the optional `model:` line and before the
-  closing `---` delimiter. When Claude Code spawns a sub-agent from
-  one of these files, it reads the frontmatter and loads
+- **Generated agent files now include a `skills:` block listing
+  `baseline-ops` in frontmatter (`ethos-9ai.4`)** —
+  `internal/hook/generate_agents.go` unconditionally emits a
+  `skills:` block with `baseline-ops` as the sole entry, placed
+  after the optional `model:` line and before the closing `---`
+  delimiter:
+
+  ```yaml
+  skills:
+    - baseline-ops
+  ```
+
+  When Claude Code spawns a sub-agent from one of these files, it
+  reads the frontmatter and loads
   `~/.claude/skills/baseline-ops/SKILL.md` (deployed by `ethos seed`
   since `ethos-l9d`) into the sub-agent's context, so every generated
   sub-agent inherits operational discipline — dedicated tool usage,
