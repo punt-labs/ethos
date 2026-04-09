@@ -192,6 +192,19 @@ func TestGenerateAgentFiles(t *testing.T) {
 				assert.Contains(t, content, `description: "Go specialist sub-agent."`)
 				assert.Contains(t, content, "  - Read")
 				assert.Contains(t, content, "  - Bash")
+				// bwk has Write in its tools list, so the PostToolUse hook
+				// block must be present, anchored by the preceding skills
+				// block and the closing frontmatter delimiter.
+				assert.Contains(t, content,
+					"skills:\n"+
+						"  - baseline-ops\n"+
+						"hooks:\n"+
+						"  PostToolUse:\n"+
+						"    - matcher: \"Write|Edit\"\n"+
+						"      hooks:\n"+
+						"        - type: command\n"+
+						"          command: \"make check 2>&1 | tail -20\"\n"+
+						"---\n")
 
 				// Body checks.
 				assert.Contains(t, content, "You are Brian K (bwk),")
@@ -361,10 +374,155 @@ func TestGenerateAgentFiles(t *testing.T) {
 				require.Len(t, parts, 3, "expected frontmatter delimiters")
 				frontmatter := parts[1]
 				assert.Contains(t, frontmatter, "skills:\n  - baseline-ops\n")
+				// bwk has Write in its tools list, so the hooks block
+				// follows skills in the same frontmatter section.
+				assert.Contains(t, frontmatter,
+					"skills:\n"+
+						"  - baseline-ops\n"+
+						"hooks:\n"+
+						"  PostToolUse:\n"+
+						"    - matcher: \"Write|Edit\"\n"+
+						"      hooks:\n"+
+						"        - type: command\n"+
+						"          command: \"make check 2>&1 | tail -20\"\n")
 
 				// Log the generated file so binary verification is visible
 				// in -v test output (spec success criterion 5).
 				t.Logf("generated bwk.md:\n%s", content)
+			},
+		},
+		{
+			// Write-enabled role emits the PostToolUse hook block. bwk's
+			// default fixture already has Write in its tools list, so the
+			// generated frontmatter must include the exact block anchored
+			// between `skills:` and the closing `---`. The leading skills
+			// anchor and the trailing `---\n` together lock placement.
+			name: "write-enabled role emits hooks",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				want := "skills:\n" +
+					"  - baseline-ops\n" +
+					"hooks:\n" +
+					"  PostToolUse:\n" +
+					"    - matcher: \"Write|Edit\"\n" +
+					"      hooks:\n" +
+					"        - type: command\n" +
+					"          command: \"make check 2>&1 | tail -20\"\n" +
+					"---\n"
+				assert.Contains(t, content, want)
+			},
+		},
+		{
+			// Review-only role — tools list excludes Write and Edit —
+			// emits NO hooks block. The frontmatter must close with
+			// `skills:` → `  - baseline-ops` → `---` directly.
+			name: "review-only role omits hooks",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				// Review-only role with Read, Grep, Glob, Bash — mirrors
+				// the real security-engineer tool set for djb.
+				writeYAML(t, filepath.Join(ethosDir, "roles", "security-engineer.yaml"), map[string]interface{}{
+					"name":             "security-engineer",
+					"responsibilities": []string{"threat modeling"},
+					"tools":            []string{"Read", "Grep", "Glob", "Bash"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "identities", "djb.yaml"), map[string]interface{}{
+					"name":          "Dan B",
+					"handle":        "djb",
+					"kind":          "agent",
+					"personality":   "security-minded",
+					"writing_style": "kernighan-prose",
+					"talents":       []string{"security"},
+				})
+				writeFile(t, filepath.Join(ethosDir, "personalities", "security-minded.md"),
+					"# Security Minded\n\nSecurity reviewer sub-agent.\n")
+				// Add djb to the team so it actually gets generated.
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "djb", "role": "security-engineer"},
+					},
+				})
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "djb.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				// No hooks block at all — not a key, not the matcher
+				// string.
+				assert.NotContains(t, content, "hooks:")
+				assert.NotContains(t, content, "PostToolUse")
+
+				// Frontmatter must still close cleanly: skills block
+				// directly followed by `---\n`.
+				assert.Contains(t, content,
+					"skills:\n"+
+						"  - baseline-ops\n"+
+						"---\n")
+			},
+		},
+		{
+			// Edit-only role — tools list has Edit but not Write — still
+			// gets the hook block. The matcher `Write|Edit` is unchanged;
+			// what gates emission is the helper's OR test over the tools
+			// list, not which of the two tools happens to be present.
+			name: "Edit-only role emits hooks",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "edit-only.yaml"), map[string]interface{}{
+					"name":             "edit-only",
+					"responsibilities": []string{"targeted edits"},
+					"tools":            []string{"Read", "Edit", "Bash"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "identities", "eon.yaml"), map[string]interface{}{
+					"name":          "Edit Only",
+					"handle":        "eon",
+					"kind":          "agent",
+					"personality":   "kernighan",
+					"writing_style": "kernighan-prose",
+					"talents":       []string{"editing"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "eon", "role": "edit-only"},
+					},
+				})
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "eon.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				want := "skills:\n" +
+					"  - baseline-ops\n" +
+					"hooks:\n" +
+					"  PostToolUse:\n" +
+					"    - matcher: \"Write|Edit\"\n" +
+					"      hooks:\n" +
+					"        - type: command\n" +
+					"          command: \"make check 2>&1 | tail -20\"\n" +
+					"---\n"
+				assert.Contains(t, content, want)
 			},
 		},
 	}
@@ -817,6 +975,38 @@ func TestJoinWithOxford(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := joinWithOxford(tt.names)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestHasWriteTool covers the exact-string membership predicate that
+// gates the PostToolUse hook block in generated frontmatter. Only the
+// literal strings "Write" and "Edit" count — no case folding, no
+// substring matching, no inference from related tool names.
+func TestHasWriteTool(t *testing.T) {
+	tests := []struct {
+		name  string
+		tools []string
+		want  bool
+	}{
+		{"nil", nil, false},
+		{"empty", []string{}, false},
+		{"write alone", []string{"Write"}, true},
+		{"edit alone", []string{"Edit"}, true},
+		{"both write and edit", []string{"Write", "Edit"}, true},
+		{"write among others", []string{"Read", "Write", "Bash"}, true},
+		{"edit among others", []string{"Read", "Edit", "Grep"}, true},
+		{"read only", []string{"Read", "Grep", "Glob", "Bash"}, false},
+		{"no overlap", []string{"Task", "WebFetch"}, false},
+		{"case mismatch write", []string{"write"}, false},
+		{"case mismatch edit", []string{"EDIT"}, false},
+		{"substring not enough", []string{"MultiEdit"}, false},
+		{"prefix not enough", []string{"WriteFile"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasWriteTool(tt.tools)
 			assert.Equal(t, tt.want, got)
 		})
 	}

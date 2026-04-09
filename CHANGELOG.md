@@ -75,6 +75,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Generated agent files include a `PostToolUse` hook that runs
+  `make check` after every Write or Edit (`ethos-9ai.2`)** —
+  `internal/hook/generate_agents.go` injects a `hooks:` block in the
+  frontmatter of every generated `.claude/agents/<handle>.md` whose
+  role `tools` list contains `Write` or `Edit`. The block is fixed
+  shape with no per-role customization: a single `PostToolUse` entry
+  matching `Write|Edit` and running the command
+  `make check 2>&1 | tail -20`. Claude Code loads the block when it
+  spawns the sub-agent, so vet/lint/test failures surface at the
+  point of the write instead of three rounds later. Review-only roles
+  whose tools list excludes both `Write` and `Edit` (e.g., the
+  `security-engineer` role used by djb with `Read, Grep, Glob, Bash`)
+  emit no `hooks:` block at all — their tool restrictions already
+  prevent the matcher from firing. Detection is exact-string
+  membership: no case folding, no substring matching, no inference
+  from related names like `MultiEdit` or `WriteFile`. The hooks block
+  sits between the existing `skills:` block and the closing `---`
+  delimiter. No schema change — `Role` gains no new field; the
+  existing `tools` list is the signal.
+
 - **Generated agent files include a `## What You Don't Do` section
   derived from `reports_to` edges in the team graph (`ethos-9ai.1`)** —
   for each `reports_to` edge from an agent's role to a target role,
