@@ -62,6 +62,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Generated agent files now include a `skills:` block listing
+  `baseline-ops` in frontmatter (`ethos-9ai.4`)** —
+  `internal/hook/generate_agents.go` unconditionally emits a
+  `skills:` block with `baseline-ops` as the sole entry, placed
+  after the optional `model:` line and before the closing `---`
+  delimiter:
+
+  ```yaml
+  skills:
+    - baseline-ops
+  ```
+
+  When Claude Code spawns a sub-agent from one of these files, it
+  reads the frontmatter and loads
+  `~/.claude/skills/baseline-ops/SKILL.md` (deployed by `ethos seed`
+  since `ethos-l9d`) into the sub-agent's context, so every generated
+  sub-agent inherits operational discipline — dedicated tool usage,
+  verification after changes, no commits, scope discipline, security
+  basics, progress tracking, concise output — without the project
+  author having to remember to add the skill manually to each agent
+  file. The injection is unconditional: no opt-out, no per-role
+  override, no configuration. A future bead can add per-role skill
+  lists to the `Role` struct if a use case emerges, but the MVP is
+  the unconditional default.
 - **`/mission` skill MVP (Phase A, `ethos-9ai.5`)** — a new
   `~/.claude/skills/mission/SKILL.md` is deployed by `ethos seed`
   alongside the existing `baseline-ops/SKILL.md`. The skill teaches
