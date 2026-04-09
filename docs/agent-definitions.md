@@ -99,7 +99,7 @@ The body has five sections, assembled in this order:
 
 **3. Working Style.** (hand-written) Operational methodology -- how this agent approaches work. This is the primary hand-written section. Covers workflow, tool preferences, testing approach, verification habits.
 
-**4. What You Do.** (generated from role responsibilities) Derived from role responsibilities. Concrete list of what the agent owns.
+**4. Responsibilities.** (generated from role responsibilities) Rendered as a `## Responsibilities` section. Concrete list of what the agent owns, one bullet per entry in the role's `responsibilities` list.
 
 **5. What You Don't Do.** (generated from the team graph's `reports_to` edges) Explicit scope boundaries. See Anti-Responsibilities below.
 
