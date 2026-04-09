@@ -4,12 +4,12 @@ Where ethos is going. Organized into phases that build on each other.
 
 ## Current Status (2026-04-09)
 
-Ethos is at **v3.0**. Two of five roadmap phases are complete.
+Ethos is at **v2.8.0**. Phase 1 is shipped, Phase 3 is complete and merged, and Phase 2 is at 5 of 6 subphases (2.1–2.5 complete, 2.6 planned).
 
 | Phase | Status | Summary |
 |---|---|---|
 | **Phase 1 — Batteries Included** | SHIPPED | 10 starter talents, 6 starter roles, baseline-ops skill, model field on Role |
-| **Phase 2 — Production-Quality Agents** | PLANNED | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill (beads `ethos-9ai.1`–`9ai.7`) |
+| **Phase 2 — Production-Quality Agents** | SHIPPED (2.1–2.5) | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill Phase A (beads `ethos-9ai.1`–`.5`). `/mission` Phase B–C (conflict detection, dry-run) remains in `ethos-9ai.5`. |
 | **Phase 3 — Workflow Primitives** | **SHIPPED** | All 7 primitives: mission contract, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log reader (beads `ethos-07m.5`–`07m.11`, ADRs DES-031 through DES-037) |
 | **Phase 4 — Operational Excellence** | PLANNED | SessionStart working context, role-based pre-tool safety, audit logging (beads `ethos-gcq.1`–`gcq.3`) |
 | **Phase 5 — Ecosystem** | FUTURE | Starter team templates, agent marketplace |
@@ -19,84 +19,50 @@ architecture rules from `~/Documents/agents-architecture.tex` are
 runtime-enforced for the first time in the project's history. See
 DES-037 for the Phase 3.7 ADR and the Phase 3 completion narrative.
 
-## What's next: `ethos-9ai.5` — the `/mission` skill MVP
+## What's next: Phase 4 — Operational Excellence
 
-Phase 3 built the rails. `ethos-9ai.5` puts a train on them. The
-mission primitive is in production, but there is no user-facing
-interface to drive it — every mission contract today is a 281–393
-line markdown file the leader writes by hand and pastes into a
-delegation prompt. The `/mission` skill closes that gap: it
-scaffolds mission contracts from team data, checks for write-set
-conflicts with running missions, and spawns workers via the
-existing primitive. Without it, Phase 3 is impressive plumbing
-without a faucet.
+Phase 4 deepens the hook system with three additions that layer onto
+the existing persona-animation infrastructure: working context at
+`SessionStart`, role-based pre-tool safety constraints, and
+`PostToolUse` audit logging. Architecture details in
+[`architecture.tex`](architecture.tex) §Operational Hooks.
 
-**Why `9ai.5` specifically is the strategic unlock:**
+| # | Bead | What | Phase |
+|---|---|---|---|
+| 1 | `ethos-gcq.1` | `SessionStart` working context (branch, uncommitted changes, open beads, open missions) | 4.1 |
+| 2 | `ethos-gcq.2` | Role-based pre-tool safety constraints (reviewer cannot write, researcher cannot destructive-bash) | 4.2 |
+| 3 | `ethos-gcq.3` | `PostToolUse` audit log per session | 4.3 |
 
-1. **It validates the Phase 3 abstractions.** Until an agent uses
-   the `/mission` skill end-to-end to drive a real workflow, we do
-   not know whether the abstractions Phase 3 built are usable. The
-   skill is the proof point. If the abstractions are wrong, we find
-   out building `9ai.5` — not after building `9ai.1`–`9ai.4` on top
-   of them.
+**Parallel / follow-up work:**
 
-2. **It is the smallest meaningful step.** The MVP shape is a pure
-   markdown skill file at `~/.claude/skills/mission/SKILL.md` — no
-   Go code required. Phase A from
-   [`docs/mission-skill-design.md`](mission-skill-design.md) is
-   self-contained and can ship in a single cycle.
+| Bead | What | Notes |
+|---|---|---|
+| `ethos-9ai.5` (Phase B–C) | Mission skill conflict detection and dry-run | Extends shipped Phase A |
+| `ethos-jjm` | Symlink policy across mission loaders | Phase 3 security debt closure |
+| `ethos-vpj` | BOM and zero-width rejection in write_set validation | Phase 3.2 hardening |
+| `ethos-wb4` | Integration: ethos + biff — identity-aware messaging | After Phase 4 |
+| `ethos-g2f` | Integration: ethos + beadle — identity-aware email | After Phase 4 |
 
-3. **It tests our own dogfooding.** Phase 3.7's 6-round cycle
-   exposed friction in the manual contract pattern every round.
-   The skill is the user-facing fix for that friction.
-
-4. **It unblocks the rest of Phase 2.** Beads `9ai.1` through
-   `9ai.4` generate better agents that USE the mission primitive.
-   They need the skill in place first so the workflow they
-   generate has somewhere to land.
-
-5. **It maps to the three-pillar vision.** Identity (shipped),
-   workflow (shipped), integration (next). The `/mission` skill is
-   the first deliverable on the integration pillar — it is what
-   makes the workflow primitive accessible, not just available.
-
-### Recommended sequence
-
-| # | Bead | What | Phase | Effort |
-|---|---|---|---|---|
-| 1 | **`ethos-9ai.5`** | `/mission` skill MVP (Phase A: skill file, no Go) | 2.6 | Small |
-| 2 | `ethos-9ai.4` | Baseline-ops skill injection in generated agents | 2.4 | Trivial |
-| 3 | `ethos-9ai.1` | Anti-responsibility generation from team graph | 2.1 | Medium |
-| 4 | `ethos-9ai.2` | Role-based hooks in generated agent frontmatter | 2.2 | Medium |
-| 5 | `ethos-9ai.3` | `output_format` field on Role | 2.3 | Small |
-| — | `ethos-jjm` | Symlink hardening across all 4 mission loaders (Phase 3 follow-up, parallel — security debt closure) | 3 | Small |
-| — | `ethos-56a` | Investigate Agent `isolation:worktree` regression (parallel — DX tax: 6 incidents in Phase 3.7 alone) | ops | Unknown |
-| — | `ethos-9ai.6`, `.7` | `GenerateAgentFiles` error-handling fixes | 2 | Cleanup |
-| — | Phase 4 hooks (`ethos-gcq.1`–`.3`) | After Phase 2 ships | 4 | — |
-| — | Cross-tool integration (`ethos-wb4`, `ethos-g2f`) | After Phase 2 + Phase 4 ship | Integration | High coordination |
-
-Cross-tool integration (agents with team messaging via biff, agents
-with email via beadle) is deliberately sequenced last because it
-requires coordinated changes across multiple repos and should wait
-until ethos itself is solidly anchored. Call this Phase 5 work in
-everything but name.
+Cross-tool integration is deliberately sequenced after Phase 4 because
+it requires coordinated changes across multiple repos. Call it Phase 5
+work in everything but name.
 
 ## Context
 
 Ethos v2.6.1 shipped the **mechanism** for identity binding:
 identities, personalities, writing styles, talents, roles, teams,
 sessions, persona animation, agent file generation, extension
-session context. Phase 3 (v2.7–v3.0) added the **workflow primitive
-layer** on top: typed mission contracts, runtime-enforced
+session context. Phase 3 (unreleased — PR #184, merge `c16715f`)
+added the **workflow primitive layer** on top: typed mission
+contracts, runtime-enforced
 write-set admission, frozen evaluators, bounded rounds, verifier
 isolation, typed result artifacts, append-only event log.
 
-What is missing is **content integration** (Phase 2), **operational
-hooks** (Phase 4), and **cross-tool identity binding**
-(ethos+biff, ethos+beadle). Generated agents are functional but
-minimal. The development workflow is manual in the seams between
-CLAUDE.md guidance and the Phase 3 primitives. Agents are not yet
-first-class participants in team messaging or email.
+What is missing is **operational hooks** (Phase 4) and
+**cross-tool identity binding** (ethos+biff, ethos+beadle). The
+development workflow is manual in the seams between CLAUDE.md
+guidance and the Phase 3 primitives. Agents are not yet first-class
+participants in team messaging or email.
 
 The sections below describe each phase in detail, preserved as the
 source of truth for phase definitions, evidence, and delivery
@@ -836,53 +802,41 @@ concern.
 ## Priority and Sequencing
 
 ```text
-Phase 1 (Batteries Included)
-├── 1.1 baseline-ops skill ←── DONE
-├── 1.2 Starter roles (6) ←── DONE
-├── 1.3 Starter talents (10) ←── DONE
-└── 1.4 Model field on Role ←── DONE
+Phase 1 (Batteries Included)             ← SHIPPED
+├── 1.1 baseline-ops skill
+├── 1.2 Starter roles (6)
+├── 1.3 Starter talents (10)
+└── 1.4 Model field on Role
 
-Phase 2 (Production Agents)     ← depends on Phase 1
-├── 2.1 Anti-responsibility generation
-├── 2.2 Role-based hooks
-├── 2.3 Structured output for handoff
-├── 2.4 Baseline-ops injection
-├── 2.5 Mission-shaped delegation guide ←── DONE (docs)
-└── 2.6 Mission skill (/mission) ←── BRIDGES THE GAP
+Phase 2 (Production-Quality Agents)      ← SHIPPED
+├── 2.1 Anti-responsibility generation (ethos-9ai.1)
+├── 2.2 Role-based PostToolUse hooks (ethos-9ai.2)
+├── 2.3 Structured output format on Role (ethos-9ai.3)
+├── 2.4 Baseline-ops skill injection (ethos-9ai.4)
+├── 2.5 Mission skill Phase A (ethos-9ai.5)
+└── 2.6 Mission skill Phase B–C          ← follow-up (ethos-9ai.5)
 
-Phase 3 (Workflow)              ← depends on Phase 1-2
-├── 3.1 Feature-dev integration
-├── 3.2 Specialized review identities
-├── 3.3 Memory consolidation pattern
-├── 3.4 Codebase indexing integration
-└── 3.5 Evaluation discipline
+Phase 3 (Workflow Primitives)            ← SHIPPED
+├── 3.1 Mission contract (DES-031, ethos-07m.5)
+├── 3.2 Write-set admission control (DES-032, ethos-07m.6)
+├── 3.3 Frozen evaluator content hash (DES-033, ethos-07m.7)
+├── 3.4 Bounded rounds with reflection (DES-034, ethos-07m.8)
+├── 3.5 Verifier isolation (DES-035, ethos-07m.9)
+├── 3.6 Result artifacts and close gate (DES-036, ethos-07m.10)
+└── 3.7 Event log reader API (DES-037, ethos-07m.11)
 
-Phase 4 (Operational)           ← independent, can parallel Phase 2-3
-├── 4.1 Context loading hooks
-├── 4.2 Role-based safety constraints ← coordinate with Phase 2 Role changes
-├── 4.3 Write-set admission control ← depends on 2.6 Phase C
-├── 4.4 Session audit logging
-└── 4.5 Audio/notification (vox)
+Phase 4 (Operational Excellence)         ← NEXT
+├── 4.1 SessionStart working context (ethos-gcq.1)
+├── 4.2 Role-based pre-tool safety (ethos-gcq.2)
+└── 4.3 PostToolUse audit logging (ethos-gcq.3)
 
-Phase 5 (Ecosystem)             ← future
+Phase 5 (Ecosystem)                      ← FUTURE
 ├── 5.1 Starter team templates
 ├── 5.2 Agent marketplace
-└── 5.3 Cross-tool workflow orchestration
+└── 5.3 Cross-tool integration (ethos-wb4, ethos-g2f)
 ```
 
-Phase 1 shipped in PR #162. Phase 2 is the immediate priority.
-
-Phase 2 requires Go changes to `GenerateAgentFiles()` and the Role
-struct. Depends on Phase 1 roles and baseline-ops being shipped.
-Item 2.5 (mission-shaped delegation guide) is already documented in
-`docs/agent-definitions.md`.
-
-Phase 3 is integration work across ethos, feature-dev, and punt-kit.
-Depends on Phase 1-2 providing the identity and role content that
-workflow agents need. Item 3.5 (evaluation discipline) formalizes
-review-cycle rules that currently live as ad hoc leader judgment.
-
-Phase 4 is independent and can run in parallel with Phase 2-3.
-Item 4.3 (write-set admission) requires coordination-layer support.
-
-Phase 5 is future work that depends on community adoption.
+Phases 1, 2, and 3 shipped. Phase 4 is the immediate priority. It is
+independent of cross-tool integration and can ship before the
+ethos+biff and ethos+beadle bindings, which require coordinated
+cross-repo work.

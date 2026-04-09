@@ -299,10 +299,7 @@ Note: the "You report to Claude Agento" line is currently hardcoded in
 the generator. Future work will source this from the session roster via
 SubagentStart instead.
 
-Fields like `model`, `effort`, `memory`, `skills`, and `hooks` are not
-yet generated — set them manually or wait for Phase 2 of the
-[roadmap](ETHOS-ROADMAP.md). Anti-responsibilities ("What You Don't
-Do") are also planned for generation from the team collaboration graph.
+As of Phase 2, the generator also produces `model` (from the role), `skills` (always includes `baseline-ops`), `hooks` (role-based `PostToolUse` for roles with `Write`/`Edit` tools), and a `## What You Don't Do` section derived from the team's `reports_to` collaboration graph. Fields like `effort` and `memory` are not generated and not part of the `Role` schema — set them manually in the generated agent file's frontmatter.
 
 The generation is idempotent -- running twice with unchanged identity data produces identical output. Content is compared before writing; identical files are not rewritten.
 
