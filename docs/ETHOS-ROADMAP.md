@@ -52,17 +52,16 @@ work in everything but name.
 Ethos v2.6.1 shipped the **mechanism** for identity binding:
 identities, personalities, writing styles, talents, roles, teams,
 sessions, persona animation, agent file generation, extension
-session context. Phase 3 (v2.7–v3.0) added the **workflow primitive
+session context. Phase 3 (v2.7–v2.8.0) added the **workflow primitive
 layer** on top: typed mission contracts, runtime-enforced
 write-set admission, frozen evaluators, bounded rounds, verifier
 isolation, typed result artifacts, append-only event log.
 
-What is missing is **content integration** (Phase 2), **operational
-hooks** (Phase 4), and **cross-tool identity binding**
-(ethos+biff, ethos+beadle). Generated agents are functional but
-minimal. The development workflow is manual in the seams between
-CLAUDE.md guidance and the Phase 3 primitives. Agents are not yet
-first-class participants in team messaging or email.
+What is missing is **operational hooks** (Phase 4) and
+**cross-tool identity binding** (ethos+biff, ethos+beadle). The
+development workflow is manual in the seams between CLAUDE.md
+guidance and the Phase 3 primitives. Agents are not yet first-class
+participants in team messaging or email.
 
 The sections below describe each phase in detail, preserved as the
 source of truth for phase definitions, evidence, and delivery
