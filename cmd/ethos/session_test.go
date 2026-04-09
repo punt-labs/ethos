@@ -1,12 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestShortID(t *testing.T) {
@@ -39,13 +36,11 @@ func TestFormatStarted(t *testing.T) {
 			name:  "valid RFC3339",
 			input: "2026-03-29T14:22:00Z",
 			check: func(t *testing.T, got string) {
-				// Compute expected in local timezone to avoid day-shift failures.
-				ts, err := time.Parse(time.RFC3339, "2026-03-29T14:22:00Z")
-				require.NoError(t, err)
-				local := ts.Local()
-				assert.Contains(t, got, local.Format("Jan"))
-				assert.Contains(t, got, fmt.Sprintf("%d", local.Day()))
-				assert.Regexp(t, `\d{2}:\d{2}`, got)
+				// Shape is fixed across timezones:
+				// YYYY-MM-DD HH:MM ZONE. Year 2026 is absolute;
+				// month/day may shift one day either side of the
+				// UTC instant depending on local zone.
+				assert.Regexp(t, `^2026-\d{2}-\d{2} \d{2}:\d{2} [A-Z]{2,5}$`, got)
 			},
 		},
 		{

@@ -115,14 +115,14 @@ $ ethos mission create --file /tmp/contract.yaml
 
 $ ethos mission list
 MISSION            STATUS  LEADER  WORKER  EVALUATOR  CREATED
-m-2026-04-08-006   open    claude  bwk     djb        Wed Apr  8 11:42
+m-2026-04-08-006   open    claude  bwk     djb        2026-04-08 11:42 PDT
 
 $ ethos mission show m-2026-04-08-006
 Mission:    m-2026-04-08-006
 Status:     open
 Leader:     claude
 Worker:     bwk
-Evaluator:  djb (pinned Wed Apr  8 11:42)
+Evaluator:  djb (pinned 2026-04-08 11:42 PDT)
 Hash:       sha256:f3c1...
 Budget:     3 round(s), reflection_after_each=true
 Round:      1 of 3
@@ -170,10 +170,10 @@ error.
 ```text
 $ ethos mission log m-2026-04-08-006
 Events:
-  - Wed Apr  8 11:42  create  by claude
-  - Wed Apr  8 12:18  result  by bwk     verdict=pass, round=1
-  - Wed Apr  8 12:19  reflect by claude  recommendation=continue, round=1
-  - Wed Apr  8 12:20  close   by claude  status=closed, round=1
+  - 2026-04-08 11:42 PDT  create  by claude
+  - 2026-04-08 12:18 PDT  result  by bwk     verdict=pass, round=1
+  - 2026-04-08 12:19 PDT  reflect by claude  recommendation=continue, round=1
+  - 2026-04-08 12:20 PDT  close   by claude  status=closed, round=1
 ```
 
 The same primitives are reachable from MCP via the `mission` tool, so a

@@ -721,10 +721,12 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	// section, not as a header row. No top-level Bead: field any more.
 	assert.Contains(t, ctx, "bead: ethos-07m.5")
 	assert.NotContains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
-	// Created uses local-time formatting; the date is 7 Apr UTC which
-	// renders as April in every timezone (TZ shifts can move the day
-	// of month but not the month within a 24h window).
-	assert.Contains(t, ctx, "Apr")
+	// Created uses local-time formatting; the layout
+	// "2026-01-02 15:04 MST" contains the year-month pair 2026-04
+	// regardless of which local timezone the test runs in (a TZ shift
+	// can move the day of month but not the month within a 24h
+	// window, and the year is absolute).
+	assert.Contains(t, ctx, "2026-04-")
 	assert.Contains(t, ctx, "Write set:")
 	assert.Contains(t, ctx, "- internal/mission/")
 	assert.Contains(t, ctx, "Tools:")
@@ -771,8 +773,9 @@ func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
 	assert.Equal(t, "m-2026-04-07-002 (closed)", r.HookSpecificOutput.UpdatedMCPToolOutput)
 	ctx := r.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, missionLabel(t, "Status:")+"closed")
-	// Closed: row must be present with a formatted timestamp.
-	assert.Regexp(t, `Closed:\s+\w+ Apr`, ctx)
+	// Closed: row must be present with a formatted timestamp in the
+	// new layout (year-month-day, 24h time, zone abbreviation).
+	assert.Regexp(t, `Closed:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} [A-Z]{2,5}`, ctx)
 }
 
 func TestFormatOutput_Mission_Show_NoOptionalFields(t *testing.T) {
@@ -1211,10 +1214,9 @@ func TestFormatMissionTime(t *testing.T) {
 			got := FormatLocalTime(tt.raw)
 			if tt.name == "valid RFC3339" {
 				// Local-time formatted; can't assert exact value across
-				// time zones, but it must contain the month name and a
-				// 24h-style time.
-				assert.Contains(t, got, "Apr")
-				assert.Regexp(t, `\d{2}:\d{2}`, got)
+				// time zones, but the shape is fixed:
+				// YYYY-MM-DD HH:MM ZONE.
+				assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2} [A-Z]{2,5}$`, got)
 				return
 			}
 			assert.Equal(t, tt.want, got)
