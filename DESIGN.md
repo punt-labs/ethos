@@ -3605,3 +3605,169 @@ they conclude the tool is broken.
   (`// mirror: internal/mcp/mission_tools.go parseEventTypeList`
   and vice versa) so the pairing is explicit. If a third call
   site ever lands, hoist then.
+
+## DES-038: Worktree isolation is scratch-and-merge, not same-branch (SETTLED)
+
+**Status**: Settled. Investigation and protocol change closing bead
+`ethos-56a`, filed 2026-04-07 after 8+ failed worker rounds across
+Phase 3.6, 3.7, 9ai.5, and 9ai.4 where the `isolation: worktree`
+flag on the Agent tool appeared to misbehave. Investigation
+conducted 2026-04-09 via a controlled experiment with a read-only
+Explore agent; the "bug" turned out to be a misuse of a correctly-
+behaving feature. This entry documents the investigation, the
+corrected mental model, and the protocol change.
+
+### Problem
+
+The Claude Code Agent tool exposes an `isolation: "worktree"` flag
+intended to "run the agent in a temporary git worktree, giving it
+an isolated copy of the repository" (per the tool's own
+documentation). The COO delegated workers with this flag set
+throughout Phase 3.6, 3.7, 9ai.5, and 9ai.4 on the expectation that
+each worker would operate on an isolated filesystem copy of the
+**leader's current feature branch**, so two workers on the same
+branch could work in parallel without fighting each other's
+writes.
+
+That expectation produced eight incidents across four phases,
+falling into six categories of failure:
+
+1. **Worker commits never reached the leader's feature branch.**
+   bwk and mdm reported "worktree on `worktree-agent-<id>`, not on
+   `feat/X`" in every round. The leader's branch never advanced.
+2. **Workers fell back to the leader checkout via absolute paths.**
+   The delegation prompts used absolute paths throughout (e.g.,
+   `<repo-root>/internal/mission/...`), so workers wrote directly
+   into the leader checkout, bypassing the worktree entirely.
+3. **Shared `.git/index` race.** Two workers in the same leader
+   checkout shared the staging area. During Phase 9ai.5, mdm
+   caught bwk's concurrent `git add` interleaving into mdm's
+   staging area — recovered by unstaging bwk's files by name.
+   Captured in `feedback_shared_branch_staging_race.md`.
+4. **Stale test execution.** In Phase 9ai.4, bwk's first `go test`
+   ran against the worktree copy and silently missed the new test
+   case because the worktree was at the old base commit; the new
+   test had been written into the leader checkout via the absolute-
+   path fallback. bwk caught it by switching to `go -C <leader>`.
+5. **Accumulated zombie worktree directories and orphan
+   `worktree-agent-*` branches** piled up in the leader checkout
+   across phases, requiring manual `git worktree remove` + `git
+   branch -D` cleanup.
+6. **Nested worktree paths.** The Agent tool creates the worktree
+   at `$PWD/.claude/worktrees/agent-<id>` — relative to the
+   leader's current PWD, not the repo root. When the leader's cwd
+   had drifted into a previous worktree directory, new worktrees
+   nested inside, producing paths like
+   `.claude/worktrees/agent-a73d8876/.claude/worktrees/agent-a554e644`.
+
+The original bead filed two hypotheses: (a) the worktree wrapper
+sets CWD but doesn't intercept absolute paths, so the leader's
+absolute-path prompts bypass isolation; (b) ethos sub-agent types
+may not honor the flag at all. Neither hypothesis was correct.
+
+### Decision
+
+**`isolation: worktree` is scratch-and-merge isolation, not
+same-branch isolation, and the COO will not use it for single-
+worker feature delivery going forward.**
+
+A controlled experiment with a read-only Explore agent confirmed
+the actual behavior:
+
+1. The flag creates a git worktree at
+   `$PWD/.claude/worktrees/agent-<id>/`.
+2. A new branch `worktree-agent-<id>` is created from the leader's
+   **current HEAD** (not from the leader's current branch ref).
+3. The worker's CWD is set to the new worktree.
+4. Worker git operations default to the new worktree and new
+   branch — so commits land on `worktree-agent-<id>`, not on the
+   leader's feature branch.
+5. If the worker makes no filesystem changes, the worktree is
+   auto-cleaned on agent completion. If changes are made, the
+   worktree and branch persist and the agent's result returns the
+   path for deliberate integration by the leader.
+
+This matches the documented design: "changes are returned in the
+result" means the leader is expected to cherry-pick, rebase, or
+merge the worktree-agent branch deliberately after review. The
+pattern is **scratch-and-merge**: the worker operates on a
+disposable branch, and the leader chooses whether the output
+becomes permanent.
+
+For the ethos Phase 2/3 delegation cycle (leader writes spec →
+worker implements → worker commits → leader reviews → ship), this
+pattern adds friction without benefit. The worker's commits
+should land directly on the feature branch so the leader's usual
+push-PR-merge workflow completes the cycle. `isolation: worktree`
+requires an extra merge-back step that the workflow does not
+need.
+
+**Protocol change** (captured in `~/.claude/CLAUDE.md` and
+`feedback_worktree_isolation_semantics.md` — both user-global,
+not tracked in this repo):
+
+- **Default for single-worker feature delivery**: do NOT use
+  `isolation: worktree`. Work in the leader checkout. The worker
+  commits to the feature branch directly. The leader waits,
+  reviews, pushes, creates the PR.
+- **Use `isolation: worktree` only for**: exploratory/scratch work
+  where the output may or may not merge; parallel fan-out where
+  the leader explicitly sequences integration of multiple workers'
+  branches; recoverable snapshot work where a persistent worktree
+  branch is the deliverable.
+- **Never use `isolation: worktree` with two or more workers on
+  the same branch in parallel** — the fallback pattern produces
+  the shared-index race documented in
+  `feedback_shared_branch_staging_race.md`. Parallel workers
+  require separate branches or serial commits.
+
+### Rejected alternatives
+
+- **Keep using `isolation: worktree` and work around the behavior
+  with absolute-path fallbacks.** This is the pattern that
+  produced the 8 incidents. It silently defeats the isolation the
+  flag promises and creates the staging race and the stale-test
+  execution hazards. Rejected.
+
+- **Fix the Agent tool's behavior upstream so worktrees land on
+  the leader's current branch.** This would be a Claude Code
+  primitive change, outside ethos's control, and it would break
+  the legitimate scratch-and-merge use case. The documented
+  behavior is correct as it stands; the project's misuse is the
+  thing to fix. Rejected.
+
+- **Add an ethos-side wrapper that intercepts Agent calls and
+  rewrites `isolation: worktree` to create the worktree on the
+  leader's feature branch.** Ethos does not wrap the Agent tool
+  at all — the tool is a Claude Code primitive. Wrapping it would
+  require writing a new Claude Code plugin. Rejected as out of
+  scope.
+
+- **Cherry-pick worktree-agent commits back to the feature branch
+  after each worker round.** Correct in principle, but adds a
+  merge step to every delegation cycle. The cost exceeds the
+  benefit for single-worker serial delivery. Kept as a technique
+  for exploratory work; rejected as the default.
+
+### Scope deferred
+
+None. This investigation closes `ethos-56a`. No code changes
+shipped: the ethos codebase has no worktree-creation logic to
+modify, and the Claude Code behavior is working as designed.
+Deliverables landed in three places:
+
+1. A new user-global memory entry
+   `feedback_worktree_isolation_semantics.md` documenting the
+   actual semantics, the symptoms that misled the COO, the
+   default-off protocol, and the cleanup commands.
+2. A new rule in `~/.claude/CLAUDE.md` (user-global) prohibiting
+   `isolation: worktree` for single-worker feature delivery.
+3. This DES-038 entry preserving the investigation in the ethos
+   repo's ADR archive.
+
+Existing cross-referenced memories:
+`feedback_shared_branch_staging_race.md` (the `.git/index` race
+that was a direct consequence of the fallback pattern),
+`feedback_commit_cwd_drift.md` (cwd drift into worktree
+directories), and `feedback_verify_binary_execution.md` (the
+stale-test execution symptom).
