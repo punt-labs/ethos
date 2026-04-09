@@ -75,6 +75,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Generated agent files include a `## What You Don't Do` section
+  derived from `reports_to` edges in the team graph (`ethos-9ai.1`)** —
+  for each `reports_to` edge from an agent's role to a target role,
+  the target's `responsibilities` are listed under "What You Don't Do" with
+  parenthetical attribution: `- release management (coo)`. The
+  preamble names the reporting target(s) with Oxford comma joining:
+  `You report to coo.`, `You report to coo and ceo.`, or
+  `You report to coo, ceo, and cto.`. Roles with no `reports_to` edges
+  get no section. Responsibility strings are normalized (whitespace
+  trimmed, embedded newlines collapsed, empty entries skipped). Missing
+  target roles and non-`reports_to` edges from the agent's role log a
+  stderr warning at generation time. Only `reports_to` is honored;
+  `collaborates_with` and `delegates_to` are future work. This round
+  also tightens blank-line discipline in the generated body — every
+  `##` heading now has a blank line below it, and every list has a
+  blank line between its last bullet and the following `Talents:` line.
+
 - **Generated agent files now include a `skills:` block listing
   `baseline-ops` in frontmatter (`ethos-9ai.4`)** —
   `internal/hook/generate_agents.go` unconditionally emits a
