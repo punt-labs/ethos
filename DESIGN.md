@@ -3347,3 +3347,261 @@ structured signal instead of being silently dropped (round 3 D1).
   pattern from Phase 3.4 — both append paths use the same shape.
   Filed as `ethos-2a6` (P3) for a coordinated fix across both
   sibling stores in a separate PR scoped to rollback semantics.
+
+## DES-037: Append-only mission event log reader API (SETTLED)
+
+**Status**: Settled. Implemented 2026-04-08 as `ethos-07m.11` — the
+Phase 3.7 primitive, the last one in Phase 3. After this merge the
+four architecture rules from `~/Documents/agents-architecture.tex`
+are runtime-enforced for the first time in the project's history.
+Three worker rounds: 1 implementation (round 1), 1 local-review-fix
+(round 2 — driven by a 4-reviewer cycle), and 1 polish round
+(round 3 — driven by the three new LOW findings from the round 2
+fix work). Six reviewer invocations across two local cycles. Local
+reviewers: `djb` (frozen evaluator — 0.82, 0.94, 0.96 across the
+three rounds), `mdm` (CLI specialist — caught the bullet-prefix
+drift from the MCP walker, the stale `runMissionLog` godoc, and the
+JSON envelope taxonomy break), `feature-dev:code-reviewer`
+(correctness — caught the `LoadEvents` ID trust anchor asymmetry
+with `LoadReflections` / `LoadResults`), `silent-failure-hunter`
+(the scanner `ErrTooLong` tail-truncation consensus with djb, and
+the `FilterEvents` silent-drop on unparseable `ts` under `--since`).
+
+### Problem
+
+Phase 3.1 shipped the mission contract with a private `appendEvent`
+helper that writes every state transition to
+`~/.punt-labs/ethos/missions/<id>.jsonl` as a JSONL event stream.
+Phase 3.4 added `reflect`; Phase 3.5 added `verify`; Phase 3.6 added
+`result`. The audit trail exists, but there is no public reader:
+when a mission goes sideways, the leader doing a post-mortem has to
+open the JSONL file by hand, parse each line manually, and hope no
+line is corrupt. That is not a workflow — it is a salvage
+operation, consulted precisely when the operator needs certainty
+and gets ambiguity instead.
+
+### Decision
+
+A public `Store.LoadEvents(missionID) ([]Event, []string, error)`
+method plus a new `ethos mission log <id>` CLI subcommand and a new
+MCP `mission log` method, all reading through the existing writer
+code path. The reader is additive — `appendEvent`,
+`appendEventLocked`, and every existing caller are unchanged.
+
+The reader's design pressure is post-mortem first: "show me as much
+of what happened as possible, even if the file is partially
+damaged." One corrupt line does not erase the log. One oversized
+line does not truncate the tail. One attacker-planted ESC sequence
+does not reach the operator terminal.
+
+**Per-line degradation with line-numbered warnings.** The 3-tuple
+return shape `([]Event, []string, error)` departs from `LoadResults`
+/ `LoadReflections` — which return `([]T, error)` — because JSONL
+can degrade per-line while YAML is whole-file all-or-nothing.
+`LoadEvents` returns every parseable line plus a warnings slice
+naming the 1-based line numbers that failed. A hypothetical
+LoadResults-shaped signature would force callers to chose between
+"strict: fail whole-file on any bad line" (unusable for a
+post-mortem tool) or "silent: return partial with no signal"
+(exactly the silent-failure mode the reader must not produce).
+
+**Single-fd file read with `io.LimitReader`.** Round 3 replaced the
+round 2 `os.Stat(logPath)` + `os.ReadFile(logPath)` path-level pair
+with a single-fd `os.Open` → `f.Stat()` →
+`io.ReadAll(io.LimitReader(f, maxLogSize+1))` sequence. The inode
+is pinned by the fd; a concurrent writer cannot replace or redirect
+the file between stat and read; the `+1` overflow byte turns silent
+cap-bypass-via-race into a distinct `"grew past cap"` error. The
+round 2 path was TOCTOU-vulnerable per djb and silent-failure-hunter
+— both raised the finding as LOW. Round 3 closed it.
+
+**Trust-boundary symmetry with the reflection and result loaders.**
+Per-line strict decode (`DisallowUnknownFields`), `ts` parseability
+check at decode time (round 2 H3), `missionIDPattern` validation at
+API entry (round 3 R3-L2), directory rejection via `info.IsDir`
+(round 2 M4), and whole-file size cap at 16 MiB (round 2 M3, round
+3 R3-L1). Every defense the Phase 3.4 / 3.6 loaders enforce, the
+Phase 3.7 reader enforces — and two the siblings don't (line-length
+resilience via `bufio.Reader`, attacker-controlled-byte sanitization
+via `sanitizeWarning`).
+
+**Warning-string sanitization at source.** Round 2 H2 closed a log
+injection vector: `DisallowUnknownFields` echoes attacker-controlled
+JSON field names verbatim in its error strings, and the warnings
+slice forwards them to operator terminals via stderr (round 1) or
+the `Warnings:` stdout footer (round 2 M2) and into MCP payloads.
+A planted line like `{"...","\x1b[2J\x1b[H\x1b[31mFAKE":1}` would
+clear the operator's terminal and paint a spoofed "no corruption"
+banner during a post-mortem. The `sanitizeWarning` helper walks the
+string rune-by-rune via `utf8.DecodeRuneInString`, escaping bytes
+`< 0x20` (except tab/space), DEL, and C1 (U+007F–U+009F), while
+preserving legitimate multi-byte UTF-8. Invalid UTF-8 bytes are
+detected via `RuneError+size==1` and hex-escaped directly — a naive
+rune walk would hide them behind `U+FFFD`, and a byte walk would
+mangle legitimate `0x80–0x9f` UTF-8 continuation bytes (e.g., `ß`
+= `0xc3 0x9f`). The sanitizer is applied at every warning append
+site in `decodeEventLog` — the source — so CLI, MCP, and the
+DES-020 formatter all consume clean strings without
+double-escaping.
+
+**Partial-damage resilience via `bufio.Reader.ReadString`.** Round 2
+H1 closed a silent tail-truncation bug: round 1 used `bufio.Scanner`
+with a 1 MiB per-line cap. A single line exceeding the cap caused
+the scanner to stop and every subsequent line to be silently lost.
+The round 2 fix replaced the scanner with a `bufio.Reader` loop
+that has no per-line cap; memory is bounded by the 16 MiB whole-
+file cap instead. Plus a final-non-terminated-line branch so
+no-trailing-newline files walk fully. The invariant
+"partial damage does not erase the log" holds end-to-end: a 1.5 MiB
+middle line in the test suite no longer drops the `close` and
+`result` tail events.
+
+**Wrong-mission-id policy: documented no-op.** The `Event` schema
+has no top-level `mission_id` field (unlike `Result`, which carries
+the field and whose loader enforces symmetry with the file path
+per Phase 3.6 round 5 Copilot finding). Mission identity for the
+event log is path-based — `logPath` runs the ID through
+`filepath.Base`, and round 3 R3-L2 adds an upfront `missionIDPattern`
+validation at the `LoadEvents` API boundary. A caller-planted
+`details.mission` key inside the free-form `Details` map is opaque
+payload, preserved untouched by the decoder. This is documented
+explicitly in the `LoadEvents` godoc and covered by
+`TestLoadEvents_WrongMissionInDetails`.
+
+**Forward-compat for unknown event types.** Event type strings are
+preserved as opaque during decode. A future phase (`worker_spawned`,
+`round_started`, `evaluator_finished`, etc., per the roadmap's
+aspirational §3.7 language) can emit new types without a reader
+change. The `--event <type,list>` CLI filter accepts arbitrary
+strings and simply returns empty if no events match the filter —
+the flag does not validate against a closed enum. This is the
+right call for an audit trail that will outlive any single phase's
+event taxonomy.
+
+**CLI and MCP surface parity.** `ethos mission log <id>` mirrors
+`mission reflections` and `mission results`: `--json` flag,
+`--event <type,list>` and `--since <RFC3339>` filters, bullet-
+prefix human mode matching the DES-020 walker. `Warnings:` footer
+on stdout (not stderr) so a caller piping `> events.txt` still sees
+damage. `mission log` MCP method with the same filters, wrapped
+JSON payload `{"events": [...], "warnings": [...]}`. The wrapped
+shape is a deliberate taxonomy break from the sibling subcommands'
+bare-array payloads — warnings MUST travel with events, and a bare
+array cannot carry them. The Long help text documents the envelope
+so CLI consumers reaching for `jq '.[].event'` see the shape before
+they conclude the tool is broken.
+
+### Rejected alternatives
+
+- **2-tuple `([]Event, error)` return shape matching
+  `LoadResults` / `LoadReflections`.** Considered for round 1.
+  Rejected because JSONL degrades per-line by construction — a
+  single corrupt line must not fail the whole read. A warnings
+  slice parameter is the smallest change that preserves partial
+  reads AND keeps callers honest about partial state. The Phase
+  3.6 `ShowPayload.Warnings` field (round 3 D1) is the precedent
+  the shape extends.
+
+- **Sanitize warning strings at CLI and MCP surfaces instead of at
+  source.** Considered in round 2. Rejected because every new
+  surface (future MCP tools, future formatters, future log
+  consumers) would have to remember to sanitize. Source-site
+  sanitization is a trust-boundary invariant: the warning slice
+  NEVER contains raw control bytes after `decodeEventLog` builds
+  it. Downstream surfaces forward verbatim.
+
+- **Re-export `AppendEvent` for external callers.** DES-031 round 3
+  explicitly unexported the writer as a deadlock footgun — any
+  external caller of a public `AppendEvent` from inside a locked
+  block would block forever on Linux flock. Phase 3.7 keeps the
+  writer private. If a future phase needs external append access,
+  the fix is to expose a new API that acquires and releases the
+  lock internally, not to re-export the locked helper.
+
+- **Add new event types (`worker_spawned`, `round_started`,
+  `evaluator_finished`, etc.) per the roadmap §3.7 aspirational
+  language.** Rejected because adding event types requires writer
+  changes, and the writer is frozen at its DES-031 / DES-033 /
+  DES-034 / DES-035 / DES-036 schema. Phase 3.7 surfaces what the
+  writer already emits. Additional event types can ship in a
+  future bead when the need is concrete.
+
+- **Hand-rolled line parser without `json.Decoder` strict decode.**
+  Considered briefly for performance. Rejected because the
+  trust-boundary symmetry with reflection and result loaders is
+  load-bearing — an attacker with local write access to
+  `~/.punt-labs/ethos/missions/<id>.jsonl` could otherwise smuggle
+  extra fields the reader ignores.
+
+- **Path-level `os.Stat` + `os.ReadFile` for the 16 MiB cap.**
+  Round 2 implementation. Rejected when djb and silent-failure-
+  hunter both raised the TOCTOU: a concurrent writer growing the
+  file between stat and read silently bypasses the cap. Round 3
+  replaced the pair with single-fd `os.Open` + `io.LimitReader(f,
+  maxLogSize+1)` + post-read length check. The inode is pinned by
+  the fd, growth is bounded by the limit reader, the `+1` byte
+  converts silent truncation into a loud "grew past cap" error.
+
+- **Silent `continue` on unparseable `ts` inside `FilterEvents`.**
+  Round 1 implementation, confirmed by a round 1 test
+  (`TestFilterEvents_EventWithInvalidTSSkippedUnderSince`) that
+  locked in the silent drop as documented behavior. Rejected
+  when silent-failure-hunter found the count-mismatch vector:
+  same log, same intent, two different counts depending on
+  whether `--since` was set. Round 2 H3 moved the `ts` parse
+  check to `decodeEventLine`, so bad-ts lines never reach
+  `FilterEvents`. Round 3 R3-M2 additionally converted
+  `FilterEvents`'s residual silent `continue` into an explicit
+  error return — defense in depth for future in-memory callers
+  bypassing the decoder.
+
+- **`TestLoadEvents_TraversalIDCannotEscape` as a positive
+  assertion that `filepath.Base` collapse is the full defense.**
+  Round 1 implementation. Rejected when the code reviewer raised
+  the asymmetry with `LoadReflections` / `LoadResults`: the
+  sibling loaders validate the mission exists via an existence
+  check, not just a path collapse. Round 2 H4 added the
+  `os.Stat(contractPath)` existence anchor; round 3 R3-L2 added
+  the upfront `missionIDPattern` validation. The test was
+  renamed to assert the layered defense rather than a single
+  collapse.
+
+### Scope deferred / filed as follow-up beads
+
+- **Symlink follow weakness across all four mission loaders.**
+  `LoadEvents`, `LoadReflections`, `LoadResults`, and `Store.Load`
+  all follow symlinks via `os.ReadFile` (or the equivalent `os.Open`
+  in Phase 3.7) without checking whether the resolved target is
+  inside `missionsDir`. djb explicitly recommended NOT fixing this
+  in Phase 3.7 alone — fixing one loader but not the others
+  creates asymmetry worse than the current consistent weakness.
+  Filed as `ethos-jjm` (P2) for a coordinated `os.Lstat`-based
+  refusal across all four loaders in a single change.
+
+- **`hook.FormatLocalTime` year and timezone rendering.** mdm
+  raised that the shared helper renders `Mon Jan _2 15:04` — no
+  year, no timezone — which is ambiguous for post-mortems across
+  timezones. Deferred because the helper is shared with `mission
+  show`, `mission list`, session output, and every other mission
+  subcommand; fixing only `mission log` would create drift worse
+  than the ambiguity. Filed as `ethos-vjp` (P3) for a global
+  update to `2006-01-02 15:04 MST` or RFC3339 with offset.
+
+- **Cobra exit code 2 on usage errors across all mission
+  subcommands.** The punt-kit CLI standard specifies exit 2 for
+  usage errors; cobra defaults to exit 1. Pre-existing across every
+  mission subcommand, not introduced by Phase 3.7. Filed as
+  `ethos-ag4` (P3) for a `cobra.SilenceErrors` plus `SilenceUsage`
+  plus root-handler refactor.
+
+- **`parseEventTypes` / `parseEventTypeList` duplication between
+  `cmd/ethos/mission.go` and `internal/mcp/mission_tools.go`.**
+  Not filed as a bead — kept deliberately as a 13-line pure
+  function duplication per mdm's argument (which overrode djb's
+  hoist recommendation): hoisting the helper into `internal/mission`
+  would couple the trust-boundary package to CLI argument parsing,
+  and McIlroy composability is about process boundaries, not
+  private Go helpers. Round 2 K1 added cross-reference comments
+  (`// mirror: internal/mcp/mission_tools.go parseEventTypeList`
+  and vice versa) so the pairing is explicit. If a third call
+  site ever lands, hoist then.

@@ -522,27 +522,32 @@ is the human-facing layer.
 `ethos mission close`. Refuse to close a mission without a valid
 result artifact.
 
-### 3.7 Append-Only Mission Log
+### 3.7 Append-Only Mission Log Reader (SHIPPED 2026-04-08)
 
 **Problem**: When something goes wrong, the leader cannot reconstruct
 what happened. Memory files are not authoritative — they're recall.
-Beads track work items, not decisions. There's no audit substrate.
+Beads track work items, not decisions. Phase 3.1 already writes the
+audit trail (JSONL event log per mission) via a private `appendEvent`
+helper, but there is no public reader — the events are on disk and
+invisible to a post-mortem.
 
-**Solution**: Each mission has an append-only event log:
+**Solution**: A public `Store.LoadEvents(missionID)` method plus
+`ethos mission log <id>` CLI and `mission log` MCP method read the
+append-only log that Phase 3.1 has been writing since launch. Read-
+only — the writer is frozen. Partial-damage resilient: one corrupt
+line does not erase the log, one oversized line does not truncate
+the tail, one attacker-planted ESC sequence does not reach the
+operator terminal. Per-line warnings for any unparseable line,
+sanitized at source. See `DES-037` for the full design.
 
-```text
-~/.punt-labs/ethos/missions/m-2026-04-07-001.jsonl
-```
+**Delivery**: `LoadEvents` in `internal/mission/log.go` (reader path;
+the existing `appendEvent` writer path is unchanged). CLI and MCP
+surfaces with `--event <type,list>` and `--since <RFC3339>` filters.
+DES-020 formatter `formatMissionLog` for MCP consumers. 28 test
+classes covering the reader's failure-mode equivalence class.
 
-Events: `create`, `update`, `close` in 3.1; 3.4 adds `reflect`;
-3.5 adds `verify`; 3.7 extends with `worker_spawned`, `round_started`,
-`round_ended`, `evaluator_spawned`, `evaluator_finished`, and any
-other transitions the log reader surfaces. Each event includes
-timestamp, actor, and structured payload. The log is the source of
-truth; derived summaries (memory, beads) are convenience layers.
-
-**Delivery**: Event log in `internal/mission/`. Append-only file with
-JSON lines. CLI: `ethos mission log <id>`. No edit, no delete.
+**Phase 3 complete.** After 3.7 lands, the four architecture rules
+from `~/Documents/agents-architecture.tex` are runtime-enforced.
 
 ### What Phase 3 is not
 
