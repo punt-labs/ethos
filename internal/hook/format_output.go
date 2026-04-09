@@ -707,9 +707,143 @@ func formatMission(w io.Writer, method, result string) error {
 		return formatMissionResult(w, result)
 	case "results":
 		return formatMissionResults(w, result)
+	case "log":
+		return formatMissionLog(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
+}
+
+// formatMissionLog renders the log method's payload as one bullet
+// per event. The summary line counts the entries; an empty array
+// becomes "(none)" so the operator distinguishes "no events
+// recorded" from a tool error. Warnings from a partial decode
+// surface as a trailing Warnings section so the operator never
+// misses a corrupt line.
+//
+// Phase 3.7 parallel of formatMissionResults — the two share the
+// one-bullet-per-round rendering convention so post-mortem tooling
+// has a consistent visual shape across sibling artifacts.
+func formatMissionLog(w io.Writer, result string) error {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	entriesRaw, _ := payload["events"].([]any)
+	n := len(entriesRaw)
+	noun := "events"
+	if n == 1 {
+		noun = "event"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+	if n == 0 {
+		// Still surface warnings on empty — a corrupt log with zero
+		// good lines would otherwise render "(none)" with no hint
+		// why the events are missing.
+		var ctx strings.Builder
+		ctx.WriteString("(none)")
+		if warnings, _ := payload["warnings"].([]any); len(warnings) > 0 {
+			writeMissionWarnings(&ctx, warnings)
+		}
+		return emit(w, summary, ctx.String())
+	}
+	var ctx strings.Builder
+	for i, e := range entriesRaw {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		ts, _ := em["ts"].(string)
+		evType, _ := em["event"].(string)
+		actor, _ := em["actor"].(string)
+		if i > 0 {
+			ctx.WriteString("\n")
+		}
+		fmt.Fprintf(&ctx, "  - %s  %s  by %s", FormatLocalTime(ts), evType, actor)
+		details, _ := em["details"].(map[string]any)
+		if summary := summarizeEventDetailsRaw(evType, details); summary != "" {
+			fmt.Fprintf(&ctx, "  %s", summary)
+		}
+	}
+	if warnings, _ := payload["warnings"].([]any); len(warnings) > 0 {
+		writeMissionWarnings(&ctx, warnings)
+	}
+	return emit(w, summary, ctx.String())
+}
+
+// summarizeEventDetailsRaw extracts a short human-readable payload
+// summary from a decoded-from-JSON Details map. The logic mirrors
+// cmd/ethos.summarizeEventDetails — the two cannot share code
+// because this package must not import internal/mission — but they
+// agree on which fields to surface for each known event type. New
+// event types grow one case here and one in the CLI helper;
+// forward-compatibility means an unknown type renders no details
+// (just the base row) rather than a guessed field set.
+func summarizeEventDetailsRaw(evType string, details map[string]any) string {
+	if len(details) == 0 {
+		return ""
+	}
+	switch evType {
+	case "create":
+		worker, _ := details["worker"].(string)
+		evaluator, _ := details["evaluator"].(string)
+		bead, _ := details["bead"].(string)
+		var parts []string
+		if worker != "" {
+			parts = append(parts, "worker="+worker)
+		}
+		if evaluator != "" {
+			parts = append(parts, "evaluator="+evaluator)
+		}
+		if bead != "" {
+			parts = append(parts, "bead="+bead)
+		}
+		return strings.Join(parts, " ")
+	case "close":
+		status, _ := details["status"].(string)
+		verdict, _ := details["verdict"].(string)
+		round, _ := details["round"].(float64)
+		var parts []string
+		if status != "" {
+			parts = append(parts, "status="+status)
+		}
+		if verdict != "" {
+			parts = append(parts, "verdict="+verdict)
+		}
+		if round > 0 {
+			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
+		}
+		return strings.Join(parts, " ")
+	case "result":
+		verdict, _ := details["verdict"].(string)
+		round, _ := details["round"].(float64)
+		var parts []string
+		if round > 0 {
+			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
+		}
+		if verdict != "" {
+			parts = append(parts, "verdict="+verdict)
+		}
+		return strings.Join(parts, " ")
+	case "reflect":
+		rec, _ := details["recommendation"].(string)
+		round, _ := details["round"].(float64)
+		var parts []string
+		if round > 0 {
+			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
+		}
+		if rec != "" {
+			parts = append(parts, "rec="+rec)
+		}
+		return strings.Join(parts, " ")
+	case "round_advanced":
+		from, _ := details["from_round"].(float64)
+		to, _ := details["to_round"].(float64)
+		if from > 0 && to > 0 {
+			return fmt.Sprintf("round %d -> %d", int(from), int(to))
+		}
+	}
+	return ""
 }
 
 // formatMissionResult renders the result method's confirmation:

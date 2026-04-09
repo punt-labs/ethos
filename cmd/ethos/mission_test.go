@@ -1760,3 +1760,345 @@ budget:
 		"after rebinding djb to security-reviewer, create must succeed: %s",
 		errB.String())
 }
+
+// --- Phase 3.7: mission log ---
+//
+// Classes 14-23 from the Phase 3.7 failure-mode table:
+//
+//   14 — --event foo with no matching events
+//   15 — --event foo,bar with partial matches
+//   16 — --since <future> with no matching events
+//   17 — --since <past> includes all
+//   18 — --event X --since Y AND-composed
+//   19 — unknown event type string in --event (accepted, empty result)
+//   20 — `ethos mission log` (no id) errors with usage
+//   21 — `ethos mission log <prefix>` prefix match
+//   22 — `ethos mission log <unknown-id>` errors
+//   23 — `ethos mission log <id> --json` empty is [] not null
+//
+// Classes 14-19 are filter-interaction through the CLI surface so
+// they exercise parseEventTypes + FilterEvents + runMissionLog end-
+// to-end. Pure filter unit tests live in internal/mission/log_test.go.
+
+// seedMissionWithEvents creates a single mission via the CLI create
+// path, then drives it through result + close so the on-disk log
+// carries create + result + close events. Returns the mission ID.
+func seedMissionWithEvents(t *testing.T) string {
+	t.Helper()
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+	submitCLIResult(t, id, 1)
+	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+	return id
+}
+
+func TestMissionLog_CleanLogRoundTrip(t *testing.T) {
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(id, "", "")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	require.Len(t, payload.Events, 3)
+	assert.Equal(t, "create", payload.Events[0].Event)
+	assert.Equal(t, "result", payload.Events[1].Event)
+	assert.Equal(t, "close", payload.Events[2].Event)
+	assert.Empty(t, payload.Warnings)
+}
+
+func TestMissionLog_EventFilter_NoMatch(t *testing.T) {
+	// Class 14: --event foo with no matching events.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(id, "foo", "")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	assert.Empty(t, payload.Events)
+	// A2 regression guard: must be [], not null.
+	assert.Contains(t, out, `"events": []`)
+	assert.NotContains(t, out, `"events": null`)
+}
+
+func TestMissionLog_EventFilter_PartialMatch(t *testing.T) {
+	// Class 15: --event create,close with partial matches.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(id, "create,close", "")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	require.Len(t, payload.Events, 2)
+	assert.Equal(t, "create", payload.Events[0].Event)
+	assert.Equal(t, "close", payload.Events[1].Event)
+}
+
+func TestMissionLog_SinceFilter_Future(t *testing.T) {
+	// Class 16: --since <future> with no matching events.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(id, "", "2099-01-01T00:00:00Z")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	assert.Empty(t, payload.Events)
+	assert.Contains(t, out, `"events": []`)
+}
+
+func TestMissionLog_SinceFilter_Past(t *testing.T) {
+	// Class 17: --since <past> includes all.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(id, "", "2020-01-01T00:00:00Z")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	require.Len(t, payload.Events, 3)
+}
+
+func TestMissionLog_BothFilters_ANDComposed(t *testing.T) {
+	// Class 18: --event X --since Y AND-composed.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	// Filter for `result` events since epoch — only the result row
+	// survives both gates.
+	out := captureStdout(t, func() {
+		runMissionLog(id, "result", "2020-01-01T00:00:00Z")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	require.Len(t, payload.Events, 1)
+	assert.Equal(t, "result", payload.Events[0].Event)
+}
+
+func TestMissionLog_UnknownEventType_IsAcceptedNotRejected(t *testing.T) {
+	// Class 19: an unknown event type string in --event is accepted
+	// and returns empty. The flag parser does not validate against
+	// a closed enum — event types are forward-compatible.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(id, "worker_spawned", "")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	assert.Empty(t, payload.Events)
+	assert.Contains(t, out, `"events": []`)
+}
+
+func TestMissionLog_NoID_ErrorsWithUsage(t *testing.T) {
+	// Class 20: `ethos mission log` with no id errors with the cobra
+	// usage hint, exit non-zero. Use the runCobra helper to drive
+	// the full cobra path including arg-count validation.
+	missionTestEnv(t)
+	_, stderr, err := runCobra(t, "mission", "log")
+	require.Error(t, err)
+	assert.Contains(t, stderr, "accepts 1 arg")
+}
+
+func TestMissionLog_PrefixMatch(t *testing.T) {
+	// Class 21: `ethos mission log <prefix>` prefix match via
+	// MatchByPrefix, symmetric with mission show.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+	// Use the first 12 characters (the "m-2026-04-NN" prefix) as an
+	// unambiguous prefix — only one mission in the store.
+	prefix := id[:12]
+	require.NotEqual(t, prefix, id, "prefix must be shorter than full id")
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(prefix, "", "")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	assert.Len(t, payload.Events, 3)
+}
+
+func TestMissionLog_UnknownID_Errors(t *testing.T) {
+	// Class 22: `ethos mission log <unknown-id>` errors. Runs in a
+	// subprocess because runMissionLog calls os.Exit on resolution
+	// failure.
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	cmd := exec.Command(ethosBinary, "mission", "log", "m-unknown-999")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+	err := cmd.Run()
+	require.Error(t, err, "unknown mission id must exit non-zero")
+	assert.Contains(t, stderrBuf.String(), "no mission matching prefix")
+}
+
+func TestMissionLog_EmptyJSON_IsEmptyArrayNotNull(t *testing.T) {
+	// Class 23: `mission log <id> --json` with zero matching events
+	// returns `"events": []`, never `"events": null`. Phase 3.6 A2
+	// regression guard: a typed-nil slice boxed into a map was the
+	// exact bug mdm caught on show; the same trap applies here.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	// Filter out every event so the payload is empty.
+	out := captureStdout(t, func() {
+		runMissionLog(id, "no-such-event", "")
+	})
+	assert.Contains(t, out, `"events": []`)
+	assert.NotContains(t, out, `"events": null`)
+	// Warnings must be omitted on a clean log.
+	assert.NotContains(t, out, `"warnings"`)
+}
+
+func TestMissionLog_HumanMode_RendersAllEvents(t *testing.T) {
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	jsonOutput = false
+	out := captureStdout(t, func() {
+		runMissionLog(id, "", "")
+	})
+	assert.Contains(t, out, "Events:")
+	assert.Contains(t, out, "create")
+	assert.Contains(t, out, "result")
+	assert.Contains(t, out, "close")
+}
+
+func TestMissionLog_HumanMode_Empty_RendersNone(t *testing.T) {
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+	jsonOutput = false
+	out := captureStdout(t, func() {
+		runMissionLog(id, "no-such-event", "")
+	})
+	assert.Contains(t, out, "Events:")
+	assert.Contains(t, out, "(none)")
+}
+
+func TestMissionLog_InvalidSinceFlag_SubprocessExits(t *testing.T) {
+	// An invalid --since is a fatal error from FilterEvents; the
+	// operator sees the bad value named in the error. Runs in a
+	// subprocess because runMissionLog calls os.Exit on the filter
+	// error path.
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.11
+write_set:
+  - tests/log-bad-since/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+	env := append(os.Environ(), "HOME="+home)
+
+	createCmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	createCmd.Env = env
+	require.NoError(t, createCmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+
+	cmd := exec.Command(ethosBinary, "mission", "log", id, "--since", "not-a-timestamp")
+	cmd.Env = env
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+	err := cmd.Run()
+	require.Error(t, err, "invalid --since must exit non-zero")
+	assert.Contains(t, stderrBuf.String(), "since")
+	assert.Contains(t, stderrBuf.String(), "not-a-timestamp")
+}
+
+func TestMissionLog_CorruptLineSurfacesAsWarning(t *testing.T) {
+	// Drive a clean mission, then plant a corrupt line in the middle
+	// of the JSONL log. Reading it back via --json must surface a
+	// warnings field naming the bad line and still return the
+	// parseable events.
+	missionTestEnv(t)
+	id := seedMissionWithEvents(t)
+
+	// The CLI uses the bare missionStore() path which reads HOME,
+	// so the sandbox HOME is the one missionTestEnv set.
+	home := os.Getenv("HOME")
+	logPath := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".jsonl")
+	raw, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+	require.GreaterOrEqual(t, len(lines), 3, "expected at least create+result+close")
+	// Insert a garbage line between line 1 (create) and line 2.
+	corrupted := []string{lines[0], "{garbage", lines[1], lines[2]}
+	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	out := captureStdout(t, func() {
+		runMissionLog(id, "", "")
+	})
+	var payload mission.LogPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	// The three good lines still decode.
+	assert.Len(t, payload.Events, 3)
+	// Warnings name the corrupt line number.
+	require.Len(t, payload.Warnings, 1)
+	assert.Contains(t, payload.Warnings[0], "line 2")
+}
+
+func TestMissionLog_HelpListsSubcommand(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "log")
+	assert.Contains(t, stdout, "Show the append-only mission event log")
+}

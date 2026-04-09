@@ -62,6 +62,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Phase 3.7: append-only mission event log reader API**
+  (`ethos-07m.11`, round 1) — a public `Store.LoadEvents(missionID)`
+  method, a new `ethos mission log <id>` CLI subcommand, and a new
+  MCP `mission log` method expose the JSONL event audit trail every
+  Phase 3.1+ writer has been quietly appending to. The reader is
+  additive: the writer (`appendEvent`, `appendEventLocked`, every
+  existing caller) is unchanged. `LoadEvents` returns `([]Event,
+  []string, error)` — events in on-disk order, warnings naming any
+  unparseable line numbers, error for unrecoverable I/O failures.
+  One corrupt line does not erase the log: each line is decoded
+  independently with `DisallowUnknownFields` (trust-boundary
+  symmetric with the reflection and result loaders), and a failing
+  line produces a warning while the rest of the file still decodes.
+  Missing file and empty file both return `[]Event{}, nil, nil`,
+  matching `LoadResults` convention. The CLI subcommand accepts
+  `--json` for a `mission.LogPayload` wire shape (events slice plus
+  omitempty warnings), `--event <type,list>` for event-type
+  filtering, and `--since <RFC3339>` for time filtering; both
+  filters are AND-composed. Unknown event type strings are
+  accepted (event types are forward-compatible — future phases may
+  add `worker_spawned`, `round_started`, etc. without a reader
+  change). The new DES-020 `formatMissionLog` walker in
+  `internal/hook/format_output.go` renders the events list for the
+  MCP hook surface with one bullet per event plus a Warnings
+  section on partial decode. Mission identity is enforced via the
+  file path (the `Event` schema has no top-level mission_id field —
+  `logPath` runs the ID through `filepath.Base` as defense in
+  depth); a caller-supplied `mission` key inside the free-form
+  `Details` map is opaque payload, not identity, so the reader
+  preserves it untouched. There is no public writer path: DES-031
+  round 3 unexported the writer as a deadlock footgun, and 3.7
+  does not re-introduce one.
 - **Structured result artifacts and close gate** (Phase 3.6,
   `ethos-07m.10`) — worker output is no longer prose. A new
   `mission.Result` type in `internal/mission/result.go` pins a
