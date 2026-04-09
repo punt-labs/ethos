@@ -816,7 +816,7 @@ Phase 2 (Production-Quality Agents)      ← SHIPPED
 ├── 2.5 Mission skill Phase A (ethos-9ai.5)
 └── 2.6 Mission skill Phase B–C          ← follow-up (ethos-9ai.5)
 
-Phase 3 (Workflow Primitives)            ← SHIPPED (v2.8.0)
+Phase 3 (Workflow Primitives)            ← SHIPPED
 ├── 3.1 Mission contract (DES-031, ethos-07m.5)
 ├── 3.2 Write-set admission control (DES-032, ethos-07m.6)
 ├── 3.3 Frozen evaluator content hash (DES-033, ethos-07m.7)
