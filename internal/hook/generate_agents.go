@@ -111,15 +111,42 @@ type antiResponsibility struct {
 	TargetRole     string
 }
 
-// deriveAntiResponsibilities walks the team's reports_to edges from
-// roleName and returns the target roles' responsibilities as a flat
-// list in walk order. Targets whose role fails to load are skipped
-// with a stderr warning. Returns nil if roleName has no outgoing
-// reports_to edges or every target has an empty Responsibilities list.
+// respNormalizer collapses embedded CR/LF sequences in a responsibility
+// string to single spaces. Trim is applied separately by the caller so
+// the result is a single line of text regardless of YAML block-scalar
+// quirks or accidental multi-line entries.
+var respNormalizer = strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ")
+
+// normalizeResponsibility applies whitespace-only cleanup to a
+// responsibility string: embedded newlines become spaces, then outer
+// whitespace is trimmed. Content is never rewritten — a responsibility
+// string containing markdown metacharacters (e.g. a leading "- ") is
+// the role author's choice and passes through verbatim.
+func normalizeResponsibility(s string) string {
+	return strings.TrimSpace(respNormalizer.Replace(s))
+}
+
+// deriveAntiResponsibilities walks the team's collaboration edges
+// starting from roleName and returns the reports_to targets'
+// responsibilities as a flat list in walk order. Each responsibility is
+// normalized: embedded newlines collapse to spaces, surrounding
+// whitespace is trimmed, and strings empty after normalization are
+// dropped with a stderr warning. Targets whose role fails to load are
+// also skipped with a warning. Non-reports_to edges from roleName are
+// warned about — this catches typos ("report_to", "reports-to") and
+// future edge types (collaborates_with, delegates_to) that the team
+// package's Load does not validate. Returns nil if roleName has no
+// outgoing reports_to edges or every target contributes zero bullets.
 func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, roles *role.LayeredStore) []antiResponsibility {
 	var out []antiResponsibility
 	for _, c := range collabs {
-		if c.Type != "reports_to" || c.From != roleName {
+		if c.From != roleName {
+			continue
+		}
+		if c.Type != "reports_to" {
+			fmt.Fprintf(os.Stderr,
+				"ethos: generate-agents: anti-responsibilities: role %q has edge with unsupported type %q (expected \"reports_to\") — skipping\n",
+				roleName, c.Type)
 			continue
 		}
 		target, err := roles.Load(c.To)
@@ -128,8 +155,15 @@ func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, r
 			continue
 		}
 		for _, resp := range target.Responsibilities {
+			norm := normalizeResponsibility(resp)
+			if norm == "" {
+				fmt.Fprintf(os.Stderr,
+					"ethos: generate-agents: anti-responsibilities: role %q: empty responsibility skipped\n",
+					c.To)
+				continue
+			}
 			out = append(out, antiResponsibility{
-				Responsibility: resp,
+				Responsibility: norm,
 				TargetRole:     c.To,
 			})
 		}
@@ -221,7 +255,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		wsBody := stripLeadingHeading(id.WritingStyleContent)
 		wsBody = strings.TrimRight(wsBody, "\n")
 		if wsBody != "" {
-			b.WriteString("\n## Writing Style\n")
+			b.WriteString("\n## Writing Style\n\n")
 			b.WriteString(wsBody)
 			b.WriteString("\n")
 		}
@@ -229,26 +263,34 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 
 	// Responsibilities.
 	if len(r.Responsibilities) > 0 {
-		b.WriteString("\n## Responsibilities\n")
+		b.WriteString("\n## Responsibilities\n\n")
 		for _, resp := range r.Responsibilities {
 			fmt.Fprintf(&b, "- %s\n", resp)
 		}
 	}
 
 	// Anti-responsibilities — what this agent does NOT do, derived
-	// from the target roles of reports_to edges.
+	// from the target roles of reports_to edges. Bullets are grouped
+	// by target in the same order targets appear in the preamble, so
+	// the two orderings cannot drift if either loop is later rewritten.
 	if len(antiResps) > 0 {
 		b.WriteString("\n## What You Don't Do\n\n")
 		targets := uniqueTargetsInOrder(antiResps)
 		fmt.Fprintf(&b, "You report to %s. These are not yours:\n\n", joinWithOxford(targets))
-		for _, ar := range antiResps {
-			fmt.Fprintf(&b, "- %s (%s)\n", ar.Responsibility, ar.TargetRole)
+		for _, tgt := range targets {
+			for _, ar := range antiResps {
+				if ar.TargetRole == tgt {
+					fmt.Fprintf(&b, "- %s (%s)\n", ar.Responsibility, ar.TargetRole)
+				}
+			}
 		}
 	}
 
-	// Talents.
+	// Talents. A leading newline guarantees a blank line between the
+	// previous section (Responsibilities, anti-responsibilities, or
+	// Writing Style) and this line so the label never hugs a bullet.
 	if len(id.Talents) > 0 {
-		fmt.Fprintf(&b, "Talents: %s\n", strings.Join(id.Talents, ", "))
+		fmt.Fprintf(&b, "\nTalents: %s\n", strings.Join(id.Talents, ", "))
 	}
 
 	return b.String()
