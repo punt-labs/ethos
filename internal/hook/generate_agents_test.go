@@ -470,8 +470,8 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 			// go-specialist reports_to BOTH ceo-empty (zero
 			// responsibilities) and coo (non-empty). ceo-empty has no
 			// responsibilities, so deriveAntiResponsibilities appends
-			// nothing for it; uniqueTargetsInOrder therefore never sees
-			// ceo-empty in the antiResps slice and cannot name it in the
+			// nothing for it; the bucketing pass in buildAgentFile
+			// therefore never sees ceo-empty and cannot name it in the
 			// preamble. The edge is not "filtered out" by preamble logic —
 			// it simply never enters the derived data in the first place.
 			name: "multiple reports_to, mixed emptiness",
@@ -817,39 +817,6 @@ func TestJoinWithOxford(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := joinWithOxford(tt.names)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestUniqueTargetsInOrder(t *testing.T) {
-	tests := []struct {
-		name string
-		in   []antiResponsibility
-		want []string
-	}{
-		{"empty", nil, nil},
-		{
-			"single target, multiple bullets",
-			[]antiResponsibility{
-				{Responsibility: "a", TargetRole: "coo"},
-				{Responsibility: "b", TargetRole: "coo"},
-			},
-			[]string{"coo"},
-		},
-		{
-			"two targets interleaved",
-			[]antiResponsibility{
-				{Responsibility: "a", TargetRole: "coo"},
-				{Responsibility: "x", TargetRole: "ceo"},
-				{Responsibility: "b", TargetRole: "coo"},
-			},
-			[]string{"coo", "ceo"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := uniqueTargetsInOrder(tt.in)
 			assert.Equal(t, tt.want, got)
 		})
 	}

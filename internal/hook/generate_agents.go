@@ -185,21 +185,6 @@ func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, r
 	return out
 }
 
-// uniqueTargetsInOrder returns the distinct TargetRole values from ars
-// in their first-occurrence order.
-func uniqueTargetsInOrder(ars []antiResponsibility) []string {
-	seen := make(map[string]struct{}, len(ars))
-	var out []string
-	for _, ar := range ars {
-		if _, ok := seen[ar.TargetRole]; ok {
-			continue
-		}
-		seen[ar.TargetRole] = struct{}{}
-		out = append(out, ar.TargetRole)
-	}
-	return out
-}
-
 // joinWithOxford joins names in English. Two items: "a and b". Three or
 // more: Oxford-comma "a, b, and c". One item returns as-is. Zero items
 // returns the empty string.
@@ -284,18 +269,25 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	}
 
 	// Anti-responsibilities — what this agent does NOT do, derived
-	// from the target roles of reports_to edges. Bullets are grouped
-	// by target in the same order targets appear in the preamble, so
-	// the two orderings cannot drift if either loop is later rewritten.
+	// from the target roles of reports_to edges. Bullets are bucketed
+	// by target in a single pass: targets records first-seen order,
+	// byTarget groups the bullets. Preamble and bullet block then
+	// render from the same ordered slice, so the two orderings cannot
+	// drift.
 	if len(antiResps) > 0 {
 		b.WriteString("\n## What You Don't Do\n\n")
-		targets := uniqueTargetsInOrder(antiResps)
+		targets := make([]string, 0, len(antiResps))
+		byTarget := make(map[string][]antiResponsibility, len(antiResps))
+		for _, ar := range antiResps {
+			if _, ok := byTarget[ar.TargetRole]; !ok {
+				targets = append(targets, ar.TargetRole)
+			}
+			byTarget[ar.TargetRole] = append(byTarget[ar.TargetRole], ar)
+		}
 		fmt.Fprintf(&b, "You report to %s. These are not yours:\n\n", joinWithOxford(targets))
 		for _, tgt := range targets {
-			for _, ar := range antiResps {
-				if ar.TargetRole == tgt {
-					fmt.Fprintf(&b, "- %s (%s)\n", ar.Responsibility, ar.TargetRole)
-				}
+			for _, ar := range byTarget[tgt] {
+				fmt.Fprintf(&b, "- %s (%s)\n", ar.Responsibility, ar.TargetRole)
 			}
 		}
 	}
