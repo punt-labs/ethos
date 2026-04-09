@@ -176,9 +176,9 @@ func TestValidateStructural_NoCallbacks(t *testing.T) {
 // structural failure, Validate returns the structural error
 // byte-for-byte — not wrapped, not augmented, not replaced. This
 // locks the contract that callers matching on structural error text
-// via errors.Is or strings.Contains still work after the round-1
-// split. A refactor that wraps any of the 9 errors in Validate fails
-// the matching sub-case.
+// via direct string comparison or strings.Contains still work after
+// the round-1 split. A refactor that wraps any of the 9 errors in
+// Validate fails the matching sub-case.
 //
 // The two always-true callbacks guarantee the identity and role
 // existence checks inside Validate are never reached — the structural
