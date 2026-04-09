@@ -285,6 +285,26 @@ func TestGenerateAgentFiles(t *testing.T) {
 				assert.True(t, os.IsNotExist(readErr), "agent with missing personality should be skipped")
 			},
 		},
+		{
+			name: "skills frontmatter includes baseline-ops",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				parts := strings.SplitN(content, "---", 3)
+				require.Len(t, parts, 3, "expected frontmatter delimiters")
+				frontmatter := parts[1]
+				assert.Contains(t, frontmatter, "skills:\n  - baseline-ops\n")
+
+				// Log the generated file so binary verification is visible
+				// in -v test output (spec success criterion 5).
+				t.Logf("generated bwk.md:\n%s", content)
+			},
+		},
 	}
 
 	for _, tt := range tests {
