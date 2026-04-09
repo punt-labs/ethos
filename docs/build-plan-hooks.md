@@ -1,5 +1,18 @@
 # Build Plan: Hook Standards Compliance
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes a 2026-03-22 audit of the hook implementation against
+> `punt-kit/standards/hooks.md`. The compliance work has landed and the
+> current hook architecture is documented in
+> [`architecture.tex`](architecture.tex) under Persona Animation and
+> in DES entries in [`../DESIGN.md`](../DESIGN.md).
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 Audit date: 2026-03-22. Standard: `punt-kit/standards/hooks.md`.
 
 ## Current State

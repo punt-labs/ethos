@@ -1,5 +1,19 @@
 # Build Plan: ethos-x4i
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes the early implementation work for `ethos-x4i`
+> (repo-level identity config and team resolution). That feature
+> shipped and was superseded by the Phase 1 teams work
+> ([`build-plan-teams.md`](build-plan-teams.md), also historical).
+> The current design is documented in [`architecture.tex`](architecture.tex)
+> under Identity Resolution and Teams and Roles.
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 Repo-level identity config and team resolution.
 
 ## Problem

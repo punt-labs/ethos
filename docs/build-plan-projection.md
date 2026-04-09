@@ -1,5 +1,19 @@
 # Build Plan: Surface Projection Consistency
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes the surface projection consistency work (CLI, MCP, slash
+> commands, Go API naming and behavior alignment per
+> [`go-projection-standard.md`](go-projection-standard.md) and DES-020).
+> That work has landed; the current CLI and MCP surface definitions are
+> in [`architecture.tex`](architecture.tex) §CLI Surface and §MCP Tool
+> Surface.
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 Close naming and behavioral gaps across CLI, MCP, slash commands, and
 Go API per `docs/go-projection-standard.md` and DES-020 (formatted text,
 not raw JSON).
