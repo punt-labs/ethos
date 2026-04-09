@@ -40,7 +40,7 @@
 
 \title{Ethos: Technical Architecture Specification}
 \author{Identity, Workflow, and Integration for Humans and AI Agents}
-\date{April 2026 --- v3.0}
+\date{April 2026 --- Phase 3 complete}
 \hypersetup{
   pdftitle={Ethos: Technical Architecture Specification},
   pdfauthor={Punt Labs},
@@ -113,11 +113,11 @@ is the contract.
 \section{Status at a Glance}
 % ===================================================================
 
-Ethos is built in phases.  Phase 1 (the identity layer) and Phase 3
-(the workflow primitives) are shipped.  Phase 2 (production-quality
-agent generation), Phase 4 (operational hooks), and the cross-tool
-integration deepening are planned.  This section is the single
-authoritative status statement; the remainder of the document
+Ethos is built in phases.  Phase 1 (the identity layer), Phase 2
+(production-quality agent generation), and Phase 3 (the workflow
+primitives) are shipped.  Phase 4 (operational hooks) and the
+cross-tool integration deepening are planned.  This section is the
+single authoritative status statement; the remainder of the document
 describes the system in present tense as a coherent whole.
 
 \begin{center}
@@ -144,11 +144,12 @@ Agent file generation          & 1   & DES-026      & ---            & SHIPPED \
 Starter content (10 talents,
   6 roles, baseline-ops skill) & 1   & DES-029, 030 & \texttt{ethos-l9d} & SHIPPED \\
 \midrule
-Anti-responsibility derivation & 2.1 & ---          & \texttt{ethos-9ai.1} & PLANNED \\
-Role-based hook frontmatter    & 2.2 & ---          & \texttt{ethos-9ai.2} & PLANNED \\
-Structured output for handoff  & 2.3 & ---          & \texttt{ethos-9ai.3} & PLANNED \\
-Baseline-ops skill injection   & 2.4 & ---          & \texttt{ethos-9ai.4} & PLANNED \\
-Mission skill (\cmd{/mission}) & 2.5/2.6 & ---      & \texttt{ethos-9ai.5} & PLANNED \\
+Anti-responsibility derivation & 2.1 & --- & \texttt{ethos-9ai.1} & SHIPPED \\
+Role-based hook frontmatter    & 2.2 & --- & \texttt{ethos-9ai.2} & SHIPPED \\
+Structured output for handoff  & 2.3 & --- & \texttt{ethos-9ai.3} & SHIPPED \\
+Baseline-ops skill injection   & 2.4 & --- & \texttt{ethos-9ai.4} & SHIPPED \\
+Mission skill Phase A (\cmd{/mission}) & 2.5 & --- & \texttt{ethos-9ai.5} & SHIPPED \\
+Mission skill Phase B--C               & 2.6 & --- & \texttt{ethos-9ai.5} & PLANNED \\
 \midrule
 Mission contract               & 3.1 & DES-031      & \texttt{ethos-07m.5} & SHIPPED \\
 Write-set admission control    & 3.2 & DES-032      & \texttt{ethos-07m.6} & SHIPPED \\
