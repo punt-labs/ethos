@@ -1,5 +1,19 @@
 # Build Plan: Persona Animation
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes the Phase 1 implementation work for `ethos-qwr` (persona
+> animation — SessionStart, PreCompact, SubagentStart hook injection).
+> That feature shipped; the current design document is at
+> [`persona-animation.md`](persona-animation.md) and the architecture
+> section is in [`architecture.tex`](architecture.tex) under Persona
+> Animation.
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 Epic bead: ethos-qwr
 Design doc: [docs/persona-animation.md](persona-animation.md)
 

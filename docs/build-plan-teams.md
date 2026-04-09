@@ -1,5 +1,19 @@
 # Build Plan: Teams, Roles, and Shared Identity Registry
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes the Phase 1 implementation work for `ethos-cpi` (teams,
+> roles, and the shared identity registry). That feature shipped; the
+> current Z specification is at [`teams.tex`](teams.tex), the team
+> setup guide is at [`team-setup.md`](team-setup.md), and the
+> architecture section is in [`architecture.tex`](architecture.tex)
+> under Teams and Roles.
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 Epic bead: ethos-cpi
 Z Specification: [docs/teams.tex](teams.tex)
 

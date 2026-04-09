@@ -1,5 +1,18 @@
 # Build Plan: Rich Identity Attributes (ethos-ncw)
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes pre-Phase-1 design work for `ethos-ncw` (rich identity
+> attributes — talents, personalities, writing styles as markdown files
+> referenced by slug). That feature shipped in Phase 1 and is documented
+> in the current architecture at [`architecture.tex`](architecture.tex)
+> and the ADR archive in [`../DESIGN.md`](../DESIGN.md).
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
+---
+
 ## Goal
 
 Convert identity attributes from inline strings to markdown file references.
