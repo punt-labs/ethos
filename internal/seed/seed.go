@@ -34,6 +34,8 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 		filepath.Join(skillsRoot, "baseline-ops", "SKILL.md"), force, r)
 	seedFile(Skills, "sidecar/skills/mission/SKILL.md",
 		filepath.Join(skillsRoot, "mission", "SKILL.md"), force, r)
+	seedFile(Skills, "sidecar/skills/create-from-project/SKILL.md",
+		filepath.Join(skillsRoot, "create-from-project", "SKILL.md"), force, r)
 
 	// READMEs
 	seedReadmes(Readmes, destRoot, force, r)
