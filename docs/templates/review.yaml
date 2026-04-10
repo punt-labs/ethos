@@ -1,0 +1,49 @@
+# Mission Archetype: Review
+#
+# Read-only. The worker assesses existing work and reports findings.
+# No files are modified. Agency is moderate — the reviewer uses
+# expertise to evaluate, but the output is assessment, not action.
+#
+# When to use:
+#   - Code review before merging
+#   - Security audit of a specific component
+#   - Architecture review of a design doc
+#   - Any work where "assess and report, don't fix" is the right
+#     instruction
+#
+# Characteristics:
+#   - Empty write-set (read-only)
+#   - Findings-based criteria with confidence ratings
+#   - 1 round typical
+#   - Worker assesses, does not modify
+
+leader: claude
+worker: djb                            # security engineer reviews
+
+inputs:
+  bead: ethos-jjm                      # link to tracking system
+  files:                               # read context — the code under review
+    - internal/mission/store.go
+    - internal/mission/log.go
+    - internal/hook/subagent_start.go
+
+write_set: []                          # empty — review is read-only
+
+success_criteria:
+  - identify security issues with severity ratings
+  - each finding includes confidence (0.0-1.0), location, and suggested fix
+  - no false positives below confidence 0.8
+  - assess whether the symlink policy is consistent across all loaders
+
+evaluator:
+  handle: claude                       # leader evaluates review quality
+
+budget:
+  rounds: 1                            # review is typically one-shot
+  reflection_after_each: true
+
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash                               # for running tests, not modifying files

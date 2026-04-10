@@ -1,0 +1,54 @@
+# Mission Archetype: Design
+#
+# Broad scope. The leader defines the problem and constraints. The
+# worker proposes approaches, evaluates tradeoffs, and recommends.
+# Agency is high — the agent's expertise and judgment are the point.
+#
+# When to use:
+#   - Architecture decisions with competing approaches
+#   - New feature design before implementation
+#   - System design with unclear requirements
+#   - Any work where "use your expertise to figure this out" is the
+#     right instruction
+#
+# Characteristics:
+#   - Broad write-set (directory or docs/)
+#   - Open-ended criteria that invite judgment
+#   - 2-3 rounds typical (propose → refine → finalize)
+#   - Worker proposes, pushes back, reshapes
+
+leader: claude
+worker: bwk
+
+inputs:
+  bead: ethos-k28.7                    # link to tracking system
+  files:                               # read context — broad
+    - internal/mission/store.go
+    - internal/hook/subagent_start.go
+    - DESIGN.md
+    - docs/ETHOS-ROADMAP.md
+
+write_set:                             # broad — design docs, not production code
+  - docs/design/
+  - DESIGN.md
+
+success_criteria:
+  - evaluate at least three approaches with tradeoffs
+  - recommend one approach with justification
+  - identify risks, open questions, and dependencies
+  - produce a design doc suitable for ADR review
+
+evaluator:
+  handle: claude                       # leader evaluates design quality
+
+budget:
+  rounds: 3                            # design needs iteration
+  reflection_after_each: true
+
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
