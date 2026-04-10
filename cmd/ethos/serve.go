@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 
+	"path/filepath"
+
+	"github.com/punt-labs/ethos/internal/adr"
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/mcp"
 
@@ -30,11 +33,18 @@ func runServeImpl() {
 	// methods don't use it, but they still resolve against the same
 	// store.
 	missions := missionStoreForCreate()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
+		os.Exit(1)
+	}
+	adrs := adr.NewStore(filepath.Join(home, ".punt-labs", "ethos", "adrs"))
 	mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles,
 		mcp.WithSessionStore(sessionStore()),
 		mcp.WithRoleStore(roles),
 		mcp.WithTeamStore(teams),
 		mcp.WithMissionStore(missions),
+		mcp.WithADRStore(adrs),
 	).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {

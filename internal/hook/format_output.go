@@ -75,6 +75,8 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return formatRole(w, method, result)
 	case "mission":
 		return formatMission(w, method, result)
+	case "adr":
+		return formatADR(w, method, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -1325,6 +1327,91 @@ func formatMissionClose(w io.Writer, result string) error {
 		return emitSimple(w, truncate(result, 200))
 	}
 	return emitSimple(w, fmt.Sprintf("Closed %s as %s", missionID, status))
+}
+
+// --- ADR tool formatters ---
+
+func formatADR(w io.Writer, method, result string) error {
+	switch method {
+	case "create":
+		id := jsonString(result, "id")
+		title := jsonString(result, "title")
+		if id == "" {
+			return emitSimple(w, truncate(result, 200))
+		}
+		return emit(w, fmt.Sprintf("Created %s: %s", id, title), result)
+	case "list":
+		return formatADRList(w, result)
+	case "show":
+		return formatADRShow(w, result)
+	default:
+		return emitSimple(w, truncate(result, 200))
+	}
+}
+
+func formatADRList(w io.Writer, result string) error {
+	var entries []map[string]any
+	if err := json.Unmarshal([]byte(result), &entries); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	n := len(entries)
+	noun := "ADRs"
+	if n == 1 {
+		noun = "ADR"
+	}
+	summary := fmt.Sprintf("%d %s", n, noun)
+
+	if n == 0 {
+		return emit(w, summary, "(none)")
+	}
+
+	headers := []string{"ID", "STATUS", "TITLE", "AUTHOR"}
+	rows := make([][]string, n)
+	for i, e := range entries {
+		id, _ := e["id"].(string)
+		status, _ := e["status"].(string)
+		title, _ := e["title"].(string)
+		author, _ := e["author"].(string)
+		if author == "" {
+			author = "-"
+		}
+		rows[i] = []string{id, status, title, author}
+	}
+	return emit(w, summary, FormatTable(headers, rows))
+}
+
+func formatADRShow(w io.Writer, result string) error {
+	id := jsonString(result, "id")
+	status := jsonString(result, "status")
+	title := jsonString(result, "title")
+	if id == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	summary := fmt.Sprintf("%s (%s): %s", id, status, title)
+
+	var ctx strings.Builder
+	ctx.WriteString("ID: " + id)
+	ctx.WriteString("\nTitle: " + title)
+	ctx.WriteString("\nStatus: " + status)
+	if author := jsonString(result, "author"); author != "" {
+		ctx.WriteString("\nAuthor: " + author)
+	}
+	if context := jsonString(result, "context"); context != "" {
+		ctx.WriteString("\n\nContext:\n  " + context)
+	}
+	if decision := jsonString(result, "decision"); decision != "" {
+		ctx.WriteString("\n\nDecision:\n  " + decision)
+	}
+	if alts := jsonStringArray(result, "alternatives"); len(alts) > 0 {
+		ctx.WriteString("\n\nAlternatives:")
+		for _, a := range alts {
+			ctx.WriteString("\n  - " + a)
+		}
+	}
+
+	return emit(w, summary, ctx.String())
 }
 
 // --- JSON extraction helpers ---
