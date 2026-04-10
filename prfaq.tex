@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{2}{3}
+\prfaqversion{2}{4}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -320,13 +320,13 @@ Evidence is structural and observational. No customer interviews have been condu
   \item \textbf{A2A v1.0}~\cite{a2av1milestone2026} --- 150+ organizations, Signed Agent Cards for cryptographic identity. Agent discovery protocol, not a persona or delegation layer. No human identity model.
   \item \textbf{CLAUDE.md / AGENTS.md}~\cite{claudemd2025pnote} --- per-project conventions, not per-person identity. Complementary.
   \item \textbf{CrewAI} --- role-based agent orchestration. Natural-language delegation, no typed contracts, no persistent identity, no write-set or reflection.
-  \item \textbf{Entire.io}~\cite{entire2026techcrunch} --- code governance and audit (\$60M seed). Commit-level checkpoints, not per-person identity or delegation contracts.
+  \item \textbf{Entire.io}~\cite{entire2026techcrunch,entireio2026docs,entireio2026hello} --- Thomas Dohmke (ex-GitHub CEO), \$60M seed at \$300M valuation. Entire captures session fidelity---every token, tool call, and prompt---as retrospective checkpoints stored on a dedicated git branch ({\small\texttt{entire/checkpoints/v1}}). AI-generated summaries (intent, outcome, learnings, friction, open items) attach to commits after the session ends. The critical difference: Entire records what the AI did (retrospective forensics); ethos specifies what the AI should do before it acts (prospective contracts). Entire has no pre-delegation spec, no write-set boundaries, no typed mission lifecycle, no ADRs. Ethos has no full-transcript capture---that role is filled by Quarry (optional). The two are complementary: Entire answers ``what did the AI do?'' Ethos answers ``what did we ask it to do, why, and did it stay in bounds?''
   \item \textbf{gstack}~\cite{gstack2025github} --- 23 SKILL.md prompt files by Garry Tan (YC CEO) simulating an engineering sprint team. Not a competitor but a validation: gstack proves developers want sprint discipline for agent teams. The content is high-quality workflow design with no structural enforcement---write-sets are suggestions, safety is conversational, personas reset each invocation. Ethos provides the enforcement layer that makes prompt-based workflows structural. Complementary: a gstack-inspired sprint team ships as a batteries-included ethos starter template.
 \end{itemize}
 
 \textbf{Why ethos wins:} No competitor combines human-agent identity parity, typed delegation contracts with file-level ownership, and a multi-surface integration pattern. SoulSpec has identity (agent-only). Mastra has delegation hooks (no identity). A2A has discovery (no personas, no delegation). Ethos is the only tool where the same runtime gives an agent its personality, constrains its file access in a mission, and lets a voice tool read its voice config---all from the same identity record.
 
-\textbf{Competitive response:} If Anthropic ships native human identity in Claude Code, the identity pillar becomes less necessary as a standalone layer. The workflow pillar (missions, write-sets, audit trails) and the cross-tool integration pattern would retain independent value. The bet is that the agentic tool market remains fragmented and that identity + delegation + integration need to be one layer.
+\textbf{Competitive response:} If Anthropic ships native human identity in Claude Code, the identity pillar becomes less necessary as a standalone layer. The workflow pillar (missions, write-sets, audit trails) and the cross-tool integration pattern would retain independent value. Entire.io validates the governance market at a \$300M valuation~\cite{entire2026techcrunch}, confirming that intent capture and audit trails for agent-written code are a real category. Ethos's approach is prospective (contracts before delegation) rather than retrospective (checkpoints after commits), and built-in rather than a separate product. The bet is that the agentic tool market remains fragmented and that identity + delegation + integration need to be one layer.
 \end{faqpair}
 
 \begin{faqpair}{What is the customer acquisition strategy?}\label{faq:acquisition}
@@ -390,6 +390,18 @@ Remaining work is adoption-driven: customer validation, integration guides for t
 
 \begin{faqpair}{What is the scaling story?}
 Ethos is a local tool---no server, no database. Scaling means identities on one machine and concurrent sessions reading them. At 100 identities and 50 concurrent sessions, the bottleneck is filesystem I/O for flock contention, which Go handles efficiently. Mission state is session-scoped. No user will realistically hit these limits.
+\end{faqpair}
+
+\begin{faqpair}{How does ethos capture intent and maintain audit trails?}\label{faq:audit-trails}
+Three layers, each independent:
+
+\textbf{Git (durable, shared).} Mission contracts, structured results, and typed ADRs live in {\small\texttt{.ethos/}} in the repository. The contract captures intent before delegation---what was specified, what files are owned, what success looks like. The result captures outcome---what was delivered, what passed, what didn't. ADRs capture design decisions with a status lifecycle (proposed $\to$ settled $\to$ superseded), rejected alternatives, and links to the missions where decisions were made~\cite{promptpals2026adrsai}. All travel with the code in version control.
+
+\textbf{Local (operational).} Event-by-event JSONL logs per mission and per-session tool audit trails stay on the developer's machine. Useful for debugging and post-mortems but not shared. This is operational telemetry, not the permanent record.
+
+\textbf{Quarry (optional, semantic).} When Quarry is installed, conversation transcripts are captured before context compaction and tagged with the active mission ID. Semantic search across sessions finds the reasoning behind decisions---``why did we choose conventions over enforcement?'' retrieves the conversation where DES-041 was discussed. Quarry adds the unstructured ``why'' layer that structured artifacts cannot capture.
+
+Together: git answers ``what was decided,'' local logs answer ``what happened in detail,'' Quarry answers ``why was it decided.'' Each layer works independently. This is a lightweight built-in alternative to Entire.io's checkpoint-branch approach~\cite{entireio2026docs}---zero additional infrastructure for teams already using git. Entire captures the full transcript retrospectively; ethos captures intent prospectively in the contract and outcome structurally in the result. The two approaches are complementary rather than competing.
 \end{faqpair}
 
 \subsubsection*{Business}
@@ -503,12 +515,15 @@ Three scenarios would cause ethos to fail:
 \subsection*{Should Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Mission archetypes}{named shorthands (implement, design, review, investigate) that suggest contract conventions for each type of work}\label{feat:archetypes}
+  \featureitem{Mission archetypes}{named contract conventions---implement (tight write-set, specific criteria, agent executes), design (broad write-set, open criteria, agent proposes and pushes back), review (read-only, findings with confidence), investigate (read-only, questions answered). The agent's expertise is always present; the archetype determines how much latitude the contract gives. Agency is expressed through contract specificity, not a mode switch}\label{feat:archetypes}
   \featureitem{Lossy export to portable formats}{{\small\texttt{ethos export --to soulspec}} produces SOUL.md, IDENTITY.md, STYLE.md, AGENTS.md readable by any SoulSpec-compatible tool. {\small\texttt{ethos export --to claude-md}} produces a CLAUDE.md personal section usable without ethos installed. Both exports are lossy by design: structural data (teams, missions, safety constraints, frozen evaluator, audit trails) drops because the target format cannot represent it. The loss signals what ethos adds. Export is compilation from a richer system to a simpler one---useful for distribution and portability}\label{feat:lossy-export}
   \featureitem{Integration guides}{documentation and examples for third-party tools to read ethos identity and mission state}\label{feat:guides}
   \featureitem{Starter team templates}{solo developer (1 human + 3 agents), small team (2--3 humans + 5 agents), reference implementation}\label{feat:templates}
   \featureitem{LLM-assisted identity creation from project context}{{\small\texttt{ethos create}} reads CLAUDE.md and fine-tunes starter content defaults with LLM inference---pre-filling writing style, personality, and role suggestions from existing project conventions}\label{feat:llm-create}
   \featureitem{Structured workflow importers}{{\small\texttt{ethos import --from gstack|soulspec|crewai}} extracts personas and roles from popular tool formats; ships a gstack-inspired sprint team as starter content}\label{feat:importers}
+  \featureitem{Git-tracked mission artifacts}{mission contracts and structured results committed to {\small\texttt{.ethos/}} in the repository. Intent and outcome travel with the code. Lightweight alternative to Entire.io's checkpoint-branch approach~\cite{entireio2026docs}---uses conventional git commits, not a separate branch structure}\label{feat:git-missions}
+  \featureitem{Typed ADRs}{Architecture Decision Records as ethos artifacts with schema validation, lifecycle status (proposed/settled/superseded), and links to missions and beads~\cite{promptpals2026adrsai}. The agent reads ADRs before acting; the ADR captures the design decision that governed the delegation}\label{feat:typed-adrs}
+  \featureitem{Quarry transcript tagging}{when Quarry is installed, conversation transcripts captured before context compaction are tagged with the active mission ID. Semantic search retrieves the reasoning behind specific missions---the unstructured ``why'' layer that completes the three-layer audit model}\label{feat:quarry-tag}
 \end{enumerate}
 
 \subsection*{Won't Do}
@@ -526,6 +541,6 @@ Three scenarios would cause ethos to fail:
 % ══════════════════════════════════════════════════════════════════════════════
 
 \newpage
-{\emergencystretch=3em\printbibliography[title={References}]}
+{\emergencystretch=5em\printbibliography[title={References}]}
 
 \end{document}
