@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Mission escalate workflow documented in CLI help (`ethos-cqt`,
+  `ethos-2qz`)** — `ethos mission result --help` now shows an escalate
+  example with empty `files_changed` and populated `open_questions` for
+  mid-round scope issues. `ethos mission create --help` documents the
+  write_set-as-envelope convention: `inputs.files` is the expected blast
+  radius, `write_set` is the permission envelope. `ethos mission --help`
+  links to the escalate path. README mission tutorial includes a note.
 - **Mission write commands echo on success (`ethos-30c`)** — The
   five mission write subcommands (`create`, `result`, `reflect`,
   `advance`, `close`) previously exited with status 0 and zero

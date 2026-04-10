@@ -79,6 +79,13 @@ func missionStoreForCreate() *mission.Store {
 var missionCmd = &cobra.Command{
 	Use:     "mission",
 	Short:   "Manage mission contracts",
+	Long: `Manage mission contracts.
+
+If the contract's scope is wrong (e.g., write_set is missing a file you
+need to touch), submit a result with verdict: escalate and files_changed: []
+— put the reason in open_questions. The leader will close the mission as
+escalated and re-scope. See "ethos mission result --help" for the full
+escalate example.`,
 	GroupID: "session",
 	Args:    cobra.NoArgs,
 }
@@ -121,7 +128,14 @@ role via ` + "`ethos team add-member`" + `.
 budget.rounds is now a hard cap: after round N the operator must
 submit a reflection via ` + "`ethos mission reflect`" + ` and advance via
 ` + "`ethos mission advance`" + ` before beginning round N+1; the round
-budget cannot be extended without re-scoping.`,
+budget cannot be extended without re-scoping.
+
+inputs.files is the expected set of files the worker will touch (the
+leader's best guess at the blast radius). write_set is the permission
+envelope — the upper bound of what the worker is allowed to touch.
+write_set should be a superset of inputs.files. Workers are not required
+to touch every file in the write_set; they surface the delta between what
+they touched and the full write_set in their result prose.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
@@ -252,7 +266,27 @@ Examples:
   #
   # Override the base ref when main is the wrong comparison point:
   #   ethos mission result m-2026-04-08-005 --file result.yaml \
-  #       --verify --base origin/main`,
+  #       --verify --base origin/main
+
+  # Escalating when the contract's scope is wrong (YAML file body):
+  #
+  #   mission: m-2026-04-08-005
+  #   round: 1
+  #   author: bwk
+  #   verdict: escalate
+  #   confidence: 1.0
+  #   files_changed: []
+  #   evidence:
+  #     - name: audit — enumerated call sites
+  #       status: pass
+  #   open_questions:
+  #     - "Request write_set expansion: session_test.go needs updating"
+  #   prose: |
+  #     Stopped at write_set boundary. The contract's scope is
+  #     missing cmd/ethos/session_test.go.
+  #
+  # Then:
+  #   ethos mission result m-2026-04-08-005 --file escalate.yaml`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionResult(args[0], missionResultFile)
