@@ -37,6 +37,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`FormatLocalTime` renders year and timezone (`ethos-vjp`)** —
+  `hook.FormatLocalTime` now formats timestamps as
+  `2006-01-02 15:04 MST` (year, month, day, 24h time, zone
+  abbreviation when available; numeric offset such as `+0530`
+  otherwise) instead of `Mon Jan _2 15:04`
+  (weekday, month, day, 24h time, no year, no zone). Mission logs
+  are a post-mortem tool;
+  two operators in different timezones now identify the same event
+  without ambiguity. Every call site picks up the new shape:
+  `mission show`, `mission list`, `mission log`, and `session`
+  output. The invalid-timestamp fallback (return raw string) and
+  empty-string behavior are preserved.
 - **Writer-role `output_format` templates aligned with
   `mission.Result` strict schema (`ethos-r6o`)** — the
   `implementer.yaml` and `test-engineer.yaml` sidecar role templates
