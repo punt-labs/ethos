@@ -2,6 +2,34 @@
 
 How to use ethos from an AI agent session — CLI, MCP tools, hooks, and extending identities with custom attributes.
 
+## Prerequisites: Agent Definitions
+
+Ethos auto-generates `.claude/agents/<handle>.md` files at **SessionStart**
+from data in the team submodule at `.punt-labs/ethos/`. If `.claude/agents/`
+is empty or missing expected agent files, the submodule is not initialized.
+
+**New repo** — add the team submodule:
+
+```bash
+git submodule add git@github.com:punt-labs/team.git .punt-labs/ethos
+```
+
+**Existing repo** — initialize an already-registered submodule:
+
+```bash
+git submodule init
+git submodule update
+```
+
+Then restart Claude Code to trigger the SessionStart hook. Verify with
+`ls .claude/agents/` — you should see one `.md` file per agent identity
+in the team registry.
+
+**Troubleshooting**: if `subagent_type` fails with "agent type not found",
+check `ls .punt-labs/ethos/agents/` and `ls .claude/agents/`. If either
+is empty, the submodule needs initialization (steps above). A leading `-`
+in `git submodule status` also indicates an uninitialized submodule.
+
 ## Concepts
 
 Ethos provides two things:
