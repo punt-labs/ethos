@@ -2788,6 +2788,143 @@ func TestMissionResult_VerifyOn_RejectsInvalidBase(t *testing.T) {
 		"error must identify the failing input as the base ref")
 }
 
+// TestMissionResult_VerifyOn_RejectsFlaglikeBase asserts the end-to-end
+// invariant that a --base value shaped like a git flag (e.g.
+// --output=<path>) cannot cause git to create a file on disk. Without
+// `--end-of-options` sandboxing the base argument, `git diff --numstat
+// --output=<path>..HEAD` would silently write to <path>; this is the
+// argument-injection class Bugbot flagged. The fix prepends
+// `--end-of-options` to both `git rev-parse --verify` and `git diff
+// --numstat` so git treats the base as a positional revision.
+//
+// Under the current code path the attack is blocked at the `rev-parse
+// --verify` gate — rev-parse has no --output flag and rejects any
+// flag-shaped base as an unresolvable revision. The diff-site
+// `--end-of-options` is therefore defense in depth: it maintains the
+// invariant if the rev-parse gate is ever relaxed or reordered. The
+// test asserts the end-to-end invariant (no file on disk) rather than
+// which layer enforces it, so it will hold the line against both
+// layers shifting in the future.
+func TestMissionResult_VerifyOn_RejectsFlaglikeBase(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 5, Removed: 0},
+	})
+
+	// Probe lives in an isolated TempDir so no other test can
+	// accidentally create or clean it. The TempDir itself exists;
+	// the probe file must not, before or after the test.
+	probeDir := t.TempDir()
+	probe := filepath.Join(probeDir, "injection")
+	require.NoFileExists(t, probe, "probe must not exist before the test")
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "--output="+probe)
+	cmd.Env = testGitEnv(home)
+	cmd.Dir = repo
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	require.Error(t, err, "flaglike --base must fail, not silently succeed")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError, got %T: %v", err, err)
+	assert.Equal(t, 1, exitErr.ExitCode(),
+		"ethos must exit 1 on flaglike --base; stderr=%s", errBuf.String())
+
+	// The load-bearing invariant: no file on disk. If --end-of-options
+	// is missing from either subprocess call site, git would write
+	// here and this assertion would fail.
+	assert.NoFileExists(t, probe,
+		"flaglike --base must not cause git to write the probe file")
+}
+
+// TestMissionResult_VerifyOn_PassesEndOfOptionsToGit asserts positively
+// that both subprocess call sites — `git rev-parse --verify` and
+// `git diff --numstat` — pass `--end-of-options` immediately before the
+// base argument. The test prepends a shim directory to PATH with a
+// `git` wrapper that records every argv to a log file and then forwards
+// to the real git binary. After a successful `ethos mission result
+// --verify` run, the log is scanned for the two expected invocations
+// and the `--end-of-options` separator is asserted on each.
+//
+// This complements the end-to-end no-file-on-disk test by proving the
+// separator is actually sent on the wire, so a future edit that removes
+// the flag from either call site fails here even when the rev-parse
+// gate would otherwise hide the regression.
+func TestMissionResult_VerifyOn_PassesEndOfOptionsToGit(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 5, Removed: 0},
+		{Path: "b.txt", Added: 3, Removed: 1},
+		{Path: "c.txt", Added: 3, Removed: 0},
+	})
+
+	// The shim logs one line per invocation, tab-separated argv.
+	// Forwarding to the real git preserves end-to-end behavior so the
+	// rest of the verify pipeline runs unmodified.
+	shimDir := t.TempDir()
+	logFile := filepath.Join(shimDir, "argv.log")
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err, "real git not found on PATH")
+	shimBody := fmt.Sprintf(`#!/bin/sh
+printf '%%s\n' "$*" >> %q
+exec %q "$@"
+`, logFile, realGit)
+	shimPath := filepath.Join(shimDir, "git")
+	require.NoError(t, os.WriteFile(shimPath, []byte(shimBody), 0o700))
+
+	env := testGitEnv(home)
+	// Prepend the shim directory to PATH so `git` resolves to the
+	// shim rather than /usr/bin/git.
+	for i, kv := range env {
+		if strings.HasPrefix(kv, "PATH=") {
+			env[i] = "PATH=" + shimDir + string(os.PathListSeparator) + strings.TrimPrefix(kv, "PATH=")
+			break
+		}
+	}
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = env
+	cmd.Dir = repo
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	require.NoError(t, cmd.Run(),
+		"verify must succeed under the git shim: stderr=%s", errBuf.String())
+
+	log, err := os.ReadFile(logFile)
+	require.NoError(t, err, "shim log must exist")
+	lines := strings.Split(strings.TrimRight(string(log), "\n"), "\n")
+
+	// Find the two invocations we care about. Other git calls may
+	// appear in the log (e.g. config reads) and are ignored.
+	var revParseLine, diffLine string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "rev-parse --verify ") {
+			revParseLine = line
+		}
+		if strings.HasPrefix(line, "diff --numstat ") {
+			diffLine = line
+		}
+	}
+	require.NotEmpty(t, revParseLine,
+		"expected a `git rev-parse --verify ...` invocation in shim log:\n%s", log)
+	require.NotEmpty(t, diffLine,
+		"expected a `git diff --numstat ...` invocation in shim log:\n%s", log)
+
+	// The separator must appear before the base argument. A regression
+	// that drops it from either call site fails here.
+	assert.Contains(t, revParseLine, "--end-of-options HEAD~1",
+		"rev-parse must pass --end-of-options immediately before base; got: %s", revParseLine)
+	assert.Contains(t, diffLine, "--end-of-options HEAD~1..HEAD",
+		"git diff must pass --end-of-options immediately before base; got: %s", diffLine)
+}
+
 // TestMissionResult_VerifyOn_AcceptsCanonicallyEquivalentPaths asserts
 // that a worker who declares `./a.txt` in files_changed — which the
 // write_set validator already accepts because `./a.txt` and `a.txt`

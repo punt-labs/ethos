@@ -895,13 +895,17 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	// (e.g. "fatal: Needed a single revision") on top of the wrapper
 	// error — without it, --verify swallows the one message that
 	// would let a human diagnose a typoed ref.
-	check := exec.Command("git", "rev-parse", "--verify", base)
+	//
+	// --end-of-options sandboxes the base argument: git treats
+	// everything after it as a positional, so a base like
+	// "--output=/tmp/x" cannot smuggle a flag into rev-parse or diff.
+	check := exec.Command("git", "rev-parse", "--verify", "--end-of-options", base)
 	check.Stderr = os.Stderr
 	if err := check.Run(); err != nil {
 		return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
 	}
 
-	diff := exec.Command("git", "diff", "--numstat", base+"..HEAD")
+	diff := exec.Command("git", "diff", "--numstat", "--end-of-options", base+"..HEAD")
 	diff.Stderr = os.Stderr
 	out, err := diff.Output()
 	if err != nil {
