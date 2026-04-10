@@ -3782,18 +3782,19 @@ stale-test execution symptom).
 After `Store.Close` commits the terminal transition to disk and
 releases the lock, the CLI needs the satisfying round and verdict
 for the echo and JSON response added by `ethos-30c`. The initial
-approach (PR #200 commit `871dc24`) added `Store.Load` +
+approach (PR #200 commit `42962f7`) added `Store.Load` +
 `Store.LoadResult` calls after `Close` returned. This created a
 TOCTOU window: a transient I/O error or file deletion between
 `Close` and `LoadResult` would cause `os.Exit(1)` for an operation
 that already succeeded on disk. Scripts retrying on non-zero exit
 would then hit "already in terminal state" — actively misleading.
 
-Both Copilot and Bugbot independently flagged the regression on the
-same review cycle. The intermediate fix (commit `871dc24`, the
-nil-check) was defensive but insufficient — it turned a panic into
-a clean error, but the clean error was still wrong: reporting
-failure for a committed write.
+Bugbot flagged the missing nil-check on `LoadResult`; the
+intermediate fix (commit `871dc24`) added the guard but was
+insufficient — it turned a panic into a clean error, but the clean
+error was still wrong: reporting failure for a committed write.
+Both Copilot and Bugbot then independently flagged the deeper
+regression on the same review cycle.
 
 ### Decision
 
