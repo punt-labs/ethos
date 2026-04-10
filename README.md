@@ -29,6 +29,13 @@ an append-only audit trail.
 **You don't do anything at runtime.** Install ethos, create identities,
 and forget about it. Hooks handle everything automatically.
 
+**How is this different from SoulSpec?** SoulSpec provides structured
+agent personas (SOUL.md, IDENTITY.md, STYLE.md) — agent-only, no human
+identity, no teams, no delegation contracts, no CLI/MCP integration
+surface. Ethos covers humans and agents with the same schema, adds
+typed mission contracts for structured delegation, and exposes identity
+through filesystem, CLI, and MCP so any tool can read it.
+
 **Platforms:** macOS and Linux (amd64, arm64)
 
 ## Quick Start
@@ -278,6 +285,15 @@ The lifecycle: **create → result → reflect → advance → close**. Each
 step is an append-only event in the mission log. The store refuses
 operations that violate the contract: overlapping write-sets, self-review,
 close without a result, advance without reflection.
+
+**Missions are optional** — identity works standalone. Start with identity,
+add missions when you need structured delegation.
+
+**The contract is a spectrum.** An implementation mission has a tight
+write-set and specific criteria ("one ReadFile, make check passes"). A
+design mission has a broad write-set and open-ended criteria ("evaluate
+three approaches, recommend one with tradeoffs"). The agent's expertise
+is always present; the contract determines how much latitude they have.
 
 ## Commands
 

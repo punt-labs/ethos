@@ -2,36 +2,33 @@
 
 Where ethos is going. Organized into phases that build on each other.
 
-## Current Status (2026-04-09)
+## Current Status (2026-04-10)
 
-Ethos is at **v2.8.0**. Phases 1, 2.1–2.5, and 3 are complete and merged to main. Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run) remains planned.
+Ethos is on `main` with Phases 1–4 complete. 20.1 KLOC production Go, 26.8 KLOC tests. Go Report Card: A+. Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run) remains planned.
 
 | Phase | Status | Summary |
 |---|---|---|
 | **Phase 1 — Batteries Included** | SHIPPED | 10 starter talents, 6 starter roles, baseline-ops skill, model field on Role |
 | **Phase 2 — Production-Quality Agents** | SHIPPED (2.1–2.5); 2.6 PLANNED | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill Phase A (beads `ethos-9ai.1`–`.5`). `/mission` Phase B–C (conflict detection, dry-run) remains planned (`ethos-9ai.5`). |
 | **Phase 3 — Workflow Primitives** | **SHIPPED** | All 7 primitives: mission contract, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log reader (beads `ethos-07m.5`–`07m.11`, ADRs DES-031 through DES-037) |
-| **Phase 4 — Operational Excellence** | PLANNED | SessionStart working context, role-based pre-tool safety, audit logging (beads `ethos-gcq.1`–`gcq.3`) |
+| **Phase 4 — Operational Excellence** | **SHIPPED** | SessionStart working context (PR #205), role-based safety constraints + session audit logging (PR #207). Beads `ethos-gcq.1`–`.3`, all closed. |
 | **Phase 5 — Ecosystem** | FUTURE | Starter team templates, agent marketplace |
 
-Phase 3 shipped 2026-04-08 on PR #184, merge `c16715f`. The four
-architecture rules from `~/Documents/agents-architecture.tex` are
-runtime-enforced for the first time in the project's history. See
-DES-037 for the Phase 3.7 ADR and the Phase 3 completion narrative.
+Phase 3 shipped 2026-04-08 on PR #184, merge `c16715f`. Phase 4
+shipped 2026-04-10 across PRs #205 and #207. The four architecture
+rules from `~/Documents/agents-architecture.tex` are runtime-enforced
+for the first time in the project's history.
 
-## What's next: Phase 4 — Operational Excellence
+## Phase 4 — Operational Excellence (SHIPPED 2026-04-10)
 
-Phase 4 deepens the hook system with three additions that layer onto
-the existing persona-animation infrastructure: working context at
-`SessionStart`, role-based pre-tool safety constraints, and
-`PostToolUse` audit logging. Architecture details in
-[`architecture.tex`](architecture.tex) §Operational Hooks.
+**Status**: Complete. All 3 subphases shipped across PRs #205 and #207.
+Epic `ethos-gcq` closed.
 
-| # | Bead | What | Phase |
-|---|---|---|---|
-| 1 | `ethos-gcq.1` | `SessionStart` working context (branch, uncommitted changes, open beads, open missions) | 4.1 |
-| 2 | `ethos-gcq.2` | Role-based pre-tool safety constraints (reviewer cannot write, researcher cannot destructive-bash) | 4.2 |
-| 3 | `ethos-gcq.3` | `PostToolUse` audit log per session | 4.3 |
+| # | Bead | What | Phase | PR |
+|---|---|---|---|---|
+| 1 | `ethos-gcq.1` | `SessionStart` working context (branch, uncommitted changes, dirty file count) | 4.1 | #205 |
+| 2 | `ethos-gcq.2` | Role-based safety constraints (`safety_constraints` on Role, emitted in generated agents) | 4.2 | #207 |
+| 3 | `ethos-gcq.3` | `PostToolUse` audit log per session (JSONL, one line per tool invocation) | 4.3 | #207 |
 
 **Parallel / follow-up work:**
 
