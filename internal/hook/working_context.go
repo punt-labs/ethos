@@ -127,7 +127,9 @@ func uncommittedChanges() (int, []string) {
 }
 
 // unpushedCommits returns the number of commits ahead of the upstream
-// tracking branch. Returns (0, false) if there is no upstream.
+// tracking branch. The bool reports whether there are any unpushed
+// commits to display; it is false when the upstream is missing or when
+// the branch is fully pushed (both suppress the output line).
 func unpushedCommits() (int, bool) {
 	out, err := runGit("log", "@{upstream}..HEAD", "--oneline")
 	if err != nil {
