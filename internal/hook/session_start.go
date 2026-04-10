@@ -48,30 +48,8 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 
 	sessionID, _ := input["session_id"].(string)
-
-	// Resolve human identity with full attribute content.
-	handle, err := resolve.Resolve(store, ss)
-	var resolvedID *identity.Identity
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: identity resolution failed: %v (using OS username)\n", err)
-	} else {
-		id, loadErr := store.Load(handle)
-		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: failed to load identity %q: %v\n", handle, loadErr)
-		} else {
-			for _, w := range id.Warnings {
-				fmt.Fprintf(os.Stderr, "ethos: session-start: identity %q: %s\n", handle, w)
-			}
-			resolvedID = id
-		}
-	}
-
-	// Clean stale PID files from previous sessions (fire-and-forget).
-	if purged, purgeErr := ss.PurgeCurrent(); purgeErr != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to purge stale PID files: %v\n", purgeErr)
-	} else if len(purged) > 0 {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: cleaned %d stale PID file(s)\n", len(purged))
-	}
+	resolvedID := resolveHumanIdentity(store, ss)
+	purgeStale(ss)
 
 	// Resolve agent persona from repo config. A non-nil error means
 	// the config file exists but cannot be read or parsed — a loud
@@ -86,76 +64,24 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		return fmt.Errorf("resolving agent: %w", err)
 	}
 
-	// Create session roster if we have a session ID.
-	if sessionID != "" {
-		userID := os.Getenv("USER")
-		if userID == "" {
-			userID = "unknown"
-		}
-		userPersona := ""
-		if resolvedID != nil {
-			userPersona = resolvedID.Handle
-		}
-		if userPersona == "" {
-			userPersona = userID
-		}
-		claudePID := process.FindClaudePID()
-
-		root := session.Participant{AgentID: userID, Persona: userPersona}
-		primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
-
-		repo := resolveRepo()
-		host := resolveHost()
-
-		if createErr := ss.Create(sessionID, root, primary, repo, host); createErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", createErr)
-		} else if wcErr := ss.WriteCurrentSession(claudePID, sessionID); wcErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: failed to write current session: %v\n", wcErr)
-		}
-	}
+	createSessionRoster(ss, sessionID, resolvedID, agentPersona)
 
 	// Emit the agent's persona block (not the human's).
 	// The agent persona comes from repo config (.punt-labs/ethos.yaml).
 	if agentPersona == "" {
-		// No agent persona configured — fall back to human identity one-liner.
-		if resolvedID != nil {
-			msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
-			result := SessionStartResult{}
-			result.HookSpecificOutput.HookEventName = "SessionStart"
-			result.HookSpecificOutput.AdditionalContext = msg
-			return json.NewEncoder(os.Stdout).Encode(result)
-		}
-		return nil
+		return emitHumanFallback(resolvedID)
 	}
 
 	agentID, agentLoadErr := store.Load(agentPersona)
 	if agentLoadErr != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to load agent identity %q: %v\n", agentPersona, agentLoadErr)
-		// Fall back to human identity one-liner.
-		if resolvedID != nil {
-			msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
-			result := SessionStartResult{}
-			result.HookSpecificOutput.HookEventName = "SessionStart"
-			result.HookSpecificOutput.AdditionalContext = msg
-			return json.NewEncoder(os.Stdout).Encode(result)
-		}
-		return nil
+		return emitHumanFallback(resolvedID)
 	}
 	for _, w := range agentID.Warnings {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: agent identity %q: %s\n", agentPersona, w)
 	}
 
-	// Install agent definitions from ethos agents dir into .claude/agents/.
-	ethosRoot := resolve.FindRepoEthosRoot()
-	if ethosRoot != "" {
-		deployed, installErr := InstallAgentDefinitions(ethosRoot)
-		if installErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: session-start: agent install failed: %v\n", installErr)
-		}
-		for _, name := range deployed {
-			fmt.Fprintf(os.Stderr, "ethos: session-start: deployed agent definition %s\n", name)
-		}
-	}
+	installAgentDefs()
 
 	// Generate .claude/agents/<handle>.md from ethos identity data.
 	// Propagates: the returned error is the single authoritative
@@ -170,7 +96,104 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 		}
 	}
 
-	// Build sections: persona, extension context, team — same as PreCompact.
+	return emitAgentContext(agentID, agentPersona, store, deps)
+}
+
+// resolveHumanIdentity loads the human caller's identity. Returns nil
+// on any resolution or load failure (warnings are logged to stderr).
+func resolveHumanIdentity(store identity.IdentityStore, ss *session.Store) *identity.Identity {
+	handle, err := resolve.Resolve(store, ss)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: identity resolution failed: %v (using OS username)\n", err)
+		return nil
+	}
+	id, err := store.Load(handle)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: failed to load identity %q: %v\n", handle, err)
+		return nil
+	}
+	for _, w := range id.Warnings {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: identity %q: %s\n", handle, w)
+	}
+	return id
+}
+
+// purgeStale cleans stale PID files from previous sessions (fire-and-forget).
+func purgeStale(ss *session.Store) {
+	if purged, err := ss.PurgeCurrent(); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: failed to purge stale PID files: %v\n", err)
+	} else if len(purged) > 0 {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: cleaned %d stale PID file(s)\n", len(purged))
+	}
+}
+
+// createSessionRoster creates the session roster entry when a session ID
+// is available. Logs errors to stderr without returning them — roster
+// creation is not a blocking failure.
+func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identity.Identity, agentPersona string) {
+	if sessionID == "" {
+		return
+	}
+
+	userID := os.Getenv("USER")
+	if userID == "" {
+		userID = "unknown"
+	}
+	userPersona := ""
+	if resolvedID != nil {
+		userPersona = resolvedID.Handle
+	}
+	if userPersona == "" {
+		userPersona = userID
+	}
+	claudePID := process.FindClaudePID()
+
+	root := session.Participant{AgentID: userID, Persona: userPersona}
+	primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
+
+	repo := resolveRepo()
+	host := resolveHost()
+
+	if err := ss.Create(sessionID, root, primary, repo, host); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", err)
+	} else if err := ss.WriteCurrentSession(claudePID, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: failed to write current session: %v\n", err)
+	}
+}
+
+// emitHumanFallback emits a one-liner for the human identity when no
+// agent persona is configured or agent loading fails. Returns nil when
+// no human identity is available either.
+func emitHumanFallback(resolvedID *identity.Identity) error {
+	if resolvedID == nil {
+		return nil
+	}
+	msg := fmt.Sprintf("Ethos session started. Active identity: %s (%s).", resolvedID.Name, resolvedID.Handle)
+	result := SessionStartResult{}
+	result.HookSpecificOutput.HookEventName = "SessionStart"
+	result.HookSpecificOutput.AdditionalContext = msg
+	return json.NewEncoder(os.Stdout).Encode(result)
+}
+
+// installAgentDefs copies agent definitions from the ethos agents dir
+// into .claude/agents/. Logs results to stderr.
+func installAgentDefs() {
+	ethosRoot := resolve.FindRepoEthosRoot()
+	if ethosRoot == "" {
+		return
+	}
+	deployed, err := InstallAgentDefinitions(ethosRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: agent install failed: %v\n", err)
+	}
+	for _, name := range deployed {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: deployed agent definition %s\n", name)
+	}
+}
+
+// emitAgentContext builds and emits the full agent persona block with
+// extensions, team context, and working context.
+func emitAgentContext(agentID *identity.Identity, agentPersona string, store identity.IdentityStore, deps SessionStartDeps) error {
 	var sections []string
 	if persona := BuildPersonaBlock(agentID); persona != "" {
 		sections = append(sections, persona)

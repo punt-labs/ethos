@@ -57,7 +57,7 @@ func TestLayeredStore_ListMerges(t *testing.T) {
 	global := NewStore(globalDir)
 
 	require.NoError(t, repo.Save(&Role{Name: "coo"}))
-	require.NoError(t, global.Save(&Role{Name: "coo"}))     // duplicate
+	require.NoError(t, global.Save(&Role{Name: "coo"}))      // duplicate
 	require.NoError(t, global.Save(&Role{Name: "engineer"})) // global-only
 
 	ls := NewLayeredStore(repoDir, globalDir)
