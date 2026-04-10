@@ -40,11 +40,12 @@ func TestFormatStarted(t *testing.T) {
 				// YYYY-MM-DD HH:MM ZONE. Year 2026 is absolute;
 				// month/day may shift one day either side of the
 				// UTC instant depending on local zone. ZONE is
-				// either an IANA abbreviation (e.g. PST, or
-				// mixed-case like ChST for Pacific/Guam) or a
-				// numeric offset fallback of ±HH, ±HHMM, or
-				// ±HHMMSS (e.g. +05, +0530, -0700) when the
-				// Location has no named zone abbreviation.
+				// either a zone abbreviation when available
+				// (e.g. PST, or mixed-case like ChST for
+				// Pacific/Guam) or a numeric offset fallback of
+				// ±HH, ±HHMM, or ±HHMMSS (e.g. +05, +0530,
+				// -0700) when the Location has no named zone
+				// abbreviation.
 				assert.Regexp(t, `^2026-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)$`, got)
 			},
 		},

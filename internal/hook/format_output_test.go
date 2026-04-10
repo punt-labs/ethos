@@ -721,13 +721,13 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	// section, not as a header row. No top-level Bead: field any more.
 	assert.Contains(t, ctx, "bead: ethos-07m.5")
 	assert.NotContains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
-	// Created uses local-time formatting; the Go reference layout
-	// "2006-01-02 15:04 MST" renders the input 2026-04-07T21:30:00Z
-	// with year-month "2026-04" in any local timezone. A TZ shift
-	// can move the day of month but, for an input that sits well
-	// inside April, cannot move the rendered month or year. The
-	// assertion relies on the fact that 2026-04-07 is mid-April,
-	// not on the layout being timezone-invariant in general.
+	// Created uses local-time formatting with the Go reference
+	// layout "2006-01-02 15:04 MST". For this specific input
+	// (2026-04-07T21:30:00Z) a TZ shift can move the rendered day
+	// of month but, because the timestamp is far enough from an
+	// April month boundary, cannot move the rendered month or
+	// year. The assertion relies on that boundary distance, not
+	// on the layout being timezone-invariant in general.
 	assert.Contains(t, ctx, "2026-04-")
 	assert.Contains(t, ctx, "Write set:")
 	assert.Contains(t, ctx, "- internal/mission/")
@@ -776,10 +776,10 @@ func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
 	ctx := r.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, missionLabel(t, "Status:")+"closed")
 	// Closed: row must be present with a formatted timestamp in the
-	// new layout (year-month-day, 24h time, then either an IANA zone
-	// abbreviation — possibly mixed-case like ChST — or a numeric
-	// offset fallback of ±HH, ±HHMM, or ±HHMMSS when the Location has
-	// no named zone).
+	// new layout (year-month-day, 24h time, then either a zone
+	// abbreviation when available — possibly mixed-case like ChST
+	// — or a numeric offset fallback of ±HH, ±HHMM, or ±HHMMSS
+	// when the Location has no named zone abbreviation).
 	assert.Regexp(t, `Closed:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`, ctx)
 }
 
@@ -1220,12 +1220,13 @@ func TestFormatMissionTime(t *testing.T) {
 			if tt.name == "valid RFC3339" {
 				// Local-time formatted; can't assert exact value across
 				// time zones, but the shape is fixed:
-				// YYYY-MM-DD HH:MM ZONE. ZONE is either an IANA
-				// abbreviation (e.g. PST, UTC, or mixed-case like
-				// ChST for Pacific/Guam) or a numeric offset
-				// fallback when the Location has no named zone —
-				// which Go emits as ±HH, ±HHMM, or ±HHMMSS
-				// (e.g. +05, +0530, -0700).
+				// YYYY-MM-DD HH:MM ZONE. ZONE is either a zone
+				// abbreviation when available (e.g. PST, UTC, or
+				// mixed-case like ChST for Pacific/Guam) or a
+				// numeric offset fallback when the Location has
+				// no named zone abbreviation — which Go emits
+				// as ±HH, ±HHMM, or ±HHMMSS (e.g. +05, +0530,
+				// -0700).
 				assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)$`, got)
 				return
 			}
