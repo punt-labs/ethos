@@ -2660,6 +2660,31 @@ func TestStore_LoadResult_MissingRoundReturnsNil(t *testing.T) {
 	assert.Nil(t, r)
 }
 
+// TestStore_LoadResult_FileRemovedAfterAppendReturnsNil locks down
+// the TOCTOU contract the CLI echo path in runMissionClose depends
+// on. After an AppendResult commits a round's result to disk, a
+// concurrent process (or filesystem fault) could remove the sibling
+// .results.yaml file. LoadResult must still return (nil, nil) rather
+// than panicking or returning a stale pointer — the caller is
+// responsible for the nil-guard.
+func TestStore_LoadResult_FileRemovedAfterAppendReturnsNil(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	require.NoError(t, s.AppendResult(c.MissionID, resultFor(c, VerdictPass)))
+
+	// Confirm the file exists before removing it — otherwise a
+	// silent path regression would make the removal a no-op and
+	// the assertion below would pass for the wrong reason.
+	_, statErr := os.Stat(s.resultsPath(c.MissionID))
+	require.NoError(t, statErr)
+	require.NoError(t, os.Remove(s.resultsPath(c.MissionID)))
+
+	r, err := s.LoadResult(c.MissionID, c.CurrentRound)
+	require.NoError(t, err)
+	assert.Nil(t, r)
+}
+
 // TestStore_CloseGate_RefusesWithoutResult covers success criterion 5:
 // every terminal status transition is refused unless a result
 // exists for the current round. The error names the mission, the

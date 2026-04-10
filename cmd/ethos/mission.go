@@ -705,6 +705,19 @@ func runMissionClose(idOrPrefix, status string) {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: loading satisfying result: %v\n", err)
 		os.Exit(1)
 	}
+	// LoadResult returns (nil, nil) when no result matches the
+	// requested round. Close's gate guarantees a matching result
+	// existed at the moment the lock was held, but the lock is
+	// released before LoadResult runs — a concurrent process (or a
+	// filesystem fault) could remove the .results.yaml file in
+	// between. Guard the echo path so that race produces a clean
+	// diagnostic instead of a nil-pointer panic.
+	if r == nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission close: result for round %d of mission %q disappeared after close; re-run `ethos mission show %s` to inspect state\n",
+			c.CurrentRound, id, id)
+		os.Exit(1)
+	}
 	if jsonOutput {
 		printJSON(map[string]any{
 			"mission_id": id,
