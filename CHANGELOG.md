@@ -46,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on stdout in text mode (JSON mode is unchanged): `created: <id>
   worker=... evaluator=...`, `result: <id> round=N verdict=...`,
   `reflected: <id> round=N rec=...`, `advanced: <id> round N -> M`,
-  `closed: <id> status=...`. The `verb: <id>` prefix is grep-able
+  `closed: <id> round=N verdict=... status=...`. The `verb: <id>` prefix is grep-able
   and the `k=v` tail mirrors the `summarizeEventDetails` audit-log
   shape so the CLI echo and the event log read alike. Surfaced
   during the Phase 3 mission-primitive dogfood on PR #199 (`ethos-vjp`).

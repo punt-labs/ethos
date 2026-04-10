@@ -165,7 +165,7 @@ $ ethos mission reflect m-2026-04-08-006 --file /tmp/reflection.yaml
 reflected: m-2026-04-08-006 round=1 rec=continue
 
 $ ethos mission close m-2026-04-08-006
-closed: m-2026-04-08-006 status=closed
+closed: m-2026-04-08-006 round=1 verdict=pass status=closed
 ```
 
 After the fact, the leader reads the audit trail. The event log is
