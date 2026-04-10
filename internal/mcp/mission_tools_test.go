@@ -426,6 +426,14 @@ func TestHandleMission_Close(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, closeResult.IsError)
 
+	// Verify close response includes round and verdict from the
+	// satisfying result (ethos-w42).
+	var closePayload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &closePayload))
+	assert.Equal(t, float64(1), closePayload["round"])
+	assert.Equal(t, "pass", closePayload["verdict"])
+	assert.Equal(t, "closed", closePayload["status"])
+
 	// Verify via show.
 	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "show",

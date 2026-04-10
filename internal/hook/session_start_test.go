@@ -280,8 +280,8 @@ func TestHandleSessionStart_WithTeamContext(t *testing.T) {
 
 	// Create identities.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Test Human",
+		Handle: "test-human",
 		Kind:   "human",
 	}))
 	agentID := &identity.Identity{
@@ -319,7 +319,7 @@ func TestHandleSessionStart_WithTeamContext(t *testing.T) {
 	require.NoError(t, ts.Save(&team.Team{
 		Name: "test-eng",
 		Members: []team.Member{
-			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "test-human", Role: "ceo"},
 			{Identity: "claude", Role: "coo"},
 		},
 		Collaborations: []team.Collaboration{
@@ -327,7 +327,7 @@ func TestHandleSessionStart_WithTeamContext(t *testing.T) {
 		},
 	}, identityExists, roleExists))
 
-	isolateGitConfig(t, "jfreeman")
+	isolateGitConfig(t, "test-human")
 	setupRepoWithTeam(t, "claude", "test-eng")
 
 	deps := SessionStartDeps{
@@ -343,7 +343,7 @@ func TestHandleSessionStart_WithTeamContext(t *testing.T) {
 
 	ctx := result.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, "## Team: test-eng")
-	assert.Contains(t, ctx, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, ctx, "Test Human (test-human) — ceo")
 	assert.Contains(t, ctx, "Claude Agento (claude) — coo")
 	assert.Contains(t, ctx, "Sets strategic direction")
 	assert.Contains(t, ctx, "Execution quality")
@@ -361,8 +361,8 @@ func TestHandleSessionStart_WithExtensionContextAndTeam(t *testing.T) {
 
 	// Create identities.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Test Human",
+		Handle: "test-human",
 		Kind:   "human",
 	}))
 	agentID := &identity.Identity{
@@ -403,7 +403,7 @@ func TestHandleSessionStart_WithExtensionContextAndTeam(t *testing.T) {
 	require.NoError(t, ts.Save(&team.Team{
 		Name: "test-eng",
 		Members: []team.Member{
-			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "test-human", Role: "ceo"},
 			{Identity: "claude", Role: "coo"},
 		},
 		Collaborations: []team.Collaboration{
@@ -411,7 +411,7 @@ func TestHandleSessionStart_WithExtensionContextAndTeam(t *testing.T) {
 		},
 	}, identityExists, roleExists))
 
-	isolateGitConfig(t, "jfreeman")
+	isolateGitConfig(t, "test-human")
 	setupRepoWithTeam(t, "claude", "test-eng")
 
 	deps := SessionStartDeps{
@@ -490,8 +490,8 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 
 	// Human identity — needed for resolve.Resolve to succeed.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Test Human",
+		Handle: "test-human",
 		Kind:   "human",
 	}))
 	// Agent identity — the config points at this handle, and
@@ -536,7 +536,7 @@ func TestHandleSessionStart_GenerateAgentsErrorPropagates(t *testing.T) {
 	require.NoError(t, os.Chdir(repoRoot))
 	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
 
-	isolateGitConfig(t, "jfreeman")
+	isolateGitConfig(t, "test-human")
 
 	deps := SessionStartDeps{
 		Store:    s,
@@ -614,8 +614,8 @@ func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
 	// the ResolveAgent call so the test doesn't short-circuit on an
 	// earlier failure mode.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Test Human",
+		Handle: "test-human",
 		Kind:   "human",
 	}))
 
@@ -638,7 +638,7 @@ func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
 	require.NoError(t, os.Chdir(repoRoot))
 	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
 
-	isolateGitConfig(t, "jfreeman")
+	isolateGitConfig(t, "test-human")
 
 	deps := SessionStartDeps{
 		Store:    s,

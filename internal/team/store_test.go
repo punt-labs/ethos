@@ -647,7 +647,7 @@ func TestStore_LoadRejectsStructurallyInvalidTeam(t *testing.T) {
 				"  - from: go-speciallist\n" + // typo: extra 'l'
 				"    to: coo\n" +
 				"    type: reports_to\n",
-			wantError: `collaboration 0: role "go-speciallist" not filled by any member`,
+			wantError: `collaboration 0 (go-speciallist -> coo): role "go-speciallist" not filled by any member`,
 		},
 		{
 			name: "typo'd collaboration.to",
@@ -661,7 +661,7 @@ func TestStore_LoadRejectsStructurallyInvalidTeam(t *testing.T) {
 				"  - from: dev\n" +
 				"    to: leed\n" + // typo
 				"    type: reports_to\n",
-			wantError: `collaboration 0: role "leed" not filled by any member`,
+			wantError: `collaboration 0 (dev -> leed): role "leed" not filled by any member`,
 		},
 		{
 			name: "self-collaboration",
@@ -687,7 +687,7 @@ func TestStore_LoadRejectsStructurallyInvalidTeam(t *testing.T) {
 				"  - from: dev\n" +
 				"    to: lead\n" +
 				"    type: manages\n", // not in validCollabTypes
-			wantError: `collaboration 0: invalid type "manages"`,
+			wantError: `collaboration 0 (dev -> lead): invalid type "manages"`,
 		},
 		{
 			name: "no members",
