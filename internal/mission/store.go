@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -336,10 +337,10 @@ func (s *Store) Create(c *Contract) error {
 func rejectSymlink(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		// File not found is not an error here — callers handle
-		// absence themselves (e.g. missing reflections file is
-		// normal for a new mission).
-		return nil
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("lstat %s: %w", path, err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refusing to follow symlink: %s", path)

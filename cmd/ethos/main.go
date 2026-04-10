@@ -42,6 +42,7 @@ func isUsageError(err error) bool {
 		"unknown shorthand flag",
 		"required flag",
 		"accepts ",
+		"requires at least",
 		"invalid argument",
 		"flag needs an argument",
 	}

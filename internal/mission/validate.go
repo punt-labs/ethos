@@ -251,7 +251,7 @@ func validateWriteSetEntry(entry string) error {
 	// the conflict checker. Rejecting at the trust boundary eliminates
 	// the class rather than trusting every downstream consumer.
 	if containsZeroWidth(trimmed) {
-		return fmt.Errorf("write_set entry contains zero-width Unicode character")
+		return fmt.Errorf("write_set entry %q contains zero-width Unicode character", trimmed)
 	}
 
 	// Normalize backslashes to forward slashes first. This makes
