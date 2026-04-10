@@ -93,6 +93,35 @@ func TestVersionCommandJSON(t *testing.T) {
 	assert.Equal(t, version, parsed["version"])
 }
 
+// TestExitCode2_BadFlag runs the compiled binary with an unknown flag
+// and asserts that the process exits with code 2. Subprocess test
+// because os.Exit cannot be captured in-process.
+func TestExitCode2_BadFlag(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+	cmd := exec.Command(ethosBinary, "--nonexistent-flag")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected non-zero exit")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected *exec.ExitError, got %T", err)
+	assert.Equal(t, 2, exitErr.ExitCode(), "bad flag should exit 2; output: %s", out)
+}
+
+// TestExitCode2_UnknownCommand runs the binary with a nonexistent
+// subcommand and asserts exit code 2.
+func TestExitCode2_UnknownCommand(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+	cmd := exec.Command(ethosBinary, "nonexistent-command")
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err, "expected non-zero exit")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected *exec.ExitError, got %T", err)
+	assert.Equal(t, 2, exitErr.ExitCode(), "unknown command should exit 2; output: %s", out)
+}
+
 // TestResolveAgentJSONFlag asserts that resolve-agent --json sets the
 // JSON output mode. The command calls os.Exit(1) when it cannot find
 // a git repo, which would kill the test process. The subprocess

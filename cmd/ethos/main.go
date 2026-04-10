@@ -21,8 +21,36 @@ var jsonOutput bool
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		// Cobra already printed the error to stderr (SilenceErrors is
+		// off). We only set the exit code here.
+		if isUsageError(err) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
+}
+
+// isUsageError reports whether err is a cobra usage error (bad flag,
+// unknown command, wrong arg count). Cobra does not export a typed
+// error for these; we match on the message prefixes cobra itself
+// generates.
+func isUsageError(err error) bool {
+	msg := err.Error()
+	prefixes := []string{
+		"unknown command",
+		"unknown flag",
+		"unknown shorthand flag",
+		"required flag",
+		"accepts ",
+		"invalid argument",
+		"flag needs an argument",
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // printJSON marshals v to stdout. Exits on error.

@@ -386,6 +386,52 @@ func TestValidate_AcceptsSingleDotSegment(t *testing.T) {
 	}
 }
 
+// TestValidate_RejectsZeroWidthUnicode asserts that write_set entries
+// containing invisible zero-width Unicode characters are rejected.
+// These runes are invisible in most terminals and editors, making them
+// a vector for path confusion: two paths that appear identical to the
+// operator but differ by a BOM or ZWSP would be treated as distinct
+// by the filesystem. Reject at the trust boundary.
+func TestValidate_RejectsZeroWidthUnicode(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "BOM prefix", path: "\uFEFFinternal/foo"},
+		{name: "ZWSP embedded", path: "internal/\u200Bfoo"},
+		{name: "ZWNJ embedded", path: "internal/\u200Cfoo"},
+		{name: "ZWJ embedded", path: "internal/\u200Dfoo"},
+		{name: "word joiner embedded", path: "internal/\u2060foo"},
+		{name: "noncharacter FFFE embedded", path: "internal/\uFFFEfoo"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			c.WriteSet = []string{tt.path}
+			err := c.Validate()
+			require.Error(t, err, "expected validation error for path with zero-width char")
+			assert.Contains(t, err.Error(), "zero-width Unicode character")
+		})
+	}
+}
+
+// TestValidate_ZeroWidthNoFalsePositive asserts that clean paths
+// containing ordinary Unicode are not rejected by the zero-width check.
+func TestValidate_ZeroWidthNoFalsePositive(t *testing.T) {
+	paths := []string{
+		"internal/mission/",
+		"cmd/ethos/main.go",
+		"docs/日本語/readme.md",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			c := validContract()
+			c.WriteSet = []string{p}
+			require.NoError(t, c.Validate())
+		})
+	}
+}
+
 func TestValidate_NilContract(t *testing.T) {
 	var c *Contract
 	require.Error(t, c.Validate())
