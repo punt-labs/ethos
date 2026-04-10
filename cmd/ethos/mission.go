@@ -481,7 +481,14 @@ func runMissionCreate() {
 		printJSON(&c)
 		return
 	}
-	// Non-JSON mode is silent on success — matches session.go pattern.
+	// Text mode echoes a one-line summary so a scripting caller can
+	// tell the write landed without a follow-up `ethos mission show`.
+	// Fields mirror the `create` event-log summary in
+	// summarizeEventDetails so the CLI echo and the audit log use the
+	// same k=v shape. Mission ID leads so it is grep-able and
+	// chain-able.
+	fmt.Printf("created: %s worker=%s evaluator=%s\n",
+		c.MissionID, c.Worker, c.Evaluator.Handle)
 }
 
 func runMissionShow(idOrPrefix string) {
@@ -687,7 +694,10 @@ func runMissionClose(idOrPrefix, status string) {
 		printJSON(map[string]string{"mission_id": id, "status": status})
 		return
 	}
-	// Non-JSON mode is silent on success — matches session.go pattern.
+	// Text mode echoes a one-line summary; mission ID + terminal
+	// status mirrors the JSON payload above so a scripting caller
+	// gets the same fields from either surface.
+	fmt.Printf("closed: %s status=%s\n", id, status)
 }
 
 // runMissionReflect handles `ethos mission reflect <id> --file <path>`.
@@ -728,7 +738,10 @@ func runMissionReflect(idOrPrefix, file string) {
 		})
 		return
 	}
-	// Non-JSON mode is silent on success — matches session.go pattern.
+	// Text mode echoes a one-line summary; the rec= tag matches the
+	// reflect event-log summary in summarizeEventDetails.
+	fmt.Printf("reflected: %s round=%d rec=%s\n",
+		id, r.Round, r.Recommendation)
 }
 
 // runMissionResult handles `ethos mission result <id> --file <path>`.
@@ -777,8 +790,10 @@ func runMissionResult(idOrPrefix, file string) {
 		})
 		return
 	}
-	// Non-JSON mode is silent on success — matches every other
-	// mission subcommand.
+	// Text mode echoes a one-line summary; round and verdict mirror
+	// the result event-log summary in summarizeEventDetails.
+	fmt.Printf("result: %s round=%d verdict=%s\n",
+		id, r.Round, r.Verdict)
 }
 
 // runMissionAdvance handles `ethos mission advance <id>`. The gate
@@ -815,10 +830,10 @@ func runMissionAdvance(idOrPrefix string) {
 		})
 		return
 	}
-	// Non-JSON mode is silent on success — matches every other
-	// mission subcommand (create, close, reflect). Exit code 0 tells
-	// the story; a chatty success message would be out of family.
-	_ = newRound
+	// Text mode echoes the round transition; format mirrors the
+	// round_advanced event-log summary in summarizeEventDetails so
+	// CLI echo and audit log read the same.
+	fmt.Printf("advanced: %s round %d -> %d\n", id, newRound-1, newRound)
 }
 
 // resolveActor returns the handle to record on a round_advanced

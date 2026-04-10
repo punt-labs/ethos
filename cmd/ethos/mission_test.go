@@ -247,14 +247,20 @@ func TestMissionCreate_FromFile(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
 
-	// Non-JSON mode is silent on success.
+	// Text mode echoes a one-line `created: <id> worker=... evaluator=...`
+	// summary so a scripting caller can chain on the new mission ID
+	// without a follow-up `ethos mission list` (ethos-30c).
 	stdout := captureStdout(t, runMissionCreate)
-	assert.Empty(t, strings.TrimSpace(stdout), "create must be silent on success (non-JSON mode)")
 
 	ms := missionStore()
 	ids, err := ms.List()
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
+
+	assert.Contains(t, stdout, "created:")
+	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "worker=bwk")
+	assert.Contains(t, stdout, "evaluator=djb")
 
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
@@ -483,9 +489,13 @@ func TestMissionClose(t *testing.T) {
 	// refusal — the refusal branch is covered separately.
 	submitCLIResult(t, ids[0], 1)
 
-	// Non-JSON mode is silent on success.
+	// Text mode echoes a one-line `closed: <id> status=closed` summary
+	// so a scripting caller sees the operation landed without a
+	// follow-up show (ethos-30c).
 	stdout := captureStdout(t, func() { runMissionClose(ids[0], mission.StatusClosed) })
-	assert.Empty(t, strings.TrimSpace(stdout), "close must be silent on success (non-JSON mode)")
+	assert.Contains(t, stdout, "closed:")
+	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "status="+mission.StatusClosed)
 
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
@@ -548,7 +558,12 @@ func TestMissionReflect_RoundTrip(t *testing.T) {
 
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "round 1 went well")
 	stdout := captureStdout(t, func() { runMissionReflect(ids[0], missionReflectFile) })
-	assert.Empty(t, strings.TrimSpace(stdout), "reflect must be silent on success (non-JSON mode)")
+	// Text mode echoes `reflected: <id> round=1 rec=continue` so a
+	// scripting caller sees the reflection landed (ethos-30c).
+	assert.Contains(t, stdout, "reflected:")
+	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "round=1")
+	assert.Contains(t, stdout, "rec=continue")
 
 	rs, err := ms.LoadReflections(ids[0])
 	require.NoError(t, err)
@@ -650,12 +665,13 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
 	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
 
-	// Advance — non-JSON mode is silent on success (matches every
-	// other mission subcommand: create, close, reflect). Exit code 0
-	// and a bumped CurrentRound on disk tell the whole story.
+	// Advance — text mode echoes `advanced: <id> round 1 -> 2` so a
+	// scripting caller can read the new round without a follow-up
+	// show (ethos-30c).
 	out := captureStdout(t, func() { runMissionAdvance(id) })
-	assert.Empty(t, strings.TrimSpace(out),
-		"mission advance must be silent on success in non-JSON mode")
+	assert.Contains(t, out, "advanced:")
+	assert.Contains(t, out, id)
+	assert.Contains(t, out, "round 1 -> 2")
 
 	loaded, err := ms.Load(id)
 	require.NoError(t, err)
@@ -1142,7 +1158,13 @@ func TestMissionResult_RoundTrip(t *testing.T) {
 
 	missionResultFile = writeResultFile(t, id, 1)
 	stdout := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
-	assert.Empty(t, strings.TrimSpace(stdout), "result must be silent on success (non-JSON mode)")
+	// Text mode echoes `result: <id> round=1 verdict=pass` so a
+	// scripting caller can confirm the submission landed without
+	// a follow-up `ethos mission results` (ethos-30c).
+	assert.Contains(t, stdout, "result:")
+	assert.Contains(t, stdout, id)
+	assert.Contains(t, stdout, "round=1")
+	assert.Contains(t, stdout, "verdict="+mission.VerdictPass)
 
 	loaded, err := ms.LoadResult(id, 1)
 	require.NoError(t, err)
