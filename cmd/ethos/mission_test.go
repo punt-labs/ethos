@@ -2433,8 +2433,8 @@ func missionResultVerifyEnv(t *testing.T) (home, repo, missionID string) {
 	runGit("add", "a.txt", "b.txt")
 	runGit("commit", "-m", "baseline")
 
-	// Change commit: a.txt gains 5 lines (0 removed), b.txt gains 2
-	// lines and loses 1 (net +1), c.txt is new with 3 lines.
+	// Change commit: a.txt adds 5 lines (0 removed), b.txt adds 3
+	// lines and removes 1 (net +2), c.txt is new with 3 lines.
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"),
 		[]byte("a1\na2\na3\na4\na5\na6\na7\na8\na9\na10\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "b.txt"),
@@ -2444,8 +2444,9 @@ func missionResultVerifyEnv(t *testing.T) (home, repo, missionID string) {
 	runGit("add", "a.txt", "b.txt", "c.txt")
 	runGit("commit", "-m", "changes")
 
-	// Contract body admits all three paths plus the result.yaml
-	// scratch path used by the test harness itself.
+	// Contract body admits all three paths touched by the change
+	// commit. result.yaml is untracked scratch and never appears in
+	// numstat, so the write_set does not need to name it.
 	contract := filepath.Join(repo, "contract.yaml")
 	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
 worker: bwk
@@ -2570,7 +2571,7 @@ func TestMissionResult_VerifyOn_PassesOnMatch(t *testing.T) {
 		"mission", "result", id,
 		"--file", resultFile,
 		"--verify", "--base", "HEAD~1")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = testGitEnv(home)
 	cmd.Dir = repo
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -2600,7 +2601,7 @@ func TestMissionResult_VerifyOn_RejectsOnMismatch(t *testing.T) {
 		"mission", "result", id,
 		"--file", resultFile,
 		"--verify", "--base", "HEAD~1")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = testGitEnv(home)
 	cmd.Dir = repo
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
@@ -2668,7 +2669,7 @@ budget:
 
 	runEthos := func(args ...string) string {
 		cmd := exec.Command(ethosBinary, args...)
-		cmd.Env = append(os.Environ(), "HOME="+home)
+		cmd.Env = testGitEnv(home)
 		cmd.Dir = repo
 		var out, errBuf bytes.Buffer
 		cmd.Stdout = &out
@@ -2707,7 +2708,7 @@ evidence:
 		"mission", "result", id,
 		"--file", resultFile,
 		"--verify", "--base", "HEAD~1")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = testGitEnv(home)
 	cmd.Dir = repo
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
@@ -2741,7 +2742,7 @@ func TestMissionResult_VerifyOn_WarnsOnUndeclaredDiffPath(t *testing.T) {
 		"mission", "result", id,
 		"--file", resultFile,
 		"--verify", "--base", "HEAD~1")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = testGitEnv(home)
 	cmd.Dir = repo
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
@@ -2770,7 +2771,7 @@ func TestMissionResult_VerifyOn_RejectsInvalidBase(t *testing.T) {
 		"mission", "result", id,
 		"--file", resultFile,
 		"--verify", "--base", "nonexistent-ref-xyz")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = testGitEnv(home)
 	cmd.Dir = repo
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
