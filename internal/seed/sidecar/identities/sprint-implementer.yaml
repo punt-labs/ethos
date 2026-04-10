@@ -1,0 +1,5 @@
+name: Sprint Implementer
+handle: sprint-implementer
+kind: agent
+personality: sprint-implementer
+writing_style: implementer-prose

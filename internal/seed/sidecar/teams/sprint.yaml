@@ -1,8 +1,6 @@
 name: sprint
 repositories: []
 members:
-  - identity: product-thinker
-    role: architect
   - identity: sprint-architect
     role: architect
   - identity: sprint-implementer

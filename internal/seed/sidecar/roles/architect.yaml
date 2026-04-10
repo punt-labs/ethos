@@ -7,6 +7,8 @@ responsibilities:
   - Never implement — produce plans for implementers
 tools:
   - Read
+  - Write
+  - Edit
   - Grep
   - Glob
 safety_constraints:
