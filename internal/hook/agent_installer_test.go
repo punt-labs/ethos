@@ -78,7 +78,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 		{
 			name: "non-md files ignored",
 			sourceFiles: map[string]string{
-				"bwk.md":   "# bwk agent",
+				"bwk.md":    "# bwk agent",
 				"notes.txt": "some notes",
 			},
 			destFiles:    nil,

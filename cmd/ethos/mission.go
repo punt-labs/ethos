@@ -77,8 +77,8 @@ func missionStoreForCreate() *mission.Store {
 // with subcommands is invoked with no arguments. This matches the role
 // and team command patterns.
 var missionCmd = &cobra.Command{
-	Use:     "mission",
-	Short:   "Manage mission contracts",
+	Use:   "mission",
+	Short: "Manage mission contracts",
 	Long: `Manage mission contracts.
 
 If the contract's scope is wrong (e.g., write_set is missing a file you
@@ -1364,7 +1364,7 @@ func parseEventTypes(raw string) []string {
 
 // printEventLog renders the event slice as one bullet per event:
 //
-//	  - <local time>  <type>  by <actor>  <short details>
+//   - <local time>  <type>  by <actor>  <short details>
 //
 // Empty input renders "Events: (none)" so an operator running the
 // command on a brand-new mission — or a mission whose log has been
@@ -1403,92 +1403,96 @@ func printEventLog(events []mission.Event) {
 // --json — this helper only decides what to show in the one-line
 // human rendering.
 func summarizeEventDetails(e mission.Event) string {
-	if len(e.Details) == 0 {
+	return summarizeDetails(e.Event, e.Details)
+}
+
+// summarizeDetails extracts a short human-readable payload summary from
+// a decoded-from-JSON Details map. Each known event type selects two or
+// three fields the operator actually wants to see at a glance; an
+// unknown event type returns an empty string so the event row still
+// renders cleanly.
+func summarizeDetails(evType string, details map[string]any) string {
+	if len(details) == 0 {
 		return ""
 	}
-	switch e.Event {
+	switch evType {
 	case "create":
-		worker, _ := e.Details["worker"].(string)
-		evaluator, _ := e.Details["evaluator"].(string)
-		bead, _ := e.Details["bead"].(string)
-		parts := []string{}
-		if worker != "" {
-			parts = append(parts, "worker="+worker)
-		}
-		if evaluator != "" {
-			parts = append(parts, "evaluator="+evaluator)
-		}
-		if bead != "" {
-			parts = append(parts, "bead="+bead)
-		}
-		return strings.Join(parts, " ")
+		return joinParts(
+			kv("worker", detailStr(details, "worker")),
+			kv("evaluator", detailStr(details, "evaluator")),
+			kv("bead", detailStr(details, "bead")),
+		)
 	case "close":
-		status, _ := e.Details["status"].(string)
-		verdict, _ := e.Details["verdict"].(string)
-		round, _ := e.Details["round"].(float64)
-		// round may come in as int or float64 depending on whether
-		// the event was decoded from JSON or constructed in-process;
-		// the json.Unmarshal path always produces float64.
-		if roundInt, ok := e.Details["round"].(int); ok {
-			round = float64(roundInt)
-		}
-		parts := []string{}
-		if status != "" {
-			parts = append(parts, "status="+status)
-		}
-		if verdict != "" {
-			parts = append(parts, "verdict="+verdict)
-		}
-		if round > 0 {
-			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
-		}
-		return strings.Join(parts, " ")
+		return joinParts(
+			kv("status", detailStr(details, "status")),
+			kv("verdict", detailStr(details, "verdict")),
+			kvRound("round", detailRound(details, "round")),
+		)
 	case "result":
-		verdict, _ := e.Details["verdict"].(string)
-		round, _ := e.Details["round"].(float64)
-		if roundInt, ok := e.Details["round"].(int); ok {
-			round = float64(roundInt)
-		}
-		parts := []string{}
-		if round > 0 {
-			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
-		}
-		if verdict != "" {
-			parts = append(parts, "verdict="+verdict)
-		}
-		return strings.Join(parts, " ")
+		return joinParts(
+			kvRound("round", detailRound(details, "round")),
+			kv("verdict", detailStr(details, "verdict")),
+		)
 	case "reflect":
-		rec, _ := e.Details["recommendation"].(string)
-		round, _ := e.Details["round"].(float64)
-		if roundInt, ok := e.Details["round"].(int); ok {
-			round = float64(roundInt)
-		}
-		parts := []string{}
-		if round > 0 {
-			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
-		}
-		if rec != "" {
-			parts = append(parts, "rec="+rec)
-		}
-		return strings.Join(parts, " ")
+		return joinParts(
+			kvRound("round", detailRound(details, "round")),
+			kv("rec", detailStr(details, "recommendation")),
+		)
 	case "round_advanced":
-		from, _ := e.Details["from_round"].(float64)
-		to, _ := e.Details["to_round"].(float64)
-		if fromInt, ok := e.Details["from_round"].(int); ok {
-			from = float64(fromInt)
-		}
-		if toInt, ok := e.Details["to_round"].(int); ok {
-			to = float64(toInt)
-		}
+		from := detailRound(details, "from_round")
+		to := detailRound(details, "to_round")
 		if from > 0 && to > 0 {
 			return fmt.Sprintf("round %d -> %d", int(from), int(to))
 		}
 		return ""
 	default:
-		// Unknown event type — render no details so forward-
-		// compatible event types still produce a clean row.
 		return ""
 	}
+}
+
+// detailStr extracts a string value from a details map.
+func detailStr(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+// detailRound extracts a numeric round from a details map. JSON
+// decoding produces float64; in-process construction may produce int.
+func detailRound(m map[string]any, key string) float64 {
+	if v, ok := m[key].(float64); ok {
+		return v
+	}
+	if v, ok := m[key].(int); ok {
+		return float64(v)
+	}
+	return 0
+}
+
+// kv returns "key=val" when val is non-empty, empty string otherwise.
+func kv(key, val string) string {
+	if val == "" {
+		return ""
+	}
+	return key + "=" + val
+}
+
+// kvRound returns "key=N" when round > 0, empty string otherwise.
+func kvRound(key string, round float64) string {
+	if round <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s=%d", key, int(round))
+}
+
+// joinParts joins non-empty parts with spaces.
+func joinParts(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // printResults renders the round-by-round result log under the

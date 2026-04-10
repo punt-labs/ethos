@@ -42,13 +42,13 @@ const (
 //  8. evaluator.handle is non-empty and contains no control characters
 //  9. evaluator.pinned_at is parseable as RFC3339
 //  10. write_set is non-empty AND every entry: no null byte, no other
-//      control character, no `..` segment, not absolute (including
-//      Windows drive letters and UNC), not empty after trimming
+//     control character, no `..` segment, not absolute (including
+//     Windows drive letters and UNC), not empty after trimming
 //  11. budget.rounds is in [1, 10]
 //  12. success_criteria has at least one entry
 //  13. current_round is in [1, budget.rounds] (3.4 round-tracking
-//      invariant; zero is rewritten to 1 by Store.Create so a
-//      pre-3.4 contract loaded in-place still parses)
+//     invariant; zero is rewritten to 1 by Store.Create so a
+//     pre-3.4 contract loaded in-place still parses)
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).

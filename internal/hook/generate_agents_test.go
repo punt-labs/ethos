@@ -174,9 +174,9 @@ func writeFile(t *testing.T, path, content string) {
 
 func TestGenerateAgentFiles(t *testing.T) {
 	tests := []struct {
-		name   string
-		setup  func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore)
-		check  func(t *testing.T, root string, err error)
+		name  string
+		setup func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore)
+		check func(t *testing.T, root string, err error)
 	}{
 		{
 			name: "basic generation",
@@ -750,7 +750,6 @@ func TestGenerateAgentFiles(t *testing.T) {
 		})
 	}
 }
-
 
 // TestGenerateAgentFiles_AntiResponsibilities covers the "## What You
 // Don't Do" section derived from reports_to edges (ethos-9ai.1).

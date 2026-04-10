@@ -16,10 +16,10 @@ import (
 
 func TestBuildPersonaBlock_Full(t *testing.T) {
 	id := &identity.Identity{
-		Name:   "Claude Agento",
-		Handle: "claude",
-		Kind:   "agent",
-		PersonalityContent: "# Friendly Direct\n\nCOO / VP Engineering for Punt Labs.\n\n## Core Traits\n\n- Direct but warm\n- Data over adjectives",
+		Name:                "Claude Agento",
+		Handle:              "claude",
+		Kind:                "agent",
+		PersonalityContent:  "# Friendly Direct\n\nCOO / VP Engineering for Punt Labs.\n\n## Core Traits\n\n- Direct but warm\n- Data over adjectives",
 		WritingStyleContent: "# Direct With Quips\n\nWriting style for Claude.\n\n## Rules\n\n- Keep sentences under 30 words\n- Lead with the answer",
 		Talents:             []string{"product-strategy", "formal-methods"},
 	}

@@ -248,7 +248,6 @@ func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolReque
 	return jsonResult(entries)
 }
 
-
 func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	handle := stringArg(req, "handle", "")
 	if handle == "" {

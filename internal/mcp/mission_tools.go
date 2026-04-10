@@ -461,4 +461,3 @@ func parseEventTypeList(raw string) []string {
 	}
 	return out
 }
-

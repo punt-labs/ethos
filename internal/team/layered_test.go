@@ -59,12 +59,12 @@ func TestLayeredStore_Load_RepoWins(t *testing.T) {
 
 func TestLayeredStore_FindByRepo(t *testing.T) {
 	tests := []struct {
-		name      string
-		repoTeams []*Team
+		name        string
+		repoTeams   []*Team
 		globalTeams []*Team
-		repo      string
-		wantNames []string
-		noRepo    bool // if true, create layered store with no repo layer
+		repo        string
+		wantNames   []string
+		noRepo      bool // if true, create layered store with no repo layer
 	}{
 		{
 			name: "same team in both layers, repo wins",

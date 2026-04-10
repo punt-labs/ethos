@@ -33,9 +33,9 @@ const maxLogSize = 16 * 1024 * 1024
 // open: Details is a free-form map so future event types do not require
 // a schema migration.
 type Event struct {
-	TS      string         `json:"ts"`              // RFC3339
-	Event   string         `json:"event"`           // create|update|close|...
-	Actor   string         `json:"actor"`           // identity handle
+	TS      string         `json:"ts"`    // RFC3339
+	Event   string         `json:"event"` // create|update|close|...
+	Actor   string         `json:"actor"` // identity handle
 	Details map[string]any `json:"details,omitempty"`
 }
 
