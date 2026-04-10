@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{2}{1}
+\prfaqversion{2}{2}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -193,7 +193,8 @@ Getting started takes under five minutes. First, install the binary with a singl
 {\small\texttt{curl -fsSL https://punt-labs.github.io/ethos/install.sh | sh}}
 
 \noindent The installer seeds 6 starter roles, 10 domain talents, and the baseline-ops skill. Second, create your persona with
-{\small\texttt{ethos create}}---four prompts (name, email, writing style, personality). Create agent personas the same way. Third, add
+{\small\texttt{ethos create}}. If a
+{\small\texttt{CLAUDE.md}} exists in the current project, the command detects it and fine-tunes starter content defaults---pre-filling writing style, personality, and role suggestions from the project context. 90\% of the result is batteries-included starter content; the remaining 10\% is LLM-inferred personalization from what the developer already has. The developer confirms or adjusts the suggestions and moves on. Create agent personas the same way. Third, add
 {\small\texttt{agent: claude}} to your repo's
 {\small\texttt{.punt-labs/ethos.yaml}}, optionally define a team with roles, and start a session. Hooks handle everything automatically. For structured delegation, write a mission contract and let the lifecycle drive the work.
 
@@ -310,11 +311,26 @@ Evidence is structural and observational. No customer interviews have been condu
   \item \textbf{CLAUDE.md / AGENTS.md}~\cite{claudemd2025pnote} --- per-project conventions, not per-person identity. Complementary.
   \item \textbf{CrewAI} --- role-based agent orchestration. Natural-language delegation, no typed contracts, no persistent identity, no write-set or reflection.
   \item \textbf{Entire.io}~\cite{entire2026techcrunch} --- code governance and audit (\$60M seed). Commit-level checkpoints, not per-person identity or delegation contracts.
+  \item \textbf{gstack}~\cite{gstack2025github} --- 23 SKILL.md prompt files by Garry Tan (YC CEO) simulating an engineering sprint team. Not a competitor but a validation: gstack proves developers want sprint discipline for agent teams. The content is high-quality workflow design with no structural enforcement---write-sets are suggestions, safety is conversational, personas reset each invocation. Ethos provides the enforcement layer that makes prompt-based workflows structural. Complementary: a gstack-inspired sprint team ships as a batteries-included ethos starter template.
 \end{itemize}
 
 \textbf{Why ethos wins:} No competitor combines human-agent identity parity, typed delegation contracts with file-level ownership, and a multi-surface integration pattern. SoulSpec has identity (agent-only). Mastra has delegation hooks (no identity). A2A has discovery (no personas, no delegation). Ethos is the only tool where the same runtime gives an agent its personality, constrains its file access in a mission, and lets a voice tool read its voice config---all from the same identity record.
 
 \textbf{Competitive response:} If Anthropic ships native human identity in Claude Code, the identity pillar becomes less necessary as a standalone layer. The workflow pillar (missions, write-sets, audit trails) and the cross-tool integration pattern would retain independent value. The bet is that the agentic tool market remains fragmented and that identity + delegation + integration need to be one layer.
+\end{faqpair}
+
+\begin{faqpair}{What is the customer acquisition strategy?}\label{faq:acquisition}
+Five channels, ordered by expected contribution:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Organic search and GitHub discovery.} Developers searching for ``Claude Code identity,'' ``agent delegation,'' or ``AI team structure'' find the repo. The MIT license and zero-dependency install remove friction. README, SEO-targeted docs, and the live example walkthrough convert visitors to installers.
+  \item \textbf{Punt Labs tool ecosystem.} Biff, Vox, and Beadle surface ethos during normal use---``install ethos for richer identity context'' prompts appear when the tool detects ethos is absent. Each tool is a distribution channel for the shared layer.
+  \item \textbf{Community and content.} Blog posts, conference talks, and example repos demonstrating mission contracts and team structures. The 12m55s end-to-end demo is the core asset: a real bug fix from bead claim to merged PR, timed and reproducible.
+  \item \textbf{SoulSpec and A2A interoperability.} SoulSpec export (\featureref{feat:soulspec-export}) lets ethos users publish agent personas into the OpenClaw ecosystem. A2A-compatible discovery lets ethos identities participate in cross-platform agent networks. Developers in those ecosystems discover ethos when they want human identity parity, team graphs, or delegation contracts that their current tools lack.
+  \item \textbf{Content compatibility.} Ethos imports structured workflows from popular prompt-based tools. gstack's 23 SKILL.md files~\cite{gstack2025github} become 6 identities with enforced roles; SoulSpec personas map to ethos identities with team structure. Users of these tools discover ethos when they want structural enforcement behind their prompt-based workflows: ``you already have the workflow discipline as prompts---ethos makes it structural.'' A gstack-inspired sprint team ships as a batteries-included starter template, so developers start with a working team structure on day one.
+\end{enumerate}
+
+\textbf{Assumption:} Channel contribution is judgment-based. No acquisition data exists. The validation interviews will test whether ``found it on GitHub'' or ``heard about it from a tool prompt'' is the dominant path.
 \end{faqpair}
 
 \begin{faqpair}{What is your next step to validate your vision?}
@@ -481,6 +497,8 @@ Three scenarios would cause ethos to fail:
   \featureitem{SoulSpec export}{optional export of ethos identities in SoulSpec-compatible format for OpenClaw interoperability}\label{feat:soulspec-export}
   \featureitem{Integration guides}{documentation and examples for third-party tools to read ethos identity and mission state}\label{feat:guides}
   \featureitem{Starter team templates}{solo developer (1 human + 3 agents), small team (2--3 humans + 5 agents), reference implementation}\label{feat:templates}
+  \featureitem{LLM-assisted identity creation from project context}{{\small\texttt{ethos create}} reads CLAUDE.md and fine-tunes starter content defaults with LLM inference---pre-filling writing style, personality, and role suggestions from existing project conventions}\label{feat:llm-create}
+  \featureitem{Structured workflow importers}{{\small\texttt{ethos import --from gstack|soulspec|crewai}} extracts personas and roles from popular tool formats; ships a gstack-inspired sprint team as starter content}\label{feat:importers}
 \end{enumerate}
 
 \subsection*{Won't Do}
