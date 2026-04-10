@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/adr"
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/doctor"
 	"github.com/punt-labs/ethos/internal/hook"
@@ -32,6 +33,7 @@ type Handler struct {
 	roles         *role.LayeredStore
 	teams         *team.LayeredStore
 	missionStore  *mission.Store
+	adrStore      *adr.Store
 }
 
 // Option configures optional Handler fields.
@@ -55,6 +57,11 @@ func WithTeamStore(ts *team.LayeredStore) Option {
 // WithMissionStore sets the mission store on the handler.
 func WithMissionStore(ms *mission.Store) Option {
 	return func(h *Handler) { h.missionStore = ms }
+}
+
+// WithADRStore sets the ADR store on the handler.
+func WithADRStore(as *adr.Store) Option {
+	return func(h *Handler) { h.adrStore = as }
 }
 
 // NewHandler creates a Handler with the given stores.
@@ -136,6 +143,10 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// Mission tool (if store configured)
 	if h.missionStore != nil {
 		s.AddTool(h.missionTool(), h.handleMission)
+	}
+	// ADR tool (if store configured)
+	if h.adrStore != nil {
+		s.AddTool(h.adrTool(), h.handleADR)
 	}
 }
 
