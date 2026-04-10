@@ -257,6 +257,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **SessionStart working context (`ethos-gcq.1`)** — `HandleSessionStart`
+  now emits a `## Working Context` section with git branch, uncommitted
+  change count and file paths (capped at 20), and unpushed commit count.
+  Advisory only — returns empty on non-git directories or git failures.
 - **`ethos mission result --verify` cross-checks declared counts
   against `git diff --numstat` (`ethos-2e4`)** — adds an optional
   `--verify` flag (with a companion `--base` flag that defaults to
