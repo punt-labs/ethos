@@ -489,12 +489,15 @@ func TestMissionClose(t *testing.T) {
 	// refusal — the refusal branch is covered separately.
 	submitCLIResult(t, ids[0], 1)
 
-	// Text mode echoes a one-line `closed: <id> status=closed` summary
-	// so a scripting caller sees the operation landed without a
-	// follow-up show (ethos-30c).
+	// Text mode echoes a one-line summary including the round and
+	// verdict that authorized the close, so a scripting caller sees
+	// the operation landed and which result satisfied the gate
+	// without a follow-up show or mission log (ethos-30c).
 	stdout := captureStdout(t, func() { runMissionClose(ids[0], mission.StatusClosed) })
 	assert.Contains(t, stdout, "closed:")
 	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "round=1")
+	assert.Contains(t, stdout, "verdict=pass")
 	assert.Contains(t, stdout, "status="+mission.StatusClosed)
 
 	c, err := ms.Load(ids[0])
@@ -1327,6 +1330,61 @@ func TestMissionResult_JSON(t *testing.T) {
 	assert.Equal(t, "pass", got["verdict"])
 	assert.Equal(t, 0.9, got["confidence"])
 	assert.NotEmpty(t, got["created_at"])
+}
+
+// TestMissionClose_JSON asserts the JSON output shape for the CLI
+// close subcommand. The payload must surface the round and verdict
+// that authorized the close so a scripting caller does not need a
+// follow-up `mission log` to learn which result satisfied the gate.
+func TestMissionClose_JSON(t *testing.T) {
+	missionTestEnv(t)
+	jsonOutput = true
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	submitCLIResult(t, id, 1)
+
+	out := captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, id, got["mission_id"])
+	assert.Equal(t, float64(1), got["round"])
+	assert.Equal(t, "pass", got["verdict"])
+	assert.Equal(t, mission.StatusClosed, got["status"])
+}
+
+// TestMissionAdvance_JSON asserts the JSON output shape for the CLI
+// advance subcommand. The payload must surface the new current
+// round so a scripting caller does not need a follow-up `mission
+// show` to learn the round transition.
+func TestMissionAdvance_JSON(t *testing.T) {
+	missionTestEnv(t)
+	jsonOutput = true
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
+
+	out := captureStdout(t, func() { runMissionAdvance(id) })
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, id, got["mission_id"])
+	assert.Equal(t, float64(1), got["from_round"])
+	assert.Equal(t, float64(2), got["to_round"])
+	assert.Equal(t, float64(2), got["current_round"])
 }
 
 // TestMissionClose_GateRefusesWithoutResult asserts the CLI close

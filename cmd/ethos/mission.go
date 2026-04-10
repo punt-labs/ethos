@@ -690,14 +690,35 @@ func runMissionClose(idOrPrefix, status string) {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 		os.Exit(1)
 	}
+	// Surface the round and verdict that authorized the close so a
+	// scripting caller does not need a follow-up `mission log` to
+	// learn which result satisfied the gate. Close does not touch
+	// CurrentRound, so the contract's current round after close is
+	// the same round checkResultGateLocked matched against.
+	c, err := ms.Load(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: loading closed contract: %v\n", err)
+		os.Exit(1)
+	}
+	r, err := ms.LoadResult(id, c.CurrentRound)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: loading satisfying result: %v\n", err)
+		os.Exit(1)
+	}
 	if jsonOutput {
-		printJSON(map[string]string{"mission_id": id, "status": status})
+		printJSON(map[string]any{
+			"mission_id": id,
+			"round":      r.Round,
+			"verdict":    r.Verdict,
+			"status":     status,
+		})
 		return
 	}
-	// Text mode echoes a one-line summary; mission ID + terminal
-	// status mirrors the JSON payload above so a scripting caller
-	// gets the same fields from either surface.
-	fmt.Printf("closed: %s status=%s\n", id, status)
+	// Text mode echoes a one-line summary; round, verdict, and
+	// status mirror the close event-log summary in
+	// summarizeEventDetails so CLI echo and audit log read the same.
+	fmt.Printf("closed: %s round=%d verdict=%s status=%s\n",
+		id, r.Round, r.Verdict, status)
 }
 
 // runMissionReflect handles `ethos mission reflect <id> --file <path>`.
@@ -824,8 +845,14 @@ func runMissionAdvance(idOrPrefix string) {
 		os.Exit(1)
 	}
 	if jsonOutput {
+		// Surface both endpoints of the round transition so the JSON
+		// shape carries the same information as the text echo and
+		// the round_advanced event-log entry. from_round and
+		// to_round match the event-log field names.
 		printJSON(map[string]any{
 			"mission_id":    id,
+			"from_round":    newRound - 1,
+			"to_round":      newRound,
 			"current_round": newRound,
 		})
 		return
