@@ -69,6 +69,15 @@ var hookFormatOutputCmd = &cobra.Command{
 	},
 }
 
+var hookAuditLogCmd = &cobra.Command{
+	Use:   "audit-log",
+	Short: "PostToolUse audit logger",
+	Args:  cobra.NoArgs,
+	Run: func(cmd *cobra.Command, args []string) {
+		runHookAuditLog()
+	},
+}
+
 func init() {
 	hookCmd.AddCommand(
 		hookSessionStartCmd,
@@ -77,6 +86,7 @@ func init() {
 		hookSubagentStopCmd,
 		hookPreCompactCmd,
 		hookFormatOutputCmd,
+		hookAuditLogCmd,
 	)
 	rootCmd.AddCommand(hookCmd)
 }
@@ -155,4 +165,14 @@ func runHookFormatOutput() {
 		fmt.Fprintf(os.Stderr, "ethos hook format-output: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func runHookAuditLog() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos hook audit-log: %v\n", err)
+		os.Exit(1)
+	}
+	sessionsDir := home + "/.punt-labs/ethos/sessions"
+	_ = hook.HandleAuditLog(os.Stdin, sessionsDir)
 }
