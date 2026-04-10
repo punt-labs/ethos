@@ -2344,9 +2344,9 @@ func TestMissionLog_Help_DocumentsEmptyEventFilter(t *testing.T) {
 //
 // The following tests cover the CLI-side cross-check that diffs the
 // worker's declared files_changed counts against `git diff --numstat`.
-// Five of the six are subprocess tests because they need a real git
-// repo plus a real binary invocation; test #1 (verify OFF, default
-// behavior unchanged) runs in-process because no git is involved.
+// Most of these are subprocess tests because they need a real git
+// repo plus a real binary invocation; the verify-OFF/default-behavior
+// case runs in-process because no git is involved.
 //
 // All subprocess tests reuse seedEvaluator + the canonical contract
 // body to bring a mission into existence, then drive `mission result`
@@ -2996,4 +2996,148 @@ func TestMissionResult_VerifyOn_UndeclaredWarningUsesCanonicalComparison(t *test
 		"`./c.txt` matches `c.txt` canonically; no warning expected")
 	assert.NotContains(t, stderr, "c.txt",
 		"the warning path must not name c.txt even obliquely")
+}
+
+// TestMissionResult_VerifyOn_SchemaErrorPrecedence asserts that a
+// structural schema error in the result is reported by the validator,
+// not by --verify. The result declares BOTH a wrong count on a.txt
+// AND a path traversal entry (`../etc/passwd`). Before the precedence
+// fix, verifyResultAgainstNumstat ran first and reported the path as
+// "not in diff" — a misleading diagnostic for what is actually a
+// structurally-invalid path. After the fix, r.Validate() runs first
+// and names the real problem.
+func TestMissionResult_VerifyOn_SchemaErrorPrecedence(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 42, Removed: 0}, // wrong count
+		{Path: "../etc/passwd", Added: 1, Removed: 0},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = testGitEnv(home)
+	cmd.Dir = repo
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	require.Error(t, err, "structural path violation must fail")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError, got %T: %v", err, err)
+	assert.Equal(t, 1, exitErr.ExitCode())
+
+	stderr := errBuf.String()
+	assert.Contains(t, stderr, "contains path traversal",
+		"validator must name the structural problem, not the diff mismatch")
+	assert.NotContains(t, stderr, "not in",
+		"verify must not run before schema validation")
+	assert.NotContains(t, stderr, "added=42",
+		"verify must not run before schema validation")
+}
+
+// TestMissionResult_VerifyOn_HandlesRenames asserts that a result
+// declaring the post-rename path of a renamed file is accepted by
+// --verify. Without --no-renames on `git diff --numstat`, git reports
+// the rename as `a.txt => renamed.txt` in the third field, and the
+// naive parseNumstat would key the entry under that arrow-joined
+// string — producing a false "not in diff" rejection for the worker
+// who declared `renamed.txt`. With --no-renames, git reports the
+// rename as a delete+add pair and the declared post-rename path maps
+// straight through.
+//
+// Uses a dedicated fixture because the rename fundamentally changes
+// the diff shape relative to the shared environment.
+func TestMissionResult_VerifyOn_HandlesRenames(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+
+	repo := t.TempDir()
+	env := testGitEnv(home)
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)
+	}
+	runGit("init", "-b", "main", repo)
+
+	// Baseline commit: a.txt with 3 lines.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"),
+		[]byte("a1\na2\na3\n"), 0o600))
+	runGit("add", "a.txt")
+	runGit("commit", "-m", "baseline")
+
+	// Rename commit: a.txt → renamed.txt with 2 added lines. Use git
+	// mv so git's rename-detection heuristic sees a strong match; the
+	// post-rename file has enough unchanged content to beat the default
+	// similarity threshold. This is exactly the case that trips the
+	// rename notation bug when --no-renames is absent.
+	runGit("mv", "a.txt", "renamed.txt")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "renamed.txt"),
+		[]byte("a1\na2\na3\na4\na5\n"), 0o600))
+	runGit("add", "renamed.txt")
+	runGit("commit", "-m", "rename a.txt to renamed.txt and extend")
+
+	// Contract admits renamed.txt; the old name is gone.
+	contract := filepath.Join(repo, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-2e4
+write_set:
+  - a.txt
+  - renamed.txt
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	runEthos := func(args ...string) string {
+		cmd := exec.Command(ethosBinary, args...)
+		cmd.Env = testGitEnv(home)
+		cmd.Dir = repo
+		var out, errBuf bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errBuf
+		require.NoError(t, cmd.Run(), "ethos %s: %s",
+			strings.Join(args, " "), errBuf.String())
+		return out.String()
+	}
+	runEthos("mission", "create", "--file", contract)
+	listOut := runEthos("mission", "list", "--json")
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(listOut), &entries))
+	id, _ := entries[0]["mission_id"].(string)
+
+	// Declare the post-rename path only. Under --no-renames, git
+	// reports the rename as `0\t3\ta.txt` (the old path, deleted) plus
+	// `5\t0\trenamed.txt` (the new path, added). The worker's declared
+	// renamed.txt with added=5/removed=0 matches; a.txt shows up as a
+	// warning on stderr (undeclared delete), which is expected noise.
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "renamed.txt", Added: 5, Removed: 0},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = testGitEnv(home)
+	cmd.Dir = repo
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	require.NoError(t, cmd.Run(),
+		"verify must accept the post-rename path: stderr=%s", errBuf.String())
+	assert.Contains(t, outBuf.String(), "result:",
+		"mission result text echo must confirm the write landed")
 }

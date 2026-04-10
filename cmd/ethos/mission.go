@@ -816,6 +816,19 @@ func runMissionResult(idOrPrefix, file string) {
 		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
 		os.Exit(1)
 	}
+	// Validate before --verify so schema errors beat diff-mismatch
+	// errors. Without this guard a structurally-invalid path (e.g. a
+	// control character or traversal segment) would surface as a
+	// misleading "not in diff" message from verifyResultAgainstNumstat,
+	// and only the schema validator knows how to point at the real
+	// problem. Store.AppendResult validates again under its own lock —
+	// the outer call here is a CLI-side precedence guard, not a
+	// replacement for the trust boundary. The double-validation is
+	// cheap and idempotent.
+	if err := r.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission result: %s: %v\n", file, err)
+		os.Exit(1)
+	}
 	// Optional CLI-side cross-check against `git diff --numstat`. The
 	// verifier runs BEFORE AppendResult so the mission store never sees
 	// a result whose declared counts contradict the working tree; on
@@ -905,7 +918,22 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 		return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
 	}
 
-	diff := exec.Command("git", "diff", "--numstat", "--end-of-options", base+"..HEAD")
+	// --no-renames tells git to report renames as a delete+add pair
+	// instead of `old => new` in the third numstat field. The
+	// rename-notation form breaks a naive path lookup: a worker who
+	// declares the post-rename path (`b.txt`) would be rejected
+	// because parseNumstat keyed the entry as `a.txt => b.txt`. With
+	// --no-renames the worker's declared path maps straight through
+	// to git's report. The trade-off is that a rename-only change
+	// (no content edit) produces a 0/0 delete on the old path; the
+	// worker who omits it from files_changed sees an undeclared-path
+	// warning on stderr rather than an outright rejection — an
+	// acceptable noise level given the alternative. --verify is a
+	// line-count check on shipped files, not a rename detector.
+	//
+	// --end-of-options applies to `base+"..HEAD"` only; git treats
+	// `--no-renames` as a real flag before the sandbox.
+	diff := exec.Command("git", "diff", "--numstat", "--no-renames", "--end-of-options", base+"..HEAD")
 	diff.Stderr = os.Stderr
 	out, err := diff.Output()
 	if err != nil {
