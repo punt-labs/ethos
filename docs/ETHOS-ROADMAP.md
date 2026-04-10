@@ -4,12 +4,12 @@ Where ethos is going. Organized into phases that build on each other.
 
 ## Current Status (2026-04-09)
 
-Ethos is at **v2.8.0**. Phase 1 is shipped, Phase 3 is complete and merged, and Phase 2 is at 5 of 6 subphases (2.1–2.5 complete, 2.6 planned).
+Ethos is at **v2.8.0**. Phases 1, 2.1–2.5, and 3 are complete and merged to main. Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run) remains planned.
 
 | Phase | Status | Summary |
 |---|---|---|
 | **Phase 1 — Batteries Included** | SHIPPED | 10 starter talents, 6 starter roles, baseline-ops skill, model field on Role |
-| **Phase 2 — Production-Quality Agents** | SHIPPED (2.1–2.5) | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill Phase A (beads `ethos-9ai.1`–`.5`). `/mission` Phase B–C (conflict detection, dry-run) remains in `ethos-9ai.5`. |
+| **Phase 2 — Production-Quality Agents** | SHIPPED (2.1–2.5); 2.6 PLANNED | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill Phase A (beads `ethos-9ai.1`–`.5`). `/mission` Phase B–C (conflict detection, dry-run) remains planned (`ethos-9ai.5`). |
 | **Phase 3 — Workflow Primitives** | **SHIPPED** | All 7 primitives: mission contract, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log reader (beads `ethos-07m.5`–`07m.11`, ADRs DES-031 through DES-037) |
 | **Phase 4 — Operational Excellence** | PLANNED | SessionStart working context, role-based pre-tool safety, audit logging (beads `ethos-gcq.1`–`gcq.3`) |
 | **Phase 5 — Ecosystem** | FUTURE | Starter team templates, agent marketplace |
@@ -52,7 +52,7 @@ work in everything but name.
 Ethos v2.6.1 shipped the **mechanism** for identity binding:
 identities, personalities, writing styles, talents, roles, teams,
 sessions, persona animation, agent file generation, extension
-session context. Phase 3 (unreleased — PR #184, merge `c16715f`)
+session context. Phase 3 (complete — PR #184, merge `c16715f`)
 added the **workflow primitive layer** on top: typed mission
 contracts, runtime-enforced
 write-set admission, frozen evaluators, bounded rounds, verifier
