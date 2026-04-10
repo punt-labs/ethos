@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **AGENTS.md audit fixes (`ethos-gpc`)** — corrected wrong `whoami`
   CLI example (should be `iam`), added missing `mission` tool to MCP
   table (9 tools -> 10), added hidden-command shortcut note, fixed
-  MCP server name (`self` -> `ethos`).
+  MCP server naming in AGENTS.md (`self` vs `ethos`).
 - **Phase 4 status block drift fixed (`ethos-zve`)** — Three stale
   "Designed, not yet implemented" / "not yet active" references in
   `docs/agent-identity-spec.tex` and `docs/agent-definitions.md`

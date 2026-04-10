@@ -20,19 +20,19 @@ Tools integrate with ethos at whatever coupling level fits:
 ### CLI
 
 ```bash
-# These are shortcuts — the full forms are `ethos identity whoami`, etc.
-ethos whoami                          # Show active identity
-ethos iam mal                         # Declare active persona for this session
+# Shortcuts — canonical forms in parentheses.
+ethos whoami                          # Show active identity   (ethos identity whoami)
+ethos iam mal                         # Declare active persona (ethos session iam)
 ethos create                          # Interactive identity creation
 ethos create -f persona.yaml          # Create from YAML file
-ethos list                            # List all identities (* = active)
-ethos show mal                        # Full identity with extensions
+ethos list                            # List all identities   (ethos identity list)
+ethos show mal                        # Full identity          (ethos identity get)
 ethos show mal --json                 # JSON output
 ```
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (`ethos`) with 10 tools using method-dispatch.
+When running as a Claude Code plugin, ethos registers an MCP server (named `ethos`, plugin key `self` -- tool names follow the pattern `mcp__plugin_ethos_self__<tool>`) with 10 tools using method-dispatch.
 
 **All tools use a consolidated `method` parameter:**
 
