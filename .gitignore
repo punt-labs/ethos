@@ -55,6 +55,9 @@ docs/*.pdf
 .beads/bd.sock*
 .beads/daemon-error
 
+# Claude Code session transcripts (ethos-<date>.jsonl at repo root)
+ethos-*.jsonl
+
 .envrc.local
 
 # Generated research cache
