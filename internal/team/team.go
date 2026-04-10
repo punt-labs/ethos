@@ -3,6 +3,8 @@ package team
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 )
@@ -98,7 +100,12 @@ func ValidateStructural(t *Team) error {
 			return fmt.Errorf("collaboration %d: self-collaboration not allowed (%s)", i, c.From)
 		}
 		if !validCollabTypes[c.Type] {
-			return fmt.Errorf("collaboration %d (%s -> %s): invalid type %q: valid types are reports_to, collaborates_with, delegates_to", i, c.From, c.To, c.Type)
+			types := make([]string, 0, len(validCollabTypes))
+			for k := range validCollabTypes {
+				types = append(types, k)
+			}
+			sort.Strings(types)
+			return fmt.Errorf("collaboration %d (%s -> %s): invalid type %q: valid types are %s", i, c.From, c.To, c.Type, strings.Join(types, ", "))
 		}
 		if !filledRoles[c.From] {
 			return fmt.Errorf("collaboration %d (%s -> %s): role %q not filled by any member", i, c.From, c.To, c.From)

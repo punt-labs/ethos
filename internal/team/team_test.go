@@ -106,7 +106,7 @@ var structuralInvariantCases = []structuralInvariantCase{
 		mutate: func(t *Team) {
 			t.Collaborations[0].Type = "manages"
 		},
-		wantError: `collaboration 0 (dev -> lead): invalid type "manages": valid types are reports_to, collaborates_with, delegates_to`,
+		wantError: `collaboration 0 (dev -> lead): invalid type "manages": valid types are collaborates_with, delegates_to, reports_to`,
 	},
 	{
 		name: "8: collaboration from role not filled by any member",
