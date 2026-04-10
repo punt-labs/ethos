@@ -20,18 +20,19 @@ Tools integrate with ethos at whatever coupling level fits:
 ### CLI
 
 ```bash
-ethos whoami                          # Show active identity
-ethos whoami mal                      # Set active identity to "mal"
+# Shortcuts — canonical forms in parentheses.
+ethos whoami                          # Show active identity   (ethos identity whoami)
+ethos iam mal                         # Declare active persona (ethos session iam)
 ethos create                          # Interactive identity creation
 ethos create -f persona.yaml          # Create from YAML file
-ethos list                            # List all identities (* = active)
-ethos show mal                        # Full identity with extensions
+ethos list                            # List all identities   (ethos identity list)
+ethos show mal                        # Full identity          (ethos identity get)
 ethos show mal --json                 # JSON output
 ```
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (`self`) with 9 tools using method-dispatch.
+When running as a Claude Code plugin, ethos registers an MCP server (named `ethos`, plugin key `self` -- tool names follow the pattern `mcp__plugin_ethos_self__<tool>`) with 10 tools using method-dispatch.
 
 **All tools use a consolidated `method` parameter:**
 
@@ -45,6 +46,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (`self`) wit
 | `ext` | get, set, del, list | `handle`, `namespace`, `key`, `value` |
 | `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type`, `repo` |
 | `role` | list, show, create, delete | `name`, `responsibilities`, `permissions` |
+| `mission` | create, show, list, close, reflect, reflections, advance, result, results, log | `mission_id`, `contract`, `reflection`, `result`, `status` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
 **Example — read identity from MCP:**
