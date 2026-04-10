@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the flag for exploratory/parallel-fan-out/snapshot work only.
   No code changes — ethos has no worktree-creation logic to
   modify; the Claude Code behavior is working as designed.
+- **Phase 2.6 completion status corrected (`ethos-gpc`)** — README,
+  roadmap, and architecture.tex claimed Phase 2 fully shipped or
+  omitted the Phase B–C remainder. Phase 2.5 (`/mission` skill
+  Phase A, PR #186) shipped; Phase 2.6 (`/mission` Phase B–C:
+  conflict detection and dry-run) remains planned. All three
+  documents now reflect this.
 
 ### Changed
 
