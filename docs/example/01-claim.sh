@@ -13,15 +13,15 @@ bd update ethos-db7 --status=in_progress
 # ✓ Updated issue: ethos-db7
 
 # 1c. Announce what you're working on (visible to other agents via /who).
-# Actual output:
-#   Plan: ethos-db7: consolidate verifier contract load (live ex
+# Actual output (truncated by biff's field width):
+#   Plan: ethos-db7: consolidate verifier contract load (live ex...
 biff plan "ethos-db7: consolidate verifier contract load"
 
 # 1d. Create a feature branch from main.
 git checkout -b fix/verifier-toctou main
 # Switched to a new branch 'fix/verifier-toctou'
 
-# Branch prefixes follow punt-kit/standards/workflow.md:
+# Branch prefixes follow standard conventions:
 #   feat/ = new feature
 #   fix/  = bug fix or hardening
 #   docs/ = documentation only

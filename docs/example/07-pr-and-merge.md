@@ -68,6 +68,7 @@ The comment added in Phase 6 documents the gap. Thread resolved.
 
 ```bash
 # Resolve the Bugbot thread
+# Thread ID is PR-specific — query reviewThreads first to get yours
 gh api graphql -f query='mutation {
   resolveReviewThread(input: {threadId: "PRRT_kwDORp6BQc56KHpF"}) {
     thread { isResolved }

@@ -89,9 +89,11 @@ talents:
 
 ### 4. Configure Your Repo
 
-```yaml
-# .punt-labs/ethos.yaml (in your repo root)
+```bash
+mkdir -p .punt-labs
+cat > .punt-labs/ethos.yaml <<'EOF'
 agent: claude
+EOF
 ```
 
 ### 5. Start a Session
@@ -399,6 +401,10 @@ assembles the merged view but never interprets extension contents.
 make check    # All quality gates: vet + staticcheck + markdownlint + shellcheck + tests
 make build    # Build binary
 make install  # Build and install to ~/.local/bin
+make dev      # Install and symlink plugin cache for development
+make undev    # Restore plugin cache from backup
+make format   # Auto-format code
+make dist     # Cross-compile for all platforms
 make help     # List all targets
 ```
 
