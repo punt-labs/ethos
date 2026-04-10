@@ -52,6 +52,15 @@
     ],
     "PostToolUse": [
       {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/audit-log.sh"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__plugin_ethos(-dev)?_self__.*",
         "hooks": [
           {

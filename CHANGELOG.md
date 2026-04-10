@@ -261,6 +261,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now emits a `## Working Context` section with git branch, uncommitted
   change count and file paths (capped at 20), and unpushed commit count.
   Advisory only — returns empty on non-git directories or git failures.
+- **Role-based safety constraints (`ethos-gcq.2`)** — Roles can declare
+  `safety_constraints` (tool + message pairs) that appear as a
+  `## Safety Constraints` section in generated agent files.
+- **Session audit logging (`ethos-gcq.3`)** — PostToolUse hook appends
+  one JSONL line per tool invocation to a per-session audit log at
+  `~/.punt-labs/ethos/sessions/<id>.audit.jsonl`.
 - **`ethos mission result --verify` cross-checks declared counts
   against `git diff --numstat` (`ethos-2e4`)** — adds an optional
   `--verify` flag (with a companion `--base` flag that defaults to

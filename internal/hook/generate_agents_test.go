@@ -614,6 +614,71 @@ func TestGenerateAgentFiles(t *testing.T) {
 			},
 		},
 		{
+			// Role with safety_constraints — generator emits a
+			// "## Safety Constraints" section between anti-responsibilities
+			// (or responsibilities) and Talents.
+			name: "role with safety_constraints emits section",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "go-specialist.yaml"), map[string]interface{}{
+					"name": "go-specialist",
+					"responsibilities": []string{
+						"Go package implementation with tests",
+						"code review for Go projects",
+						"adherence to punt-kit/standards/go.md",
+					},
+					"tools": []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
+					"safety_constraints": []map[string]string{
+						{"tool": "Bash", "message": "Never run destructive rm commands"},
+						{"tool": "Write|Edit", "message": "Never modify dotenv files"},
+					},
+				})
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+
+				// Section must be present with the correct heading.
+				assert.Contains(t, content, "## Safety Constraints\n\n")
+				assert.Contains(t, content,
+					"These restrictions apply to your tool usage. Violations will be caught by review.\n\n")
+
+				// Both constraints rendered as bullets.
+				assert.Contains(t, content, "- **Bash**: Never run destructive rm commands\n")
+				assert.Contains(t, content, "- **Write|Edit**: Never modify dotenv files\n")
+
+				// Ordering: Responsibilities < Safety Constraints < Talents.
+				respIdx := strings.Index(content, "## Responsibilities")
+				safetyIdx := strings.Index(content, "## Safety Constraints")
+				talentsIdx := strings.Index(content, "\nTalents:")
+				require.True(t, respIdx >= 0 && safetyIdx >= 0 && talentsIdx >= 0,
+					"all three anchors must be present")
+				assert.Less(t, respIdx, safetyIdx,
+					"Safety Constraints must follow Responsibilities")
+				assert.Less(t, safetyIdx, talentsIdx,
+					"Safety Constraints must precede Talents")
+			},
+		},
+		{
+			// Role without safety_constraints — no section emitted.
+			// bwk's default fixture has no safety_constraints.
+			name: "role without safety_constraints omits section",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				assert.NotContains(t, string(data), "## Safety Constraints")
+			},
+		},
+		{
 			// Edit-only role — tools list has Edit but not Write — still
 			// gets the hook block. The matcher `Write|Edit` is unchanged;
 			// what gates emission is the helper's OR test over the tools

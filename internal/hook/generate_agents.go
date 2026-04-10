@@ -363,9 +363,19 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		}
 	}
 
+	// Safety constraints — tool-usage restrictions the agent must obey.
+	if len(r.SafetyConstraints) > 0 {
+		b.WriteString("\n## Safety Constraints\n\n")
+		b.WriteString("These restrictions apply to your tool usage. Violations will be caught by review.\n\n")
+		for _, sc := range r.SafetyConstraints {
+			fmt.Fprintf(&b, "- **%s**: %s\n", sc.Tool, sc.Message)
+		}
+	}
+
 	// Talents. A leading newline guarantees a blank line between the
-	// previous section (Responsibilities, anti-responsibilities, or
-	// Writing Style) and this line so the label never hugs a bullet.
+	// previous section (Responsibilities, anti-responsibilities, safety
+	// constraints, or Writing Style) and this line so the label never
+	// hugs a bullet.
 	if len(id.Talents) > 0 {
 		fmt.Fprintf(&b, "\nTalents: %s\n", strings.Join(id.Talents, ", "))
 	}
