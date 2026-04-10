@@ -262,7 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change count and file paths (capped at 20), and unpushed commit count.
   Advisory only — returns empty on non-git directories or git failures.
 - **Role-based safety constraints (`ethos-gcq.2`)** — Roles can declare
-  `safety_constraints` (tool/deny/message triples) that appear as a
+  `safety_constraints` (tool + message pairs) that appear as a
   `## Safety Constraints` section in generated agent files.
 - **Session audit logging (`ethos-gcq.3`)** — PostToolUse hook appends
   one JSONL line per tool invocation to a per-session audit log at

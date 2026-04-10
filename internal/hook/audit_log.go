@@ -50,6 +50,11 @@ func HandleAuditLog(r io.Reader, sessionsDir string) error {
 	}
 	line = append(line, '\n')
 
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: creating %s: %v\n", sessionsDir, err)
+		return nil
+	}
+
 	path := filepath.Join(sessionsDir, filepath.Base(sessionID)+".audit.jsonl")
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
