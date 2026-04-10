@@ -56,3 +56,6 @@ docs/*.pdf
 .beads/daemon-error
 
 .envrc.local
+
+# Generated research cache
+research/

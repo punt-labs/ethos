@@ -3905,3 +3905,63 @@ or formatter paths.
   mission saw `close status=escalated` without context. The
   append-only log exists precisely so future readers can
   reconstruct what happened without reading the conversation.
+
+## DES-041: Conventions over enforcement for write-sets and safety constraints (SETTLED)
+
+**Status**: Settled. Design philosophy documented in PR/FAQ v2.1.
+Bead `ethos-2br` (closed — agency spectrum resolved).
+
+### Problem
+
+Write-set boundaries and safety constraints define what an agent
+should and should not do. Two enforcement models exist:
+
+1. **Runtime enforcement** — the system blocks file writes outside
+   the write-set at the filesystem level, using sandboxing or
+   kernel-level controls.
+2. **Convention enforcement** — the contract declares the boundary,
+   the agent agrees to it as part of its system prompt, and the
+   review pipeline (code-reviewer, Copilot, Bugbot, audit log)
+   catches violations after the fact.
+
+### Decision
+
+Ethos uses conventions, not runtime enforcement. Write-sets are
+contracts verified in review, not filesystem sandboxes.
+
+**Rationale:**
+
+- Agent runtimes (Claude Code, Codex CLI, OpenCode) do not expose
+  filesystem sandboxing primitives. Runtime enforcement would require
+  kernel-level isolation (seccomp, namespaces) that is outside ethos's
+  layer — a different product entirely.
+- The convention model is cheap to adopt. A mission contract takes
+  seconds to write. A sandbox takes infrastructure to provision.
+- The audit trail catches violations after the fact. The append-only
+  event log, the `--verify` flag on `ethos mission result`, and the
+  layered review pipeline (local code-reviewer → Copilot → Bugbot)
+  provide multiple catch points.
+- The same convention model scales across the agency spectrum: a tight
+  implementation mission and an open design mission use the same
+  contract schema. The leader controls agency through contract
+  specificity (tight write-set and specific criteria vs. broad
+  write-set and open-ended criteria), not through a mode switch.
+
+### Rejected alternatives
+
+- **Filesystem sandboxing via seccomp/namespaces.** Requires
+  kernel-level integration that agent runtimes don't support. Would
+  make ethos a sandboxing tool rather than an identity/workflow tool.
+  Out of scope.
+- **Pre-tool hook enforcement that blocks writes outside write-set.**
+  Claude Code's PreToolUse hooks can reject tool calls, but the hook
+  runs in shell and would need to parse the tool input to extract
+  file paths, match against the mission's write-set, and handle
+  edge cases (relative paths, symlinks, directory creation). Fragile,
+  slow on the hot path, and creates friction during refactors where
+  intermediate states are knowingly outside the declared set.
+- **No write-set at all — trust the agent.** Misses the point. The
+  write-set isn't about distrust; it's about coordination. Two
+  missions claiming the same files is a merge conflict waiting to
+  happen. The write-set prevents the conflict at creation time, even
+  if it doesn't block the write at runtime.
