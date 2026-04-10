@@ -225,7 +225,15 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
-	if err := h.missionStore.Close(id, status); err != nil {
+	// Store.Close returns the satisfying result the gate matched
+	// against, so the MCP payload carries the same round and verdict
+	// the CLI echo does. The underscore is deliberate: the MCP
+	// response shape is still {mission_id, status} for backward
+	// compatibility, but the signature must match the store method.
+	// If a future round widens the MCP shape to include round/verdict,
+	// drop the underscore and add the fields.
+	_, err = h.missionStore.Close(id, status)
+	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to close mission: %v", err)), nil
 	}
 	return jsonResult(map[string]string{

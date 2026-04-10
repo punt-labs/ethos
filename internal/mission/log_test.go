@@ -147,7 +147,8 @@ func TestStoreCloseAppendsCloseEvent(t *testing.T) {
 	// round. Submit one so the test exercises the close event append,
 	// not the gate refusal.
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.Close("m-2026-04-07-001", StatusClosed))
+	_, err := s.Close("m-2026-04-07-001", StatusClosed)
+	require.NoError(t, err)
 
 	events := readLog(t, s, "m-2026-04-07-001")
 	// Phase 3.6 adds a "result" event for the submitted artifact —
@@ -285,7 +286,8 @@ func TestLoadEvents_CleanMultipleEvents(t *testing.T) {
 	c := newContract("m-2026-04-07-004")
 	require.NoError(t, s.Create(c))
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.Close("m-2026-04-07-004", StatusClosed))
+	_, closeErr := s.Close("m-2026-04-07-004", StatusClosed)
+	require.NoError(t, closeErr)
 
 	events, warnings, err := s.LoadEvents("m-2026-04-07-004")
 	require.NoError(t, err)

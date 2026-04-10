@@ -247,14 +247,20 @@ func TestMissionCreate_FromFile(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
 
-	// Non-JSON mode is silent on success.
+	// Text mode echoes a one-line `created: <id> worker=... evaluator=...`
+	// summary so a scripting caller can chain on the new mission ID
+	// without a follow-up `ethos mission list` (ethos-30c).
 	stdout := captureStdout(t, runMissionCreate)
-	assert.Empty(t, strings.TrimSpace(stdout), "create must be silent on success (non-JSON mode)")
 
 	ms := missionStore()
 	ids, err := ms.List()
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
+
+	assert.Contains(t, stdout, "created:")
+	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "worker=bwk")
+	assert.Contains(t, stdout, "evaluator=djb")
 
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
@@ -443,7 +449,8 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	// result artifact for the current round before the close gate
 	// will accept the terminal transition.
 	submitCLIResult(t, ids[0], 1)
-	require.NoError(t, ms.Close(ids[0], mission.StatusClosed))
+	_, err = ms.Close(ids[0], mission.StatusClosed)
+	require.NoError(t, err)
 
 	// Default filter "open" returns the two open ones.
 	jsonOutput = true
@@ -483,9 +490,16 @@ func TestMissionClose(t *testing.T) {
 	// refusal — the refusal branch is covered separately.
 	submitCLIResult(t, ids[0], 1)
 
-	// Non-JSON mode is silent on success.
+	// Text mode echoes a one-line summary including the round and
+	// verdict that authorized the close, so a scripting caller sees
+	// the operation landed and which result satisfied the gate
+	// without a follow-up show or mission log (ethos-30c).
 	stdout := captureStdout(t, func() { runMissionClose(ids[0], mission.StatusClosed) })
-	assert.Empty(t, strings.TrimSpace(stdout), "close must be silent on success (non-JSON mode)")
+	assert.Contains(t, stdout, "closed:")
+	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "round=1")
+	assert.Contains(t, stdout, "verdict=pass")
+	assert.Contains(t, stdout, "status="+mission.StatusClosed)
 
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
@@ -548,7 +562,12 @@ func TestMissionReflect_RoundTrip(t *testing.T) {
 
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "round 1 went well")
 	stdout := captureStdout(t, func() { runMissionReflect(ids[0], missionReflectFile) })
-	assert.Empty(t, strings.TrimSpace(stdout), "reflect must be silent on success (non-JSON mode)")
+	// Text mode echoes `reflected: <id> round=1 rec=continue` so a
+	// scripting caller sees the reflection landed (ethos-30c).
+	assert.Contains(t, stdout, "reflected:")
+	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "round=1")
+	assert.Contains(t, stdout, "rec=continue")
 
 	rs, err := ms.LoadReflections(ids[0])
 	require.NoError(t, err)
@@ -650,12 +669,13 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
 	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
 
-	// Advance — non-JSON mode is silent on success (matches every
-	// other mission subcommand: create, close, reflect). Exit code 0
-	// and a bumped CurrentRound on disk tell the whole story.
+	// Advance — text mode echoes `advanced: <id> round 1 -> 2` so a
+	// scripting caller can read the new round without a follow-up
+	// show (ethos-30c).
 	out := captureStdout(t, func() { runMissionAdvance(id) })
-	assert.Empty(t, strings.TrimSpace(out),
-		"mission advance must be silent on success in non-JSON mode")
+	assert.Contains(t, out, "advanced:")
+	assert.Contains(t, out, id)
+	assert.Contains(t, out, "round 1 -> 2")
 
 	loaded, err := ms.Load(id)
 	require.NoError(t, err)
@@ -1142,7 +1162,13 @@ func TestMissionResult_RoundTrip(t *testing.T) {
 
 	missionResultFile = writeResultFile(t, id, 1)
 	stdout := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
-	assert.Empty(t, strings.TrimSpace(stdout), "result must be silent on success (non-JSON mode)")
+	// Text mode echoes `result: <id> round=1 verdict=pass` so a
+	// scripting caller can confirm the submission landed without
+	// a follow-up `ethos mission results` (ethos-30c).
+	assert.Contains(t, stdout, "result:")
+	assert.Contains(t, stdout, id)
+	assert.Contains(t, stdout, "round=1")
+	assert.Contains(t, stdout, "verdict="+mission.VerdictPass)
 
 	loaded, err := ms.LoadResult(id, 1)
 	require.NoError(t, err)
@@ -1305,6 +1331,61 @@ func TestMissionResult_JSON(t *testing.T) {
 	assert.Equal(t, "pass", got["verdict"])
 	assert.Equal(t, 0.9, got["confidence"])
 	assert.NotEmpty(t, got["created_at"])
+}
+
+// TestMissionClose_JSON asserts the JSON output shape for the CLI
+// close subcommand. The payload must surface the round and verdict
+// that authorized the close so a scripting caller does not need a
+// follow-up `mission log` to learn which result satisfied the gate.
+func TestMissionClose_JSON(t *testing.T) {
+	missionTestEnv(t)
+	jsonOutput = true
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	submitCLIResult(t, id, 1)
+
+	out := captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, id, got["mission_id"])
+	assert.Equal(t, float64(1), got["round"])
+	assert.Equal(t, "pass", got["verdict"])
+	assert.Equal(t, mission.StatusClosed, got["status"])
+}
+
+// TestMissionAdvance_JSON asserts the JSON output shape for the CLI
+// advance subcommand. The payload must surface the new current
+// round so a scripting caller does not need a follow-up `mission
+// show` to learn the round transition.
+func TestMissionAdvance_JSON(t *testing.T) {
+	missionTestEnv(t)
+	jsonOutput = true
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
+
+	out := captureStdout(t, func() { runMissionAdvance(id) })
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, id, got["mission_id"])
+	assert.Equal(t, float64(1), got["from_round"])
+	assert.Equal(t, float64(2), got["to_round"])
+	assert.Equal(t, float64(2), got["current_round"])
 }
 
 // TestMissionClose_GateRefusesWithoutResult asserts the CLI close
