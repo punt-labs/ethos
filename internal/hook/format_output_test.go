@@ -10,6 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// zoneRegex is the zone portion of FormatLocalTime output: an
+// alphabetic abbreviation (possibly mixed-case like ChST for
+// Pacific/Guam) or a numeric offset fallback (±HH, ±HHMM, ±HHMMSS).
+// Interpolated into per-row assertions so future tweaks land in
+// one place.
+const zoneRegex = `([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`
+
 // runFormat calls HandleFormatOutput with the given payload and returns
 // the output written to the writer. Does not touch os.Stdout.
 func runFormat(t *testing.T, payload []byte) string {
@@ -730,7 +737,7 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	// is either an abbreviation when available (possibly mixed-case
 	// like ChST) or a numeric offset fallback of ±HH, ±HHMM, or
 	// ±HHMMSS when the Location has no named zone abbreviation.
-	assert.Regexp(t, `Created:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`, ctx)
+	assert.Regexp(t, `Created:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} `+zoneRegex, ctx)
 	assert.Contains(t, ctx, "Write set:")
 	assert.Contains(t, ctx, "- internal/mission/")
 	assert.Contains(t, ctx, "Tools:")
@@ -782,7 +789,7 @@ func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
 	// abbreviation when available — possibly mixed-case like ChST
 	// — or a numeric offset fallback of ±HH, ±HHMM, or ±HHMMSS
 	// when the Location has no named zone abbreviation).
-	assert.Regexp(t, `Closed:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`, ctx)
+	assert.Regexp(t, `Closed:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} `+zoneRegex, ctx)
 }
 
 func TestFormatOutput_Mission_Show_NoOptionalFields(t *testing.T) {
@@ -1229,7 +1236,7 @@ func TestFormatMissionTime(t *testing.T) {
 				// no named zone abbreviation — which Go emits
 				// as ±HH, ±HHMM, or ±HHMMSS (e.g. +05, +0530,
 				// -0700).
-				assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)$`, got)
+				assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2} `+zoneRegex+`$`, got)
 				return
 			}
 			assert.Equal(t, tt.want, got)

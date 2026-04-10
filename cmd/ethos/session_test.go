@@ -6,6 +6,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// zoneRegex is the zone portion of FormatLocalTime output: an
+// alphabetic abbreviation (possibly mixed-case like ChST for
+// Pacific/Guam) or a numeric offset fallback (±HH, ±HHMM, ±HHMMSS).
+// Interpolated into per-row assertions so future tweaks land in
+// one place.
+const zoneRegex = `([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`
+
 func TestShortID(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -46,7 +53,7 @@ func TestFormatStarted(t *testing.T) {
 				// ±HH, ±HHMM, or ±HHMMSS (e.g. +05, +0530,
 				// -0700) when the Location has no named zone
 				// abbreviation.
-				assert.Regexp(t, `^2026-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)$`, got)
+				assert.Regexp(t, `^2026-\d{2}-\d{2} \d{2}:\d{2} `+zoneRegex+`$`, got)
 			},
 		},
 		{
