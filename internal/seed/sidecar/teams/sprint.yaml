@@ -1,0 +1,26 @@
+name: sprint
+repositories: []
+members:
+  - identity: sprint-architect
+    role: architect
+  - identity: sprint-implementer
+    role: implementer
+  - identity: sprint-reviewer
+    role: reviewer
+  - identity: sprint-qa
+    role: test-engineer
+  - identity: sprint-security
+    role: security-reviewer
+collaborations:
+  - from: implementer
+    to: architect
+    type: reports_to
+  - from: reviewer
+    to: architect
+    type: reports_to
+  - from: test-engineer
+    to: architect
+    type: reports_to
+  - from: security-reviewer
+    to: architect
+    type: reports_to

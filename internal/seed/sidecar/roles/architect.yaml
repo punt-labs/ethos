@@ -7,8 +7,13 @@ responsibilities:
   - Never implement — produce plans for implementers
 tools:
   - Read
+  - Write
+  - Edit
   - Grep
   - Glob
+safety_constraints:
+  - tool: Write|Edit
+    message: "Produce specs and design docs only — never write implementation code"
 output_format: |
   Report design decisions using this structure:
 

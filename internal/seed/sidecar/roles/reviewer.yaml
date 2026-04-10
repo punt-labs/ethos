@@ -10,6 +10,11 @@ tools:
   - Grep
   - Glob
   - Bash
+safety_constraints:
+  - tool: Write|Edit
+    message: "Never modify code — report findings only"
+  - tool: Bash
+    message: "Run tests and linters for verification only — never modify files via shell"
 output_format: |
   Report findings using this structure:
 

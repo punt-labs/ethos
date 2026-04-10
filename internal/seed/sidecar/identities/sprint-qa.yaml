@@ -1,0 +1,5 @@
+name: Sprint QA
+handle: sprint-qa
+kind: agent
+personality: sprint-qa
+writing_style: qa-prose
