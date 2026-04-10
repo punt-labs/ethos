@@ -15,6 +15,7 @@ import (
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // ethosBinary is the path to the compiled ethos binary, built once
@@ -78,6 +79,7 @@ func missionTestEnv(t *testing.T) string {
 	missionResultFile = ""
 	missionResultVerify = false
 	missionResultBase = "main"
+	missionExportDir = ".ethos/missions"
 	t.Cleanup(func() {
 		jsonOutput = false
 		missionCreateFile = ""
@@ -86,6 +88,7 @@ func missionTestEnv(t *testing.T) string {
 		missionResultFile = ""
 		missionResultVerify = false
 		missionResultBase = "main"
+		missionExportDir = ".ethos/missions"
 	})
 	return tmp
 }
@@ -3140,4 +3143,170 @@ budget:
 		"verify must accept the post-rename path: stderr=%s", errBuf.String())
 	assert.Contains(t, outBuf.String(), "result:",
 		"mission result text echo must confirm the write landed")
+}
+
+// TestMissionExport_HappyPath exercises the full export path: create a
+// mission, submit a result, export both artifacts to a custom directory,
+// and verify the files exist and contain valid YAML with the expected
+// mission ID.
+func TestMissionExport_HappyPath(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-k28.7
+write_set:
+  - cmd/ethos/mission.go
+success_criteria:
+  - make check passes
+budget:
+  rounds: 2
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	// Create the mission.
+	cmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	cmd.Env = env
+	require.NoError(t, cmd.Run())
+
+	// Discover the ID.
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	// Submit a result for round 1.
+	resultFile := filepath.Join(tmp, "result.yaml")
+	require.NoError(t, os.WriteFile(resultFile, []byte(fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.95
+files_changed:
+  - path: cmd/ethos/mission.go
+    added: 50
+    removed: 0
+evidence:
+  - name: make check
+    status: pass
+`, id)), 0o600))
+
+	submitCmd := exec.Command(ethosBinary, "mission", "result", id, "--file", resultFile)
+	submitCmd.Env = env
+	require.NoError(t, submitCmd.Run())
+
+	// Export to a custom directory.
+	exportDir := filepath.Join(tmp, ".ethos", "missions")
+	exportCmd := exec.Command(ethosBinary, "mission", "export", id, "--dir", exportDir)
+	exportCmd.Env = env
+	var exportOut bytes.Buffer
+	exportCmd.Stdout = &exportOut
+	require.NoError(t, exportCmd.Run())
+
+	// Both files must exist.
+	contractExport := filepath.Join(exportDir, id+".contract.yaml")
+	resultExport := filepath.Join(exportDir, id+".result.yaml")
+	assert.FileExists(t, contractExport)
+	assert.FileExists(t, resultExport)
+
+	// Stdout must confirm both exports.
+	out := exportOut.String()
+	assert.Contains(t, out, contractExport)
+	assert.Contains(t, out, resultExport)
+
+	// Contract YAML must contain the mission ID.
+	cData, err := os.ReadFile(contractExport)
+	require.NoError(t, err)
+	var cParsed map[string]any
+	require.NoError(t, yaml.Unmarshal(cData, &cParsed))
+	assert.Equal(t, id, cParsed["mission_id"])
+
+	// Result YAML must contain the mission ID and round 1.
+	rData, err := os.ReadFile(resultExport)
+	require.NoError(t, err)
+	var rParsed map[string]any
+	require.NoError(t, yaml.Unmarshal(rData, &rParsed))
+	assert.Equal(t, id, rParsed["mission"])
+	assert.Equal(t, 1, rParsed["round"])
+}
+
+// TestMissionExport_NoResult exports a mission with no result and
+// verifies only the contract is written, with a warning on stderr.
+func TestMissionExport_NoResult(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	tmp := t.TempDir()
+
+	contract := filepath.Join(tmp, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-k28.7b
+write_set:
+  - cmd/ethos/mission.go
+success_criteria:
+  - make check passes
+budget:
+  rounds: 1
+`), 0o600))
+
+	env := append(os.Environ(), "HOME="+home)
+
+	cmd := exec.Command(ethosBinary, "mission", "create", "--file", contract)
+	cmd.Env = env
+	require.NoError(t, cmd.Run())
+
+	listCmd := exec.Command(ethosBinary, "mission", "list", "--json")
+	listCmd.Env = env
+	var listOut bytes.Buffer
+	listCmd.Stdout = &listOut
+	require.NoError(t, listCmd.Run())
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(listOut.Bytes(), &entries))
+	require.Len(t, entries, 1)
+	id, _ := entries[0]["mission_id"].(string)
+	require.NotEmpty(t, id)
+
+	exportDir := filepath.Join(tmp, ".ethos", "missions")
+	exportCmd := exec.Command(ethosBinary, "mission", "export", id, "--dir", exportDir)
+	exportCmd.Env = env
+	var exportOut, exportErr bytes.Buffer
+	exportCmd.Stdout = &exportOut
+	exportCmd.Stderr = &exportErr
+	require.NoError(t, exportCmd.Run())
+
+	// Contract must exist.
+	contractExport := filepath.Join(exportDir, id+".contract.yaml")
+	assert.FileExists(t, contractExport)
+
+	// Result must NOT exist.
+	resultExport := filepath.Join(exportDir, id+".result.yaml")
+	_, err := os.Stat(resultExport)
+	assert.True(t, os.IsNotExist(err), "result file should not exist when mission has no result")
+
+	// Stderr must carry the warning.
+	assert.Contains(t, exportErr.String(), "no result yet")
 }

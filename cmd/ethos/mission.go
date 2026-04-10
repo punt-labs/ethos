@@ -13,6 +13,7 @@ import (
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 // missionStore returns a bare mission store rooted at
@@ -426,6 +427,27 @@ Examples:
 	},
 }
 
+// --- mission export ---
+
+var missionExportDir string
+
+var missionExportCmd = &cobra.Command{
+	Use:   "export <id-or-prefix>",
+	Short: "Export mission contract and result to a repo directory for git tracking",
+	Long: `Export mission contract and result to a repo directory for git tracking.
+
+Copies the mission's contract and final result (the last result on file)
+to <dir>/<id>.contract.yaml and <dir>/<id>.result.yaml. The directory
+is created if it doesn't exist. Default --dir is .ethos/missions/ in
+the current working directory.
+
+If the mission has no result yet (still open), only the contract is
+exported and a warning is printed to stderr. The exported files are
+plain YAML — the same format as the store.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runMissionExport,
+}
+
 // --- mission advance ---
 
 var missionAdvanceCmd = &cobra.Command{
@@ -472,6 +494,9 @@ func init() {
 	missionLogCmd.Flags().StringVar(&missionLogSinceFilter, "since", "",
 		"Filter by RFC3339 timestamp (events on or after)")
 
+	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".ethos/missions",
+		"Directory to export artifacts into")
+
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
@@ -483,6 +508,7 @@ func init() {
 		missionResultCmd,
 		missionResultsCmd,
 		missionLogCmd,
+		missionExportCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -1116,6 +1142,60 @@ func runMissionAdvance(idOrPrefix string) {
 	// round_advanced event-log summary in summarizeEventDetails so
 	// CLI echo and audit log read the same.
 	fmt.Printf("advanced: %s round %d -> %d\n", id, newRound-1, newRound)
+}
+
+// runMissionExport handles `ethos mission export <id> [--dir <path>]`.
+//
+// Copies the mission contract and its final result to a repo-local
+// directory for git tracking. The exported files are plain YAML — the
+// same bytes yaml.Marshal produces from the loaded structs. If no
+// result exists, the contract is exported alone with a warning.
+func runMissionExport(cmd *cobra.Command, args []string) error {
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(args[0])
+	if err != nil {
+		return err
+	}
+	c, err := ms.Load(id)
+	if err != nil {
+		return err
+	}
+
+	dir := missionExportDir
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("creating export directory %q: %w", dir, err)
+	}
+
+	contractData, err := yaml.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("marshaling contract: %w", err)
+	}
+	contractPath := filepath.Join(dir, id+".contract.yaml")
+	if err := os.WriteFile(contractPath, contractData, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", contractPath, err)
+	}
+	fmt.Printf("exported: %s\n", contractPath)
+
+	results, err := ms.LoadResults(id)
+	if err != nil {
+		return fmt.Errorf("loading results for %q: %w", id, err)
+	}
+	if len(results) == 0 {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s has no result yet — exporting contract only\n", id)
+		return nil
+	}
+
+	last := results[len(results)-1]
+	resultData, err := yaml.Marshal(&last)
+	if err != nil {
+		return fmt.Errorf("marshaling result: %w", err)
+	}
+	resultPath := filepath.Join(dir, id+".result.yaml")
+	if err := os.WriteFile(resultPath, resultData, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", resultPath, err)
+	}
+	fmt.Printf("exported: %s\n", resultPath)
+	return nil
 }
 
 // resolveActor returns the handle to record on a round_advanced
