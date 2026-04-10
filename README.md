@@ -151,6 +151,16 @@ EOF
 $ ethos mission result m-2026-04-08-006 --file /tmp/result.yaml
 result: m-2026-04-08-006 round=1 verdict=pass
 
+# Optional: cross-check the declared files_changed counts against
+# the real git diff before the result lands. --base defaults to
+# "main"; override it for stacked branches or to diff against a
+# specific ancestor. A declared path absent from the diff (or a
+# count that disagrees with git --numstat) rejects the submission;
+# a diff path not declared in files_changed warns on stderr but
+# is not a rejection.
+$ ethos mission result m-2026-04-08-006 --file /tmp/result.yaml \
+      --verify --base origin/main
+
 $ cat > /tmp/reflection.yaml <<'EOF'
 round: 1
 author: claude
@@ -418,7 +428,7 @@ content on both read and write — the on-disk trust boundary is symmetric.
 | `ethos mission show <id>` | Show contract, reflections, and results for one mission |
 | `ethos mission list [--status open\|closed\|failed\|escalated\|all]` | List missions filtered by status |
 | `ethos mission close <id> [--status closed\|failed\|escalated]` | Close a mission (gated on a valid result for the current round) |
-| `ethos mission result <id> --file <path>` | Submit a structured result for the current round |
+| `ethos mission result <id> --file <path> [--verify [--base <ref>]]` | Submit a structured result for the current round (`--verify` cross-checks `files_changed` counts against `git diff --numstat <base>..HEAD`) |
 | `ethos mission results <id>` | Read the round-by-round result log |
 | `ethos mission reflect <id> --file <path>` | Submit a structured reflection for the current round |
 | `ethos mission reflections <id>` | Read the round-by-round reflection log |

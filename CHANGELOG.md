@@ -240,6 +240,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ethos mission result --verify` cross-checks declared counts
+  against `git diff --numstat` (`ethos-2e4`)** — adds an optional
+  `--verify` flag (with a companion `--base` flag that defaults to
+  `main`) to `ethos mission result` that runs
+  `git diff --numstat <base>..HEAD` before the result lands and
+  rejects the submission when any declared `files_changed` entry is
+  absent from the diff or carries counts that disagree with git's
+  numstat output; the error names the path and both count pairs.
+  A path present in the diff but not declared in `files_changed`
+  emits a warning to stderr and does not reject — workers may
+  legitimately omit auto-generated files from their accounting. The
+  flag is off by default; existing `mission result` behavior is
+  byte-for-byte unchanged when `--verify` is not set. The verify
+  code path lives in `cmd/ethos/mission.go` (CLI surface), not in
+  `internal/mission/`, because the mission package is the trust
+  boundary for persisted artifacts and git is a consumer-side
+  convenience. Surfaced during Phase 3 dogfood on PR #199.
 - **`Role.OutputFormat` field for structured agent handoff
   (`ethos-9ai.3`)** — `internal/role/role.go` gains an optional
   `OutputFormat string` field with YAML tag `output_format,omitempty`

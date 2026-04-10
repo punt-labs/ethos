@@ -212,6 +212,33 @@ func splitSegments(p string) []string {
 	return segs
 }
 
+// CanonicalPath returns a canonical string form of p that matches the
+// write_set containment rules used by pathContainedBy. Two inputs that
+// pathContainedBy would treat as "the same file" produce the same
+// canonical string; inputs that normalize to nothing (empty, `.`,
+// `./`, `///`) return the empty string.
+//
+// This is the shared primitive for any code outside the mission
+// package that needs to compare a file path against another path
+// using the same semantics the validator applies to write_set entries
+// and files_changed. The CLI --verify cross-check uses it so a worker
+// who declares `./a.txt` in files_changed — which the validator
+// accepts because `./a.txt` and `a.txt` normalize equal — is not
+// falsely rejected against `git diff --numstat`, which emits the
+// canonical form.
+//
+// The helper is an exported wrapper over splitSegments so there is
+// exactly one implementation of path canonicalization in the package;
+// a parallel normalizer in the CLI would drift the moment the
+// validator's rules change.
+func CanonicalPath(p string) string {
+	segs := splitSegments(p)
+	if len(segs) == 0 {
+		return ""
+	}
+	return strings.Join(segs, "/")
+}
+
 // formatConflictError builds the operator-facing error string from
 // one or more Conflicts. Each conflict is on its own line so the
 // operator sees every blocker at once.
