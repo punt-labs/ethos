@@ -161,6 +161,10 @@ result: m-2026-04-08-006 round=1 verdict=pass
 $ ethos mission result m-2026-04-08-006 --file /tmp/result.yaml \
       --verify --base origin/main
 
+# If the contract's scope is wrong, submit a result with
+# verdict: escalate and files_changed: [] — see
+# "ethos mission result --help" for the full example.
+
 $ cat > /tmp/reflection.yaml <<'EOF'
 round: 1
 author: claude
