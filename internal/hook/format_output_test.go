@@ -10,6 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// zoneRegex is the zone portion of FormatLocalTime output: an
+// alphabetic abbreviation (possibly mixed-case like ChST for
+// Pacific/Guam) or a numeric offset fallback (±HH, ±HHMM, ±HHMMSS).
+// Interpolated into per-row assertions so future tweaks land in
+// one place.
+const zoneRegex = `([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`
+
 // runFormat calls HandleFormatOutput with the given payload and returns
 // the output written to the writer. Does not touch os.Stdout.
 func runFormat(t *testing.T, payload []byte) string {
@@ -721,10 +728,16 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	// section, not as a header row. No top-level Bead: field any more.
 	assert.Contains(t, ctx, "bead: ethos-07m.5")
 	assert.NotContains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
-	// Created uses local-time formatting; the date is 7 Apr UTC which
-	// renders as April in every timezone (TZ shifts can move the day
-	// of month but not the month within a 24h window).
-	assert.Contains(t, ctx, "Apr")
+	// The Created: row carries the formatted timestamp via
+	// FormatLocalTime(createdAt). Assert the row's shape directly
+	// rather than a substring that could also appear elsewhere in
+	// the context (e.g. "2026-04-" also matches the mission ID
+	// m-2026-04-07-001, which would make the assertion vacuous).
+	// Shape matches TestFormatOutput_Mission_Show_Closed: the zone
+	// is either an abbreviation when available (possibly mixed-case
+	// like ChST) or a numeric offset fallback of ±HH, ±HHMM, or
+	// ±HHMMSS when the Location has no named zone abbreviation.
+	assert.Regexp(t, `Created:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} `+zoneRegex, ctx)
 	assert.Contains(t, ctx, "Write set:")
 	assert.Contains(t, ctx, "- internal/mission/")
 	assert.Contains(t, ctx, "Tools:")
@@ -771,8 +784,12 @@ func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
 	assert.Equal(t, "m-2026-04-07-002 (closed)", r.HookSpecificOutput.UpdatedMCPToolOutput)
 	ctx := r.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, missionLabel(t, "Status:")+"closed")
-	// Closed: row must be present with a formatted timestamp.
-	assert.Regexp(t, `Closed:\s+\w+ Apr`, ctx)
+	// Closed: row must be present with a formatted timestamp in the
+	// new layout (year-month-day, 24h time, then either a zone
+	// abbreviation when available — possibly mixed-case like ChST
+	// — or a numeric offset fallback of ±HH, ±HHMM, or ±HHMMSS
+	// when the Location has no named zone abbreviation).
+	assert.Regexp(t, `Closed:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} `+zoneRegex, ctx)
 }
 
 func TestFormatOutput_Mission_Show_NoOptionalFields(t *testing.T) {
@@ -1211,10 +1228,15 @@ func TestFormatMissionTime(t *testing.T) {
 			got := FormatLocalTime(tt.raw)
 			if tt.name == "valid RFC3339" {
 				// Local-time formatted; can't assert exact value across
-				// time zones, but it must contain the month name and a
-				// 24h-style time.
-				assert.Contains(t, got, "Apr")
-				assert.Regexp(t, `\d{2}:\d{2}`, got)
+				// time zones, but the shape is fixed:
+				// YYYY-MM-DD HH:MM ZONE. ZONE is either a zone
+				// abbreviation when available (e.g. PST, UTC, or
+				// mixed-case like ChST for Pacific/Guam) or a
+				// numeric offset fallback when the Location has
+				// no named zone abbreviation — which Go emits
+				// as ±HH, ±HHMM, or ±HHMMSS (e.g. +05, +0530,
+				// -0700).
+				assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2} `+zoneRegex+`$`, got)
 				return
 			}
 			assert.Equal(t, tt.want, got)
