@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -469,14 +470,56 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]verifierMiss
 	)
 
 	for _, id := range ids {
-		c, loadErr := deps.Missions.Load(id)
-		if loadErr != nil {
-			// A corrupt or unparseable mission file blocks the gate.
-			// Silently skipping it would let an attacker bypass the
-			// frozen evaluator by hand-corrupting the contract.
+		// Single read: rejectSymlink + ReadFile + decode from the
+		// same bytes. Eliminates the TOCTOU window that two separate
+		// reads (Store.Load + os.ReadFile) would open.
+		// Inline symlink rejection — mirrors mission.rejectSymlink
+		// (unexported, different package). Same Lstat-before-Read
+		// TOCTOU gap as rejectSymlink; see ethos-jjm for context.
+		path := deps.Missions.ContractPath(id)
+		if info, lErr := os.Lstat(path); lErr == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return nil, fmt.Errorf(
+					"verifier hash gate: refusing to follow symlink: %s", path,
+				)
+			}
+		} else if !errors.Is(lErr, fs.ErrNotExist) {
+			return nil, fmt.Errorf(
+				"verifier hash gate: lstat %s: %w", path, lErr,
+			)
+		}
+		raw, readErr := os.ReadFile(path)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				return nil, fmt.Errorf(
+					"verifier hash gate: mission %q not found", id,
+				)
+			}
+			return nil, fmt.Errorf(
+				"verifier hash gate: reading mission %q: %w", id, readErr,
+			)
+		}
+		c, decErr := mission.DecodeContractStrict(raw, id)
+		if decErr != nil {
 			return nil, fmt.Errorf(
 				"verifier hash gate: failed to load mission %q: %w",
-				id, loadErr,
+				id, decErr,
+			)
+		}
+		// Match Store.Load's default-fill for pre-3.4 contracts.
+		if c.CurrentRound == 0 {
+			c.CurrentRound = 1
+		}
+		if vErr := c.Validate(); vErr != nil {
+			return nil, fmt.Errorf(
+				"verifier hash gate: contract %q failed validation: %w",
+				id, vErr,
+			)
+		}
+		if c.MissionID != id {
+			return nil, fmt.Errorf(
+				"verifier hash gate: contract filename %q does not match mission_id %q",
+				id, c.MissionID,
 			)
 		}
 		if c.Status != mission.StatusOpen {
@@ -485,25 +528,9 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]verifierMiss
 		if c.Evaluator.Handle != agentType {
 			continue
 		}
-		// Read the raw contract bytes now — the same bytes used for
-		// hash verification are threaded to renderVerifierBlock,
-		// eliminating the TOCTOU window a later os.ReadFile would open.
-		rawYAML, readErr := os.ReadFile(deps.Missions.ContractPath(id))
-		if readErr != nil {
-			return nil, fmt.Errorf(
-				"verifier hash gate: reading contract bytes for %q: %w",
-				id, readErr,
-			)
-		}
-		// Phase 3.5: this mission names agentType as its evaluator
-		// and is still open — it IS a verifier spawn target,
-		// regardless of whether the hash is legacy or matches. The
-		// context-isolation path uses the full list to decide what
-		// to inject; the hash mismatch check only filters those
-		// with a mismatched pinned hash.
 		verifierMissions = append(verifierMissions, verifierMission{
 			Contract: c,
-			RawYAML:  rawYAML,
+			RawYAML:  raw,
 		})
 		if c.Evaluator.Hash == "" {
 			// Pre-3.3 mission with an empty pinned hash. Warn and
