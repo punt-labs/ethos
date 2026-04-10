@@ -16,7 +16,7 @@ Ethos is on `main` with Phases 1–4 complete. 20.1 KLOC production Go, 26.8 KLO
 
 Phase 3 shipped 2026-04-08 on PR #184, merge `c16715f`. Phase 4
 shipped 2026-04-10 across PRs #205 and #207. The four architecture
-rules from `~/Documents/agents-architecture.tex` are runtime-enforced
+rules from the agents architecture document are runtime-enforced
 for the first time in the project's history.
 
 ## Phase 4 — Operational Excellence (SHIPPED 2026-04-10)
@@ -624,7 +624,7 @@ DES-020 formatter `formatMissionLog` for MCP consumers. 28 test
 classes covering the reader's failure-mode equivalence class.
 
 **Phase 3 complete.** After 3.7 lands, the four architecture rules
-from `~/Documents/agents-architecture.tex` are runtime-enforced.
+from the agents architecture document are runtime-enforced.
 
 ### What Phase 3 is not
 

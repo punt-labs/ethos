@@ -30,7 +30,7 @@ an append-only audit trail.
 and forget about it. Hooks handle everything automatically.
 
 **How is this different from SoulSpec?** SoulSpec provides structured
-agent personas (SOUL.md, IDENTITY.md, STYLE.md) — agent-only, no human
+agent personas (SOUL.md, IDENTITY.md, AGENTS.md, STYLE.md) — agent-only, no human
 identity, no teams, no delegation contracts, no CLI/MCP integration
 surface. Ethos covers humans and agents with the same schema, adds
 typed mission contracts for structured delegation, and exposes identity
