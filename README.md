@@ -1,6 +1,6 @@
 # ethos
 
-> AI agents as first-class engineering citizens.
+> Identity and workflow for AI agents that work alongside humans.
 
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
@@ -8,57 +8,43 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/punt-labs/ethos)](https://goreportcard.com/report/github.com/punt-labs/ethos)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-Ethos is a runtime for AI agents that work alongside humans, on three
-pillars. **Identity** binds name, persona, role, and channel bindings
-into one YAML file per participant — same schema for humans and agents.
-**Workflow** turns delegation from free-form prose into typed mission
-contracts with write-set admission, frozen evaluators, bounded rounds,
-structured result artifacts, and an append-only audit trail.
-**Integration** lets any tool — Claude Code, Beadle, Biff, Vox — read
-identity state and configure itself, so the same agent shows up
-correctly in code reviews, email, chat, and voice.
+## The Problem
+
+Every Claude Code session starts blank. The agent doesn't know who it
+is, who you are, or how your team works. Sub-agents are generic — they
+have tools but no judgment, no voice, no boundaries. When you delegate
+work, the contract is free-form prose. When something goes wrong, there's
+no audit trail.
+
+## What Ethos Does
+
+Ethos gives every person and AI agent on your team a persistent identity
+— personality, writing style, expertise, and role — that loads
+automatically at session start and survives context compaction. When you
+delegate to a sub-agent, it gets its own identity with distinct expertise
+and tool restrictions. When you need structured delegation, ethos provides
+typed mission contracts with write-set boundaries, bounded rounds, and
+an append-only audit trail.
+
+**You don't do anything at runtime.** Install ethos, create identities,
+and forget about it. Hooks handle everything automatically.
 
 **Platforms:** macOS and Linux (amd64, arm64)
 
-## Status at a Glance
-
-The single source of truth for what is live and what is planned. Prose
-elsewhere is written in the present tense; this table is where status
-lives.
-
-| Subsystem | Phase | Status | ADR / Bead |
-|-----------|-------|--------|------------|
-| Identity, sessions, persona animation, teams, roles, starter content | 1 | SHIPPED | v2.7.0 |
-| Anti-responsibility generation, role-based hooks, structured output, baseline-ops injection | 2.1–2.4 | SHIPPED | `ethos-9ai.1`–`.4` |
-| Mission skill (`/mission`) Phase A | 2.5 | SHIPPED | `ethos-9ai.5` |
-| Mission skill (`/mission`) Phase B–C | 2.6 | PLANNED | `ethos-9ai.5` |
-| Mission contract | 3.1 | SHIPPED | DES-031, `ethos-07m.5` |
-| Write-set admission | 3.2 | SHIPPED | DES-032, `ethos-07m.6` |
-| Frozen evaluator | 3.3 | SHIPPED | DES-033, `ethos-07m.7` |
-| Bounded rounds with reflection | 3.4 | SHIPPED | DES-034, `ethos-07m.8` |
-| Verifier isolation | 3.5 | SHIPPED | DES-035, `ethos-07m.9` |
-| Result artifacts and close gate | 3.6 | SHIPPED | DES-036, `ethos-07m.10` |
-| Event log reader API | 3.7 | SHIPPED | DES-037, `ethos-07m.11` |
-| SessionStart working context, role-based pre-tool safety, session audit log | 4.1–4.3 | PLANNED | `ethos-gcq.1`–`.3` |
-| ethos + biff: identity-aware messaging | Integration | PLANNED | `ethos-wb4` |
-| ethos + beadle: identity-aware email | Integration | PLANNED | `ethos-g2f` |
-
-Phase 1 shipped in v2.7.0. Phases 2.1–2.5 and Phase 3 are merged to
-`main` and pending the next tagged release. Phase 2.6 (`/mission`
-Phase B–C: conflict detection and dry-run) remains planned. The four architecture
-rules — roles as interfaces, centralized understanding with
-decentralized execution, hooks as enforcement, no ambient context
-inheritance — are runtime-enforced for the first time in the project's
-history.
-
 ## Quick Start
+
+### 1. Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/590ae88/install.sh | sh
 ```
 
+The installer puts the `ethos` binary in `~/.local/bin` and seeds starter
+content: 6 role archetypes, 10 domain talents, and the baseline-ops
+skill.
+
 <details>
-<summary>Manual install (if you already have Go)</summary>
+<summary>Manual install (Go required)</summary>
 
 ```bash
 go install github.com/punt-labs/ethos/cmd/ethos@latest
@@ -68,554 +54,346 @@ ethos doctor
 
 </details>
 
-<details>
-<summary>Verify before running</summary>
+### 2. Create Your Identity
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/590ae88/install.sh -o install.sh
-shasum -a 256 install.sh
-cat install.sh
-sh install.sh
+ethos create
 ```
 
-</details>
+Or from a YAML file:
 
-The installer seeds starter content automatically: roles and talents to
-`~/.punt-labs/ethos/`, and the baseline-ops skill to `~/.claude/skills/`.
-To re-seed or update after install: `ethos seed` (or `ethos seed --force`
-to overwrite customizations).
+```yaml
+# ~/.punt-labs/ethos/identities/mal.yaml
+name: Mal Reynolds
+handle: mal
+kind: human
+email: mal@example.com
+personality: principal-engineer    # slug → personalities/principal-engineer.md
+writing_style: concise-quantified  # slug → writing-styles/concise-quantified.md
+talents:
+  - engineering
+```
 
-## What It Looks Like
+### 3. Create Your Agent
 
-A complete delegation. The leader writes a contract; ethos pins the
-evaluator and assigns an ID. The worker submits a typed result. The
-leader closes the mission. Every state transition lands in the
-append-only event log.
+```yaml
+# ~/.punt-labs/ethos/identities/claude.yaml
+name: Claude
+handle: claude
+kind: agent
+personality: principal-engineer
+writing_style: concise-quantified
+talents:
+  - engineering
+```
 
-```text
-$ cat > /tmp/contract.yaml <<'EOF'
+### 4. Configure Your Repo
+
+```bash
+mkdir -p .punt-labs
+cat > .punt-labs/ethos.yaml <<'EOF'
+agent: claude
+EOF
+```
+
+### 5. Start a Session
+
+Start Claude Code. Ethos hooks fire automatically:
+
+- **SessionStart** — loads your agent's personality, writing style,
+  team context, and git working state
+- **PreCompact** — re-injects identity before context compression so
+  your agent doesn't lose its personality in long conversations
+- **SubagentStart** — gives each sub-agent its own identity when spawned
+- **PostToolUse** — logs every tool invocation to a per-session audit trail
+
+Your agent now knows who it is. Every session.
+
+## How It Works in Practice
+
+Here's a real mission executed on 2026-04-10. Total time: **12 minutes
+55 seconds** from claim to merge.
+
+### The task
+
+Eliminate a TOCTOU (time-of-check/time-of-use) bug in the verifier hash
+check — two file reads that should be one.
+
+### Create the mission contract
+
+```yaml
 leader: claude
-worker: bwk
-evaluator:
-  handle: djb
-inputs:
-  bead: ethos-07m.11
+worker: bwk                            # Go specialist
 write_set:
-  - internal/mission/log.go
-  - internal/mission/log_test.go
+  - internal/hook/subagent_start.go    # only this file may be modified
 success_criteria:
-  - LoadEvents reads JSONL log
-  - one corrupt line does not erase the tail
+  - make check passes
+  - exactly one os.ReadFile per contract
+  - same bytes for hash check and rendering
+evaluator:
+  handle: djb                          # security engineer reviews
 budget:
-  rounds: 3
-  reflection_after_each: true
-EOF
-
-$ ethos mission create --file /tmp/contract.yaml
-created: m-2026-04-08-006 worker=bwk evaluator=djb
-
-$ ethos mission list
-MISSION            STATUS  LEADER  WORKER  EVALUATOR  CREATED
-m-2026-04-08-006   open    claude  bwk     djb        2026-04-08 11:42 PDT
-
-$ ethos mission show m-2026-04-08-006
-Mission:    m-2026-04-08-006
-Status:     open
-Leader:     claude
-Worker:     bwk
-Evaluator:  djb (pinned 2026-04-08 11:42 PDT)
-Hash:       sha256:f3c1...
-Budget:     3 round(s), reflection_after_each=true
-Round:      1 of 3
+  rounds: 2
 ```
 
-The worker does its work, then submits a typed result. The mission
-cannot close until a result for the current round exists.
+### The worker delivers
+
+bwk implemented the fix in **2 minutes 10 seconds** and submitted a
+typed result: verdict `pass`, confidence `0.95`, 1 file changed
+(+50/-23 lines), 4 evidence items.
+
+### The leader reflects
+
+Convergence: yes. All success criteria met on the first round.
+Recommendation: continue to code review and close.
+
+### Review, merge, close
+
+The local code reviewer found 1 finding (maintenance comment needed).
+Bugbot found 1 finding (same class — accepted tradeoff). Both resolved.
+PR merged. Mission closed.
+
+### The audit trail
 
 ```text
-$ cat > /tmp/result.yaml <<'EOF'
-mission: m-2026-04-08-006
-round: 1
-author: bwk
-verdict: pass
-confidence: 0.95
-files_changed:
-  - path: internal/mission/log.go
-    added: 200
-    removed: 0
-evidence:
-  - name: go test ./internal/mission/... -race
-    status: pass
-EOF
-
-$ ethos mission result m-2026-04-08-006 --file /tmp/result.yaml
-result: m-2026-04-08-006 round=1 verdict=pass
-
-# Optional: cross-check the declared files_changed counts against
-# the real git diff before the result lands. --base defaults to
-# "main"; override it for stacked branches or to diff against a
-# specific ancestor. A declared path absent from the diff (or a
-# count that disagrees with git --numstat) rejects the submission;
-# a diff path not declared in files_changed warns on stderr but
-# is not a rejection.
-$ ethos mission result m-2026-04-08-006 --file /tmp/result.yaml \
-      --verify --base origin/main
-
-# If the contract's scope is wrong, submit a result with
-# verdict: escalate and files_changed: [] — see
-# "ethos mission result --help" for the full example.
-
-$ cat > /tmp/reflection.yaml <<'EOF'
-round: 1
-author: claude
-converging: true
-signals:
-  - tests passing
-  - no new lint findings
-recommendation: continue
-EOF
-
-$ ethos mission reflect m-2026-04-08-006 --file /tmp/reflection.yaml
-reflected: m-2026-04-08-006 round=1 rec=continue
-
-$ ethos mission close m-2026-04-08-006
-closed: m-2026-04-08-006 round=1 verdict=pass status=closed
+2026-04-10 07:19 PDT  create   by claude  worker=bwk evaluator=djb
+2026-04-10 07:22 PDT  result   by bwk     round=1 verdict=pass
+2026-04-10 07:23 PDT  reflect  by claude  round=1 rec=continue
+2026-04-10 07:31 PDT  close    by claude  status=closed verdict=pass
 ```
 
-After the fact, the leader reads the audit trail. The event log is
-append-only; one corrupt line is surfaced as a warning, not a fatal
-error.
+4 events. 1 round. No rework. Full walkthrough with every command and
+output: [docs/example/](docs/example/).
 
-```text
-$ ethos mission log m-2026-04-08-006
-Events:
-  - 2026-04-08 11:42 PDT  create  by claude
-  - 2026-04-08 12:18 PDT  result  by bwk     verdict=pass, round=1
-  - 2026-04-08 12:19 PDT  reflect by claude  recommendation=continue, round=1
-  - 2026-04-08 12:20 PDT  close   by claude  status=closed, round=1
+### Where the time went
+
+| Phase | Duration | % |
+|-------|----------|---|
+| Claim + mission contract | 42s | 5% |
+| Worker implementation | 2m10s | 17% |
+| Verify + result + reflection | 1m02s | 8% |
+| Code review (local) | 1m25s | 11% |
+| CI + remote review + merge | 7m36s | 59% |
+
+Coding was 17% of wall time. Review was 70%. That's the right
+distribution — the review pipeline is the bottleneck, not the
+implementation.
+
+## Teams and Roles
+
+For teams, ethos adds roles and collaboration graphs. Each agent gets
+tool restrictions, responsibilities, and anti-responsibilities derived
+from the team structure.
+
+```yaml
+# teams/engineering.yaml
+name: engineering
+members:
+  - identity: claude
+    role: coo
+  - identity: bwk
+    role: go-specialist
+  - identity: djb
+    role: security-engineer
+collaborations:
+  - from: go-specialist
+    to: coo
+    type: reports_to
 ```
 
-The same primitives are reachable from MCP via the `mission` tool, so a
-running Claude Code session drives a mission end-to-end without shelling
-out. Filter the log with `--event create,close` or `--since
-2026-04-08T00:00:00Z`; pass `--json` for the wrapped
-`{"events": [...], "warnings": [...]}` payload.
+```yaml
+# roles/go-specialist.yaml
+name: go-specialist
+tools: [Read, Write, Edit, Bash, Grep, Glob]
+responsibilities:
+  - Go package implementation with tests
+  - code review for Go projects
+safety_constraints:
+  - tool: Bash
+    message: "Never run destructive commands (rm -rf, git push --force)"
+```
 
-## Three Pillars
+At session start, ethos generates `.claude/agents/<handle>.md` for each
+agent — complete with tools, personality, anti-responsibilities ("don't
+make architectural decisions — the COO handles that"), and quality-gate
+hooks. See the [Team Setup Guide](docs/team-setup.md).
 
-### Pillar 1: Identity — who the agent is
+## Status
 
-One YAML file per persona, same schema for humans and agents. An
-identity binds three layers of context onto one durable anchor:
+| Phase | Status | What |
+|-------|--------|------|
+| 1 — Batteries Included | SHIPPED | Starter talents, roles, persona animation, agent generation |
+| 2 — Production Agents | SHIPPED | Anti-responsibilities, role hooks, structured output, mission skill |
+| 3 — Workflow Primitives | SHIPPED | Mission contracts, write-set admission, frozen evaluators, bounded rounds, verifier isolation, result artifacts, event log |
+| 4 — Operational Excellence | SHIPPED | SessionStart working context, role safety constraints, session audit logging |
+| 5 — Ecosystem | PLANNED | Starter team templates, cross-tool integration |
 
-- **Persona** — personality, writing style, talents. Reusable `.md`
-  files referenced by slug. Defines judgment and voice.
-- **Role** — tools, responsibilities, model preference. Defines what
-  the agent does. Anti-responsibilities — the things the agent should
-  push upward — are derived from the team graph's `reports_to` edges,
-  not stored on the role itself.
-- **Channel bindings** — email (Beadle), GitHub (Biff), voice (Vox
-  extension), Claude Code agent definition. Defines where the agent
-  shows up.
+20.1 KLOC production Go. 26.8 KLOC tests (1.33:1 ratio).
+Go Report Card: A+.
 
-Resolution is layered: repo-local overrides user-global. Ethos resolves
-the caller automatically from iam, git, or OS user. When a subagent
-spawns whose handle matches an identity, the persona attaches
-automatically.
+## Identity Schema
 
-**Pillar 1 features:**
-
-- **Same schema for humans and agents**, `kind: human` or `kind: agent`
-- **Composable attributes** — talents, personalities, and writing styles
-  as reusable `.md` files referenced by slug
-- **Layered resolution** — repo-local overrides global; resolved from
-  iam declaration, git config, or OS user (DES-011, DES-018)
-- **Channel bindings** — email (Beadle), GitHub (Biff), Claude Code
-  agent definition; voice config in extensions (`ext/vox`)
-- **Extensible** — any tool attaches namespaced attributes via
-  `<handle>.ext/<tool>.yaml`
-- **Session roster** — all participants (human + agents) with
-  parent-child tree
-- **Persona auto-matching** — subagents get personas when the handle
-  matches the agent type
-- **Persona animation** — SessionStart, PreCompact, and SubagentStart
-  hooks inject personality, writing style, and talent content
-- **Agent file generation** — SessionStart generates
-  `.claude/agents/<handle>.md` from identity, personality, writing-style,
-  and role data
-- **Extension session context** — any tool injects per-persona context
-  via extension YAML; zero ethos-side code per consumer (DES-022)
-- **Starter content** — 10 talents, 6 role archetypes, and the
-  baseline-ops skill ship in the box
-
-### Pillar 2: Workflow — how the agent works
-
-The mission primitive (DES-031 through DES-037) turns delegation into a
-typed runtime contract. A mission declares a write-set (the file
-allowlist the worker may touch), a frozen evaluator (sha256-pinned at
-launch), a round budget (bounded, with mandatory reflection between
-rounds), typed result artifacts (schema-validated, append-only), and an
-append-only JSONL event log.
-
-The store refuses operations that violate the contract: two missions
-cannot claim overlapping files, the verifier cannot share a role with
-the worker, the mission cannot close without a structured result for
-the current round. The CLI and the MCP `mission` tool share the same
-admission gates — no surface bypasses them.
-
-**Pillar 2 features:**
-
-- **Mission contract** (DES-031) — typed YAML with leader, worker,
-  evaluator, write_set, success_criteria, and budget. Strict
-  unknown-field-rejecting decode at every read path.
-- **Write-set admission** (DES-032) — segment-prefix conflict scan on
-  create refuses overlap with any open mission, naming the blocker.
-- **Frozen evaluator** (DES-033) — sha256 of the evaluator's persona and
-  role bindings is pinned at launch. SubagentStart refuses verifier
-  spawns if the hash drifts, with a per-section breakdown of which
-  file changed.
-- **Bounded rounds with reflection** (DES-034) — round budget is a
-  hard cap. The operator must submit a structured reflection before
-  advancing; a `stop` or `escalate` recommendation blocks advance.
-- **Verifier isolation** (DES-035) — SubagentStart replaces the normal
-  persona injection for verifier spawns with the mission contract and
-  a file allowlist; the verifier cannot read the worker's scratch state.
-- **Result artifacts and close gate** (DES-036) — every terminal
-  transition requires a valid result for the current round. Verdict is
-  `pass | fail | escalate`; confidence in `[0.0, 1.0]`; every
-  `files_changed` path must live inside the contract's write_set.
-- **Append-only event log reader** (DES-037) — `ethos mission log <id>`
-  and the MCP `mission log` method read the JSONL audit trail every
-  Phase 3.1+ writer appends to. One corrupt line surfaces as a warning,
-  not a fatal error. Filters: `--event` (type list) and `--since`
-  (RFC3339), AND-composed.
-
-### Pillar 3: Integration — how the agent participates
-
-Ethos publishes identity state through three surfaces — filesystem, CLI,
-and MCP — so any tool reads it without taking a Go dependency. The
-fourth integration pattern, identity-aware channel binding, lets a
-sibling tool configure itself per persona: Beadle sends mail as
-`claude@punt-labs.com` with the right GPG key, Biff routes messages to
-the right session, Vox speaks with the right voice — all from the same
-identity record.
-
-Operational hooks (Phase 4) inject working context at session start (git
-branch, uncommitted changes, recent issues), enforce role-based pre-tool
-safety constraints (a reviewer cannot Write, a researcher cannot run
-destructive Bash), and audit every tool invocation to a session log.
-
-**Pillar 3 features:**
-
-- **Four integration patterns** — filesystem (zero dependency), CLI
-  (shell/hooks), MCP server (10 tools), identity-aware channel binding
-  (Beadle, Biff, Vox)
-- **MCP server** — covers identity, attributes, extensions, sessions,
-  teams, roles, and missions
-- **Cross-tool identity** — an agent impersonating the COO sends email
-  from `claude@punt-labs.com` with the right GPG key, signs commits as
-  `Claude Agento`, and speaks with the configured voice
-- **Hooks fire reliably across platforms** — DES-029 fixed the Linux
-  stdin hang via shell-level forwarding, so SessionStart, PreCompact,
-  SubagentStart, SubagentStop, and SessionEnd all work on macOS and
-  Linux
-
-## Schema
-
-### Identity contract
+One schema for humans and agents. Only `kind` differs.
 
 ```yaml
 name: Mal Reynolds
 handle: mal
 kind: human                       # or "agent"
-email: mal@serenity.ship           # Beadle binding
-github: mal                        # Biff binding
-agent: .claude/agents/mal.md       # Claude Code agent binding
-writing_style: concise-quantified  # slug → writing-styles/concise-quantified.md
-personality: principal-engineer    # slug → personalities/principal-engineer.md
+email: mal@example.com             # Beadle (email) binding
+github: mal                        # Biff (messaging) binding
+agent: .claude/agents/mal.md       # Claude Code agent definition
+writing_style: concise-quantified  # slug → writing-styles/<slug>.md
+personality: principal-engineer    # slug → personalities/<slug>.md
 talents:                            # slugs → talents/<slug>.md
-  - go-engineering
+  - engineering
   - product-strategy
 ```
 
-Attributes are slugs that reference `.md` files in the attribute
-directories. `ethos identity get` resolves them to content by default.
-Multiple identities share the same attribute files.
+Personalities define how the agent thinks. Writing styles define how it
+communicates. Talents define domain expertise. Roles define boundaries.
+The identity binds them all to one handle.
 
-Same schema for agents — only `kind` differs:
-
-```yaml
-name: Code Reviewer
-handle: code-reviewer
-kind: agent
-personality: principal-engineer
-talents:
-  - code-review
-  - security-analysis
-agent: .claude/agents/code-reviewer.md
-```
-
-When a `code-reviewer` subagent spawns, ethos auto-matches it by handle
-(case-sensitive, lowercase, `[a-z0-9-]`) and the agent inherits the
-personality, talents, and channel bindings defined here.
-
-### Mission contract
+## Mission Contract Schema
 
 ```yaml
-mission_id: m-2026-04-08-006        # server-controlled
-status: open                         # server-controlled
 leader: claude
 worker: bwk
 evaluator:
   handle: djb
-  pinned_at: 2026-04-08T18:42:01Z   # server-controlled
-  hash: sha256:f3c1...               # server-controlled (DES-033)
+  # hash and pinned_at are set by ethos at creation
 inputs:
-  bead: ethos-07m.11
-write_set:
-  - internal/mission/log.go
-  - internal/mission/log_test.go
+  bead: ethos-db7                  # links to your tracking system
+  files: [internal/hook/subagent_start.go]  # read context
+write_set:                          # write permission envelope
+  - internal/hook/subagent_start.go
 success_criteria:
-  - LoadEvents reads JSONL log
-  - one corrupt line does not erase the tail
+  - make check passes
+  - exactly one os.ReadFile per contract
 budget:
-  rounds: 3
+  rounds: 2
   reflection_after_each: true
-current_round: 1                     # server-controlled
-created_at: 2026-04-08T18:42:01Z    # server-controlled
 ```
 
-Server-controlled fields are overwritten on every create. The strict
-YAML decoder rejects unknown fields, multi-document input, and trailing
-content on both read and write — the on-disk trust boundary is symmetric.
+The lifecycle: **create → result → reflect → advance → close**. Each
+step is an append-only event in the mission log. The store refuses
+operations that violate the contract: overlapping write-sets, self-review,
+close without a result, advance without reflection.
 
 ## Commands
 
-### Identity
+### Core
 
 | Command | What it does |
 |---------|-------------|
-| `ethos whoami [--json]` | Show the caller's identity (resolved from iam/git/OS) |
-| `ethos identity whoami` | Same as `ethos whoami` |
-| `ethos identity list [--json]` | List all identities |
-| `ethos identity get <handle> [--json]` | Show identity with resolved attribute content |
-| `ethos identity get <handle> --reference` | Show identity with attribute slugs only |
-| `ethos identity create` | Create a new identity (interactive wizard) |
-| `ethos identity create -f <path>` | Create from a YAML file |
-
-### Attributes
-
-| Command | What it does |
-|---------|-------------|
-| `ethos talent create <slug>` | Create a talent (opens `$EDITOR` or `--file`) |
-| `ethos talent list` | List all talents |
-| `ethos talent show <slug>` | Show talent content |
-| `ethos talent delete <slug>` | Delete a talent |
-| `ethos talent add <handle> <slug>` | Add talent to an identity |
-| `ethos talent remove <handle> <slug>` | Remove talent from an identity |
-| `ethos personality create <slug>` | Create a personality |
-| `ethos personality list` | List all personalities |
-| `ethos personality show <slug>` | Show personality content |
-| `ethos personality delete <slug>` | Delete a personality |
-| `ethos personality set <handle> <slug>` | Set personality on an identity |
-| `ethos writing-style create <slug>` | Create a writing style |
-| `ethos writing-style list` | List all writing styles |
-| `ethos writing-style show <slug>` | Show writing style content |
-| `ethos writing-style delete <slug>` | Delete a writing style |
-| `ethos writing-style set <handle> <slug>` | Set writing style on an identity |
+| `ethos whoami` | Show your resolved identity |
+| `ethos create` | Create a new identity (interactive) |
+| `ethos doctor` | Check installation health |
+| `ethos seed` | Deploy starter roles, talents, and skills |
 
 ### Mission
 
 | Command | What it does |
 |---------|-------------|
-| `ethos mission create --file <path>` | Create a mission contract from YAML (strict decode) |
-| `ethos mission show <id>` | Show contract, reflections, and results for one mission |
-| `ethos mission list [--status open\|closed\|failed\|escalated\|all]` | List missions filtered by status |
-| `ethos mission close <id> [--status closed\|failed\|escalated]` | Close a mission (gated on a valid result for the current round) |
-| `ethos mission result <id> --file <path> [--verify [--base <ref>]]` | Submit a structured result for the current round (`--verify` cross-checks `files_changed` counts against `git diff --numstat <base>..HEAD`) |
-| `ethos mission results <id>` | Read the round-by-round result log |
-| `ethos mission reflect <id> --file <path>` | Submit a structured reflection for the current round |
-| `ethos mission reflections <id>` | Read the round-by-round reflection log |
-| `ethos mission advance <id>` | Bump `current_round` (gated on reflection + recommendation + budget) |
-| `ethos mission log <id> [--event <list>] [--since <ts>]` | Read the append-only JSONL event log |
+| `ethos mission create --file <path>` | Create a mission contract |
+| `ethos mission show <id>` | Show contract, results, reflections |
+| `ethos mission list [--status open]` | List missions |
+| `ethos mission result <id> --file <path> [--verify]` | Submit worker result |
+| `ethos mission reflect <id> --file <path>` | Submit leader reflection |
+| `ethos mission advance <id>` | Advance to next round |
+| `ethos mission close <id>` | Close mission (requires result) |
+| `ethos mission log <id>` | Read append-only event log |
 
-All mission subcommands accept `--json`. IDs accept any unambiguous prefix.
-
-### Session
+### Identity and Attributes
 
 | Command | What it does |
 |---------|-------------|
-| `ethos session list` | List all sessions (short IDs, REPO column, human-readable dates) |
-| `ethos session show [id]` | Show session details — participants, roles, repo, host, joined times |
-| `ethos session iam <persona> [--session <id>]` | Declare persona in current or specified session (auto-detected inside Claude Code) |
-| `ethos session join --agent-id <id>` | Add a participant to the session |
-| `ethos session leave --agent-id <id>` | Remove a participant from the session |
-| `ethos session purge` | Clean up stale sessions and PID files |
+| `ethos identity list` | List all identities |
+| `ethos identity get <handle>` | Show identity with resolved content |
+| `ethos talent create/list/show/add/remove` | Manage talents |
+| `ethos personality create/list/show/set` | Manage personalities |
+| `ethos writing-style create/list/show/set` | Manage writing styles |
 
-### Extensions
-
-| Command | What it does |
-|---------|-------------|
-| `ethos ext set <handle> <ns> <key> <value>` | Write an extension key |
-| `ethos ext get <handle> <ns> [key]` | Read extension key(s) |
-| `ethos ext del <handle> <ns> [key]` | Delete key or namespace |
-| `ethos ext list <handle>` | List extension namespaces |
-
-### Admin
+### Session, Team, Role, Extensions
 
 | Command | What it does |
 |---------|-------------|
-| `ethos version [--json]` | Print version |
-| `ethos doctor [--json]` | Check installation health |
-| `ethos serve` | Start MCP server (stdio) |
-| `ethos completion <bash\|zsh\|fish>` | Generate shell completion script |
-| `ethos seed [--force]` | Deploy starter roles, talents, and skills to global directories |
-| `ethos uninstall` | Remove plugin (`--purge` to remove binary + data) |
+| `ethos session` | Show current session roster |
+| `ethos session iam <persona>` | Declare your persona |
+| `ethos team list/show` | Query teams |
+| `ethos role list/show` | Query roles |
+| `ethos ext set/get/del/list` | Manage tool-scoped extensions |
 
-`--json` is a global flag — valid before or after the subcommand.
+All commands accept `--json` for machine-readable output.
 
 ## MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server with
-10 tools. Tools with multiple verbs use a `method` parameter for dispatch.
+When running as a Claude Code plugin, ethos registers 10 MCP tools with
+method dispatch. Each has a corresponding `/ethos:*` slash command.
 
-All tools have corresponding slash commands under `/ethos:*`.
-
-| Tool | Methods | Slash command |
-|------|---------|---------------|
-| `identity` | whoami, list, get, create | `/ethos:identity` |
-| `talent` | create, list, show, delete, add, remove | `/ethos:talent` |
-| `personality` | create, list, show, delete, set | `/ethos:personality` |
-| `writing_style` | create, list, show, delete, set | `/ethos:writing-style` |
-| `session` | roster, iam, join, leave | `/ethos:session` |
-| `ext` | get, set, del, list | `/ethos:ext` |
-| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `/ethos:team` |
-| `role` | list, show, create, delete | `/ethos:role` |
-| `mission` | create, show, list, close, result, results, reflect, reflections, advance, log | `/ethos:mission` |
-| `doctor` | *(standalone)* | — |
-
-## Setup
-
-Ethos resolves repo-specific config from `.punt-labs/ethos.yaml` in the
-repo root:
-
-```yaml
-agent: claude       # primary agent identity handle
-team: engineering   # team definition for hook context
-```
-
-Team identity data (identities, personalities, writing styles, talents,
-roles, teams) lives in `.punt-labs/ethos/`. You can populate this
-directory locally or share it across repos as a git submodule.
-Running `ethos seed` populates global defaults (6 starter roles, 10
-talents, and the baseline-ops skill). Teams override or extend with
-repo-local content. See the
-[Team Setup Guide](docs/team-setup.md) for how to create and structure
-a team from scratch.
-
-## Persona Animation
-
-The agent definition (`.claude/agents/<handle>.md`) defines what the agent does. The ethos identity defines who the agent is. The mission contract defines what the agent must do right now. Hooks connect all three automatically: SessionStart injects the full persona for the primary agent, PreCompact re-injects a condensed persona before context compression, and SubagentStart injects the matched persona when a subagent spawns. For an open mission whose evaluator handle matches the spawning subagent, SubagentStart replaces the normal injection with the Phase 3.5 isolation block — the mission contract byte-for-byte plus a file allowlist derived from the write-set. See [AGENTS.md](AGENTS.md#persona-animation) and [docs/persona-animation.md](docs/persona-animation.md).
+| Tool | Methods |
+|------|---------|
+| `identity` | whoami, list, get, create |
+| `session` | roster, iam, join, leave |
+| `talent` | create, list, show, delete, add, remove |
+| `personality` | create, list, show, delete, set |
+| `writing_style` | create, list, show, delete, set |
+| `ext` | get, set, del, list |
+| `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo |
+| `role` | list, show, create, delete |
+| `mission` | create, show, list, close, result, results, reflect, reflections, advance, log |
+| `doctor` | *(standalone)* |
 
 ## Storage
 
-Identities, attributes, and missions resolve in two layers: **repo-local**
-(`.punt-labs/ethos/`) overrides **user-global** (`~/.punt-labs/ethos/`).
-Repo-local files are tracked in git; global files are personal. Mission
-state is global-only — missions are session-scoped and not meant to
-travel across hosts.
+Two layers: **repo-local** (`.punt-labs/ethos/`, git-tracked) overrides
+**user-global** (`~/.punt-labs/ethos/`, personal).
 
-| Scope | Path | Tracked? |
-|-------|------|----------|
-| Repo identities | `.punt-labs/ethos/identities/<handle>.yaml` | Yes |
-| Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
-| Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
-| Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
-| Repo roles | `.punt-labs/ethos/roles/<name>.yaml` | Yes |
-| Repo teams | `.punt-labs/ethos/teams/<name>.yaml` | Yes |
-| Repo config | `.punt-labs/ethos.yaml` | Yes |
-| Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
-| Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
-| Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |
-| Global personalities | `~/.punt-labs/ethos/personalities/<slug>.md` | No |
-| Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
-| Global roles | `~/.punt-labs/ethos/roles/<name>.yaml` | No |
-| Global teams | `~/.punt-labs/ethos/teams/<name>.yaml` | No |
-| Extensions | `~/.punt-labs/ethos/identities/<handle>.ext/<tool>.yaml` | No |
-| Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No (ephemeral) |
-| Mission contracts | `~/.punt-labs/ethos/missions/<id>.yaml` | No |
-| Mission reflections | `~/.punt-labs/ethos/missions/<id>.reflections.yaml` | No |
-| Mission results | `~/.punt-labs/ethos/missions/<id>.results.yaml` | No |
-| Mission event log | `~/.punt-labs/ethos/missions/<id>.jsonl` | No (append-only) |
-
-## Identity Resolution
-
-Human and agent identities are resolved automatically — no manual
-"set active" step required.
-
-**Human resolution** (stops at first match):
-
-1. `iam` declaration — explicit persona set via `ethos session iam`
-2. `git config user.name` — matched against identity `github` field
-3. `git config user.email` — matched against identity `email` field
-4. `$USER` — matched against identity `handle` field
-
-**Agent resolution** — per-repo `.punt-labs/ethos.yaml`:
-
-```yaml
-agent: claude
-```
-
-Tracked in git — the whole team shares the same agent configuration.
-When the agent field is unset, the primary agent has no persona.
+| What | Repo-local | Global |
+|------|------------|--------|
+| Identities | `.punt-labs/ethos/identities/` | `~/.punt-labs/ethos/identities/` |
+| Personalities | `.punt-labs/ethos/personalities/` | `~/.punt-labs/ethos/personalities/` |
+| Writing styles | `.punt-labs/ethos/writing-styles/` | `~/.punt-labs/ethos/writing-styles/` |
+| Talents | `.punt-labs/ethos/talents/` | `~/.punt-labs/ethos/talents/` |
+| Roles | `.punt-labs/ethos/roles/` | `~/.punt-labs/ethos/roles/` |
+| Teams | `.punt-labs/ethos/teams/` | `~/.punt-labs/ethos/teams/` |
+| Missions | — | `~/.punt-labs/ethos/missions/` |
+| Sessions | — | `~/.punt-labs/ethos/sessions/` |
+| Extensions | — | `~/.punt-labs/ethos/identities/<handle>.ext/` |
 
 ## Integration
 
-Tools integrate with ethos at whatever coupling level fits. The first
-three patterns describe how a consumer reads or writes ethos state. The
-fourth — identity-aware channel binding — describes how the same
-identity record drives configuration in a sibling tool.
+Tools integrate with ethos at whatever coupling level fits:
 
 | Pattern | How | Dependency |
 |---------|-----|------------|
-| **Filesystem** | Read YAML at `~/.punt-labs/ethos/identities/<handle>.yaml` | None |
-| **CLI** | Call `ethos whoami --json` or `ethos identity get <handle> --json` from hooks/scripts | Binary installed |
-| **MCP server** | Connect to `ethos serve` for identity, attributes, extensions, sessions, teams, roles, and missions | Binary installed |
-| **Identity-aware channel binding** | Sibling tool reads ethos state and configures itself per persona — Beadle sends mail from the bound email with the right GPG key, Biff routes to the right session, Vox speaks with the right voice | Binary installed + sibling tool |
+| **Filesystem** | Read YAML at known paths | None |
+| **CLI** | `ethos whoami --json`, `ethos identity get <handle> --json` | Binary |
+| **MCP** | Connect to `ethos serve` during a session | Binary |
+| **Channel binding** | Sibling tool reads identity and configures itself per persona | Binary + tool |
 
-**Core identity fields** (owned by ethos): name, handle, kind, email,
-github, agent, writing\_style, personality, talents.
-
-**Attributes** (reusable `.md` files): talents, personalities, and writing
-styles are plain markdown documents stored in dedicated directories. Any
-identity can reference them by slug. Create with `ethos talent create`,
-`ethos personality create`, or `ethos writing-style create`.
-
-**Extensions** (owned by each tool): any tool can read/write namespaced
-key-value pairs in `<handle>.ext/<tool>.yaml`. Vox stores voice config,
-Beadle stores a GPG key, Biff stores routing preferences. Ethos assembles
-the merged view but never interprets extension contents.
+**Extensions** let any tool attach config without schema changes:
 
 ```bash
-ethos ext set mal beadle gpg_key_id 3AA5C34371567BD2
-ethos ext get mal beadle gpg_key_id
-ethos identity get mal   # includes ext map with all tool namespaces
+ethos ext set claude vox default_voice george
+ethos ext set claude beadle gpg_key_id 3AA5C34371567BD2
 ```
+
+Stored in `~/.punt-labs/ethos/identities/claude.ext/vox.yaml`. Ethos
+assembles the merged view but never interprets extension contents.
 
 ## Documentation
 
-[Team Setup Guide](docs/team-setup.md) |
-[Agent Definitions](docs/agent-definitions.md) |
-[Mission Skill Design](docs/mission-skill-design.md) |
-[Persona Animation](docs/persona-animation.md) |
-[Agent Teams](docs/agent-teams.md) |
-[Quarry Integration](docs/quarry-integration.md) |
-[Workflow](docs/workflow.md) |
-[Architecture](docs/architecture.tex) |
-[Design Decisions](DESIGN.md) |
-[Roadmap](docs/ETHOS-ROADMAP.md) |
-[Agent Guide](AGENTS.md) |
-[Changelog](CHANGELOG.md)
+- [Live Example Walkthrough](docs/example/) — real mission, real outputs, real timing
+- [Team Setup Guide](docs/team-setup.md) — creating and structuring a team
+- [Agent Guide](AGENTS.md) — CLI, MCP tools, hooks, extending identities
+- [Persona Animation](docs/persona-animation.md) — how hooks inject identity
+- [Agent Definitions](docs/agent-definitions.md) — generated agent files
+- [Agent Teams](docs/agent-teams.md) — multi-agent coordination
+- [Workflow](docs/workflow.md) — development lifecycle
+- [Architecture](docs/architecture.tex) — system design
+- [Design Decisions](DESIGN.md) — ADR archive (DES-001 through DES-040)
+- [Roadmap](docs/ETHOS-ROADMAP.md) — phase-by-phase plan
+- [Changelog](CHANGELOG.md)
 
 ## Development
 

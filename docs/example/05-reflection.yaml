@@ -1,0 +1,52 @@
+# Phase 5: Leader Reflection
+#
+# This is the actual reflection submitted for mission m-2026-04-10-003.
+# Submitted at 2026-04-10T07:23 PDT via:
+#
+#   mcp__plugin_ethos_self__mission(method="reflect", ...)
+#
+# The leader (claude) reviewed the worker's result and assessed
+# convergence. This took 31 seconds — brief because the work was
+# clearly correct on first inspection.
+
+# --- Actual reflection fields ---
+
+round: 1
+author: claude
+converging: true
+
+signals:
+  - "make check passes — all 13 packages green with -race"
+  - "single os.ReadFile confirmed in diff — Load call removed"
+  - "KnownFields(true) preserved via DecodeContractStrict"
+  - "rejectSymlink called via os.Lstat before ReadFile"
+
+recommendation: continue
+
+reason: |
+  Worker delivered exactly what was specified. One ReadFile per
+  contract, local strict decode, same bytes for hash check and
+  render. The TOCTOU window is eliminated. All existing tests
+  pass unchanged. Ready for code review and close.
+
+# --- Actual ethos output ---
+#
+# Reflected m-2026-04-10-003 round 1 (continue)
+
+# --- Notes ---
+#
+# - converging: true = work is moving toward done, not diverging.
+# - signals: 4 observations, each backed by evidence from the result.
+#   Signals are strings, not structured objects.
+# - recommendation: continue = proceed to code review and close.
+#   Other options: pivot, escalate, stop.
+# - reason: free-text explanation of the decision.
+#
+# For a single-round mission, the reflection is brief. For multi-round
+# missions where round 1 fails and round 2 is needed, the reflection
+# captures *why* — what didn't converge and what the next round should
+# try differently.
+#
+# Without a reflection, the mission cannot advance to round 2:
+#   ethos mission advance m-2026-04-10-003
+# returns an error if the current round has no reflection.
