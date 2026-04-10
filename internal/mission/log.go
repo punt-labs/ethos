@@ -199,6 +199,13 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 		}
 		return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, err)
 	}
+	// Reject symlinks before opening. A symlink pointing outside the
+	// missions directory could trick the log reader into parsing
+	// attacker-controlled content as event data.
+	logPath := s.logPath(missionID)
+	if err := rejectSymlink(logPath); err != nil {
+		return nil, nil, err
+	}
 	// Open, stat, and read the log file through a single fd so there
 	// is no TOCTOU window between a path-level stat and a path-level
 	// read: a concurrent writer growing the file past the cap would
@@ -206,7 +213,6 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 	// cap at read time regardless of any growth after the stat, and
 	// the post-read length check turns the `+1` overflow byte into a
 	// distinct error naming the race.
-	logPath := s.logPath(missionID)
 	f, err := os.Open(logPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

@@ -94,6 +94,78 @@ func TestStore_RoundTrip(t *testing.T) {
 	assert.Equal(t, c.Inputs.Files, loaded.Inputs.Files)
 }
 
+// TestStore_RejectsSymlink_Load creates a real contract, replaces it with
+// a symlink, and asserts that Load refuses to follow it.
+func TestStore_RejectsSymlink_Load(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	// Replace the contract file with a symlink.
+	path := s.ContractPath("m-2026-04-07-001")
+	target := path + ".target"
+	require.NoError(t, os.Rename(path, target))
+	require.NoError(t, os.Symlink(target, path))
+
+	_, err := s.Load("m-2026-04-07-001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to follow symlink")
+}
+
+// TestStore_RejectsSymlink_LoadEvents creates a contract and a log file,
+// replaces the log with a symlink, and asserts that LoadEvents refuses.
+func TestStore_RejectsSymlink_LoadEvents(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	// The create event wrote the .jsonl file. Replace it with a symlink.
+	logPath := filepath.Join(s.Root(), "missions", "m-2026-04-07-001.jsonl")
+	target := logPath + ".target"
+	require.NoError(t, os.Rename(logPath, target))
+	require.NoError(t, os.Symlink(target, logPath))
+
+	_, _, err := s.LoadEvents("m-2026-04-07-001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to follow symlink")
+}
+
+// TestStore_RejectsSymlink_LoadReflections creates a symlink where the
+// reflections file would be and asserts that LoadReflections refuses.
+func TestStore_RejectsSymlink_LoadReflections(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	// Create a fake target and symlink the reflections path to it.
+	refPath := filepath.Join(s.Root(), "missions", "m-2026-04-07-001.reflections.yaml")
+	target := refPath + ".target"
+	require.NoError(t, os.WriteFile(target, []byte("reflections: []\n"), 0o600))
+	require.NoError(t, os.Symlink(target, refPath))
+
+	_, err := s.LoadReflections("m-2026-04-07-001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to follow symlink")
+}
+
+// TestStore_RejectsSymlink_LoadResults creates a symlink where the
+// results file would be and asserts that LoadResults refuses.
+func TestStore_RejectsSymlink_LoadResults(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-001")
+	require.NoError(t, s.Create(c))
+
+	// Create a fake target and symlink the results path to it.
+	resPath := filepath.Join(s.Root(), "missions", "m-2026-04-07-001.results.yaml")
+	target := resPath + ".target"
+	require.NoError(t, os.WriteFile(target, []byte("results: []\n"), 0o600))
+	require.NoError(t, os.Symlink(target, resPath))
+
+	_, err := s.LoadResults("m-2026-04-07-001")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to follow symlink")
+}
+
 func TestStore_CreateRejectsNil(t *testing.T) {
 	s := testStore(t)
 	require.Error(t, s.Create(nil))

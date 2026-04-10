@@ -507,18 +507,16 @@ func TestLoadEvents_PermissionDenied(t *testing.T) {
 // follow-up that hardens all four loaders together.
 //
 // This test pins the current behavior so the follow-up is an
-// explicit, reviewable change — not a silent drift. It used to
-// carry the positive-sounding name "SymlinkPolicy" which misread
-// as "this is a feature"; the rename signals the intent is
-// deferred hardening, not a capability.
-func TestLoadEvents_FollowsSymlink_KnownWeaknessMatchesStoreLoad(t *testing.T) {
+// TestLoadEvents_RejectsSymlink asserts that LoadEvents refuses to
+// follow a symlink at the log path. Symlinks are a local-attacker
+// vector: pointing a log file outside the missions directory would
+// let the attacker control the event data the operator sees. This
+// test replaces the former "known weakness" test (the symlink was
+// previously followed); ethos-jjm closed the weakness.
+func TestLoadEvents_RejectsSymlink(t *testing.T) {
 	s := testStore(t)
 	missionID := "m-2026-04-07-013"
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
-	// Write a log body to an out-of-directory file, then symlink the
-	// mission's log path to it. os.ReadFile follows the symlink, so
-	// LoadEvents reads it as if it were the mission's own log — the
-	// weakness ethos-jjm will close across all four loaders.
 	outside := filepath.Join(t.TempDir(), "outside.jsonl")
 	require.NoError(t, os.WriteFile(outside,
 		[]byte(`{"ts":"2026-04-07T22:00:01Z","event":"create","actor":"claude"}`+"\n"),
@@ -526,11 +524,9 @@ func TestLoadEvents_FollowsSymlink_KnownWeaknessMatchesStoreLoad(t *testing.T) {
 	require.NoError(t, os.Symlink(outside, s.logPath(missionID)))
 	seedContractStub(t, s, missionID)
 
-	events, warnings, err := s.LoadEvents(missionID)
-	require.NoError(t, err)
-	assert.Empty(t, warnings)
-	require.Len(t, events, 1)
-	assert.Equal(t, "create", events[0].Event)
+	_, _, err := s.LoadEvents(missionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to follow symlink")
 }
 
 // TestLoadEvents_TraversalIDCannotEscape asserts that a

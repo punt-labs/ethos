@@ -16,6 +16,15 @@ import (
 	"github.com/punt-labs/ethos/internal/session"
 )
 
+// verifierMission pairs a parsed contract with the raw on-disk bytes
+// that produced it. checkVerifierHash reads the contract once;
+// renderVerifierBlock uses the same bytes for the isolation block,
+// eliminating the TOCTOU window a second os.ReadFile would open.
+type verifierMission struct {
+	Contract *mission.Contract
+	RawYAML  []byte
+}
+
 // SubagentStartResult is the JSON output of the subagent-start hook.
 type SubagentStartResult struct {
 	HookSpecificOutput struct {
@@ -124,11 +133,12 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	// Phase 3.5: verifier context isolation. When at least one open
 	// mission names this agentType as its evaluator, REPLACE the
 	// normal persona/extension injection with an isolation block
-	// containing only the mission contract (byte-for-byte from
-	// disk), the file allowlist derived from the write_set, the
-	// explicit verification criteria, and the file-level delta.
-	// Parent transcript, worker scratch, and prior reasoning are
-	// excluded by virtue of never being added.
+	// containing only the mission contract (byte-for-byte from the
+	// single read checkVerifierHash already performed), the file
+	// allowlist derived from the write_set, the explicit verification
+	// criteria, and the file-level delta. Parent transcript, worker
+	// scratch, and prior reasoning are excluded by virtue of never
+	// being added.
 	//
 	// The verifier spawn's agent definition is loaded by Claude Code
 	// from the agent's `.md` file on disk — the hook does not touch
@@ -200,12 +210,13 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 //  1. "You are the frozen verifier …" opener anchored to the
 //     evaluator handle and mission ID — the verifier knows its role
 //     and its scope on the first line.
-//  2. The mission contract YAML, read BYTE-FOR-BYTE from disk. The
-//     hook does not re-marshal the Contract struct; a re-marshal
-//     could produce different bytes than the originally pinned
-//     contract (different key ordering, comment loss), which would
-//     let the operator smuggle content through the trust boundary.
-//     ContractPath + os.ReadFile is the one true path.
+//  2. The mission contract YAML, byte-for-byte from the single read
+//     performed by checkVerifierHash. The hook does not re-marshal
+//     the Contract struct or re-read the file; a re-marshal could
+//     produce different bytes than the originally pinned contract
+//     (key reordering, comment loss), and a second read opens a
+//     TOCTOU window. The raw bytes from checkVerifierHash are the
+//     one true source.
 //  3. Success criteria repeated explicitly, so the verifier's
 //     verdict cannot "drift" to a different rubric than the one
 //     pinned at launch.
@@ -224,7 +235,7 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 // Returns an error if the contract file is missing or unreadable;
 // the caller refuses the spawn. A successful build always returns
 // non-empty bytes.
-func buildVerifierIsolationBlock(missions []*mission.Contract, store *mission.Store) (string, error) {
+func buildVerifierIsolationBlock(missions []verifierMission, store *mission.Store) (string, error) {
 	if len(missions) == 0 {
 		return "", fmt.Errorf("no verifier missions")
 	}
@@ -232,8 +243,8 @@ func buildVerifierIsolationBlock(missions []*mission.Contract, store *mission.St
 		return "", fmt.Errorf("mission store is nil")
 	}
 	var blocks []string
-	for _, m := range missions {
-		body, err := renderVerifierBlock(m, store)
+	for _, vm := range missions {
+		body, err := renderVerifierBlock(vm, store)
 		if err != nil {
 			return "", err
 		}
@@ -245,16 +256,20 @@ func buildVerifierIsolationBlock(missions []*mission.Contract, store *mission.St
 // renderVerifierBlock renders one mission's verifier isolation block.
 // Factored out of buildVerifierIsolationBlock so the per-mission
 // render logic is unit-testable without a multi-mission harness.
-func renderVerifierBlock(m *mission.Contract, store *mission.Store) (string, error) {
+//
+// The contract bytes come from the verifierMission struct, which was
+// populated by checkVerifierHash's single read. This eliminates the
+// TOCTOU window a second os.ReadFile would open: the bytes used for
+// hash verification are the same bytes rendered into the isolation
+// block.
+func renderVerifierBlock(vm verifierMission, store *mission.Store) (string, error) {
+	m := vm.Contract
 	if m == nil {
 		return "", fmt.Errorf("mission contract is nil")
 	}
-	// Byte-for-byte contract from disk. A re-marshal from the
-	// already-parsed Contract would diverge from the pinned bytes;
-	// the contract file is the trust anchor.
-	contractBytes, err := os.ReadFile(store.ContractPath(m.MissionID))
-	if err != nil {
-		return "", fmt.Errorf("reading contract %q: %w", m.MissionID, err)
+	contractBytes := vm.RawYAML
+	if len(contractBytes) == 0 {
+		return "", fmt.Errorf("contract %q has empty raw YAML", m.MissionID)
 	}
 
 	repoAllowlist, absAllowlist := verifierAllowlistSplit(m, store)
@@ -418,7 +433,7 @@ func verifierAllowlistSplit(m *mission.Contract, store *mission.Store) (repo, ab
 // operator can cross-reference which file they edited, and two
 // recovery options (revert the edit to preserve the missions, or
 // close and relaunch to accept the new content).
-func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]*mission.Contract, error) {
+func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]verifierMission, error) {
 	if deps.Missions == nil {
 		return nil, nil // legacy install: no mission store
 	}
@@ -450,7 +465,7 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]*mission.Con
 		breakdown        mission.EvaluatorHashBreakdown
 		breakdownLoaded  bool
 		mismatches       []driftedMission
-		verifierMissions []*mission.Contract
+		verifierMissions []verifierMission
 	)
 
 	for _, id := range ids {
@@ -470,13 +485,26 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]*mission.Con
 		if c.Evaluator.Handle != agentType {
 			continue
 		}
+		// Read the raw contract bytes now — the same bytes used for
+		// hash verification are threaded to renderVerifierBlock,
+		// eliminating the TOCTOU window a later os.ReadFile would open.
+		rawYAML, readErr := os.ReadFile(deps.Missions.ContractPath(id))
+		if readErr != nil {
+			return nil, fmt.Errorf(
+				"verifier hash gate: reading contract bytes for %q: %w",
+				id, readErr,
+			)
+		}
 		// Phase 3.5: this mission names agentType as its evaluator
 		// and is still open — it IS a verifier spawn target,
 		// regardless of whether the hash is legacy or matches. The
 		// context-isolation path uses the full list to decide what
 		// to inject; the hash mismatch check only filters those
 		// with a mismatched pinned hash.
-		verifierMissions = append(verifierMissions, c)
+		verifierMissions = append(verifierMissions, verifierMission{
+			Contract: c,
+			RawYAML:  rawYAML,
+		})
 		if c.Evaluator.Hash == "" {
 			// Pre-3.3 mission with an empty pinned hash. Warn and
 			// continue; do not attempt to recompute the current

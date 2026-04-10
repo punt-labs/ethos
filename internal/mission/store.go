@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -327,6 +328,26 @@ func (s *Store) Create(c *Contract) error {
 	return nil
 }
 
+// rejectSymlink returns an error if path is a symbolic link. Symlinks
+// in the missions directory are a local-attacker vector: a symlink
+// pointing outside the store can trick the mission package into
+// reading (or writing via temp+rename) files the caller never
+// intended. Lstat + ModeSymlink is the standard check; it does not
+// follow the link.
+func rejectSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("lstat %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to follow symlink: %s", path)
+	}
+	return nil
+}
+
 // Load reads a mission contract by ID.
 //
 // Decodes with KnownFields(true) so an attacker who has local write
@@ -340,7 +361,11 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	data, err := os.ReadFile(s.contractPath(missionID))
+	path := s.contractPath(missionID)
+	if err := rejectSymlink(path); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, fmt.Errorf("mission %q not found", missionID)
@@ -560,7 +585,11 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 // post-mutation Validate because the mutation fixed the field under
 // inspection.
 func (s *Store) loadLocked(missionID string) (*Contract, []byte, error) {
-	data, err := os.ReadFile(s.contractPath(missionID))
+	path := s.contractPath(missionID)
+	if err := rejectSymlink(path); err != nil {
+		return nil, nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil, fmt.Errorf("mission %q not found", missionID)
@@ -802,7 +831,11 @@ func (s *Store) LoadReflections(missionID string) ([]Reflection, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	data, err := os.ReadFile(s.reflectionsPath(missionID))
+	path := s.reflectionsPath(missionID)
+	if err := rejectSymlink(path); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -961,7 +994,11 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 // and AdvanceRound use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadReflectionsLocked(missionID string) ([]Reflection, error) {
-	data, err := os.ReadFile(s.reflectionsPath(missionID))
+	path := s.reflectionsPath(missionID)
+	if err := rejectSymlink(path); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -1325,7 +1362,11 @@ func (s *Store) LoadResults(missionID string) ([]Result, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	data, err := os.ReadFile(s.resultsPath(missionID))
+	path := s.resultsPath(missionID)
+	if err := rejectSymlink(path); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -1550,7 +1591,11 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 // checkResultGateLocked use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadResultsLocked(missionID string) ([]Result, error) {
-	data, err := os.ReadFile(s.resultsPath(missionID))
+	path := s.resultsPath(missionID)
+	if err := rejectSymlink(path); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
