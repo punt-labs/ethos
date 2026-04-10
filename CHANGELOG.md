@@ -37,6 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Phase 2.6 completion status corrected (`ethos-gpc`)** — README,
+  roadmap, and architecture.tex claimed Phase 2 fully shipped or
+  omitted the Phase B–C remainder. Phase 2.5 (`/mission` skill
+  Phase A, PR #186) shipped; Phase 2.6 (`/mission` Phase B–C:
+  conflict detection and dry-run) remains planned. All three
+  documents now reflect this.
 - **Mission escalate workflow documented in CLI help (`ethos-cqt`,
   `ethos-2qz`)** — `ethos mission result --help` now shows an escalate
   example with empty `files_changed` and populated `open_questions` for

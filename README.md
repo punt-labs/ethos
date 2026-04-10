@@ -45,7 +45,7 @@ lives.
 
 Phase 1 shipped in v2.7.0. Phases 2.1–2.5 and Phase 3 are merged to
 `main` and pending the next tagged release. Phase 2.6 (`/mission`
-conflict detection and dry-run) remains planned. The four architecture
+Phase B–C: conflict detection and dry-run) remains planned. The four architecture
 rules — roles as interfaces, centralized understanding with
 decentralized execution, hooks as enforcement, no ambient context
 inheritance — are runtime-enforced for the first time in the project's
