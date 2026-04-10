@@ -118,6 +118,11 @@ func TestReflection_Validate(t *testing.T) {
 			wantErr: `reason is required when recommendation is "escalate"`,
 		},
 		{
+			name:    "reason control character",
+			mutate:  func(r *Reflection) { r.Reason = "looks good\x00but smuggled" },
+			wantErr: "reason contains control character",
+		},
+		{
 			name:    "malformed created_at",
 			mutate:  func(r *Reflection) { r.CreatedAt = "yesterday" },
 			wantErr: "invalid created_at",

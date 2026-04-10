@@ -178,6 +178,19 @@ func TestStore_LoadCorruptYAML(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestStore_LoadFatalCorrupt asserts that a completely garbled file
+// (not parseable as YAML at all) returns a clean error, not a panic.
+func TestStore_LoadFatalCorrupt(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(s.missionsDir(), "m-2026-04-07-001.yaml"),
+		[]byte("!!!corrupt"), 0o600,
+	))
+	_, err := s.Load("m-2026-04-07-001")
+	require.Error(t, err, "corrupt file must return an error, not panic")
+}
+
 func TestStore_LoadFailsValidation(t *testing.T) {
 	s := testStore(t)
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
@@ -3068,4 +3081,64 @@ func TestStore_AppendResult_ConcurrentSerialization(t *testing.T) {
 		assert.Contains(t, err.Error(), "append-only",
 			"failure must be the append-only refusal, not a lock error")
 	}
+}
+
+// TestStore_AppendReflectionRollbackRemovesFile asserts that when
+// AppendReflection's event-log append fails on the first reflection
+// (no prior file existed), the rollback removes the reflections file
+// entirely rather than leaving an empty stub.
+func TestStore_AppendReflectionRollbackRemovesFile(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-400")
+	require.NoError(t, s.Create(c))
+
+	// Sabotage: replace the event log with a directory so
+	// appendEventLocked fails.
+	logPath := s.logPath(c.MissionID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	r := validReflection()
+	r.Round = c.CurrentRound
+	err := s.AppendReflection(c.MissionID, &r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event append failed")
+
+	// The reflections file must not exist — rollback should have
+	// removed it, not written an empty stub.
+	_, statErr := os.Stat(s.reflectionsPath(c.MissionID))
+	assert.True(t, os.IsNotExist(statErr),
+		"reflections file must be removed on rollback when no prior file existed")
+}
+
+// TestStore_AppendResultRollbackRemovesFile asserts the same
+// remove-on-rollback behavior for AppendResult.
+func TestStore_AppendResultRollbackRemovesFile(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-401")
+	require.NoError(t, s.Create(c))
+
+	// Sabotage the event log.
+	logPath := s.logPath(c.MissionID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	r := &Result{
+		Mission:    c.MissionID,
+		Round:      c.CurrentRound,
+		Author:     c.Worker,
+		Verdict:    VerdictPass,
+		Confidence: 0.8,
+		Evidence: []EvidenceCheck{
+			{Name: "go test ./...", Status: EvidenceStatusPass},
+		},
+	}
+	err := s.AppendResult(c.MissionID, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event append failed")
+
+	// The results file must not exist.
+	_, statErr := os.Stat(s.resultsPath(c.MissionID))
+	assert.True(t, os.IsNotExist(statErr),
+		"results file must be removed on rollback when no prior file existed")
 }
