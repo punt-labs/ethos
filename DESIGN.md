@@ -3771,3 +3771,136 @@ that was a direct consequence of the fallback pattern),
 `feedback_commit_cwd_drift.md` (cwd drift into worktree
 directories), and `feedback_verify_binary_execution.md` (the
 stale-test execution symptom).
+
+## DES-039: Store.Close returns satisfying result (SETTLED)
+
+**Status**: Settled. Shipped in PR #200 (`ethos-30c`), commit
+`cee2d51`. Bead `ethos-30c`.
+
+### Problem
+
+After `Store.Close` commits the terminal transition to disk and
+releases the lock, the CLI needs the satisfying round and verdict
+for the echo and JSON response added by `ethos-30c`. The initial
+approach (PR #200 commit `871dc24`) added `Store.Load` +
+`Store.LoadResult` calls after `Close` returned. This created a
+TOCTOU window: a transient I/O error or file deletion between
+`Close` and `LoadResult` would cause `os.Exit(1)` for an operation
+that already succeeded on disk. Scripts retrying on non-zero exit
+would then hit "already in terminal state" — actively misleading.
+
+Both Copilot and Bugbot independently flagged the regression on the
+same review cycle. The intermediate fix (commit `871dc24`, the
+nil-check) was defensive but insufficient — it turned a panic into
+a clean error, but the clean error was still wrong: reporting
+failure for a committed write.
+
+### Decision
+
+Change `Store.Close` from `func (s *Store) Close(id, status string)
+error` to `func (s *Store) Close(id, status string) (*Result,
+error)`. The close gate already materializes the satisfying result
+inside `closeLocked` while holding the lock. Return it to the
+caller. No re-read, no race.
+
+`runMissionClose` dropped from 54 lines to 33. The JSON and text
+echo paths use the returned `*Result` directly. The returned result
+is guaranteed non-nil on success because the close gate already
+verified its existence.
+
+All call sites updated: `cmd/ethos/mission.go`,
+`internal/mcp/mission_tools.go`, `internal/mission/store_test.go`,
+`internal/mission/log_test.go`,
+`internal/hook/subagent_start_test.go`,
+`cmd/ethos/mission_test.go`.
+
+### Rejected alternatives
+
+- **Non-fatal echo path (exit 0 with degraded output if
+  `LoadResult` fails).** Masks real failures. Operators cannot
+  distinguish "close succeeded but echo failed" from "close
+  succeeded with full echo." The exit code becomes unreliable for
+  scripting. The whole point of `ethos-30c` was to make write
+  commands trustworthy — a degraded path undermines that.
+
+- **Keep the re-read with nil-check (the intermediate fix in
+  `871dc24`).** Correct for panic prevention, but still exits
+  non-zero after a committed write. A TOCTOU race between `Close`
+  and `LoadResult` — however unlikely — would cause scripts to
+  retry a close that already landed. Worse than the original
+  silent-success behavior.
+
+- **Add a separate `CloseAndGetSummary` method.** Two methods that
+  do the same thing (close the mission) with different return
+  shapes. The simpler change is to return the result from `Close`
+  itself, which is what every caller needs anyway.
+
+## DES-040: Escalate via existing Result, not a new artifact type (SETTLED)
+
+**Status**: Settled. Documented in PR #202 (`ethos-cqt`). CLI help
+updated to show the escalate example. Bead `ethos-cqt`.
+
+### Problem
+
+During the Phase 3 mission primitive dogfood (PR #199,
+`ethos-vjp`), the worker hit a write_set boundary and needed to
+tell the leader "the scope is wrong — I need more room." The
+mission primitive had no *documented* path for mid-round scope
+escalation. The worker reported through the agent conversation
+channel, which is not recorded in the mission's append-only event
+log. Future operators auditing the mission would see only
+`close status=escalated` without the "why."
+
+The escalate path actually existed in the schema from Phase 3.6:
+`verdict: escalate` is a valid `Result.Verdict` value, and
+`files_changed` may be empty ("only when the round made no file
+changes" — `internal/mission/result.go:161-164`). The combination
+`verdict=escalate, files_changed=[], open_questions=[reason]` is a
+well-formed result that passes validation, persists to disk, and
+appears in the event log. Workers didn't know this because the CLI
+help showed only a `verdict: pass` example with non-empty
+`files_changed`.
+
+### Decision
+
+Document the existing shape as the canonical mid-round escalation
+protocol. Do not add a new artifact type.
+
+- `ethos mission result --help` now shows a complete escalate
+  example: `verdict: escalate`, `files_changed: []`,
+  `open_questions` populated with the scope-expansion request,
+  `prose` explaining the blocker.
+- `ethos mission --help` links to the escalate protocol.
+- The delegation template convention instructs leaders to include
+  the escalate protocol reference in every contract's `context`
+  field so new workers discover it before they hit a boundary.
+
+The primitive's surface area stays at two worker-authored artifact
+types (`Result` and `Reflection`) and three leader actions
+(`reflect`, `advance`, `close`). No new store methods, event types,
+or formatter paths.
+
+### Rejected alternatives
+
+- **Dedicated `Block` or `ScopeRequest` artifact type alongside
+  `Result` and `Reflection`.** Adds a third artifact to learn, a
+  third store method, a third event type, a third formatter path —
+  all for a scenario that happens once per write_set gap per
+  mission. The existing `Result` shape carries the data. A new type
+  would increase the API surface without adding information the
+  existing type cannot convey.
+
+- **`Reflection` with `recommendation=escalate` as the worker's
+  escalation channel.** Reflections are leader-authored in the
+  mission workflow — the leader writes the reflection after
+  reviewing the worker's result. A worker-initiated scope issue
+  should come through the worker's artifact (`Result`), not the
+  leader's. Routing it through `Reflection` would conflate the
+  authorship model.
+
+- **No formal path; workers use the agent conversation channel.**
+  This is what happened during the dogfood. The escalation reason
+  was not recorded in the mission event log. Operators auditing the
+  mission saw `close status=escalated` without context. The
+  append-only log exists precisely so future readers can
+  reconstruct what happened without reading the conversation.
