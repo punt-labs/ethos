@@ -777,9 +777,10 @@ func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
 	assert.Contains(t, ctx, missionLabel(t, "Status:")+"closed")
 	// Closed: row must be present with a formatted timestamp in the
 	// new layout (year-month-day, 24h time, then either an IANA zone
-	// abbreviation or a numeric offset fallback of ±HH, ±HHMM, or
-	// ±HHMMSS when the Location has no named zone).
-	assert.Regexp(t, `Closed:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([A-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`, ctx)
+	// abbreviation — possibly mixed-case like ChST — or a numeric
+	// offset fallback of ±HH, ±HHMM, or ±HHMMSS when the Location has
+	// no named zone).
+	assert.Regexp(t, `Closed:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`, ctx)
 }
 
 func TestFormatOutput_Mission_Show_NoOptionalFields(t *testing.T) {
@@ -1220,11 +1221,12 @@ func TestFormatMissionTime(t *testing.T) {
 				// Local-time formatted; can't assert exact value across
 				// time zones, but the shape is fixed:
 				// YYYY-MM-DD HH:MM ZONE. ZONE is either an IANA
-				// abbreviation (e.g. PST, UTC) or a numeric offset
+				// abbreviation (e.g. PST, UTC, or mixed-case like
+				// ChST for Pacific/Guam) or a numeric offset
 				// fallback when the Location has no named zone —
 				// which Go emits as ±HH, ±HHMM, or ±HHMMSS
 				// (e.g. +05, +0530, -0700).
-				assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([A-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)$`, got)
+				assert.Regexp(t, `^\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)$`, got)
 				return
 			}
 			assert.Equal(t, tt.want, got)
