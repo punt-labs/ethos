@@ -183,6 +183,9 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	if teamCtx := BuildTeamSection(deps.Teams, deps.Roles, store, agentPersona); teamCtx != "" {
 		sections = append(sections, teamCtx)
 	}
+	if workCtx := BuildWorkingContext(); workCtx != "" {
+		sections = append(sections, workCtx)
+	}
 
 	result := SessionStartResult{}
 	result.HookSpecificOutput.HookEventName = "SessionStart"
