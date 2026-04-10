@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{2}{4}
+\prfaqversion{2}{5}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -375,14 +375,14 @@ None. Ethos is a standalone Go binary with zero runtime dependencies. It does no
 \end{faqpair}
 
 \begin{faqpair}{What is the development status?}
-Ethos has shipped 4 of 5 planned phases. 20,100 lines of production Go. 26,800 lines of tests (1.33:1 ratio). Go Report Card: A+.
+Ethos has shipped all 5 planned phases. Go Report Card: A+.
 
 \begin{itemize}[nosep]
   \item \textbf{Phase 1 (Shipped):} Identity, sessions, persona animation, teams, roles, 10 talents, 6 role archetypes, baseline-ops skill.
   \item \textbf{Phase 2 (Shipped):} Anti-responsibility generation, role-based hooks, structured output, baseline-ops injection, mission skill MVP.
   \item \textbf{Phase 3 (Shipped):} All 7 workflow primitives: mission contract, write-set admission, frozen evaluator, bounded rounds with reflection, verifier isolation, result artifacts, append-only event log. 7 ADRs (DES-031 through DES-037).
   \item \textbf{Phase 4 (Shipped):} SessionStart working context (git branch, dirty files), role-based safety constraints, session audit logging.
-  \item \textbf{Phase 5 (Planned):} Starter team templates, cross-tool integration (ethos+biff, ethos+beadle), agent marketplace.
+  \item \textbf{Phase 5 (Shipped):} Sprint team template (6 personas, roles with safety constraints), mission archetypes, typed ADRs, git-tracked mission export, SoulSpec import/export, LLM-assisted identity creation, integration guides. Cross-tool integration (ethos+biff, ethos+beadle, quarry transcript tagging) planned.
 \end{itemize}
 
 Remaining work is adoption-driven: customer validation, integration guides for third-party tools, and Phase 5 ecosystem features.
@@ -510,19 +510,18 @@ Three scenarios would cause ethos to fail:
   \featureitem{Three integration surfaces}{filesystem (zero dependency), CLI (hooks/scripts), MCP server (10 tools)}\label{feat:surfaces}
   \featureitem{Extension model}{per-tool attributes under <handle>.ext/<tool>.yaml; any tool attaches config without schema changes}\label{feat:extensions}
   \featureitem{Starter content}{10 domain talents, 6 role archetypes, baseline-ops skill ship in the box}\label{feat:starter}
+  \featureitem{Mission archetypes}{named contract conventions---implement (tight write-set, specific criteria, agent executes), design (broad write-set, open criteria, agent proposes and pushes back), review (read-only, findings with confidence), investigate (read-only, questions answered). Agency is expressed through contract specificity, not a mode switch}\label{feat:archetypes}
+  \featureitem{Sprint team template}{6 sprint personas (product-thinker, architect, implementer, reviewer, QA, security) with writing styles, roles with safety constraints, and a team collaboration graph}\label{feat:templates}
+  \featureitem{Lossy export}{{\small\texttt{ethos export --to soulspec|claude-md}} compiles identities to portable formats. Structural data drops---the loss signals what ethos adds}\label{feat:lossy-export}
+  \featureitem{SoulSpec and CLAUDE.md ingestion}{{\small\texttt{ethos import --from soulspec}} reads SoulSpec files and creates a hardened ethos identity. LLM-assisted {\small\texttt{ethos create}} fine-tunes starter content from existing CLAUDE.md}\label{feat:importers}
+  \featureitem{Typed ADRs}{Architecture Decision Records as ethos artifacts with schema validation, lifecycle status (proposed/settled/superseded), CLI, and MCP tool~\cite{promptpals2026adrsai}}\label{feat:typed-adrs}
+  \featureitem{Git-tracked mission export}{{\small\texttt{ethos mission export}} copies contracts and results to the repo for version control. Lightweight alternative to Entire.io's checkpoint branch~\cite{entireio2026docs}}\label{feat:git-missions}
+  \featureitem{Integration guides}{filesystem, CLI, and MCP guides with working examples for third-party tools}\label{feat:guides}
 \end{enumerate}
 
 \subsection*{Should Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Mission archetypes}{named contract conventions---implement (tight write-set, specific criteria, agent executes), design (broad write-set, open criteria, agent proposes and pushes back), review (read-only, findings with confidence), investigate (read-only, questions answered). The agent's expertise is always present; the archetype determines how much latitude the contract gives. Agency is expressed through contract specificity, not a mode switch}\label{feat:archetypes}
-  \featureitem{Lossy export to portable formats}{{\small\texttt{ethos export --to soulspec}} produces SOUL.md, IDENTITY.md, STYLE.md, AGENTS.md readable by any SoulSpec-compatible tool. {\small\texttt{ethos export --to claude-md}} produces a CLAUDE.md personal section usable without ethos installed. Both exports are lossy by design: structural data (teams, missions, safety constraints, frozen evaluator, audit trails) drops because the target format cannot represent it. The loss signals what ethos adds. Export is compilation from a richer system to a simpler one---useful for distribution and portability}\label{feat:lossy-export}
-  \featureitem{Integration guides}{documentation and examples for third-party tools to read ethos identity and mission state}\label{feat:guides}
-  \featureitem{Starter team templates}{solo developer (1 human + 3 agents), small team (2--3 humans + 5 agents), reference implementation}\label{feat:templates}
-  \featureitem{LLM-assisted identity creation from project context}{{\small\texttt{ethos create}} reads CLAUDE.md and fine-tunes starter content defaults with LLM inference---pre-filling writing style, personality, and role suggestions from existing project conventions}\label{feat:llm-create}
-  \featureitem{Structured workflow importers}{{\small\texttt{ethos import --from gstack|soulspec|crewai}} extracts personas and roles from popular tool formats; ships a gstack-inspired sprint team as starter content}\label{feat:importers}
-  \featureitem{Git-tracked mission artifacts}{mission contracts and structured results committed to {\small\texttt{.ethos/}} in the repository. Intent and outcome travel with the code. Lightweight alternative to Entire.io's checkpoint-branch approach~\cite{entireio2026docs}---uses conventional git commits, not a separate branch structure}\label{feat:git-missions}
-  \featureitem{Typed ADRs}{Architecture Decision Records as ethos artifacts with schema validation, lifecycle status (proposed/settled/superseded), and links to missions and beads~\cite{promptpals2026adrsai}. The agent reads ADRs before acting; the ADR captures the design decision that governed the delegation}\label{feat:typed-adrs}
   \featureitem{Quarry transcript tagging}{when Quarry is installed, conversation transcripts captured before context compaction are tagged with the active mission ID. Semantic search retrieves the reasoning behind specific missions---the unstructured ``why'' layer that completes the three-layer audit model}\label{feat:quarry-tag}
 \end{enumerate}
 
