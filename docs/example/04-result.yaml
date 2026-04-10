@@ -1,0 +1,56 @@
+# Phase 4: Worker Result
+#
+# This is the actual result submitted for mission m-2026-04-10-003.
+# Submitted at 2026-04-10T07:22 PDT via:
+#
+#   mcp__plugin_ethos_self__mission(method="result", ...)
+#
+# The worker (bwk) took 2 minutes 10 seconds to implement the fix.
+# make check passed on first try. All existing tests unchanged.
+
+# --- Actual result fields ---
+
+mission: m-2026-04-10-003
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.95
+
+files_changed:
+  - path: internal/hook/subagent_start.go
+    added: 47
+    removed: 23
+
+evidence:
+  - name: make check
+    status: pass
+  - name: go test -race ./internal/hook/
+    status: pass
+  - name: "single os.ReadFile per contract verified in diff"
+    status: pass
+  - name: "KnownFields(true) via DecodeContractStrict"
+    status: pass
+
+open_questions: []
+
+prose: |
+  Replaced deps.Missions.Load(id) + os.ReadFile with a single
+  os.ReadFile + mission.DecodeContractStrict (KnownFields=true).
+  Added os.Lstat symlink rejection before the read, matching
+  the Store.Load defense. Same []byte used for both decoded
+  Contract and RawYAML. Net +24 lines due to inline validation
+  that Store.Load previously handled internally.
+
+# --- Actual ethos output ---
+#
+# Result m-2026-04-10-003 round 1 (pass)
+
+# --- Notes ---
+#
+# - verdict: pass = worker believes the work meets all success criteria.
+# - confidence: 0.95 = high but wants evaluator to verify TOCTOU elimination.
+# - files_changed: 1 file, +47/-23 lines. The --verify flag would
+#   cross-check these counts against `git diff --numstat`.
+# - evidence: 4 items, each individually verifiable.
+# - open_questions: empty = no blockers, no scope expansion needed.
+# - prose: optional human summary. The structured fields are what matters.

@@ -1,0 +1,66 @@
+# Phase 2: Mission Contract
+#
+# This is the actual contract used for mission m-2026-04-10-003.
+# Created at 2026-04-10T07:19 PDT via:
+#
+#   mcp__plugin_ethos_self__mission(method="create", contract="...")
+#
+# The ethos MCP tool assigned the ID, pinned the evaluator hash, and
+# wrote the contract to ~/.punt-labs/ethos/missions/m-2026-04-10-003.yaml.
+
+# --- Actual contract fields ---
+
+leader: claude
+worker: bwk
+
+inputs:
+  bead: ethos-db7
+  files:                               # READ context — not write permission
+    - internal/hook/subagent_start.go
+    - internal/mission/store.go
+
+write_set:                             # WRITE permission envelope
+  - internal/hook/subagent_start.go
+
+success_criteria:
+  - make check passes
+  - checkVerifierHash does exactly one os.ReadFile per contract
+  - the same bytes are used for both yaml decode and RawYAML
+  - no behavioral change — all existing tests pass
+
+evaluator:
+  handle: djb
+  # Ethos pinned the hash at creation:
+  # 19095bb477fb03f170676196565c083685e3346baca4f3aabae4314b6bec37c0
+
+budget:
+  rounds: 2
+  reflection_after_each: true
+
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
+
+# --- Actual output from ethos ---
+#
+# Mission:    m-2026-04-10-003
+# Status:     open
+# Created:    2026-04-10 07:19 PDT
+# Leader:     claude
+# Worker:     bwk
+# Evaluator:  djb (pinned 2026-04-10 07:19 PDT)
+# Budget:     2 round(s), reflection_after_each=true
+# Round:      1 of 2
+
+# --- Notes ---
+#
+# - write_set has exactly 1 file. The worker cannot touch anything else.
+# - inputs.files lists 2 files: the file to change and Store.Load's
+#   source (so the worker understands the internal behavior to replace).
+# - evaluator.handle is djb (security engineer) because this is a
+#   TOCTOU elimination — a security-relevant change.
+# - budget.rounds is 2, but the mission completed in 1 round.
