@@ -173,7 +173,6 @@ func init() {
 	whoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
 	iamCmd.Flags().StringVar(&sessionIamSession, "session", "", "Session ID (full or prefix)")
 
-
 	rootCmd.AddCommand(
 		versionCmd,
 		doctorCmd,
@@ -284,7 +283,6 @@ func runList() {
 
 	fmt.Println(hook.FormatTable(headers, rows))
 }
-
 
 func runShow(handle string, reference bool) {
 	var opts []identity.LoadOption

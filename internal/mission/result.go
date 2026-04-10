@@ -167,9 +167,9 @@ var validEvidenceStatuses = map[string]bool{
 //  9. open_questions entries, when present, are non-empty and free of
 //     control characters
 //  10. prose, when set, contains no control characters (newlines are
-//      permitted inside prose; the containsControlChar helper treats
-//      them as control, so prose uses a dedicated pass that allows
-//      \n, \r, and \t — reviewers write multi-line prose)
+//     permitted inside prose; the containsControlChar helper treats
+//     them as control, so prose uses a dedicated pass that allows
+//     \n, \r, and \t — reviewers write multi-line prose)
 //
 // Validate does NOT check files_changed containment against a
 // specific contract's write_set. That check is the store's job, where

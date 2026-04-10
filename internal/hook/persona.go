@@ -191,64 +191,10 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 	fmt.Fprintf(&b, "## Team: %s\n", t.Name)
 
 	for _, m := range t.Members {
-		// Load full identity — personality is needed so we know how to
-		// work with each team member after compaction (via a summary).
-		name := m.Identity
-		var id *identity.Identity
-		if identities != nil {
-			var err error
-			id, err = identities.Load(m.Identity)
-			if err == nil {
-				name = fmt.Sprintf("%s (%s)", id.Name, id.Handle)
-			} else {
-				fmt.Fprintf(os.Stderr, "ethos: team context: failed to load identity %q: %v\n", m.Identity, err)
-			}
-		}
-
-		fmt.Fprintf(&b, "\n### %s — %s\n", name, m.Role)
-
-		// Skip full content for self — already emitted in persona block.
 		isSelf := selfHandle != "" && m.Identity == selfHandle
-
-		if !isSelf {
-			// Full personality content — strip the top-level heading only.
-			if id != nil && id.PersonalityContent != "" {
-				content := strings.TrimRight(stripLeadingHeading(id.PersonalityContent), "\n")
-				if content != "" {
-					fmt.Fprintf(&b, "%s\n", content)
-				}
-			}
-
-			// Full writing style content.
-			if id != nil && id.WritingStyleContent != "" {
-				content := strings.TrimRight(stripLeadingHeading(id.WritingStyleContent), "\n")
-				if content != "" {
-					fmt.Fprintf(&b, "\n#### Writing Style\n%s\n", content)
-				}
-			}
-		}
-
-		// Role responsibilities.
-		if roles != nil {
-			if r, err := roles.Load(m.Role); err == nil && len(r.Responsibilities) > 0 {
-				if !isSelf {
-					fmt.Fprintf(&b, "\n#### Responsibilities\n")
-				}
-				for _, resp := range r.Responsibilities {
-					fmt.Fprintf(&b, "- %s\n", resp)
-				}
-			} else if err != nil {
-				fmt.Fprintf(os.Stderr, "ethos: team context: failed to load role %q: %v\n", m.Role, err)
-			}
-		}
-
-		// Talents.
-		if !isSelf && id != nil && len(id.Talents) > 0 {
-			fmt.Fprintf(&b, "Talents: %s\n", strings.Join(id.Talents, ", "))
-		}
+		writeMemberBlock(&b, m, roles, identities, isSelf)
 	}
 
-	// Emit collaborations as a compact summary.
 	if len(t.Collaborations) > 0 {
 		b.WriteString("\n### Collaborations\n")
 		for _, c := range t.Collaborations {
@@ -257,4 +203,55 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 	}
 
 	return b.String()
+}
+
+// writeMemberBlock renders a single team member's context block. When
+// isSelf is true, only role responsibilities are emitted since the full
+// persona block is already present above.
+func writeMemberBlock(b *strings.Builder, m team.Member, roles *role.LayeredStore, identities identity.IdentityStore, isSelf bool) {
+	name := m.Identity
+	var id *identity.Identity
+	if identities != nil {
+		var err error
+		id, err = identities.Load(m.Identity)
+		if err == nil {
+			name = fmt.Sprintf("%s (%s)", id.Name, id.Handle)
+		} else {
+			fmt.Fprintf(os.Stderr, "ethos: team context: failed to load identity %q: %v\n", m.Identity, err)
+		}
+	}
+
+	fmt.Fprintf(b, "\n### %s — %s\n", name, m.Role)
+
+	if !isSelf {
+		if id != nil && id.PersonalityContent != "" {
+			content := strings.TrimRight(stripLeadingHeading(id.PersonalityContent), "\n")
+			if content != "" {
+				fmt.Fprintf(b, "%s\n", content)
+			}
+		}
+		if id != nil && id.WritingStyleContent != "" {
+			content := strings.TrimRight(stripLeadingHeading(id.WritingStyleContent), "\n")
+			if content != "" {
+				fmt.Fprintf(b, "\n#### Writing Style\n%s\n", content)
+			}
+		}
+	}
+
+	if roles != nil {
+		if r, err := roles.Load(m.Role); err == nil && len(r.Responsibilities) > 0 {
+			if !isSelf {
+				fmt.Fprintf(b, "\n#### Responsibilities\n")
+			}
+			for _, resp := range r.Responsibilities {
+				fmt.Fprintf(b, "- %s\n", resp)
+			}
+		} else if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: team context: failed to load role %q: %v\n", m.Role, err)
+		}
+	}
+
+	if !isSelf && id != nil && len(id.Talents) > 0 {
+		fmt.Fprintf(b, "Talents: %s\n", strings.Join(id.Talents, ", "))
+	}
 }

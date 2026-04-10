@@ -791,65 +791,74 @@ func summarizeEventDetailsRaw(evType string, details map[string]any) string {
 	}
 	switch evType {
 	case "create":
-		worker, _ := details["worker"].(string)
-		evaluator, _ := details["evaluator"].(string)
-		bead, _ := details["bead"].(string)
-		var parts []string
-		if worker != "" {
-			parts = append(parts, "worker="+worker)
-		}
-		if evaluator != "" {
-			parts = append(parts, "evaluator="+evaluator)
-		}
-		if bead != "" {
-			parts = append(parts, "bead="+bead)
-		}
-		return strings.Join(parts, " ")
+		return joinEventParts(
+			eventKV("worker", eventStr(details, "worker")),
+			eventKV("evaluator", eventStr(details, "evaluator")),
+			eventKV("bead", eventStr(details, "bead")),
+		)
 	case "close":
-		status, _ := details["status"].(string)
-		verdict, _ := details["verdict"].(string)
-		round, _ := details["round"].(float64)
-		var parts []string
-		if status != "" {
-			parts = append(parts, "status="+status)
-		}
-		if verdict != "" {
-			parts = append(parts, "verdict="+verdict)
-		}
-		if round > 0 {
-			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
-		}
-		return strings.Join(parts, " ")
+		return joinEventParts(
+			eventKV("status", eventStr(details, "status")),
+			eventKV("verdict", eventStr(details, "verdict")),
+			eventKVRound("round", eventRound(details, "round")),
+		)
 	case "result":
-		verdict, _ := details["verdict"].(string)
-		round, _ := details["round"].(float64)
-		var parts []string
-		if round > 0 {
-			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
-		}
-		if verdict != "" {
-			parts = append(parts, "verdict="+verdict)
-		}
-		return strings.Join(parts, " ")
+		return joinEventParts(
+			eventKVRound("round", eventRound(details, "round")),
+			eventKV("verdict", eventStr(details, "verdict")),
+		)
 	case "reflect":
-		rec, _ := details["recommendation"].(string)
-		round, _ := details["round"].(float64)
-		var parts []string
-		if round > 0 {
-			parts = append(parts, fmt.Sprintf("round=%d", int(round)))
-		}
-		if rec != "" {
-			parts = append(parts, "rec="+rec)
-		}
-		return strings.Join(parts, " ")
+		return joinEventParts(
+			eventKVRound("round", eventRound(details, "round")),
+			eventKV("rec", eventStr(details, "recommendation")),
+		)
 	case "round_advanced":
-		from, _ := details["from_round"].(float64)
-		to, _ := details["to_round"].(float64)
+		from := eventRound(details, "from_round")
+		to := eventRound(details, "to_round")
 		if from > 0 && to > 0 {
 			return fmt.Sprintf("round %d -> %d", int(from), int(to))
 		}
 	}
 	return ""
+}
+
+// eventStr extracts a string value from an event details map.
+func eventStr(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
+}
+
+// eventRound extracts a numeric round from an event details map.
+func eventRound(m map[string]any, key string) float64 {
+	v, _ := m[key].(float64)
+	return v
+}
+
+// eventKV returns "key=val" when val is non-empty.
+func eventKV(key, val string) string {
+	if val == "" {
+		return ""
+	}
+	return key + "=" + val
+}
+
+// eventKVRound returns "key=N" when round > 0.
+func eventKVRound(key string, round float64) string {
+	if round <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s=%d", key, int(round))
+}
+
+// joinEventParts joins non-empty parts with spaces.
+func joinEventParts(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // formatMissionResult renders the result method's confirmation:

@@ -27,7 +27,6 @@ func layeredRoleStore(is identity.IdentityStore) *role.LayeredStore {
 	return role.NewLayeredStore("", is.Root())
 }
 
-
 var roleCmd = &cobra.Command{
 	Use:     "role",
 	Short:   "Manage roles (create, list, show, delete)",

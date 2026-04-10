@@ -224,7 +224,7 @@ func TestValidate_StructuralBeforeCallbacks(t *testing.T) {
 	tm := &Team{
 		Name: "eng",
 		Members: []Member{
-			{Identity: "", Role: "dev"},              // structural: empty
+			{Identity: "", Role: "dev"},             // structural: empty
 			{Identity: "nonexistent", Role: "lead"}, // callback would reject
 		},
 	}

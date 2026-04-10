@@ -1593,4 +1593,3 @@ func TestHandleMission_Log_WarningsNoRawControlBytes(t *testing.T) {
 			"MCP log payload must not carry raw control byte 0x%02x at offset %d", b, i)
 	}
 }
-
