@@ -130,12 +130,11 @@ submit a reflection via ` + "`ethos mission reflect`" + ` and advance via
 ` + "`ethos mission advance`" + ` before beginning round N+1; the round
 budget cannot be extended without re-scoping.
 
-inputs.files is the expected set of files the worker will touch (the
-leader's best guess at the blast radius). write_set is the permission
-envelope — the upper bound of what the worker is allowed to touch.
-write_set should be a superset of inputs.files. Workers are not required
-to touch every file in the write_set; they surface the delta between what
-they touched and the full write_set in their result prose.`,
+inputs.files lists files the worker should read for context — the
+leader's curated reading list, not a write-intent signal. write_set is
+the permission envelope — the upper bound of what the worker is allowed
+to write. Workers surface what they actually changed in their result's
+files_changed field; there is no "expected write" input.`,
 	Args: cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionCreate()
