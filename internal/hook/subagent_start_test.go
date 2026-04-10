@@ -668,7 +668,8 @@ func TestSubagentStart_VerifierGateNoOpForClosedMission(t *testing.T) {
 			{Name: "make check", Status: mission.EvidenceStatusPass},
 		},
 	}))
-	require.NoError(t, missions.Close(c.MissionID, mission.StatusClosed))
+	_, err := missions.Close(c.MissionID, mission.StatusClosed)
+	require.NoError(t, err)
 
 	// Drift the personality. A closed mission must NOT block the spawn.
 	personalityPath := filepath.Join(dir, "personalities", "bernstein.md")
@@ -678,7 +679,7 @@ func TestSubagentStart_VerifierGateNoOpForClosedMission(t *testing.T) {
 		0o600,
 	))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	_, err = runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
 	require.NoError(t, err, "closed mission must not block verifier spawn")
 }
 
@@ -1080,7 +1081,8 @@ func TestSubagentStart_VerifierIsolationNoOpForClosedMission(t *testing.T) {
 			{Name: "make check", Status: mission.EvidenceStatusPass},
 		},
 	}))
-	require.NoError(t, missions.Close(c.MissionID, mission.StatusClosed))
+	_, err := missions.Close(c.MissionID, mission.StatusClosed)
+	require.NoError(t, err)
 
 	// Spawning djb now should fall through to the normal persona
 	// path — the fixture seeds djb with a personality body.

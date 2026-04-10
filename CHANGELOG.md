@@ -37,6 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Mission write commands echo on success (`ethos-30c`)** — The
+  five mission write subcommands (`create`, `result`, `reflect`,
+  `advance`, `close`) previously exited with status 0 and zero
+  stdout, forcing every scripting caller to chase a follow-up
+  `ethos mission show` or `list` to verify the operation landed.
+  Each command now emits a one-line `verb: <id> k=v...` summary
+  on stdout in text mode (JSON mode is unchanged): `created: <id>
+  worker=... evaluator=...`, `result: <id> round=N verdict=...`,
+  `reflected: <id> round=N rec=...`, `advanced: <id> round N -> M`,
+  `closed: <id> round=N verdict=... status=...`. The `verb: <id>` prefix is grep-able
+  and the `k=v` tail mirrors the `summarizeEventDetails` audit-log
+  shape so the CLI echo and the event log read alike. Surfaced
+  during the Phase 3 mission-primitive dogfood on PR #199 (`ethos-vjp`).
 - **`FormatLocalTime` renders year and timezone (`ethos-vjp`)** —
   `hook.FormatLocalTime` now formats timestamps as
   `2006-01-02 15:04 MST` (year, month, day, 24h time, zone

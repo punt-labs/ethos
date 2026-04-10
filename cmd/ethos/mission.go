@@ -481,7 +481,16 @@ func runMissionCreate() {
 		printJSON(&c)
 		return
 	}
-	// Non-JSON mode is silent on success — matches session.go pattern.
+	// Text mode echoes a one-line summary so a scripting caller can
+	// tell the write landed without a follow-up `ethos mission show`.
+	// The echoed fields use the same k=v style as the `create`
+	// event-log summary in summarizeEventDetails, but are not
+	// necessarily the full same field set — bead= lives in the log
+	// (for audit) and in the contract YAML the user just submitted,
+	// so cluttering the echo with it adds no new information.
+	// Mission ID leads so it is grep-able and chain-able.
+	fmt.Printf("created: %s worker=%s evaluator=%s\n",
+		c.MissionID, c.Worker, c.Evaluator.Handle)
 }
 
 func runMissionShow(idOrPrefix string) {
@@ -679,15 +688,33 @@ func runMissionClose(idOrPrefix, status string) {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 		os.Exit(1)
 	}
-	if err := ms.Close(id, status); err != nil {
+	// Store.Close returns the satisfying result it already
+	// materialized under the lock, so the CLI echo does not re-read
+	// the .results.yaml file after the lock releases. An earlier
+	// version of this function called Load + LoadResult after Close
+	// and had to nil-guard against a concurrent file removal — the
+	// "fix" turned a silent success into a post-commit failure.
+	// Pushing the data through Close closes the TOCTOU window
+	// entirely: on success, r is guaranteed non-nil.
+	r, err := ms.Close(id, status)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 		os.Exit(1)
 	}
 	if jsonOutput {
-		printJSON(map[string]string{"mission_id": id, "status": status})
+		printJSON(map[string]any{
+			"mission_id": id,
+			"round":      r.Round,
+			"verdict":    r.Verdict,
+			"status":     status,
+		})
 		return
 	}
-	// Non-JSON mode is silent on success — matches session.go pattern.
+	// Text mode echoes a one-line summary; round, verdict, and
+	// status mirror the close event-log summary in
+	// summarizeEventDetails so CLI echo and audit log read the same.
+	fmt.Printf("closed: %s round=%d verdict=%s status=%s\n",
+		id, r.Round, r.Verdict, status)
 }
 
 // runMissionReflect handles `ethos mission reflect <id> --file <path>`.
@@ -728,7 +755,10 @@ func runMissionReflect(idOrPrefix, file string) {
 		})
 		return
 	}
-	// Non-JSON mode is silent on success — matches session.go pattern.
+	// Text mode echoes a one-line summary; the rec= tag matches the
+	// reflect event-log summary in summarizeEventDetails.
+	fmt.Printf("reflected: %s round=%d rec=%s\n",
+		id, r.Round, r.Recommendation)
 }
 
 // runMissionResult handles `ethos mission result <id> --file <path>`.
@@ -777,8 +807,10 @@ func runMissionResult(idOrPrefix, file string) {
 		})
 		return
 	}
-	// Non-JSON mode is silent on success — matches every other
-	// mission subcommand.
+	// Text mode echoes a one-line summary; round and verdict mirror
+	// the result event-log summary in summarizeEventDetails.
+	fmt.Printf("result: %s round=%d verdict=%s\n",
+		id, r.Round, r.Verdict)
 }
 
 // runMissionAdvance handles `ethos mission advance <id>`. The gate
@@ -809,16 +841,22 @@ func runMissionAdvance(idOrPrefix string) {
 		os.Exit(1)
 	}
 	if jsonOutput {
+		// Surface both endpoints of the round transition so the JSON
+		// shape carries the same information as the text echo and
+		// the round_advanced event-log entry. from_round and
+		// to_round match the event-log field names.
 		printJSON(map[string]any{
 			"mission_id":    id,
+			"from_round":    newRound - 1,
+			"to_round":      newRound,
 			"current_round": newRound,
 		})
 		return
 	}
-	// Non-JSON mode is silent on success — matches every other
-	// mission subcommand (create, close, reflect). Exit code 0 tells
-	// the story; a chatty success message would be out of family.
-	_ = newRound
+	// Text mode echoes the round transition; format mirrors the
+	// round_advanced event-log summary in summarizeEventDetails so
+	// CLI echo and audit log read the same.
+	fmt.Printf("advanced: %s round %d -> %d\n", id, newRound-1, newRound)
 }
 
 // resolveActor returns the handle to record on a round_advanced
