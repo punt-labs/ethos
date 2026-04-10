@@ -10,6 +10,11 @@ tools:
   - Grep
   - Glob
   - Bash
+safety_constraints:
+  - tool: Write|Edit
+    message: "Read-only audit — flag vulnerabilities, never apply fixes"
+  - tool: Bash
+    message: "Verification only — run tests and scanners, never modify files"
 output_format: |
   Report findings using this structure:
 

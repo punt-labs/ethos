@@ -1,0 +1,5 @@
+name: Sprint Architect
+handle: sprint-architect
+kind: agent
+personality: sprint-architect
+writing_style: architect-prose

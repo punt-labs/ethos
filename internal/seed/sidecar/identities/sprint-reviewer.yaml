@@ -1,0 +1,5 @@
+name: Sprint Reviewer
+handle: sprint-reviewer
+kind: agent
+personality: sprint-reviewer
+writing_style: reviewer-prose

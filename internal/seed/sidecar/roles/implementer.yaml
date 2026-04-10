@@ -12,6 +12,9 @@ tools:
   - Bash
   - Grep
   - Glob
+safety_constraints:
+  - tool: Bash
+    message: "Never run destructive commands (rm -rf, git push --force, git reset --hard, git checkout -- .)"
 output_format: |
   # Fill in the placeholder values below, then submit as your mission result.
   # The decoder is strict: do not add keys, do not rename keys, and keep

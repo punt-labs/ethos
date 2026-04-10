@@ -1,0 +1,5 @@
+name: Sprint Security
+handle: sprint-security
+kind: agent
+personality: sprint-security
+writing_style: security-prose

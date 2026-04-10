@@ -12,6 +12,9 @@ tools:
   - Bash
   - Grep
   - Glob
+safety_constraints:
+  - tool: Write|Edit
+    message: "Only write test files (*_test.go, *_test.py, test_*) — never modify production code"
 output_format: |
   # Fill in the placeholder values below, then submit as your mission result.
   # The decoder is strict: do not add keys, do not rename keys, and keep
