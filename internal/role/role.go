@@ -13,7 +13,6 @@ import (
 // tool pattern) and a human-readable denial message.
 type SafetyConstraint struct {
 	Tool    string `yaml:"tool" json:"tool"`
-	Deny    string `yaml:"deny" json:"deny"`
 	Message string `yaml:"message" json:"message"`
 }
 

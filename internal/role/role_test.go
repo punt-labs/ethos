@@ -52,10 +52,8 @@ tools:
   - Bash
 safety_constraints:
   - tool: Bash
-    deny: "rm\\s+-rf"
     message: Never run destructive rm commands
   - tool: "Write|Edit"
-    deny: "\\.env"
     message: Never modify dotenv files
 `)
 	require.NoError(t, os.WriteFile(filepath.Join(rolesDir, "secure-role.yaml"), data, 0o600))
@@ -66,11 +64,9 @@ safety_constraints:
 	require.Len(t, r.SafetyConstraints, 2)
 
 	assert.Equal(t, "Bash", r.SafetyConstraints[0].Tool)
-	assert.Equal(t, `rm\s+-rf`, r.SafetyConstraints[0].Deny)
 	assert.Equal(t, "Never run destructive rm commands", r.SafetyConstraints[0].Message)
 
 	assert.Equal(t, "Write|Edit", r.SafetyConstraints[1].Tool)
-	assert.Equal(t, `\.env`, r.SafetyConstraints[1].Deny)
 	assert.Equal(t, "Never modify dotenv files", r.SafetyConstraints[1].Message)
 }
 

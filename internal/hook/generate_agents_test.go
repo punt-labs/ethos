@@ -629,8 +629,8 @@ func TestGenerateAgentFiles(t *testing.T) {
 					},
 					"tools": []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
 					"safety_constraints": []map[string]string{
-						{"tool": "Bash", "deny": `rm\s+-rf`, "message": "Never run destructive rm commands"},
-						{"tool": "Write|Edit", "deny": `\.env`, "message": "Never modify dotenv files"},
+						{"tool": "Bash", "message": "Never run destructive rm commands"},
+						{"tool": "Write|Edit", "message": "Never modify dotenv files"},
 					},
 				})
 			},
