@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{2}{2}
+\prfaqversion{2}{3}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -268,6 +268,16 @@ Three Punt Labs tools (Biff for messaging, Vox for voice, Beadle for email) inte
 Yes. The mission contract is a spectrum. An implementation mission has a tight write-set (``only this file'') and specific criteria (``one ReadFile, make check passes''). A design mission has a broad write-set (``docs/design/'') and open-ended criteria (``evaluate three approaches, recommend one with tradeoffs''). The agent's expertise and judgment are always present; the contract determines how much latitude they have. The leader chooses the structure level when writing the contract, not when defining the persona.
 \end{faqpair}
 
+\begin{faqpair}{Can I use ethos with SoulSpec or existing CLAUDE.md files?}\label{faq:interop}
+Yes. Ethos both ingests and exports these formats.
+
+\textbf{Ingestion.} Ethos reads SoulSpec files (SOUL.md, IDENTITY.md, STYLE.md, AGENTS.md) and CLAUDE.md as input during identity creation. The content becomes an ethos identity with structural metadata the source format cannot express---typed roles with tool restrictions, team collaboration graphs, mission contracts with write-set boundaries, safety constraints, and hash-pinned evaluators. The ingested identity is a hardened version of the same content: the personality is the same words, but now it is pinned by content hash so it cannot drift between mission rounds. The writing style is the same prose, but now it is bound to a role that restricts which tools the agent can use.
+
+\textbf{Export.} Ethos exports to SoulSpec format (SOUL.md, IDENTITY.md, STYLE.md, AGENTS.md) for any compatible tool, and to CLAUDE.md for any Claude Code session without ethos installed. Both exports are lossy---structural enforcement (roles, teams, missions, audit trails, frozen evaluators) drops because markdown cannot represent it. The loss is the point: it shows what ethos adds. Export is useful for distribution (SoulSpec files work in OpenClaw) and portability (CLAUDE.md works without ethos).
+
+\textbf{The relationship.} SoulSpec and CLAUDE.md are content formats---personality as prose, conventions as text. Ethos is the structural layer that makes that content enforceable. Import gains structure. Export loses structure but gains reach.
+\end{faqpair}
+
 \newpage
 \subsection*{Internal FAQs}
 
@@ -304,7 +314,7 @@ Evidence is structural and observational. No customer interviews have been condu
 
 \begin{faqpair}{Who are the competitors and why will we win?}\label{faq:competitors}
 \begin{itemize}[nosep]
-  \item \textbf{SoulSpec / OpenClaw}~\cite{soulspec2026standard,arxiv2510soulmd} --- structured agent personas (SOUL.md, IDENTITY.md, STYLE.md). Agent-only; no human identity, no teams, no delegation, no MCP/CLI surface. 350,000+ GitHub stars via OpenClaw. The closest identity competitor. Ethos differentiates on human-agent parity, team graphs, and the workflow pillar.
+  \item \textbf{SoulSpec / OpenClaw}~\cite{soulspec2026standard,arxiv2510soulmd} --- structured agent personas (SOUL.md, IDENTITY.md, STYLE.md). Agent-only; no human identity, no teams, no delegation, no MCP/CLI surface. 350,000+ GitHub stars via OpenClaw. The closest identity competitor. Ethos ingests SoulSpec files as an onboarding path---SoulSpec users import their existing personas and gain structural enforcement (typed roles, team graphs, mission contracts) without starting from scratch. Ethos differentiates on human-agent parity, team graphs, and the workflow pillar.
   \item \textbf{Mastra}~\cite{mastra2026supervisor} --- typed Zod request schemas and pre-delegation hooks. 300,000+ weekly npm downloads. Closest to typed delegation. No write-set boundaries, no frozen evaluator, no append-only audit, no identity layer.
   \item \textbf{Claude Managed Agents}~\cite{claudemanagedagents2026} --- Anthropic's hosted agent infrastructure (April 2026). Stateful sessions, scoped permissions. ``Persona'' means deployment configuration, not rich identity. No human developer identity. Vendor-specific.
   \item \textbf{A2A v1.0}~\cite{a2av1milestone2026} --- 150+ organizations, Signed Agent Cards for cryptographic identity. Agent discovery protocol, not a persona or delegation layer. No human identity model.
@@ -326,7 +336,7 @@ Five channels, ordered by expected contribution:
   \item \textbf{Organic search and GitHub discovery.} Developers searching for ``Claude Code identity,'' ``agent delegation,'' or ``AI team structure'' find the repo. The MIT license and zero-dependency install remove friction. README, SEO-targeted docs, and the live example walkthrough convert visitors to installers.
   \item \textbf{Punt Labs tool ecosystem.} Biff, Vox, and Beadle surface ethos during normal use---``install ethos for richer identity context'' prompts appear when the tool detects ethos is absent. Each tool is a distribution channel for the shared layer.
   \item \textbf{Community and content.} Blog posts, conference talks, and example repos demonstrating mission contracts and team structures. The 12m55s end-to-end demo is the core asset: a real bug fix from bead claim to merged PR, timed and reproducible.
-  \item \textbf{SoulSpec and A2A interoperability.} SoulSpec export (\featureref{feat:soulspec-export}) lets ethos users publish agent personas into the OpenClaw ecosystem. A2A-compatible discovery lets ethos identities participate in cross-platform agent networks. Developers in those ecosystems discover ethos when they want human identity parity, team graphs, or delegation contracts that their current tools lack.
+  \item \textbf{Portable export and ecosystem interoperability.} Lossy export (\featureref{feat:lossy-export}) lets ethos users publish identities into two ecosystems: SoulSpec files (SOUL.md, IDENTITY.md, STYLE.md, AGENTS.md) for OpenClaw and compatible tools, and CLAUDE.md personal sections for any Claude Code session without ethos installed. A2A-compatible discovery lets ethos identities participate in cross-platform agent networks. Developers in those ecosystems discover ethos when they want human identity parity, team graphs, or delegation contracts that their current tools lack.
   \item \textbf{Content compatibility.} Ethos imports structured workflows from popular prompt-based tools. gstack's 23 SKILL.md files~\cite{gstack2025github} become 6 identities with enforced roles; SoulSpec personas map to ethos identities with team structure. Users of these tools discover ethos when they want structural enforcement behind their prompt-based workflows: ``you already have the workflow discipline as prompts---ethos makes it structural.'' A gstack-inspired sprint team ships as a batteries-included starter template, so developers start with a working team structure on day one.
 \end{enumerate}
 
@@ -357,7 +367,7 @@ Success threshold: 7 of 10 describe the combined gap as a daily friction or woul
 
 \textbf{Risk 3: Schema evolution.} Core identity fields are fixed; extensions live in separate files per tool. Mission contracts use strict unknown-field-rejecting decode. Adding fields requires careful versioning. Mitigation: the extension model handles per-tool data without core schema changes. The strict decoder prevents silent corruption.
 
-\textbf{Risk 4: SoulSpec competition.} SoulSpec is gaining traction (466 OSS projects, OpenClaw adoption). If SoulSpec expands to include human identity and cross-tool integration, ethos's identity pillar faces direct competition. Mitigation: the workflow pillar and multi-surface integration are independent of the identity competition. Ethos could optionally export identities in SoulSpec format as a distribution strategy.
+\textbf{Risk 4: SoulSpec competition.} SoulSpec is gaining traction (466 OSS projects, OpenClaw adoption). If SoulSpec expands to include human identity and cross-tool integration, ethos's identity pillar faces direct competition. Mitigation: the workflow pillar and multi-surface integration are independent of the identity competition. Lossy export to SoulSpec and CLAUDE.md formats (\featureref{feat:lossy-export}) turns this into coexistence rather than competition---ethos ingests SoulSpec files on the way in and exports them on the way out.
 \end{faqpair}
 
 \begin{faqpair}{What dependencies exist on other teams or systems?}
@@ -456,7 +466,7 @@ Viability  & \textcolor{RiskAmber}{Medium} & Ethos is free infrastructure whose 
 Three scenarios would cause ethos to fail:
 
 \begin{enumerate}[nosep]
-  \item \textbf{SoulSpec wins agent identity; a dominant tool ships delegation.} If SoulSpec becomes the standard for agent personas and Claude Code ships native mission contracts, ethos is squeezed from both sides. The cross-tool integration pattern survives only if the market stays fragmented. Mitigation: ethos could export SoulSpec-compatible files and interoperate rather than compete.
+  \item \textbf{SoulSpec wins agent identity; a dominant tool ships delegation.} If SoulSpec becomes the standard for agent personas and Claude Code ships native mission contracts, ethos is squeezed from both sides. The cross-tool integration pattern survives only if the market stays fragmented. Mitigation: ethos ingests SoulSpec files and exports to both SoulSpec and CLAUDE.md formats---interoperating rather than competing.
   \item \textbf{The combined product is too broad.} Identity + workflow + integration may be too much for one tool. Developers may want ``just identity'' or ``just delegation'' from focused tools. Mitigation: each pillar works independently. Identity loads without missions. Missions work without team structure. The pillars compound but don't require each other.
   \item \textbf{The benefit is too abstract to motivate installation.} Developers may understand the gaps intellectually but not feel them strongly enough to install a tool---especially when Claude Code adds native features quarterly. Validation interviews will test this. If 7 of 10 say ``I'd wait for native,'' the standalone tool should be reconsidered.
 \end{enumerate}
@@ -494,7 +504,7 @@ Three scenarios would cause ethos to fail:
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
   \featureitem{Mission archetypes}{named shorthands (implement, design, review, investigate) that suggest contract conventions for each type of work}\label{feat:archetypes}
-  \featureitem{SoulSpec export}{optional export of ethos identities in SoulSpec-compatible format for OpenClaw interoperability}\label{feat:soulspec-export}
+  \featureitem{Lossy export to portable formats}{{\small\texttt{ethos export --to soulspec}} produces SOUL.md, IDENTITY.md, STYLE.md, AGENTS.md readable by any SoulSpec-compatible tool. {\small\texttt{ethos export --to claude-md}} produces a CLAUDE.md personal section usable without ethos installed. Both exports are lossy by design: structural data (teams, missions, safety constraints, frozen evaluator, audit trails) drops because the target format cannot represent it. The loss signals what ethos adds. Export is compilation from a richer system to a simpler one---useful for distribution and portability}\label{feat:lossy-export}
   \featureitem{Integration guides}{documentation and examples for third-party tools to read ethos identity and mission state}\label{feat:guides}
   \featureitem{Starter team templates}{solo developer (1 human + 3 agents), small team (2--3 humans + 5 agents), reference implementation}\label{feat:templates}
   \featureitem{LLM-assisted identity creation from project context}{{\small\texttt{ethos create}} reads CLAUDE.md and fine-tunes starter content defaults with LLM inference---pre-filling writing style, personality, and role suggestions from existing project conventions}\label{feat:llm-create}
