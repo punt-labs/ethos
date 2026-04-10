@@ -184,6 +184,24 @@ func containsControlChar(s string) bool {
 	return false
 }
 
+// containsZeroWidth reports whether s contains any zero-width Unicode
+// character. These runes are invisible in terminals and editors,
+// making them a vector for path confusion and display spoofing.
+func containsZeroWidth(s string) bool {
+	for _, r := range s {
+		switch r {
+		case '\uFEFF', // BOM
+			'\u200B', // ZWSP
+			'\u200C', // ZWNJ
+			'\u200D', // ZWJ
+			'\u2060', // Word Joiner
+			'\uFFFE': // noncharacter
+			return true
+		}
+	}
+	return false
+}
+
 // validateWriteSetEntry rejects empty paths, absolute paths, and any
 // path containing a `..` segment (path traversal).
 //
@@ -224,6 +242,16 @@ func validateWriteSetEntry(entry string) error {
 	// containsControlChar for the full rationale.
 	if containsControlChar(trimmed) {
 		return fmt.Errorf("%q contains control character", trimmed)
+	}
+
+	// Reject zero-width Unicode characters. These are invisible in most
+	// terminals and editors, which makes them a vector for path confusion:
+	// two paths that appear identical to the operator but differ by a
+	// ZWSP or BOM would be treated as distinct by the filesystem and by
+	// the conflict checker. Rejecting at the trust boundary eliminates
+	// the class rather than trusting every downstream consumer.
+	if containsZeroWidth(trimmed) {
+		return fmt.Errorf("write_set entry %q contains zero-width Unicode character", trimmed)
 	}
 
 	// Normalize backslashes to forward slashes first. This makes
