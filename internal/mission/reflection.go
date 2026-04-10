@@ -140,6 +140,9 @@ func (r *Reflection) Validate() error {
 			return fmt.Errorf("signals[%d]: entry contains control character", i)
 		}
 	}
+	if containsControlChar(r.Reason) {
+		return fmt.Errorf("reason contains control character")
+	}
 	if IsTerminalRecommendation(r.Recommendation) && strings.TrimSpace(r.Reason) == "" {
 		return fmt.Errorf("reason is required when recommendation is %q", r.Recommendation)
 	}

@@ -933,7 +933,15 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 			// state matches the operation's failure: if the event log
 			// rejects the reflect record, the reflection itself must
 			// not be observable to a later read.
-			if rbErr := s.writeReflectionsLocked(missionID, existing); rbErr != nil {
+			//
+			// If the file did not exist before the append (existing
+			// was nil), remove it entirely rather than writing an
+			// empty reflections: [] stub that would confuse readers.
+			if existing == nil {
+				if rbErr := os.Remove(s.reflectionsPath(missionID)); rbErr != nil && !os.IsNotExist(rbErr) {
+					return fmt.Errorf("reflect: event append failed: %w; rollback remove failed: %v", err, rbErr)
+				}
+			} else if rbErr := s.writeReflectionsLocked(missionID, existing); rbErr != nil {
 				return fmt.Errorf("reflect: event append failed: %w; rollback failed: %v", err, rbErr)
 			}
 			return fmt.Errorf("reflect: event append failed, reflection rolled back: %w", err)
@@ -1516,7 +1524,15 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 			// state matches the operation's failure: if the event log
 			// rejects the result record, the result itself must not
 			// be observable to a later read or to the close gate.
-			if rbErr := s.writeResultsLocked(missionID, existing); rbErr != nil {
+			//
+			// If the file did not exist before the append (existing
+			// was nil), remove it entirely rather than writing an
+			// empty results: [] stub.
+			if existing == nil {
+				if rbErr := os.Remove(s.resultsPath(missionID)); rbErr != nil && !os.IsNotExist(rbErr) {
+					return fmt.Errorf("result: event append failed: %w; rollback remove failed: %v", err, rbErr)
+				}
+			} else if rbErr := s.writeResultsLocked(missionID, existing); rbErr != nil {
 				return fmt.Errorf("result: event append failed: %w; rollback failed: %v", err, rbErr)
 			}
 			return fmt.Errorf("result: event append failed, result rolled back: %w", err)

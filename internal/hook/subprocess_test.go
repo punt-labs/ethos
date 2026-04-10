@@ -643,6 +643,35 @@ func TestSubprocess_VerifierIsolationBlock(t *testing.T) {
 	}
 }
 
+func TestSubprocess_AuditLog(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+
+	se := setupSubprocessEnv(t)
+	sid := "test-audit-001"
+	payload := `{"session_id":"test-audit-001","tool_name":"Bash","tool_input":{"command":"git status"}}`
+
+	stdout, stderr, err := runHookSubprocess(t, se, "audit-log", payload)
+	t.Logf("stdout: %s", stdout)
+	t.Logf("stderr: %s", stderr)
+
+	require.NoError(t, err, "audit-log exited non-zero: %s", stderr)
+
+	// Audit log file created.
+	auditPath := filepath.Join(sessionsDir(se), sid+".audit.jsonl")
+	data, readErr := os.ReadFile(auditPath)
+	require.NoError(t, readErr, "audit log file should exist at %s", auditPath)
+
+	// File contains one JSONL line with the tool name.
+	lines := bytes.Split(bytes.TrimSpace(data), []byte("\n"))
+	assert.Len(t, lines, 1, "audit log should contain exactly one line")
+
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal(lines[0], &entry), "audit line should be valid JSON")
+	assert.Equal(t, "Bash", entry["tool"])
+}
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "ethos-subprocess-test-*")
 	if err != nil {
