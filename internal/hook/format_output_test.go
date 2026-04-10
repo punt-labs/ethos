@@ -721,14 +721,16 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	// section, not as a header row. No top-level Bead: field any more.
 	assert.Contains(t, ctx, "bead: ethos-07m.5")
 	assert.NotContains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
-	// Created uses local-time formatting with the Go reference
-	// layout "2006-01-02 15:04 MST". For this specific input
-	// (2026-04-07T21:30:00Z) a TZ shift can move the rendered day
-	// of month but, because the timestamp is far enough from an
-	// April month boundary, cannot move the rendered month or
-	// year. The assertion relies on that boundary distance, not
-	// on the layout being timezone-invariant in general.
-	assert.Contains(t, ctx, "2026-04-")
+	// The Created: row carries the formatted timestamp via
+	// FormatLocalTime(createdAt). Assert the row's shape directly
+	// rather than a substring that could also appear elsewhere in
+	// the context (e.g. "2026-04-" also matches the mission ID
+	// m-2026-04-07-001, which would make the assertion vacuous).
+	// Shape matches TestFormatOutput_Mission_Show_Closed: the zone
+	// is either an abbreviation when available (possibly mixed-case
+	// like ChST) or a numeric offset fallback of ±HH, ±HHMM, or
+	// ±HHMMSS when the Location has no named zone abbreviation.
+	assert.Regexp(t, `Created:\s+\d{4}-\d{2}-\d{2} \d{2}:\d{2} ([a-zA-Z]{2,5}|[+-]\d{2}(\d{2}(\d{2})?)?)`, ctx)
 	assert.Contains(t, ctx, "Write set:")
 	assert.Contains(t, ctx, "- internal/mission/")
 	assert.Contains(t, ctx, "Tools:")
