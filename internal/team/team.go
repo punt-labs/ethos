@@ -3,6 +3,8 @@ package team
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 )
@@ -73,7 +75,7 @@ func ValidateStructural(t *Team) error {
 			return fmt.Errorf("member %d: identity is required", i)
 		}
 		if m.Role == "" {
-			return fmt.Errorf("member %d: role is required", i)
+			return fmt.Errorf("member %d (%s): role is required", i, m.Identity)
 		}
 		key := m.Identity + "/" + m.Role
 		if seen[key] {
@@ -92,19 +94,24 @@ func ValidateStructural(t *Team) error {
 	// referential integrity against filledRoles.
 	for i, c := range t.Collaborations {
 		if c.From == "" || c.To == "" {
-			return fmt.Errorf("collaboration %d: from and to are required", i)
+			return fmt.Errorf("collaboration %d (%s -> %s): from and to are required", i, c.From, c.To)
 		}
 		if c.From == c.To {
 			return fmt.Errorf("collaboration %d: self-collaboration not allowed (%s)", i, c.From)
 		}
 		if !validCollabTypes[c.Type] {
-			return fmt.Errorf("collaboration %d: invalid type %q", i, c.Type)
+			types := make([]string, 0, len(validCollabTypes))
+			for k := range validCollabTypes {
+				types = append(types, k)
+			}
+			sort.Strings(types)
+			return fmt.Errorf("collaboration %d (%s -> %s): invalid type %q: valid types are %s", i, c.From, c.To, c.Type, strings.Join(types, ", "))
 		}
 		if !filledRoles[c.From] {
-			return fmt.Errorf("collaboration %d: role %q not filled by any member", i, c.From)
+			return fmt.Errorf("collaboration %d (%s -> %s): role %q not filled by any member", i, c.From, c.To, c.From)
 		}
 		if !filledRoles[c.To] {
-			return fmt.Errorf("collaboration %d: role %q not filled by any member", i, c.To)
+			return fmt.Errorf("collaboration %d (%s -> %s): role %q not filled by any member", i, c.From, c.To, c.To)
 		}
 	}
 

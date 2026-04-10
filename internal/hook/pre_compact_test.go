@@ -86,8 +86,8 @@ func TestHandlePreCompact_FullPersona(t *testing.T) {
 	s, ss := setupIdentityWithAttributes(t, id, personality, writingStyle)
 
 	// Create a session with a root human and a primary agent.
-	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
-	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
+	root := session.Participant{AgentID: "test-human", Persona: "tester"}
+	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "test-human"}
 	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session"})
@@ -122,8 +122,8 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 
 	// Create identities.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Test Human",
+		Handle: "test-human",
 		Kind:   "human",
 	}))
 	require.NoError(t, s.Save(&identity.Identity{
@@ -148,7 +148,7 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 	require.NoError(t, ts.Save(&team.Team{
 		Name: "test-eng",
 		Members: []team.Member{
-			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "test-human", Role: "ceo"},
 			{Identity: "claude", Role: "coo"},
 		},
 		Collaborations: []team.Collaboration{
@@ -160,8 +160,8 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 	setupRepoWithTeam(t, "claude", "test-eng")
 
 	// Create session.
-	root := session.Participant{AgentID: "jfreeman", Persona: "jfreeman"}
-	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
+	root := session.Participant{AgentID: "test-human", Persona: "test-human"}
+	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "test-human"}
 	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session"})
@@ -176,7 +176,7 @@ func TestHandlePreCompact_WithTeamContext(t *testing.T) {
 	out := capturePreCompactOutput(t, string(payload), deps)
 
 	assert.Contains(t, out, "## Team: test-eng")
-	assert.Contains(t, out, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, out, "Test Human (test-human) — ceo")
 	assert.Contains(t, out, "Claude Agento (claude) — coo")
 	assert.Contains(t, out, "Sets strategic direction")
 	assert.Contains(t, out, "Execution quality and velocity")
@@ -200,8 +200,8 @@ func TestHandlePreCompact_WithExtensionContext(t *testing.T) {
 	require.NoError(t, s.ExtSet("claude", "quarry", "session_context", "## Memory\n\nYou have memory. Collection: claude-mem"))
 
 	// Create a session with a root human and a primary agent.
-	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
-	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
+	root := session.Participant{AgentID: "test-human", Persona: "tester"}
+	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "test-human"}
 	require.NoError(t, ss.Create("test-session-ext", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session-ext"})
@@ -226,8 +226,8 @@ func TestHandlePreCompact_WithExtensionContextAndTeam(t *testing.T) {
 
 	// Create identities.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:   "Jim Freeman",
-		Handle: "jfreeman",
+		Name:   "Test Human",
+		Handle: "test-human",
 		Kind:   "human",
 	}))
 	require.NoError(t, s.Save(&identity.Identity{
@@ -255,7 +255,7 @@ func TestHandlePreCompact_WithExtensionContextAndTeam(t *testing.T) {
 	require.NoError(t, ts.Save(&team.Team{
 		Name: "test-eng",
 		Members: []team.Member{
-			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "test-human", Role: "ceo"},
 			{Identity: "claude", Role: "coo"},
 		},
 		Collaborations: []team.Collaboration{
@@ -267,8 +267,8 @@ func TestHandlePreCompact_WithExtensionContextAndTeam(t *testing.T) {
 	setupRepoWithTeam(t, "claude", "test-eng")
 
 	// Create session.
-	root := session.Participant{AgentID: "jfreeman", Persona: "jfreeman"}
-	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "jfreeman"}
+	root := session.Participant{AgentID: "test-human", Persona: "test-human"}
+	primary := session.Participant{AgentID: "12345", Persona: "claude", Parent: "test-human"}
 	require.NoError(t, ss.Create("test-session-ext-team", root, primary, "", ""))
 
 	payload, err := json.Marshal(map[string]string{"session_id": "test-session-ext-team"})
@@ -316,8 +316,8 @@ func TestHandlePreCompact_NoPersonaOnAgent_NoOutput(t *testing.T) {
 	s := identity.NewStore(dir)
 	ss := session.NewStore(dir)
 
-	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
-	primary := session.Participant{AgentID: "99999", Persona: "", Parent: "jfreeman"}
+	root := session.Participant{AgentID: "test-human", Persona: "tester"}
+	primary := session.Participant{AgentID: "99999", Persona: "", Parent: "test-human"}
 	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	out := capturePreCompactOutput(t, `{"session_id": "test-session"}`, makeDeps(s, ss))
@@ -329,8 +329,8 @@ func TestHandlePreCompact_PersonaIdentityNotFound_NoOutput(t *testing.T) {
 	s := identity.NewStore(dir)
 	ss := session.NewStore(dir)
 
-	root := session.Participant{AgentID: "jfreeman", Persona: "jim"}
-	primary := session.Participant{AgentID: "99999", Persona: "ghost", Parent: "jfreeman"}
+	root := session.Participant{AgentID: "test-human", Persona: "tester"}
+	primary := session.Participant{AgentID: "99999", Persona: "ghost", Parent: "test-human"}
 	require.NoError(t, ss.Create("test-session", root, primary, "", ""))
 
 	out := capturePreCompactOutput(t, `{"session_id": "test-session"}`, makeDeps(s, ss))
