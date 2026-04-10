@@ -390,7 +390,7 @@ func TestFormatOutput_Session_Roster(t *testing.T) {
 }
 
 func TestFormatOutput_Session_Roster_Rich(t *testing.T) {
-	result := `{"session":"abc123","participants":[{"agent_id":"jfreeman","persona":"jfreeman","agent_type":"human"},{"agent_id":"37569","persona":"claude","parent":"jfreeman","agent_type":"cli"}]}`
+	result := `{"session":"abc123","participants":[{"agent_id":"test-human","persona":"test-human","agent_type":"human"},{"agent_id":"37569","persona":"claude","parent":"test-human","agent_type":"cli"}]}`
 	payload := makeToolPayload("session", "roster", result)
 
 	out := runFormat(t, payload)
@@ -403,7 +403,7 @@ func TestFormatOutput_Session_Roster_Rich(t *testing.T) {
 	assert.Contains(t, ctx, "PERSONA")
 	assert.Contains(t, ctx, "PARENT")
 	assert.Contains(t, ctx, "TYPE")
-	assert.Contains(t, ctx, "jfreeman")
+	assert.Contains(t, ctx, "test-human")
 	assert.Contains(t, ctx, "37569")
 	assert.Contains(t, ctx, "claude")
 	assert.Contains(t, ctx, "human")

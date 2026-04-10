@@ -86,7 +86,7 @@ func setupTestRepo(t *testing.T) (string, identity.IdentityStore, *team.LayeredS
 		"members": []map[string]string{
 			{"identity": "claude", "role": "coo"},
 			{"identity": "bwk", "role": "go-specialist"},
-			{"identity": "jfreeman", "role": "ceo"},
+			{"identity": "test-human", "role": "ceo"},
 		},
 	})
 
@@ -107,9 +107,9 @@ func setupTestRepo(t *testing.T) (string, identity.IdentityStore, *team.LayeredS
 		"writing_style": "kernighan-prose",
 		"talents":       []string{"engineering"},
 	})
-	writeYAML(t, filepath.Join(ethosDir, "identities", "jfreeman.yaml"), map[string]interface{}{
-		"name":   "Jim Freeman",
-		"handle": "jfreeman",
+	writeYAML(t, filepath.Join(ethosDir, "identities", "test-human.yaml"), map[string]interface{}{
+		"name":   "Test Human",
+		"handle": "test-human",
 		"kind":   "human",
 		"email":  "jim@punt-labs.com",
 	})
@@ -233,8 +233,8 @@ func TestGenerateAgentFiles(t *testing.T) {
 			name: "skip humans",
 			check: func(t *testing.T, root string, err error) {
 				require.NoError(t, err)
-				// jfreeman is human — should NOT be generated.
-				humanPath := filepath.Join(root, ".claude", "agents", "jfreeman.md")
+				// test-human is human — should NOT be generated.
+				humanPath := filepath.Join(root, ".claude", "agents", "test-human.md")
 				_, readErr := os.ReadFile(humanPath)
 				assert.True(t, os.IsNotExist(readErr), "human agent file should not be generated")
 			},
@@ -839,9 +839,9 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 			//
 			// Post-ethos-2z2: ValidateStructural requires every
 			// collaboration from/to role to be filled by a team member.
-			// jfreeman (kind: human in setupTestRepo) fills ceo-empty
-			// here so the team passes Load. jfreeman's human kind means
-			// the main generator loop skips building a jfreeman.md
+			// test-human (kind: human in setupTestRepo) fills ceo-empty
+			// here so the team passes Load. test-human's human kind means
+			// the main generator loop skips building a test-human.md
 			// file; no cross-test contamination.
 			name: "multiple reports_to, mixed emptiness",
 			setup: func(t *testing.T, root string) {
@@ -857,7 +857,7 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 					"members": []map[string]string{
 						{"identity": "claude", "role": "coo"},
 						{"identity": "bwk", "role": "go-specialist"},
-						{"identity": "jfreeman", "role": "ceo-empty"},
+						{"identity": "test-human", "role": "ceo-empty"},
 					},
 					"collaborations": []map[string]string{
 						{"from": "go-specialist", "to": "ceo-empty", "type": "reports_to"},
@@ -894,10 +894,10 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 			// against a regression that reverts to iterating antiResps
 			// in walk order, which would interleave bullets if a future
 			// change reordered collaborations.
-			// Post-ethos-2z2: jfreeman (kind: human from setupTestRepo)
+			// Post-ethos-2z2: test-human (kind: human from setupTestRepo)
 			// fills the architect role so ValidateStructural passes on
-			// Load. The generator skips jfreeman because kind != agent,
-			// so no jfreeman.md is produced and the assertion anchors
+			// Load. The generator skips test-human because kind != agent,
+			// so no test-human.md is produced and the assertion anchors
 			// below still match bwk.md byte-for-byte.
 			name: "two non-empty targets, bullets grouped by target",
 			setup: func(t *testing.T, root string) {
@@ -915,7 +915,7 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 					"members": []map[string]string{
 						{"identity": "claude", "role": "coo"},
 						{"identity": "bwk", "role": "go-specialist"},
-						{"identity": "jfreeman", "role": "architect"},
+						{"identity": "test-human", "role": "architect"},
 					},
 					"collaborations": []map[string]string{
 						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
@@ -1060,14 +1060,14 @@ func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
 // Post-ethos-2z2 Store.Load calls ValidateStructural, which rejects
 // any collaboration whose from/to role is not filled by a team
 // member. To preserve the "role file is missing" semantic under
-// test, the fixture adds jfreeman (a kind: human identity from
+// test, the fixture adds test-human (a kind: human identity from
 // setupTestRepo) as a member with role "ghost" — that makes "ghost"
 // a filled role on the roster so Load accepts the team, but the
 // on-disk .punt-labs/ethos/roles/ghost.yaml file still does not
 // exist, so roles.Load("ghost") inside deriveAntiResponsibilities
 // still fails with the same "not found" error the test asserts.
-// jfreeman being kind human means the main generator loop skips
-// building a jfreeman.md file; no cross-test contamination.
+// test-human being kind human means the main generator loop skips
+// building a test-human.md file; no cross-test contamination.
 func TestDeriveAntiResponsibilities_MissingTarget(t *testing.T) {
 	root, _, _, _ := setupTestRepo(t)
 	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
@@ -1080,11 +1080,11 @@ func TestDeriveAntiResponsibilities_MissingTarget(t *testing.T) {
 		"members": []map[string]string{
 			{"identity": "claude", "role": "coo"},
 			{"identity": "bwk", "role": "go-specialist"},
-			// jfreeman fills "ghost" so ValidateStructural passes.
+			// test-human fills "ghost" so ValidateStructural passes.
 			// The ghost role YAML is deliberately not created, so
 			// roles.Load("ghost") downstream still fails — the
 			// invariant under test.
-			{"identity": "jfreeman", "role": "ghost"},
+			{"identity": "test-human", "role": "ghost"},
 		},
 		"collaborations": []map[string]string{
 			{"from": "go-specialist", "to": "ghost", "type": "reports_to"},

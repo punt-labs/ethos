@@ -1,6 +1,8 @@
 package hook
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -367,8 +369,8 @@ func TestBuildTeamContext_Full(t *testing.T) {
 
 	// Create identities with personality, writing style, and talents.
 	require.NoError(t, s.Save(&identity.Identity{
-		Name:         "Jim Freeman",
-		Handle:       "jfreeman",
+		Name:         "Test Human",
+		Handle:       "test-human",
 		Kind:         "human",
 		Personality:  "data-driven",
 		WritingStyle: "concise-quantified",
@@ -396,7 +398,7 @@ func TestBuildTeamContext_Full(t *testing.T) {
 	tm := &team.Team{
 		Name: "punt-labs",
 		Members: []team.Member{
-			{Identity: "jfreeman", Role: "ceo"},
+			{Identity: "test-human", Role: "ceo"},
 			{Identity: "claude", Role: "coo"},
 		},
 		Collaborations: []team.Collaboration{
@@ -408,7 +410,7 @@ func TestBuildTeamContext_Full(t *testing.T) {
 
 	// Team header and member names.
 	assert.Contains(t, got, "## Team: punt-labs")
-	assert.Contains(t, got, "Jim Freeman (jfreeman) — ceo")
+	assert.Contains(t, got, "Test Human (test-human) — ceo")
 	assert.Contains(t, got, "Claude Agento (claude) — coo")
 
 	// Non-self member: full personality content.
@@ -456,4 +458,51 @@ func TestBuildTeamContext_NoRoles(t *testing.T) {
 
 	assert.Contains(t, got, "## Team: test-team")
 	assert.Contains(t, got, "alice — dev")
+}
+
+func TestBuildTeamSection_ResolveError(t *testing.T) {
+	// A malformed ethos.yaml causes ResolveTeam to return an error.
+	// BuildTeamSection must surface it as a visible warning section.
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(puntDir, "ethos.yaml"),
+		[]byte("team: [unclosed\n"),
+		0o644))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	ts := team.NewLayeredStore("", t.TempDir())
+	got := BuildTeamSection(ts, nil, nil, "")
+
+	assert.Contains(t, got, "## Team")
+	assert.Contains(t, got, "team resolution failed")
+}
+
+func TestBuildTeamSection_TeamLoadError(t *testing.T) {
+	// A valid config naming a team that doesn't exist on disk.
+	repoRoot := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(repoRoot, ".git"), 0o755))
+	puntDir := filepath.Join(repoRoot, ".punt-labs")
+	require.NoError(t, os.MkdirAll(puntDir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(puntDir, "ethos.yaml"),
+		[]byte("team: nonexistent-team\n"),
+		0o644))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoRoot))
+	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck
+
+	ts := team.NewLayeredStore("", t.TempDir())
+	got := BuildTeamSection(ts, nil, nil, "")
+
+	assert.Contains(t, got, "## Team")
+	assert.Contains(t, got, "team load failed")
 }

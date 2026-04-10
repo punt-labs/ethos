@@ -106,8 +106,10 @@ func buildTeamSection(deps PreCompactDeps, selfHandle string) string {
 }
 
 // BuildTeamSection resolves the team from repo config and builds the team
-// context block. Returns empty string if teams is nil, no team is configured,
-// or on any load error.
+// context block. Returns empty string if teams is nil or no team is
+// configured. Returns a visible warning section if team resolution or
+// loading fails, so operators see why team context is missing instead
+// of getting silent absence.
 func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identities identity.IdentityStore, selfHandle string) string {
 	if teams == nil {
 		return ""
@@ -116,12 +118,8 @@ func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identi
 	repoRoot := resolve.FindRepoRoot()
 	teamName, err := resolve.ResolveTeam(repoRoot)
 	if err != nil {
-		// Fail-open per this function's documented contract
-		// ("Returns empty string ... on any load error"). The log
-		// preserves the visibility the old ResolveTeam's Fprintf gave
-		// us before its signature change propagated the error here.
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %v\n", err)
-		return ""
+		return fmt.Sprintf("## Team\n\n(team resolution failed: %v)", err)
 	}
 	if teamName == "" {
 		return ""
@@ -130,7 +128,7 @@ func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identi
 	t, err := teams.Load(teamName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: team context: failed to load team %q: %v\n", teamName, err)
-		return ""
+		return fmt.Sprintf("## Team\n\n(team load failed: %v)", err)
 	}
 
 	return BuildTeamContext(t, roles, identities, selfHandle)

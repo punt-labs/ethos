@@ -71,7 +71,7 @@ var structuralInvariantCases = []structuralInvariantCase{
 		mutate: func(t *Team) {
 			t.Members[0].Role = ""
 		},
-		wantError: "member 0: role is required",
+		wantError: "member 0 (alice): role is required",
 	},
 	{
 		name: "4: duplicate (identity, role) pair",
@@ -85,14 +85,14 @@ var structuralInvariantCases = []structuralInvariantCase{
 		mutate: func(t *Team) {
 			t.Collaborations[0].From = ""
 		},
-		wantError: "collaboration 0: from and to are required",
+		wantError: "collaboration 0 ( -> lead): from and to are required",
 	},
 	{
 		name: "5b: collaboration with empty to",
 		mutate: func(t *Team) {
 			t.Collaborations[0].To = ""
 		},
-		wantError: "collaboration 0: from and to are required",
+		wantError: "collaboration 0 (dev -> ): from and to are required",
 	},
 	{
 		name: "6: self-collaboration",
@@ -106,21 +106,21 @@ var structuralInvariantCases = []structuralInvariantCase{
 		mutate: func(t *Team) {
 			t.Collaborations[0].Type = "manages"
 		},
-		wantError: `collaboration 0: invalid type "manages"`,
+		wantError: `collaboration 0 (dev -> lead): invalid type "manages": valid types are collaborates_with, delegates_to, reports_to`,
 	},
 	{
 		name: "8: collaboration from role not filled by any member",
 		mutate: func(t *Team) {
 			t.Collaborations[0].From = "ghost"
 		},
-		wantError: `collaboration 0: role "ghost" not filled by any member`,
+		wantError: `collaboration 0 (ghost -> lead): role "ghost" not filled by any member`,
 	},
 	{
 		name: "9: collaboration to role not filled by any member",
 		mutate: func(t *Team) {
 			t.Collaborations[0].To = "ghost"
 		},
-		wantError: `collaboration 0: role "ghost" not filled by any member`,
+		wantError: `collaboration 0 (dev -> ghost): role "ghost" not filled by any member`,
 	},
 }
 
