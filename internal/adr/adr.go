@@ -23,6 +23,23 @@ var validStatuses = map[string]bool{
 	StatusSuperseded: true,
 }
 
+// validStatusFilters lists the allowed values for the list --status flag.
+var validStatusFilters = map[string]bool{
+	StatusProposed:   true,
+	StatusSettled:    true,
+	StatusSuperseded: true,
+	"all":            true,
+	"":               true,
+}
+
+// ValidateStatusFilter returns an error if filter is not a recognized status filter value.
+func ValidateStatusFilter(filter string) error {
+	if !validStatusFilters[filter] {
+		return fmt.Errorf("invalid status filter %q: valid values are proposed, settled, superseded, all", filter)
+	}
+	return nil
+}
+
 // idPattern enforces the DES-NNN format.
 var idPattern = regexp.MustCompile(`^DES-\d{3}$`)
 

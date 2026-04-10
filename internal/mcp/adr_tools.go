@@ -90,12 +90,15 @@ func (h *Handler) handleCreateADR(req mcplib.CallToolRequest) (*mcplib.CallToolR
 }
 
 func (h *Handler) handleListADRs(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	statusFilter := stringArg(req, "status", "all")
+	if err := adr.ValidateStatusFilter(statusFilter); err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+
 	ids, err := h.adrStore.List()
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to list ADRs: %v", err)), nil
 	}
-
-	statusFilter := stringArg(req, "status", "all")
 
 	type entry struct {
 		ID     string `json:"id"`

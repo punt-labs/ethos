@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -66,6 +67,17 @@ func (s *Store) Load(id string) (*ADR, error) {
 		return nil, fmt.Errorf("ADR id is required")
 	}
 	path := s.path(id)
+
+	// Reject symlinks before reading. Same inline pattern as
+	// subagent_start.go; see ethos-jjm for rationale.
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("refusing to follow symlink: %s", path)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("lstat %s: %w", path, err)
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -76,6 +88,9 @@ func (s *Store) Load(id string) (*ADR, error) {
 	a, err := decodeStrict(data, id)
 	if err != nil {
 		return nil, err
+	}
+	if a.ID != id {
+		return nil, fmt.Errorf("ADR file %s contains mismatched ID %q", id, a.ID)
 	}
 	return a, nil
 }

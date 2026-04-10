@@ -207,3 +207,54 @@ func TestStore_CreateMissingDecision(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decision is required")
 }
+
+func TestStore_Load_RejectsIDMismatch(t *testing.T) {
+	s := testStore(t)
+	a := &ADR{
+		Title:    "test",
+		Context:  "context",
+		Decision: "decided",
+	}
+	require.NoError(t, s.Create(a))
+	assert.Equal(t, "DES-001", a.ID)
+
+	// Manually write a file named DES-002.yaml that contains ID: DES-001.
+	path := s.path("DES-002")
+	src, err := os.ReadFile(s.path("DES-001"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, src, 0o600))
+
+	_, err = s.Load("DES-002")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mismatched ID")
+}
+
+func TestStore_Load_RejectsSymlink(t *testing.T) {
+	s := testStore(t)
+	a := &ADR{
+		Title:    "test",
+		Context:  "context",
+		Decision: "decided",
+	}
+	require.NoError(t, s.Create(a))
+
+	// Create a symlink DES-002.yaml -> DES-001.yaml
+	target := s.path("DES-001")
+	link := s.path("DES-002")
+	require.NoError(t, os.Symlink(target, link))
+
+	_, err := s.Load("DES-002")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "symlink")
+}
+
+func TestValidateStatusFilter(t *testing.T) {
+	valid := []string{"proposed", "settled", "superseded", "all", ""}
+	for _, v := range valid {
+		assert.NoError(t, ValidateStatusFilter(v), "expected %q to be valid", v)
+	}
+	err := ValidateStatusFilter("bogus")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid status filter")
+	assert.Contains(t, err.Error(), "bogus")
+}

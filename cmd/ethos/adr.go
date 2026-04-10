@@ -147,6 +147,11 @@ func runADRCreate() {
 }
 
 func runADRList() {
+	if err := adr.ValidateStatusFilter(adrListStatus); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		os.Exit(1)
+	}
+
 	s := adrStore()
 	ids, err := s.List()
 	if err != nil {
