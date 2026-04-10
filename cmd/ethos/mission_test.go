@@ -76,12 +76,16 @@ func missionTestEnv(t *testing.T) string {
 	missionListStatus = "open"
 	missionCloseStatus = mission.StatusClosed
 	missionResultFile = ""
+	missionResultVerify = false
+	missionResultBase = "main"
 	t.Cleanup(func() {
 		jsonOutput = false
 		missionCreateFile = ""
 		missionListStatus = "open"
 		missionCloseStatus = mission.StatusClosed
 		missionResultFile = ""
+		missionResultVerify = false
+		missionResultBase = "main"
 	})
 	return tmp
 }
@@ -2334,4 +2338,451 @@ func TestMissionLog_Help_DocumentsEmptyEventFilter(t *testing.T) {
 	// in the --event description.
 	assert.Contains(t, strings.ToLower(stdout), "empty")
 	assert.Contains(t, strings.ToLower(stdout), "all event types")
+}
+
+// --- Phase 3.? ethos-2e4: `mission result --verify` ---
+//
+// The following tests cover the CLI-side cross-check that diffs the
+// worker's declared files_changed counts against `git diff --numstat`.
+// Five of the six are subprocess tests because they need a real git
+// repo plus a real binary invocation; test #1 (verify OFF, default
+// behavior unchanged) runs in-process because no git is involved.
+//
+// All subprocess tests reuse seedEvaluator + the canonical contract
+// body to bring a mission into existence, then drive `mission result`
+// inside a temp git repo where `git diff --numstat HEAD~1..HEAD`
+// returns a deterministic payload. Using HEAD~1 as the base sidesteps
+// the need for a feature-branch fixture and exercises the --base
+// override path.
+
+// testGitEnv returns a child-process environment suitable for
+// running git in a test fixture: global and system config are
+// redirected to /dev/null, GPG signing is forced off, and a
+// deterministic author/committer is set. The function also strips
+// every inherited GIT_CONFIG_* entry so the developer's shell
+// .envrc (which injects signing key bindings via GIT_CONFIG_COUNT
+// in this repo) cannot contaminate the child's view of git config.
+func testGitEnv(home string) []string {
+	base := make([]string, 0, len(os.Environ())+10)
+	for _, kv := range os.Environ() {
+		if strings.HasPrefix(kv, "GIT_CONFIG_") ||
+			strings.HasPrefix(kv, "GIT_AUTHOR_") ||
+			strings.HasPrefix(kv, "GIT_COMMITTER_") ||
+			strings.HasPrefix(kv, "HOME=") {
+			continue
+		}
+		base = append(base, kv)
+	}
+	return append(base,
+		"HOME="+home,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_NAME=test",
+		"GIT_AUTHOR_EMAIL=test@example.com",
+		"GIT_COMMITTER_NAME=test",
+		"GIT_COMMITTER_EMAIL=test@example.com",
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=commit.gpgsign",
+		"GIT_CONFIG_VALUE_0=false",
+	)
+}
+
+// missionResultVerifyEnv bootstraps the subprocess fixture common to
+// every --verify test: a temp HOME with the evaluator identity
+// seeded, a temp git repo with an initial commit and a second commit
+// that modifies two files (and adds a third), and a created mission
+// whose write_set admits all three paths. Returns the temp HOME, the
+// git-repo working directory, and the mission ID.
+//
+// The second commit is shaped so `git diff --numstat HEAD~1..HEAD`
+// yields exactly:
+//
+//	5\t0\ta.txt
+//	3\t1\tb.txt
+//	3\t0\tc.txt
+//
+// so every --verify test references the same known-good counts.
+func missionResultVerifyEnv(t *testing.T) (home, repo, missionID string) {
+	t.Helper()
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home = t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+
+	repo = t.TempDir()
+	env := testGitEnv(home)
+
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
+	}
+
+	runGit("init", "-b", "main", repo)
+
+	// Baseline commit: a.txt has 5 lines, b.txt has 3 lines.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"),
+		[]byte("a1\na2\na3\na4\na5\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "b.txt"),
+		[]byte("b1\nb2\nb3\n"), 0o600))
+	runGit("add", "a.txt", "b.txt")
+	runGit("commit", "-m", "baseline")
+
+	// Change commit: a.txt gains 5 lines (0 removed), b.txt gains 2
+	// lines and loses 1 (net +1), c.txt is new with 3 lines.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"),
+		[]byte("a1\na2\na3\na4\na5\na6\na7\na8\na9\na10\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "b.txt"),
+		[]byte("b1\nb2-modified\nb3\nb4\nb5\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "c.txt"),
+		[]byte("c1\nc2\nc3\n"), 0o600))
+	runGit("add", "a.txt", "b.txt", "c.txt")
+	runGit("commit", "-m", "changes")
+
+	// Contract body admits all three paths plus the result.yaml
+	// scratch path used by the test harness itself.
+	contract := filepath.Join(repo, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-2e4
+write_set:
+  - a.txt
+  - b.txt
+  - c.txt
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	runEthos := func(args ...string) (string, string) {
+		cmd := exec.Command(ethosBinary, args...)
+		cmd.Env = env
+		cmd.Dir = repo
+		var out, errBuf bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errBuf
+		require.NoError(t, cmd.Run(),
+			"ethos %s failed: %s", strings.Join(args, " "), errBuf.String())
+		return out.String(), errBuf.String()
+	}
+
+	runEthos("mission", "create", "--file", contract)
+	listOut, _ := runEthos("mission", "list", "--json")
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(listOut), &entries))
+	require.Len(t, entries, 1)
+	missionID, _ = entries[0]["mission_id"].(string)
+	return home, repo, missionID
+}
+
+// writeVerifyResultFile drops a result YAML at repo/result.yaml with
+// the given files_changed entries and returns the path. The evidence
+// block is fixed — every verify test just needs a well-formed result
+// that names the files_changed it is asserting against.
+func writeVerifyResultFile(t *testing.T, repo, missionID string, files []mission.FileChange) string {
+	t.Helper()
+	var fc strings.Builder
+	for _, f := range files {
+		fmt.Fprintf(&fc, "  - path: %s\n    added: %d\n    removed: %d\n",
+			f.Path, f.Added, f.Removed)
+	}
+	body := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+files_changed:
+%sevidence:
+  - name: make check
+    status: pass
+`, missionID, fc.String())
+	path := filepath.Join(repo, "result.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
+// TestMissionResult_VerifyOff_DefaultBehaviorUnchanged asserts that a
+// result with deliberately wrong counts still lands when --verify is
+// not set. The in-process path is sufficient here because no git
+// invocation should happen at all — the test is proving the verify
+// code is gated behind the flag.
+func TestMissionResult_VerifyOff_DefaultBehaviorUnchanged(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdout(t, runMissionCreate)
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	// Write a result with clearly fabricated counts for a path that
+	// lives inside the contract write_set. Without --verify, the
+	// mission store accepts it — the line counts are advisory in the
+	// schema.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "result.yaml")
+	body := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+files_changed:
+  - path: internal/mission/result.go
+    added: 99999
+    removed: 99999
+evidence:
+  - name: make check
+    status: pass
+`, id)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	missionResultFile = path
+	missionResultVerify = false
+	out := captureStdout(t, func() { runMissionResult(id, path) })
+	assert.Contains(t, out, "result:")
+	assert.Contains(t, out, "round=1")
+	assert.Contains(t, out, "verdict=pass")
+}
+
+// TestMissionResult_VerifyOn_PassesOnMatch drives the subprocess
+// through a real git repo and asserts that declared counts matching
+// the real numstat are accepted.
+func TestMissionResult_VerifyOn_PassesOnMatch(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 5, Removed: 0},
+		{Path: "b.txt", Added: 3, Removed: 1},
+		{Path: "c.txt", Added: 3, Removed: 0},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Dir = repo
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	require.NoError(t, cmd.Run(),
+		"verify must accept matching counts: stderr=%s", errBuf.String())
+	assert.Contains(t, outBuf.String(), "result:")
+	assert.NotContains(t, errBuf.String(), "warning",
+		"all diff paths were declared; no warning expected")
+}
+
+// TestMissionResult_VerifyOn_RejectsOnMismatch asserts that a
+// declared count that disagrees with git numstat produces a clean
+// rejection naming the file and both count pairs.
+func TestMissionResult_VerifyOn_RejectsOnMismatch(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	// a.txt is declared with the WRONG added count; everything else
+	// matches. The helper must name a.txt and both count pairs so
+	// the operator can read the discrepancy without re-running git.
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 42, Removed: 0},
+		{Path: "b.txt", Added: 3, Removed: 1},
+		{Path: "c.txt", Added: 3, Removed: 0},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Dir = repo
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	require.Error(t, err, "mismatched counts must fail")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError, got %T: %v", err, err)
+	assert.Equal(t, 1, exitErr.ExitCode())
+
+	stderr := errBuf.String()
+	assert.Contains(t, stderr, "a.txt", "error must name the mismatched path")
+	assert.Contains(t, stderr, "added=42", "error must name the declared count")
+	assert.Contains(t, stderr, "added=5", "error must name the real count")
+	assert.Contains(t, stderr, "--verify",
+		"error must identify the --verify path so operator knows which flag caused it")
+}
+
+// TestMissionResult_VerifyOn_RejectsUnknownPath asserts the
+// "declared but not in diff" branch: declare a file that the
+// write_set admits but that the diff range does not touch. Uses a
+// dedicated fixture because the shared env touches every admitted
+// path.
+func TestMissionResult_VerifyOn_RejectsUnknownPath(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+
+	repo := t.TempDir()
+	env := testGitEnv(home)
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)
+	}
+	runGit("init", "-b", "main", repo)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"),
+		[]byte("a1\na2\n"), 0o600))
+	runGit("add", "a.txt")
+	runGit("commit", "-m", "baseline")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"),
+		[]byte("a1\na2\na3\n"), 0o600))
+	runGit("add", "a.txt")
+	runGit("commit", "-m", "change a only")
+
+	contract := filepath.Join(repo, "contract.yaml")
+	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-2e4
+write_set:
+  - a.txt
+  - ghost.txt
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+`), 0o600))
+
+	runEthos := func(args ...string) string {
+		cmd := exec.Command(ethosBinary, args...)
+		cmd.Env = append(os.Environ(), "HOME="+home)
+		cmd.Dir = repo
+		var out, errBuf bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &errBuf
+		require.NoError(t, cmd.Run(), "ethos %s: %s",
+			strings.Join(args, " "), errBuf.String())
+		return out.String()
+	}
+	runEthos("mission", "create", "--file", contract)
+	listOut := runEthos("mission", "list", "--json")
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(listOut), &entries))
+	id, _ := entries[0]["mission_id"].(string)
+
+	// ghost.txt is write_set-admitted but not in the diff range.
+	resultFile := filepath.Join(repo, "result.yaml")
+	body := fmt.Sprintf(`mission: %s
+round: 1
+author: bwk
+verdict: pass
+confidence: 0.9
+files_changed:
+  - path: a.txt
+    added: 1
+    removed: 0
+  - path: ghost.txt
+    added: 10
+    removed: 0
+evidence:
+  - name: make check
+    status: pass
+`, id)
+	require.NoError(t, os.WriteFile(resultFile, []byte(body), 0o600))
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Dir = repo
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	require.Error(t, err, "absent path must be rejected")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError, got %T: %v", err, err)
+	assert.Equal(t, 1, exitErr.ExitCode())
+
+	stderr := errBuf.String()
+	assert.Contains(t, stderr, "ghost.txt", "error must name the undeclared path")
+	assert.Contains(t, stderr, "not in",
+		"error must explain that the path is missing from the diff")
+}
+
+// TestMissionResult_VerifyOn_WarnsOnUndeclaredDiffPath asserts that
+// a file present in the numstat diff but not declared in
+// files_changed emits a warning on stderr but does not reject — the
+// leader may legitimately omit auto-generated files from the
+// result accounting.
+func TestMissionResult_VerifyOn_WarnsOnUndeclaredDiffPath(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	// Declare only a.txt and b.txt; c.txt is in the diff but omitted
+	// on purpose.
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 5, Removed: 0},
+		{Path: "b.txt", Added: 3, Removed: 1},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Dir = repo
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	require.NoError(t, cmd.Run(),
+		"undeclared diff path must warn, not reject: stderr=%s", errBuf.String())
+
+	assert.Contains(t, outBuf.String(), "result:",
+		"stdout must still carry the success echo")
+	stderr := errBuf.String()
+	assert.Contains(t, stderr, "warning")
+	assert.Contains(t, stderr, "c.txt")
+	assert.Contains(t, stderr, "not declared")
+}
+
+// TestMissionResult_VerifyOn_RejectsInvalidBase asserts that a
+// --base ref that git rev-parse cannot resolve produces a clean
+// error naming the bad ref, not a cryptic git exit code.
+func TestMissionResult_VerifyOn_RejectsInvalidBase(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 5, Removed: 0},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "nonexistent-ref-xyz")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Dir = repo
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	err := cmd.Run()
+	require.Error(t, err, "invalid --base ref must fail")
+	exitErr, ok := err.(*exec.ExitError)
+	require.True(t, ok, "expected ExitError, got %T: %v", err, err)
+	assert.Equal(t, 1, exitErr.ExitCode())
+
+	stderr := errBuf.String()
+	assert.Contains(t, stderr, "nonexistent-ref-xyz",
+		"error must name the bad ref")
+	assert.Contains(t, stderr, "base ref",
+		"error must identify the failing input as the base ref")
 }
