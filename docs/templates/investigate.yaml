@@ -1,0 +1,49 @@
+# Mission Archetype: Investigate
+#
+# Research and synthesis. The worker explores a question and returns
+# structured findings. No files are modified. Agency is high — the
+# investigator decides what's relevant and how to present it.
+#
+# When to use:
+#   - Debugging a complex issue with unknown root cause
+#   - Competitive research or technology evaluation
+#   - Codebase archaeology ("how does X actually work?")
+#   - Any work where "find out and tell me" is the right instruction
+#
+# Characteristics:
+#   - Empty write-set (read-only, or docs/ for write-up)
+#   - Question-based criteria — answers, not actions
+#   - 1-2 rounds typical
+#   - Worker researches, synthesizes, recommends
+
+leader: claude
+worker: bwk
+
+inputs:
+  bead: ethos-2br                      # link to tracking system
+  files:                               # seed context — starting points
+    - internal/mission/store.go
+    - internal/hook/subagent_start.go
+    - DESIGN.md
+
+write_set:                             # optional — investigation results
+  - docs/investigation/
+
+success_criteria:
+  - answer the question: how should ethos handle different agency levels?
+  - evaluate at least three options with pros/cons
+  - recommend one option with justification
+  - identify what we don't know and what would change the recommendation
+
+evaluator:
+  handle: claude                       # leader evaluates investigation quality
+
+budget:
+  rounds: 2
+  reflection_after_each: true
+
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash

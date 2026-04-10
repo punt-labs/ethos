@@ -1,0 +1,50 @@
+# Mission Archetype: Implement
+#
+# Tight scope. The leader specifies exactly what to build and how to
+# verify it. The worker executes within boundaries. Agency is low —
+# the contract answers most questions before the worker starts.
+#
+# When to use:
+#   - Bug fixes with a known root cause
+#   - Feature work with a clear spec
+#   - Refactoring with specific before/after invariants
+#   - Any work where "stay on the spec" is the right instruction
+#
+# Characteristics:
+#   - Tight write-set (specific files)
+#   - Specific, individually verifiable success criteria
+#   - 1-2 rounds typical
+#   - Worker executes, doesn't redesign
+
+leader: claude
+worker: bwk
+
+inputs:
+  bead: ethos-db7                      # link to tracking system
+  files:                               # read context
+    - internal/hook/subagent_start.go
+    - internal/mission/store.go        # for understanding Store.Load internals
+
+write_set:                             # only these files may be modified
+  - internal/hook/subagent_start.go
+
+success_criteria:
+  - make check passes
+  - checkVerifierHash does exactly one os.ReadFile per contract
+  - the same bytes are used for both yaml decode and RawYAML
+  - no behavioral change — all existing tests pass
+
+evaluator:
+  handle: djb                          # security engineer for a TOCTOU fix
+
+budget:
+  rounds: 2
+  reflection_after_each: true
+
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
