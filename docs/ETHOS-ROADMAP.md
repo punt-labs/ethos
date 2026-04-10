@@ -4,7 +4,7 @@ Where ethos is going. Organized into phases that build on each other.
 
 ## Current Status (2026-04-09)
 
-Ethos is at **v2.8.0**. Phases 1 and 3 are shipped. Phase 2 subphases 2.1–2.5 are complete; 2.6 (`/mission` Phase B–C: conflict detection and dry-run) remains planned.
+Ethos is at **v2.8.0**. Phases 1, 2.1–2.5, and 3 are complete and merged to main. Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run) remains planned.
 
 | Phase | Status | Summary |
 |---|---|---|
@@ -52,7 +52,7 @@ work in everything but name.
 Ethos v2.6.1 shipped the **mechanism** for identity binding:
 identities, personalities, writing styles, talents, roles, teams,
 sessions, persona animation, agent file generation, extension
-session context. Phase 3 (unreleased — PR #184, merge `c16715f`)
+session context. Phase 3 (complete — PR #184, merge `c16715f`)
 added the **workflow primitive layer** on top: typed mission
 contracts, runtime-enforced
 write-set admission, frozen evaluators, bounded rounds, verifier
