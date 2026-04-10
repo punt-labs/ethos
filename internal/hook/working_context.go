@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// gitTimeout bounds all git subprocess calls in this file.
+const gitTimeout = 2 * time.Second
+
 // BuildWorkingContext returns a markdown section with the current git
 // working state. Returns empty string if not in a git repo or if git
 // is not available. Never errors -- this is advisory context, not a gate.
@@ -48,10 +51,10 @@ func BuildWorkingContext() string {
 	return strings.Join(lines, "\n")
 }
 
-// runGit runs a git command with a 2-second timeout. Returns trimmed
+// runGit runs a git command with a gitTimeout deadline. Returns trimmed
 // stdout on success, or the error on failure.
 func runGit(args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -89,7 +92,7 @@ func uncommittedChanges() (int, []string, bool) {
 	// Run git directly instead of runGit to preserve leading spaces.
 	// Porcelain lines start with two status chars (e.g. " M") and
 	// TrimSpace would strip the leading space, corrupting the parse.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
