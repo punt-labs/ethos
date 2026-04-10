@@ -9,6 +9,9 @@ tools:
   - Read
   - Grep
   - Glob
+safety_constraints:
+  - tool: Write|Edit
+    message: "Produce specs and design docs only — never write implementation code"
 output_format: |
   Report design decisions using this structure:
 
