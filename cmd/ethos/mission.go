@@ -875,6 +875,14 @@ func runMissionResult(idOrPrefix, file string) {
 // from the verified map. A declared binary file would therefore be
 // reported as "not in diff" — verify is a line-count check and has
 // nothing useful to say about binaries.
+//
+// Path comparison goes through mission.CanonicalPath so a worker who
+// declares `./a.txt` (which the write_set validator accepts because
+// `./a.txt` and `a.txt` normalize equal) matches git's canonical
+// `a.txt` output. Without this the verify helper would reject a
+// submission the validator already admitted. Error messages still
+// quote the operator-supplied path, not the canonical form, so a
+// diagnostic identifies the string the operator typed.
 func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 	base = strings.TrimSpace(base)
 	if base == "" {
@@ -905,10 +913,29 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 		return fmt.Errorf("--verify: parsing git diff --numstat output: %w", err)
 	}
 
+	// Re-key the numstat map by canonical path so lookups from
+	// canonically-equivalent declared paths find the same entry. The
+	// rawPath side retains git's original string for warning
+	// diagnostics — the operator should see git's path, not a
+	// re-normalized form.
+	type canonEntry struct {
+		added, removed int
+		rawPath        string
+	}
+	canonical := make(map[string]canonEntry, len(numstat))
+	for path, e := range numstat {
+		key := mission.CanonicalPath(path)
+		if key == "" {
+			continue
+		}
+		canonical[key] = canonEntry{added: e.added, removed: e.removed, rawPath: path}
+	}
+
 	declared := make(map[string]bool, len(r.FilesChanged))
 	for _, fc := range r.FilesChanged {
-		declared[fc.Path] = true
-		got, ok := numstat[fc.Path]
+		key := mission.CanonicalPath(fc.Path)
+		declared[key] = true
+		got, ok := canonical[key]
 		if !ok {
 			return fmt.Errorf(
 				"--verify: file %q declared in result but not in %s..HEAD diff",
@@ -921,11 +948,15 @@ func verifyResultAgainstNumstat(r *mission.Result, base string) error {
 		}
 	}
 
-	for path := range numstat {
-		if !declared[path] {
+	// Warn on diff paths the result did not declare. Compare using
+	// the same canonical key so a worker who declared `./a.txt` is
+	// not warned that `a.txt` is undeclared; print the raw git path
+	// in the warning so the operator sees what git reported.
+	for key, e := range canonical {
+		if !declared[key] {
 			fmt.Fprintf(os.Stderr,
 				"ethos: mission result: --verify: warning: file %q in diff but not declared\n",
-				path)
+				e.rawPath)
 		}
 	}
 	return nil

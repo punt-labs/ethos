@@ -2787,3 +2787,76 @@ func TestMissionResult_VerifyOn_RejectsInvalidBase(t *testing.T) {
 	assert.Contains(t, stderr, "base ref",
 		"error must identify the failing input as the base ref")
 }
+
+// TestMissionResult_VerifyOn_AcceptsCanonicallyEquivalentPaths asserts
+// that a worker who declares `./a.txt` in files_changed — which the
+// write_set validator already accepts because `./a.txt` and `a.txt`
+// normalize to the same segment list — is not falsely rejected by
+// --verify against `git diff --numstat`, which emits the canonical
+// `a.txt`. The verify helper must compare paths using the same
+// canonicalization the validator uses; the two were briefly out of
+// sync in ethos-2e4 round 1 and Copilot caught it.
+func TestMissionResult_VerifyOn_AcceptsCanonicallyEquivalentPaths(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	// Declare every path in a form that normalizes equal to the
+	// canonical git output but is textually different:
+	//   `./a.txt`   — leading `./`
+	//   `b.txt/`    — trailing slash
+	//   `./c.txt`   — leading `./`
+	// All three must be accepted.
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "./a.txt", Added: 5, Removed: 0},
+		{Path: "b.txt/", Added: 3, Removed: 1},
+		{Path: "./c.txt", Added: 3, Removed: 0},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = testGitEnv(home)
+	cmd.Dir = repo
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	require.NoError(t, cmd.Run(),
+		"verify must accept canonically equivalent paths: stderr=%s", errBuf.String())
+	assert.Contains(t, outBuf.String(), "result:")
+	assert.NotContains(t, errBuf.String(), "warning",
+		"every diff path matches a declared path after canonicalization; no warning expected")
+}
+
+// TestMissionResult_VerifyOn_UndeclaredWarningUsesCanonicalComparison
+// asserts the "undeclared diff path" warning loop also uses canonical
+// comparison. A worker who declares `./c.txt` must not see a warning
+// about `c.txt` — the paths match canonically. Without the canonical
+// comparison on both sides the warning path would spuriously name
+// every file the worker declared with a non-canonical prefix.
+func TestMissionResult_VerifyOn_UndeclaredWarningUsesCanonicalComparison(t *testing.T) {
+	home, repo, id := missionResultVerifyEnv(t)
+	// Every diff path is declared, but c.txt is declared as `./c.txt`.
+	// The warning loop must still treat it as declared.
+	resultFile := writeVerifyResultFile(t, repo, id, []mission.FileChange{
+		{Path: "a.txt", Added: 5, Removed: 0},
+		{Path: "b.txt", Added: 3, Removed: 1},
+		{Path: "./c.txt", Added: 3, Removed: 0},
+	})
+
+	cmd := exec.Command(ethosBinary,
+		"mission", "result", id,
+		"--file", resultFile,
+		"--verify", "--base", "HEAD~1")
+	cmd.Env = testGitEnv(home)
+	cmd.Dir = repo
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	require.NoError(t, cmd.Run(),
+		"verify must accept canonically equivalent paths: stderr=%s", errBuf.String())
+	assert.Contains(t, outBuf.String(), "result:")
+	stderr := errBuf.String()
+	assert.NotContains(t, stderr, "warning",
+		"`./c.txt` matches `c.txt` canonically; no warning expected")
+	assert.NotContains(t, stderr, "c.txt",
+		"the warning path must not name c.txt even obliquely")
+}
