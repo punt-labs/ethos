@@ -452,6 +452,8 @@ func (s *Store) Update(c *Contract) error {
 
 // Close transitions a mission to the given terminal status (closed,
 // failed, or escalated), sets ClosedAt, and appends a "close" event.
+// Returns the satisfying result that authorized the transition so
+// the caller can echo round and verdict without re-reading disk.
 //
 // Phase 3.6: Close is gated on a result artifact for the mission's
 // current round. The gate fires unconditionally at the store
@@ -461,14 +463,21 @@ func (s *Store) Update(c *Contract) error {
 // command the operator should run. There is no override flag: the
 // point of the gate is the invariant.
 //
+// The returned *Result is non-nil exactly when the error is nil:
+// the gate already verified the result exists during the locked
+// section, so returning it to the caller closes the TOCTOU window
+// a post-Close LoadResult would otherwise open. On failure the
+// method returns (nil, err).
+//
 // Atomicity: the new closed state is written, then the close event is
 // appended. If the event append fails, the original contract bytes
 // are restored — a failed Close leaves the on-disk state unchanged.
-func (s *Store) Close(missionID, status string) error {
+func (s *Store) Close(missionID, status string) (*Result, error) {
 	if !validStatuses[status] || status == StatusOpen {
-		return fmt.Errorf("invalid close status %q: must be closed, failed, or escalated", status)
+		return nil, fmt.Errorf("invalid close status %q: must be closed, failed, or escalated", status)
 	}
-	return s.withLock(missionID, func() error {
+	var satisfying *Result
+	err := s.withLock(missionID, func() error {
 		dest := s.contractPath(missionID)
 		// loadLocked returns both the parsed contract and the raw
 		// bytes, so Close reads the file only once and keeps the
@@ -496,7 +505,7 @@ func (s *Store) Close(missionID, status string) error {
 		// 3.6 added this so an auditor reading the JSONL does not
 		// have to scan back across round_advanced events to
 		// reconstruct which result authorized the terminal transition.
-		satisfying, err := s.checkResultGateLocked(c)
+		gated, err := s.checkResultGateLocked(c)
 		if err != nil {
 			return err
 		}
@@ -512,8 +521,8 @@ func (s *Store) Close(missionID, status string) error {
 		}
 		closeDetails := map[string]any{
 			"status":  status,
-			"round":   satisfying.Round,
-			"verdict": satisfying.Verdict,
+			"round":   gated.Round,
+			"verdict": gated.Verdict,
 		}
 		if err := s.appendEventLocked(missionID, Event{
 			TS:      now,
@@ -526,8 +535,17 @@ func (s *Store) Close(missionID, status string) error {
 			}
 			return fmt.Errorf("close: event append failed, contract rolled back: %w", err)
 		}
+		// Publish the satisfying result only after the close event
+		// commits. A mid-method failure leaves satisfying nil, matching
+		// the "operation did not happen" contract the Update and Close
+		// rollback paths already guarantee for on-disk state.
+		satisfying = gated
 		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	return satisfying, nil
 }
 
 // loadLocked reads a contract without acquiring the flock. Callers must

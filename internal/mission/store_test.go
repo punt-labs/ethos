@@ -272,7 +272,7 @@ bogus: smuggled
 	originalBytes, err := os.ReadFile(path)
 	require.NoError(t, err)
 
-	err = s.Close("m-2026-04-07-001", StatusClosed)
+	_, err = s.Close("m-2026-04-07-001", StatusClosed)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "field bogus not found")
 
@@ -362,7 +362,15 @@ func TestStore_Close(t *testing.T) {
 	require.NoError(t, s.Create(c))
 	submitRoundResult(t, s, c, VerdictPass)
 
-	require.NoError(t, s.Close("m-2026-04-07-003", StatusClosed))
+	r, err := s.Close("m-2026-04-07-003", StatusClosed)
+	require.NoError(t, err)
+	// Close returns the satisfying result it materialized inside
+	// the lock so the caller does not have to re-read disk. On
+	// success the result is non-nil and carries the round and
+	// verdict the close event was authorized against.
+	require.NotNil(t, r, "Close must return the satisfying result on success")
+	assert.Equal(t, 1, r.Round)
+	assert.Equal(t, VerdictPass, r.Verdict)
 
 	loaded, err := s.Load("m-2026-04-07-003")
 	require.NoError(t, err)
@@ -374,16 +382,18 @@ func TestStore_CloseRejectsOpenStatus(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-004")
 	require.NoError(t, s.Create(c))
-	err := s.Close("m-2026-04-07-004", StatusOpen)
+	r, err := s.Close("m-2026-04-07-004", StatusOpen)
 	require.Error(t, err)
+	assert.Nil(t, r, "Close must return nil result on failure")
 }
 
 func TestStore_CloseRejectsUnknownStatus(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-005")
 	require.NoError(t, s.Create(c))
-	err := s.Close("m-2026-04-07-005", "abandoned")
+	r, err := s.Close("m-2026-04-07-005", "abandoned")
 	require.Error(t, err)
+	assert.Nil(t, r, "Close must return nil result on failure")
 }
 
 // TestStore_CloseRejectsAlreadyTerminal asserts that re-closing a
@@ -400,11 +410,12 @@ func TestStore_CloseRejectsAlreadyTerminal(t *testing.T) {
 			c := newContract(id)
 			require.NoError(t, s.Create(c))
 			submitRoundResult(t, s, c, VerdictPass)
-			require.NoError(t, s.Close(id, firstStatus))
+			_, err := s.Close(id, firstStatus)
+			require.NoError(t, err)
 
 			// Second close must fail regardless of the target status.
 			for _, secondStatus := range cases {
-				err := s.Close(id, secondStatus)
+				_, err := s.Close(id, secondStatus)
 				require.Error(t, err, "re-closing %s with %s must fail", firstStatus, secondStatus)
 				assert.Contains(t, err.Error(), "already in terminal state")
 			}
@@ -521,7 +532,7 @@ func TestStore_CloseRollsBackOnEventAppendFailure(t *testing.T) {
 	require.NoError(t, os.Remove(logPath))
 	require.NoError(t, os.Mkdir(logPath, 0o700))
 
-	err = s.Close(c.MissionID, StatusClosed)
+	_, err = s.Close(c.MissionID, StatusClosed)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "event append failed")
 	assert.Contains(t, err.Error(), "contract rolled back")
@@ -566,7 +577,8 @@ func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
 			c := disjointContract(id)
 			require.NoError(t, s.Create(c))
 			submitRoundResult(t, s, c, VerdictPass)
-			require.NoError(t, s.Close(id, status))
+			_, err := s.Close(id, status)
+			require.NoError(t, err)
 			loaded, err := s.Load(id)
 			require.NoError(t, err)
 			assert.Equal(t, status, loaded.Status)
@@ -609,7 +621,7 @@ budget:
 	originalBytes, err := os.ReadFile(path)
 	require.NoError(t, err)
 
-	err = s.Close(missionID, StatusClosed)
+	_, err = s.Close(missionID, StatusClosed)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed validation on load")
 
@@ -854,7 +866,8 @@ func TestStore_CreateAllowsConflictAfterClose(t *testing.T) {
 			a := withWriteSet("m-2026-04-08-001", "internal/foo/")
 			require.NoError(t, s.Create(a))
 			submitRoundResult(t, s, a, VerdictPass)
-			require.NoError(t, s.Close(a.MissionID, terminal))
+			_, err := s.Close(a.MissionID, terminal)
+			require.NoError(t, err)
 
 			// Overlapping create must succeed: A is no longer active.
 			b := withWriteSet("m-2026-04-08-002", "internal/foo/bar.go")
@@ -1562,9 +1575,10 @@ func TestStore_AppendReflection_RejectsClosedMission(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.Close(c.MissionID, StatusClosed))
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
 
-	err := s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue))
+	err = s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "terminal state")
 }
@@ -1714,9 +1728,10 @@ func TestStore_AdvanceRound_RefusesClosedMission(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.Close(c.MissionID, StatusClosed))
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
 
-	_, err := s.AdvanceRound(c.MissionID, "claude")
+	_, err = s.AdvanceRound(c.MissionID, "claude")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "terminal state")
 }
@@ -2280,9 +2295,10 @@ func TestStore_AppendResult_RejectsClosedMission(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.Close(c.MissionID, StatusClosed))
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
 
-	err := s.AppendResult(c.MissionID, resultFor(c, VerdictPass))
+	err = s.AppendResult(c.MissionID, resultFor(c, VerdictPass))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "terminal state")
 }
@@ -2621,7 +2637,7 @@ func TestStore_LoadResults_RejectsMismatchedMissionID(t *testing.T) {
 	// through checkResultGateLocked rather than silently satisfied
 	// by the round match. Pre-fix this assertion fails — Close
 	// accepts the forgery and flips missionA to closed.
-	err = s.Close(missionA, StatusClosed)
+	_, err = s.Close(missionA, StatusClosed)
 	require.Error(t, err, "close must refuse when the results file is forged")
 	assert.Contains(t, err.Error(), "mission")
 
@@ -2696,7 +2712,7 @@ func TestStore_CloseGate_RefusesWithoutResult(t *testing.T) {
 			c := disjointContract("m-2026-04-08-001")
 			require.NoError(t, s.Create(c))
 
-			err := s.Close(c.MissionID, status)
+			_, err := s.Close(c.MissionID, status)
 			require.Error(t, err)
 			msg := err.Error()
 			assert.Contains(t, msg, c.MissionID)
@@ -2729,7 +2745,15 @@ func TestStore_CloseGate_AcceptsWithResult(t *testing.T) {
 			require.NoError(t, s.Create(c))
 			submitRoundResult(t, s, c, verdict)
 
-			require.NoError(t, s.Close(c.MissionID, status))
+			r, err := s.Close(c.MissionID, status)
+			require.NoError(t, err)
+			// Close returns the gating result so the caller can
+			// echo round and verdict without re-reading disk; the
+			// TOCTOU window around a post-Close LoadResult is
+			// eliminated by pushing the data through.
+			require.NotNil(t, r)
+			assert.Equal(t, 1, r.Round)
+			assert.Equal(t, verdict, r.Verdict)
 
 			loaded, err := s.Load(c.MissionID)
 			require.NoError(t, err)
@@ -2756,7 +2780,7 @@ func TestStore_CloseGate_RefusesWhenOnlyStaleRoundHasResult(t *testing.T) {
 	require.Equal(t, 2, newRound)
 
 	// Round 2 has no result yet; close must refuse.
-	err = s.Close(c.MissionID, StatusClosed)
+	_, err = s.Close(c.MissionID, StatusClosed)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "round 2")
 }
@@ -2867,7 +2891,7 @@ func TestStore_NonTerminalTransitionsUnchanged(t *testing.T) {
 	require.NoError(t, s.Update(loaded))
 
 	// The close gate fires only now, at round 3.
-	err = s.Close(c.MissionID, StatusClosed)
+	_, err = s.Close(c.MissionID, StatusClosed)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "round 3")
 }
@@ -2891,7 +2915,13 @@ func TestStore_Close_EventLogRecordsRoundAndVerdict(t *testing.T) {
 	// Close with a terminal status that does not match the verdict
 	// — the gate does not require equality, but the event log must
 	// still record the result's OWN verdict, not the close status.
-	require.NoError(t, s.Close(c.MissionID, StatusFailed))
+	returned, err := s.Close(c.MissionID, StatusFailed)
+	require.NoError(t, err)
+	// The store returns the same satisfying result it writes to
+	// the event log so CLI and MCP callers echo matching values.
+	require.NotNil(t, returned)
+	assert.Equal(t, 1, returned.Round)
+	assert.Equal(t, VerdictFail, returned.Verdict)
 
 	events := readLog(t, s, c.MissionID)
 	require.NotEmpty(t, events)

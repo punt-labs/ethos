@@ -483,10 +483,12 @@ func runMissionCreate() {
 	}
 	// Text mode echoes a one-line summary so a scripting caller can
 	// tell the write landed without a follow-up `ethos mission show`.
-	// Fields mirror the `create` event-log summary in
-	// summarizeEventDetails so the CLI echo and the audit log use the
-	// same k=v shape. Mission ID leads so it is grep-able and
-	// chain-able.
+	// The echoed fields use the same k=v style as the `create`
+	// event-log summary in summarizeEventDetails, but are not
+	// necessarily the full same field set — bead= lives in the log
+	// (for audit) and in the contract YAML the user just submitted,
+	// so cluttering the echo with it adds no new information.
+	// Mission ID leads so it is grep-able and chain-able.
 	fmt.Printf("created: %s worker=%s evaluator=%s\n",
 		c.MissionID, c.Worker, c.Evaluator.Handle)
 }
@@ -686,36 +688,17 @@ func runMissionClose(idOrPrefix, status string) {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 		os.Exit(1)
 	}
-	if err := ms.Close(id, status); err != nil {
+	// Store.Close returns the satisfying result it already
+	// materialized under the lock, so the CLI echo does not re-read
+	// the .results.yaml file after the lock releases. An earlier
+	// version of this function called Load + LoadResult after Close
+	// and had to nil-guard against a concurrent file removal — the
+	// "fix" turned a silent success into a post-commit failure.
+	// Pushing the data through Close closes the TOCTOU window
+	// entirely: on success, r is guaranteed non-nil.
+	r, err := ms.Close(id, status)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
-		os.Exit(1)
-	}
-	// Surface the round and verdict that authorized the close so a
-	// scripting caller does not need a follow-up `mission log` to
-	// learn which result satisfied the gate. Close does not touch
-	// CurrentRound, so the contract's current round after close is
-	// the same round checkResultGateLocked matched against.
-	c, err := ms.Load(id)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: loading closed contract: %v\n", err)
-		os.Exit(1)
-	}
-	r, err := ms.LoadResult(id, c.CurrentRound)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: loading satisfying result: %v\n", err)
-		os.Exit(1)
-	}
-	// LoadResult returns (nil, nil) when no result matches the
-	// requested round. Close's gate guarantees a matching result
-	// existed at the moment the lock was held, but the lock is
-	// released before LoadResult runs — a concurrent process (or a
-	// filesystem fault) could remove the .results.yaml file in
-	// between. Guard the echo path so that race produces a clean
-	// diagnostic instead of a nil-pointer panic.
-	if r == nil {
-		fmt.Fprintf(os.Stderr,
-			"ethos: mission close: result for round %d of mission %q disappeared after close; re-run `ethos mission show %s` to inspect state\n",
-			c.CurrentRound, id, id)
 		os.Exit(1)
 	}
 	if jsonOutput {

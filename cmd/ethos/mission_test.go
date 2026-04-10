@@ -449,7 +449,8 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	// result artifact for the current round before the close gate
 	// will accept the terminal transition.
 	submitCLIResult(t, ids[0], 1)
-	require.NoError(t, ms.Close(ids[0], mission.StatusClosed))
+	_, err = ms.Close(ids[0], mission.StatusClosed)
+	require.NoError(t, err)
 
 	// Default filter "open" returns the two open ones.
 	jsonOutput = true
