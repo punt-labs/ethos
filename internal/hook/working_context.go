@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,10 +33,12 @@ func BuildWorkingContext() string {
 	lines = append(lines, "")
 	lines = append(lines, "Branch: "+branch)
 
-	dirty, paths := uncommittedChanges()
-	lines = append(lines, fmt.Sprintf("Uncommitted changes: %d", dirty))
-	for _, p := range paths {
-		lines = append(lines, "  "+p)
+	dirty, paths, ok := uncommittedChanges()
+	if ok {
+		lines = append(lines, fmt.Sprintf("Uncommitted changes: %d", dirty))
+		for _, p := range paths {
+			lines = append(lines, "  "+p)
+		}
 	}
 
 	if n, ok := unpushedCommits(); ok {
@@ -79,9 +82,10 @@ func currentBranch() string {
 	return sha
 }
 
-// uncommittedChanges returns the count of dirty files and up to 20
-// file paths from git status --porcelain.
-func uncommittedChanges() (int, []string) {
+// uncommittedChanges returns the count of dirty files, up to 20 file
+// paths, and whether git status succeeded. The bool is false on error,
+// so the caller can omit the line rather than report a misleading 0.
+func uncommittedChanges() (int, []string, bool) {
 	// Run git directly instead of runGit to preserve leading spaces.
 	// Porcelain lines start with two status chars (e.g. " M") and
 	// TrimSpace would strip the leading space, corrupting the parse.
@@ -92,12 +96,12 @@ func uncommittedChanges() (int, []string) {
 	raw, err := cmd.Output()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: git status --porcelain: %v\n", err)
-		return 0, nil
+		return 0, nil, false
 	}
 
 	out := strings.TrimRight(string(raw), "\n")
 	if out == "" {
-		return 0, nil
+		return 0, nil, true
 	}
 
 	rawLines := strings.Split(out, "\n")
@@ -123,7 +127,7 @@ func uncommittedChanges() (int, []string) {
 	if total > maxShow {
 		paths = append(paths, fmt.Sprintf("... and %d more", total-maxShow))
 	}
-	return total, paths
+	return total, paths, true
 }
 
 // unpushedCommits returns the number of commits ahead of the upstream
@@ -131,13 +135,16 @@ func uncommittedChanges() (int, []string) {
 // commits to display; it is false when the upstream is missing or when
 // the branch is fully pushed (both suppress the output line).
 func unpushedCommits() (int, bool) {
-	out, err := runGit("log", "@{upstream}..HEAD", "--oneline")
+	out, err := runGit("rev-list", "--count", "@{upstream}..HEAD")
 	if err != nil {
-		// No upstream or other error -- omit this line.
 		return 0, false
 	}
-	if out == "" {
+	n, err := strconv.Atoi(out)
+	if err != nil {
 		return 0, false
 	}
-	return len(strings.Split(out, "\n")), true
+	if n == 0 {
+		return 0, false
+	}
+	return n, true
 }
