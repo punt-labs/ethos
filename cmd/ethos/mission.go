@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -186,7 +188,11 @@ closing; see "ethos mission result --help" for the required YAML shape.`,
 
 // --- mission result ---
 
-var missionResultFile string
+var (
+	missionResultFile   string
+	missionResultVerify bool
+	missionResultBase   string
+)
 
 var missionResultCmd = &cobra.Command{
 	Use:   "result <id-or-prefix>",
@@ -206,6 +212,17 @@ files_changed path must live inside the contract's write_set.
 Submitting a result is a prerequisite for closing the mission. The
 close gate (ethos mission close) refuses the terminal transition
 until a valid result exists for the current round.
+
+Passing --verify cross-checks the declared files_changed added/removed
+counts against ` + "`git diff --numstat <base>..HEAD`" + ` before the result
+lands. The base ref defaults to main and can be overridden with --base
+(e.g. --base origin/main or --base HEAD~1). Verification rejects the
+submission when a declared path is absent from the diff or when the
+declared counts disagree with git's numstat output; the error names
+the path and both count pairs. A path present in the diff but not
+declared in files_changed emits a warning to stderr and does not
+reject — workers may legitimately omit auto-generated files from their
+accounting. --verify is off by default; when unset, --base is ignored.
 
 Examples:
 
@@ -227,7 +244,15 @@ Examples:
   #       status: pass
   #
   # Then:
-  #   ethos mission result m-2026-04-08-005 --file result.yaml`,
+  #   ethos mission result m-2026-04-08-005 --file result.yaml
+
+  # Cross-check the declared counts against the real diff before
+  # submitting:
+  #   ethos mission result m-2026-04-08-005 --file result.yaml --verify
+  #
+  # Override the base ref when main is the wrong comparison point:
+  #   ethos mission result m-2026-04-08-005 --file result.yaml \
+  #       --verify --base origin/main`,
 	Args: cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		runMissionResult(args[0], missionResultFile)
@@ -404,6 +429,10 @@ func init() {
 
 	missionResultCmd.Flags().StringVarP(&missionResultFile, "file", "f", "", "Read result YAML from file (required)")
 	_ = missionResultCmd.MarkFlagRequired("file")
+	missionResultCmd.Flags().BoolVar(&missionResultVerify, "verify", false,
+		"Cross-check files_changed counts against git diff --numstat")
+	missionResultCmd.Flags().StringVar(&missionResultBase, "base", "main",
+		"Base ref for --verify (diff range is <base>..HEAD)")
 
 	missionLogCmd.Flags().StringVar(&missionLogEventFilter, "event", "",
 		"Filter by event type (comma-separated, e.g. create,close)")
@@ -787,6 +816,33 @@ func runMissionResult(idOrPrefix, file string) {
 		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
 		os.Exit(1)
 	}
+	// Validate before --verify so schema errors beat diff-mismatch
+	// errors. Without this guard a structurally-invalid path (e.g. a
+	// control character or traversal segment) would surface as a
+	// misleading "not in diff" message from verifyResultAgainstNumstat,
+	// and only the schema validator knows how to point at the real
+	// problem. Store.AppendResult validates again under its own lock —
+	// the outer call here is a CLI-side precedence guard, not a
+	// replacement for the trust boundary. The double-validation is
+	// cheap and idempotent.
+	if err := r.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission result: %s: %v\n", file, err)
+		os.Exit(1)
+	}
+	// Optional CLI-side cross-check against `git diff --numstat`. The
+	// verifier runs BEFORE AppendResult so the mission store never sees
+	// a result whose declared counts contradict the working tree; on
+	// any mismatch the submission is refused and nothing is written.
+	// This lives in the CLI — not in internal/mission — because the
+	// mission package is the trust boundary for persisted artifacts,
+	// and git is a consumer-side convenience, not part of the contract
+	// schema.
+	if missionResultVerify {
+		if err := verifyResultAgainstNumstat(r, missionResultBase); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission result: %s: %v\n", file, err)
+			os.Exit(1)
+		}
+	}
 	// Wrap AppendResult errors with the file path so structural
 	// Validate failures — empty verdict, out-of-range confidence,
 	// empty evidence — carry the same locator the unknown-field
@@ -811,6 +867,176 @@ func runMissionResult(idOrPrefix, file string) {
 	// the result event-log summary in summarizeEventDetails.
 	fmt.Printf("result: %s round=%d verdict=%s\n",
 		id, r.Round, r.Verdict)
+}
+
+// verifyResultAgainstNumstat cross-checks r.FilesChanged against the
+// output of `git diff --numstat <base>..HEAD` and returns an error
+// naming the first discrepancy it finds. A path declared in the
+// result but absent from the diff, or declared with counts that
+// disagree with git's numstat, is a rejection. A path present in the
+// diff but not declared emits a warning to stderr and is not a
+// rejection — workers may legitimately omit auto-generated files
+// from their accounting.
+//
+// The base ref is validated with `git rev-parse --verify` before the
+// diff runs so a bad --base value produces a concrete error with
+// "base ref" in the message, not a cryptic git exit code. Git's
+// stderr passes through the child process untouched so the operator
+// sees git's own diagnostic on top of the wrapper error.
+//
+// Binary files appear in numstat as `-\t-\t<path>` and are skipped
+// from the verified map. A declared binary file would therefore be
+// reported as "not in diff" — verify is a line-count check and has
+// nothing useful to say about binaries.
+//
+// Path comparison goes through mission.CanonicalPath so a worker who
+// declares `./a.txt` (which the write_set validator accepts because
+// `./a.txt` and `a.txt` normalize equal) matches git's canonical
+// `a.txt` output. Without this the verify helper would reject a
+// submission the validator already admitted. Error messages still
+// quote the operator-supplied path, not the canonical form, so a
+// diagnostic identifies the string the operator typed.
+func verifyResultAgainstNumstat(r *mission.Result, base string) error {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return fmt.Errorf("--verify: --base must not be empty")
+	}
+	// Validate the base ref first so a typo surfaces as a clean
+	// "invalid base ref" error rather than a confusing numstat
+	// failure downstream. Pass git's own stderr through to the
+	// user's terminal so the operator sees the real diagnostic
+	// (e.g. "fatal: Needed a single revision") on top of the wrapper
+	// error — without it, --verify swallows the one message that
+	// would let a human diagnose a typoed ref.
+	//
+	// --end-of-options sandboxes the base argument: git treats
+	// everything after it as a positional, so a base like
+	// "--output=/tmp/x" cannot smuggle a flag into rev-parse or diff.
+	check := exec.Command("git", "rev-parse", "--verify", "--end-of-options", base)
+	check.Stderr = os.Stderr
+	if err := check.Run(); err != nil {
+		return fmt.Errorf("--verify: invalid base ref %q: %w", base, err)
+	}
+
+	// --no-renames tells git to report renames as a delete+add pair
+	// instead of `old => new` in the third numstat field. The
+	// rename-notation form breaks a naive path lookup: a worker who
+	// declares the post-rename path (`b.txt`) would be rejected
+	// because parseNumstat keyed the entry as `a.txt => b.txt`. With
+	// --no-renames the worker's declared path maps straight through
+	// to git's report. The trade-off is that a rename-only change
+	// (no content edit) produces a 0/0 delete on the old path; the
+	// worker who omits it from files_changed sees an undeclared-path
+	// warning on stderr rather than an outright rejection — an
+	// acceptable noise level given the alternative. --verify is a
+	// line-count check on shipped files, not a rename detector.
+	//
+	// --end-of-options applies to `base+"..HEAD"` only; git treats
+	// `--no-renames` as a real flag before the sandbox.
+	diff := exec.Command("git", "diff", "--numstat", "--no-renames", "--end-of-options", base+"..HEAD")
+	diff.Stderr = os.Stderr
+	out, err := diff.Output()
+	if err != nil {
+		return fmt.Errorf("--verify: running git diff --numstat %s..HEAD: %w", base, err)
+	}
+
+	numstat, err := parseNumstat(out)
+	if err != nil {
+		return fmt.Errorf("--verify: parsing git diff --numstat output: %w", err)
+	}
+
+	// Re-key the numstat map by canonical path so lookups from
+	// canonically-equivalent declared paths find the same entry. The
+	// rawPath side retains git's original string for warning
+	// diagnostics — the operator should see git's path, not a
+	// re-normalized form.
+	type canonEntry struct {
+		added, removed int
+		rawPath        string
+	}
+	canonical := make(map[string]canonEntry, len(numstat))
+	for path, e := range numstat {
+		key := mission.CanonicalPath(path)
+		if key == "" {
+			continue
+		}
+		canonical[key] = canonEntry{added: e.added, removed: e.removed, rawPath: path}
+	}
+
+	declared := make(map[string]bool, len(r.FilesChanged))
+	for _, fc := range r.FilesChanged {
+		key := mission.CanonicalPath(fc.Path)
+		declared[key] = true
+		got, ok := canonical[key]
+		if !ok {
+			return fmt.Errorf(
+				"--verify: file %q declared in result but not in %s..HEAD diff",
+				fc.Path, base)
+		}
+		if got.added != fc.Added || got.removed != fc.Removed {
+			return fmt.Errorf(
+				"--verify: file %q declared added=%d/removed=%d but git diff shows added=%d/removed=%d",
+				fc.Path, fc.Added, fc.Removed, got.added, got.removed)
+		}
+	}
+
+	// Warn on diff paths the result did not declare. Compare using
+	// the same canonical key so a worker who declared `./a.txt` is
+	// not warned that `a.txt` is undeclared; print the raw git path
+	// in the warning so the operator sees what git reported.
+	for key, e := range canonical {
+		if !declared[key] {
+			fmt.Fprintf(os.Stderr,
+				"ethos: mission result: --verify: warning: file %q in diff but not declared\n",
+				e.rawPath)
+		}
+	}
+	return nil
+}
+
+// numstatEntry is the parsed added/removed pair for one file in the
+// output of `git diff --numstat`.
+type numstatEntry struct {
+	added   int
+	removed int
+}
+
+// parseNumstat turns the raw output of `git diff --numstat` into a
+// path → (added, removed) map. Each line is `<added>\t<removed>\t<path>`;
+// binary files appear as `-\t-\t<path>` and are skipped from the map
+// so callers can treat "present but unverifiable" the same as absent.
+// Whitespace-only lines are ignored.
+func parseNumstat(out []byte) (map[string]numstatEntry, error) {
+	entries := make(map[string]numstatEntry)
+	for i, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		// Split on tab: git diff --numstat uses tab separators, not
+		// spaces. Paths may contain spaces but not tabs (tabs are
+		// escaped as \t in git's C-style quoting, which we do not
+		// attempt to parse — worker paths are repo-relative and
+		// should not carry tabs).
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("line %d: expected 3 tab-separated fields, got %q", i+1, line)
+		}
+		addedStr, removedStr, path := fields[0], fields[1], fields[2]
+		if addedStr == "-" || removedStr == "-" {
+			continue
+		}
+		added, err := strconv.Atoi(addedStr)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: added field %q: %w", i+1, addedStr, err)
+		}
+		removed, err := strconv.Atoi(removedStr)
+		if err != nil {
+			return nil, fmt.Errorf("line %d: removed field %q: %w", i+1, removedStr, err)
+		}
+		entries[path] = numstatEntry{added: added, removed: removed}
+	}
+	return entries, nil
 }
 
 // runMissionAdvance handles `ethos mission advance <id>`. The gate

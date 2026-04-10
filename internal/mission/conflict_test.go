@@ -341,6 +341,64 @@ func TestPathContainedBy(t *testing.T) {
 	}
 }
 
+// TestCanonicalPath exercises the exported wrapper that external
+// callers use to compare paths against write_set entries under the
+// same normalization rules the validator uses. Every row declares
+// two textually different inputs that must produce the same
+// canonical string, or one input whose canonical form is the empty
+// string.
+func TestCanonicalPath(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "plain relative path", in: "a.txt", want: "a.txt"},
+		{name: "leading ./", in: "./a.txt", want: "a.txt"},
+		{name: "trailing slash", in: "internal/foo/", want: "internal/foo"},
+		{name: "embedded ./", in: "internal/./foo", want: "internal/foo"},
+		{name: "doubled slash", in: "internal//foo", want: "internal/foo"},
+		{name: "backslashes", in: `internal\foo\bar`, want: "internal/foo/bar"},
+		{name: "leading whitespace", in: "  a.txt", want: "a.txt"},
+		{name: "trailing whitespace", in: "a.txt  ", want: "a.txt"},
+		{name: "empty", in: "", want: ""},
+		{name: "whitespace only", in: "   ", want: ""},
+		{name: "lone dot", in: ".", want: ""},
+		{name: "dot slash", in: "./", want: ""},
+		{name: "nested dots", in: "./.", want: ""},
+		{name: "root slashes", in: "///", want: ""},
+		{name: "multi-segment round-trip", in: "cmd/ethos/mission.go", want: "cmd/ethos/mission.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, CanonicalPath(tt.in),
+				"CanonicalPath(%q)", tt.in)
+		})
+	}
+}
+
+// TestCanonicalPath_EquivalenceClass asserts that every member of a
+// canonical equivalence class maps to the same string. This is the
+// invariant the --verify cross-check relies on: if two paths compare
+// equal under pathContainedBy, CanonicalPath must agree.
+func TestCanonicalPath_EquivalenceClass(t *testing.T) {
+	classes := [][]string{
+		{"a.txt", "./a.txt", "a.txt/", "./a.txt/", "  a.txt  "},
+		{"internal/foo", "./internal/foo", "internal/./foo",
+			"internal//foo", "internal/foo/", `internal\foo`},
+		{"cmd/ethos/mission.go", "./cmd/ethos/mission.go",
+			"cmd/./ethos/./mission.go", "cmd//ethos//mission.go"},
+	}
+	for _, class := range classes {
+		want := CanonicalPath(class[0])
+		assert.NotEmpty(t, want, "canonical form of %q must be non-empty", class[0])
+		for _, member := range class[1:] {
+			assert.Equal(t, want, CanonicalPath(member),
+				"CanonicalPath(%q) must equal CanonicalPath(%q)", member, class[0])
+		}
+	}
+}
+
 // TestFindWriteSetConflicts exercises the cross-mission conflict
 // detector against a list of existing contracts. Each row sets up a
 // new contract's write_set plus zero or more existing contracts and
