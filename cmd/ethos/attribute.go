@@ -44,8 +44,8 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 		Use:   "create <slug>",
 		Short: fmt.Sprintf("Create a new %s", kind.DisplayName),
 		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runAttributeCreate(kind, args[0], createFile)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAttributeCreate(cmd, kind, args[0], createFile)
 		},
 	}
 	createCmd.Flags().StringVarP(&createFile, "file", "f", "", "Read content from file")
@@ -54,8 +54,8 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 		Use:   "list",
 		Short: fmt.Sprintf("List all %s", kind.PluralName),
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			runAttributeList(kind)
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAttributeList(cmd, kind)
 		},
 	}
 
@@ -63,8 +63,8 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 		Use:   "show <slug>",
 		Short: fmt.Sprintf("Show %s content", kind.DisplayName),
 		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runAttributeShow(kind, args[0])
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAttributeShow(cmd, kind, args[0])
 		},
 	}
 
@@ -72,8 +72,8 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 		Use:   "delete <slug>",
 		Short: fmt.Sprintf("Delete a %s", kind.DisplayName),
 		Args:  cobra.ExactArgs(1),
-		Run: func(cmd *cobra.Command, args []string) {
-			runAttributeDelete(kind, args[0])
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runAttributeDelete(cmd, kind, args[0])
 		},
 	}
 
@@ -84,8 +84,8 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 			Use:   "add <handle> <slug>",
 			Short: fmt.Sprintf("Add %s to an identity", kind.DisplayName),
 			Args:  cobra.ExactArgs(2),
-			Run: func(cmd *cobra.Command, args []string) {
-				runAttributeAdd(kind, args[0], args[1])
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runAttributeAdd(cmd, kind, args[0], args[1])
 			},
 		}
 
@@ -93,8 +93,8 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 			Use:   "remove <handle> <slug>",
 			Short: fmt.Sprintf("Remove %s from an identity", kind.DisplayName),
 			Args:  cobra.ExactArgs(2),
-			Run: func(cmd *cobra.Command, args []string) {
-				runAttributeRemove(args[0], args[1])
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runAttributeRemove(cmd, args[0], args[1])
 			},
 		}
 
@@ -104,8 +104,8 @@ func registerAttributeCommands(root *cobra.Command, kind attribute.Kind, use, sh
 			Use:   "set <handle> <slug>",
 			Short: fmt.Sprintf("Set %s on an identity", kind.DisplayName),
 			Args:  cobra.ExactArgs(2),
-			Run: func(cmd *cobra.Command, args []string) {
-				runAttributeSet(kind, args[0], args[1])
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return runAttributeSet(cmd, kind, args[0], args[1])
 			},
 		}
 
@@ -121,103 +121,99 @@ func init() {
 	registerAttributeCommands(rootCmd, attribute.WritingStyles, "writing-style", "Manage writing styles (create, list, show, delete, set)")
 }
 
-func runAttributeCreate(kind attribute.Kind, slug string, file string) {
+func runAttributeCreate(cmd *cobra.Command, kind attribute.Kind, slug string, file string) error {
 	var content string
 
 	if file != "" {
 		data, err := os.ReadFile(file)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		content = string(data)
 	} else {
 		var err error
 		content, err = editContent(kind, slug)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 	}
 
 	if strings.TrimSpace(content) == "" {
-		fmt.Fprintf(os.Stderr, "ethos %s create: empty content, aborting\n", kind.DisplayName)
-		os.Exit(1)
+		return fmt.Errorf("%s create: empty content, aborting", kind.DisplayName)
 	}
 
 	s := attributeStore(kind)
 	a := &attribute.Attribute{Slug: slug, Content: content}
 	if err := s.Save(a); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	p, _ := s.Path(slug)
-	fmt.Printf("Created %s %q (%s)\n", kind.DisplayName, slug, p)
+	fmt.Fprintf(cmd.OutOrStdout(), "Created %s %q (%s)\n", kind.DisplayName, slug, p)
+	return nil
 }
 
-func runAttributeList(kind attribute.Kind) {
+func runAttributeList(cmd *cobra.Command, kind attribute.Kind) error {
 	s := attributeStore(kind)
 	result, err := s.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	errOut := cmd.ErrOrStderr()
 	for _, w := range result.Warnings {
-		fmt.Fprintf(os.Stderr, "ethos: %s\n", w)
+		fmt.Fprintf(errOut, "ethos: %s\n", w)
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(result.Attributes)
-		return
+		return writeJSON(out, result.Attributes)
 	}
 	if len(result.Attributes) == 0 {
-		fmt.Printf("No %s found. Run 'ethos %s create <slug>' to create one.\n", kind.PluralName, kind.CmdName)
-		return
+		fmt.Fprintf(out, "No %s found. Run 'ethos %s create <slug>' to create one.\n", kind.PluralName, kind.CmdName)
+		return nil
 	}
 	for _, a := range result.Attributes {
-		fmt.Println(a.Slug)
+		fmt.Fprintln(out, a.Slug)
 	}
+	return nil
 }
 
-func runAttributeShow(kind attribute.Kind, slug string) {
+func runAttributeShow(cmd *cobra.Command, kind attribute.Kind, slug string) error {
 	s := attributeStore(kind)
 	a, err := s.Load(slug)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(a)
-		return
+		return writeJSON(out, a)
 	}
-	fmt.Print(a.Content)
+	fmt.Fprint(out, a.Content)
+	return nil
 }
 
-func runAttributeDelete(kind attribute.Kind, slug string) {
+func runAttributeDelete(cmd *cobra.Command, kind attribute.Kind, slug string) error {
 	s := attributeStore(kind)
 	if err := s.Delete(slug); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(map[string]string{"deleted": slug, "kind": kind.DisplayName})
-		return
+		return writeJSON(out, map[string]string{"deleted": slug, "kind": kind.DisplayName})
 	}
-	fmt.Printf("Deleted %s %q\n", kind.DisplayName, slug)
+	fmt.Fprintf(out, "Deleted %s %q\n", kind.DisplayName, slug)
+	return nil
 }
 
 // runAttributeAdd adds an attribute slug to an identity's talents list.
-func runAttributeAdd(kind attribute.Kind, handle, slug string) {
+func runAttributeAdd(cmd *cobra.Command, kind attribute.Kind, handle, slug string) error {
 	if kind != attribute.Talents {
-		fmt.Fprintf(os.Stderr, "ethos %s add: use 'set' for single-value attributes\n", kind.DisplayName)
-		os.Exit(1)
+		return fmt.Errorf("%s add: use 'set' for single-value attributes", kind.DisplayName)
 	}
 
 	// Verify the talent exists.
 	as := attributeStore(kind)
 	if !as.Exists(slug) {
-		fmt.Fprintf(os.Stderr, "ethos: talent %q not found — create it with 'ethos talent create %s'\n", slug, slug)
-		os.Exit(1)
+		return fmt.Errorf("talent %q not found — create it with 'ethos talent create %s'", slug, slug)
 	}
 
 	is := identityStore()
@@ -230,14 +226,14 @@ func runAttributeAdd(kind attribute.Kind, handle, slug string) {
 		id.Talents = append(id.Talents, slug)
 		return nil
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	fmt.Printf("Added talent %q to %q\n", slug, handle)
+	fmt.Fprintf(cmd.OutOrStdout(), "Added talent %q to %q\n", slug, handle)
+	return nil
 }
 
 // runAttributeRemove removes a talent slug from an identity.
-func runAttributeRemove(handle, slug string) {
+func runAttributeRemove(cmd *cobra.Command, handle, slug string) error {
 	is := identityStore()
 	if err := is.Update(handle, func(id *identity.Identity) error {
 		found := false
@@ -255,25 +251,23 @@ func runAttributeRemove(handle, slug string) {
 		id.Talents = filtered
 		return nil
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	fmt.Printf("Removed talent %q from %q\n", slug, handle)
+	fmt.Fprintf(cmd.OutOrStdout(), "Removed talent %q from %q\n", slug, handle)
+	return nil
 }
 
 // runAttributeSet sets a single-value attribute on an identity.
-func runAttributeSet(kind attribute.Kind, handle, slug string) {
+func runAttributeSet(cmd *cobra.Command, kind attribute.Kind, handle, slug string) error {
 	if kind == attribute.Talents {
-		fmt.Fprintf(os.Stderr, "ethos talent set: use 'add' and 'remove' for list attributes\n")
-		os.Exit(1)
+		return fmt.Errorf("talent set: use 'add' and 'remove' for list attributes")
 	}
 
 	// Verify the attribute exists.
 	as := attributeStore(kind)
 	if !as.Exists(slug) {
-		fmt.Fprintf(os.Stderr, "ethos: %s %q not found — create it with 'ethos %s create %s'\n",
+		return fmt.Errorf("%s %q not found — create it with 'ethos %s create %s'",
 			kind.DisplayName, slug, kind.CmdName, slug)
-		os.Exit(1)
 	}
 
 	is := identityStore()
@@ -288,10 +282,10 @@ func runAttributeSet(kind attribute.Kind, handle, slug string) {
 		}
 		return nil
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	fmt.Printf("Set %s %q on %q\n", kind.DisplayName, slug, handle)
+	fmt.Fprintf(cmd.OutOrStdout(), "Set %s %q on %q\n", kind.DisplayName, slug, handle)
+	return nil
 }
 
 // editContent opens $EDITOR for the user to write attribute content.
