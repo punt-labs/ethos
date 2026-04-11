@@ -64,11 +64,12 @@ func TestRunRoleCreate(t *testing.T) {
 
 	// Create via --file flag.
 	roleFile := filepath.Join(t.TempDir(), "dev.yaml")
-	data, _ := yaml.Marshal(map[string]interface{}{
+	data, merr := yaml.Marshal(map[string]interface{}{
 		"name":             "dev",
 		"responsibilities": []string{"write code"},
 		"permissions":      []string{"read"},
 	})
+	require.NoError(t, merr)
 	require.NoError(t, os.WriteFile(roleFile, data, 0o644))
 
 	stdout, _, err := execHandler(t, "role", "create", "dev", "-f", roleFile)
@@ -137,10 +138,11 @@ func TestRunTeamCreate(t *testing.T) {
 	seedRole(t, se, "eng")
 
 	teamFile := filepath.Join(t.TempDir(), "alpha.yaml")
-	data, _ := yaml.Marshal(map[string]interface{}{
+	data, merr := yaml.Marshal(map[string]interface{}{
 		"name":    "alpha",
 		"members": []map[string]string{{"identity": "test-agent", "role": "eng"}},
 	})
+	require.NoError(t, merr)
 	require.NoError(t, os.WriteFile(teamFile, data, 0o644))
 
 	stdout, _, err := execHandler(t, "team", "create", "alpha", "-f", teamFile)
