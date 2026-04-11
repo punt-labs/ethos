@@ -190,7 +190,7 @@ func submitCLIResult(t *testing.T, missionID string, round int) {
 	oldFile := missionResultFile
 	missionResultFile = writeResultFile(t, missionID, round)
 	t.Cleanup(func() { missionResultFile = oldFile })
-	captureStdout(t, func() { runMissionResult(missionID, missionResultFile) })
+	captureStdoutE(t, func() error { return runMissionResult(missionID, missionResultFile) })
 }
 
 // writeContractFileWithWriteSet writes a contract file with a custom
@@ -257,7 +257,7 @@ func TestMissionCreate_FromFile(t *testing.T) {
 	// Text mode echoes a one-line `created: <id> worker=... evaluator=...`
 	// summary so a scripting caller can chain on the new mission ID
 	// without a follow-up `ethos mission list` (ethos-30c).
-	stdout := captureStdout(t, func() { runMissionCreate() })
+	stdout := captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -284,7 +284,7 @@ func TestMissionCreate_FromFileJSON(t *testing.T) {
 	jsonOutput = true
 
 	missionCreateFile = writeContractFile(t)
-	out := captureStdout(t, func() { runMissionCreate() })
+	out := captureStdoutE(t, func() error { return runMissionCreate() })
 
 	var c mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(out), &c))
@@ -325,7 +325,7 @@ func TestMissionBareShowsHelp(t *testing.T) {
 func TestMissionShow(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -333,7 +333,7 @@ func TestMissionShow(t *testing.T) {
 	require.Len(t, ids, 1)
 	id := ids[0]
 
-	out := captureStdout(t, func() { runMissionShow(id) })
+	out := captureStdoutE(t, func() error { return runMissionShow(id) })
 	assert.Contains(t, out, id)
 	assert.Contains(t, out, "claude")
 	assert.Contains(t, out, "bwk")
@@ -348,7 +348,7 @@ func TestMissionShow(t *testing.T) {
 func TestMissionShow_Prefix(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -358,14 +358,14 @@ func TestMissionShow_Prefix(t *testing.T) {
 	// First 8 characters: "m-2026-0" — enough to disambiguate a single
 	// mission in a fresh store.
 	prefix := ids[0][:8]
-	out := captureStdout(t, func() { runMissionShow(prefix) })
+	out := captureStdoutE(t, func() error { return runMissionShow(prefix) })
 	assert.Contains(t, out, ids[0])
 }
 
 func TestMissionShow_JSON(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -373,7 +373,7 @@ func TestMissionShow_JSON(t *testing.T) {
 	require.Len(t, ids, 1)
 
 	jsonOutput = true
-	out := captureStdout(t, func() { runMissionShow(ids[0]) })
+	out := captureStdoutE(t, func() error { return runMissionShow(ids[0]) })
 
 	var c mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(out), &c))
@@ -392,7 +392,7 @@ func TestMissionShow_JSON(t *testing.T) {
 func TestMissionShow_HashOnOwnLine(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -400,7 +400,7 @@ func TestMissionShow_HashOnOwnLine(t *testing.T) {
 	require.Len(t, ids, 1)
 	id := ids[0]
 
-	out := captureStdout(t, func() { runMissionShow(id) })
+	out := captureStdoutE(t, func() error { return runMissionShow(id) })
 
 	// The Evaluator row still names the handle and pinned timestamp,
 	// but no longer carries the hash inline.
@@ -431,7 +431,7 @@ func TestMissionShow_HashOnOwnLine(t *testing.T) {
 
 func TestMissionList_Empty(t *testing.T) {
 	missionTestEnv(t)
-	out := captureStdout(t, func() { runMissionList("open") })
+	out := captureStdoutE(t, func() error { return runMissionList("open") })
 	assert.Contains(t, out, "No missions found")
 }
 
@@ -441,11 +441,11 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	// Create three missions with disjoint write_sets so Phase 3.2's
 	// cross-mission conflict check does not collapse them.
 	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-a/")
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-b/")
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-c/")
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -462,19 +462,19 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	// Default filter "open" returns the two open ones.
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() { runMissionList("open") })
+	out := captureStdoutE(t, func() error { return runMissionList("open") })
 	var openEntries []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &openEntries))
 	assert.Len(t, openEntries, 2)
 
 	// "all" returns all three.
-	out = captureStdout(t, func() { runMissionList("all") })
+	out = captureStdoutE(t, func() error { return runMissionList("all") })
 	var allEntries []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &allEntries))
 	assert.Len(t, allEntries, 3)
 
 	// "closed" returns just the one.
-	out = captureStdout(t, func() { runMissionList("closed") })
+	out = captureStdoutE(t, func() error { return runMissionList("closed") })
 	var closedEntries []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &closedEntries))
 	assert.Len(t, closedEntries, 1)
@@ -485,7 +485,7 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 func TestMissionClose(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -501,7 +501,7 @@ func TestMissionClose(t *testing.T) {
 	// verdict that authorized the close, so a scripting caller sees
 	// the operation landed and which result satisfied the gate
 	// without a follow-up show or mission log (ethos-30c).
-	stdout := captureStdout(t, func() { runMissionClose(ids[0], mission.StatusClosed) })
+	stdout := captureStdoutE(t, func() error { return runMissionClose(ids[0], mission.StatusClosed) })
 	assert.Contains(t, stdout, "closed:")
 	assert.Contains(t, stdout, ids[0])
 	assert.Contains(t, stdout, "round=1")
@@ -517,7 +517,7 @@ func TestMissionClose(t *testing.T) {
 func TestMissionClose_PrefixMatch(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -527,7 +527,7 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 	submitCLIResult(t, ids[0], 1)
 
 	prefix := ids[0][:9]
-	captureStdout(t, func() { runMissionClose(prefix, mission.StatusFailed) })
+	captureStdoutE(t, func() error { return runMissionClose(prefix, mission.StatusFailed) })
 
 	c, err := ms.Load(ids[0])
 	require.NoError(t, err)
@@ -560,7 +560,7 @@ reason: %q
 func TestMissionReflect_RoundTrip(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -568,7 +568,7 @@ func TestMissionReflect_RoundTrip(t *testing.T) {
 	require.Len(t, ids, 1)
 
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "round 1 went well")
-	stdout := captureStdout(t, func() { runMissionReflect(ids[0], missionReflectFile) })
+	stdout := captureStdoutE(t, func() error { return runMissionReflect(ids[0], missionReflectFile) })
 	// Text mode echoes `reflected: <id> round=1 rec=continue` so a
 	// scripting caller sees the reflection landed (ethos-30c).
 	assert.Contains(t, stdout, "reflected:")
@@ -586,7 +586,7 @@ func TestMissionReflect_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -594,7 +594,7 @@ func TestMissionReflect_JSON(t *testing.T) {
 	require.Len(t, ids, 1)
 
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
-	out := captureStdout(t, func() { runMissionReflect(ids[0], missionReflectFile) })
+	out := captureStdoutE(t, func() error { return runMissionReflect(ids[0], missionReflectFile) })
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	assert.Equal(t, ids[0], got["mission_id"])
@@ -664,7 +664,7 @@ budget:
 func TestMissionAdvance_HappyPath(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -674,12 +674,12 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 
 	// Reflect on round 1.
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
-	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
+	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	// Advance — text mode echoes `advanced: <id> round 1 -> 2` so a
 	// scripting caller can read the new round without a follow-up
 	// show (ethos-30c).
-	out := captureStdout(t, func() { runMissionAdvance(id) })
+	out := captureStdoutE(t, func() error { return runMissionAdvance(id) })
 	assert.Contains(t, out, "advanced:")
 	assert.Contains(t, out, id)
 	assert.Contains(t, out, "round 1 -> 2")
@@ -702,7 +702,7 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 func TestMissionShow_IncludesResults(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -713,11 +713,11 @@ func TestMissionShow_IncludesResults(t *testing.T) {
 	// Submit a valid result and close the mission so show renders
 	// both the contract and the result.
 	submitCLIResult(t, id, 1)
-	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+	captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusClosed) })
 
 	// Human mode: the Results section must appear with the round
 	// and verdict.
-	out := captureStdout(t, func() { runMissionShow(id) })
+	out := captureStdoutE(t, func() error { return runMissionShow(id) })
 	assert.Contains(t, out, "Results:")
 	assert.Contains(t, out, "round 1")
 	assert.Contains(t, out, "pass")
@@ -727,7 +727,7 @@ func TestMissionShow_IncludesResults(t *testing.T) {
 	// entry whose verdict is "pass".
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+	jsonOut := captureStdoutE(t, func() error { return runMissionShow(id) })
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
 	results, ok := payload["results"].([]any)
@@ -749,7 +749,7 @@ func TestMissionShow_IncludesResults(t *testing.T) {
 func TestMissionShow_EmptyResultsIsArray(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -759,7 +759,7 @@ func TestMissionShow_EmptyResultsIsArray(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+	jsonOut := captureStdoutE(t, func() error { return runMissionShow(id) })
 
 	// Raw text: `"results": []` must appear, `"results": null` must
 	// not. Both forms use the printJSON indent width so the exact
@@ -788,7 +788,7 @@ func TestMissionShow_EmptyResultsIsArray(t *testing.T) {
 func TestMissionShow_JSONIncludesSessionAndRepo(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -809,7 +809,7 @@ func TestMissionShow_JSONIncludesSessionAndRepo(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+	jsonOut := captureStdoutE(t, func() error { return runMissionShow(id) })
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
@@ -830,7 +830,7 @@ func TestMissionShow_JSONIncludesSessionAndRepo(t *testing.T) {
 func TestMissionShow_JSONOmitsEmptyOptionalFields(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -849,7 +849,7 @@ func TestMissionShow_JSONOmitsEmptyOptionalFields(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+	jsonOut := captureStdoutE(t, func() error { return runMissionShow(id) })
 
 	// An open mission never has closed_at; it must not appear in
 	// the payload.
@@ -872,7 +872,7 @@ func TestMissionShow_JSONOmitsEmptyOptionalFields(t *testing.T) {
 func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -887,7 +887,7 @@ func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	jsonOut := captureStdout(t, func() { runMissionShow(id) })
+	jsonOut := captureStdoutE(t, func() error { return runMissionShow(id) })
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(jsonOut), &payload))
@@ -916,7 +916,7 @@ func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
 func TestMissionShow_PrintsEmptyResultsSection(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -924,7 +924,7 @@ func TestMissionShow_PrintsEmptyResultsSection(t *testing.T) {
 	require.Len(t, ids, 1)
 	id := ids[0]
 
-	out := captureStdout(t, func() { runMissionShow(id) })
+	out := captureStdoutE(t, func() error { return runMissionShow(id) })
 	assert.Contains(t, out, "Results:",
 		"empty-results show must print the Results: header, got: %s", out)
 	assert.Contains(t, out, "(none)",
@@ -1109,14 +1109,14 @@ func TestMissionClose_HelpMentionsResultGate(t *testing.T) {
 func TestMissionShow_RendersCurrentRound(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
-	out := captureStdout(t, func() { runMissionShow(ids[0]) })
+	out := captureStdoutE(t, func() error { return runMissionShow(ids[0]) })
 	assert.Contains(t, out, "Round:")
 	assert.Contains(t, out, "1 of 3")
 }
@@ -1127,7 +1127,7 @@ func TestMissionShow_RendersCurrentRound(t *testing.T) {
 func TestMissionReflections_JSON(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1136,14 +1136,14 @@ func TestMissionReflections_JSON(t *testing.T) {
 
 	// Empty case — no reflections yet, must produce "[]" (not "null").
 	jsonOutput = true
-	out := captureStdout(t, func() { runMissionReflections(id) })
+	out := captureStdoutE(t, func() error { return runMissionReflections(id) })
 	assert.Equal(t, "[]", strings.TrimSpace(out))
 
 	// Submit a reflection and re-fetch.
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
-	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
+	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
-	out = captureStdout(t, func() { runMissionReflections(id) })
+	out = captureStdoutE(t, func() error { return runMissionReflections(id) })
 	var got []mission.Reflection
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	require.Len(t, got, 1)
@@ -1159,7 +1159,7 @@ func TestMissionReflections_JSON(t *testing.T) {
 func TestMissionResult_RoundTrip(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1168,7 +1168,7 @@ func TestMissionResult_RoundTrip(t *testing.T) {
 	id := ids[0]
 
 	missionResultFile = writeResultFile(t, id, 1)
-	stdout := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
+	stdout := captureStdoutE(t, func() error { return runMissionResult(id, missionResultFile) })
 	// Text mode echoes `result: <id> round=1 verdict=pass` so a
 	// scripting caller can confirm the submission landed without
 	// a follow-up `ethos mission results` (ethos-30c).
@@ -1193,7 +1193,7 @@ func TestMissionResult_RoundTrip(t *testing.T) {
 func TestMissionResults_ListsSubmittedResults(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1206,12 +1206,12 @@ func TestMissionResults_ListsSubmittedResults(t *testing.T) {
 	// without a nil guard.
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() { runMissionResults(id) })
+	out := captureStdoutE(t, func() error { return runMissionResults(id) })
 	assert.Equal(t, "[]", strings.TrimSpace(out))
 
 	// Submit a result and fetch again.
 	submitCLIResult(t, id, 1)
-	out = captureStdout(t, func() { runMissionResults(id) })
+	out = captureStdoutE(t, func() error { return runMissionResults(id) })
 	var got []mission.Result
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	require.Len(t, got, 1)
@@ -1222,7 +1222,7 @@ func TestMissionResults_ListsSubmittedResults(t *testing.T) {
 	// Human mode: the Results section header and a round 1 bullet
 	// must appear.
 	jsonOutput = false
-	humanOut := captureStdout(t, func() { runMissionResults(id) })
+	humanOut := captureStdoutE(t, func() error { return runMissionResults(id) })
 	assert.Contains(t, humanOut, "Results:")
 	assert.Contains(t, humanOut, "round 1")
 	assert.Contains(t, humanOut, "pass")
@@ -1322,7 +1322,7 @@ func TestMissionResult_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1330,7 +1330,7 @@ func TestMissionResult_JSON(t *testing.T) {
 	id := ids[0]
 
 	missionResultFile = writeResultFile(t, id, 1)
-	out := captureStdout(t, func() { runMissionResult(id, missionResultFile) })
+	out := captureStdoutE(t, func() error { return runMissionResult(id, missionResultFile) })
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	assert.Equal(t, id, got["mission_id"])
@@ -1348,7 +1348,7 @@ func TestMissionClose_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1358,7 +1358,7 @@ func TestMissionClose_JSON(t *testing.T) {
 
 	submitCLIResult(t, id, 1)
 
-	out := captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+	out := captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusClosed) })
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	assert.Equal(t, id, got["mission_id"])
@@ -1375,7 +1375,7 @@ func TestMissionAdvance_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1384,9 +1384,9 @@ func TestMissionAdvance_JSON(t *testing.T) {
 	id := ids[0]
 
 	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
-	captureStdout(t, func() { runMissionReflect(id, missionReflectFile) })
+	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
-	out := captureStdout(t, func() { runMissionAdvance(id) })
+	out := captureStdoutE(t, func() error { return runMissionAdvance(id) })
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	assert.Equal(t, id, got["mission_id"])
@@ -1464,7 +1464,7 @@ budget:
 func TestMissionClose_GateAcceptsWithResult(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1472,7 +1472,7 @@ func TestMissionClose_GateAcceptsWithResult(t *testing.T) {
 	id := ids[0]
 
 	submitCLIResult(t, id, 1)
-	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+	captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusClosed) })
 
 	loaded, err := ms.Load(id)
 	require.NoError(t, err)
@@ -1874,14 +1874,14 @@ budget:
 func seedMissionWithEvents(t *testing.T) string {
 	t.Helper()
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 	ms := missionStore()
 	ids, err := ms.List()
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 	id := ids[0]
 	submitCLIResult(t, id, 1)
-	captureStdout(t, func() { runMissionClose(id, mission.StatusClosed) })
+	captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusClosed) })
 	return id
 }
 
@@ -1891,8 +1891,8 @@ func TestMissionLog_CleanLogRoundTrip(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(id, "", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "", "")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1910,8 +1910,8 @@ func TestMissionLog_EventFilter_NoMatch(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(id, "foo", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "foo", "")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1928,8 +1928,8 @@ func TestMissionLog_EventFilter_PartialMatch(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(id, "create,close", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "create,close", "")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1945,8 +1945,8 @@ func TestMissionLog_SinceFilter_Future(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(id, "", "2099-01-01T00:00:00Z")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "", "2099-01-01T00:00:00Z")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1961,8 +1961,8 @@ func TestMissionLog_SinceFilter_Past(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(id, "", "2020-01-01T00:00:00Z")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "", "2020-01-01T00:00:00Z")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1978,8 +1978,8 @@ func TestMissionLog_BothFilters_ANDComposed(t *testing.T) {
 	t.Cleanup(func() { jsonOutput = false })
 	// Filter for `result` events since epoch — only the result row
 	// survives both gates.
-	out := captureStdout(t, func() {
-		runMissionLog(id, "result", "2020-01-01T00:00:00Z")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "result", "2020-01-01T00:00:00Z")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -1996,8 +1996,8 @@ func TestMissionLog_UnknownEventType_IsAcceptedNotRejected(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(id, "worker_spawned", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "worker_spawned", "")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -2027,8 +2027,8 @@ func TestMissionLog_PrefixMatch(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(prefix, "", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(prefix, "", "")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -2064,8 +2064,8 @@ func TestMissionLog_EmptyJSON_IsEmptyArrayNotNull(t *testing.T) {
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
 	// Filter out every event so the payload is empty.
-	out := captureStdout(t, func() {
-		runMissionLog(id, "no-such-event", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "no-such-event", "")
 	})
 	assert.Contains(t, out, `"events": []`)
 	assert.NotContains(t, out, `"events": null`)
@@ -2078,8 +2078,8 @@ func TestMissionLog_HumanMode_RendersAllEvents(t *testing.T) {
 	id := seedMissionWithEvents(t)
 
 	jsonOutput = false
-	out := captureStdout(t, func() {
-		runMissionLog(id, "", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "", "")
 	})
 	assert.Contains(t, out, "Events:")
 	assert.Contains(t, out, "create")
@@ -2091,8 +2091,8 @@ func TestMissionLog_HumanMode_Empty_RendersNone(t *testing.T) {
 	missionTestEnv(t)
 	id := seedMissionWithEvents(t)
 	jsonOutput = false
-	out := captureStdout(t, func() {
-		runMissionLog(id, "no-such-event", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "no-such-event", "")
 	})
 	assert.Contains(t, out, "Events:")
 	assert.Contains(t, out, "(none)")
@@ -2171,8 +2171,8 @@ func TestMissionLog_CorruptLineSurfacesAsWarning(t *testing.T) {
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdout(t, func() {
-		runMissionLog(id, "", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "", "")
 	})
 	var payload mission.LogPayload
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
@@ -2203,8 +2203,8 @@ func TestMissionLog_HumanMode_BulletPrefix(t *testing.T) {
 	id := seedMissionWithEvents(t)
 
 	jsonOutput = false
-	out := captureStdout(t, func() {
-		runMissionLog(id, "", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "", "")
 	})
 	// Every rendered event line must carry the "  - " prefix. Grep
 	// the output for lines that mention an event type but lack the
@@ -2246,8 +2246,8 @@ func TestMissionLog_HumanMode_WarningsFooterOnStdout(t *testing.T) {
 	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
 
 	jsonOutput = false
-	out := captureStdout(t, func() {
-		runMissionLog(id, "", "")
+	out := captureStdoutE(t, func() error {
+		return runMissionLog(id, "", "")
 	})
 	// The events section still renders the three good lines.
 	assert.Contains(t, out, "Events:")
@@ -2522,7 +2522,7 @@ files_changed:
 func TestMissionResult_VerifyOff_DefaultBehaviorUnchanged(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, func() { runMissionCreate() })
+	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -2553,7 +2553,7 @@ evidence:
 
 	missionResultFile = path
 	missionResultVerify = false
-	out := captureStdout(t, func() { runMissionResult(id, path) })
+	out := captureStdoutE(t, func() error { return runMissionResult(id, path) })
 	assert.Contains(t, out, "result:")
 	assert.Contains(t, out, "round=1")
 	assert.Contains(t, out, "verdict=pass")
