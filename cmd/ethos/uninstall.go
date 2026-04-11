@@ -43,7 +43,6 @@ func runUninstall() error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: plugin uninstall failed: %v\n", err)
 			hadError = true
 		} else {
 			fmt.Println("Removed Claude Code plugin.")
@@ -80,7 +79,8 @@ func runUninstall() error {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "yes" {
-		return fmt.Errorf("aborted")
+		fmt.Fprintln(os.Stdout, "Aborted.")
+		return silentError{}
 	}
 
 	// Step 3: Remove data directory.

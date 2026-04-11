@@ -346,7 +346,11 @@ func runSessionJoin(cmd *cobra.Command) error {
 	ss := sessionStore()
 	sid := sessionJoinSession
 	if sid == "" {
-		sid, _, _ = resolveSessionContext()
+		var resolveErr error
+		sid, _, resolveErr = resolveSessionContext()
+		if resolveErr != nil {
+			return resolveErr
+		}
 	} else {
 		resolved, err := ss.MatchByPrefix(sid)
 		if err != nil {
@@ -374,7 +378,11 @@ func runSessionLeave(cmd *cobra.Command) error {
 	ss := sessionStore()
 	sid := sessionLeaveSession
 	if sid == "" {
-		sid, _, _ = resolveSessionContext()
+		var resolveErr error
+		sid, _, resolveErr = resolveSessionContext()
+		if resolveErr != nil {
+			return resolveErr
+		}
 	} else {
 		resolved, err := ss.MatchByPrefix(sid)
 		if err != nil {
