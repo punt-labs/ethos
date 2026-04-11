@@ -480,7 +480,7 @@ func runSessionPurge(cmd *cobra.Command) error {
 	// Purge stale PID files first (independent of roster purge).
 	pidPurged, pidErr := ss.PurgeCurrent()
 	if pidErr != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: purging PID files: %v\n", pidErr)
+		pidErr = fmt.Errorf("purging PID files: %w", pidErr)
 	}
 
 	purged, err := ss.Purge()
