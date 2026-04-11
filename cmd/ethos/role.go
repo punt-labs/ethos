@@ -39,8 +39,8 @@ var roleCreateCmd = &cobra.Command{
 	Use:   "create <name>",
 	Short: "Create a new role",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runRoleCreate(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRoleCreate(cmd, args[0])
 	},
 }
 
@@ -48,8 +48,8 @@ var roleListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all roles",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runRoleList()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRoleList(cmd)
 	},
 }
 
@@ -57,8 +57,8 @@ var roleShowCmd = &cobra.Command{
 	Use:   "show <name>",
 	Short: "Show role details",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runRoleShow(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRoleShow(cmd, args[0])
 	},
 }
 
@@ -66,8 +66,8 @@ var roleDeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
 	Short: "Delete a role",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runRoleDelete(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runRoleDelete(cmd, args[0])
 	},
 }
 
@@ -77,121 +77,115 @@ func init() {
 	rootCmd.AddCommand(roleCmd)
 }
 
-func runRoleCreate(name string) {
+func runRoleCreate(cmd *cobra.Command, name string) error {
 	var r role.Role
 
 	if roleCreateFile != "" {
 		data, err := os.ReadFile(roleCreateFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		if err := yaml.Unmarshal(data, &r); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: parsing role file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("parsing role file: %w", err)
 		}
 		// Name from argument overrides file.
 		r.Name = name
 	} else {
 		r.Name = name
 		// Read responsibilities and permissions from stdin if available.
-		fmt.Println("Enter responsibilities (one per line, empty line to finish):")
+		fmt.Fprintln(cmd.OutOrStdout(), "Enter responsibilities (one per line, empty line to finish):")
 		r.Responsibilities = readLines()
-		fmt.Println("Enter permissions (one per line, empty line to finish):")
+		fmt.Fprintln(cmd.OutOrStdout(), "Enter permissions (one per line, empty line to finish):")
 		r.Permissions = readLines()
 	}
 
 	s := roleStore()
 	if err := s.Save(&r); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if jsonOutput {
-		printJSON(&r)
-		return
+		return writeJSON(cmd.OutOrStdout(), &r)
 	}
-	fmt.Printf("Created role %q\n", name)
+	fmt.Fprintf(cmd.OutOrStdout(), "Created role %q\n", name)
+	return nil
 }
 
-func runRoleList() {
+func runRoleList(cmd *cobra.Command) error {
 	s := roleStore()
 	names, err := s.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(names)
-		return
+		return writeJSON(out, names)
 	}
 	if len(names) == 0 {
-		fmt.Println("No roles found. Run 'ethos role create <name>' to create one.")
-		return
+		fmt.Fprintln(out, "No roles found. Run 'ethos role create <name>' to create one.")
+		return nil
 	}
 	for _, n := range names {
-		fmt.Println(n)
+		fmt.Fprintln(out, n)
 	}
+	return nil
 }
 
-func runRoleShow(name string) {
+func runRoleShow(cmd *cobra.Command, name string) error {
 	s := roleStore()
 	r, err := s.Load(name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(r)
-		return
+		return writeJSON(out, r)
 	}
-	fmt.Printf("Name: %s\n", r.Name)
+	fmt.Fprintf(out, "Name: %s\n", r.Name)
 	if len(r.Responsibilities) > 0 {
-		fmt.Println("Responsibilities:")
+		fmt.Fprintln(out, "Responsibilities:")
 		for _, resp := range r.Responsibilities {
-			fmt.Printf("  - %s\n", resp)
+			fmt.Fprintf(out, "  - %s\n", resp)
 		}
 	}
 	if len(r.Permissions) > 0 {
-		fmt.Println("Permissions:")
+		fmt.Fprintln(out, "Permissions:")
 		for _, perm := range r.Permissions {
-			fmt.Printf("  - %s\n", perm)
+			fmt.Fprintf(out, "  - %s\n", perm)
 		}
 	}
+	return nil
 }
 
-func runRoleDelete(name string) {
+func runRoleDelete(cmd *cobra.Command, name string) error {
 	s := roleStore()
 	// Check referential integrity: no team should reference this role.
 	// Fail closed — if we can't check, don't delete.
 	ts := teamStore()
 	teamNames, err := ts.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: cannot verify references for role %q: %v\n", name, err)
-		os.Exit(1)
+		return fmt.Errorf("cannot verify references for role %q: %w", name, err)
 	}
 	for _, tn := range teamNames {
 		t, err := ts.Load(tn)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: cannot verify references for role %q: failed to load team %q: %v\n", name, tn, err)
-			os.Exit(1)
+			return fmt.Errorf("cannot verify references for role %q: failed to load team %q: %w", name, tn, err)
 		}
 		for _, m := range t.Members {
 			if m.Role == name {
-				fmt.Fprintf(os.Stderr, "ethos: cannot delete role %q: referenced by team %q (member %s)\n", name, tn, m.Identity)
-				os.Exit(1)
+				return fmt.Errorf("cannot delete role %q: referenced by team %q (member %s)", name, tn, m.Identity)
 			}
 		}
 	}
 	if err := s.Delete(name); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(map[string]string{"deleted": name})
-		return
+		return writeJSON(out, map[string]string{"deleted": name})
 	}
-	fmt.Printf("Deleted role %q\n", name)
+	fmt.Fprintf(out, "Deleted role %q\n", name)
+	return nil
 }
 
 // readLines reads lines from stdin until an empty line.
