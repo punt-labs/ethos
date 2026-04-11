@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 PLUGIN_CACHE := $(HOME)/.claude/plugins/cache/punt-labs/ethos
 PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
 
-.PHONY: help lint docs test check format build install dev clean dist cover tools doctor
+.PHONY: help lint docs test check validate-content format build install dev clean dist cover tools doctor
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -20,7 +20,10 @@ docs: ## Lint markdown
 test: ## Run tests with race detection
 	go test -race -count=1 ./...
 
-check: lint docs test ## Run all quality gates
+validate-content: ## Validate all ethos content files
+	go run ./cmd/validate-content
+
+check: lint docs test validate-content ## Run all quality gates
 
 format: ## Format code
 	gofmt -w .

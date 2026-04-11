@@ -148,6 +148,7 @@ Coverage targets:
 1. **Test fixture repo**: `ethos-behavioral-fixture` — a minimal Go repo with ethos installed, agent files generated for each sprint team role, no production code worth protecting
 
 2. **Test runner**: `scripts/run-behavioral-tests.sh` — iterates YAML scenario files, invokes:
+
    ```bash
    claude --bare -p "$(cat scenario.prompt)" \
      --system-prompt-file .claude/agents/${PERSONA}.md \
@@ -158,6 +159,7 @@ Coverage targets:
    ```
 
 3. **Oracle**: Python script that reads the session audit log and sends it to a judge model via the Anthropic API:
+
    ```python
    result = client.messages.create(
        model="claude-sonnet-4-6",
@@ -222,7 +224,8 @@ Coverage targets:
 ### Release checklist integration
 
 Add to the ethos release checklist (before tagging):
-```
+
+```text
 [ ] Run make test-sprint and confirm all 5 checks pass
 [ ] Record session IDs in the release notes for audit reference
 ```
