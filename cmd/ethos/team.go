@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -49,8 +50,8 @@ var teamCreateCmd = &cobra.Command{
 	Use:   "create <name>",
 	Short: "Create a new team",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runTeamCreate(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTeamCreate(cmd, args[0])
 	},
 }
 
@@ -58,8 +59,8 @@ var teamListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all teams",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runTeamList()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTeamList(cmd)
 	},
 }
 
@@ -67,8 +68,8 @@ var teamShowCmd = &cobra.Command{
 	Use:   "show <name>",
 	Short: "Show team details",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runTeamShow(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTeamShow(cmd, args[0])
 	},
 }
 
@@ -76,8 +77,8 @@ var teamDeleteCmd = &cobra.Command{
 	Use:   "delete <name>",
 	Short: "Delete a team",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runTeamDelete(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTeamDelete(cmd, args[0])
 	},
 }
 
@@ -85,8 +86,8 @@ var teamAddMemberCmd = &cobra.Command{
 	Use:   "add-member <team> <identity> <role>",
 	Short: "Add a member to a team",
 	Args:  cobra.ExactArgs(3),
-	Run: func(cmd *cobra.Command, args []string) {
-		runTeamAddMember(args[0], args[1], args[2])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTeamAddMember(cmd, args[0], args[1], args[2])
 	},
 }
 
@@ -94,8 +95,8 @@ var teamRemoveMemberCmd = &cobra.Command{
 	Use:   "remove-member <team> <identity> <role>",
 	Short: "Remove a member from a team",
 	Args:  cobra.ExactArgs(3),
-	Run: func(cmd *cobra.Command, args []string) {
-		runTeamRemoveMember(args[0], args[1], args[2])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTeamRemoveMember(cmd, args[0], args[1], args[2])
 	},
 }
 
@@ -103,8 +104,8 @@ var teamAddCollabCmd = &cobra.Command{
 	Use:   "add-collab <team> <from> <to> <type>",
 	Short: "Add a collaboration to a team",
 	Args:  cobra.ExactArgs(4),
-	Run: func(cmd *cobra.Command, args []string) {
-		runTeamAddCollab(args[0], args[1], args[2], args[3])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runTeamAddCollab(cmd, args[0], args[1], args[2], args[3])
 	},
 }
 
@@ -112,12 +113,12 @@ var teamForRepoCmd = &cobra.Command{
 	Use:   "for-repo [repo]",
 	Short: "Show team(s) for a repository",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		var repo string
 		if len(args) > 0 {
 			repo = args[0]
 		}
-		runTeamForRepo(repo)
+		return runTeamForRepo(cmd, repo)
 	},
 }
 
@@ -128,190 +129,184 @@ func init() {
 	rootCmd.AddCommand(teamCmd)
 }
 
-func runTeamCreate(name string) {
+func runTeamCreate(cmd *cobra.Command, name string) error {
 	var t team.Team
 
 	if teamCreateFile != "" {
 		data, err := os.ReadFile(teamCreateFile)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("reading %s: %w", teamCreateFile, err)
 		}
 		if err := yaml.Unmarshal(data, &t); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: parsing team file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("parsing team file: %w", err)
 		}
 		t.Name = name
 	} else {
 		t.Name = name
 		// Require at least one member via flags or interactive.
-		fmt.Println("Enter first member identity handle:")
+		fmt.Fprintln(cmd.OutOrStdout(), "Enter first member identity handle:")
 		var ident string
 		if _, err := fmt.Scanln(&ident); err != nil || ident == "" {
-			fmt.Fprintf(os.Stderr, "ethos: identity is required\n")
-			os.Exit(1)
+			return fmt.Errorf("identity is required")
 		}
-		fmt.Println("Enter first member role:")
+		fmt.Fprintln(cmd.OutOrStdout(), "Enter first member role:")
 		var r string
 		if _, err := fmt.Scanln(&r); err != nil || r == "" {
-			fmt.Fprintf(os.Stderr, "ethos: role is required\n")
-			os.Exit(1)
+			return fmt.Errorf("role is required")
 		}
 		t.Members = []team.Member{{Identity: ident, Role: r}}
 	}
 
 	s := teamStore()
 	if err := s.Save(&t, identityExistsFunc(), roleExistsFunc()); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if jsonOutput {
-		printJSON(&t)
-		return
+		return writeJSON(cmd.OutOrStdout(), &t)
 	}
-	fmt.Printf("Created team %q\n", name)
+	fmt.Fprintf(cmd.OutOrStdout(), "Created team %q\n", name)
+	return nil
 }
 
-func runTeamList() {
+func runTeamList(cmd *cobra.Command) error {
 	s := teamStore()
 	names, err := s.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(names)
-		return
+		return writeJSON(out, names)
 	}
 	if len(names) == 0 {
-		fmt.Println("No teams found. Run 'ethos team create <name>' to create one.")
-		return
+		fmt.Fprintln(out, "No teams found. Run 'ethos team create <name>' to create one.")
+		return nil
 	}
 	for _, n := range names {
-		fmt.Println(n)
+		fmt.Fprintln(out, n)
 	}
+	return nil
 }
 
-func runTeamShow(name string) {
+func runTeamShow(cmd *cobra.Command, name string) error {
 	s := teamStore()
 	t, err := s.Load(name)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(t)
-		return
+		return writeJSON(out, t)
 	}
-	printTeam(t)
+	printTeam(out, t)
+	return nil
 }
 
 // printTeam displays a team in human-readable text format.
-func printTeam(t *team.Team) {
-	fmt.Printf("Name: %s\n", t.Name)
+func printTeam(w io.Writer, t *team.Team) {
+	fmt.Fprintf(w, "Name: %s\n", t.Name)
 	if len(t.Repositories) > 0 {
-		fmt.Println("Repositories:")
+		fmt.Fprintln(w, "Repositories:")
 		for _, r := range t.Repositories {
-			fmt.Printf("  - %s\n", r)
+			fmt.Fprintf(w, "  - %s\n", r)
 		}
 	}
-	fmt.Println("Members:")
+	fmt.Fprintln(w, "Members:")
 	for _, m := range t.Members {
-		fmt.Printf("  - %s (%s)\n", m.Identity, m.Role)
+		fmt.Fprintf(w, "  - %s (%s)\n", m.Identity, m.Role)
 	}
 	if len(t.Collaborations) > 0 {
-		fmt.Println("Collaborations:")
+		fmt.Fprintln(w, "Collaborations:")
 		for _, c := range t.Collaborations {
-			fmt.Printf("  - %s -> %s (%s)\n", c.From, c.To, c.Type)
+			fmt.Fprintf(w, "  - %s -> %s (%s)\n", c.From, c.To, c.Type)
 		}
 	}
 }
 
-func runTeamForRepo(repo string) {
+func runTeamForRepo(cmd *cobra.Command, repo string) error {
 	if repo == "" {
 		repo = resolve.RepoName()
 	}
 	if repo == "" {
-		fmt.Fprintf(os.Stderr, "ethos: could not determine repo name (no argument and no git remote)\n")
-		os.Exit(1)
+		return fmt.Errorf("could not determine repo name (no argument and no git remote)")
 	}
 
 	s := teamStore()
 	teams, err := s.FindByRepo(repo)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(teams)
-		return
+		return writeJSON(out, teams)
 	}
 
 	if len(teams) == 0 {
-		fmt.Printf("no team found for %s\n", repo)
-		return
+		fmt.Fprintf(out, "no team found for %s\n", repo)
+		return nil
 	}
 
 	for i, t := range teams {
 		if i > 0 {
-			fmt.Println()
+			fmt.Fprintln(out)
 		}
-		printTeam(t)
+		printTeam(out, t)
 	}
+	return nil
 }
 
-func runTeamDelete(name string) {
+func runTeamDelete(cmd *cobra.Command, name string) error {
 	s := teamStore()
 	if err := s.Delete(name); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(map[string]string{"deleted": name})
-		return
+		return writeJSON(out, map[string]string{"deleted": name})
 	}
-	fmt.Printf("Deleted team %q\n", name)
+	fmt.Fprintf(out, "Deleted team %q\n", name)
+	return nil
 }
 
-func runTeamAddMember(teamName, ident, r string) {
+func runTeamAddMember(cmd *cobra.Command, teamName, ident, r string) error {
 	s := teamStore()
 	m := team.Member{Identity: ident, Role: r}
 	if err := s.AddMember(teamName, m, identityExistsFunc(), roleExistsFunc()); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(m)
-		return
+		return writeJSON(out, m)
 	}
-	fmt.Printf("Added %s (%s) to team %q\n", ident, r, teamName)
+	fmt.Fprintf(out, "Added %s (%s) to team %q\n", ident, r, teamName)
+	return nil
 }
 
-func runTeamRemoveMember(teamName, ident, r string) {
+func runTeamRemoveMember(cmd *cobra.Command, teamName, ident, r string) error {
 	s := teamStore()
 	if err := s.RemoveMember(teamName, ident, r); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(map[string]string{"removed": ident, "role": r, "team": teamName})
-		return
+		return writeJSON(out, map[string]string{"removed": ident, "role": r, "team": teamName})
 	}
-	fmt.Printf("Removed %s (%s) from team %q\n", ident, r, teamName)
+	fmt.Fprintf(out, "Removed %s (%s) from team %q\n", ident, r, teamName)
+	return nil
 }
 
-func runTeamAddCollab(teamName, from, to, collabType string) {
+func runTeamAddCollab(cmd *cobra.Command, teamName, from, to, collabType string) error {
 	s := teamStore()
 	c := team.Collaboration{From: from, To: to, Type: collabType}
 	if err := s.AddCollaboration(teamName, c); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(c)
-		return
+		return writeJSON(out, c)
 	}
-	fmt.Printf("Added collaboration %s -> %s (%s) on team %q\n", from, to, collabType, teamName)
+	fmt.Fprintf(out, "Added collaboration %s -> %s (%s) on team %q\n", from, to, collabType, teamName)
+	return nil
 }
