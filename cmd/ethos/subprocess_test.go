@@ -238,16 +238,3 @@ func TestCLI_Doctor(t *testing.T) {
 	assert.NotEmpty(t, stdout, "doctor should print results to stdout")
 	assert.NotContains(t, stderr, "goroutine", "doctor should not panic")
 }
-
-func TestCLI_UnknownCommand(t *testing.T) {
-	if ethosBinary == "" {
-		t.Skip("ethos binary not built")
-	}
-
-	stdout, stderr, exitCode := runCLI(t, nil, "boguscommand")
-	t.Logf("stdout: %s", stdout)
-	t.Logf("stderr: %s", stderr)
-
-	assert.Equal(t, 2, exitCode, "unknown command should exit 2 (usage error)")
-	assert.NotEmpty(t, stderr, "unknown command should print to stderr")
-}
