@@ -13,13 +13,12 @@ import (
 )
 
 // adrStore returns the global ADR store rooted at ~/.punt-labs/ethos/adrs.
-func adrStore() *adr.Store {
+func adrStore() (*adr.Store, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		return nil, fmt.Errorf("cannot determine home directory: %w", err)
 	}
-	return adr.NewStore(filepath.Join(home, ".punt-labs", "ethos", "adrs"))
+	return adr.NewStore(filepath.Join(home, ".punt-labs", "ethos", "adrs")), nil
 }
 
 // --- adr (bare command) ---
@@ -47,8 +46,8 @@ var adrCreateCmd = &cobra.Command{
 	Use:   "create",
 	Short: "Create a new ADR",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runADRCreate()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runADRCreate(cmd)
 	},
 }
 
@@ -60,8 +59,8 @@ var adrListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List ADRs",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runADRList()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runADRList(cmd)
 	},
 }
 
@@ -71,8 +70,8 @@ var adrShowCmd = &cobra.Command{
 	Use:   "show <id>",
 	Short: "Show ADR details",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runADRShow(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runADRShow(cmd, args[0])
 	},
 }
 
@@ -82,8 +81,8 @@ var adrSettleCmd = &cobra.Command{
 	Use:   "settle <id>",
 	Short: "Transition ADR status to settled",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runADRSettle(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runADRSettle(cmd, args[0])
 	},
 }
 
@@ -102,14 +101,12 @@ func init() {
 	rootCmd.AddCommand(adrCmd)
 }
 
-func runADRCreate() {
+func runADRCreate(cmd *cobra.Command) error {
 	if adrCreateTitle == "" {
-		fmt.Fprintf(os.Stderr, "ethos: --title is required\n")
-		os.Exit(1)
+		return fmt.Errorf("--title is required")
 	}
 	if adrCreateDecision == "" {
-		fmt.Fprintf(os.Stderr, "ethos: --decision is required\n")
-		os.Exit(1)
+		return fmt.Errorf("--decision is required")
 	}
 
 	author := adrCreateAuthor
@@ -133,38 +130,44 @@ func runADRCreate() {
 		BeadID:    adrCreateBeadID,
 	}
 
-	s := adrStore()
+	s, err := adrStore()
+	if err != nil {
+		return err
+	}
 	if err := s.Create(a); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(a)
-		return
+		return writeJSON(out, a)
 	}
-	fmt.Printf("Created %s: %s\n", a.ID, a.Title)
+	fmt.Fprintf(out, "Created %s: %s\n", a.ID, a.Title)
+	return nil
 }
 
-func runADRList() {
+func runADRList(cmd *cobra.Command) error {
 	if err := adr.ValidateStatusFilter(adrListStatus); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	s := adrStore()
+	s, err := adrStore()
+	if err != nil {
+		return err
+	}
 	ids, err := s.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Load all, filter by status.
+	out := cmd.OutOrStdout()
+	errOut := cmd.ErrOrStderr()
 	var adrs []*adr.ADR
 	for _, id := range ids {
 		a, err := s.Load(id)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: loading %s: %v\n", id, err)
+			fmt.Fprintf(errOut, "ethos: loading %s: %v\n", id, err)
 			continue
 		}
 		if adrListStatus != "all" && a.Status != adrListStatus {
@@ -177,13 +180,12 @@ func runADRList() {
 		if adrs == nil {
 			adrs = []*adr.ADR{}
 		}
-		printJSON(adrs)
-		return
+		return writeJSON(out, adrs)
 	}
 
 	if len(adrs) == 0 {
-		fmt.Println("No ADRs found.")
-		return
+		fmt.Fprintln(out, "No ADRs found.")
+		return nil
 	}
 
 	headers := []string{"ID", "STATUS", "TITLE", "AUTHOR"}
@@ -195,69 +197,74 @@ func runADRList() {
 		}
 		rows[i] = []string{a.ID, a.Status, a.Title, author}
 	}
-	fmt.Println(hook.FormatTable(headers, rows))
+	fmt.Fprintln(out, hook.FormatTable(headers, rows))
+	return nil
 }
 
-func runADRShow(id string) {
-	s := adrStore()
+func runADRShow(cmd *cobra.Command, id string) error {
+	s, err := adrStore()
+	if err != nil {
+		return err
+	}
 	a, err := s.Load(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(a)
-		return
+		return writeJSON(out, a)
 	}
 
-	fmt.Printf("ID:       %s\n", a.ID)
-	fmt.Printf("Title:    %s\n", a.Title)
-	fmt.Printf("Status:   %s\n", a.Status)
-	fmt.Printf("Author:   %s\n", a.Author)
-	fmt.Printf("Created:  %s\n", hook.FormatLocalTime(a.CreatedAt))
-	fmt.Printf("Updated:  %s\n", hook.FormatLocalTime(a.UpdatedAt))
+	fmt.Fprintf(out, "ID:       %s\n", a.ID)
+	fmt.Fprintf(out, "Title:    %s\n", a.Title)
+	fmt.Fprintf(out, "Status:   %s\n", a.Status)
+	fmt.Fprintf(out, "Author:   %s\n", a.Author)
+	fmt.Fprintf(out, "Created:  %s\n", hook.FormatLocalTime(a.CreatedAt))
+	fmt.Fprintf(out, "Updated:  %s\n", hook.FormatLocalTime(a.UpdatedAt))
 	if a.MissionID != "" {
-		fmt.Printf("Mission:  %s\n", a.MissionID)
+		fmt.Fprintf(out, "Mission:  %s\n", a.MissionID)
 	}
 	if a.BeadID != "" {
-		fmt.Printf("Bead:     %s\n", a.BeadID)
+		fmt.Fprintf(out, "Bead:     %s\n", a.BeadID)
 	}
-	fmt.Println()
+	fmt.Fprintln(out)
 	if a.Context != "" {
-		fmt.Println("Context:")
-		fmt.Printf("  %s\n", a.Context)
-		fmt.Println()
+		fmt.Fprintln(out, "Context:")
+		fmt.Fprintf(out, "  %s\n", a.Context)
+		fmt.Fprintln(out)
 	}
-	fmt.Println("Decision:")
-	fmt.Printf("  %s\n", a.Decision)
+	fmt.Fprintln(out, "Decision:")
+	fmt.Fprintf(out, "  %s\n", a.Decision)
 	if len(a.Alternatives) > 0 {
-		fmt.Println()
-		fmt.Println("Alternatives:")
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Alternatives:")
 		for _, alt := range a.Alternatives {
-			fmt.Printf("  - %s\n", alt)
+			fmt.Fprintf(out, "  - %s\n", alt)
 		}
 	}
+	return nil
 }
 
-func runADRSettle(id string) {
-	s := adrStore()
-	err := s.Update(id, func(a *adr.ADR) {
-		a.Status = adr.StatusSettled
-	})
+func runADRSettle(cmd *cobra.Command, id string) error {
+	s, err := adrStore()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
+	}
+	if err := s.Update(id, func(a *adr.ADR) {
+		a.Status = adr.StatusSettled
+	}); err != nil {
+		return err
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
 		a, err := s.Load(id)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return err
 		}
-		printJSON(a)
-		return
+		return writeJSON(out, a)
 	}
-	fmt.Printf("Settled %s\n", id)
+	fmt.Fprintf(out, "Settled %s\n", id)
+	return nil
 }
