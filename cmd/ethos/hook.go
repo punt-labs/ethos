@@ -19,8 +19,8 @@ var hookSessionStartCmd = &cobra.Command{
 	Use:   "session-start",
 	Short: "SessionStart hook handler",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runHookSessionStart()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookSessionStart()
 	},
 }
 
@@ -28,8 +28,8 @@ var hookSessionEndCmd = &cobra.Command{
 	Use:   "session-end",
 	Short: "SessionEnd hook handler",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runHookSessionEnd()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookSessionEnd()
 	},
 }
 
@@ -37,8 +37,8 @@ var hookSubagentStartCmd = &cobra.Command{
 	Use:   "subagent-start",
 	Short: "SubagentStart hook handler",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runHookSubagentStart()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookSubagentStart()
 	},
 }
 
@@ -46,8 +46,8 @@ var hookSubagentStopCmd = &cobra.Command{
 	Use:   "subagent-stop",
 	Short: "SubagentStop hook handler",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runHookSubagentStop()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookSubagentStop()
 	},
 }
 
@@ -55,8 +55,8 @@ var hookPreCompactCmd = &cobra.Command{
 	Use:   "pre-compact",
 	Short: "PreCompact hook handler",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runHookPreCompact()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookPreCompact()
 	},
 }
 
@@ -64,8 +64,8 @@ var hookFormatOutputCmd = &cobra.Command{
 	Use:   "format-output",
 	Short: "PostToolUse output formatter",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runHookFormatOutput()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookFormatOutput()
 	},
 }
 
@@ -73,8 +73,8 @@ var hookAuditLogCmd = &cobra.Command{
 	Use:   "audit-log",
 	Short: "PostToolUse audit logger",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runHookAuditLog()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookAuditLog()
 	},
 }
 
@@ -91,7 +91,7 @@ func init() {
 	rootCmd.AddCommand(hookCmd)
 }
 
-func runHookSessionStart() {
+func runHookSessionStart() error {
 	is := identityStore()
 	deps := hook.SessionStartDeps{
 		Store:    is,
@@ -100,20 +100,20 @@ func runHookSessionStart() {
 		Roles:    layeredRoleStore(is),
 	}
 	if err := hook.HandleSessionStart(os.Stdin, deps); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook session-start: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook session-start: %w", err)
 	}
+	return nil
 }
 
-func runHookSessionEnd() {
+func runHookSessionEnd() error {
 	ss := sessionStore()
 	if err := hook.HandleSessionEnd(os.Stdin, ss); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook session-end: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook session-end: %w", err)
 	}
+	return nil
 }
 
-func runHookSubagentStart() {
+func runHookSubagentStart() error {
 	s := identityStore()
 	ss := sessionStore()
 	// Phase 3.3: wire the mission store and live hash sources so the
@@ -123,8 +123,7 @@ func runHookSubagentStart() {
 	ms := missionStore()
 	hashSources, err := mission.NewLiveHashSources(s, layeredRoleStore(s), layeredTeamStore(s))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook subagent-start: %w", err)
 	}
 	deps := hook.SubagentStartDeps{
 		Identities: s,
@@ -133,20 +132,20 @@ func runHookSubagentStart() {
 		Hash:       hashSources,
 	}
 	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook subagent-start: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook subagent-start: %w", err)
 	}
+	return nil
 }
 
-func runHookSubagentStop() {
+func runHookSubagentStop() error {
 	ss := sessionStore()
 	if err := hook.HandleSubagentStop(os.Stdin, ss); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook subagent-stop: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook subagent-stop: %w", err)
 	}
+	return nil
 }
 
-func runHookPreCompact() {
+func runHookPreCompact() error {
 	is := identityStore()
 	deps := hook.PreCompactDeps{
 		Identities: is,
@@ -155,24 +154,24 @@ func runHookPreCompact() {
 		Roles:      layeredRoleStore(is),
 	}
 	if err := hook.HandlePreCompact(os.Stdin, deps); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook pre-compact: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook pre-compact: %w", err)
 	}
+	return nil
 }
 
-func runHookFormatOutput() {
+func runHookFormatOutput() error {
 	if err := hook.HandleFormatOutput(os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook format-output: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook format-output: %w", err)
 	}
+	return nil
 }
 
-func runHookAuditLog() {
+func runHookAuditLog() error {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos hook audit-log: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("hook audit-log: %w", err)
 	}
 	sessionsDir := home + "/.punt-labs/ethos/sessions"
 	_ = hook.HandleAuditLog(os.Stdin, sessionsDir)
+	return nil
 }

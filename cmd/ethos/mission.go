@@ -137,8 +137,8 @@ the permission envelope — the upper bound of what the worker is allowed
 to write. Workers surface what they actually changed in their result's
 files_changed field; there is no "expected write" input.`,
 	Args: cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionCreate()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionCreate()
 	},
 }
 
@@ -152,8 +152,8 @@ var missionShowCmd = &cobra.Command{
 Accepts a full mission ID (m-YYYY-MM-DD-NNN) or any unambiguous prefix.
 Use --json to emit the raw contract for piping.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionShow(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionShow(args[0])
 	},
 }
 
@@ -170,8 +170,8 @@ Filters by --status (default "open"). Pass --status all to include
 closed, failed, and escalated missions alongside open ones. Pass
 --json for a machine-readable summary.`,
 	Args: cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionList(missionListStatus)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionList(missionListStatus)
 	},
 }
 
@@ -195,8 +195,8 @@ round N" until the worker has submitted a result for that round.
 Submit one with "ethos mission result <id> --file <path>" before
 closing; see "ethos mission result --help" for the required YAML shape.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionClose(args[0], missionCloseStatus)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionClose(args[0], missionCloseStatus)
 	},
 }
 
@@ -288,8 +288,8 @@ Examples:
   # Then:
   #   ethos mission result m-2026-04-08-005 --file escalate.yaml`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionResult(args[0], missionResultFile)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionResult(args[0], missionResultFile)
 	},
 }
 
@@ -332,8 +332,8 @@ Examples:
   # Then:
   #   ethos mission reflect m-2026-04-08-005 --file reflection.yaml`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionReflect(args[0], missionReflectFile)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionReflect(args[0], missionReflectFile)
 	},
 }
 
@@ -349,8 +349,8 @@ Prints only the round-by-round reflection log for a mission; unlike
 as a single JSON array with --json (always an array, even when there
 are no reflections yet — empty rather than null).`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionReflections(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionReflections(args[0])
 	},
 }
 
@@ -371,8 +371,8 @@ files_changed, evidence, open_questions, and prose fields. This is
 the read-only counterpart to "mission result", mirroring the
 reflection/reflections pair.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionResults(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionResults(args[0])
 	},
 }
 
@@ -422,8 +422,8 @@ Examples:
   ethos mission log m-2026-04-08-006 --since 2026-04-08T00:00:00Z
   ethos mission log m-2026-04-08-006 --event result --since 2026-04-08T12:00:00Z`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionLog(args[0], missionLogEventFilter, missionLogSinceFilter)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionLog(args[0], missionLogEventFilter, missionLogSinceFilter)
 	},
 }
 
@@ -464,8 +464,8 @@ The advance is refused if any of the following hold:
 On success, the contract's current_round is bumped and a
 round_advanced event is appended to the mission event log.`,
 	Args: cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runMissionAdvance(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionAdvance(args[0])
 	},
 }
 
@@ -522,13 +522,12 @@ func init() {
 //
 // Uses missionStoreForCreate so the Phase 3.5 role-overlap gate
 // fires; read-only subcommands use the bare missionStore.
-func runMissionCreate() {
+func runMissionCreate() error {
 	ms := missionStoreForCreate()
 
 	data, err := os.ReadFile(missionCreateFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission create: %w", err)
 	}
 
 	// Strict decode via the shared helper: unknown fields, multiple
@@ -537,8 +536,7 @@ func runMissionCreate() {
 	// identically regardless of how the YAML reached the store.
 	parsed, err := mission.DecodeContractStrict(data, missionCreateFile)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission create: %w", err)
 	}
 	c := *parsed
 
@@ -552,22 +550,19 @@ func runMissionCreate() {
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission create: %w", err)
 	}
 	if err := ms.ApplyServerFields(&c, time.Now(), sources); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission create: %w", err)
 	}
 
 	if err := ms.Create(&c); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission create: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission create: %w", err)
 	}
 
 	if jsonOutput {
 		printJSON(&c)
-		return
+		return nil
 	}
 	// Text mode echoes a one-line summary so a scripting caller can
 	// tell the write landed without a follow-up `ethos mission show`.
@@ -579,19 +574,18 @@ func runMissionCreate() {
 	// Mission ID leads so it is grep-able and chain-able.
 	fmt.Printf("created: %s worker=%s evaluator=%s\n",
 		c.MissionID, c.Worker, c.Evaluator.Handle)
+	return nil
 }
 
-func runMissionShow(idOrPrefix string) {
+func runMissionShow(idOrPrefix string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission show: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission show: %w", err)
 	}
 	c, err := ms.Load(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission show: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission show: %w", err)
 	}
 	if jsonOutput {
 		// JSON shape wraps the contract in ShowPayload: the
@@ -624,7 +618,7 @@ func runMissionShow(idOrPrefix string) {
 				fmt.Sprintf("loading results: %v", loadErr))
 		}
 		printJSON(payload)
-		return
+		return nil
 	}
 	printContract(c)
 
@@ -647,23 +641,22 @@ func runMissionShow(idOrPrefix string) {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading results: %v\n", err)
 	}
 	printResults(results)
+	return nil
 }
 
 // runMissionReflections handles `ethos mission reflections <id>`,
 // the read-only counterpart to `mission reflect`. Returns the
 // round-by-round reflection log as a YAML-friendly JSON array (or a
 // human-readable bullet list).
-func runMissionReflections(idOrPrefix string) {
+func runMissionReflections(idOrPrefix string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission reflections: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission reflections: %w", err)
 	}
 	rs, err := ms.LoadReflections(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission reflections: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission reflections: %w", err)
 	}
 	if jsonOutput {
 		// Always return an array, never null, so consumers can
@@ -672,9 +665,10 @@ func runMissionReflections(idOrPrefix string) {
 			rs = []mission.Reflection{}
 		}
 		printJSON(rs)
-		return
+		return nil
 	}
 	printReflections(rs)
+	return nil
 }
 
 // runMissionResults handles `ethos mission results <id>`, the
@@ -684,17 +678,15 @@ func runMissionReflections(idOrPrefix string) {
 // had both `result` and `results`; the CLI only had `result`, so
 // operators could not list results from the command line at all.
 // Mirrors runMissionReflections byte-for-byte.
-func runMissionResults(idOrPrefix string) {
+func runMissionResults(idOrPrefix string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission results: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission results: %w", err)
 	}
 	rs, err := ms.LoadResults(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission results: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission results: %w", err)
 	}
 	if jsonOutput {
 		// Always return an array, never null, so consumers can
@@ -703,26 +695,23 @@ func runMissionResults(idOrPrefix string) {
 			rs = []mission.Result{}
 		}
 		printJSON(rs)
-		return
+		return nil
 	}
 	printResults(rs)
+	return nil
 }
 
-func runMissionList(status string) {
+func runMissionList(status string) error {
 	// Validate the filter at the boundary so `ethos mission list
 	// --status bogus` returns an explicit error instead of an empty
 	// table. Symmetric with the MCP handler's defense.
 	if !mission.IsValidStatusFilter(status) {
-		fmt.Fprintf(os.Stderr,
-			"ethos: mission list: invalid --status %q: must be one of open, closed, failed, escalated, all\n",
-			status)
-		os.Exit(1)
+		return fmt.Errorf("mission list: invalid --status %q: must be one of open, closed, failed, escalated, all", status)
 	}
 	ms := missionStore()
 	ids, err := ms.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission list: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission list: %w", err)
 	}
 
 	entries := []mission.ListEntry{}
@@ -743,12 +732,12 @@ func runMissionList(status string) {
 
 	if jsonOutput {
 		printJSON(entries)
-		return
+		return nil
 	}
 
 	if len(entries) == 0 {
 		fmt.Println("No missions found.")
-		return
+		return nil
 	}
 
 	headers := []string{"MISSION", "STATUS", "LEADER", "WORKER", "EVALUATOR", "CREATED"}
@@ -767,14 +756,14 @@ func runMissionList(status string) {
 		}
 	}
 	fmt.Println(hook.FormatTable(headers, rows))
+	return nil
 }
 
-func runMissionClose(idOrPrefix, status string) {
+func runMissionClose(idOrPrefix, status string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission close: %w", err)
 	}
 	// Store.Close returns the satisfying result it already
 	// materialized under the lock, so the CLI echo does not re-read
@@ -786,8 +775,7 @@ func runMissionClose(idOrPrefix, status string) {
 	// entirely: on success, r is guaranteed non-nil.
 	r, err := ms.Close(id, status)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission close: %w", err)
 	}
 	if jsonOutput {
 		printJSON(map[string]any{
@@ -796,13 +784,14 @@ func runMissionClose(idOrPrefix, status string) {
 			"verdict":    r.Verdict,
 			"status":     status,
 		})
-		return
+		return nil
 	}
 	// Text mode echoes a one-line summary; round, verdict, and
 	// status mirror the close event-log summary in
 	// summarizeEventDetails so CLI echo and audit log read the same.
 	fmt.Printf("closed: %s round=%d verdict=%s status=%s\n",
 		id, r.Round, r.Verdict, status)
+	return nil
 }
 
 // runMissionReflect handles `ethos mission reflect <id> --file <path>`.
@@ -813,26 +802,22 @@ func runMissionClose(idOrPrefix, status string) {
 // caller's reflection round must equal the mission's current round
 // — passing a stale round produces a precise error at submit time
 // rather than a vague one at advance time.
-func runMissionReflect(idOrPrefix, file string) {
+func runMissionReflect(idOrPrefix, file string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission reflect: %w", err)
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission reflect: %w", err)
 	}
 	r, err := mission.DecodeReflectionStrict(data, file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission reflect: %w", err)
 	}
 	if err := ms.AppendReflection(id, r); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission reflect: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission reflect: %w", err)
 	}
 	if jsonOutput {
 		printJSON(map[string]any{
@@ -841,12 +826,13 @@ func runMissionReflect(idOrPrefix, file string) {
 			"recommendation": r.Recommendation,
 			"created_at":     r.CreatedAt,
 		})
-		return
+		return nil
 	}
 	// Text mode echoes a one-line summary; the rec= tag matches the
 	// reflect event-log summary in summarizeEventDetails.
 	fmt.Printf("reflected: %s round=%d rec=%s\n",
 		id, r.Round, r.Recommendation)
+	return nil
 }
 
 // runMissionResult handles `ethos mission result <id> --file <path>`.
@@ -858,22 +844,19 @@ func runMissionReflect(idOrPrefix, file string) {
 // state — passing a stale round or a mismatched mission ID produces
 // a precise error at submit time rather than a vague one at close
 // time.
-func runMissionResult(idOrPrefix, file string) {
+func runMissionResult(idOrPrefix, file string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission result: %w", err)
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission result: %w", err)
 	}
 	r, err := mission.DecodeResultStrict(data, file)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission result: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission result: %w", err)
 	}
 	// Validate before --verify so schema errors beat diff-mismatch
 	// errors. Without this guard a structurally-invalid path (e.g. a
@@ -885,8 +868,7 @@ func runMissionResult(idOrPrefix, file string) {
 	// replacement for the trust boundary. The double-validation is
 	// cheap and idempotent.
 	if err := r.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission result: %s: %v\n", file, err)
-		os.Exit(1)
+		return fmt.Errorf("mission result: %s: %w", file, err)
 	}
 	// Optional CLI-side cross-check against `git diff --numstat`. The
 	// verifier runs BEFORE AppendResult so the mission store never sees
@@ -898,8 +880,7 @@ func runMissionResult(idOrPrefix, file string) {
 	// schema.
 	if missionResultVerify {
 		if err := verifyResultAgainstNumstat(r, missionResultBase); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission result: %s: %v\n", file, err)
-			os.Exit(1)
+			return fmt.Errorf("mission result: %s: %w", file, err)
 		}
 	}
 	// Wrap AppendResult errors with the file path so structural
@@ -909,8 +890,7 @@ func runMissionResult(idOrPrefix, file string) {
 	// sees "invalid result: invalid verdict" with no hint which
 	// file produced it.
 	if err := ms.AppendResult(id, r); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission result: %s: %v\n", file, err)
-		os.Exit(1)
+		return fmt.Errorf("mission result: %s: %w", file, err)
 	}
 	if jsonOutput {
 		printJSON(map[string]any{
@@ -920,12 +900,13 @@ func runMissionResult(idOrPrefix, file string) {
 			"confidence": r.Confidence,
 			"created_at": r.CreatedAt,
 		})
-		return
+		return nil
 	}
 	// Text mode echoes a one-line summary; round and verdict mirror
 	// the result event-log summary in summarizeEventDetails.
 	fmt.Printf("result: %s round=%d verdict=%s\n",
 		id, r.Round, r.Verdict)
+	return nil
 }
 
 // verifyResultAgainstNumstat cross-checks r.FilesChanged against the
@@ -1103,12 +1084,11 @@ func parseNumstat(out []byte) (map[string]numstatEntry, error) {
 // the reflection recommends stop or escalate, or when the budget
 // would be exceeded; in all three cases the operator-facing message
 // surfaces the reason verbatim.
-func runMissionAdvance(idOrPrefix string) {
+func runMissionAdvance(idOrPrefix string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission advance: %w", err)
 	}
 	// Resolve the actor to record on the round_advanced event. A
 	// load failure is fatal here — recording an "unknown" actor on
@@ -1117,13 +1097,11 @@ func runMissionAdvance(idOrPrefix string) {
 	// round impossible.
 	actor, err := resolveActor(ms, id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission advance: %w", err)
 	}
 	newRound, err := ms.AdvanceRound(id, actor)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission advance: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission advance: %w", err)
 	}
 	if jsonOutput {
 		// Surface both endpoints of the round transition so the JSON
@@ -1136,12 +1114,13 @@ func runMissionAdvance(idOrPrefix string) {
 			"to_round":      newRound,
 			"current_round": newRound,
 		})
-		return
+		return nil
 	}
 	// Text mode echoes the round transition; format mirrors the
 	// round_advanced event-log summary in summarizeEventDetails so
 	// CLI echo and audit log read the same.
 	fmt.Printf("advanced: %s round %d -> %d\n", id, newRound-1, newRound)
+	return nil
 }
 
 // runMissionExport handles `ethos mission export <id> [--dir <path>]`.
@@ -1359,23 +1338,20 @@ func printReflections(rs []mission.Reflection) {
 // add new ones without a reader change). `--since` is RFC3339;
 // an invalid value is a fatal flag-parse error so the operator
 // sees it immediately.
-func runMissionLog(idOrPrefix, eventFilter, sinceFilter string) {
+func runMissionLog(idOrPrefix, eventFilter, sinceFilter string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission log: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission log: %w", err)
 	}
 	events, warnings, err := ms.LoadEvents(id)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission log: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission log: %w", err)
 	}
 	types := parseEventTypes(eventFilter)
 	filtered, err := mission.FilterEvents(events, types, sinceFilter)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission log: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("mission log: %w", err)
 	}
 	if jsonOutput {
 		// Always return a non-nil slice so the payload serializes
@@ -1385,7 +1361,7 @@ func runMissionLog(idOrPrefix, eventFilter, sinceFilter string) {
 		}
 		payload := mission.LogPayload{Events: filtered, Warnings: warnings}
 		printJSON(payload)
-		return
+		return nil
 	}
 	// Human mode: events first, then a Warnings footer on stdout
 	// so an operator piping `ethos mission log <id> > events.txt`
@@ -1397,6 +1373,7 @@ func runMissionLog(idOrPrefix, eventFilter, sinceFilter string) {
 	// `Warnings:` header, one `  - <warning>` bullet per entry.
 	printEventLog(filtered)
 	printEventWarnings(warnings)
+	return nil
 }
 
 // printEventWarnings emits a trailing Warnings section for the
