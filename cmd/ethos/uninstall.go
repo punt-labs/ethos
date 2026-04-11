@@ -43,6 +43,7 @@ func runUninstall() error {
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: plugin uninstall failed: %v\n", err)
 			hadError = true
 		} else {
 			fmt.Println("Removed Claude Code plugin.")
@@ -57,7 +58,7 @@ func runUninstall() error {
 		}
 		fmt.Println("Run 'ethos uninstall --purge' to remove everything.")
 		if hadError {
-			return fmt.Errorf("plugin uninstall failed")
+			return silentError{}
 		}
 		return nil
 	}
