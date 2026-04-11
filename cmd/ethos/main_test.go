@@ -67,6 +67,26 @@ func captureStdout(t *testing.T, fn func()) string {
 	return buf.String()
 }
 
+// captureStdoutE is like captureStdout but for functions that return error.
+// The error is checked with require.NoError so test failures are reported
+// at the call site rather than silently swallowed.
+func captureStdoutE(t *testing.T, fn func() error) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = w
+	defer func() { os.Stdout = old }()
+
+	require.NoError(t, fn())
+
+	w.Close()
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, r)
+	require.NoError(t, err)
+	return buf.String()
+}
+
 func TestVersionCommand(t *testing.T) {
 	jsonOutput = false
 	t.Cleanup(func() { jsonOutput = false })

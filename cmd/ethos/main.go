@@ -164,8 +164,8 @@ var iamCmd = &cobra.Command{
 	Short:  "Declare persona in current session",
 	Hidden: true,
 	Args:   cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runIam(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runIam(args[0])
 	},
 }
 
@@ -176,8 +176,8 @@ var serveCmd = &cobra.Command{
 	Short:   "Start MCP server (stdio transport)",
 	GroupID: "admin",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runServeImpl()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runServeImpl()
 	},
 }
 

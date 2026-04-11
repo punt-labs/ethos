@@ -13,7 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
-func runServeImpl() {
+func runServeImpl() error {
 	s := server.NewMCPServer(
 		"ethos",
 		version,
@@ -35,8 +35,7 @@ func runServeImpl() {
 	missions := missionStoreForCreate()
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	adrs := adr.NewStore(filepath.Join(home, ".punt-labs", "ethos", "adrs"))
 	mcp.NewHandlerWithOptions(is, talents, personalities, writingStyles,
@@ -48,7 +47,7 @@ func runServeImpl() {
 	).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: MCP server error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("MCP server error: %w", err)
 	}
+	return nil
 }
