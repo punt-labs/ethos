@@ -5,10 +5,9 @@ import (
 )
 
 var identityCmd = &cobra.Command{
-	Use:          "identity",
-	Short:        "Manage identities (whoami, list, get, create)",
-	GroupID:      "identity",
-	SilenceUsage: true,
+	Use:     "identity",
+	Short:   "Manage identities (whoami, list, get, create)",
+	GroupID: "identity",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runWhoami(cmd)
 	},
@@ -19,10 +18,9 @@ func init() {
 	var identityCreateFile string
 
 	identityWhoamiCmd := &cobra.Command{
-		Use:          "whoami",
-		Short:        "Show the caller's identity",
-		Args:         cobra.NoArgs,
-		SilenceUsage: true,
+		Use:   "whoami",
+		Short: "Show the caller's identity",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runWhoami(cmd)
 		},
@@ -30,20 +28,18 @@ func init() {
 	identityWhoamiCmd.Flags().BoolVar(&whoamiReference, "reference", false, "Include reference identity data")
 
 	identityListCmd := &cobra.Command{
-		Use:          "list",
-		Short:        "List all identities",
-		Args:         cobra.NoArgs,
-		SilenceUsage: true,
+		Use:   "list",
+		Short: "List all identities",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runList(cmd)
 		},
 	}
 
 	identityGetCmd := &cobra.Command{
-		Use:          "get <handle>",
-		Short:        "Show identity details",
-		Args:         cobra.ExactArgs(1),
-		SilenceUsage: true,
+		Use:   "get <handle>",
+		Short: "Show identity details",
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runShow(cmd, args[0], getReference)
 		},

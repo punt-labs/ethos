@@ -22,8 +22,7 @@ var jsonOutput bool
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		// Cobra already printed the error to stderr (SilenceErrors is
-		// off). We only set the exit code here.
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		if isUsageError(err) {
 			os.Exit(2)
 		}
@@ -78,11 +77,10 @@ func writeJSON(w io.Writer, v any) error {
 // --- version ---
 
 var versionCmd = &cobra.Command{
-	Use:          "version",
-	Short:        "Print version",
-	GroupID:      "admin",
-	Args:         cobra.NoArgs,
-	SilenceUsage: true,
+	Use:     "version",
+	Short:   "Print version",
+	GroupID: "admin",
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runVersion(cmd)
 	},
@@ -91,11 +89,10 @@ var versionCmd = &cobra.Command{
 // --- doctor ---
 
 var doctorCmd = &cobra.Command{
-	Use:          "doctor",
-	Short:        "Check installation health",
-	GroupID:      "admin",
-	Args:         cobra.NoArgs,
-	SilenceUsage: true,
+	Use:     "doctor",
+	Short:   "Check installation health",
+	GroupID: "admin",
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runDoctor(cmd)
 	},
@@ -106,11 +103,10 @@ var doctorCmd = &cobra.Command{
 var whoamiReference bool
 
 var whoamiCmd = &cobra.Command{
-	Use:          "whoami",
-	Short:        "Show the caller's identity",
-	GroupID:      "identity",
-	Args:         cobra.NoArgs,
-	SilenceUsage: true,
+	Use:     "whoami",
+	Short:   "Show the caller's identity",
+	GroupID: "identity",
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runWhoami(cmd)
 	},
@@ -121,11 +117,10 @@ var whoamiCmd = &cobra.Command{
 var showReference bool
 
 var showCmd = &cobra.Command{
-	Use:          "show <handle>",
-	Short:        "Show identity details",
-	Hidden:       true,
-	Args:         cobra.ExactArgs(1),
-	SilenceUsage: true,
+	Use:    "show <handle>",
+	Short:  "Show identity details",
+	Hidden: true,
+	Args:   cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runShow(cmd, args[0], showReference)
 	},
@@ -134,11 +129,10 @@ var showCmd = &cobra.Command{
 // --- list ---
 
 var listCmd = &cobra.Command{
-	Use:          "list",
-	Short:        "List all identities",
-	Hidden:       true,
-	Args:         cobra.NoArgs,
-	SilenceUsage: true,
+	Use:    "list",
+	Short:  "List all identities",
+	Hidden: true,
+	Args:   cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runList(cmd)
 	},
@@ -147,11 +141,10 @@ var listCmd = &cobra.Command{
 // --- resolve-agent ---
 
 var resolveAgentCmd = &cobra.Command{
-	Use:          "resolve-agent",
-	Short:        "Show default agent from repo config",
-	Args:         cobra.NoArgs,
-	Hidden:       true,
-	SilenceUsage: true,
+	Use:    "resolve-agent",
+	Short:  "Show default agent from repo config",
+	Args:   cobra.NoArgs,
+	Hidden: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runResolveAgent(cmd)
 	},
@@ -286,7 +279,7 @@ func runList(cmd *cobra.Command) error {
 		return writeJSON(out, ids)
 	}
 	if len(result.Identities) == 0 {
-		fmt.Fprintln(out, "No identities found. Run 'ethos create' to create one.")
+		fmt.Fprintln(out, "No identities found. Run 'ethos identity create' to create one.")
 		return nil
 	}
 
