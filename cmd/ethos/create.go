@@ -19,12 +19,11 @@ var createCmd = &cobra.Command{
 	Short:  "Create a new identity",
 	Hidden: true,
 	Args:   cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if createFile != "" {
-			createFromFile(createFile)
-		} else {
-			createInteractive()
+			return createFromFile(createFile)
 		}
+		return createInteractive()
 	},
 }
 
@@ -33,25 +32,21 @@ func init() {
 	rootCmd.AddCommand(createCmd)
 }
 
-func createFromFile(path string) {
+func createFromFile(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	var id identity.Identity
 	if err := yaml.Unmarshal(data, &id); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: invalid YAML: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("invalid YAML: %w", err)
 	}
 	if err := id.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	s := identityStore()
 	if err := s.Save(&id); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Legacy: extract voice data from raw YAML and write to ext/vox.
@@ -77,9 +72,10 @@ func createFromFile(path string) {
 	}
 
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
+	return nil
 }
 
-func createInteractive() {
+func createInteractive() error {
 	reader := bufio.NewReader(os.Stdin)
 
 	name := prompt(reader, "Name", "")
@@ -107,16 +103,15 @@ func createInteractive() {
 	}
 
 	if err := id.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	s := identityStore()
 	if err := s.Save(id); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	fmt.Printf("Created identity %q (%s)\n", id.Handle, id.Name)
+	return nil
 }
 
 // pickAttribute shows existing attributes and lets the user pick one,

@@ -50,12 +50,11 @@ func init() {
 		Use:   "create",
 		Short: "Create a new identity",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			if identityCreateFile != "" {
-				createFromFile(identityCreateFile)
-			} else {
-				createInteractive()
+				return createFromFile(identityCreateFile)
 			}
+			return createInteractive()
 		},
 	}
 	identityCreateCmd.Flags().StringVarP(&identityCreateFile, "file", "f", "", "Create identity from YAML file")

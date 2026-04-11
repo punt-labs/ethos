@@ -8,15 +8,17 @@ import (
 	"github.com/punt-labs/ethos/internal/session"
 )
 
-func runIam(persona string) {
-	sessionID, agentID := resolveSessionContext()
+func runIam(persona string) error {
+	sessionID, agentID, err := resolveSessionContext()
+	if err != nil {
+		return err
+	}
 	ss := sessionStore()
 	if err := ss.Join(sessionID, session.Participant{
 		AgentID: agentID,
 		Persona: persona,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if jsonOutput {
@@ -28,6 +30,7 @@ func runIam(persona string) {
 	} else {
 		fmt.Printf("Set persona %q for %s in session %s\n", persona, agentID, sessionID)
 	}
+	return nil
 }
 
 // resolveSessionContext determines the session ID and agent ID from
@@ -36,8 +39,8 @@ func runIam(persona string) {
 //  2. ETHOS_SESSION env var
 //  3. PID tree lookup via FindClaudePID
 //
-// Exits the process if session ID cannot be determined.
-func resolveSessionContext() (sessionID, agentID string) {
+// Returns an error if session ID cannot be determined.
+func resolveSessionContext() (sessionID, agentID string, err error) {
 	agentID = os.Getenv("ETHOS_AGENT_ID")
 	ss := sessionStore()
 
@@ -45,8 +48,7 @@ func resolveSessionContext() (sessionID, agentID string) {
 	if sessionIamSession != "" {
 		sid, err := ss.MatchByPrefix(sessionIamSession)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return "", "", err
 		}
 		sessionID = sid
 	}
@@ -61,8 +63,7 @@ func resolveSessionContext() (sessionID, agentID string) {
 		claudePID := process.FindClaudePID()
 		sid, err := ss.ReadCurrentSession(claudePID)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "ethos: no session found in process tree. Use --session to specify one.")
-			os.Exit(1)
+			return "", "", fmt.Errorf("no session found in process tree. Use --session to specify one")
 		}
 		sessionID = sid
 	}
@@ -71,5 +72,5 @@ func resolveSessionContext() (sessionID, agentID string) {
 		agentID = process.FindClaudePID()
 	}
 
-	return sessionID, agentID
+	return sessionID, agentID, nil
 }

@@ -168,8 +168,8 @@ var sessionIamCmd = &cobra.Command{
 	Use:   "iam <persona>",
 	Short: "Declare persona in current session",
 	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runIam(args[0])
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runIam(args[0])
 	},
 }
 
@@ -346,7 +346,7 @@ func runSessionJoin(cmd *cobra.Command) error {
 	ss := sessionStore()
 	sid := sessionJoinSession
 	if sid == "" {
-		sid, _ = resolveSessionContext()
+		sid, _, _ = resolveSessionContext()
 	} else {
 		resolved, err := ss.MatchByPrefix(sid)
 		if err != nil {
@@ -374,7 +374,7 @@ func runSessionLeave(cmd *cobra.Command) error {
 	ss := sessionStore()
 	sid := sessionLeaveSession
 	if sid == "" {
-		sid, _ = resolveSessionContext()
+		sid, _, _ = resolveSessionContext()
 	} else {
 		resolved, err := ss.MatchByPrefix(sid)
 		if err != nil {

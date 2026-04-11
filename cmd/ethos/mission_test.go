@@ -257,7 +257,7 @@ func TestMissionCreate_FromFile(t *testing.T) {
 	// Text mode echoes a one-line `created: <id> worker=... evaluator=...`
 	// summary so a scripting caller can chain on the new mission ID
 	// without a follow-up `ethos mission list` (ethos-30c).
-	stdout := captureStdout(t, runMissionCreate)
+	stdout := captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -284,7 +284,7 @@ func TestMissionCreate_FromFileJSON(t *testing.T) {
 	jsonOutput = true
 
 	missionCreateFile = writeContractFile(t)
-	out := captureStdout(t, runMissionCreate)
+	out := captureStdout(t, func() { runMissionCreate() })
 
 	var c mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(out), &c))
@@ -325,7 +325,7 @@ func TestMissionBareShowsHelp(t *testing.T) {
 func TestMissionShow(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -348,7 +348,7 @@ func TestMissionShow(t *testing.T) {
 func TestMissionShow_Prefix(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -365,7 +365,7 @@ func TestMissionShow_Prefix(t *testing.T) {
 func TestMissionShow_JSON(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -392,7 +392,7 @@ func TestMissionShow_JSON(t *testing.T) {
 func TestMissionShow_HashOnOwnLine(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -441,11 +441,11 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	// Create three missions with disjoint write_sets so Phase 3.2's
 	// cross-mission conflict check does not collapse them.
 	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-a/")
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-b/")
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 	missionCreateFile = writeContractFileWithWriteSet(t, "tests/list-c/")
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -485,7 +485,7 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 func TestMissionClose(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -517,7 +517,7 @@ func TestMissionClose(t *testing.T) {
 func TestMissionClose_PrefixMatch(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -560,7 +560,7 @@ reason: %q
 func TestMissionReflect_RoundTrip(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -586,7 +586,7 @@ func TestMissionReflect_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -664,7 +664,7 @@ budget:
 func TestMissionAdvance_HappyPath(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -702,7 +702,7 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 func TestMissionShow_IncludesResults(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -749,7 +749,7 @@ func TestMissionShow_IncludesResults(t *testing.T) {
 func TestMissionShow_EmptyResultsIsArray(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -788,7 +788,7 @@ func TestMissionShow_EmptyResultsIsArray(t *testing.T) {
 func TestMissionShow_JSONIncludesSessionAndRepo(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -830,7 +830,7 @@ func TestMissionShow_JSONIncludesSessionAndRepo(t *testing.T) {
 func TestMissionShow_JSONOmitsEmptyOptionalFields(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -872,7 +872,7 @@ func TestMissionShow_JSONOmitsEmptyOptionalFields(t *testing.T) {
 func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -916,7 +916,7 @@ func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
 func TestMissionShow_PrintsEmptyResultsSection(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1109,7 +1109,7 @@ func TestMissionClose_HelpMentionsResultGate(t *testing.T) {
 func TestMissionShow_RendersCurrentRound(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1127,7 +1127,7 @@ func TestMissionShow_RendersCurrentRound(t *testing.T) {
 func TestMissionReflections_JSON(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1159,7 +1159,7 @@ func TestMissionReflections_JSON(t *testing.T) {
 func TestMissionResult_RoundTrip(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1193,7 +1193,7 @@ func TestMissionResult_RoundTrip(t *testing.T) {
 func TestMissionResults_ListsSubmittedResults(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1322,7 +1322,7 @@ func TestMissionResult_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1348,7 +1348,7 @@ func TestMissionClose_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1375,7 +1375,7 @@ func TestMissionAdvance_JSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1464,7 +1464,7 @@ budget:
 func TestMissionClose_GateAcceptsWithResult(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1874,7 +1874,7 @@ budget:
 func seedMissionWithEvents(t *testing.T) string {
 	t.Helper()
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 	ms := missionStore()
 	ids, err := ms.List()
 	require.NoError(t, err)
@@ -2522,7 +2522,7 @@ files_changed:
 func TestMissionResult_VerifyOff_DefaultBehaviorUnchanged(t *testing.T) {
 	missionTestEnv(t)
 	missionCreateFile = writeContractFile(t)
-	captureStdout(t, runMissionCreate)
+	captureStdout(t, func() { runMissionCreate() })
 
 	ms := missionStore()
 	ids, err := ms.List()

@@ -21,8 +21,8 @@ var uninstallCmd = &cobra.Command{
 	Short:   "Remove plugin (--purge to remove binary + data)",
 	GroupID: "admin",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runUninstall()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runUninstall()
 	},
 }
 
@@ -31,7 +31,7 @@ func init() {
 	rootCmd.AddCommand(uninstallCmd)
 }
 
-func runUninstall() {
+func runUninstall() error {
 	hadError := false
 
 	// Step 1: Remove Claude Code plugin.
@@ -58,16 +58,15 @@ func runUninstall() {
 		}
 		fmt.Println("Run 'ethos uninstall --purge' to remove everything.")
 		if hadError {
-			os.Exit(1)
+			return fmt.Errorf("plugin uninstall failed")
 		}
-		return
+		return nil
 	}
 
 	// Step 2 (purge): Confirm before deleting data.
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: cannot determine home directory: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("cannot determine home directory: %w", err)
 	}
 	dataDir := filepath.Join(home, ".punt-labs", "ethos")
 
@@ -81,8 +80,7 @@ func runUninstall() {
 
 	scanner := bufio.NewScanner(os.Stdin)
 	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "yes" {
-		fmt.Println("Aborted.")
-		os.Exit(1)
+		return fmt.Errorf("aborted")
 	}
 
 	// Step 3: Remove data directory.
@@ -105,10 +103,10 @@ func runUninstall() {
 	}
 
 	if hadError {
-		fmt.Fprintln(os.Stderr, "\nethos: uninstall completed with errors")
-		os.Exit(1)
+		return fmt.Errorf("uninstall completed with errors")
 	}
 	fmt.Println("\nethos is uninstalled.")
+	return nil
 }
 
 // resolvedBinaryPath returns the absolute path of the running executable.
