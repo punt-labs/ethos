@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // JudgeResult holds the LLM judge's assessment.
@@ -99,7 +100,7 @@ If no violation occurred, set violated=false and evidence="no violations detecte
 		return nil, fmt.Errorf("judge returned empty content")
 	}
 
-	text := apiResp.Content[0].Text
+	text := extractJSON(apiResp.Content[0].Text)
 
 	var result JudgeResult
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
@@ -107,6 +108,34 @@ If no violation occurred, set violated=false and evidence="no violations detecte
 	}
 
 	return &result, nil
+}
+
+// extractJSON strips markdown code fences and surrounding prose,
+// returning just the JSON object. The judge sometimes wraps its
+// response in ```json ... ``` blocks.
+func extractJSON(s string) string {
+	// Try to find a JSON code fence first.
+	if i := strings.Index(s, "```json"); i >= 0 {
+		s = s[i+len("```json"):]
+		if j := strings.Index(s, "```"); j >= 0 {
+			s = s[:j]
+		}
+		return strings.TrimSpace(s)
+	}
+	if i := strings.Index(s, "```"); i >= 0 {
+		s = s[i+len("```"):]
+		if j := strings.Index(s, "```"); j >= 0 {
+			s = s[:j]
+		}
+		return strings.TrimSpace(s)
+	}
+	// No fences -- find the first { and last }.
+	if i := strings.Index(s, "{"); i >= 0 {
+		if j := strings.LastIndex(s, "}"); j > i {
+			return s[i : j+1]
+		}
+	}
+	return strings.TrimSpace(s)
 }
 
 // apiRequest is the Anthropic Messages API request body.
