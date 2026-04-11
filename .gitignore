@@ -9,7 +9,6 @@ coverage.out
 # Claude local settings
 .claude/settings.local.json
 .claude/*.local.md
-.claude/agents/
 .claude/scheduled_tasks.lock
 
 # direnv
@@ -17,8 +16,6 @@ coverage.out
 # MCP (project-local, not part of plugin distribution)
 .mcp.json
 
-# Vox ephemeral audio
-.vox/
 
 # Lux config
 Lux.ini
