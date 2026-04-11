@@ -27,16 +27,15 @@ var emptyFS embed.FS
 //go:embed testdata/mixed
 var mixedFS embed.FS
 
-// TestWriteFile_ForceCreateTempFails makes filepath.Dir(dest) a
-// non-existent path so MkdirAll is called; then immediately removes
-// the directory so CreateTemp fails. The window between MkdirAll and
-// CreateTemp is small but reliable on a single-threaded test: the
-// helper uses a path that MkdirAll cannot actually create.
+// TestWriteFile_ForceCreateTempFails exercises the writeFile branch
+// where os.MkdirAll(filepath.Dir(dest)) succeeds but os.CreateTemp in
+// that directory fails. It does so by pre-creating the destination
+// directory without write permission, so the directory already exists
+// for MkdirAll but cannot accept a new tempfile.
 //
-// A more reliable trick: make the parent a regular file via pre-stage,
-// then force writeFile to try creating a tempfile under it. MkdirAll
-// returns early (dir exists — wait, it's a file), and CreateTemp fails
-// with ENOTDIR.
+// This test is skipped when running as root because root may still be
+// able to create files in a permission-restricted directory, making
+// the intended CreateTemp failure unreliable.
 func TestWriteFile_ForceCreateTempFails(t *testing.T) {
 	parent := t.TempDir()
 	// dest's parent is a regular file, not a directory. os.MkdirAll
@@ -303,8 +302,8 @@ func TestSeed_NonForceWriteFails(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
 
-	// Create an existing writable roles dir first so MkdirAll is a
-	// no-op and the file-level OpenFile is what fails.
+	// Create the existing talents dir with non-writable permissions so
+	// MkdirAll is a no-op and the file-level OpenFile is what fails.
 	talentsDir := filepath.Join(dest, "talents")
 	require.NoError(t, os.MkdirAll(talentsDir, 0o500))
 	t.Cleanup(func() { os.Chmod(talentsDir, 0o700) })

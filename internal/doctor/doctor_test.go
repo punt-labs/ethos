@@ -104,16 +104,14 @@ func TestCheckHumanIdentity(t *testing.T) {
 
 	t.Run("malformed file", func(t *testing.T) {
 		s, ss, root := newFixture(t)
-		// Write a file that satisfies $USER resolution but fails YAML parse.
+		// Write a file that matches $USER by name, but malformed YAML is
+		// skipped during resolution, so lookup fails with no match before
+		// any direct load is attempted.
 		writeIdentity(t, root, "bad", "not: [valid: yaml")
 		t.Setenv("USER", "bad")
 		detail, ok := CheckHumanIdentity(s, ss)
 		assert.False(t, ok)
-		// Either a resolution failure (List skips the bad file, so $USER
-		// no longer matches) or a direct load failure — both are failures
-		// with distinct messages. We accept either.
-		assert.False(t, ok)
-		assert.NotEmpty(t, detail)
+		assert.Contains(t, detail, "no match")
 	})
 }
 
@@ -217,8 +215,8 @@ func TestCheckDuplicateFields(t *testing.T) {
 }
 
 func TestRunAllAndHelpers(t *testing.T) {
-	// A fixture that passes identity-dir and duplicates but fails
-	// human-identity (no matching USER) and exercises all four checks.
+	// A fixture that passes all four checks initially, including
+	// human-identity via USER=mal matching the mal identity.
 	s, ss, root := newFixture(t)
 	writeIdentity(t, root, "mal",
 		"name: Mal\nhandle: mal\nkind: human\n")
