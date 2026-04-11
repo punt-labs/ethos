@@ -72,7 +72,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Check 4: List warnings are load failures.
+	// Load-level warnings from List() are failures (referential or parse errors).
 	for _, w := range listResult.Warnings {
 		results = append(results, fail("identities: load failure", w))
 	}
@@ -90,26 +90,30 @@ func main() {
 
 	// Checks 1 & 2: struct validation and referential integrity.
 	nIdentities := len(listResult.Identities)
-	idFails := 0
+	structFails := 0
+	refFails := 0
 	for _, idRef := range listResult.Identities {
 		// Reload with attribute resolution to populate Warnings.
 		id, loadErr := layeredID.Load(idRef.Handle)
 		if loadErr != nil {
 			results = append(results, fail("identities: load", fmt.Sprintf("%s: %v", idRef.Handle, loadErr)))
-			idFails++
+			structFails++
 			continue
 		}
 		if valErr := id.Validate(); valErr != nil {
 			results = append(results, fail("identities: validate struct", fmt.Sprintf("%s: %v", id.Handle, valErr)))
-			idFails++
+			structFails++
 		}
 		for _, w := range id.Warnings {
 			results = append(results, fail("identities: referential integrity", fmt.Sprintf("%s: %s", id.Handle, w)))
-			idFails++
+			refFails++
 		}
 	}
-	if idFails == 0 {
+	if structFails == 0 {
 		results = append(results, pass(fmt.Sprintf("identities: validate struct (%d identities)", nIdentities)))
+	}
+	if refFails == 0 {
+		results = append(results, pass("identities: referential integrity"))
 	}
 
 	// Check 5: agent file path resolution.
