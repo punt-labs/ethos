@@ -4,7 +4,7 @@ LDFLAGS := -X main.version=$(VERSION)
 PLUGIN_CACHE := $(HOME)/.claude/plugins/cache/punt-labs/ethos
 PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
 
-.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev
+.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -22,6 +22,9 @@ test: ## Run tests with race detection and write coverage to coverage.out
 
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
+
+test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
+	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
 
 check: lint docs test validate-content ## Run all quality gates
 
