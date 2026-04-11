@@ -30,14 +30,18 @@ func TestMain(m *testing.M) {
 	}
 
 	bin := filepath.Join(dir, "ethos")
-	wd, _ := os.Getwd()
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "getting working directory: %v\n", err)
+		os.Exit(1)
+	}
 	root := filepath.Join(wd, "..", "..")
 
 	cmd := exec.Command("go", "build", "-o", bin, "./cmd/ethos")
 	cmd.Dir = root
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "go build failed: %v\n", err)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go build failed: %v\n%s\n", err, out)
 	} else {
 		ethosBinary = bin
 	}
@@ -190,7 +194,11 @@ func TestMCP_ToolsList(t *testing.T) {
 		names[tool.Name] = true
 	}
 
-	for _, want := range []string{"identity", "ext", "session", "doctor"} {
+	for _, want := range []string{
+		"identity", "ext", "session", "doctor",
+		"talent", "personality", "writing_style",
+		"role", "team", "mission", "adr",
+	} {
 		assert.True(t, names[want], "tools/list should include %q", want)
 	}
 }
@@ -370,12 +378,12 @@ func TestMCP_Identity_UnknownMethod(t *testing.T) {
 	result := callTool(t, c, "identity", map[string]interface{}{
 		"method": "bogus",
 	})
-	assert.True(t, result.IsError, "unknown method should be an error")
+	require.True(t, result.IsError, "unknown method should be an error")
 	text := resultText(t, result)
 	assert.Contains(t, text, "unknown method")
 }
 
-func TestMCP_Attribute_List(t *testing.T) {
+func TestMCP_Talent_List(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
