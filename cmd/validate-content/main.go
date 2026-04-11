@@ -48,14 +48,20 @@ func main() {
 		fmt.Fprintf(os.Stderr, "validate-content: ethos root not found\n")
 		os.Exit(1)
 	}
-	if _, err := os.Stat(ethosRoot); err != nil {
+	if info, err := os.Stat(ethosRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "validate-content: ethos root not found: %s\n", ethosRoot)
+		os.Exit(1)
+	} else if !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "validate-content: ethos root is not a directory: %s\n", ethosRoot)
 		os.Exit(1)
 	}
 
 	hasGlobal := false
-	if _, err := os.Stat(globalRoot); err == nil {
-		hasGlobal = true
+	if info, err := os.Stat(globalRoot); err == nil {
+		hasGlobal = info.IsDir()
+	} else if !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "validate-content: checking global root %s: %v\n", globalRoot, err)
+		os.Exit(1)
 	}
 
 	var results []result
@@ -92,20 +98,13 @@ func main() {
 	nIdentities := len(listResult.Identities)
 	structFails := 0
 	refFails := 0
-	for _, idRef := range listResult.Identities {
-		// Reload with attribute resolution to populate Warnings.
-		id, loadErr := layeredID.Load(idRef.Handle)
-		if loadErr != nil {
-			results = append(results, fail("identities: load", fmt.Sprintf("%s: %v", idRef.Handle, loadErr)))
-			structFails++
-			continue
-		}
+	for _, id := range listResult.Identities {
 		if valErr := id.Validate(); valErr != nil {
 			results = append(results, fail("identities: validate struct", fmt.Sprintf("%s: %v", id.Handle, valErr)))
 			structFails++
 		}
-		for _, w := range id.Warnings {
-			results = append(results, fail("identities: referential integrity", fmt.Sprintf("%s: %s", id.Handle, w)))
+		if refErr := layeredID.ValidateRefs(id); refErr != nil {
+			results = append(results, fail("identities: referential integrity", fmt.Sprintf("%s: %v", id.Handle, refErr)))
 			refFails++
 		}
 	}
@@ -117,7 +116,8 @@ func main() {
 	}
 
 	// Check 5: agent file path resolution.
-	repoRoot := resolve.FindRepoRoot()
+	// ethosRoot is always <repo>/.punt-labs/ethos — derive repo root structurally.
+	repoRoot := filepath.Dir(filepath.Dir(ethosRoot))
 	agentFails := 0
 	for _, idRef := range listResult.Identities {
 		if idRef.Agent == "" {
