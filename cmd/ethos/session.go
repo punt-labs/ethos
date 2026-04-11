@@ -15,8 +15,8 @@ var sessionCmd = &cobra.Command{
 	Short:   "Manage session roster",
 	GroupID: "session",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionShow()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionShow(cmd)
 	},
 }
 
@@ -35,8 +35,8 @@ var sessionCreateCmd = &cobra.Command{
 	Short:  "Create a new session roster",
 	Hidden: true,
 	Args:   cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionCreate()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionCreate(cmd)
 	},
 }
 
@@ -49,8 +49,8 @@ var sessionDeleteCmd = &cobra.Command{
 	Short:  "Delete a session roster",
 	Hidden: true,
 	Args:   cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionDelete()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionDelete(cmd)
 	},
 }
 
@@ -68,8 +68,8 @@ var sessionJoinCmd = &cobra.Command{
 	Use:   "join",
 	Short: "Add a participant to the session",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionJoin()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionJoin(cmd)
 	},
 }
 
@@ -84,8 +84,8 @@ var sessionLeaveCmd = &cobra.Command{
 	Use:   "leave",
 	Short: "Remove a participant from the session",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionLeave()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionLeave(cmd)
 	},
 }
 
@@ -101,8 +101,8 @@ var sessionWriteCurrentCmd = &cobra.Command{
 	Short:  "Write PID-to-session mapping",
 	Args:   cobra.NoArgs,
 	Hidden: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionWriteCurrent()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionWriteCurrent(cmd)
 	},
 }
 
@@ -115,8 +115,8 @@ var sessionDeleteCurrentCmd = &cobra.Command{
 	Short:  "Delete PID-to-session mapping",
 	Args:   cobra.NoArgs,
 	Hidden: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionDeleteCurrent()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionDeleteCurrent(cmd)
 	},
 }
 
@@ -126,8 +126,8 @@ var sessionListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all sessions",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionList()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionList(cmd)
 	},
 }
 
@@ -137,12 +137,11 @@ var sessionShowCmd = &cobra.Command{
 	Use:   "show [session-id]",
 	Short: "Show session roster",
 	Args:  cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
-			runSessionShowByID(args[0])
-		} else {
-			runSessionShow()
+			return runSessionShowByID(cmd, args[0])
 		}
+		return runSessionShow(cmd)
 	},
 }
 
@@ -153,12 +152,11 @@ var sessionRosterCmd = &cobra.Command{
 	Short:  "Show session roster (alias for show)",
 	Hidden: true,
 	Args:   cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 {
-			runSessionShowByID(args[0])
-		} else {
-			runSessionShow()
+			return runSessionShowByID(cmd, args[0])
 		}
+		return runSessionShow(cmd)
 	},
 }
 
@@ -181,8 +179,8 @@ var sessionPurgeCmd = &cobra.Command{
 	Use:   "purge",
 	Short: "Clean up stale sessions",
 	Args:  cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runSessionPurge()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionPurge(cmd)
 	},
 }
 
@@ -243,7 +241,7 @@ func init() {
 	rootCmd.AddCommand(sessionCmd)
 }
 
-func runSessionShow() {
+func runSessionShow(cmd *cobra.Command) error {
 	sessionID := os.Getenv("ETHOS_SESSION")
 	ss := sessionStore()
 	if sessionID == "" {
@@ -254,43 +252,41 @@ func runSessionShow() {
 		}
 	}
 	if sessionID == "" {
-		fmt.Println("No active session.")
-		return
+		fmt.Fprintln(cmd.OutOrStdout(), "No active session.")
+		return nil
 	}
-	printRoster(ss, sessionID)
+	return printRoster(cmd, ss, sessionID)
 }
 
-func runSessionShowByID(idOrPrefix string) {
+func runSessionShowByID(cmd *cobra.Command, idOrPrefix string) error {
 	ss := sessionStore()
 	sessionID, err := ss.MatchByPrefix(idOrPrefix)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
-	printRoster(ss, sessionID)
+	return printRoster(cmd, ss, sessionID)
 }
 
-func printRoster(ss *session.Store, sessionID string) {
+func printRoster(cmd *cobra.Command, ss *session.Store, sessionID string) error {
 	roster, err := ss.Load(sessionID)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(roster)
-		return
+		return writeJSON(out, roster)
 	}
 
-	fmt.Printf("Session: %s\n", roster.Session)
+	fmt.Fprintf(out, "Session: %s\n", roster.Session)
 	if roster.Repo != "" {
-		fmt.Printf("Repo:    %s\n", roster.Repo)
+		fmt.Fprintf(out, "Repo:    %s\n", roster.Repo)
 	}
 	if roster.Host != "" {
-		fmt.Printf("Host:    %s\n", roster.Host)
+		fmt.Fprintf(out, "Host:    %s\n", roster.Host)
 	}
-	fmt.Printf("Started: %s\n", formatStarted(roster.Started))
-	fmt.Println()
+	fmt.Fprintf(out, "Started: %s\n", formatStarted(roster.Started))
+	fmt.Fprintln(out)
 
 	headers := []string{"AGENT_ID", "PERSONA", "ROLE", "PARENT", "JOINED"}
 	rows := make([][]string, len(roster.Participants))
@@ -310,7 +306,8 @@ func printRoster(ss *session.Store, sessionID string) {
 		role := inferRole(i, p.Parent)
 		rows[i] = []string{p.AgentID, persona, role, parent, joined}
 	}
-	fmt.Println(hook.FormatTable(headers, rows))
+	fmt.Fprintln(out, hook.FormatTable(headers, rows))
+	return nil
 }
 
 // inferRole derives a display role from a participant's position and parentage.
@@ -327,28 +324,25 @@ func inferRole(index int, parent string) string {
 	return "teammate"
 }
 
-func runSessionCreate() {
+func runSessionCreate(cmd *cobra.Command) error {
 	ss := sessionStore()
 	root := session.Participant{AgentID: sessionCreateRootID, Persona: sessionCreateRootPersona}
 	primary := session.Participant{AgentID: sessionCreatePrimaryID, Persona: sessionCreatePrimaryPersona, Parent: sessionCreateRootID}
 	if err := ss.Create(sessionCreateSession, root, primary, "", ""); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if jsonOutput {
-		printJSON(map[string]string{"session": sessionCreateSession})
+		return writeJSON(cmd.OutOrStdout(), map[string]string{"session": sessionCreateSession})
 	}
+	return nil
 }
 
-func runSessionDelete() {
+func runSessionDelete(cmd *cobra.Command) error {
 	ss := sessionStore()
-	if err := ss.Delete(sessionDeleteSession); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
-	}
+	return ss.Delete(sessionDeleteSession)
 }
 
-func runSessionJoin() {
+func runSessionJoin(cmd *cobra.Command) error {
 	ss := sessionStore()
 	sid := sessionJoinSession
 	if sid == "" {
@@ -356,8 +350,7 @@ func runSessionJoin() {
 	} else {
 		resolved, err := ss.MatchByPrefix(sid)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		sid = resolved
 	}
@@ -369,15 +362,15 @@ func runSessionJoin() {
 		Parent:    sessionJoinParent,
 	}
 	if err := ss.Join(sid, p); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if jsonOutput {
-		printJSON(p)
+		return writeJSON(cmd.OutOrStdout(), p)
 	}
+	return nil
 }
 
-func runSessionLeave() {
+func runSessionLeave(cmd *cobra.Command) error {
 	ss := sessionStore()
 	sid := sessionLeaveSession
 	if sid == "" {
@@ -385,40 +378,29 @@ func runSessionLeave() {
 	} else {
 		resolved, err := ss.MatchByPrefix(sid)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-			os.Exit(1)
+			return err
 		}
 		sid = resolved
 	}
 
-	if err := ss.Leave(sid, sessionLeaveAgentID); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
-	}
+	return ss.Leave(sid, sessionLeaveAgentID)
 }
 
-func runSessionWriteCurrent() {
+func runSessionWriteCurrent(cmd *cobra.Command) error {
 	ss := sessionStore()
-	if err := ss.WriteCurrentSession(sessionWriteCurrentPID, sessionWriteCurrentSession); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
-	}
+	return ss.WriteCurrentSession(sessionWriteCurrentPID, sessionWriteCurrentSession)
 }
 
-func runSessionDeleteCurrent() {
+func runSessionDeleteCurrent(cmd *cobra.Command) error {
 	ss := sessionStore()
-	if err := ss.DeleteCurrentSession(sessionDeleteCurrentPID); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
-	}
+	return ss.DeleteCurrentSession(sessionDeleteCurrentPID)
 }
 
-func runSessionList() {
+func runSessionList(cmd *cobra.Command) error {
 	ss := sessionStore()
 	ids, err := ss.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	type sessionEntry struct {
@@ -433,7 +415,7 @@ func runSessionList() {
 	for _, id := range ids {
 		roster, loadErr := ss.Load(id)
 		if loadErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: warning: session %s: %v\n", id, loadErr)
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: warning: session %s: %v\n", id, loadErr)
 			continue
 		}
 		entries = append(entries, sessionEntry{
@@ -445,17 +427,17 @@ func runSessionList() {
 		})
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
 		if entries == nil {
 			entries = []sessionEntry{}
 		}
-		printJSON(entries)
-		return
+		return writeJSON(out, entries)
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("No sessions found.")
-		return
+		fmt.Fprintln(out, "No sessions found.")
+		return nil
 	}
 
 	headers := []string{"SESSION", "PARTICIPANTS", "REPO", "STARTED"}
@@ -472,7 +454,8 @@ func runSessionList() {
 			formatStarted(e.Started),
 		}
 	}
-	fmt.Println(hook.FormatTable(headers, rows))
+	fmt.Fprintln(out, hook.FormatTable(headers, rows))
+	return nil
 }
 
 // shortID truncates a session ID to its first 8 characters for display.
@@ -491,20 +474,20 @@ func formatStarted(raw string) string {
 	return hook.FormatLocalTime(raw)
 }
 
-func runSessionPurge() {
+func runSessionPurge(cmd *cobra.Command) error {
 	ss := sessionStore()
 
 	// Purge stale PID files first (independent of roster purge).
 	pidPurged, pidErr := ss.PurgeCurrent()
 	if pidErr != nil {
-		fmt.Fprintf(os.Stderr, "ethos: purging PID files: %v\n", pidErr)
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: purging PID files: %v\n", pidErr)
 	}
 
 	purged, err := ss.Purge()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
 		if purged == nil {
 			purged = []string{}
@@ -512,25 +495,28 @@ func runSessionPurge() {
 		if pidPurged == nil {
 			pidPurged = []string{}
 		}
-		printJSON(map[string][]string{
+		if werr := writeJSON(out, map[string][]string{
 			"sessions":  purged,
 			"pid_files": pidPurged,
-		})
-		if pidErr != nil {
-			os.Exit(1)
+		}); werr != nil {
+			return werr
 		}
-		return
+		if pidErr != nil {
+			return pidErr
+		}
+		return nil
 	}
 	for _, id := range purged {
-		fmt.Printf("Purged session %s\n", id)
+		fmt.Fprintf(out, "Purged session %s\n", id)
 	}
 	for _, pid := range pidPurged {
-		fmt.Printf("Purged PID file %s\n", pid)
+		fmt.Fprintf(out, "Purged PID file %s\n", pid)
 	}
 	if pidErr != nil {
-		os.Exit(1)
+		return pidErr
 	}
 	if len(purged) == 0 && len(pidPurged) == 0 {
-		fmt.Println("No stale sessions found.")
+		fmt.Fprintln(out, "No stale sessions found.")
 	}
+	return nil
 }
