@@ -150,9 +150,11 @@ func TestSeedFile_ReadError(t *testing.T) {
 }
 
 func TestSeedReadmes_WalkError(t *testing.T) {
-	// emptyFS has no "sidecar" root, so WalkDir returns an error on
-	// the very first step. The outer `if err != nil` branch records
-	// a "walking sidecar for READMEs" error.
+	// emptyFS has no "sidecar" root. fs.WalkDir invokes the callback
+	// once with walkErr set ("open sidecar: file does not exist") and
+	// then returns nil. The callback's walkErr branch records the
+	// error as "walking sidecar: ..." — the outer `if err != nil`
+	// block is not reached.
 	r := &Result{}
 	seedReadmes(emptyFS, t.TempDir(), false, r)
 	require.NotEmpty(t, r.Errors)
@@ -250,17 +252,17 @@ func TestSeed_SkillsPathBlocked(t *testing.T) {
 
 	result, err := Seed(dest, skills, false)
 	require.Error(t, err)
-	// seedFile calls writeFile which records an mkdir error mentioning
-	// the skill subpath.
-	var sawSkillError bool
+	// seedFile reads the embedded SKILL.md, then writeFile's MkdirAll
+	// fails with ENOTDIR because the skills destination is a regular
+	// file, not a directory. The wrapper in writeFile prefixes "mkdir".
+	var sawMkdirError bool
 	for _, e := range result.Errors {
-		if strings.Contains(e, "baseline-ops") ||
-			strings.Contains(e, "mission") ||
-			strings.Contains(e, "create-from-project") {
-			sawSkillError = true
+		if strings.Contains(e, "mkdir") &&
+			strings.Contains(e, "not a directory") {
+			sawMkdirError = true
 		}
 	}
-	assert.True(t, sawSkillError, "errors: %v", result.Errors)
+	assert.True(t, sawMkdirError, "errors: %v", result.Errors)
 }
 
 // TestSeed_ForceRenameFails exercises the Rename error branch in the

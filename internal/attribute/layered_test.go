@@ -45,6 +45,9 @@ func TestNewLayeredStore_ReadsRepoFirst(t *testing.T) {
 	a, err = s.Load("go")
 	require.NoError(t, err)
 	assert.Equal(t, "global go\n", a.Content)
+
+	// Exists: still true because global has it.
+	assert.True(t, s.Exists("go"))
 }
 
 func TestNewLayeredStore_ListMerges(t *testing.T) {
