@@ -19,6 +19,7 @@ humans and agents. Repo-scoped team identities are git-tracked.`,
 
 func init() {
 	rootCmd.SilenceUsage = true
+	rootCmd.SilenceErrors = true
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "JSON output")
 
 	rootCmd.AddGroup(

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -19,10 +20,18 @@ var version = "dev"
 // jsonOutput is set by the --json persistent flag on rootCmd.
 var jsonOutput bool
 
+// silentError is returned when a command has already reported its
+// failure (e.g. doctor printed a FAIL table). main() exits non-zero
+// without printing an additional error line.
+type silentError struct{}
+
+func (silentError) Error() string { return "" }
+
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		// Cobra already printed the error to stderr (SilenceErrors is
-		// off). We only set the exit code here.
+		if _, ok := err.(silentError); !ok {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		}
 		if isUsageError(err) {
 			os.Exit(2)
 		}
@@ -56,12 +65,20 @@ func isUsageError(err error) bool {
 
 // printJSON marshals v to stdout. Exits on error.
 func printJSON(v any) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	if err := writeJSON(os.Stdout, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
+}
+
+// writeJSON marshals v to w as indented JSON, followed by a newline.
+func writeJSON(w io.Writer, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal JSON: %w", err)
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
 }
 
 // --- version ---
@@ -71,12 +88,8 @@ var versionCmd = &cobra.Command{
 	Short:   "Print version",
 	GroupID: "admin",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		if jsonOutput {
-			printJSON(map[string]string{"version": version})
-		} else {
-			fmt.Printf("ethos %s\n", version)
-		}
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runVersion(cmd)
 	},
 }
 
@@ -87,8 +100,8 @@ var doctorCmd = &cobra.Command{
 	Short:   "Check installation health",
 	GroupID: "admin",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runDoctor()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runDoctor(cmd)
 	},
 }
 
@@ -101,8 +114,8 @@ var whoamiCmd = &cobra.Command{
 	Short:   "Show the caller's identity",
 	GroupID: "identity",
 	Args:    cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runWhoami()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runWhoami(cmd)
 	},
 }
 
@@ -115,8 +128,8 @@ var showCmd = &cobra.Command{
 	Short:  "Show identity details",
 	Hidden: true,
 	Args:   cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		runShow(args[0], showReference)
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runShow(cmd, args[0], showReference)
 	},
 }
 
@@ -127,8 +140,8 @@ var listCmd = &cobra.Command{
 	Short:  "List all identities",
 	Hidden: true,
 	Args:   cobra.NoArgs,
-	Run: func(cmd *cobra.Command, args []string) {
-		runList()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runList(cmd)
 	},
 }
 
@@ -139,8 +152,8 @@ var resolveAgentCmd = &cobra.Command{
 	Short:  "Show default agent from repo config",
 	Args:   cobra.NoArgs,
 	Hidden: true,
-	Run: func(cmd *cobra.Command, args []string) {
-		runResolveAgent()
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runResolveAgent(cmd)
 	},
 }
 
@@ -185,32 +198,43 @@ func init() {
 	)
 }
 
-func runDoctor() {
+func runVersion(cmd *cobra.Command) error {
+	if jsonOutput {
+		return writeJSON(cmd.OutOrStdout(), map[string]string{"version": version})
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "ethos %s\n", version)
+	return nil
+}
+
+func runDoctor(cmd *cobra.Command) error {
 	is := identityStore()
 	ss := sessionStore()
 	results := doctor.RunAll(is, ss)
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(results)
+		if err := writeJSON(out, results); err != nil {
+			return err
+		}
 	} else {
 		for _, r := range results {
-			fmt.Printf("  %-24s %s  %s\n", r.Name, r.Status, r.Detail)
+			fmt.Fprintf(out, "  %-24s %s  %s\n", r.Name, r.Status, r.Detail)
 		}
 	}
 
 	if !doctor.AllPassed(results) {
-		os.Exit(1)
+		return silentError{}
 	}
+	return nil
 }
 
-func runWhoami() {
+func runWhoami(cmd *cobra.Command) error {
 	is := identityStore()
 	ss := sessionStore()
 
 	handle, err := resolve.Resolve(is, ss)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	var opts []identity.LoadOption
@@ -220,50 +244,50 @@ func runWhoami() {
 
 	id, err := is.Load(handle, opts...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: identity %q not found: %v\n", handle, err)
-		os.Exit(1)
+		return fmt.Errorf("identity %q not found: %w", handle, err)
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(id)
-	} else {
-		fmt.Printf("%s (%s)\n", id.Name, id.Handle)
+		return writeJSON(out, id)
 	}
+	fmt.Fprintf(out, "%s (%s)\n", id.Name, id.Handle)
+	return nil
 }
 
-func runResolveAgent() {
+func runResolveAgent(cmd *cobra.Command) error {
 	repoRoot := resolve.FindRepoRoot()
 	handle, err := resolve.ResolveAgent(repoRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	if handle != "" {
-		fmt.Println(handle)
+		fmt.Fprintln(cmd.OutOrStdout(), handle)
 	}
+	return nil
 }
 
-func runList() {
+func runList(cmd *cobra.Command) error {
 	is := identityStore()
 	result, err := is.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	errOut := cmd.ErrOrStderr()
 	for _, w := range result.Warnings {
-		fmt.Fprintf(os.Stderr, "ethos: %s\n", w)
+		fmt.Fprintf(errOut, "ethos: %s\n", w)
 	}
+	out := cmd.OutOrStdout()
 	if jsonOutput {
 		ids := result.Identities
 		if ids == nil {
 			ids = []*identity.Identity{}
 		}
-		printJSON(ids)
-		return
+		return writeJSON(out, ids)
 	}
 	if len(result.Identities) == 0 {
-		fmt.Println("No identities found. Run 'ethos create' to create one.")
-		return
+		fmt.Fprintln(out, "No identities found. Run 'ethos identity create' to create one.")
+		return nil
 	}
 
 	// Build columnar table.
@@ -281,10 +305,11 @@ func runList() {
 		rows[i] = []string{id.Handle, id.Name, id.Kind, personality, writing}
 	}
 
-	fmt.Println(hook.FormatTable(headers, rows))
+	fmt.Fprintln(out, hook.FormatTable(headers, rows))
+	return nil
 }
 
-func runShow(handle string, reference bool) {
+func runShow(cmd *cobra.Command, handle string, reference bool) error {
 	var opts []identity.LoadOption
 	if reference {
 		opts = append(opts, identity.Reference(true))
@@ -292,18 +317,17 @@ func runShow(handle string, reference bool) {
 
 	id, err := identityStore().Load(handle, opts...)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
-	// Print warnings to stderr.
+	errOut := cmd.ErrOrStderr()
 	for _, w := range id.Warnings {
-		fmt.Fprintf(os.Stderr, "ethos: warning: %s\n", w)
+		fmt.Fprintf(errOut, "ethos: warning: %s\n", w)
 	}
 
+	out := cmd.OutOrStdout()
 	if jsonOutput {
-		printJSON(id)
-		return
+		return writeJSON(out, id)
 	}
 
 	// Build summary table of identity fields.
@@ -345,26 +369,27 @@ func runShow(handle string, reference bool) {
 			rows = append(rows, []string{f.label, f.value})
 		}
 	}
-	fmt.Println(hook.FormatTable(headers, rows))
+	fmt.Fprintln(out, hook.FormatTable(headers, rows))
 
 	// Show resolved attribute content below the table.
 	if id.WritingStyle != "" && id.WritingStyleContent != "" {
-		fmt.Println()
-		fmt.Print(id.WritingStyleContent)
+		fmt.Fprintln(out)
+		fmt.Fprint(out, id.WritingStyleContent)
 	}
 	if id.Personality != "" && id.PersonalityContent != "" {
-		fmt.Println()
-		fmt.Print(id.PersonalityContent)
+		fmt.Fprintln(out)
+		fmt.Fprint(out, id.PersonalityContent)
 	}
 	if len(id.Talents) > 0 {
 		for i, slug := range id.Talents {
 			if i < len(id.TalentContents) && id.TalentContents[i] != "" {
-				fmt.Println()
-				fmt.Printf("--- %s ---\n", slug)
-				fmt.Print(id.TalentContents[i])
+				fmt.Fprintln(out)
+				fmt.Fprintf(out, "--- %s ---\n", slug)
+				fmt.Fprint(out, id.TalentContents[i])
 			}
 		}
 	}
+	return nil
 }
 
 // joinTalents formats a talents slice for display.
