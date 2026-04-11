@@ -1,5 +1,6 @@
 # Go build artifacts
 /ethos
+/validate-content
 dist/
 coverage.out
 
