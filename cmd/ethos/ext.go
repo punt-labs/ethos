@@ -36,7 +36,7 @@ var extDelCmd = &cobra.Command{
 	Short: "Delete extension values",
 	Args:  cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runExtDel(args)
+		return runExtDel(cmd, args)
 	},
 }
 
@@ -84,7 +84,7 @@ func runExtSet(cmd *cobra.Command, args []string) error {
 	return s.ExtSet(args[0], args[1], args[2], value)
 }
 
-func runExtDel(args []string) error {
+func runExtDel(_ *cobra.Command, args []string) error {
 	s := globalStore()
 	key := ""
 	if len(args) > 2 {
