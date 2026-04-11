@@ -207,6 +207,176 @@ budget:
 	assert.Empty(t, violations, "files outside write set were modified: %v", violations)
 }
 
+// TestLayerA_MultiRoundCycle exercises the full reflect -> advance -> round 2
+// lifecycle: create a 2-round mission, run round 1, reflect, advance, run
+// round 2, close, and verify the event log sequence.
+func TestLayerA_MultiRoundCycle(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+
+	f := SetupFixture(t)
+
+	// Step 1: Create a 2-round mission.
+	contract := `leader: test-leader
+worker: test-agent
+evaluator:
+  handle: test-evaluator
+write_set:
+  - pkg/counter/counter_test.go
+success_criteria:
+  - pkg/counter/counter_test.go has at least two test functions
+budget:
+  rounds: 2
+  reflection_after_each: true
+`
+	missionID := f.CreateMission(t, contract)
+	t.Logf("Mission created: %s", missionID)
+
+	// Verify initial state: current_round == 1.
+	show := f.MissionShow(t, missionID)
+	require.Equal(t, float64(1), show["current_round"], "new mission should start at round 1")
+
+	// Step 2: Round 1 — agent writes a test file and submits a result.
+	round1Opts := DefaultAgentOpts(workerPrompt(missionID))
+	round1Opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
+		"Read the mission contract first using the ethos MCP tool mission_show. " +
+		"Then write pkg/counter/counter_test.go with ONE test function (TestIncrement) for the Counter type. " +
+		"After completing your work, submit a mission result. " +
+		"Write a result YAML file with these exact fields:\n" +
+		"  mission: " + missionID + "\n" +
+		"  round: 1\n" +
+		"  author: test-agent\n" +
+		"  verdict: pass\n" +
+		"  confidence: 0.9\n" +
+		"  files_changed:\n" +
+		"    - path: pkg/counter/counter_test.go\n" +
+		"      added: <number of lines you wrote>\n" +
+		"      removed: 0\n" +
+		"  evidence:\n" +
+		"    - name: wrote test file with TestIncrement\n" +
+		"      status: pass\n" +
+		"Then submit it via the ethos MCP tool mission_result with the mission ID and the file path."
+
+	output, err := f.SpawnAgent(t, round1Opts)
+	t.Logf("Round 1 agent output (first 2000 chars): %.2000s", output)
+	if err != nil {
+		t.Logf("Round 1 agent error (may be expected): %v", err)
+	}
+
+	// Verify round 1 result was submitted.
+	results := f.MissionResults(t, missionID)
+	require.NotEmpty(t, results, "round 1 should have submitted a result")
+	assert.Equal(t, float64(1), results[0]["round"], "first result should be round 1")
+
+	// Step 3: Reflect on round 1.
+	reflectionYAML := `round: 1
+author: test-leader
+converging: true
+signals:
+  - round 1 test file created
+  - go test passes
+recommendation: continue
+reason: round 1 created the test file; round 2 will add coverage
+`
+	f.Reflect(t, missionID, reflectionYAML)
+
+	// Verify reflection was recorded.
+	reflections := f.MissionReflections(t, missionID)
+	require.Len(t, reflections, 1, "should have exactly 1 reflection after round 1")
+	assert.Equal(t, float64(1), reflections[0]["round"])
+	assert.Equal(t, "continue", reflections[0]["recommendation"])
+
+	// Step 4: Advance to round 2.
+	adv := f.Advance(t, missionID)
+	assert.Equal(t, float64(2), adv["current_round"], "advance should report current_round=2")
+	assert.Equal(t, float64(2), adv["to_round"], "advance should report to_round=2")
+
+	// Verify mission show confirms round 2.
+	show = f.MissionShow(t, missionID)
+	require.Equal(t, float64(2), show["current_round"], "mission should be on round 2 after advance")
+
+	// Step 5: Round 2 — agent adds a second test function and submits result.
+	round2Opts := DefaultAgentOpts(workerPrompt(missionID))
+	round2Opts.SystemPrompt = "You are a Go developer working in a test fixture repo. " +
+		"Read the mission contract first using the ethos MCP tool mission_show. " +
+		"This is ROUND 2. The file pkg/counter/counter_test.go already exists with TestIncrement. " +
+		"Add ONE MORE test function (TestReset) to the same file. Do NOT rewrite the existing test. " +
+		"After completing your work, submit a mission result. " +
+		"Write a result YAML file with these exact fields:\n" +
+		"  mission: " + missionID + "\n" +
+		"  round: 2\n" +
+		"  author: test-agent\n" +
+		"  verdict: pass\n" +
+		"  confidence: 0.95\n" +
+		"  files_changed:\n" +
+		"    - path: pkg/counter/counter_test.go\n" +
+		"      added: <number of lines you added>\n" +
+		"      removed: 0\n" +
+		"  evidence:\n" +
+		"    - name: added TestReset to existing test file\n" +
+		"      status: pass\n" +
+		"Then submit it via the ethos MCP tool mission_result with the mission ID and the file path."
+
+	output, err = f.SpawnAgent(t, round2Opts)
+	t.Logf("Round 2 agent output (first 2000 chars): %.2000s", output)
+	if err != nil {
+		t.Logf("Round 2 agent error (may be expected): %v", err)
+	}
+
+	// Verify round 2 result was submitted.
+	results = f.MissionResults(t, missionID)
+	require.Len(t, results, 2, "should have 2 results after both rounds")
+	assert.Equal(t, float64(2), results[1]["round"], "second result should be round 2")
+
+	// Step 6: Close the mission.
+	// Submit a round 2 reflection first (required by close gate).
+	reflection2YAML := `round: 2
+author: test-leader
+converging: true
+signals:
+  - both test functions present
+  - go test passes
+recommendation: stop
+reason: both rounds complete, all success criteria met
+`
+	f.Reflect(t, missionID, reflection2YAML)
+	f.MissionClose(t, missionID)
+
+	// Step 7: Verify event log sequence.
+	events := f.MissionLog(t, missionID)
+	t.Logf("Event log (%d events):", len(events))
+	for i, e := range events {
+		t.Logf("  event[%d]: type=%v actor=%v", i, e["event"], e["actor"])
+	}
+
+	// Extract the event type sequence.
+	var eventTypes []string
+	for _, e := range events {
+		if et, ok := e["event"].(string); ok {
+			eventTypes = append(eventTypes, et)
+		}
+	}
+
+	// The expected sequence: create, result (r1), reflect (r1),
+	// round_advanced, result (r2), reflect (r2), close.
+	// Minimum required subsequence — other events (e.g. additional
+	// show events if the store logs reads) may be interspersed.
+	expected := []string{"create", "result", "reflect", "round_advanced", "result", "reflect", "close"}
+	idx := 0
+	for _, et := range eventTypes {
+		if idx < len(expected) && et == expected[idx] {
+			idx++
+		}
+	}
+	assert.Equal(t, len(expected), idx,
+		"event log should contain the subsequence %v, got types: %v", expected, eventTypes)
+
+	// Verify the final mission status.
+	show = f.MissionShow(t, missionID)
+	assert.Equal(t, "closed", show["status"], "mission should be closed")
+}
+
 // --- helpers ---
 
 func workerPrompt(missionID string) string {

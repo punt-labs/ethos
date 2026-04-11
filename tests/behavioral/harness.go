@@ -321,6 +321,7 @@ func (f *Fixture) SpawnAgent(t *testing.T, opts AgentOpts) (output string, err e
 		"--print",
 		"--output-format", "text",
 		"--no-session-persistence",
+		"--dangerously-skip-permissions",
 		"--max-budget-usd", fmt.Sprintf("%.2f", opts.BudgetUSD),
 	}
 
@@ -387,6 +388,69 @@ func DefaultAgentOpts(prompt string) AgentOpts {
 		BudgetUSD: 0.50,
 		Timeout:   3 * time.Minute,
 	}
+}
+
+// Reflect writes a reflection YAML to a temp file and calls
+// ethos mission reflect <id> --file <path> --json.
+func (f *Fixture) Reflect(t *testing.T, missionID, reflectionYAML string) {
+	t.Helper()
+
+	path := filepath.Join(f.Root, "reflection.yaml")
+	writeFile(t, path, reflectionYAML)
+
+	stdout, stderr, err := f.runEthos(t, "mission", "reflect", missionID, "--file", path, "--json")
+	require.NoError(t, err, "mission reflect failed: stdout=%s stderr=%s", stdout, stderr)
+	t.Logf("Reflect output: %s", stdout)
+}
+
+// Advance calls ethos mission advance <id> --json and returns the parsed output.
+func (f *Fixture) Advance(t *testing.T, missionID string) map[string]interface{} {
+	t.Helper()
+
+	stdout, stderr, err := f.runEthos(t, "mission", "advance", missionID, "--json")
+	require.NoError(t, err, "mission advance failed: stdout=%s stderr=%s", stdout, stderr)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
+		"mission advance output is not JSON: %s", stdout)
+	return result
+}
+
+// MissionShow calls ethos mission show <id> --json and returns the parsed output.
+// The JSON shape is a ShowPayload: contract fields + "results" array + optional "warnings".
+func (f *Fixture) MissionShow(t *testing.T, missionID string) map[string]interface{} {
+	t.Helper()
+
+	stdout, stderr, err := f.runEthos(t, "mission", "show", missionID, "--json")
+	require.NoError(t, err, "mission show failed: stdout=%s stderr=%s", stdout, stderr)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &result),
+		"mission show output is not JSON: %s", stdout)
+	return result
+}
+
+// MissionReflections returns the parsed reflections for a mission.
+// The JSON shape is a bare array: [...].
+func (f *Fixture) MissionReflections(t *testing.T, missionID string) []map[string]interface{} {
+	t.Helper()
+
+	stdout, _, err := f.runEthos(t, "mission", "reflections", missionID, "--json")
+	require.NoError(t, err, "mission reflections failed")
+
+	var reflections []map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &reflections),
+		"mission reflections output is not JSON array: %s", stdout)
+	return reflections
+}
+
+// MissionClose calls ethos mission close <id> --json.
+func (f *Fixture) MissionClose(t *testing.T, missionID string) {
+	t.Helper()
+
+	stdout, stderr, err := f.runEthos(t, "mission", "close", missionID, "--json")
+	require.NoError(t, err, "mission close failed: stdout=%s stderr=%s", stdout, stderr)
+	t.Logf("Close output: %s", stdout)
 }
 
 // --- Assertion helpers ---
