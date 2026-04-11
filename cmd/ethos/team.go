@@ -135,7 +135,7 @@ func runTeamCreate(cmd *cobra.Command, name string) error {
 	if teamCreateFile != "" {
 		data, err := os.ReadFile(teamCreateFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("reading %s: %w", teamCreateFile, err)
 		}
 		if err := yaml.Unmarshal(data, &t); err != nil {
 			return fmt.Errorf("parsing team file: %w", err)

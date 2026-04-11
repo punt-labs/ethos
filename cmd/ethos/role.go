@@ -83,7 +83,7 @@ func runRoleCreate(cmd *cobra.Command, name string) error {
 	if roleCreateFile != "" {
 		data, err := os.ReadFile(roleCreateFile)
 		if err != nil {
-			return err
+			return fmt.Errorf("reading %s: %w", roleCreateFile, err)
 		}
 		if err := yaml.Unmarshal(data, &r); err != nil {
 			return fmt.Errorf("parsing role file: %w", err)

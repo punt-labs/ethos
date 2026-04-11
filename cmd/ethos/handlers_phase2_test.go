@@ -395,6 +395,94 @@ func TestRunADRShow_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRunRoleShow_JSON(t *testing.T) {
+	se := setupPhase2Env(t)
+	resetPhase2Flags(t)
+
+	seedRole(t, se, "reviewer")
+
+	stdout, _, err := execHandler(t, "role", "show", "reviewer", "--json")
+	require.NoError(t, err)
+	var r map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &r))
+	assert.Equal(t, "reviewer", r["name"])
+	assert.NotNil(t, r["responsibilities"])
+}
+
+func TestRunTeamShow_JSON(t *testing.T) {
+	se := setupPhase2Env(t)
+	resetPhase2Flags(t)
+
+	seedRole(t, se, "eng")
+	seedTeam(t, se, "gamma", "test-agent", "eng")
+
+	stdout, _, err := execHandler(t, "team", "show", "gamma", "--json")
+	require.NoError(t, err)
+	var tm map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &tm))
+	assert.Equal(t, "gamma", tm["name"])
+	members, ok := tm["members"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, members, 1)
+}
+
+func TestRunTeamAddCollab(t *testing.T) {
+	se := setupPhase2Env(t)
+	resetPhase2Flags(t)
+
+	seedRole(t, se, "eng")
+	seedRole(t, se, "lead")
+	seedIdentity(t, se, "other-agent")
+	seedTeamTwoMembers(t, se, "sigma", "test-agent", "eng", "other-agent", "lead")
+
+	stdout, _, err := execHandler(t, "team", "add-collab", "sigma", "eng", "lead", "reports_to")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "eng -> lead (reports_to)")
+
+	// Verify the collaboration persists.
+	stdout, _, err = execHandler(t, "team", "show", "sigma", "--json")
+	require.NoError(t, err)
+	var tm map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(stdout), &tm))
+	collabs, ok := tm["collaborations"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, collabs, 1)
+	c := collabs[0].(map[string]interface{})
+	assert.Equal(t, "eng", c["from"])
+	assert.Equal(t, "lead", c["to"])
+	assert.Equal(t, "reports_to", c["type"])
+}
+
+func TestRunTeamForRepo(t *testing.T) {
+	se := setupPhase2Env(t)
+	resetPhase2Flags(t)
+
+	// Test the "no argument, no git remote" path — explicit repo arg.
+	seedRole(t, se, "eng")
+
+	// Seed a team with a repository field.
+	dir := filepath.Join(se.home, ".punt-labs", "ethos", "teams")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	data, err := yaml.Marshal(map[string]interface{}{
+		"name":         "repo-team",
+		"repositories": []string{"ethos"},
+		"members":      []map[string]string{{"identity": "test-agent", "role": "eng"}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "repo-team.yaml"), data, 0o644))
+
+	// Should find the team by repo name.
+	stdout, _, err := execHandler(t, "team", "for-repo", "ethos")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "repo-team")
+	assert.Contains(t, stdout, "test-agent (eng)")
+
+	// Non-matching repo should print "no team found".
+	stdout, _, err = execHandler(t, "team", "for-repo", "nonexistent")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "no team found")
+}
+
 // --- helpers ---
 
 // seedRole creates a role YAML in the global store.
