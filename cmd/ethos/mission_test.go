@@ -295,12 +295,12 @@ func TestMissionCreate_FromFileJSON(t *testing.T) {
 func TestMissionCreate_RequiresFile(t *testing.T) {
 	missionTestEnv(t)
 
-	_, stderr, err := runCobra(t, "mission", "create")
+	_, _, err := runCobra(t, "mission", "create")
 	require.Error(t, err, "create without --file must fail")
 	// Tightened from "required flag" to the specific flag name so a
 	// future regression that demands a different required flag would
 	// not silently match.
-	assert.Contains(t, stderr, `required flag(s) "file"`)
+	assert.Contains(t, err.Error(), `required flag(s) "file"`)
 }
 
 // --- bare mission command ---
@@ -2010,9 +2010,9 @@ func TestMissionLog_NoID_ErrorsWithUsage(t *testing.T) {
 	// usage hint, exit non-zero. Use the runCobra helper to drive
 	// the full cobra path including arg-count validation.
 	missionTestEnv(t)
-	_, stderr, err := runCobra(t, "mission", "log")
+	_, _, err := runCobra(t, "mission", "log")
 	require.Error(t, err)
-	assert.Contains(t, stderr, "accepts 1 arg")
+	assert.Contains(t, err.Error(), "accepts 1 arg")
 }
 
 func TestMissionLog_PrefixMatch(t *testing.T) {
