@@ -20,9 +20,18 @@ var version = "dev"
 // jsonOutput is set by the --json persistent flag on rootCmd.
 var jsonOutput bool
 
+// silentError is returned when a command has already reported its
+// failure (e.g. doctor printed a FAIL table). main() exits non-zero
+// without printing an additional error line.
+type silentError struct{}
+
+func (silentError) Error() string { return "" }
+
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		if _, ok := err.(silentError); !ok {
+			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+		}
 		if isUsageError(err) {
 			os.Exit(2)
 		}
@@ -214,7 +223,7 @@ func runDoctor(cmd *cobra.Command) error {
 	}
 
 	if !doctor.AllPassed(results) {
-		return fmt.Errorf("one or more health checks failed")
+		return silentError{}
 	}
 	return nil
 }

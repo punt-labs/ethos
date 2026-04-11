@@ -30,8 +30,8 @@ func gitInitDir(t *testing.T, dir, home string) {
 }
 
 // execHandler runs a cobra command in-process with stdout/stderr captured
-// and args set. It resets jsonOutput at test end so table-driven and
-// parallel-safe behavior is preserved.
+// and args set. It resets package-level flag state at test end. Not safe
+// for t.Parallel — it mutates shared rootCmd and global flags.
 func execHandler(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	// Reset package-level flag state so tests do not leak into each
