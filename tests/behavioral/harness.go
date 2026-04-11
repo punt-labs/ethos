@@ -281,23 +281,58 @@ func (f *Fixture) MissionResults(t *testing.T, missionID string) []map[string]in
 	return results
 }
 
-// GitDiffFiles returns the list of files changed since the given base ref.
+// GitDiffFiles returns every file changed since base, including committed,
+// staged, unstaged, and untracked files. This catches changes regardless
+// of whether the agent committed, staged, or left files in the working tree.
 func (f *Fixture) GitDiffFiles(t *testing.T, base string) []string {
 	t.Helper()
 
-	cmd := exec.Command("git", "diff", "--name-only", base+"..HEAD")
+	seen := make(map[string]bool)
+
+	// Committed changes since base.
+	for _, line := range f.gitLines(t, "diff", "--name-only", base+"..HEAD") {
+		seen[line] = true
+	}
+
+	// Staged (index) changes.
+	for _, line := range f.gitLines(t, "diff", "--name-only", "--cached") {
+		seen[line] = true
+	}
+
+	// Unstaged working-tree changes.
+	for _, line := range f.gitLines(t, "diff", "--name-only") {
+		seen[line] = true
+	}
+
+	// Untracked new files.
+	for _, line := range f.gitLines(t, "ls-files", "--others", "--exclude-standard") {
+		seen[line] = true
+	}
+
+	files := make([]string, 0, len(seen))
+	for f := range seen {
+		files = append(files, f)
+	}
+	return files
+}
+
+// gitLines runs a git command and returns non-empty output lines.
+func (f *Fixture) gitLines(t *testing.T, args ...string) []string {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
 	cmd.Dir = f.Repo
 	cmd.Env = f.Env
 	out, err := cmd.Output()
-	require.NoError(t, err, "git diff failed")
+	require.NoError(t, err, "git %s failed", strings.Join(args, " "))
 
-	var files []string
+	var lines []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line != "" {
-			files = append(files, line)
+			lines = append(lines, line)
 		}
 	}
-	return files
+	return lines
 }
 
 // GitHead returns the current HEAD sha.
@@ -334,15 +369,6 @@ func (f *Fixture) SpawnAgent(t *testing.T, opts AgentOpts) (output string, err e
 	args = append(args, "--mcp-config", mcpConfig)
 
 	args = append(args, "--add-dir", f.Repo)
-
-	// Allowed tools: the agent needs Bash, Read, Write, Edit for file work,
-	// plus the ethos MCP tools.
-	args = append(args, "--allowedTools",
-		"Bash", "Read", "Write", "Edit", "Glob", "Grep",
-		"mcp__ethos__mission_show",
-		"mcp__ethos__mission_result",
-		"mcp__ethos__mission_log",
-	)
 
 	args = append(args, "-p", opts.Prompt)
 

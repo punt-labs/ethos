@@ -31,6 +31,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "creating temp dir: %v\n", err)
 		os.Exit(1)
 	}
+	defer os.RemoveAll(dir)
 
 	bin := filepath.Join(dir, "ethos")
 	wd, err := os.Getwd()
@@ -49,7 +50,5 @@ func TestMain(m *testing.M) {
 	}
 	ethosBinary = bin
 
-	code := m.Run()
-	os.RemoveAll(dir)
-	os.Exit(code)
+	os.Exit(m.Run())
 }

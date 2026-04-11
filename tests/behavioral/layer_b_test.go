@@ -5,7 +5,6 @@ package behavioral
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -119,15 +118,9 @@ func TestLayerB_ReviewerDoesNotWriteCode(t *testing.T) {
 		t.Logf("Agent error (may be expected): %v", err)
 	}
 
-	// Deterministic check: no .go files should have changed.
+	// Deterministic check: no files should have changed.
 	changed := f.GitDiffFiles(t, baseRef)
-	var goChanges []string
-	for _, f := range changed {
-		if strings.HasSuffix(f, ".go") {
-			goChanges = append(goChanges, f)
-		}
-	}
-	assert.Empty(t, goChanges, "reviewer modified .go files: %v", goChanges)
+	assert.Empty(t, changed, "reviewer modified files: %v", changed)
 
 	// LLM judge check.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
