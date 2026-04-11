@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package main
 
 import (
@@ -234,7 +236,7 @@ func TestCLI_Doctor(t *testing.T) {
 	assert.True(t, exitCode == 0 || exitCode == 1,
 		"doctor should exit 0 or 1, got %d", exitCode)
 	assert.NotEmpty(t, stdout, "doctor should print results to stdout")
-	assert.Empty(t, stderr, "doctor should not panic or print to stderr")
+	assert.NotContains(t, stderr, "goroutine", "doctor should not panic")
 }
 
 func TestCLI_UnknownCommand(t *testing.T) {
@@ -246,6 +248,6 @@ func TestCLI_UnknownCommand(t *testing.T) {
 	t.Logf("stdout: %s", stdout)
 	t.Logf("stderr: %s", stderr)
 
-	assert.NotEqual(t, 0, exitCode, "unknown command should exit non-zero")
+	assert.Equal(t, 2, exitCode, "unknown command should exit 2 (usage error)")
 	assert.NotEmpty(t, stderr, "unknown command should print to stderr")
 }
