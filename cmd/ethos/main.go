@@ -56,12 +56,10 @@ func isUsageError(err error) bool {
 
 // printJSON marshals v to stdout. Exits on error.
 func printJSON(v any) {
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
+	if err := writeJSON(os.Stdout, v); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(string(data))
 }
 
 // writeJSON marshals v to w as indented JSON, followed by a newline.
