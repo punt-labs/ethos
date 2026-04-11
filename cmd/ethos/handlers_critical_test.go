@@ -191,7 +191,8 @@ func TestExportSoulSpec_MissingContent(t *testing.T) {
 
 	outDir := filepath.Join(t.TempDir(), "export")
 
-	// Capture stderr to verify warnings.
+	// Export; warnings go to stderr (not captured here — we verify
+	// the side effects: which files exist vs. which are skipped).
 	captureStdoutE(t, func() error {
 		return exportSoulSpec("bare", outDir)
 	})
@@ -470,8 +471,9 @@ func TestVerifyResultAgainstNumstat(t *testing.T) {
 	se := setupCLISubprocessEnv(t)
 	setInProcessEnv(t, se)
 
-	// Ensure the default branch is called "main".
-	gitCmd(t, se.repo, "checkout", "-b", "main")
+	// Ensure the default branch is called "main". Use -M (rename) instead
+	// of -b (create) because git init may already use "main" as default.
+	gitCmd(t, se.repo, "branch", "-M", "main")
 
 	// Create a file and commit it so we have a base.
 	testFile := filepath.Join(se.repo, "hello.txt")
