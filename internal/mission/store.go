@@ -236,6 +236,12 @@ func (s *Store) Create(c *Contract) error {
 	if staged.UpdatedAt == "" {
 		staged.UpdatedAt = staged.CreatedAt
 	}
+	// Default Type to "implement" when the caller omits it. The field
+	// is optional on input for backward compatibility; the store fills
+	// the default so every persisted contract has a type.
+	if staged.Type == "" {
+		staged.Type = "implement"
+	}
 	// 3.4: a freshly created mission begins at round 1. The caller
 	// may leave CurrentRound at its zero value; Validate would
 	// otherwise reject the staged contract for being out of [1, N].
@@ -319,12 +325,11 @@ func (s *Store) Create(c *Contract) error {
 	if err != nil {
 		return err
 	}
-	// Success: reflect the new UpdatedAt and the (possibly defaulted)
-	// CurrentRound back to the caller. These are the two fields Create
-	// is contracted to set. A failed Create leaves the caller's struct
-	// unchanged.
+	// Success: reflect server-defaulted fields back to the caller.
+	// A failed Create leaves the caller's struct unchanged.
 	c.UpdatedAt = staged.UpdatedAt
 	c.CurrentRound = staged.CurrentRound
+	c.Type = staged.Type
 	return nil
 }
 
@@ -390,6 +395,11 @@ func decodeAndValidate(data []byte, missionID string) (*Contract, error) {
 	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
 		return nil, err
+	}
+	// Pre-type contracts on disk have no type line and decode to "".
+	// Default-fill on read keeps the upgrade path clean.
+	if c.Type == "" {
+		c.Type = "implement"
 	}
 	// 3.4: pre-3.4 contracts on disk have no current_round line and
 	// decode to CurrentRound == 0. Default-fill on read keeps the
