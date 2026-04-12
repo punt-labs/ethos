@@ -55,7 +55,7 @@ func init() {
 }
 
 func runExtGet(cmd *cobra.Command, args []string) error {
-	s := globalStore()
+	s := identityStore()
 	handle := args[0]
 	namespace := args[1]
 	key := ""
@@ -79,13 +79,13 @@ func runExtGet(cmd *cobra.Command, args []string) error {
 }
 
 func runExtSet(cmd *cobra.Command, args []string) error {
-	s := globalStore()
+	s := identityStore()
 	value := strings.Join(args[3:], " ")
 	return s.ExtSet(args[0], args[1], args[2], value)
 }
 
 func runExtDel(_ *cobra.Command, args []string) error {
-	s := globalStore()
+	s := identityStore()
 	key := ""
 	if len(args) > 2 {
 		key = args[2]
@@ -94,7 +94,7 @@ func runExtDel(_ *cobra.Command, args []string) error {
 }
 
 func runExtList(cmd *cobra.Command, args []string) error {
-	s := globalStore()
+	s := identityStore()
 	if !s.Exists(args[0]) {
 		return fmt.Errorf("handle %q does not exist", args[0])
 	}
