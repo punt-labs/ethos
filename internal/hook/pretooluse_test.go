@@ -60,10 +60,10 @@ func TestHandlePreToolUse_AllowAndBlock(t *testing.T) {
 			decision: "allow",
 		},
 		{
-			name:     "Read file outside allowlist",
+			name:     "Read file outside allowlist is allowed (read-only)",
 			tool:     "Read",
 			input:    map[string]any{"file_path": "internal/session/store.go"},
-			decision: "block",
+			decision: "allow",
 		},
 		{
 			name:     "Write file outside allowlist",
@@ -90,9 +90,9 @@ func TestHandlePreToolUse_AllowAndBlock(t *testing.T) {
 			decision: "allow",
 		},
 		{
-			name:     "Read with no file_path field",
+			name:     "Read always allowed regardless of path",
 			tool:     "Read",
-			input:    map[string]any{},
+			input:    map[string]any{"file_path": "/etc/shadow"},
 			decision: "allow",
 		},
 	}
@@ -123,7 +123,8 @@ func TestHandlePreToolUse_AllowAndBlock(t *testing.T) {
 }
 
 func TestHandlePreToolUse_DirectoryEntryAllowsChildren(t *testing.T) {
-	// A directory entry in the allowlist permits any file under it.
+	// A directory entry in the allowlist permits Write/Edit to any file under it.
+	// Read is unrestricted and does not check the allowlist.
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "internal/hook/:cmd/ethos/")
 
 	tests := []struct {
@@ -131,17 +132,17 @@ func TestHandlePreToolUse_DirectoryEntryAllowsChildren(t *testing.T) {
 		path     string
 		decision string
 	}{
-		{"file under allowed dir", "internal/hook/pretooluse.go", "allow"},
-		{"nested file under allowed dir", "internal/hook/deep/nested.go", "allow"},
-		{"dir entry itself", "internal/hook", "allow"},
-		{"sibling dir blocked", "internal/mission/store.go", "block"},
-		{"partial prefix not matched", "internal/hookextra/file.go", "block"},
+		{"write file under allowed dir", "internal/hook/pretooluse.go", "allow"},
+		{"write nested file under allowed dir", "internal/hook/deep/nested.go", "allow"},
+		{"write dir entry itself", "internal/hook", "allow"},
+		{"write sibling dir blocked", "internal/mission/store.go", "block"},
+		{"write partial prefix not matched", "internal/hookextra/file.go", "block"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payload := map[string]any{
-				"tool_name":  "Read",
+				"tool_name":  "Write",
 				"tool_input": map[string]any{"file_path": tt.path},
 			}
 			data, err := json.Marshal(payload)
@@ -159,6 +160,7 @@ func TestHandlePreToolUse_DirectoryEntryAllowsChildren(t *testing.T) {
 }
 
 func TestHandlePreToolUse_GlobAndGrep(t *testing.T) {
+	// Glob and Grep are unrestricted — verifiers need full read access.
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "internal/hook/")
 
 	tests := []struct {
@@ -168,9 +170,9 @@ func TestHandlePreToolUse_GlobAndGrep(t *testing.T) {
 		decision string
 	}{
 		{"Glob inside allowlist", "Glob", "internal/hook", "allow"},
-		{"Glob outside allowlist", "Glob", "internal/mission", "block"},
+		{"Glob outside allowlist", "Glob", "internal/mission", "allow"},
 		{"Grep inside allowlist", "Grep", "internal/hook", "allow"},
-		{"Grep outside allowlist", "Grep", "/some/other/path", "block"},
+		{"Grep outside allowlist", "Grep", "/some/other/path", "allow"},
 		{"Grep with no path (cwd)", "Grep", "", "allow"},
 	}
 
@@ -205,14 +207,14 @@ func TestExtractTargetPath(t *testing.T) {
 		input map[string]any
 		want  string
 	}{
-		{"Read", "Read", map[string]any{"file_path": "/a/b.go"}, "/a/b.go"},
+		{"Read unrestricted", "Read", map[string]any{"file_path": "/a/b.go"}, ""},
 		{"Write", "Write", map[string]any{"file_path": "x.go"}, "x.go"},
 		{"Edit", "Edit", map[string]any{"file_path": "y.go"}, "y.go"},
-		{"Glob", "Glob", map[string]any{"path": "/some/dir"}, "/some/dir"},
-		{"Grep", "Grep", map[string]any{"path": "src/"}, "src/"},
+		{"Glob unrestricted", "Glob", map[string]any{"path": "/some/dir"}, ""},
+		{"Grep unrestricted", "Grep", map[string]any{"path": "src/"}, ""},
 		{"Bash", "Bash", map[string]any{"command": "ls"}, ""},
-		{"nil input", "Read", nil, ""},
-		{"missing key", "Read", map[string]any{"other": "val"}, ""},
+		{"nil input", "Write", nil, ""},
+		{"missing key", "Write", map[string]any{"other": "val"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -279,21 +281,28 @@ func TestHandlePreToolUse_EnvVarFromSubagentStart(t *testing.T) {
 	allowlist := "internal/hook/pretooluse.go:internal/hook/pretooluse_test.go:/home/user/missions/m-001.yaml"
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", allowlist)
 
-	// Allowed: file in the allowlist.
-	payload := `{"tool_name":"Read","tool_input":{"file_path":"internal/hook/pretooluse.go"}}`
+	// Allowed: Write to a file in the allowlist.
+	payload := `{"tool_name":"Write","tool_input":{"file_path":"internal/hook/pretooluse.go"}}`
 	var out bytes.Buffer
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
 	assert.Equal(t, "allow", r.Decision)
 
-	// Blocked: file not in the allowlist.
+	// Blocked: Write to a file not in the allowlist.
 	out.Reset()
-	payload = `{"tool_name":"Read","tool_input":{"file_path":"internal/session/store.go"}}`
+	payload = `{"tool_name":"Write","tool_input":{"file_path":"internal/session/store.go"}}`
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
 	assert.Equal(t, "block", r.Decision)
 	assert.Contains(t, r.Reason, "outside the verifier file allowlist")
+
+	// Read is always allowed, even outside the allowlist.
+	out.Reset()
+	payload = `{"tool_name":"Read","tool_input":{"file_path":"internal/session/store.go"}}`
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
 }
 
 // TestHandlePreToolUse_EmptyInput gracefully handles empty or
@@ -315,16 +324,16 @@ func TestHandlePreToolUse_EmptyInput(t *testing.T) {
 func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	key := "ETHOS_VERIFIER_ALLOWLIST"
 
-	// Unset: passthrough.
+	// Unset: passthrough — Write allowed anywhere.
 	t.Setenv(key, "")
 	var out bytes.Buffer
-	payload := `{"tool_name":"Read","tool_input":{"file_path":"anything.go"}}`
+	payload := `{"tool_name":"Write","tool_input":{"file_path":"anything.go"}}`
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
 	assert.Equal(t, "allow", r.Decision)
 
-	// Set: enforced.
+	// Set: Write enforced against the allowlist.
 	os.Setenv(key, "only/this.go")
 	defer os.Unsetenv(key)
 
