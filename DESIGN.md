@@ -3965,3 +3965,99 @@ contracts verified in review, not filesystem sandboxes.
   missions claiming the same files is a merge conflict waiting to
   happen. The write-set prevents the conflict at creation time, even
   if it doesn't block the write at runtime.
+
+## DES-042: RunE for all CLI handlers (SETTLED)
+
+**Decision**: Every cobra command in `cmd/ethos/` uses `RunE` (returns
+`error`) instead of `Run` (returns nothing). Handlers return errors
+instead of calling `os.Exit`. A `silentError` type signals "already
+reported — exit non-zero without printing."
+
+**Reasoning**: `Run` + `os.Exit` makes handlers untestable in-process.
+Coverage tools can't measure code that kills the process. The RunE
+pattern lets tests call handlers directly via `execHandler`, capture
+stdout/stderr, and assert on both output and error values. This moved
+`cmd/ethos/` from 22% to 64% measurable coverage.
+
+`SilenceErrors` is set on `rootCmd`. The `main()` function prints
+errors with the `ethos:` prefix and routes to exit code 1 (runtime)
+or 2 (usage). Handlers that already reported their failure (e.g.,
+`runDoctor` printing a FAIL table) return `silentError{}` to avoid
+double-printing.
+
+**Rejected alternatives**:
+
+- Keep `Run` + `os.Exit`, test only via subprocess — subprocess tests
+  prove behavior but are invisible to coverage tools. The project needs
+  both: subprocess tests for exit-code contracts, in-process tests for
+  measurable coverage of handler logic.
+- Refactor `printJSON` to return errors — 30+ call sites across files
+  not being touched. Added `writeJSON` alongside instead; `printJSON`
+  delegates to `writeJSON` internally.
+
+## DES-043: Three-layer behavioral test architecture (SETTLED)
+
+**Decision**: L4 behavioral tests use three layers, each with different
+assertion strategies:
+
+- **Layer A (deterministic)**: Mission event log, git diff, result YAML
+  structure. No LLM calls. Catches protocol violations.
+- **Layer B (LLM-judged)**: Agent output + persona definition sent to
+  Claude Sonnet as a judge. Returns `{violated, evidence, confidence}`.
+  Catches persona constraint violations that can't be checked
+  mechanically.
+- **Layer C (adversarial)**: Deliberately tempts agents to break
+  constraints. Combines deterministic + judge assertions. Proves the
+  system holds under pressure.
+
+All three layers share a common harness (`tests/behavioral/`) behind
+a `//go:build behavioral` tag, excluded from `make check`. Run via
+`make test-behavioral` (requires `ANTHROPIC_API_KEY` and `claude` CLI).
+Daily CI via `.github/workflows/behavioral.yml`.
+
+**Reasoning**: Deterministic tests are fast and cheap but can only check
+structural properties (did the file change? did the event appear?).
+Persona compliance requires judgment — did the reviewer stay in its
+lane? An LLM judge provides this at ~$0.05/call with structured output.
+Adversarial scenarios prove the system works when agents are pushed,
+not just when they cooperate.
+
+The `behavioral` build tag keeps these tests out of the per-commit
+suite. They spawn real Claude Code agents (~$0.50 each, ~2 min each)
+and are too slow and expensive for CI on every push.
+
+**Rejected alternatives**:
+
+- promptfoo with `llm-rubric` — doesn't support `claude --bare` with
+  MCP config and per-agent system prompts. The custom harness fits the
+  exact subprocess model used throughout ethos.
+- All-deterministic, no LLM judge — misses the persona compliance
+  dimension entirely. "Did the reviewer write code?" can be checked
+  via git diff, but "did the reviewer stay in character?" requires
+  judgment.
+- Python test harness — ethos is a Go project. `go test` with build
+  tags keeps the toolchain unified. The Anthropic API call is a single
+  `net/http` POST, no SDK needed.
+
+## DES-044: Extensions resolve through the layered identity chain (SETTLED)
+
+**Decision**: `ethos ext set/get/del/list` resolve identities through
+the same repo-local → global chain that `ethos identity get` uses.
+Extensions still write to the global `.ext/` directory (extensions are
+personal, not git-tracked), but the identity lookup finds repo-local
+handles.
+
+**Reasoning**: A repo-local identity (e.g., `claudia` defined only in
+`.punt-labs/ethos/identities/claudia.yaml`) should be extensible. The
+extension data is personal (voice config, tool preferences) and belongs
+in `~/.punt-labs/ethos/identities/claudia.ext/`, but the identity that
+the extension attaches to may only exist in the repo. The `IdentityStore`
+interface already includes all Ext methods, and `LayeredStore.ExtSet`
+already checks existence across both layers before writing to global.
+
+**Rejected alternatives**:
+
+- Require all extended identities to exist in the global store —
+  forces users to duplicate repo-local identities globally just to
+  set an extension. The workaround (copying the YAML) was the bug
+  report that motivated this fix.
