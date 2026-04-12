@@ -43,7 +43,7 @@ through filesystem, CLI, and MCP so any tool can read it.
 ### 1. Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/a10eb37/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/544d29e/install.sh | sh
 ```
 
 The installer puts the `ethos` binary in `~/.local/bin` and seeds starter
