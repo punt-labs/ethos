@@ -32,6 +32,10 @@ type SubagentStartResult struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext,omitempty"`
 	} `json:"hookSpecificOutput"`
+	// Env is an optional map of environment variables that Claude Code
+	// sets in the spawned subagent's process. Used by verifier isolation
+	// to pass ETHOS_VERIFIER_ALLOWLIST to the subagent's PreToolUse hooks.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // SubagentStartDeps groups the dependencies HandleSubagentStartWithDeps
@@ -160,6 +164,9 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 		result := SubagentStartResult{}
 		result.HookSpecificOutput.HookEventName = "SubagentStart"
 		result.HookSpecificOutput.AdditionalContext = block
+		// Set ETHOS_VERIFIER_ALLOWLIST so PreToolUse hooks in the
+		// subagent can enforce the file allowlist mechanically.
+		result.Env = buildVerifierAllowlistEnv(verifierMissions, deps.Missions)
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
 
@@ -416,6 +423,30 @@ func verifierAllowlistSplit(m *mission.Contract, store *mission.Store) (repo, ab
 		}
 	}
 	return repo, abs
+}
+
+// buildVerifierAllowlistEnv returns the env map for a verifier
+// subagent. The ETHOS_VERIFIER_ALLOWLIST value is a colon-separated
+// list of all allowed paths across all verifier missions. PreToolUse
+// reads this env var and blocks tool calls targeting paths outside it.
+func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store) map[string]string {
+	seen := make(map[string]struct{})
+	var entries []string
+	for _, vm := range missions {
+		for _, p := range verifierAllowlist(vm.Contract, store) {
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			entries = append(entries, p)
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return map[string]string{
+		"ETHOS_VERIFIER_ALLOWLIST": strings.Join(entries, ":"),
+	}
 }
 
 // checkVerifierHash recomputes the evaluator hash for every open

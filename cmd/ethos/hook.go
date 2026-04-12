@@ -70,6 +70,15 @@ var hookFormatOutputCmd = &cobra.Command{
 	},
 }
 
+var hookPreToolUseCmd = &cobra.Command{
+	Use:   "pre-tool-use",
+	Short: "PreToolUse hook handler (verifier file allowlist)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookPreToolUse()
+	},
+}
+
 var hookAuditLogCmd = &cobra.Command{
 	Use:   "audit-log",
 	Short: "PostToolUse audit logger",
@@ -86,6 +95,7 @@ func init() {
 		hookSubagentStartCmd,
 		hookSubagentStopCmd,
 		hookPreCompactCmd,
+		hookPreToolUseCmd,
 		hookFormatOutputCmd,
 		hookAuditLogCmd,
 	)
@@ -157,6 +167,13 @@ func runHookPreCompact() error {
 	}
 	if err := hook.HandlePreCompact(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook pre-compact: %w", err)
+	}
+	return nil
+}
+
+func runHookPreToolUse() error {
+	if err := hook.HandlePreToolUse(os.Stdin, os.Stdout); err != nil {
+		return fmt.Errorf("hook pre-tool-use: %w", err)
 	}
 	return nil
 }
