@@ -1,0 +1,26 @@
+name: full
+description: "Plan, design, implement, test, review, and retro — complete lifecycle with bookends"
+stages:
+  - name: plan
+    archetype: design
+    description: "Scope the work and define success criteria"
+  - name: design
+    archetype: design
+    description: "Produce the design document"
+    inputs_from: plan
+  - name: implement
+    archetype: implement
+    description: "Write the code from the design"
+    inputs_from: design
+  - name: test
+    archetype: test
+    description: "Add integration and edge-case tests"
+    inputs_from: implement
+  - name: review
+    archetype: review
+    description: "Review the complete change"
+    inputs_from: test
+  - name: retro
+    archetype: report
+    description: "Retrospective — summarize what shipped and lessons learned"
+    inputs_from: review

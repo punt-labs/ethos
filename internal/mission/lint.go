@@ -25,7 +25,7 @@ type Warning struct {
 // warnings. It does not require a store round-trip. All checks are
 // non-blocking — callers should print warnings but not fail on them.
 //
-// Nine heuristics:
+// Ten heuristics:
 //  1. write_set contains a .go file but not the adjacent _test.go
 //  2. write_set contains production code but no CHANGELOG.md entry
 //  3. success_criteria mention README/docs but README.md is not in write_set
@@ -35,6 +35,7 @@ type Warning struct {
 //  7. context references another repo but no cross-repo collaboration noted
 //  8. design mission has no user-visible impact criterion
 //  9. docs write-set with a generalist evaluator
+//  10. pipeline selector: suggests quick/standard/full based on contract size
 func Lint(c *Contract) []Warning {
 	if c == nil {
 		return nil
@@ -49,6 +50,7 @@ func Lint(c *Contract) []Warning {
 	ws = lintCrossRepoContext(c, ws)
 	ws = lintDesignImpact(c, ws)
 	ws = lintDocsEvaluator(c, ws)
+	ws = lintPipelineSelector(c, ws)
 	return ws
 }
 
@@ -384,4 +386,84 @@ func isProductionCode(p string) bool {
 		return true
 	}
 	return false
+}
+
+// lintPipelineSelector suggests a pipeline template based on the size
+// and complexity of the contract. Skips when the contract already
+// specifies a pipeline (the Pipeline field does not exist on Contract
+// yet — when it is added, update hasPipeline).
+func lintPipelineSelector(c *Contract, ws []Warning) []Warning {
+	if hasPipeline(c) {
+		return ws
+	}
+	nFiles := len(c.WriteSet)
+	nCriteria := len(c.SuccessCriteria)
+
+	switch {
+	case nFiles > 10 || hasMultipleRepoRefs(c.Context, c.WriteSet):
+		return append(ws, Warning{
+			Field:    "pipeline",
+			Message:  "consider pipeline: full (" + pipelineReason(nFiles, nCriteria, c.Context, c.WriteSet) + ")",
+			Severity: SeverityInfo,
+		})
+	case nFiles >= 4 || nCriteria >= 3:
+		return append(ws, Warning{
+			Field:    "pipeline",
+			Message:  "consider pipeline: standard (" + pipelineReason(nFiles, nCriteria, c.Context, c.WriteSet) + ")",
+			Severity: SeverityInfo,
+		})
+	case nFiles >= 1 && nFiles <= 3 && nCriteria >= 1 && nCriteria <= 2:
+		return append(ws, Warning{
+			Field:    "pipeline",
+			Message:  "consider pipeline: quick (" + pipelineReason(nFiles, nCriteria, c.Context, c.WriteSet) + ")",
+			Severity: SeverityInfo,
+		})
+	}
+	return ws
+}
+
+// hasPipeline reports whether the contract already specifies a
+// pipeline. Returns false until the Pipeline field is added to
+// Contract.
+func hasPipeline(_ *Contract) bool {
+	return false
+}
+
+// hasMultipleRepoRefs reports whether s contains two or more distinct
+// external repo references (owner/repo patterns not matching write_set
+// path prefixes).
+func hasMultipleRepoRefs(s string, writeSet []string) bool {
+	if s == "" {
+		return false
+	}
+	matches := repoNamePattern.FindAllString(s, -1)
+	seen := make(map[string]bool)
+	for _, m := range matches {
+		if !isWriteSetPrefix(m, writeSet) {
+			seen[m] = true
+		}
+	}
+	return len(seen) >= 2
+}
+
+// pipelineReason returns a short explanation for the suggested
+// pipeline tier.
+func pipelineReason(nFiles, nCriteria int, ctx string, writeSet []string) string {
+	parts := make([]string, 0, 2)
+	if nFiles > 10 {
+		parts = append(parts, "10+ files in write_set")
+	} else if nFiles >= 4 {
+		parts = append(parts, "4+ files in write_set")
+	} else {
+		parts = append(parts, "1-3 files in write_set")
+	}
+	if nCriteria >= 3 {
+		parts = append(parts, "3+ success criteria")
+	} else {
+		parts = append(parts, "1-2 success criteria")
+	}
+	if hasMultipleRepoRefs(ctx, writeSet) {
+		parts = append(parts, "multiple repos in context")
+	}
+	return strings.Join(parts, ", ")
 }

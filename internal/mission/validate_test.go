@@ -208,18 +208,18 @@ func TestValidate(t *testing.T) {
 			wantErr: "success_criteria must contain at least one entry",
 		},
 
-		// Rule 13: current_round in [1, budget.rounds]. Store.Create
+		// Rule 14: current_round in [1, budget.rounds]. Store.Create
 		// and Store.loadLocked rewrite CurrentRound == 0 to 1 before
 		// calling Validate, but a caller that builds a Contract
 		// directly (MCP tests, hand-rolled fixtures) bypasses those
 		// paths and must still see the range rejection.
 		{
-			name:    "rule 13: current_round zero",
+			name:    "rule 14: current_round zero",
 			mutate:  func(c *Contract) { c.CurrentRound = 0 },
 			wantErr: "current_round 0 out of range",
 		},
 		{
-			name: "rule 13: current_round exceeds budget",
+			name: "rule 14: current_round exceeds budget",
 			mutate: func(c *Contract) {
 				c.CurrentRound = 4
 				c.Budget.Rounds = 3
@@ -227,9 +227,22 @@ func TestValidate(t *testing.T) {
 			wantErr: "current_round 4 out of range",
 		},
 		{
-			name:    "rule 13: current_round above max budget",
+			name:    "rule 14: current_round above max budget",
 			mutate:  func(c *Contract) { c.CurrentRound = 11 },
 			wantErr: "current_round 11 out of range",
+		},
+
+		// Rule 6: type accepts empty (Store.Create defaults it),
+		// rejects control characters when set.
+		{
+			name:    "rule 6: type with control character",
+			mutate:  func(c *Contract) { c.Type = "implement\n" },
+			wantErr: "type contains control character",
+		},
+		{
+			name:    "rule 6: type with escape sequence",
+			mutate:  func(c *Contract) { c.Type = "design\x1b" },
+			wantErr: "type contains control character",
 		},
 	}
 
@@ -430,6 +443,32 @@ func TestValidate_ZeroWidthNoFalsePositive(t *testing.T) {
 			require.NoError(t, c.Validate())
 		})
 	}
+}
+
+// TestValidate_TypeField asserts that empty Type passes validation
+// (Store.Create and decodeAndValidate default it) and that a
+// populated Type with clean content passes.
+func TestValidate_TypeField(t *testing.T) {
+	t.Run("empty type accepted", func(t *testing.T) {
+		c := validContract()
+		c.Type = ""
+		require.NoError(t, c.Validate())
+	})
+	t.Run("implement type accepted", func(t *testing.T) {
+		c := validContract()
+		c.Type = "implement"
+		require.NoError(t, c.Validate())
+	})
+	t.Run("design type accepted", func(t *testing.T) {
+		c := validContract()
+		c.Type = "design"
+		require.NoError(t, c.Validate())
+	})
+	t.Run("custom type accepted", func(t *testing.T) {
+		c := validContract()
+		c.Type = "inbox"
+		require.NoError(t, c.Validate())
+	})
 }
 
 func TestValidate_NilContract(t *testing.T) {

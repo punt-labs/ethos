@@ -29,6 +29,12 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 	// Talents (skip README.md — handled separately)
 	seedFS(Talents, "sidecar/talents", filepath.Join(destRoot, "talents"), ".md", force, r)
 
+	// Archetypes
+	seedFS(Archetypes, "sidecar/archetypes", filepath.Join(destRoot, "archetypes"), ".yaml", force, r)
+
+	// Pipelines
+	seedFS(Pipelines, "sidecar/pipelines", filepath.Join(destRoot, "pipelines"), ".yaml", force, r)
+
 	// Skills
 	seedFile(Skills, "sidecar/skills/baseline-ops/SKILL.md",
 		filepath.Join(skillsRoot, "baseline-ops", "SKILL.md"), force, r)
