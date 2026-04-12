@@ -292,6 +292,38 @@ func TestRunExtGet_NotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+// --- ext repo-local tests ---
+
+func TestRunExtSetGet_RepoLocalIdentity(t *testing.T) {
+	se := setupPhase2Env(t)
+	resetPhase2Flags(t)
+
+	// Create identity only in the repo-local store, not global.
+	repoIDs := filepath.Join(se.repo, ".punt-labs", "ethos", "identities")
+	require.NoError(t, os.MkdirAll(repoIDs, 0o755))
+	data, err := yaml.Marshal(map[string]interface{}{
+		"name":   "Local Only",
+		"handle": "local-only",
+		"kind":   "agent",
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(repoIDs, "local-only.yaml"), data, 0o644))
+
+	// ext set should succeed — previously failed with "handle does not exist".
+	_, _, err = execHandler(t, "ext", "set", "local-only", "vox", "voice_id", "george")
+	require.NoError(t, err)
+
+	// ext get should return the value just set.
+	stdout, _, err := execHandler(t, "ext", "get", "local-only", "vox", "voice_id")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "george")
+
+	// ext list should show the namespace.
+	stdout, _, err = execHandler(t, "ext", "list", "local-only")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "vox")
+}
+
 // --- adr tests ---
 
 func TestRunADRCreate(t *testing.T) {
