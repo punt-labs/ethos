@@ -1,0 +1,9 @@
+name: task
+description: "Task mission — execute a specific instruction"
+budget_default:
+  rounds: 3
+  reflection_after_each: true
+allow_empty_write_set: false
+required_fields:
+  - context
+write_set_constraints: []

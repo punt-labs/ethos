@@ -1,0 +1,8 @@
+name: report
+description: "Report mission — gather information and deliver a summary, read-only"
+budget_default:
+  rounds: 1
+  reflection_after_each: true
+allow_empty_write_set: true
+required_fields: []
+write_set_constraints: []

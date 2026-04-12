@@ -1,0 +1,12 @@
+name: test
+description: "Test mission — add or improve test coverage without changing production code"
+budget_default:
+  rounds: 2
+  reflection_after_each: true
+allow_empty_write_set: false
+required_fields: []
+write_set_constraints:
+  - "*_test.go"
+  - "testdata/**"
+  - "docs/**"
+  - "*.md"
