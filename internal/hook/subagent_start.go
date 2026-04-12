@@ -233,15 +233,14 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 //     verdict cannot "drift" to a different rubric than the one
 //     pinned at launch.
 //  4. The file allowlist — the write_set plus the contract file
-//     itself. This is the list of files the verifier is permitted
-//     to inspect; files outside the allowlist are the worker's
-//     scratch or the parent transcript and must not be read.
+//     itself. The verifier may read any repo file for context, but
+//     Write/Edit outside this list is blocked by the PreToolUse hook.
 //
 // The block explicitly says what the verifier must NOT do:
-// read parent transcript, read worker scratch outside the
-// write_set, or trust prior reasoning from the worker. Prose is
-// the weakest layer of enforcement — a PreToolUse hook is the
-// mechanical enforcement — but the prose carries the contract into
+// write outside the allowlist, read the parent transcript or worker
+// scratch state, or trust prior reasoning from the worker. Prose
+// reinforces the mechanical enforcement (PreToolUse hook blocks
+// Write/Edit outside the allowlist) and carries the contract into
 // the verifier's first prompt so the intent is unambiguous.
 //
 // Returns an error if the contract file is missing or unreadable;
@@ -298,8 +297,9 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot stri
 		m.Evaluator.Handle, m.MissionID)
 	b.WriteString("\n")
 	b.WriteString("You operate under Phase 3.5 context isolation:\n")
-	b.WriteString("  - Your only inputs are this mission contract and the files listed in the allowlist below.\n")
-	b.WriteString("  - You MUST NOT read the worker's scratch state, the parent transcript, or any file outside the allowlist.\n")
+	b.WriteString("  - You may read any file in the repo to understand context.\n")
+	b.WriteString("  - You MUST NOT write or edit any file outside the allowlist below.\n")
+	b.WriteString("  - You MUST NOT read the worker's scratch state or the parent transcript.\n")
 	b.WriteString("  - Your verdict is scored against the success criteria pinned in the contract, not against any rubric you invent.\n")
 	b.WriteString("\n")
 
@@ -324,7 +324,7 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot stri
 	b.WriteString("\n")
 
 	b.WriteString("### File allowlist\n\n")
-	b.WriteString("These are the only paths the verifier may read:\n\n")
+	b.WriteString("These are the paths the verifier may write or edit:\n\n")
 	// Split by path kind so the operator can see at a glance which
 	// entries resolve from the repo root and which are absolute. The
 	// write_set is repo-relative per the per-entry validator in
@@ -344,8 +344,8 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot stri
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Any Read, Grep, or Glob against a path outside this list must be\n")
-	b.WriteString("refused as out-of-scope for this verification pass.\n")
+	b.WriteString("Any Write or Edit against a path outside this list is blocked by the\n")
+	b.WriteString("PreToolUse hook. You may read any file in the repo for context.\n")
 
 	// Walk the write_set to concrete files on disk so the verifier
 	// sees exactly which files exist, not just the static entries.
