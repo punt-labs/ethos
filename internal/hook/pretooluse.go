@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/mission"
 )
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.
@@ -94,22 +95,23 @@ func splitAllowlist(raw string) []string {
 }
 
 // pathAllowed reports whether target is inside any allowlist entry.
-// An allowlist entry matches if the cleaned target path starts with
-// the cleaned entry path (prefix match after filepath.Clean).
-//
-// This handles both directory entries (e.g., "internal/hook/") and
-// file entries (e.g., "cmd/ethos/hook.go"). A directory entry
-// matches any file under it; a file entry matches exactly.
+// Paths are normalized with mission.CanonicalPath so "./a" and "a"
+// compare equal, and the prefix check uses a "/" boundary to prevent
+// "internal/hook" from matching "internal/hookextra/file.go".
 func pathAllowed(target string, entries []string) bool {
-	clean := filepath.Clean(target)
+	ct := mission.CanonicalPath(target)
+	if ct == "" {
+		return false
+	}
 	for _, entry := range entries {
-		ce := filepath.Clean(entry)
-		if clean == ce {
+		ce := mission.CanonicalPath(entry)
+		if ce == "" {
+			continue
+		}
+		if ct == ce {
 			return true
 		}
-		// Directory prefix: "internal/hook" matches
-		// "internal/hook/pretooluse.go".
-		if strings.HasPrefix(clean, ce+string(filepath.Separator)) {
+		if strings.HasPrefix(ct, ce+"/") {
 			return true
 		}
 	}

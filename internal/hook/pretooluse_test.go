@@ -258,6 +258,8 @@ func TestPathAllowed(t *testing.T) {
 		{"outside all entries", "internal/mission/store.go", false},
 		{"partial prefix no sep", "cmd/ethosX/hook.go", false},
 		{"clean trailing slash", "internal/hook/pretooluse.go/", true},
+		{"dot-slash normalized", "./internal/hook/pretooluse.go", true},
+		{"dot-slash dir child", "./cmd/ethos/main.go", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

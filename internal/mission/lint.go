@@ -169,10 +169,13 @@ func lintInputsNotInWriteSet(c *Contract, ws []Warning) []Warning {
 		if set[cf] {
 			continue
 		}
-		// Check directory coverage.
+		// Check directory coverage. CanonicalPath strips the
+		// trailing slash, so we re-add "/" to enforce a segment
+		// boundary — without it "internal/foo" would match
+		// "internal/foobar/file.go".
 		covered := false
 		for _, w := range c.WriteSet {
-			if strings.HasSuffix(w, "/") && strings.HasPrefix(cf, CanonicalPath(w)) {
+			if strings.HasSuffix(w, "/") && strings.HasPrefix(cf, CanonicalPath(w)+"/") {
 				covered = true
 				break
 			}

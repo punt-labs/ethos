@@ -152,6 +152,15 @@ func TestLint(t *testing.T) {
 			wantMsg: "",
 		},
 		{
+			name: "H5: prefix overlap without segment boundary — not covered",
+			mutate: func(c *Contract) {
+				c.Inputs.Files = []string{"internal/missionextra/file.go"}
+				c.WriteSet = append(c.WriteSet, "internal/mission/")
+			},
+			wantMsg: "internal/missionextra/file.go is in inputs.files but not in write_set",
+			wantSev: SeverityInfo,
+		},
+		{
 			name: "H5: input file in write_set — no H5 warning",
 			mutate: func(c *Contract) {
 				c.Inputs.Files = []string{"internal/mission/lint.go"}
