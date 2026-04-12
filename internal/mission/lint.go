@@ -264,7 +264,7 @@ func lintCrossRepoContext(c *Contract, ws []Warning) []Warning {
 	if ctx == "" {
 		return ws
 	}
-	if !repoNamePattern.MatchString(ctx) {
+	if !hasExternalRepoRef(ctx, c.WriteSet) {
 		return ws
 	}
 	if collaborationEvidence(ctx) {
@@ -277,6 +277,37 @@ func lintCrossRepoContext(c *Contract, ws []Warning) []Warning {
 	})
 }
 
+// hasExternalRepoRef reports whether s contains a word/word pattern
+// that is not a prefix of any path in writeSet. Patterns like
+// "internal/mission" match repoNamePattern but are file paths, not
+// repo references.
+func hasExternalRepoRef(s string, writeSet []string) bool {
+	matches := repoNamePattern.FindAllString(s, -1)
+	for _, m := range matches {
+		if !isWriteSetPrefix(m, writeSet) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWriteSetPrefix reports whether candidate is a path prefix of any
+// entry in writeSet. Both sides are canonicalized for comparison.
+func isWriteSetPrefix(candidate string, writeSet []string) bool {
+	cc := CanonicalPath(candidate)
+	if cc == "" {
+		return false
+	}
+	prefix := cc + "/"
+	for _, w := range writeSet {
+		cw := CanonicalPath(w)
+		if cw == cc || strings.HasPrefix(cw, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // isDocsOnlyWriteSet reports whether every path in write_set is a
 // markdown file or inside a docs/ directory.
 func isDocsOnlyWriteSet(writeSet []string) bool {
@@ -284,8 +315,13 @@ func isDocsOnlyWriteSet(writeSet []string) bool {
 		return false
 	}
 	for _, p := range writeSet {
+		// Check the raw entry for trailing slash (directory marker)
+		// before canonicalization, which strips trailing slashes.
+		if strings.HasSuffix(p, "/") {
+			continue
+		}
 		cp := CanonicalPath(p)
-		if strings.HasPrefix(cp, "docs/") || strings.HasSuffix(cp, "/") {
+		if strings.HasPrefix(cp, "docs/") {
 			continue
 		}
 		if strings.HasSuffix(cp, ".md") {

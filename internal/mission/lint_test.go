@@ -245,6 +245,21 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		{
+			name: "H7: context mentions file path matching write_set — no H7 warning",
+			mutate: func(c *Contract) {
+				c.Context = "Changes to internal/mission linting logic"
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: context has both file path and real repo ref — H7 fires",
+			mutate: func(c *Contract) {
+				c.Context = "Changes to internal/mission plus punt-labs/biff integration"
+			},
+			wantMsg: "no cross-repo collaboration noted",
+			wantSev: SeverityWarn,
+		},
 		// Heuristic 8: design mission without user-visible impact
 		{
 			name: "H8: docs-only write_set without impact criterion",
@@ -276,6 +291,14 @@ func TestLint(t *testing.T) {
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"docs/architecture.md"}
 				c.SuccessCriteria = []string{"user-facing behavior documented"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H8: docs-only with directory entry — no H8 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/", "DESIGN.md"}
+				c.SuccessCriteria = []string{"user-visible change documented"}
 			},
 			wantMsg: "",
 		},
