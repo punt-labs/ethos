@@ -160,6 +160,13 @@ Verifier isolation             & 3.5 & DES-035      & \texttt{ethos-07m.9} & SHI
 Result artifacts + close gate  & 3.6 & DES-036      & \texttt{ethos-07m.10} & SHIPPED \\
 Event log reader API           & 3.7 & DES-037      & \texttt{ethos-07m.11} & SHIPPED \\
 \midrule
+RunE handler refactor          & Test & DES-042      & \texttt{ethos-aeb}   & SHIPPED \\
+CLI subprocess tests (L2)      & Test & ---          & \texttt{ethos-oto}   & SHIPPED \\
+In-process handler tests (L2.5)& Test & DES-042      & \texttt{ethos-a1m}   & SHIPPED \\
+MCP integration tests (L3)     & Test & ---          & \texttt{ethos-764}   & SHIPPED \\
+Behavioral test harness (L4)   & Test & DES-043      & \texttt{ethos-fal}   & SHIPPED \\
+Ext layered resolution fix     & Test & DES-044      & \texttt{ethos-q6q}   & SHIPPED \\
+\midrule
 SessionStart working context   & 4.1 & ---          & \texttt{ethos-gcq.1} & PLANNED \\
 Role-based pre-tool safety     & 4.2 & ---          & \texttt{ethos-gcq.2} & PLANNED \\
 PostToolUse audit logging      & 4.3 & ---          & \texttt{ethos-gcq.3} & PLANNED \\
@@ -1177,6 +1184,24 @@ IDs cannot race past the conflict scan (DES-032).
     A \texttt{close} event lands in the JSONL log carrying the
     satisfying result's round and verdict.
 \end{enumerate}
+
+\paragraph{Verified Lifecycle.}
+The mission lifecycle is not merely specified --- it is tested at four
+levels of the test pyramid.  L2 subprocess tests verify that each CLI
+command (\cmd{create}, \cmd{reflect}, \cmd{advance}, \cmd{result},
+\cmd{close}) exits with the correct code and produces the expected
+output.  L2.5 in-process handler tests (DES-042) exercise every gate
+--- the write-set conflict scan, the evaluator hash gate (DES-033),
+the round-advance gate (DES-034), and the close gate (DES-036) ---
+through direct \texttt{RunE} invocation with captured stdout/stderr.
+L3 MCP integration tests drive the same gates through the
+\texttt{mission} MCP tool via a real stdio client.  L4 behavioral
+tests (DES-043) spawn real Claude Code agents against mission
+contracts and verify protocol compliance end-to-end: the agent reads
+the contract before writing, submits a typed result artifact, and
+stays within the declared write-set even under adversarial prompting.
+Together, these layers verify the entire path from typed contract to
+terminal close event.
 
 \subsection{Write-Set Admission Control (DES-032)}
 
@@ -2499,6 +2524,178 @@ inspection and testing:
     event log reader returns every parseable line plus a
     line-numbered warnings list, even when the file is partially
     damaged or contains attacker-planted control sequences.
+
+  \item \textbf{In-process handler testability} (DES-042): every
+    CLI handler uses \texttt{RunE} and returns errors instead of
+    calling \texttt{os.Exit}.  Tests call handlers directly via
+    \texttt{execHandler}, capture stdout/stderr, and assert on
+    both output and error values.  This moved \pkg{cmd/ethos/}
+    from 22\% to 64\% measurable coverage.
+
+  \item \textbf{Behavioral test isolation} (DES-043): L4 tests
+    spawn real Claude Code agents in fixture repos with isolated
+    \texttt{HOME} directories, their own identity stores, and
+    per-test mission contracts.  No shared state leaks between
+    tests; no test reads the developer's global identity store.
+
+  \item \textbf{Layered assertion strategy} (DES-043):
+    deterministic assertions (event log structure, git diff,
+    result YAML schema) catch protocol violations without LLM
+    calls.  LLM-judged assertions catch persona constraint
+    violations that require judgment.  Adversarial scenarios
+    combine both to prove the system holds under pressure.
+    Each layer is independently runnable.
 \end{enumerate}
+
+% ===================================================================
+\section{Testability Architecture}
+\label{sec:testability}
+% ===================================================================
+
+Ethos has 1,055 tests across four pyramid levels, a 1.54:1 test-to-production
+line ratio, and 75.6\% total coverage.  This section describes the
+infrastructure that makes those numbers possible.
+
+\subsection{Test Pyramid}
+
+The test pyramid has four levels.  Each level trades speed for fidelity.
+
+\begin{center}
+\begin{longtable}{@{}llrp{6cm}@{}}
+\toprule
+\textbf{Level} & \textbf{Name} & \textbf{Time} & \textbf{What it proves} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Level} & \textbf{Name} & \textbf{Time} & \textbf{What it proves} \\
+\midrule
+\endhead
+L1 & Content validation  & $<$1\,s   & Identity YAML, attribute slugs,
+                                        and extension schemas are
+                                        well-formed.  Runs as
+                                        \cmd{validate-content} in CI. \\
+L2 & CLI subprocess      & $\sim$2\,s & Each CLI command exits with the
+                                        correct code and produces the
+                                        expected stdout/stderr.  Spawns
+                                        a real \cmd{ethos} binary. \\
+L2.5 & In-process handler & $\sim$3\,s & Handler logic, gate
+                                          enforcement, and error paths
+                                          exercised via \texttt{RunE}
+                                          without spawning a subprocess.
+                                          DES-042. \\
+L3 & MCP integration     & $\sim$5\,s & Every MCP tool exercised
+                                        through a real stdio client
+                                        connection.  Verifies the
+                                        JSON-RPC dispatch, input
+                                        validation, and output
+                                        formatting. \\
+L4 & Behavioral          & $\sim$2\,min & Real Claude Code agents
+                                          execute against mission
+                                          contracts.  Protocol
+                                          compliance, persona
+                                          adherence, and adversarial
+                                          resistance.  DES-043. \\
+\bottomrule
+\end{longtable}
+\end{center}
+
+L1--L3 run on every commit via \cmd{make check}.  L4 runs daily in
+CI via \fpath{.github/workflows/behavioral.yml} and on-demand via
+\cmd{make test-behavioral} (requires \texttt{ANTHROPIC\_API\_KEY} and
+\texttt{claude} CLI).
+
+\subsection{In-Process Handler Testing (DES-042)}
+
+Before DES-042, every CLI handler used \texttt{Run} (no error return)
+and called \texttt{os.Exit} on failure.  This made handlers untestable
+in-process: coverage tools cannot measure code that kills the process.
+
+The refactor converts every handler to \texttt{RunE}.  Handlers return
+errors; the single \texttt{main()} function prints errors with the
+\texttt{ethos:} prefix and routes to exit code 1 (runtime) or 2
+(usage).  A \texttt{silentError} type signals ``already reported ---
+exit non-zero without printing,'' used by handlers like
+\texttt{runDoctor} that format their own failure output.
+
+Tests call handlers via \texttt{execHandler}, which builds a
+\texttt{cobra.Command}, injects flags, redirects stdout/stderr to
+buffers, and returns the error.  No subprocess spawn, no binary
+build, no process overhead.  This moved \pkg{cmd/ethos/} from 22\% to
+64\% measurable coverage.
+
+\subsection{Behavioral Test Infrastructure (DES-043)}
+
+The L4 behavioral tests live in \fpath{tests/behavioral/} behind a
+\texttt{//go:build behavioral} tag, excluded from \cmd{make check}.
+
+\paragraph{Harness.}
+\texttt{SetupFixture} creates an isolated environment per test: a
+\texttt{t.TempDir()} root containing a fake \texttt{HOME}, a
+git-initialized Go repo with a counter package, global and repo-local
+identity stores, personality/writing-style/talent files for the
+evaluator, a team with worker and evaluator roles, and ethos MCP
+config for \cmd{claude --bare}.  The \texttt{SpawnAgent} function
+runs \cmd{claude} as a subprocess with the fixture's environment,
+a budget cap (\texttt{--max-budget-usd}), and a timeout.
+
+\paragraph{Three Assertion Layers.}
+Layer~A (deterministic) checks mission event logs, git diffs, and
+result YAML structure --- no LLM calls required.  Layer~B
+(LLM-judged) sends the agent's output and persona definition to
+Claude Sonnet as a judge, which returns
+\texttt{\{violated, evidence, confidence\}}.  Layer~C (adversarial)
+deliberately tempts agents to break constraints, then combines
+deterministic and judge assertions.  A low-confidence violation
+($<0.7$) is logged as a warning, not a test failure.
+
+\paragraph{Judge.}
+\texttt{JudgePersonaCompliance} is a single \texttt{net/http} POST
+to the Anthropic API.  No SDK dependency.  The prompt includes the
+persona definition, the task, and the agent output; the response is
+a structured JSON verdict.  The judge runs Claude Sonnet at
+\textasciitilde\$0.05 per call.
+
+\subsection{Convention Verification}
+
+Convention tests enforce structural properties that code review
+misses at scale:
+
+\begin{itemize}
+  \item Every CLI handler uses \texttt{RunE}, not \texttt{Run}.
+  \item Every MCP tool has a corresponding formatter in
+    \texttt{format\_output.go}.
+  \item Identity YAML files pass strict decode
+    (\texttt{KnownFields(true)}).
+  \item Extension namespaces conform to the 32-char, lowercase
+    pattern.
+  \item Attribute slugs match the handle regex.
+\end{itemize}
+
+These are standard \texttt{go test} assertions that run in L1--L2.5.
+When a new tool or handler is added, the convention test fails until
+the corresponding formatter or \texttt{RunE} conversion is present.
+
+\subsection{CI Integration}
+
+Two workflows cover the pyramid:
+
+\begin{enumerate}
+  \item \textbf{Per-commit} (\fpath{.github/workflows/test.yml}):
+    \cmd{make check} runs L1--L3.  Go vet, staticcheck, shellcheck,
+    markdownlint, \texttt{go test -race -count=1 ./...}, and
+    \cmd{validate-content}.
+    Approximately 10 seconds wall time.
+  \item \textbf{Daily behavioral}
+    (\fpath{.github/workflows/behavioral.yml}):
+    \cmd{make test-behavioral} runs L4.  Requires
+    \texttt{ANTHROPIC\_API\_KEY} as a repository secret.  Each test
+    spawns a Claude Code agent (\textasciitilde\$0.50,
+    \textasciitilde 2\,min) so the suite is too slow and expensive
+    for per-commit CI.
+\end{enumerate}
+
+The per-commit gate is the merge blocker.  The behavioral suite is
+a confidence signal; failures create beads for investigation, not
+automatic reverts.
 
 \end{document}
