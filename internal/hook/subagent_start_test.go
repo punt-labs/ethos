@@ -1183,3 +1183,71 @@ func TestVerifierAllowlist_PreservesOrder(t *testing.T) {
 	assert.Equal(t, "a-first", list[1])
 	assert.Equal(t, "m-middle", list[2])
 }
+
+// TestSubagentStart_VerifierEmitsAllowlistEnv asserts that a verifier
+// spawn's hook result includes the ETHOS_VERIFIER_ALLOWLIST env var
+// with the colon-separated allowlist. This is the bridge between
+// SubagentStart (which knows the verifier's write_set) and PreToolUse
+// (which enforces the allowlist mechanically).
+func TestSubagentStart_VerifierEmitsAllowlistEnv(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	c.WriteSet = []string{"internal/hook/pretooluse.go", "internal/hook/pretooluse_test.go"}
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	require.NotNil(t, result.Env, "verifier spawn must set env vars")
+	allowlist, ok := result.Env["ETHOS_VERIFIER_ALLOWLIST"]
+	require.True(t, ok, "env must contain ETHOS_VERIFIER_ALLOWLIST")
+
+	// The allowlist must contain every write_set entry and the contract file.
+	for _, entry := range c.WriteSet {
+		assert.Contains(t, allowlist, entry,
+			"allowlist env var must include every write_set entry")
+	}
+	contractPath := missions.ContractPath(c.MissionID)
+	assert.Contains(t, allowlist, contractPath,
+		"allowlist env var must include the contract file path")
+}
+
+// TestSubagentStart_NonVerifierOmitsAllowlistEnv asserts that a
+// non-verifier spawn does not set ETHOS_VERIFIER_ALLOWLIST. The env
+// field must be nil or absent so PreToolUse operates in passthrough
+// mode for normal subagents.
+func TestSubagentStart_NonVerifierOmitsAllowlistEnv(t *testing.T) {
+	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// Seed a second identity so the normal persona path fires.
+	require.NoError(t, attribute.NewStore(dir, attribute.Personalities).Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n",
+	}))
+	require.NoError(t, idStore.Save(&identity.Identity{
+		Name:        "Brian K",
+		Handle:      "bwk",
+		Kind:        "agent",
+		Personality: "kernighan",
+	}))
+
+	// Create a mission with djb as evaluator, bwk as worker.
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// Spawn bwk — not the evaluator.
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk")
+	require.NoError(t, err)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	assert.Nil(t, result.Env,
+		"non-verifier spawn must not set env vars")
+}
