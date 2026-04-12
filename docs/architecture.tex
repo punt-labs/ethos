@@ -1727,7 +1727,7 @@ when an agent is invoked without a generated definition file.
 
 When a verifier subagent spawns, the \texttt{SubagentStart} hook
 sets the \texttt{ETHOS\_VERIFIER\_ALLOWLIST} environment variable to
-a newline-delimited list of paths derived from the mission's
+a colon-separated list of paths derived from the mission's
 \field{write\_set} (walked to concrete files on disk via
 \texttt{WalkWriteSet}).  The \texttt{PreToolUse} hook handler reads
 this variable and blocks \texttt{Read}, \texttt{Write},

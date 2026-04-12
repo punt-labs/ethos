@@ -200,11 +200,21 @@ func lintEvaluatorRole(c *Contract, ws []Warning) []Warning {
 	if h == "" || h == "evaluator" || h == "tbd" || h == "TBD" {
 		ws = append(ws, Warning{
 			Field:    "evaluator.handle",
-			Message:  "evaluator handle " + h + " looks like a placeholder — assign a named identity",
+			Message:  "evaluator handle " + formatHandle(h) + " looks like a placeholder — assign a named identity",
 			Severity: SeverityWarn,
 		})
 	}
 	return ws
+}
+
+// formatHandle returns a quoted representation of h for use in
+// diagnostic messages. An empty handle becomes "(empty)" so the
+// message reads naturally without a double space.
+func formatHandle(h string) string {
+	if h == "" {
+		return "(empty)"
+	}
+	return `"` + h + `"`
 }
 
 // writeSetIndex builds a set of canonical paths from write_set for

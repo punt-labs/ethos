@@ -260,6 +260,9 @@ func TestPathAllowed(t *testing.T) {
 		{"clean trailing slash", "internal/hook/pretooluse.go/", true},
 		{"dot-slash normalized", "./internal/hook/pretooluse.go", true},
 		{"dot-slash dir child", "./cmd/ethos/main.go", true},
+		{"traversal escapes allowlist", "internal/hook/../../secret.go", false},
+		{"traversal into sibling", "cmd/ethos/../../internal/mission/store.go", false},
+		{"traversal that stays inside", "cmd/ethos/sub/../hook.go", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

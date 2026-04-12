@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -95,16 +96,17 @@ func splitAllowlist(raw string) []string {
 }
 
 // pathAllowed reports whether target is inside any allowlist entry.
-// Paths are normalized with mission.CanonicalPath so "./a" and "a"
-// compare equal, and the prefix check uses a "/" boundary to prevent
-// "internal/hook" from matching "internal/hookextra/file.go".
+// Paths are normalized with filepath.Clean and mission.CanonicalPath
+// so "./a" and "a" compare equal, ".." traversals are collapsed, and
+// the prefix check uses a "/" boundary to prevent "internal/hook"
+// from matching "internal/hookextra/file.go".
 func pathAllowed(target string, entries []string) bool {
-	ct := mission.CanonicalPath(target)
+	ct := cleanCanonical(target)
 	if ct == "" {
 		return false
 	}
 	for _, entry := range entries {
-		ce := mission.CanonicalPath(entry)
+		ce := cleanCanonical(entry)
 		if ce == "" {
 			continue
 		}
@@ -116,4 +118,12 @@ func pathAllowed(target string, entries []string) bool {
 		}
 	}
 	return false
+}
+
+// cleanCanonical applies filepath.Clean then mission.CanonicalPath.
+// filepath.Clean resolves ".." segments so "a/b/../../c" becomes "c",
+// preventing traversal attacks that pass a prefix check before
+// resolution.
+func cleanCanonical(p string) string {
+	return mission.CanonicalPath(filepath.Clean(p))
 }
