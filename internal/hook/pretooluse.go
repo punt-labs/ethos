@@ -30,8 +30,9 @@ type PreToolUseResult struct {
 // it relative to the working directory). Absolute entries match as
 // prefixes directly.
 //
-// Tools checked: Read, Write, Edit (file_path), Glob and Grep (path).
-// All other tools are allowed unconditionally.
+// Only Write and Edit are checked — verifiers may read any file but
+// may not write outside the allowlist. All other tools (Read, Glob,
+// Grep, Bash, etc.) are allowed unconditionally.
 func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	allowlist := os.Getenv("ETHOS_VERIFIER_ALLOWLIST")
 	if allowlist == "" {
@@ -64,18 +65,20 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	})
 }
 
-// extractTargetPath returns the file or directory path a tool call
-// targets. Returns "" for tools that don't operate on file paths.
+// extractTargetPath returns the file path a tool call targets for
+// allowlist enforcement. Only Write and Edit are checked — verifiers
+// may read any file but may not write outside the allowlist. Returns
+// "" for all other tools, which means "allow unconditionally".
 func extractTargetPath(toolName string, toolInput map[string]any) string {
 	if toolInput == nil {
 		return ""
 	}
 	switch toolName {
-	case "Read", "Write", "Edit":
+	case "Write", "Edit":
+		// Verifiers must not modify files outside the write-set.
+		// Read/Glob/Grep are unrestricted — verifiers need full read
+		// access to review effectively.
 		p, _ := toolInput["file_path"].(string)
-		return p
-	case "Glob", "Grep":
-		p, _ := toolInput["path"].(string)
 		return p
 	default:
 		return ""
