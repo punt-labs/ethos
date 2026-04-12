@@ -2,6 +2,7 @@ package mission
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -24,13 +25,16 @@ type Warning struct {
 // warnings. It does not require a store round-trip. All checks are
 // non-blocking — callers should print warnings but not fail on them.
 //
-// Six heuristics:
+// Nine heuristics:
 //  1. write_set contains a .go file but not the adjacent _test.go
 //  2. write_set contains production code but no CHANGELOG.md entry
 //  3. success_criteria mention README/docs but README.md is not in write_set
 //  4. write_set contains _test.go but no corresponding .go (inverted gap)
 //  5. inputs.files contains paths not in write_set
 //  6. evaluator identity has no role bound (handle is "evaluator" placeholder)
+//  7. context references another repo but no cross-repo collaboration noted
+//  8. design mission has no user-visible impact criterion
+//  9. docs write-set with a generalist evaluator
 func Lint(c *Contract) []Warning {
 	if c == nil {
 		return nil
@@ -42,6 +46,9 @@ func Lint(c *Contract) []Warning {
 	ws = lintInvertedTestGap(c, ws)
 	ws = lintInputsNotInWriteSet(c, ws)
 	ws = lintEvaluatorRole(c, ws)
+	ws = lintCrossRepoContext(c, ws)
+	ws = lintDesignImpact(c, ws)
+	ws = lintDocsEvaluator(c, ws)
 	return ws
 }
 
@@ -228,6 +235,141 @@ func writeSetIndex(writeSet []string) map[string]bool {
 		}
 	}
 	return m
+}
+
+// repoNamePattern matches owner/repo (e.g. "punt-labs/ethos") or a
+// bare repo-like name (word-word or word, 2+ chars, not a file path).
+var repoNamePattern = regexp.MustCompile(`\b[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+\b`)
+
+// collaborationEvidence reports whether s contains @handle references
+// or collaboration phrases.
+func collaborationEvidence(s string) bool {
+	if strings.Contains(s, "@") {
+		return true
+	}
+	low := strings.ToLower(s)
+	for _, phrase := range []string{"discussed with", "agreed with", "coordinated with"} {
+		if strings.Contains(low, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+// lintCrossRepoContext warns when context references another repo but
+// contains no evidence of cross-repo collaboration (no @handle, no
+// "discussed with"/"agreed with" phrases).
+func lintCrossRepoContext(c *Contract, ws []Warning) []Warning {
+	ctx := c.Context
+	if ctx == "" {
+		return ws
+	}
+	if !hasExternalRepoRef(ctx, c.WriteSet) {
+		return ws
+	}
+	if collaborationEvidence(ctx) {
+		return ws
+	}
+	return append(ws, Warning{
+		Field:    "context",
+		Message:  "context references another repo but no cross-repo collaboration noted",
+		Severity: SeverityWarn,
+	})
+}
+
+// hasExternalRepoRef reports whether s contains a word/word pattern
+// that is not a prefix of any path in writeSet. Patterns like
+// "internal/mission" match repoNamePattern but are file paths, not
+// repo references.
+func hasExternalRepoRef(s string, writeSet []string) bool {
+	matches := repoNamePattern.FindAllString(s, -1)
+	for _, m := range matches {
+		if !isWriteSetPrefix(m, writeSet) {
+			return true
+		}
+	}
+	return false
+}
+
+// isWriteSetPrefix reports whether candidate is a path prefix of any
+// entry in writeSet. Both sides are canonicalized for comparison.
+func isWriteSetPrefix(candidate string, writeSet []string) bool {
+	cc := CanonicalPath(candidate)
+	if cc == "" {
+		return false
+	}
+	prefix := cc + "/"
+	for _, w := range writeSet {
+		cw := CanonicalPath(w)
+		if cw == cc || strings.HasPrefix(cw, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDocsOnlyWriteSet reports whether every path in write_set is a
+// markdown file or inside a docs/ directory.
+func isDocsOnlyWriteSet(writeSet []string) bool {
+	if len(writeSet) == 0 {
+		return false
+	}
+	for _, p := range writeSet {
+		// Check the raw entry for trailing slash (directory marker)
+		// before canonicalization, which strips trailing slashes.
+		if strings.HasSuffix(p, "/") {
+			continue
+		}
+		cp := CanonicalPath(p)
+		if strings.HasPrefix(cp, "docs/") {
+			continue
+		}
+		if strings.HasSuffix(cp, ".md") {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// lintDesignImpact warns when the write_set is docs-only but no
+// success criterion mentions user-visible impact.
+func lintDesignImpact(c *Contract, ws []Warning) []Warning {
+	if !isDocsOnlyWriteSet(c.WriteSet) {
+		return ws
+	}
+	for _, sc := range c.SuccessCriteria {
+		low := strings.ToLower(sc)
+		if strings.Contains(low, "before") && strings.Contains(low, "after") {
+			return ws
+		}
+		if strings.Contains(low, "user-visible") || strings.Contains(low, "user-facing") {
+			return ws
+		}
+	}
+	return append(ws, Warning{
+		Field:    "success_criteria",
+		Message:  "design mission has no user-visible impact criterion",
+		Severity: SeverityWarn,
+	})
+}
+
+// lintDocsEvaluator warns (info) when the write_set is docs-only and
+// the evaluator handle looks like a generalist placeholder.
+func lintDocsEvaluator(c *Contract, ws []Warning) []Warning {
+	if !isDocsOnlyWriteSet(c.WriteSet) {
+		return ws
+	}
+	h := strings.TrimSpace(c.Evaluator.Handle)
+	switch h {
+	case "", "evaluator", "tbd", "TBD", "claude", "default":
+		return append(ws, Warning{
+			Field:    "evaluator.handle",
+			Message:  "evaluator may not have domain expertise for this design",
+			Severity: SeverityInfo,
+		})
+	}
+	return ws
 }
 
 // isProductionCode reports whether the path looks like production

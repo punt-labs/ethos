@@ -8,9 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// lintContract returns a contract that passes all six heuristics
+// lintContract returns a contract that passes all nine heuristics
 // cleanly: paired .go and _test.go, CHANGELOG.md present, no
-// README mention in criteria, no input files, real evaluator handle.
+// README mention in criteria, no input files, real evaluator handle,
+// no cross-repo context, non-docs write_set, non-generalist evaluator.
 func lintContract() Contract {
 	return Contract{
 		Leader: "claude",
@@ -82,7 +83,7 @@ func TestLint(t *testing.T) {
 		{
 			name: "H2: no production code — no H2 warning",
 			mutate: func(c *Contract) {
-				c.WriteSet = []string{"CHANGELOG.md", "README.md"}
+				c.WriteSet = []string{"CHANGELOG.md", "README.md", "config.yaml"}
 			},
 			wantMsg: "",
 		},
@@ -204,6 +205,161 @@ func TestLint(t *testing.T) {
 			name: "H6: real evaluator handle — no H6 warning",
 			mutate: func(c *Contract) {
 				c.Evaluator.Handle = "mdm"
+			},
+			wantMsg: "",
+		},
+		// Heuristic 7: cross-repo context without collaboration
+		{
+			name: "H7: context references repo without collaboration",
+			mutate: func(c *Contract) {
+				c.Context = "Extends punt-labs/ethos with new lint rules"
+			},
+			wantMsg: "no cross-repo collaboration noted",
+			wantSev: SeverityWarn,
+		},
+		{
+			name: "H7: context references repo with @handle — no H7 warning",
+			mutate: func(c *Contract) {
+				c.Context = "Extends punt-labs/ethos with new lint rules, @bwk agreed"
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: context references repo with discussed-with — no H7 warning",
+			mutate: func(c *Contract) {
+				c.Context = "Extends punt-labs/ethos, discussed with bwk"
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: empty context — no H7 warning",
+			mutate: func(c *Contract) {
+				c.Context = ""
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: context with no repo reference — no H7 warning",
+			mutate: func(c *Contract) {
+				c.Context = "This mission adds three design heuristics"
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: context mentions file path matching write_set — no H7 warning",
+			mutate: func(c *Contract) {
+				c.Context = "Changes to internal/mission linting logic"
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H7: context has both file path and real repo ref — H7 fires",
+			mutate: func(c *Contract) {
+				c.Context = "Changes to internal/mission plus punt-labs/biff integration"
+			},
+			wantMsg: "no cross-repo collaboration noted",
+			wantSev: SeverityWarn,
+		},
+		// Heuristic 8: design mission without user-visible impact
+		{
+			name: "H8: docs-only write_set without impact criterion",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md", "DESIGN.md"}
+				c.SuccessCriteria = []string{"Document the architecture"}
+			},
+			wantMsg: "no user-visible impact criterion",
+			wantSev: SeverityWarn,
+		},
+		{
+			name: "H8: docs-only with before/after in criteria — no H8 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md", "DESIGN.md"}
+				c.SuccessCriteria = []string{"Show before and after comparison"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H8: docs-only with user-visible in criteria — no H8 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md", "DESIGN.md"}
+				c.SuccessCriteria = []string{"Include user-visible change summary"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H8: docs-only with user-facing in criteria — no H8 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md"}
+				c.SuccessCriteria = []string{"user-facing behavior documented"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H8: docs-only with directory entry — no H8 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/", "DESIGN.md"}
+				c.SuccessCriteria = []string{"user-visible change documented"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H8: non-docs write_set — no H8 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/lint.go", "internal/mission/lint_test.go", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"make check passes"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H8: empty write_set — no H8 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = nil
+				c.SuccessCriteria = []string{"Document the architecture"}
+			},
+			wantMsg: "",
+		},
+		// Heuristic 9: docs evaluator is generalist
+		{
+			name: "H9: docs write_set with generalist evaluator 'claude'",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md", "DESIGN.md"}
+				c.Evaluator.Handle = "claude"
+			},
+			wantMsg: "evaluator may not have domain expertise",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H9: docs write_set with evaluator 'default'",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md"}
+				c.Evaluator.Handle = "default"
+			},
+			wantMsg: "evaluator may not have domain expertise",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H9: docs write_set with empty evaluator",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md"}
+				c.Evaluator.Handle = ""
+			},
+			wantMsg: "evaluator may not have domain expertise",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H9: docs write_set with named evaluator — no H9 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/architecture.md", "DESIGN.md"}
+				c.Evaluator.Handle = "djb"
+				c.SuccessCriteria = []string{"user-visible change documented"}
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H9: non-docs write_set with generalist evaluator — no H9 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/lint.go", "internal/mission/lint_test.go", "CHANGELOG.md"}
+				c.Evaluator.Handle = "claude"
 			},
 			wantMsg: "",
 		},
