@@ -1,0 +1,12 @@
+name: review
+description: "Review mission — read and report findings, no code changes"
+budget_default:
+  rounds: 1
+  reflection_after_each: true
+allow_empty_write_set: false
+required_fields:
+  - inputs.files
+write_set_constraints:
+  - "*.md"
+  - "*.yaml"
+  - ".tmp/**"

@@ -1,0 +1,10 @@
+name: quick
+description: "Implement and review — fast path for well-understood changes"
+stages:
+  - name: implement
+    archetype: implement
+    description: "Write the code"
+  - name: review
+    archetype: review
+    description: "Review the implementation"
+    inputs_from: implement

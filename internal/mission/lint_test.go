@@ -8,10 +8,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// lintContract returns a contract that passes all nine heuristics
-// cleanly: paired .go and _test.go, CHANGELOG.md present, no
-// README mention in criteria, no input files, real evaluator handle,
-// no cross-repo context, non-docs write_set, non-generalist evaluator.
+// lintContract returns a contract that passes H1-H9 cleanly: paired
+// .go and _test.go, CHANGELOG.md present, no README mention in
+// criteria, no input files, real evaluator handle, no cross-repo
+// context, non-docs write_set, non-generalist evaluator.
+//
+// H10 (pipeline selector) fires because no pipeline field exists yet.
 func lintContract() Contract {
 	return Contract{
 		Leader: "claude",
@@ -33,7 +35,10 @@ func lintContract() Contract {
 func TestLint_CleanContract(t *testing.T) {
 	c := lintContract()
 	ws := Lint(&c)
-	assert.Empty(t, ws, "clean contract should produce no warnings")
+	// H10 fires (info) because no pipeline field is set.
+	require.Len(t, ws, 1, "expected exactly one warning (H10)")
+	assert.Equal(t, SeverityInfo, ws[0].Severity)
+	assert.Contains(t, ws[0].Message, "consider pipeline:")
 }
 
 func TestLint_NilContract(t *testing.T) {
@@ -363,6 +368,106 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		// Heuristic 10: pipeline selector
+		{
+			name: "H10: quick — 1-3 files, 1-2 criteria",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/lint.go", "internal/mission/lint_test.go"}
+				c.SuccessCriteria = []string{"make check passes"}
+			},
+			wantMsg: "consider pipeline: quick",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: quick — 1 file, 1 criterion",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"README.md"}
+				c.SuccessCriteria = []string{"updated"}
+			},
+			wantMsg: "consider pipeline: quick",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: quick — 3 files, 2 criteria",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "a_test.go", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"tests pass", "lint clean"}
+			},
+			wantMsg: "consider pipeline: quick",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: standard — 4 files",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "a_test.go", "b.go", "b_test.go"}
+				c.SuccessCriteria = []string{"tests pass"}
+			},
+			wantMsg: "consider pipeline: standard",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: standard — 3+ criteria",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "a_test.go"}
+				c.SuccessCriteria = []string{"tests pass", "lint clean", "docs updated"}
+			},
+			wantMsg: "consider pipeline: standard",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: standard — 10 files (boundary)",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go", "g.go", "h.go", "i.go", "j.go"}
+				c.SuccessCriteria = []string{"tests pass"}
+			},
+			wantMsg: "consider pipeline: standard",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: full — 11 files",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go", "g.go", "h.go", "i.go", "j.go", "k.go"}
+				c.SuccessCriteria = []string{"tests pass"}
+			},
+			wantMsg: "consider pipeline: full",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: full — multiple repos in context",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "a_test.go"}
+				c.SuccessCriteria = []string{"tests pass"}
+				c.Context = "Coordinate punt-labs/ethos and punt-labs/biff for identity sync"
+			},
+			wantMsg: "consider pipeline: full",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: single repo in context — not full",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "a_test.go"}
+				c.SuccessCriteria = []string{"tests pass"}
+				c.Context = "Extends punt-labs/biff with new feature"
+			},
+			wantMsg: "consider pipeline: quick",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: empty write_set and criteria — no H10 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = nil
+				c.SuccessCriteria = nil
+			},
+			wantMsg: "",
+		},
+		{
+			name: "H10: empty write_set with criteria — no H10 warning",
+			mutate: func(c *Contract) {
+				c.WriteSet = nil
+				c.SuccessCriteria = []string{"design complete"}
+			},
+			wantMsg: "",
+		},
 	}
 
 	for _, tc := range tests {
@@ -371,7 +476,16 @@ func TestLint(t *testing.T) {
 			tc.mutate(&c)
 			ws := Lint(&c)
 			if tc.wantMsg == "" {
-				assert.Empty(t, ws, "expected no warnings; got %v", ws)
+				// Filter H10 pipeline suggestions — advisory,
+				// fires on all contracts until Pipeline field
+				// is added to Contract.
+				var filtered []Warning
+				for _, w := range ws {
+					if w.Field != "pipeline" {
+						filtered = append(filtered, w)
+					}
+				}
+				assert.Empty(t, filtered, "expected no warnings (ignoring pipeline); got %v", filtered)
 				return
 			}
 			require.NotEmpty(t, ws, "expected at least one warning containing %q", tc.wantMsg)
@@ -400,8 +514,9 @@ func TestLint_MultipleWarnings(t *testing.T) {
 	}
 	ws := Lint(&c)
 	// H1 (missing _test.go), H2 (no CHANGELOG), H3 (README in
-	// criteria), H6 (placeholder evaluator) — at least 4 warnings.
-	assert.GreaterOrEqual(t, len(ws), 4, "expected >= 4 warnings; got %v", ws)
+	// criteria), H6 (placeholder evaluator), H10 (pipeline) — at
+	// least 5 warnings.
+	assert.GreaterOrEqual(t, len(ws), 5, "expected >= 5 warnings; got %v", ws)
 
 	msgs := make([]string, len(ws))
 	for i, w := range ws {

@@ -28,7 +28,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (13 total — must match the numbered list below
+// Validation rules (14 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -37,16 +37,18 @@ const (
 //  5. status ↔ closed_at invariant:
 //     - status == open  → closed_at must be empty
 //     - status != open  → closed_at must be non-empty and RFC3339
-//  6. leader is non-empty and contains no control characters
-//  7. worker is non-empty and contains no control characters
-//  8. evaluator.handle is non-empty and contains no control characters
-//  9. evaluator.pinned_at is parseable as RFC3339
-//  10. write_set is non-empty AND every entry: no null byte, no other
+//  6. type: empty is accepted (defaulted by Store.Create / load);
+//     when set, must not contain control characters
+//  7. leader is non-empty and contains no control characters
+//  8. worker is non-empty and contains no control characters
+//  9. evaluator.handle is non-empty and contains no control characters
+//  10. evaluator.pinned_at is parseable as RFC3339
+//  11. write_set is non-empty AND every entry: no null byte, no other
 //     control character, no `..` segment, not absolute (including
 //     Windows drive letters and UNC), not empty after trimming
-//  11. budget.rounds is in [1, 10]
-//  12. success_criteria has at least one entry
-//  13. current_round is in [1, budget.rounds] (3.4 round-tracking
+//  12. budget.rounds is in [1, 10]
+//  13. success_criteria has at least one entry
+//  14. current_round is in [1, budget.rounds] (3.4 round-tracking
 //     invariant; zero is rewritten to 1 by Store.Create so a
 //     pre-3.4 contract loaded in-place still parses)
 //
@@ -95,6 +97,12 @@ func (c *Contract) Validate() error {
 		if _, err := time.Parse(time.RFC3339, c.ClosedAt); err != nil {
 			return fmt.Errorf("invalid closed_at %q: %w", c.ClosedAt, err)
 		}
+	}
+
+	// type: empty is accepted (Store.Create and decodeAndValidate
+	// default it to "implement"); when set, reject control characters.
+	if c.Type != "" && containsControlChar(c.Type) {
+		return fmt.Errorf("type contains control character")
 	}
 
 	// leader non-empty and clean

@@ -22,6 +22,7 @@ const (
 type Contract struct {
 	MissionID string `yaml:"mission_id" json:"mission_id"`
 	Status    string `yaml:"status" json:"status"`
+	Type      string `yaml:"type,omitempty" json:"type,omitempty"`
 	CreatedAt string `yaml:"created_at" json:"created_at"`
 	UpdatedAt string `yaml:"updated_at" json:"updated_at"`
 	ClosedAt  string `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`

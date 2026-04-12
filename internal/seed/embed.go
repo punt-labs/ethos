@@ -8,6 +8,12 @@ var Roles embed.FS
 //go:embed sidecar/talents/*.md
 var Talents embed.FS
 
+//go:embed sidecar/archetypes/*.yaml
+var Archetypes embed.FS
+
+//go:embed sidecar/pipelines/*.yaml
+var Pipelines embed.FS
+
 //go:embed sidecar/skills/baseline-ops/SKILL.md sidecar/skills/mission/SKILL.md sidecar/skills/create-from-project/SKILL.md
 var Skills embed.FS
 
