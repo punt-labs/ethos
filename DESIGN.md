@@ -3116,25 +3116,21 @@ not being referenced in the block at all.
 
 ### What 3.5 deliberately does NOT do
 
-- **No mechanical file-allowlist enforcement** (SC6 of the mission
-  contract). The isolation block declares the allowlist as a prose
-  directive. A misbehaving verifier subagent could still call
-  `Read`, `Grep`, or `Glob` against a path outside the list. Phase
-  3.5's threat model is "the implementer shouldn't review their
-  own work" — specifically, an ethos sub-agent that has no incentive
-  to cheat but whose judgment is biased by shared role framing.
-  The prose directive is sufficient for a cooperating verifier.
-  Mechanical enforcement via a new `PreToolUse` hook handler is
-  defense-in-depth against an adversarial verifier, which is a
-  different threat model. Filed as a follow-up bead.
+- **~~No mechanical file-allowlist enforcement~~ (SC6, now
+  implemented — `ethos-x05`).** A `PreToolUse` hook handler blocks
+  verifier Read/Write/Edit/Glob/Grep calls against paths outside
+  the mission write_set. The allowlist is communicated to the hook
+  via the `ETHOS_VERIFIER_ALLOWLIST` environment variable set at
+  `SubagentStart`. The prose directive remains as the cooperating-
+  verifier signal; the hook enforces it mechanically as defense-in-
+  depth.
 
-- **No real git-diff computation of round deltas** (SC5). The
-  isolation block's file allowlist lists the static `write_set`
-  entries, not a walked diff of files actually touched by the
-  worker in the current round. A walked diff is more informative
-  (the verifier can see `filepath.WalkDir`-discovered files instead
-  of the pattern) but adds filesystem walking on every verifier
-  spawn. Filed as a follow-up bead.
+- **~~No real git-diff computation of round deltas~~ (SC5, now
+  implemented — `ethos-4au`).** `WalkWriteSet` resolves static
+  write_set paths to concrete files on disk via `filepath.WalkDir`.
+  The verifier isolation block now includes a "Concrete files on
+  disk" section listing the walked results alongside the static
+  write_set entries.
 
 - **No change to Phase 3.3's `checkVerifierHash`.** Phase 3.5
   REUSES the discriminator; it does not modify it. The same gate

@@ -32,6 +32,10 @@ type SubagentStartResult struct {
 		HookEventName     string `json:"hookEventName"`
 		AdditionalContext string `json:"additionalContext,omitempty"`
 	} `json:"hookSpecificOutput"`
+	// Env is an optional map of environment variables that Claude Code
+	// sets in the spawned subagent's process. Used by verifier isolation
+	// to pass ETHOS_VERIFIER_ALLOWLIST to the subagent's PreToolUse hooks.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 // SubagentStartDeps groups the dependencies HandleSubagentStartWithDeps
@@ -51,6 +55,10 @@ type SubagentStartDeps struct {
 	// the live evaluator content. Required when Missions is non-nil
 	// and Phase 3.3 verifier discipline is in effect.
 	Hash mission.HashSources
+	// RepoRoot is the repository root directory, used by the verifier
+	// isolation block to resolve write_set entries to concrete files
+	// on disk via WalkWriteSet. Empty means the walk is skipped.
+	RepoRoot string
 }
 
 // HandleSubagentStart reads the SubagentStart hook payload from stdin,
@@ -146,7 +154,7 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	// that. The isolation block is additionalContext on top of that
 	// agent definition.
 	if len(verifierMissions) > 0 {
-		block, blockErr := buildVerifierIsolationBlock(verifierMissions, deps.Missions)
+		block, blockErr := buildVerifierIsolationBlock(verifierMissions, deps.Missions, deps.RepoRoot)
 		if blockErr != nil {
 			// Refuse the spawn rather than silently fall through to
 			// the normal persona path: a verifier with the wrong
@@ -156,6 +164,9 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 		result := SubagentStartResult{}
 		result.HookSpecificOutput.HookEventName = "SubagentStart"
 		result.HookSpecificOutput.AdditionalContext = block
+		// Set ETHOS_VERIFIER_ALLOWLIST so PreToolUse hooks in the
+		// subagent can enforce the file allowlist mechanically.
+		result.Env = buildVerifierAllowlistEnv(verifierMissions, deps.Missions)
 		return json.NewEncoder(os.Stdout).Encode(result)
 	}
 
@@ -236,7 +247,7 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 // Returns an error if the contract file is missing or unreadable;
 // the caller refuses the spawn. A successful build always returns
 // non-empty bytes.
-func buildVerifierIsolationBlock(missions []verifierMission, store *mission.Store) (string, error) {
+func buildVerifierIsolationBlock(missions []verifierMission, store *mission.Store, repoRoot string) (string, error) {
 	if len(missions) == 0 {
 		return "", fmt.Errorf("no verifier missions")
 	}
@@ -245,7 +256,7 @@ func buildVerifierIsolationBlock(missions []verifierMission, store *mission.Stor
 	}
 	var blocks []string
 	for _, vm := range missions {
-		body, err := renderVerifierBlock(vm, store)
+		body, err := renderVerifierBlock(vm, store, repoRoot)
 		if err != nil {
 			return "", err
 		}
@@ -263,7 +274,7 @@ func buildVerifierIsolationBlock(missions []verifierMission, store *mission.Stor
 // TOCTOU window a second os.ReadFile would open: the bytes used for
 // hash verification are the same bytes rendered into the isolation
 // block.
-func renderVerifierBlock(vm verifierMission, store *mission.Store) (string, error) {
+func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot string) (string, error) {
 	m := vm.Contract
 	if m == nil {
 		return "", fmt.Errorf("mission contract is nil")
@@ -336,6 +347,23 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store) (string, erro
 	b.WriteString("Any Read, Grep, or Glob against a path outside this list must be\n")
 	b.WriteString("refused as out-of-scope for this verification pass.\n")
 
+	// Walk the write_set to concrete files on disk so the verifier
+	// sees exactly which files exist, not just the static entries.
+	if repoRoot != "" {
+		walked, walkErr := mission.WalkWriteSet(repoRoot, m.WriteSet)
+		if walkErr != nil {
+			// Log the walk error but do not fail the spawn; the
+			// static allowlist above is sufficient for verification.
+			fmt.Fprintf(os.Stderr, "ethos: subagent-start: walk write_set for %s: %v\n", m.MissionID, walkErr)
+		} else if len(walked) > 0 {
+			b.WriteString("\n### Concrete files on disk\n\n")
+			b.WriteString("The write_set entries resolve to these files:\n\n")
+			for _, f := range walked {
+				fmt.Fprintf(&b, "  - %s\n", f)
+			}
+		}
+	}
+
 	return b.String(), nil
 }
 
@@ -395,6 +423,30 @@ func verifierAllowlistSplit(m *mission.Contract, store *mission.Store) (repo, ab
 		}
 	}
 	return repo, abs
+}
+
+// buildVerifierAllowlistEnv returns the env map for a verifier
+// subagent. The ETHOS_VERIFIER_ALLOWLIST value is a colon-separated
+// list of all allowed paths across all verifier missions. PreToolUse
+// reads this env var and blocks tool calls targeting paths outside it.
+func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store) map[string]string {
+	seen := make(map[string]struct{})
+	var entries []string
+	for _, vm := range missions {
+		for _, p := range verifierAllowlist(vm.Contract, store) {
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			entries = append(entries, p)
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	return map[string]string{
+		"ETHOS_VERIFIER_ALLOWLIST": strings.Join(entries, ":"),
+	}
 }
 
 // checkVerifierHash recomputes the evaluator hash for every open

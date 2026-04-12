@@ -427,6 +427,27 @@ Examples:
 	},
 }
 
+// --- mission lint ---
+
+var missionLintCmd = &cobra.Command{
+	Use:   "lint <contract.yaml>",
+	Short: "Run advisory heuristics on a mission contract",
+	Long: `Run advisory heuristics on a mission contract YAML file.
+
+Parses the contract and checks for common spec errors: missing
+adjacent test files, CHANGELOG gaps, README references in criteria
+without write_set coverage, inverted test gaps, input files outside
+write_set, and placeholder evaluator handles.
+
+All findings are advisory (exit 0 even with warnings). The contract
+does not need to pass full validation — lint operates on the parsed
+struct, not via the store.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionLint(args[0])
+	},
+}
+
 // --- mission export ---
 
 var missionExportDir string
@@ -509,6 +530,7 @@ func init() {
 		missionResultsCmd,
 		missionLogCmd,
 		missionExportCmd,
+		missionLintCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -1174,6 +1196,37 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("writing %s: %w", resultPath, err)
 	}
 	fmt.Printf("exported: %s\n", resultPath)
+	return nil
+}
+
+// runMissionLint handles `ethos mission lint <contract.yaml>`.
+//
+// Parses the contract from a YAML file, runs Lint, and prints
+// warnings. Exits 0 regardless of findings — lint is advisory.
+func runMissionLint(file string) error {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return fmt.Errorf("mission lint: %w", err)
+	}
+	c, err := mission.DecodeContractStrict(data, file)
+	if err != nil {
+		return fmt.Errorf("mission lint: %w", err)
+	}
+	ws := mission.Lint(c)
+	if jsonOutput {
+		if ws == nil {
+			ws = []mission.Warning{}
+		}
+		printJSON(ws)
+		return nil
+	}
+	if len(ws) == 0 {
+		fmt.Println("no issues")
+		return nil
+	}
+	for _, w := range ws {
+		fmt.Printf("[%s] %s: %s\n", w.Severity, w.Field, w.Message)
+	}
 	return nil
 }
 

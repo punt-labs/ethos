@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos mission lint`** — advisory pre-delegation linter with 6
+  heuristic checks (adjacent test file, CHANGELOG gap, README in
+  criteria, inverted test gap, inputs.files not in write_set, placeholder
+  evaluator). Exits 0 with or without warnings. Supports `--json`.
+- **Walked-diff for verifier isolation** — `WalkWriteSet` resolves
+  static write_set paths to concrete files on disk. Verifier isolation
+  block now includes a "Concrete files on disk" section.
+- **PreToolUse file allowlist enforcement** — hook handler blocks
+  verifier Read/Write/Edit/Glob/Grep calls against paths outside the
+  mission write_set. Communicated via `ETHOS_VERIFIER_ALLOWLIST` env var.
+- **L4 behavioral test infrastructure** — three-layer test harness
+  (deterministic, LLM-judged, adversarial) with 8 scenarios. Daily CI
+  via `.github/workflows/behavioral.yml`.
+- **L1-L3 test infrastructure** — content validation CI binary, CLI
+  subprocess tests, MCP integration tests via stdio client.
+- **`-coverprofile` in `make test`** and CI coverage summary step.
+
+### Changed
+
+- **All CLI handlers use RunE** (DES-042) — handlers return errors
+  instead of calling `os.Exit`. `silentError` type for already-reported
+  failures. `writeJSON` alongside `printJSON`.
+- **`validate-content` added to CI test workflow** — was in `make check`
+  locally but missing from GitHub Actions.
+
+### Fixed
+
+- **ext commands resolve repo-local identities** (DES-044) — `ext
+  set/get/del/list` now use layered identity store. Extensions still
+  write to global `.ext/` directory.
+
 ## [3.0.0] - 2026-04-10
 
 ### Docs
@@ -1222,7 +1255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP handlers receive `Store` via injection (no `os.Exit` in handler context)
 - ShellCheck added to CI and `make lint`
 
-[Unreleased]: https://github.com/punt-labs/ethos/compare/v2.6.1...HEAD
+[Unreleased]: https://github.com/punt-labs/ethos/compare/v3.0.0...HEAD
 [2.6.1]: https://github.com/punt-labs/ethos/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/punt-labs/ethos/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/punt-labs/ethos/compare/v2.4.1...v2.5.0
