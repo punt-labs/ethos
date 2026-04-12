@@ -1401,6 +1401,19 @@ transcript is excluded by structural replacement (the hook's
 For multi-mission evaluators, the block concatenates one section
 per mission separated by \texttt{---}.
 
+\textbf{Walked-diff and tool enforcement (post-3.5 additions).}
+Two follow-ups from the original DES-035 scope are now shipped.
+\texttt{WalkWriteSet} (\texttt{ethos-4au}) resolves static
+write\_set paths to concrete files on disk via
+\texttt{filepath.WalkDir}; the verifier isolation block includes a
+``Concrete files on disk'' section alongside the static entries.  A
+\texttt{PreToolUse} hook handler (\texttt{ethos-x05}) blocks
+verifier \texttt{Read}/\texttt{Write}/\texttt{Edit}/\texttt{Glob}/\texttt{Grep}
+calls against paths outside the allowlist, communicated via the
+\texttt{ETHOS\_VERIFIER\_ALLOWLIST} environment variable set at
+\texttt{SubagentStart}.  See \S{}Operational Hooks for the
+enforcement details.
+
 \subsection{Result Artifacts and Close Gate (DES-036)}
 
 A typed \texttt{mission.Result} artifact pins a closed schema with
@@ -1710,6 +1723,25 @@ generated agent's frontmatter (Phase 2.2) are the first line of
 defense; the safety constraints field is the second, enforced even
 when an agent is invoked without a generated definition file.
 
+\subsection{PreToolUse File Allowlist Enforcement}
+
+When a verifier subagent spawns, the \texttt{SubagentStart} hook
+sets the \texttt{ETHOS\_VERIFIER\_ALLOWLIST} environment variable to
+a newline-delimited list of paths derived from the mission's
+\field{write\_set} (walked to concrete files on disk via
+\texttt{WalkWriteSet}).  The \texttt{PreToolUse} hook handler reads
+this variable and blocks \texttt{Read}, \texttt{Write},
+\texttt{Edit}, \texttt{Glob}, and \texttt{Grep} calls whose target
+path falls outside the allowlist.  The check is segment-prefix
+based, matching the containment semantics used by the result
+artifact's \texttt{pathContainedBy} helper (DES-036).
+
+The enforcement is defense-in-depth: the verifier isolation block's
+prose directive (DES-035) remains the cooperative signal, and the
+hook enforces it mechanically.  Non-verifier tool invocations (no
+\texttt{ETHOS\_VERIFIER\_ALLOWLIST} in the environment) pass through
+unconditionally.
+
 \subsection{PostToolUse Audit Logging (Phase 4.3)}
 
 \texttt{HandleFormatOutput} (the existing \texttt{PostToolUse} hook
@@ -2003,6 +2035,16 @@ Three parallel command groups: \cmd{talent}, \cmd{personality},
                                        \cmd{--since <RFC3339>}.
                                        Warnings appended on
                                        partial decode. \\
+\cmd{mission lint <contract.yaml>}  & Advisory pre-delegation
+                                       linter.  Six heuristic
+                                       checks (adjacent test file,
+                                       CHANGELOG gap, README in
+                                       criteria, inverted test gap,
+                                       \field{inputs.files} not in
+                                       write\_set, placeholder
+                                       evaluator).  Exits 0 with
+                                       or without warnings.
+                                       \cmd{--json} supported. \\
 \bottomrule
 \end{tabular}
 \end{center}

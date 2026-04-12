@@ -318,6 +318,7 @@ is always present; the contract determines how much latitude they have.
 | `ethos mission advance <id>` | Advance to next round |
 | `ethos mission close <id>` | Close mission (requires result) |
 | `ethos mission log <id>` | Read append-only event log |
+| `ethos mission lint <contract.yaml>` | Advisory pre-delegation linter |
 
 ### Identity and Attributes
 
