@@ -44,39 +44,54 @@ Three problems follow:
 An archetype is a named set of constraints applied on top of the
 base `Contract.Validate()` rules (13 rules as of DES-034).
 
-```go
-// Archetype defines a mission subtype with per-type validation,
-// budget defaults, and required fields.
-type Archetype struct {
-    // Name is the archetype identifier. Lowercase, hyphenated.
-    // Examples: "design", "implement", "test", "inbox".
-    Name string
+Archetypes are YAML files discovered from the filesystem, following
+the same layered-store pattern as identities, roles, teams, talents,
+and personalities. There is no Go registration API -- tools add
+archetypes by dropping YAML files into the appropriate directory.
 
-    // Description is a one-line summary for help text and
-    // mission show output.
-    Description string
+### Storage Layout
 
-    // DefaultBudget is applied when the contract omits budget or
-    // uses zero values. Per-archetype tuning: design missions
-    // default to 2 rounds, implementation to 3.
-    DefaultBudget Budget
+| Scope | Path | Git-tracked? |
+|-------|------|-------------|
+| Repo archetypes | `.punt-labs/ethos/archetypes/<name>.yaml` | Yes |
+| Global archetypes | `~/.punt-labs/ethos/archetypes/<name>.yaml` | No |
 
-    // RequiredFields lists contract fields that must be non-empty
-    // beyond the base Validate rules. Examples: "context" for
-    // design, "inputs.files" for review.
-    RequiredFields []string
+Repo-local archetypes override global archetypes with the same name,
+same as every other layered store in ethos.
 
-    // AllowEmptyWriteSet, when true, skips the base validation
-    // rule that requires write_set to be non-empty (rule 10).
-    // Used by read-only archetypes (inbox, report) whose output
-    // is delivered via the result mechanism, not file writes.
-    AllowEmptyWriteSet bool
+### YAML Schema
 
-    // ValidateFunc runs archetype-specific validation AFTER the
-    // base Validate() passes. Returns nil if the contract
-    // satisfies this archetype's constraints.
-    ValidateFunc func(*Contract) error
-}
+```yaml
+# name must match the filename (without .yaml extension).
+# Lowercase, hyphenated. Examples: design, implement, inbox.
+name: design
+
+# One-line summary for help text and mission show output.
+description: "Design mission — output is a document, not code"
+
+# Applied when the contract omits budget or uses zero values.
+budget_default:
+  rounds: 2
+  reflection_after_each: true
+
+# When true, skips the base validation rule that requires write_set
+# to be non-empty (rule 10). Used by read-only archetypes (inbox,
+# report) whose output is delivered via the result mechanism, not
+# file writes.
+allow_empty_write_set: false
+
+# Contract fields that must be non-empty beyond the base Validate
+# rules. Dot-separated paths for nested fields.
+# Examples: "context", "inputs.files".
+required_fields:
+  - context
+
+# Optional glob patterns the write_set must match. When present,
+# every write_set entry must match at least one pattern.
+# Examples: "docs/*.md", "*.md", "internal/**/*_test.go".
+write_set_constraints:
+  - "*.md"
+  - "docs/**"
 ```
 
 ## Contract Schema Change
@@ -100,11 +115,11 @@ type Contract struct {
 mission's classification metadata together.
 
 **Validation rule 14:** `type`, when non-empty, must match a
-registered archetype name. When empty, it is rewritten to
-`"implement"` by `Store.Create` (same pattern as `CurrentRound`
-being rewritten to 1). `Validate()` rejects unknown type names
-after the rewrite, so a hand-edited contract with `type: foobar`
-fails on load.
+discovered archetype name (a YAML file in the layered store). When
+empty, it is rewritten to `"implement"` by `Store.Create` (same
+pattern as `CurrentRound` being rewritten to 1). `Validate()`
+rejects unknown type names after the rewrite, so a hand-edited
+contract with `type: foobar` fails on load.
 
 **Wire compatibility:** `omitempty` on the YAML tag means
 pre-existing mission files without a `type` field decode cleanly.
@@ -114,15 +129,17 @@ shape (same pattern as `Evaluator.Hash`).
 ## Archetype Registry
 
 Seven archetypes form the initial registry: four ethos-native
-archetypes and three beadle archetypes. The registry is a
-package-level map, not a file on disk -- archetypes are compiled-in
-because their validation functions reference Go types.
+archetypes and three beadle archetypes. All are YAML files on disk.
 
-Ethos ships the four core archetypes. Beadle registers its three
-at startup via `RegisterArchetype`. The split reflects ownership:
-ethos defines archetypes for code-lifecycle work; beadle defines
-archetypes for daemon-triggered work (email processing, task
-execution, information gathering).
+Ethos ships the four core archetypes as repo-local files in
+`.punt-labs/ethos/archetypes/`. Beadle drops its three into
+`~/.punt-labs/ethos/archetypes/` at install time. The split
+reflects ownership: ethos defines archetypes for code-lifecycle
+work; beadle defines archetypes for daemon-triggered work (email
+processing, task execution, information gathering).
+
+No Go code, no import dependency. Beadle adds archetypes the same
+way any tool adds identities or talents -- by writing files.
 
 ### Ethos Archetypes
 
@@ -191,9 +208,9 @@ they want a revision cycle.
 ### Beadle Archetypes
 
 The beadle daemon creates missions triggered by email. Its work
-collapses to three primitives. Beadle registers these at startup
-via `RegisterArchetype` -- ethos does not know about them at
-compile time.
+collapses to three primitives. Beadle drops these YAML files into
+`~/.punt-labs/ethos/archetypes/` at install time -- ethos discovers
+them at runtime via the layered store, same as any other archetype.
 
 #### inbox
 
@@ -256,41 +273,40 @@ Note: same `AllowEmptyWriteSet: true` override as inbox. See
 
 ### Extensibility
 
-The registration API:
+Tools add archetypes by dropping YAML files into the archetype
+directories. No Go code, no import, no registration API.
 
-```go
-// RegisterArchetype adds a custom archetype to the registry.
-// Panics if the name collides with a built-in or previously
-// registered archetype. Called at init time by consumer packages
-// (e.g. beadle).
-func RegisterArchetype(a Archetype) {
-    if _, exists := registry[a.Name]; exists {
-        panic("archetype already registered: " + a.Name)
-    }
-    registry[a.Name] = a
-}
+```text
+# Beadle installs its archetypes during `beadle install`:
+~/.punt-labs/ethos/archetypes/inbox.yaml
+~/.punt-labs/ethos/archetypes/task.yaml
+~/.punt-labs/ethos/archetypes/report.yaml
+
+# A project adds a custom archetype by committing a file:
+.punt-labs/ethos/archetypes/deploy.yaml
 ```
 
-Consumer packages call `RegisterArchetype` during `init()`. This is
-the same pattern as `database/sql.Register` -- compile-time
-registration, no config files.
+This is the same pattern as identities (`identities/<handle>.yaml`),
+talents (`talents/<slug>.md`), and roles (`roles/<name>.yaml`) --
+filesystem discovery via a layered store, repo-local overrides
+global.
 
-Beadle registers inbox, task, and report at startup. Future
-consumers can register additional archetypes the same way. The only
-constraint is name uniqueness -- two packages cannot register the
-same archetype name.
+Name uniqueness is enforced at load time: if two files at the same
+scope have the same `name`, ethos reports an error. Repo-local
+files intentionally override global files with the same name (that
+is not a collision -- it is the override mechanism).
 
 ## Per-Archetype Validation
 
 Archetype validation is a second pass after `Contract.Validate()`.
-The base 13+1 rules always run first. The archetype's
-`ValidateFunc` runs only if the base passes.
+The base 13+1 rules always run first. The archetype constraints
+(derived from the YAML fields) run only if the base passes.
 
 ```text
 Contract.Validate()           -- 14 rules, same as today + rule 14 (type)
-  |                               (rule 10 skipped if archetype.AllowEmptyWriteSet)
+  |                               (rule 10 skipped if archetype.allow_empty_write_set)
   v (pass)
-archetype.ValidateFunc(c)    -- per-type constraints
+archetype constraints         -- per-type, derived from YAML fields
   |
   v (pass)
 Store.Create proceeds
@@ -303,141 +319,28 @@ This layering means:
 2. Archetype validation can assume the contract is well-formed
    (non-nil, valid timestamps, etc.).
 3. Adding an archetype never weakens the base rules -- except for
-   `AllowEmptyWriteSet`, which is an explicit opt-out from rule 10
-   for read-only archetypes. The opt-out is structural: a read-only
-   archetype that requires empty write_set would contradict a base
-   rule that requires non-empty write_set. The archetype flag
-   resolves the contradiction at registration time, not by silently
-   ignoring the error.
+   `allow_empty_write_set`, which is an explicit opt-out from rule
+   10 for read-only archetypes. The opt-out is structural: a
+   read-only archetype that requires empty write_set would
+   contradict a base rule that requires non-empty write_set. The
+   archetype flag resolves the contradiction at load time, not by
+   silently ignoring the error.
 
-### Concrete Validation Rules
+### How YAML Fields Map to Validation
 
-**design archetype:**
+| YAML field | Validation behavior |
+|------------|-------------------|
+| `required_fields` | Each listed field path must be non-empty in the contract |
+| `allow_empty_write_set` | When true, skips base rule 10 (write_set non-empty) |
+| `write_set_constraints` | Every write_set entry must match at least one glob pattern |
+| `budget_default` | Applied when the contract omits budget or uses zero values |
 
-```go
-func validateDesign(c *Contract) error {
-    // Context is required for design missions.
-    if strings.TrimSpace(c.Context) == "" {
-        return fmt.Errorf("design mission requires non-empty context field")
-    }
-    // Write set must be docs-only.
-    if !isDocsOnlyWriteSet(c.WriteSet) {
-        return fmt.Errorf("design mission write_set must contain only .md files or docs/ paths")
-    }
-    // At least one success criterion must reference user-visible impact.
-    if !hasImpactCriterion(c.SuccessCriteria) {
-        return fmt.Errorf("design mission requires at least one success criterion with before/after or user-visible language")
-    }
-    return nil
-}
-```
-
-**implement archetype:**
-
-```go
-func validateImplement(c *Contract) error {
-    // If write set contains .go files, adjacent _test.go must be present.
-    for _, p := range c.WriteSet {
-        if strings.HasSuffix(p, ".go") && !strings.HasSuffix(p, "_test.go") {
-            want := strings.TrimSuffix(p, ".go") + "_test.go"
-            if !writeSetContains(c.WriteSet, want) {
-                // Also check directory coverage.
-                dir := filepath.Dir(want) + "/"
-                if !writeSetContains(c.WriteSet, dir) {
-                    return fmt.Errorf("implement mission: %s has no adjacent %s in write_set",
-                        p, filepath.Base(want))
-                }
-            }
-        }
-    }
-    return nil
-}
-```
-
-**test archetype:**
-
-```go
-func validateTest(c *Contract) error {
-    for _, p := range c.WriteSet {
-        if strings.HasSuffix(p, "/") {
-            continue // directory entries are fine
-        }
-        if strings.HasSuffix(p, "_test.go") {
-            continue
-        }
-        if strings.Contains(p, "testdata/") {
-            continue
-        }
-        if strings.HasSuffix(p, ".md") || strings.HasPrefix(p, "docs/") {
-            continue
-        }
-        return fmt.Errorf("test mission: write_set entry %q is not a test file, testdata, or docs", p)
-    }
-    if !hasCoverageCriterion(c.SuccessCriteria) {
-        return fmt.Errorf("test mission requires at least one success criterion referencing coverage, regression, or test")
-    }
-    return nil
-}
-```
-
-**review archetype:**
-
-```go
-func validateReview(c *Contract) error {
-    if len(c.Inputs.Files) == 0 {
-        return fmt.Errorf("review mission requires non-empty inputs.files")
-    }
-    for _, p := range c.WriteSet {
-        if strings.HasSuffix(p, "/") {
-            continue
-        }
-        ok := strings.HasSuffix(p, ".md") ||
-            strings.HasSuffix(p, ".yaml") ||
-            strings.HasPrefix(p, ".tmp/")
-        if !ok {
-            return fmt.Errorf("review mission: write_set entry %q must be .md, .yaml, or under .tmp/", p)
-        }
-    }
-    return nil
-}
-```
-
-**inbox archetype** (registered by beadle):
-
-```go
-func validateInbox(c *Contract) error {
-    // Inbox is read-only. AllowEmptyWriteSet skips the base
-    // non-empty check; this enforces that write_set is truly empty.
-    if len(c.WriteSet) != 0 {
-        return fmt.Errorf("inbox mission must have empty write_set")
-    }
-    return nil
-}
-```
-
-**task archetype** (registered by beadle):
-
-```go
-func validateTask(c *Contract) error {
-    // Context carries the instruction to execute.
-    if strings.TrimSpace(c.Context) == "" {
-        return fmt.Errorf("task mission requires non-empty context field")
-    }
-    return nil
-}
-```
-
-**report archetype** (registered by beadle):
-
-```go
-func validateReport(c *Contract) error {
-    // Report is read-only. Same enforcement as inbox.
-    if len(c.WriteSet) != 0 {
-        return fmt.Errorf("report mission must have empty write_set")
-    }
-    return nil
-}
-```
+The Go code that interprets these fields is generic -- it does not
+know about "design" or "inbox" specifically. It reads the YAML,
+checks `required_fields` against the contract, matches
+`write_set_constraints` globs against `write_set` entries, and
+applies `budget_default` when needed. Adding a new archetype is
+adding a YAML file, not writing Go.
 
 ## Authorization Model
 
@@ -783,7 +686,7 @@ pipeline).
    missions have neither field. They load, validate, and operate
    identically to today.
 
-4. **New validation rule 14 accepts all registered archetype names
+4. **New validation rule 14 accepts all discovered archetype names
    plus empty.** A hand-edited contract with `type: foobar` fails,
    but that contract would have had to be manually created -- no
    existing tool produces it.
@@ -798,9 +701,9 @@ pipeline).
 
 1. Add `Type` field to `Contract` struct with `omitempty`.
 2. Add validation rule 14 to `Validate()`.
-3. Add archetype registry with four built-in types.
-4. Wire `Store.Create` to call archetype validation after base
-   validation.
+3. Add archetype layered store with filesystem discovery.
+4. Ship four core archetype YAML files; wire `Store.Create` to
+   load archetype and run constraints after base validation.
 5. Update `mission show` and `mission list` to display `Type`.
 6. Add `Pipeline` and `DependsOn` fields.
 7. Add `--pipeline` filter to `mission list`.
@@ -811,8 +714,8 @@ pipeline support. Each step is independently shippable.
 
 ## Archetype Defaults Summary
 
-| Archetype | Default Rounds | Required Fields | Write Set Constraint | Success Criteria Constraint | Registered By |
-|-----------|---------------|-----------------|---------------------|----------------------------|---------------|
+| Archetype | Default Rounds | Required Fields | Write Set Constraint | Success Criteria Constraint | Shipped By |
+|-----------|---------------|-----------------|---------------------|----------------------------|------------|
 | design | 2 | context | .md or docs/ only | before/after or user-visible | ethos |
 | implement | 3 | (base only) | .go requires _test.go | (base only) | ethos |
 | test | 2 | (base only) | _test.go, testdata/, or docs only | coverage/regression/test ref | ethos |
