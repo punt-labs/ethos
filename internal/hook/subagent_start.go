@@ -324,7 +324,7 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot stri
 	b.WriteString("\n")
 
 	b.WriteString("### File allowlist\n\n")
-	b.WriteString("These are the only paths the verifier may read:\n\n")
+	b.WriteString("These are the paths the verifier may write or edit:\n\n")
 	// Split by path kind so the operator can see at a glance which
 	// entries resolve from the repo root and which are absolute. The
 	// write_set is repo-relative per the per-entry validator in
@@ -344,8 +344,8 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot stri
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Any Read, Grep, or Glob against a path outside this list must be\n")
-	b.WriteString("refused as out-of-scope for this verification pass.\n")
+	b.WriteString("Any Write or Edit against a path outside this list is blocked by the\n")
+	b.WriteString("PreToolUse hook. You may read any file in the repo for context.\n")
 
 	// Walk the write_set to concrete files on disk so the verifier
 	// sees exactly which files exist, not just the static entries.
