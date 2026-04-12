@@ -247,6 +247,103 @@ ethos mission close m-2026-04-09-001
 The log now records `create`, `result`, `close`. The leader writes
 the commit, pushes, and opens the PR.
 
+## Design mission archetype
+
+Some missions produce a document rather than code — an integration
+design, an architecture decision, a protocol specification. These
+are design missions. The contract shape and workflow differ from
+code missions in three ways: the write set targets docs, the success
+criteria require before/after user-visible impact, and the worker
+often needs to talk to agents in other repos before writing anything.
+
+### Contract shape
+
+```yaml
+leader: claude
+worker: mdm                           # or the domain specialist
+evaluator:
+  handle: bwk                          # someone who reads the design
+inputs:
+  bead: ethos-abc
+  references:
+    - docs/existing-design.md          # prior art the worker should read
+    - .punt-labs/ethos/teams/core.yaml # team graph for cross-repo scope
+context: |
+  One paragraph: what the design must decide, what repos are
+  involved, what constraints exist. Name the agents who own the
+  other repos — the worker will contact them.
+write_set:
+  - docs/my-design.md                  # docs, not code
+success_criteria:
+  - Design covers <topic> with concrete API contracts
+  - Each integration point has a before/after showing user-visible change
+  - No code changes required in this repo (or: minimal code changes listed)
+  - make check passes
+budget:
+  rounds: 2
+  reflection_after_each: true
+```
+
+The write set is typically one or two files under `docs/`. If the
+design requires code changes, list those files too — but a design
+mission that grows a large code write set is probably two missions.
+
+Every success criterion that describes an integration point should
+include a "before/after" requirement: what the user or operator sees
+today versus what they will see after the design is implemented.
+This forces the worker to ground the design in observable behavior
+rather than internal abstractions.
+
+### Cross-repo collaboration
+
+Design missions that span repositories need information from agents
+who own the other side. The worker should talk to those agents
+before reading their code — the agent has context (plans, pending
+changes, constraints) that the code does not.
+
+**When biff is available:**
+
+1. Run `/who` to see which agents are active across repos.
+2. `/finger @<agent>` to check what they are working on.
+3. `/write @<agent>` with a specific question: what the integration
+   point looks like from their side, what constraints they have,
+   what they plan to change. Include enough context that they can
+   answer without reading your repo.
+4. Wait for the response via `/read`. Incorporate their answers
+   into the design. Attribute cross-repo decisions to the
+   conversation ("agreed with @bwk via biff").
+
+**Detecting biff availability:**
+
+Biff is an MCP server, not a guaranteed dependency. Before using
+biff tools, check whether the `tty` MCP server is loaded in the
+current session. If it is not loaded, or if no agent is active in
+the target repo, fall back to reading code directly.
+
+The fallback chain:
+
+1. Biff available, agent active → talk to the agent.
+2. Biff available, no agent active → `/write` them anyway (they
+   will see it when they start), then read their code and docs
+   for immediate answers.
+3. Biff not available → read the other repo's code, docs, and
+   CLAUDE.md. Note in the design that cross-repo decisions are
+   based on code reading, not agent conversation, and flag them
+   for confirmation.
+
+**Do not block on biff.** If the agent does not respond within the
+round's working time, proceed with code-reading and mark the
+decision as unconfirmed. A design with an unconfirmed decision is
+better than no design.
+
+### Worker selection
+
+Design missions default to `mdm` for docs and CLI-facing designs,
+or the domain specialist when the design is deep in their area
+(e.g. `djb` for a security protocol, `kpz` for an inference
+pipeline). The evaluator should be someone who will consume the
+design — the implementer, not another writer.
+
 ## What this skill does NOT do
 
 - Does not edit Phase 3 primitives. The runtime is frozen; this
