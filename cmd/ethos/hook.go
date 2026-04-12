@@ -6,6 +6,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
 )
 
@@ -130,6 +131,7 @@ func runHookSubagentStart() error {
 		Sessions:   ss,
 		Missions:   ms,
 		Hash:       hashSources,
+		RepoRoot:   resolve.FindRepoRoot(),
 	}
 	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook subagent-start: %w", err)
