@@ -409,6 +409,42 @@ func TestLint(t *testing.T) {
 			wantSev: SeverityInfo,
 		},
 		{
+			name: "H10: docs — directory under docs/ counts as doc path",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/", "README.md"}
+				c.SuccessCriteria = []string{"docs reviewed", "user-visible change documented"}
+			},
+			wantMsg: "consider pipeline: docs",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: docs — nested docs directory counts as doc path",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/design/", "README.md"}
+				c.SuccessCriteria = []string{"docs reviewed", "user-visible change documented"}
+			},
+			wantMsg: "consider pipeline: docs",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: non-doc directory is not a doc path — no docs pipeline",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/foo/", "README.md"}
+				c.SuccessCriteria = []string{"make check passes"}
+			},
+			wantMsg: "consider pipeline: quick",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: lone non-doc directory — size fallback, not docs",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/foo/"}
+				c.SuccessCriteria = []string{"make check passes"}
+			},
+			wantMsg: "consider pipeline: quick",
+			wantSev: SeverityInfo,
+		},
+		{
 			name: "H10: coverage — context mentions test coverage",
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"internal/foo/bar.go", "internal/foo/bar_test.go", "CHANGELOG.md"}

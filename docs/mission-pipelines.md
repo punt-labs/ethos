@@ -126,7 +126,7 @@ Contract context and write_set
   |    "state machine", "protocol"?
   |      yes --> formal (7 stages)
   |
-  +--> mentions "coe", "cause of error", "recurring bug",
+  +--> mentions "cause of error", "recurring bug",
   |    "data corruption", "incident", "fixed before", "postmortem"?
   |      yes --> coe (5 stages)
   |
@@ -139,7 +139,7 @@ Contract context and write_set
   |      yes --> coverage (3 stages)
   |
   +--> size fallback:
-       10+ files or multi-repo  --> full (9 stages)
+       11+ files or multi-repo  --> full (9 stages)
        4+ files or 3+ criteria  --> standard (5 stages)
        1-3 files, 1-2 criteria  --> quick (2 stages)
 ```

@@ -311,18 +311,22 @@ func isWriteSetPrefix(candidate string, writeSet []string) bool {
 }
 
 // isDocsOnlyWriteSet reports whether every path in write_set is a
-// markdown file or inside a docs/ directory.
+// markdown file or inside a docs/ directory. Directory entries are
+// doc paths only if under docs/.
 func isDocsOnlyWriteSet(writeSet []string) bool {
 	if len(writeSet) == 0 {
 		return false
 	}
 	for _, p := range writeSet {
+		cp := CanonicalPath(p)
 		// Check the raw entry for trailing slash (directory marker)
 		// before canonicalization, which strips trailing slashes.
 		if strings.HasSuffix(p, "/") {
-			continue
+			if cp == "docs" || strings.HasPrefix(cp, "docs/") {
+				continue
+			}
+			return false
 		}
-		cp := CanonicalPath(p)
 		if strings.HasPrefix(cp, "docs/") {
 			continue
 		}
@@ -454,7 +458,7 @@ func detectNature(ctx string, writeSet []string) (string, string) {
 	}
 
 	// coe
-	coeKeywords := []string{"coe", "cause of error", "recurring bug", "data corruption", "incident", "fixed before", "postmortem"}
+	coeKeywords := []string{"cause of error", "recurring bug", "data corruption", "incident", "fixed before", "postmortem"}
 	if kw, ok := contextContainsAny(ctx, coeKeywords); ok {
 		return "coe", "context mentions " + kw
 	}
@@ -473,9 +477,10 @@ func detectNature(ctx string, writeSet []string) (string, string) {
 	return "", ""
 }
 
-// contextContainsAny reports whether ctx contains any of the keywords
-// (case-insensitive). Returns the first matched keyword and true, or
-// empty string and false.
+// contextContainsAny reports whether ctx contains any of the keywords.
+// The caller must lowercase ctx before calling; keywords are expected to
+// be lowercase. Returns the first matched keyword and true, or empty
+// string and false.
 func contextContainsAny(ctx string, keywords []string) (string, bool) {
 	for _, kw := range keywords {
 		if strings.Contains(ctx, kw) {
@@ -502,13 +507,18 @@ func isDocPath(path string) bool {
 
 // allDocPaths reports whether every entry in writeSet is a
 // documentation file. Returns false for an empty write_set.
+// Directory entries are doc paths only if under docs/.
 func allDocPaths(writeSet []string) bool {
 	if len(writeSet) == 0 {
 		return false
 	}
 	for _, p := range writeSet {
+		cp := CanonicalPath(p)
 		if strings.HasSuffix(p, "/") {
-			continue
+			if cp == "docs" || strings.HasPrefix(cp, "docs/") {
+				continue
+			}
+			return false
 		}
 		if !isDocPath(p) {
 			return false
@@ -546,7 +556,7 @@ func hasMultipleRepoRefs(s string, writeSet []string) bool {
 func pipelineReason(nFiles, nCriteria int, ctx string, writeSet []string) string {
 	parts := make([]string, 0, 2)
 	if nFiles > 10 {
-		parts = append(parts, "10+ files in write_set")
+		parts = append(parts, "11+ files in write_set")
 	} else if nFiles >= 4 {
 		parts = append(parts, "4+ files in write_set")
 	} else {
