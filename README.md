@@ -92,8 +92,11 @@ restrictions from its role:
 [ethos] Safety: Bash must not run destructive commands (rm -rf, git push --force)
 ```
 
-For a real mission — bead claim to merged PR in 12m55s, with every
-command and output — see [docs/example/](docs/example/).
+For a real mission — issue ticket claim to merged PR in 12m55s, with
+every command and output — see [docs/example/](docs/example/). The
+walkthrough uses [beads](https://github.com/punt-labs/beads) as the
+issue tracker, but ethos accepts any tracker ID (Linear, Jira, GitHub
+issues, etc.) via the `inputs.bead` contract field.
 
 ## Scale up as you need
 
