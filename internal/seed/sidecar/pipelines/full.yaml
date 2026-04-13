@@ -4,35 +4,88 @@ stages:
   - name: prfaq
     archetype: design
     description: "Working Backwards — press release, FAQs, meeting personas"
+    write_set:
+      - "docs/prfaq-{feature}.md"
+    context: "Working Backwards for {feature} — press release, FAQs, meeting personas"
+    success_criteria:
+      - "press release under 250 words"
+      - "FAQs address skeptical-executive concerns"
+      - "customer quote is concrete, not aspirational"
   - name: spec
     archetype: design
     description: "Formal specification for stateful systems (Z-Spec)"
     inputs_from: prfaq
+    write_set:
+      - "docs/spec-{feature}.md"
+    context: "Formal specification for {feature} — state, invariants, transitions"
+    success_criteria:
+      - "type-checks with fuzz"
+      - "invariants defined"
+      - "failure modes enumerated"
   - name: design
     archetype: design
     description: "Produce the design document"
     inputs_from: spec
+    write_set:
+      - "docs/{feature}.md"
+    context: "Produce the design document for {feature}"
+    success_criteria:
+      - "covers problem, chosen approach, rejected alternatives, migration plan"
   - name: implement
     archetype: implement
     description: "Write the code from the design"
     inputs_from: design
+    write_set:
+      - "{target}"
+    success_criteria:
+      - "make check passes"
+      - "all design decisions implemented"
   - name: test
     archetype: test
     description: "Add integration and edge-case tests"
     inputs_from: implement
+    write_set:
+      - "{target}"
+    success_criteria:
+      - "coverage does not decrease"
+      - "edge cases and error paths covered"
   - name: coverage
     archetype: report
     description: "Measure test coverage delta"
     inputs_from: test
+    write_set:
+      - ".tmp/coverage-{feature}.md"
+    success_criteria:
+      - "coverage delta per package reported"
+      - "uncovered paths identified"
   - name: review
     archetype: review
     description: "Review the complete change"
     inputs_from: coverage
+    write_set:
+      - ".tmp/review-{feature}.md"
+    success_criteria:
+      - "findings reported with severity and file:line references"
   - name: document
     archetype: design
     description: "Update DESIGN.md, README, CHANGELOG with design decisions"
     inputs_from: review
+    write_set:
+      - "CHANGELOG.md"
+      - "README.md"
+      - "DESIGN.md"
+    context: "Update user-facing documentation for {feature}"
+    success_criteria:
+      - "CHANGELOG entry under [Unreleased]"
+      - "README reflects new commands/flags"
+      - "DESIGN.md has an ADR for non-trivial design decisions"
   - name: retro
     archetype: report
     description: "Retrospective — summarize what shipped and lessons learned"
     inputs_from: document
+    write_set:
+      - ".tmp/retro-{feature}.md"
+    success_criteria:
+      - "what shipped summarized"
+      - "lessons learned documented"
+      - "follow-up beads filed if needed"

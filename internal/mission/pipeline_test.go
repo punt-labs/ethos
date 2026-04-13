@@ -1,13 +1,17 @@
 package mission
 
 import (
+	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/seed"
 )
 
 func writePipelineFile(t *testing.T, dir, name, content string) {
@@ -952,4 +956,168 @@ func TestExpandVars(t *testing.T) {
 			}
 		})
 	}
+}
+
+// seedBuiltInContent extracts embedded pipeline and archetype YAMLs to
+// a temp directory and returns the root path (containing "pipelines"
+// and "archetypes" subdirectories).
+func seedBuiltInContent(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+
+	for _, item := range []struct {
+		fsys embed.FS
+		src  string
+		dir  string
+		ext  string
+	}{
+		{seed.Pipelines, "sidecar/pipelines", "pipelines", ".yaml"},
+		{seed.Archetypes, "sidecar/archetypes", "archetypes", ".yaml"},
+	} {
+		dest := filepath.Join(root, item.dir)
+		if err := os.MkdirAll(dest, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		entries, err := fs.ReadDir(item.fsys, item.src)
+		if err != nil {
+			t.Fatalf("reading embedded %s: %v", item.dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), item.ext) {
+				continue
+			}
+			data, readErr := fs.ReadFile(item.fsys, item.src+"/"+e.Name())
+			if readErr != nil {
+				t.Fatalf("reading %s: %v", e.Name(), readErr)
+			}
+			if writeErr := os.WriteFile(filepath.Join(dest, e.Name()), data, 0o600); writeErr != nil {
+				t.Fatalf("writing %s: %v", e.Name(), writeErr)
+			}
+		}
+	}
+	return root
+}
+
+// patchPlaceholderIDs rewrites synthetic m-placeholder-NNN mission IDs
+// and their DependsOn references to the m-YYYY-MM-DD-NNN format that
+// Contract.Validate requires. Instantiate intentionally produces
+// placeholder IDs; real IDs come from ApplyServerFields in the CLI.
+func patchPlaceholderIDs(contracts []*Contract) {
+	remap := make(map[string]string, len(contracts))
+	for i, c := range contracts {
+		real := fmt.Sprintf("m-2026-04-13-%03d", i+1)
+		remap[c.MissionID] = real
+		c.MissionID = real
+	}
+	for _, c := range contracts {
+		for j, dep := range c.DependsOn {
+			if mapped, ok := remap[dep]; ok {
+				c.DependsOn[j] = mapped
+			}
+		}
+	}
+}
+
+func TestBuiltInPipelines_Instantiate(t *testing.T) {
+	root := seedBuiltInContent(t)
+	pipelines := NewPipelineStore("", root)
+	archetypes := NewArchetypeStore("", root)
+	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+
+	allNames := []string{
+		"quick", "standard", "full", "product",
+		"formal", "docs", "coe", "coverage",
+	}
+
+	for _, name := range allNames {
+		t.Run(name, func(t *testing.T) {
+			p, err := pipelines.Load(name)
+			if err != nil {
+				t.Fatalf("Load(%q): %v", name, err)
+			}
+
+			vars := map[string]string{
+				"feature": "test-feature",
+				"target":  "internal/foo/",
+			}
+			opts := InstantiateOptions{
+				Vars:       vars,
+				Leader:     "claude",
+				Worker:     "bwk",
+				Evaluator:  "djb",
+				Now:        now,
+				Archetypes: archetypes,
+			}
+
+			contracts, err := Instantiate(p, opts)
+			if err != nil {
+				t.Fatalf("Instantiate(%q): %v", name, err)
+			}
+			if len(contracts) != len(p.Stages) {
+				t.Fatalf("got %d contracts, want %d", len(contracts), len(p.Stages))
+			}
+
+			patchPlaceholderIDs(contracts)
+
+			for i, c := range contracts {
+				if err := c.Validate(); err != nil {
+					t.Errorf("stage %d (%s) Validate: %v", i, p.Stages[i].Name, err)
+				}
+			}
+		})
+	}
+
+	// Pipelines with code-touching stages require {target}.
+	targetPipelines := []string{
+		"quick", "standard", "full", "product", "formal", "coe", "coverage",
+	}
+	for _, name := range targetPipelines {
+		t.Run(name+"/missing-target", func(t *testing.T) {
+			p, err := pipelines.Load(name)
+			if err != nil {
+				t.Fatalf("Load(%q): %v", name, err)
+			}
+			opts := InstantiateOptions{
+				Vars:       map[string]string{"feature": "test-feature"},
+				Leader:     "claude",
+				Worker:     "bwk",
+				Evaluator:  "djb",
+				Now:        now,
+				Archetypes: archetypes,
+			}
+			_, err = Instantiate(p, opts)
+			if err == nil {
+				t.Fatal("expected error for missing {target}")
+			}
+			if !strings.Contains(err.Error(), "{target}") {
+				t.Errorf("error should name {target}, got: %v", err)
+			}
+		})
+	}
+
+	// docs pipeline only needs {feature} — no {target} variable.
+	t.Run("docs/feature-only", func(t *testing.T) {
+		p, err := pipelines.Load("docs")
+		if err != nil {
+			t.Fatalf("Load(docs): %v", err)
+		}
+		opts := InstantiateOptions{
+			Vars:       map[string]string{"feature": "test-feature"},
+			Leader:     "claude",
+			Worker:     "bwk",
+			Evaluator:  "djb",
+			Now:        now,
+			Archetypes: archetypes,
+		}
+		contracts, err := Instantiate(p, opts)
+		if err != nil {
+			t.Fatalf("Instantiate(docs) with feature-only: %v", err)
+		}
+		patchPlaceholderIDs(contracts)
+		for i, c := range contracts {
+			if err := c.Validate(); err != nil {
+				t.Errorf("stage %d Validate: %v", i, err)
+			}
+		}
+	})
 }

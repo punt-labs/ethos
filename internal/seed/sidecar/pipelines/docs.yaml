@@ -4,7 +4,16 @@ stages:
   - name: design
     archetype: design
     description: "Write or update documentation"
+    write_set:
+      - "docs/{feature}.md"
+    context: "Write or update documentation for {feature}"
+    success_criteria:
+      - "covers problem, chosen approach, concrete examples"
   - name: review
     archetype: review
     description: "Review the documentation"
     inputs_from: design
+    write_set:
+      - ".tmp/review-{feature}.md"
+    success_criteria:
+      - "findings reported with severity and file:line references"

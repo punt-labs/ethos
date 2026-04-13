@@ -4,11 +4,28 @@ stages:
   - name: measure
     archetype: report
     description: "Run coverage tool, identify gaps, report current state"
+    write_set:
+      - ".tmp/coverage-measure-{feature}.md"
+    context: "Measure current test coverage for {target}, identify gaps"
+    success_criteria:
+      - "coverage percentage reported per package"
+      - "gaps identified at file:function granularity"
   - name: test
     archetype: test
     description: "Write tests for identified coverage gaps"
     inputs_from: measure
+    write_set:
+      - "{target}"
+    success_criteria:
+      - "tests added for identified gaps"
+      - "make check passes"
   - name: verify
     archetype: report
     description: "Re-run coverage, confirm improvement, report delta"
     inputs_from: test
+    write_set:
+      - ".tmp/coverage-verify-{feature}.md"
+    context: "Re-measure coverage for {target}, report delta"
+    success_criteria:
+      - "coverage delta per package reported"
+      - "gaps closed or justified"
