@@ -13,7 +13,7 @@ import (
 // criteria, no input files, real evaluator handle, no cross-repo
 // context, non-docs write_set, non-generalist evaluator.
 //
-// H10 (pipeline selector) fires because no pipeline field exists yet.
+// H10 (pipeline selector) fires because Pipeline is empty.
 func lintContract() Contract {
 	return Contract{
 		Leader: "claude",
@@ -35,7 +35,7 @@ func lintContract() Contract {
 func TestLint_CleanContract(t *testing.T) {
 	c := lintContract()
 	ws := Lint(&c)
-	// H10 fires (info) because no pipeline field is set.
+	// H10 fires (info) because Pipeline is empty.
 	require.Len(t, ws, 1, "expected exactly one warning (H10)")
 	assert.Equal(t, SeverityInfo, ws[0].Severity)
 	assert.Contains(t, ws[0].Message, "consider pipeline:")
@@ -582,6 +582,13 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
+		{
+			name: "H10: pipeline already set — no H10 warning",
+			mutate: func(c *Contract) {
+				c.Pipeline = "standard-2026-04-13-abc123"
+			},
+			wantMsg: "",
+		},
 	}
 
 	for _, tc := range tests {
@@ -591,8 +598,7 @@ func TestLint(t *testing.T) {
 			ws := Lint(&c)
 			if tc.wantMsg == "" {
 				// Filter H10 pipeline suggestions — advisory,
-				// fires on all contracts until Pipeline field
-				// is added to Contract.
+				// fires on contracts without a Pipeline value.
 				var filtered []Warning
 				for _, w := range ws {
 					if w.Field != "pipeline" {

@@ -1064,6 +1064,18 @@ func TestBuiltInPipelines_Instantiate(t *testing.T) {
 					t.Errorf("stage %d (%s) Validate: %v", i, p.Stages[i].Name, err)
 				}
 			}
+
+			// Lint should not fire H10 (pipeline selector) on
+			// pipeline-instantiated contracts — Pipeline is set.
+			for i, c := range contracts {
+				ws := Lint(c)
+				for _, w := range ws {
+					if w.Field == "pipeline" {
+						t.Errorf("stage %d (%s) Lint: unexpected pipeline warning: %s",
+							i, p.Stages[i].Name, w.Message)
+					}
+				}
+			}
 		})
 	}
 
