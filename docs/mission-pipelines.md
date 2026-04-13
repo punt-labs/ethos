@@ -98,6 +98,9 @@ Write set entries and context strings may contain `{feature}` (or
 any `{key}`) placeholders. The leader supplies values at
 instantiation time:
 
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. The current release provides `list` and `show`.
+
 ```bash
 ethos mission pipeline instantiate sprint --var feature=walk-diff
 ```
@@ -134,8 +137,7 @@ Contract context and write_set
   |    (*.md, *.tex, docs/*, *.pdf)?
   |      yes --> docs (2 stages)
   |
-  +--> mentions "coverage", "test gap", "test coverage",
-  |    "coverage improvement"?
+  +--> mentions "test gap"?
   |      yes --> coverage (3 stages)
   |
   +--> size fallback:
@@ -377,6 +379,9 @@ stages:
 
 ### Instantiation
 
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
+
 ```bash
 $ ethos mission pipeline instantiate sprint \
     --var feature=walk-diff \
@@ -542,6 +547,9 @@ stages:
 ```
 
 ### Instantiation
+
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
 
 ```bash
 $ ethos mission pipeline instantiate schedule-meeting \
@@ -745,6 +753,9 @@ stages:
 
 ### Instantiation
 
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
+
 ```bash
 $ ethos mission pipeline instantiate product \
     --var feature=auto-suggest \
@@ -894,6 +905,9 @@ stages:
 ```
 
 ### Instantiation
+
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
 
 ```bash
 $ ethos mission pipeline instantiate coe \

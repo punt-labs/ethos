@@ -394,7 +394,7 @@ func TestLint(t *testing.T) {
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"internal/foo/bar.go", "internal/foo/bar_test.go", "CHANGELOG.md"}
 				c.SuccessCriteria = []string{"make check passes"}
-				c.Context = "This bug was fixed before, recurring regression"
+				c.Context = "This bug was fixed before, a recurring bug observed again"
 			},
 			wantMsg: "consider pipeline: coe",
 			wantSev: SeverityInfo,
@@ -427,6 +427,24 @@ func TestLint(t *testing.T) {
 			wantSev: SeverityInfo,
 		},
 		{
+			name: "H10: docs — bare 'docs' without trailing slash is a doc dir",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs", "README.md"}
+				c.SuccessCriteria = []string{"docs reviewed", "user-visible change documented"}
+			},
+			wantMsg: "consider pipeline: docs",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: docs-guide prefix look-alike is not a doc path",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs-guide/foo.go", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"make check passes"}
+			},
+			wantMsg: "consider pipeline: quick",
+			wantSev: SeverityInfo,
+		},
+		{
 			name: "H10: non-doc directory is not a doc path — no docs pipeline",
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"internal/foo/", "README.md"}
@@ -445,11 +463,11 @@ func TestLint(t *testing.T) {
 			wantSev: SeverityInfo,
 		},
 		{
-			name: "H10: coverage — context mentions test coverage",
+			name: "H10: coverage — context mentions test gap",
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"internal/foo/bar.go", "internal/foo/bar_test.go", "CHANGELOG.md"}
 				c.SuccessCriteria = []string{"make check passes"}
-				c.Context = "Improve test coverage for mission package"
+				c.Context = "Fill test gap in mission package"
 			},
 			wantMsg: "consider pipeline: coverage",
 			wantSev: SeverityInfo,

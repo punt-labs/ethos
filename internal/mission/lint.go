@@ -447,7 +447,7 @@ func detectNature(ctx string, writeSet []string) (string, string) {
 	}
 
 	// coverage
-	coverageKeywords := []string{"coverage", "test gap"}
+	coverageKeywords := []string{"test gap"}
 	if kw, ok := contextContainsAny(ctx, coverageKeywords); ok {
 		return "coverage", "context mentions " + kw
 	}
@@ -468,10 +468,9 @@ func contextContainsAny(ctx string, keywords []string) (string, bool) {
 	return "", false
 }
 
-// isDocPath reports whether path matches a documentation file pattern:
-// *.md, *.tex, docs/*, *.pdf.
-func isDocPath(path string) bool {
-	cp := CanonicalPath(path)
+// isDocPathCanonical reports whether a canonicalized path matches a
+// documentation file pattern: *.md, *.tex, docs/*, *.pdf.
+func isDocPathCanonical(cp string) bool {
 	if strings.HasPrefix(cp, "docs/") {
 		return true
 	}
@@ -492,13 +491,16 @@ func allDocPaths(writeSet []string) bool {
 	}
 	for _, p := range writeSet {
 		cp := CanonicalPath(p)
+		// Treat "docs" and "docs/..." as doc directories regardless
+		// of whether the original entry had a trailing slash.
+		if cp == "docs" || strings.HasPrefix(cp, "docs/") {
+			continue
+		}
 		if strings.HasSuffix(p, "/") {
-			if cp == "docs" || strings.HasPrefix(cp, "docs/") {
-				continue
-			}
+			// Non-doc directory.
 			return false
 		}
-		if !isDocPath(p) {
+		if !isDocPathCanonical(cp) {
 			return false
 		}
 	}
