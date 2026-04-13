@@ -1,5 +1,9 @@
 # Mission Pipelines
 
+`ethos mission pipeline instantiate` is implemented. See
+[archetypes-and-pipelines.md](archetypes-and-pipelines.md) for the
+user-facing guide.
+
 Pipelines compose typed archetype stages into workflows. A pipeline
 is orchestration, not an archetype. The orchestrator (leader or
 daemon) holds pipeline state. Ethos stores the declaration and
@@ -97,9 +101,6 @@ stages:
 Write set entries and context strings may contain `{feature}` (or
 any `{key}`) placeholders. The leader supplies values at
 instantiation time:
-
-> **Planned**: `ethos mission pipeline instantiate` is not yet
-> implemented. The current release provides `list` and `show`.
 
 ```bash
 ethos mission pipeline instantiate sprint --var feature=walk-diff
@@ -379,9 +380,6 @@ stages:
 
 ### Instantiation
 
-> **Planned**: `ethos mission pipeline instantiate` is not yet
-> implemented. This example shows the intended API.
-
 ```bash
 $ ethos mission pipeline instantiate sprint \
     --var feature=walk-diff \
@@ -547,9 +545,6 @@ stages:
 ```
 
 ### Instantiation
-
-> **Planned**: `ethos mission pipeline instantiate` is not yet
-> implemented. This example shows the intended API.
 
 ```bash
 $ ethos mission pipeline instantiate schedule-meeting \
@@ -753,9 +748,6 @@ stages:
 
 ### Instantiation
 
-> **Planned**: `ethos mission pipeline instantiate` is not yet
-> implemented. This example shows the intended API.
-
 ```bash
 $ ethos mission pipeline instantiate product \
     --var feature=auto-suggest \
@@ -905,9 +897,6 @@ stages:
 ```
 
 ### Instantiation
-
-> **Planned**: `ethos mission pipeline instantiate` is not yet
-> implemented. This example shows the intended API.
 
 ```bash
 $ ethos mission pipeline instantiate coe \

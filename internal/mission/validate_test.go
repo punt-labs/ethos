@@ -1,6 +1,7 @@
 package mission
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -474,4 +475,59 @@ func TestValidate_TypeField(t *testing.T) {
 func TestValidate_NilContract(t *testing.T) {
 	var c *Contract
 	require.Error(t, c.Validate())
+}
+
+func TestValidate_Pipeline(t *testing.T) {
+	tests := []struct {
+		name     string
+		pipeline string
+		wantErr  string
+	}{
+		{name: "valid pipeline", pipeline: "sprint-walk-diff-2026-04-12"},
+		{name: "empty pipeline accepted", pipeline: ""},
+		{name: "control char rejected", pipeline: "sprint\n", wantErr: "control character"},
+		{name: "too long rejected", pipeline: strings.Repeat("a", 129), wantErr: "exceeds maximum length"},
+		{name: "uppercase rejected", pipeline: "Sprint-Walk", wantErr: "lowercase alphanumeric"},
+		{name: "spaces rejected", pipeline: "sprint walk", wantErr: "lowercase alphanumeric"},
+		{name: "leading hyphen rejected", pipeline: "-sprint", wantErr: "lowercase alphanumeric"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			c.Pipeline = tt.pipeline
+			err := c.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate_DependsOn(t *testing.T) {
+	tests := []struct {
+		name      string
+		dependsOn []string
+		wantErr   string
+	}{
+		{name: "valid depends_on", dependsOn: []string{"m-2026-04-12-001", "m-2026-04-12-002"}},
+		{name: "empty depends_on accepted", dependsOn: nil},
+		{name: "malformed ID rejected", dependsOn: []string{"bad-id"}, wantErr: "invalid mission ID"},
+		{name: "self-reference rejected", dependsOn: []string{"m-2026-04-07-001"}, wantErr: "self-reference"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			c.DependsOn = tt.dependsOn
+			err := c.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
 }

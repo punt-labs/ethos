@@ -4142,3 +4142,29 @@ evaluation standard (frozen evaluator hash, DES-033).
   to compute, fragile.
 
 References PR #246. Shipped v3.1.0.
+
+## DES-048: Pipeline conflict-skip trust model (SETTLED)
+
+**Decision**: Accept the trust assumption in the same-pipeline conflict skip.
+When `c.Pipeline == existing.Pipeline`, write-set conflict detection is skipped
+(DES-032: intra-pipeline overlap is expected). A hand-crafted contract with a
+faked `pipeline:` field bypasses conflict detection against all missions in that
+pipeline.
+
+**Reasoning**: Ethos is local-only, single-user. Write-sets are conventions,
+not kernel-level enforcement (DES-014/DES-041). The `pipeline` field is a
+grouping label for related missions that share files. A user who fakes it to
+bypass their own conflict check is not an attack vector worth guarding against.
+The mechanism that matters is the review step catching unexpected writes,
+regardless of how the contract was framed.
+
+**Rejected alternatives**:
+
+- Verify the claimed pipeline exists by scanning missions before create --
+  slows hot path; user can still fake by creating a decoy mission first.
+- Require DependsOn entries to reference members of the claimed pipeline --
+  adds coupling; breaks standalone contracts that happen to use a pipeline
+  grouping label.
+
+**Implications**: The `pipeline` field is semantically "grouping label for
+related missions that share files." It is not a security boundary.
