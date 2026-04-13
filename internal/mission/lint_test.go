@@ -475,7 +475,7 @@ func TestLint(t *testing.T) {
 			wantSev: SeverityInfo,
 		},
 		{
-			name: "H10: quick — 1 file, 1 criterion",
+			name: "H10: docs — single README.md triggers docs nature",
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"README.md"}
 				c.SuccessCriteria = []string{"updated"}

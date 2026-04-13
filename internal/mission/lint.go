@@ -311,31 +311,9 @@ func isWriteSetPrefix(candidate string, writeSet []string) bool {
 }
 
 // isDocsOnlyWriteSet reports whether every path in write_set is a
-// markdown file or inside a docs/ directory. Directory entries are
-// doc paths only if under docs/.
+// documentation file or inside a docs/ directory.
 func isDocsOnlyWriteSet(writeSet []string) bool {
-	if len(writeSet) == 0 {
-		return false
-	}
-	for _, p := range writeSet {
-		cp := CanonicalPath(p)
-		// Check the raw entry for trailing slash (directory marker)
-		// before canonicalization, which strips trailing slashes.
-		if strings.HasSuffix(p, "/") {
-			if cp == "docs" || strings.HasPrefix(cp, "docs/") {
-				continue
-			}
-			return false
-		}
-		if strings.HasPrefix(cp, "docs/") {
-			continue
-		}
-		if strings.HasSuffix(cp, ".md") {
-			continue
-		}
-		return false
-	}
-	return true
+	return allDocPaths(writeSet)
 }
 
 // lintDesignImpact warns when the write_set is docs-only but no
@@ -469,7 +447,7 @@ func detectNature(ctx string, writeSet []string) (string, string) {
 	}
 
 	// coverage
-	coverageKeywords := []string{"coverage", "test gap", "test coverage", "coverage improvement"}
+	coverageKeywords := []string{"coverage", "test gap"}
 	if kw, ok := contextContainsAny(ctx, coverageKeywords); ok {
 		return "coverage", "context mentions " + kw
 	}
