@@ -26,6 +26,7 @@ stages:
     inputs_from: design
     write_set:
       - "{target}"
+    context: "Implement {feature} in {target} per design"
     success_criteria:
       - "make check passes"
       - "all design decisions implemented"
@@ -35,6 +36,7 @@ stages:
     inputs_from: implement
     write_set:
       - "{target}"
+    context: "Add tests for {feature} in {target}"
     success_criteria:
       - "coverage does not decrease"
       - "edge cases and error paths covered"
@@ -44,6 +46,7 @@ stages:
     inputs_from: test
     write_set:
       - ".tmp/coverage-{feature}.md"
+    context: "Measure test coverage delta for {feature}"
     success_criteria:
       - "coverage delta per package reported"
       - "uncovered paths identified"
@@ -53,6 +56,7 @@ stages:
     inputs_from: coverage
     write_set:
       - ".tmp/review-{feature}.md"
+    context: "Review the {feature} change end-to-end"
     success_criteria:
       - "findings reported with severity and file:line references"
   - name: document

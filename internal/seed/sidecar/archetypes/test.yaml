@@ -10,4 +10,3 @@ write_set_constraints:
   - "testdata/**"
   - "docs/**"
   - "*.md"
-  - "**/"

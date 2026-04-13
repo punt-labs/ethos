@@ -26,6 +26,7 @@ stages:
     inputs_from: root-cause
     write_set:
       - "{target}"
+    context: "Write the fix for {feature} in {target} and a regression test"
     success_criteria:
       - "make check passes"
       - "regression test fails without fix, passes with it"
@@ -35,6 +36,7 @@ stages:
     inputs_from: fix
     write_set:
       - "{target}"
+    context: "Verify the fix for {feature}; check for siblings"
     success_criteria:
       - "regression test covers original failure"
       - "siblings of the bug grepped and fixed"

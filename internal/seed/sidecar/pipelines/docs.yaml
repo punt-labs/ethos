@@ -15,5 +15,6 @@ stages:
     inputs_from: design
     write_set:
       - ".tmp/review-{feature}.md"
+    context: "Review the {feature} documentation"
     success_criteria:
       - "findings reported with severity and file:line references"

@@ -16,6 +16,7 @@ stages:
     inputs_from: measure
     write_set:
       - "{target}"
+    context: "Add tests to close coverage gaps in {target}"
     success_criteria:
       - "tests added for identified gaps"
       - "make check passes"

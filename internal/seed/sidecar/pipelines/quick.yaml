@@ -6,6 +6,7 @@ stages:
     description: "Write the code"
     write_set:
       - "{target}"
+    context: "Implement {feature} in {target}"
     success_criteria:
       - "make check passes"
       - "new code has tests"
@@ -15,5 +16,6 @@ stages:
     inputs_from: implement
     write_set:
       - ".tmp/review-{feature}.md"
+    context: "Review the {feature} implementation"
     success_criteria:
       - "findings reported with severity and file:line references"
