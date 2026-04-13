@@ -185,7 +185,6 @@ type InstantiateOptions struct {
 	Leader     string            // Required. Sets Contract.Leader for every stage.
 	Evaluator  string            // Default evaluator handle. Stage.Evaluator overrides.
 	Worker     string            // Default worker handle. Stage.Worker overrides.
-	Root       string            // Mission store root for NewID calls.
 	Now        time.Time         // Timestamp for ID generation and contract fields.
 	Archetypes *ArchetypeStore   // Optional. When set, applies archetype budget defaults.
 	DryRun     bool              // When true, use synthetic IDs instead of allocating real ones.
@@ -204,9 +203,6 @@ func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
 	}
 	if strings.TrimSpace(opts.Leader) == "" {
 		return nil, fmt.Errorf("instantiate %q: leader is required", p.Name)
-	}
-	if opts.Root == "" && !opts.DryRun {
-		return nil, fmt.Errorf("instantiate %q: root is required", p.Name)
 	}
 	if opts.Now.IsZero() {
 		opts.Now = time.Now()
@@ -229,16 +225,10 @@ func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
 
 	contracts := make([]*Contract, len(p.Stages))
 	for i, stage := range p.Stages {
-		var missionID string
-		if opts.DryRun {
-			missionID = fmt.Sprintf("m-dryrun-%03d", i+1)
-		} else {
-			var err error
-			missionID, err = NewID(opts.Root, opts.Now)
-			if err != nil {
-				return nil, fmt.Errorf("instantiate %q stage %q: %w", p.Name, stage.Name, err)
-			}
-		}
+		// Always use synthetic placeholder IDs. Real IDs are assigned
+		// later by ApplyServerFields in the CLI save loop, so Instantiate
+		// never burns counter slots.
+		missionID := fmt.Sprintf("m-placeholder-%03d", i+1)
 
 		// Resolve worker: stage > opts > "".
 		worker := opts.Worker
@@ -337,7 +327,11 @@ func generatePipelineID(name string, now time.Time) (string, error) {
 		return "", fmt.Errorf("generating random suffix: %w", err)
 	}
 	day := now.UTC().Format("2006-01-02")
-	return fmt.Sprintf("%s-%s-%x", name, day, b), nil
+	id := fmt.Sprintf("%s-%s-%x", name, day, b)
+	if len(id) > 128 {
+		return "", fmt.Errorf("pipeline name %q produces ID of length %d (max 128): shorten the pipeline name", name, len(id))
+	}
+	return id, nil
 }
 
 // ExpandVars replaces {key} tokens with their values from vars.

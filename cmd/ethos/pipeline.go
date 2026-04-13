@@ -195,10 +195,34 @@ func runPipelineInstantiate(name string) error {
 	if err != nil {
 		return fmt.Errorf("pipeline instantiate: cannot determine home directory: %w", err)
 	}
-	root := filepath.Join(home, ".punt-labs", "ethos")
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
 	repoRoot := resolve.FindRepoEthosRoot()
-	as := mission.NewArchetypeStore(repoRoot, filepath.Join(home, ".punt-labs", "ethos"))
+	as := mission.NewArchetypeStore(repoRoot, globalRoot)
+
+	// Validate that every stage resolves a non-empty worker and evaluator
+	// before instantiation, so the user gets one clear error instead of
+	// a confusing per-stage validation failure deep inside the pipeline.
+	var missing []string
+	for _, stage := range p.Stages {
+		w := stage.Worker
+		if w == "" {
+			w = pipelineInstWorker
+		}
+		if w == "" {
+			missing = append(missing, fmt.Sprintf("stage %q has no worker (set stage.worker or pass --worker)", stage.Name))
+		}
+		e := stage.Evaluator
+		if e == "" {
+			e = pipelineInstEvaluator
+		}
+		if e == "" {
+			missing = append(missing, fmt.Sprintf("stage %q has no evaluator (set stage.evaluator or pass --evaluator)", stage.Name))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("pipeline %q: cannot resolve required fields:\n  - %s", p.Name, strings.Join(missing, "\n  - "))
+	}
 
 	opts := mission.InstantiateOptions{
 		PipelineID: pipelineInstID,
@@ -206,7 +230,6 @@ func runPipelineInstantiate(name string) error {
 		Leader:     pipelineInstLeader,
 		Evaluator:  pipelineInstEvaluator,
 		Worker:     pipelineInstWorker,
-		Root:       root,
 		Now:        time.Now(),
 		Archetypes: as,
 		DryRun:     pipelineInstDryRun,
@@ -243,11 +266,17 @@ func runPipelineInstantiate(name string) error {
 		// server-assigned ID.
 		c.DependsOn = nil
 		if p.Stages[i].InputsFrom != "" {
+			found := false
 			for j := 0; j < i; j++ {
 				if p.Stages[j].Name == p.Stages[i].InputsFrom {
 					c.DependsOn = []string{contracts[j].MissionID}
+					found = true
 					break
 				}
+			}
+			if !found {
+				return fmt.Errorf("pipeline instantiate: stage %q references unknown upstream stage %q via inputs_from",
+					p.Stages[i].Name, p.Stages[i].InputsFrom)
 			}
 		}
 

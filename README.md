@@ -131,7 +131,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | Command | What it does |
 |---------|--------------|
 | `ethos whoami` | Show your resolved identity |
-| `ethos create` | Create a new identity (interactive) |
+| `ethos identity create` | Create a new identity (interactive) |
 | `ethos doctor` | Check installation health |
 | `ethos identity list` / `get <handle>` | Query identities |
 | `ethos mission create --file <path>` | Create a mission contract |

@@ -214,13 +214,17 @@ upstream stage.
 
 > **Built-in pipelines are skeletons.** The shipped `quick`, `standard`,
 > `full`, `product`, `formal`, `docs`, `coe`, and `coverage` pipelines
-> declare stage structure but leave `write_set` empty for stages that
-> expect user-supplied paths. Running `instantiate` on a built-in
-> directly fails validation for archetypes that require a non-empty
-> write-set (`implement`, `test`, `design`). Copy the built-in to
-> `.punt-labs/ethos/pipelines/<name>.yaml` and add `write_set` entries
-> (with optional `{key}` placeholders) before running. See
-> [Creating your own pipeline](#creating-your-own-pipeline).
+> declare stage structure but leave stage-level fields to the user. To
+> instantiate successfully, each stage needs:
+>
+> - `write_set` entries (non-empty for archetypes that require it)
+> - `success_criteria` entries (non-empty for archetypes that require it)
+> - A resolved `worker` (from `stage.worker` or the `--worker` flag)
+> - A resolved `evaluator` (from `stage.evaluator` or the `--evaluator` flag)
+>
+> Copy the built-in to `.punt-labs/ethos/pipelines/<name>.yaml` and add
+> the missing fields (with optional `{key}` placeholders) before
+> running. See [Creating your own pipeline](#creating-your-own-pipeline).
 
 ```bash
 ethos mission pipeline instantiate standard \
