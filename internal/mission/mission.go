@@ -68,6 +68,19 @@ type Contract struct {
 	CurrentRound int `yaml:"current_round,omitempty" json:"current_round"`
 
 	Context string `yaml:"context,omitempty" json:"context,omitempty"`
+
+	// Pipeline is an optional identifier grouping related missions into a
+	// sequence. All missions in a pipeline share the same value. The leader
+	// picks it at instantiation time, or ethos auto-generates one. Validate
+	// requires a slug-like value: lowercase letters, digits, and hyphens
+	// only, max 128 characters.
+	Pipeline string `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
+
+	// DependsOn is an optional list of mission IDs that must reach a
+	// terminal status before this mission's worker should begin. Advisory —
+	// the store does not block Create on dependency status. The leader or
+	// daemon enforces ordering.
+	DependsOn []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 }
 
 // Evaluator is the frozen reviewer pinned at mission launch.

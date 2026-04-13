@@ -447,7 +447,7 @@ func TestMissionShow_HashOnOwnLine(t *testing.T) {
 
 func TestMissionList_Empty(t *testing.T) {
 	missionTestEnv(t)
-	out := captureStdoutE(t, func() error { return runMissionList("open") })
+	out := captureStdoutE(t, func() error { return runMissionList("open", "") })
 	assert.Contains(t, out, "No missions found")
 }
 
@@ -478,19 +478,19 @@ func TestMissionList_FilterByStatus(t *testing.T) {
 	// Default filter "open" returns the two open ones.
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
-	out := captureStdoutE(t, func() error { return runMissionList("open") })
+	out := captureStdoutE(t, func() error { return runMissionList("open", "") })
 	var openEntries []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &openEntries))
 	assert.Len(t, openEntries, 2)
 
 	// "all" returns all three.
-	out = captureStdoutE(t, func() error { return runMissionList("all") })
+	out = captureStdoutE(t, func() error { return runMissionList("all", "") })
 	var allEntries []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &allEntries))
 	assert.Len(t, allEntries, 3)
 
 	// "closed" returns just the one.
-	out = captureStdoutE(t, func() error { return runMissionList("closed") })
+	out = captureStdoutE(t, func() error { return runMissionList("closed", "") })
 	var closedEntries []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &closedEntries))
 	assert.Len(t, closedEntries, 1)

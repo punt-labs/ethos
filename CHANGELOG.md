@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos mission pipeline instantiate`** -- generate N mission contracts
+  from a pipeline template. `--var key=value` for template expansion,
+  `--leader`/`--evaluator`/`--worker` flags, `--id` to override the
+  auto-generated pipeline ID, `--dry-run` to preview without creating.
+  Closes the gap between pipeline templates (v3.3.0) and executable
+  pipeline-driven sprints.
+- **Contract `pipeline` and `depends_on` fields** -- missions that
+  belong to a pipeline carry its ID and reference upstream stage
+  mission IDs. Enables filtered listing and dependency ordering.
+- **`ethos mission list --pipeline <id>`** -- filter missions by
+  pipeline membership; results returned in topological order (stages
+  after their `depends_on` dependencies).
+
+### Changed
+
+- **README** -- rewritten for approachability. Three-gap intro (identity,
+  delegation, integration), shorter quick start, linked guides for team
+  setup and archetypes/pipelines.
+- **New guide**: `docs/archetypes-and-pipelines.md` -- user-facing how-to
+  covering built-in archetypes and pipelines, customization, and the
+  pipeline selection heuristic.
+
 ## [3.3.0] - 2026-04-13
 
 ### Added

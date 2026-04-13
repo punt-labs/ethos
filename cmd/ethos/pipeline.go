@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -67,8 +69,50 @@ Use --json for the full pipeline object.`,
 	},
 }
 
+// --- mission pipeline instantiate ---
+
+var (
+	pipelineInstVars      []string
+	pipelineInstLeader    string
+	pipelineInstEvaluator string
+	pipelineInstWorker    string
+	pipelineInstID        string
+	pipelineInstDryRun    bool
+)
+
+var pipelineInstantiateCmd = &cobra.Command{
+	Use:   "instantiate <name>",
+	Short: "Generate mission contracts from a pipeline template",
+	Long: `Generate mission contracts from a pipeline template.
+
+Creates one mission per stage, expanding {key} template variables
+in write_set, context, and success_criteria. Each mission carries
+the pipeline ID and depends_on wiring from inputs_from declarations.
+
+Use --dry-run to preview contracts without creating them.
+Use --json for machine-readable output.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runPipelineInstantiate(args[0])
+	},
+}
+
 func init() {
-	pipelineCmd.AddCommand(pipelineListCmd, pipelineShowCmd)
+	pipelineInstantiateCmd.Flags().StringArrayVar(&pipelineInstVars, "var", nil,
+		"Template variable as key=value (repeatable)")
+	pipelineInstantiateCmd.Flags().StringVar(&pipelineInstLeader, "leader", "",
+		"Leader handle for all stages (required)")
+	_ = pipelineInstantiateCmd.MarkFlagRequired("leader")
+	pipelineInstantiateCmd.Flags().StringVar(&pipelineInstEvaluator, "evaluator", "",
+		"Default evaluator handle (stage.evaluator overrides)")
+	pipelineInstantiateCmd.Flags().StringVar(&pipelineInstWorker, "worker", "",
+		"Default worker handle (stage.worker overrides)")
+	pipelineInstantiateCmd.Flags().StringVar(&pipelineInstID, "id", "",
+		"Pipeline ID (auto-generated if omitted)")
+	pipelineInstantiateCmd.Flags().BoolVar(&pipelineInstDryRun, "dry-run", false,
+		"Print contracts without saving")
+
+	pipelineCmd.AddCommand(pipelineListCmd, pipelineShowCmd, pipelineInstantiateCmd)
 	missionCmd.AddCommand(pipelineCmd)
 }
 
@@ -127,6 +171,200 @@ func runPipelineList() error {
 	fmt.Fprintf(tw, "NAME\tSTAGES\tDESCRIPTION\n")
 	for _, r := range rows {
 		fmt.Fprintf(tw, "%s\t%d\t%s\n", r.name, r.stages, r.description)
+	}
+	return tw.Flush()
+}
+
+func runPipelineInstantiate(name string) error {
+	ps := pipelineStore()
+	p, err := ps.Load(name)
+	if err != nil {
+		return fmt.Errorf("pipeline instantiate: %w", err)
+	}
+
+	if pipelineInstID != "" && !mission.PipelineIDValid(pipelineInstID) {
+		return fmt.Errorf("--id %q: must match ^[a-z0-9][a-z0-9-]*$ (max 128 chars)", pipelineInstID)
+	}
+
+	vars, err := parseVarFlags(pipelineInstVars)
+	if err != nil {
+		return fmt.Errorf("pipeline instantiate: %w", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("pipeline instantiate: cannot determine home directory: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	repoRoot := resolve.FindRepoEthosRoot()
+	as := mission.NewArchetypeStore(repoRoot, globalRoot)
+
+	// Validate that every stage resolves a non-empty worker and evaluator
+	// before instantiation, so the user gets one clear error instead of
+	// a confusing per-stage validation failure deep inside the pipeline.
+	var missing []string
+	for _, stage := range p.Stages {
+		w := stage.Worker
+		if w == "" {
+			w = pipelineInstWorker
+		}
+		if w == "" {
+			missing = append(missing, fmt.Sprintf("stage %q has no worker (set stage.worker or pass --worker)", stage.Name))
+		}
+		e := stage.Evaluator
+		if e == "" {
+			e = pipelineInstEvaluator
+		}
+		if e == "" {
+			missing = append(missing, fmt.Sprintf("stage %q has no evaluator (set stage.evaluator or pass --evaluator)", stage.Name))
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("pipeline %q: cannot resolve required fields:\n  - %s", p.Name, strings.Join(missing, "\n  - "))
+	}
+
+	opts := mission.InstantiateOptions{
+		PipelineID: pipelineInstID,
+		Vars:       vars,
+		Leader:     pipelineInstLeader,
+		Evaluator:  pipelineInstEvaluator,
+		Worker:     pipelineInstWorker,
+		Now:        time.Now(),
+		Archetypes: as,
+	}
+
+	contracts, err := mission.Instantiate(p, opts)
+	if err != nil {
+		return fmt.Errorf("pipeline instantiate: %w", err)
+	}
+
+	if pipelineInstDryRun {
+		return printInstantiateResult(p.Stages, contracts, true)
+	}
+
+	// Save each contract via the create-path store.
+	ms := missionStoreForCreate()
+	is := identityStore()
+	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	if err != nil {
+		return fmt.Errorf("pipeline instantiate: %w", err)
+	}
+
+	for i, c := range contracts {
+		// ApplyServerFields overwrites MissionID, timestamps, hash etc.
+		pipeline := c.Pipeline
+		if err := ms.ApplyServerFields(c, opts.Now, sources); err != nil {
+			return fmt.Errorf("pipeline instantiate: stage %q: %w", p.Stages[i].Name, err)
+		}
+		// Restore pipeline (ApplyServerFields does not set it).
+		c.Pipeline = pipeline
+
+		// Re-derive DependsOn from InputsFrom. Earlier stages have
+		// already been processed so contracts[j].MissionID is the
+		// server-assigned ID.
+		c.DependsOn = nil
+		if p.Stages[i].InputsFrom != "" {
+			found := false
+			for j := 0; j < i; j++ {
+				if p.Stages[j].Name == p.Stages[i].InputsFrom {
+					c.DependsOn = []string{contracts[j].MissionID}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("pipeline instantiate: stage %q references unknown upstream stage %q via inputs_from",
+					p.Stages[i].Name, p.Stages[i].InputsFrom)
+			}
+		}
+
+		if err := ms.Create(c); err != nil {
+			return fmt.Errorf("pipeline instantiate: stage %q (mission %s): %w",
+				p.Stages[i].Name, c.MissionID, err)
+		}
+	}
+
+	return printInstantiateResult(p.Stages, contracts, false)
+}
+
+// parseVarFlags parses --var key=value flags into a map.
+func parseVarFlags(flags []string) (map[string]string, error) {
+	vars := make(map[string]string, len(flags))
+	for _, f := range flags {
+		eq := strings.IndexByte(f, '=')
+		if eq < 0 {
+			return nil, fmt.Errorf("invalid --var %q: expected key=value", f)
+		}
+		key := f[:eq]
+		val := f[eq+1:]
+		if key == "" {
+			return nil, fmt.Errorf("invalid --var %q: empty key", f)
+		}
+		vars[key] = val
+	}
+	return vars, nil
+}
+
+// printInstantiateResult outputs the table or JSON for instantiate.
+// stages provides the stage names from the pipeline template.
+func printInstantiateResult(stages []mission.Stage, contracts []*mission.Contract, dryRun bool) error {
+	if len(contracts) == 0 {
+		fmt.Println("No stages in pipeline.")
+		return nil
+	}
+
+	pipelineID := contracts[0].Pipeline
+
+	if jsonOutput {
+		type missionEntry struct {
+			Stage     string   `json:"stage"`
+			ID        string   `json:"id"`
+			Type      string   `json:"type"`
+			DependsOn []string `json:"depends_on"`
+		}
+		type output struct {
+			Pipeline string         `json:"pipeline"`
+			DryRun   bool           `json:"dry_run,omitempty"`
+			Missions []missionEntry `json:"missions"`
+		}
+		out := output{
+			Pipeline: pipelineID,
+			DryRun:   dryRun,
+			Missions: make([]missionEntry, len(contracts)),
+		}
+		for i, c := range contracts {
+			dep := c.DependsOn
+			if dep == nil {
+				dep = []string{}
+			}
+			name := stages[i].Name
+			out.Missions[i] = missionEntry{
+				Stage:     name,
+				ID:        c.MissionID,
+				Type:      c.Type,
+				DependsOn: dep,
+			}
+		}
+		printJSON(out)
+		return nil
+	}
+
+	if dryRun {
+		fmt.Printf("Dry run pipeline %s (mission IDs are placeholders, not allocated):\n", pipelineID)
+	} else {
+		fmt.Printf("Created pipeline %s:\n", pipelineID)
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "STAGE\tMISSION_ID\tTYPE\tDEPENDS_ON\n")
+	for i, c := range contracts {
+		dep := "(none)"
+		if len(c.DependsOn) > 0 {
+			dep = strings.Join(c.DependsOn, ", ")
+		}
+		name := stages[i].Name
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, c.MissionID, c.Type, dep)
 	}
 	return tw.Flush()
 }

@@ -11,6 +11,19 @@ import (
 // missionIDPattern enforces the m-YYYY-MM-DD-NNN format.
 var missionIDPattern = regexp.MustCompile(`^m-\d{4}-\d{2}-\d{2}-\d{3}$`)
 
+// pipelineIDPattern enforces lowercase alphanumeric with hyphens,
+// matching the slug constraints used for pipeline names.
+var pipelineIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+const maxPipelineIDLen = 128
+
+// PipelineIDValid reports whether s is a valid pipeline ID: lowercase
+// alphanumeric with hyphens, starting with a letter or digit, and at
+// most 128 characters.
+func PipelineIDValid(s string) bool {
+	return len(s) <= maxPipelineIDLen && pipelineIDPattern.MatchString(s)
+}
+
 // validStatuses lists the four allowed Status values.
 var validStatuses = map[string]bool{
 	StatusOpen:      true,
@@ -28,7 +41,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (14 total — must match the numbered list below
+// Validation rules (16 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -51,6 +64,10 @@ const (
 //  14. current_round is in [1, budget.rounds] (3.4 round-tracking
 //     invariant; zero is rewritten to 1 by Store.Create so a
 //     pre-3.4 contract loaded in-place still parses)
+//  15. pipeline: when set, must be a valid slug (lowercase, hyphens,
+//     digits), no control characters, length ≤ 128
+//  16. depends_on: each entry must be a valid mission ID; self-reference
+//     is rejected
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
@@ -164,6 +181,31 @@ func (c *Contract) Validate() error {
 	// 1 ≤ CurrentRound ≤ Budget.Rounds.
 	if c.CurrentRound < 1 || c.CurrentRound > c.Budget.Rounds {
 		return fmt.Errorf("current_round %d out of range [1, %d]", c.CurrentRound, c.Budget.Rounds)
+	}
+
+	// pipeline: when set, must be a valid slug (lowercase, hyphens,
+	// digits) with no control characters and length ≤ 128.
+	if c.Pipeline != "" {
+		if containsControlChar(c.Pipeline) {
+			return fmt.Errorf("pipeline contains control character")
+		}
+		if len(c.Pipeline) > maxPipelineIDLen {
+			return fmt.Errorf("pipeline %q exceeds maximum length %d", c.Pipeline, maxPipelineIDLen)
+		}
+		if !pipelineIDPattern.MatchString(c.Pipeline) {
+			return fmt.Errorf("invalid pipeline %q: must be lowercase alphanumeric with hyphens", c.Pipeline)
+		}
+	}
+
+	// depends_on: each entry must be a valid mission ID; self-reference
+	// is rejected.
+	for i, dep := range c.DependsOn {
+		if !missionIDPattern.MatchString(dep) {
+			return fmt.Errorf("depends_on[%d]: invalid mission ID %q", i, dep)
+		}
+		if dep == c.MissionID {
+			return fmt.Errorf("depends_on[%d]: self-reference %q", i, dep)
+		}
 	}
 
 	return nil
