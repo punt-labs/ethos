@@ -159,6 +159,8 @@ Bounded rounds + reflection    & 3.4 & DES-034      & \texttt{ethos-07m.8} & SHI
 Verifier isolation             & 3.5 & DES-035      & \texttt{ethos-07m.9} & SHIPPED \\
 Result artifacts + close gate  & 3.6 & DES-036      & \texttt{ethos-07m.10} & SHIPPED \\
 Event log reader API           & 3.7 & DES-037      & \texttt{ethos-07m.11} & SHIPPED \\
+Mission archetypes             & 3.8 & DES-045      & ---                  & SHIPPED \\
+Mission pipelines              & 3.9 & DES-046      & ---                  & SHIPPED \\
 \midrule
 RunE handler refactor          & Test & DES-042      & \texttt{ethos-aeb}   & SHIPPED \\
 CLI subprocess tests (L2)      & Test & ---          & \texttt{ethos-oto}   & SHIPPED \\
@@ -1552,6 +1554,60 @@ no terminal transition without a typed result artifact.  The
 event log reader (DES-037) is the post-mortem substrate that lets
 an operator reconstruct what happened when any of the above fired.
 
+\subsection{Archetype System (DES-045)}
+
+Missions declare a \field{type} field that maps to an archetype
+definition on the filesystem.  Archetypes are YAML files under
+\fpath{\~{}/.punt-labs/ethos/archetypes/} (global) or
+\fpath{.punt-labs/ethos/archetypes/} (repo-local).  Seven
+archetypes ship as seed content: \texttt{design},
+\texttt{implement}, \texttt{test}, \texttt{review},
+\texttt{inbox}, \texttt{task}, \texttt{report}.
+
+Each archetype declares:
+
+\begin{itemize}
+  \item \textbf{Budget defaults} --- \field{rounds} and
+    \field{reflection\_after\_each}.  Applied at create time when
+    the contract omits them.
+  \item \textbf{Write-set constraints} --- open (any path) vs
+    restricted (specific paths required).
+  \item \textbf{Required fields} --- archetype-specific fields that
+    must be present beyond the base contract schema.
+\end{itemize}
+
+The \field{type} field defaults to \texttt{implement} for backward
+compatibility with pre-archetype contracts.  Per-archetype validation
+runs alongside the existing \texttt{Contract.Validate()} checks.
+Extensibility is purely filesystem-based: teams add a YAML file and
+the archetype is available without modifying the binary.
+
+\subsection{Pipeline System (DES-046)}
+
+A pipeline is a named sequence of typed mission stages.  Each stage
+references an archetype and carries stage-specific overrides (worker,
+evaluator, budget).  The pipeline is orchestration, not archetype ---
+it composes existing archetypes into a repeatable workflow.  Stages are
+independent missions; a result artifact connects one stage's output to
+the next stage's input.
+
+Three sprint templates ship as seed content:
+
+\begin{itemize}
+  \item \textbf{quick} --- design + implement (2 stages)
+  \item \textbf{standard} --- design + implement + test + review
+    (4 stages)
+  \item \textbf{full} --- design + implement + test + review +
+    report + inbox (6 stages)
+\end{itemize}
+
+\cmd{ethos mission pipeline list} and
+\cmd{ethos mission pipeline show <name>} expose the templates via
+CLI with \cmd{--json} support.  Pipelines do not auto-execute ---
+the leader instantiates each stage and decides at each transition
+whether to proceed, matching the bounded-rounds discipline from
+DES-034 at the multi-mission level.
+
 % ===================================================================
 \section{Agent Generation}
 % ===================================================================
@@ -2036,15 +2092,23 @@ Three parallel command groups: \cmd{talent}, \cmd{personality},
                                        Warnings appended on
                                        partial decode. \\
 \cmd{mission lint <contract.yaml>}  & Advisory pre-delegation
-                                       linter.  Six heuristic
-                                       checks (adjacent test file,
-                                       CHANGELOG gap, README in
+                                       linter.  Ten heuristic
+                                       checks (H1--H6: adjacent test
+                                       file, CHANGELOG gap, README in
                                        criteria, inverted test gap,
                                        \field{inputs.files} not in
                                        write\_set, placeholder
-                                       evaluator).  Exits 0 with
+                                       evaluator; H7--H9: cross-repo
+                                       context, before/after criteria,
+                                       evaluator domain; H10: pipeline
+                                       selector).  Exits 0 with
                                        or without warnings.
                                        \cmd{--json} supported. \\
+\cmd{mission pipeline list}        & List available sprint templates.
+                                       \cmd{--json} supported. \\
+\cmd{mission pipeline show <name>} & Show pipeline stages and
+                                       defaults.  \cmd{--json}
+                                       supported. \\
 \bottomrule
 \end{tabular}
 \end{center}

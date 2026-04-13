@@ -37,8 +37,9 @@ var ErrEvaluatorNotFound = errors.New("evaluator not found")
 // contracts are not git-tracked and not layered. Phase 3.2+ may revisit if
 // repo-scoped missions become necessary.
 type Store struct {
-	root  string     // e.g. ~/.punt-labs/ethos
-	roles RoleLister // optional; wires the Phase 3.5 role-overlap check
+	root       string          // e.g. ~/.punt-labs/ethos
+	roles      RoleLister      // optional; wires the Phase 3.5 role-overlap check
+	archetypes *ArchetypeStore // optional; validates Type on Create
 }
 
 // NewStore creates a Store rooted at the given directory.
@@ -62,6 +63,19 @@ func NewStore(root string) *Store {
 //	ms := mission.NewStore(root).WithRoleLister(rl)
 func (s *Store) WithRoleLister(r RoleLister) *Store {
 	s.roles = r
+	return s
+}
+
+// WithArchetypeStore wires an ArchetypeStore for type validation on
+// Create. When set, Store.Create refuses a contract whose Type does not
+// match a discovered archetype. A nil store disables the check entirely
+// (backward compatible).
+//
+// Returns the receiver so construction stays compact:
+//
+//	ms := mission.NewStore(root).WithArchetypeStore(as)
+func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
+	s.archetypes = as
 	return s
 }
 
@@ -241,6 +255,14 @@ func (s *Store) Create(c *Contract) error {
 	// the default so every persisted contract has a type.
 	if staged.Type == "" {
 		staged.Type = "implement"
+	}
+	// Validate Type against discovered archetypes when wired.
+	if s.archetypes != nil && !s.archetypes.Exists(staged.Type) {
+		available, _ := s.archetypes.List()
+		return fmt.Errorf(
+			"unknown mission type %q; available archetypes: %s",
+			staged.Type, strings.Join(available, ", "),
+		)
 	}
 	// 3.4: a freshly created mission begins at round 1. The caller
 	// may leave CurrentRound at its zero value; Validate would

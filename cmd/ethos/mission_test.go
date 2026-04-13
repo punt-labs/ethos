@@ -94,9 +94,12 @@ func missionTestEnv(t *testing.T) string {
 }
 
 // seedEvaluator drops a minimal djb identity (the canonical evaluator
-// every contract names) into the given root. Mirrors the MCP test
-// helper testHandlerWithMissions so the CLI tests no longer rely on
-// a magically-pre-existing identity at the user's home directory.
+// every contract names) and the default "implement" archetype into the
+// given root. Mirrors the MCP test helper testHandlerWithMissions so
+// the CLI tests no longer rely on a magically-pre-existing identity at
+// the user's home directory. The archetype is seeded here (not in a
+// separate call) because every test that creates a mission needs both
+// the evaluator identity and a recognized archetype.
 func seedEvaluator(t *testing.T, root string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(root, 0o700))
@@ -121,6 +124,19 @@ func seedEvaluator(t *testing.T, root string) {
 		WritingStyle: "bernstein-prose",
 		Talents:      []string{"security"},
 	}))
+	seedArchetype(t, root, "implement")
+}
+
+// seedArchetype drops a minimal archetype YAML into root/archetypes/
+// so the ArchetypeStore wired by missionStoreForCreate recognizes the
+// given name. Without this, any Create call would reject the default
+// "implement" type with "unknown mission type".
+func seedArchetype(t *testing.T, root, name string) {
+	t.Helper()
+	dir := filepath.Join(root, "archetypes")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	body := fmt.Sprintf("name: %s\ndescription: test archetype\n", name)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name+".yaml"), []byte(body), 0o644))
 }
 
 // writeContractFile drops a YAML contract into a temp file and returns
