@@ -121,16 +121,16 @@ is nature-based, with a size-based fallback.
 ```text
 Contract context and write_set
   |
-  +--> mentions "prfaq", "working backwards", "product validation"
-  |    AND write_set non-empty?
+  +--> mentions "prfaq", "pr/faq", "working backwards",
+  |    "product validation" AND write_set non-empty?
   |      yes --> product (6 stages)
   |
-  +--> mentions "z-spec", "formal spec", "model check", "invariant",
-  |    "state machine"?
+  +--> mentions "z-spec", "zspec", "formal spec", "model check",
+  |    "invariant", "state machine"?
   |      yes --> formal (7 stages)
   |
   +--> mentions "cause of error", "recurring bug",
-  |    "data corruption", "incident", "fixed before", "postmortem"?
+  |    "data corruption", "fixed before", "postmortem"?
   |      yes --> coe (5 stages)
   |
   +--> ALL write_set entries match doc patterns

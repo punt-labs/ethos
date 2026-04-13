@@ -436,7 +436,7 @@ func detectNature(ctx string, writeSet []string) (string, string) {
 	}
 
 	// coe
-	coeKeywords := []string{"cause of error", "recurring bug", "data corruption", "incident", "fixed before", "postmortem"}
+	coeKeywords := []string{"cause of error", "recurring bug", "data corruption", "fixed before", "postmortem"}
 	if kw, ok := contextContainsAny(ctx, coeKeywords); ok {
 		return "coe", "context mentions " + kw
 	}
