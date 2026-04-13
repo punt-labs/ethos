@@ -233,7 +233,7 @@ hooks. See the [Team Setup Guide](docs/team-setup.md).
 | 2 — Production Agents | SHIPPED | Anti-responsibilities, role hooks, structured output, mission skill |
 | 3 — Workflow Primitives | SHIPPED | Mission contracts, write-set admission, frozen evaluators, bounded rounds, verifier isolation, result artifacts, event log |
 | 4 — Operational Excellence | SHIPPED | SessionStart working context, role safety constraints, session audit logging |
-| 5 — Ecosystem | PLANNED | Starter team templates, cross-tool integration |
+| 5 — Ecosystem | PARTIAL | Archetypes, sprint templates/pipelines (SHIPPED); agent marketplace, cross-tool orchestration (PLANNED) |
 
 20.1 KLOC production Go. 26.8 KLOC tests (1.33:1 ratio).
 Go Report Card: A+.

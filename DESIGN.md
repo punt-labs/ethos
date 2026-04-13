@@ -4121,3 +4121,24 @@ stage by stage, preserving human judgment at each transition.
 - Pipeline as a special archetype -- conflates the composition layer
   with the individual mission layer. A pipeline contains archetypes;
   it is not one.
+
+## DES-047: Verifier read-allowed policy (SETTLED)
+
+**Decision**: Verifiers get full read access to the repo. Only Write
+and Edit are blocked by the PreToolUse hook. Read, Glob, and Grep are
+unrestricted.
+
+**Reasoning**: A verifier reviewing code needs to read imports, callers,
+and surrounding context -- not just the files in the write-set. Blocking
+Read made verifiers unable to review effectively. The real constraint
+is: don't modify anything (Write/Edit blocked) and don't drift the
+evaluation standard (frozen evaluator hash, DES-033).
+
+**Rejected alternatives**:
+
+- Block all file access outside write-set -- makes review impossible,
+  verifier can't understand context.
+- Allow Read only for files imported by write-set files -- too complex
+  to compute, fragile.
+
+References PR #246. Shipped v3.1.0.

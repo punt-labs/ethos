@@ -1392,9 +1392,10 @@ block instead of the normal persona block.  The block contains:
     \field{success\_criteria} list, verbatim
   \item \texttt{\#\#\# File allowlist} --- two labeled sub-sections:
     repo-relative paths and absolute paths
-  \item A \texttt{MUST NOT} directive: the verifier may not read
-    parent transcript, worker scratch, or paths outside the
-    allowlist
+  \item A \texttt{MUST NOT} directive: the verifier may not write or
+    edit files outside the allowlist, and may not read parent
+    transcript or worker scratch state (DES-047: read access to all
+    other repo files is unrestricted)
 \end{itemize}
 
 The persona block is EXCLUDED for verifier spawns.  Parent
@@ -1410,8 +1411,10 @@ write\_set paths to concrete files on disk via
 \texttt{filepath.WalkDir}; the verifier isolation block includes a
 ``Concrete files on disk'' section alongside the static entries.  A
 \texttt{PreToolUse} hook handler (\texttt{ethos-x05}) blocks
-verifier \texttt{Read}/\texttt{Write}/\texttt{Edit}/\texttt{Glob}/\texttt{Grep}
-calls against paths outside the allowlist, communicated via the
+verifier \texttt{Write}/\texttt{Edit}
+calls against paths outside the allowlist; \texttt{Read},
+\texttt{Glob}, and \texttt{Grep} are unrestricted (DES-047).
+The allowlist is communicated via the
 \texttt{ETHOS\_VERIFIER\_ALLOWLIST} environment variable set at
 \texttt{SubagentStart}.  See \S{}Operational Hooks for the
 enforcement details.
@@ -1786,11 +1789,13 @@ sets the \texttt{ETHOS\_VERIFIER\_ALLOWLIST} environment variable to
 a colon-separated list of paths derived from the mission's
 \field{write\_set} (walked to concrete files on disk via
 \texttt{WalkWriteSet}).  The \texttt{PreToolUse} hook handler reads
-this variable and blocks \texttt{Read}, \texttt{Write},
-\texttt{Edit}, \texttt{Glob}, and \texttt{Grep} calls whose target
-path falls outside the allowlist.  The check is segment-prefix
-based, matching the containment semantics used by the result
-artifact's \texttt{pathContainedBy} helper (DES-036).
+this variable and blocks \texttt{Write} and \texttt{Edit} calls
+whose target path falls outside the allowlist (DES-047).
+\texttt{Read}, \texttt{Glob}, and \texttt{Grep} are unrestricted ---
+verifiers need full read access to review imports, callers, and
+surrounding context.  The check is segment-prefix based, matching
+the containment semantics used by the result artifact's
+\texttt{pathContainedBy} helper (DES-036).
 
 The enforcement is defense-in-depth: the verifier isolation block's
 prose directive (DES-035) remains the cooperative signal, and the
