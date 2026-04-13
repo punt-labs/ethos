@@ -54,7 +54,7 @@ ethos mission create --file .tmp/missions/fix-validator.yaml
 ```
 
 Ethos assigns an ID, pins the evaluator's content hash, and creates an
-event log at `~/.punt-labs/ethos/missions/<id>.log.jsonl`. The worker
+event log at `~/.punt-labs/ethos/missions/<id>.jsonl`. The worker
 opens the mission, implements the change, submits a structured result,
 and the leader reflects. Full walkthrough:
 [docs/example/](example/).

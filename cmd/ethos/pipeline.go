@@ -182,6 +182,10 @@ func runPipelineInstantiate(name string) error {
 		return fmt.Errorf("pipeline instantiate: %w", err)
 	}
 
+	if pipelineInstID != "" && !mission.PipelineIDValid(pipelineInstID) {
+		return fmt.Errorf("--id %q: must match ^[a-z0-9][a-z0-9-]*$ (max 128 chars)", pipelineInstID)
+	}
+
 	vars, err := parseVarFlags(pipelineInstVars)
 	if err != nil {
 		return fmt.Errorf("pipeline instantiate: %w", err)
@@ -213,7 +217,7 @@ func runPipelineInstantiate(name string) error {
 	}
 
 	if pipelineInstDryRun {
-		return printInstantiateResult(contracts, true)
+		return printInstantiateResult(p.Stages, contracts, true)
 	}
 
 	// Save each contract via the create-path store.
@@ -226,22 +230,17 @@ func runPipelineInstantiate(name string) error {
 
 	for i, c := range contracts {
 		// ApplyServerFields overwrites MissionID, timestamps, hash etc.
-		// We keep the Pipeline and DependsOn the Instantiate set.
 		pipeline := c.Pipeline
-		dependsOn := c.DependsOn
 		if err := ms.ApplyServerFields(c, opts.Now, sources); err != nil {
 			return fmt.Errorf("pipeline instantiate: stage %q: %w", p.Stages[i].Name, err)
 		}
-		// Restore pipeline fields overwritten by ApplyServerFields
-		// (it doesn't touch them, but be defensive).
+		// Restore pipeline (ApplyServerFields does not set it).
 		c.Pipeline = pipeline
-		c.DependsOn = dependsOn
 
-		// Re-resolve DependsOn: the upstream mission IDs may have been
-		// replaced by ApplyServerFields. But since Instantiate assigned
-		// provisional IDs and ApplyServerFields replaces them, we need
-		// to update the downstream depends_on to point to the NEW
-		// upstream IDs.
+		// Re-derive DependsOn from InputsFrom. Earlier stages have
+		// already been processed so contracts[j].MissionID is the
+		// server-assigned ID.
+		c.DependsOn = nil
 		if p.Stages[i].InputsFrom != "" {
 			for j := 0; j < i; j++ {
 				if p.Stages[j].Name == p.Stages[i].InputsFrom {
@@ -257,7 +256,7 @@ func runPipelineInstantiate(name string) error {
 		}
 	}
 
-	return printInstantiateResult(contracts, false)
+	return printInstantiateResult(p.Stages, contracts, false)
 }
 
 // parseVarFlags parses --var key=value flags into a map.
@@ -279,7 +278,8 @@ func parseVarFlags(flags []string) (map[string]string, error) {
 }
 
 // printInstantiateResult outputs the table or JSON for instantiate.
-func printInstantiateResult(contracts []*mission.Contract, dryRun bool) error {
+// stages provides the stage names from the pipeline template.
+func printInstantiateResult(stages []mission.Stage, contracts []*mission.Contract, dryRun bool) error {
 	if len(contracts) == 0 {
 		fmt.Println("No stages in pipeline.")
 		return nil
@@ -309,8 +309,9 @@ func printInstantiateResult(contracts []*mission.Contract, dryRun bool) error {
 			if dep == nil {
 				dep = []string{}
 			}
+			name := stages[i].Name
 			out.Missions[i] = missionEntry{
-				Stage:     fmt.Sprintf("stage-%d", i+1),
+				Stage:     name,
 				ID:        c.MissionID,
 				Type:      c.Type,
 				DependsOn: dep,
@@ -333,7 +334,8 @@ func printInstantiateResult(contracts []*mission.Contract, dryRun bool) error {
 		if len(c.DependsOn) > 0 {
 			dep = strings.Join(c.DependsOn, ", ")
 		}
-		fmt.Fprintf(tw, "%d\t%s\t%s\t%s\n", i+1, c.MissionID, c.Type, dep)
+		name := stages[i].Name
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", name, c.MissionID, c.Type, dep)
 	}
 	return tw.Flush()
 }

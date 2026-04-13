@@ -310,30 +310,47 @@ func generatePipelineID(name string, now time.Time) (string, error) {
 	return fmt.Sprintf("%s-%s-%x", name, day, b), nil
 }
 
-// ExpandVars replaces {key} tokens with their values from vars. Returns
-// an error listing the first unknown token encountered.
+// ExpandVars replaces {key} tokens with their values from vars.
+// Double braces escape: {{ becomes literal {, }} becomes literal }.
+// An empty placeholder {} is rejected. Returns an error listing the
+// first unknown or empty token encountered.
 func ExpandVars(s string, vars map[string]string) (string, error) {
 	var result strings.Builder
 	for i := 0; i < len(s); {
-		open := strings.IndexByte(s[i:], '{')
-		if open < 0 {
+		// Escaped open brace: {{ → literal {
+		if i+1 < len(s) && s[i] == '{' && s[i+1] == '{' {
+			result.WriteByte('{')
+			i += 2
+			continue
+		}
+		// Escaped close brace: }} → literal }
+		if i+1 < len(s) && s[i] == '}' && s[i+1] == '}' {
+			result.WriteByte('}')
+			i += 2
+			continue
+		}
+		if s[i] != '{' {
+			result.WriteByte(s[i])
+			i++
+			continue
+		}
+		// Single open brace: look for the matching close.
+		close := strings.IndexByte(s[i+1:], '}')
+		if close < 0 {
+			// No closing brace; write the rest literally.
 			result.WriteString(s[i:])
 			break
 		}
-		result.WriteString(s[i : i+open])
-		close := strings.IndexByte(s[i+open:], '}')
-		if close < 0 {
-			// No closing brace; write the rest literally.
-			result.WriteString(s[i+open:])
-			break
+		key := s[i+1 : i+1+close]
+		if key == "" {
+			return "", fmt.Errorf("empty template variable placeholder \"{}\"")
 		}
-		key := s[i+open+1 : i+open+close]
 		val, ok := vars[key]
 		if !ok {
 			return "", fmt.Errorf("unknown template variable {%s}", key)
 		}
 		result.WriteString(val)
-		i = i + open + close + 1
+		i = i + 1 + close + 1
 	}
 	return result.String(), nil
 }

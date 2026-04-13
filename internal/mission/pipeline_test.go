@@ -710,6 +710,16 @@ func TestExpandVars(t *testing.T) {
 		{name: "empty input", input: "", vars: map[string]string{"x": "y"}, want: ""},
 		{name: "unclosed brace", input: "docs/{feature", vars: map[string]string{"feature": "x"},
 			want: "docs/{feature"},
+		{name: "empty key rejected", input: "literal {}", vars: map[string]string{},
+			wantErr: "empty template variable"},
+		{name: "double brace escape open", input: "{{feature}}", vars: map[string]string{"feature": "foo"},
+			want: "{feature}"},
+		{name: "double brace mixed", input: "output: {{x: {val}}}", vars: map[string]string{"val": "42"},
+			want: "output: {x: 42}"},
+		{name: "adjacent tokens", input: "{a}{b}", vars: map[string]string{"a": "x", "b": "y"},
+			want: "xy"},
+		{name: "double close brace", input: "a}}b", vars: nil, want: "a}b"},
+		{name: "only double braces", input: "{{}}", vars: nil, want: "{}"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

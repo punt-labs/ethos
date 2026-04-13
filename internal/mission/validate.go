@@ -17,6 +17,13 @@ var pipelineIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 const maxPipelineIDLen = 128
 
+// PipelineIDValid reports whether s is a valid pipeline ID: lowercase
+// alphanumeric with hyphens, starting with a letter or digit, and at
+// most 128 characters.
+func PipelineIDValid(s string) bool {
+	return len(s) <= maxPipelineIDLen && pipelineIDPattern.MatchString(s)
+}
+
 // validStatuses lists the four allowed Status values.
 var validStatuses = map[string]bool{
 	StatusOpen:      true,
