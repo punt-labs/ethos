@@ -111,7 +111,7 @@ type: design
 leader: claude
 worker: mdm
 evaluator:
-  handle: claude
+  handle: djb
 write_set:
   - docs/pipeline-walkthrough.md
 success_criteria:
@@ -170,8 +170,9 @@ Rules:
 - Write-set constraints use `filepath.Match` glob syntax. Entries must
   match at least one pattern.
 - Archetypes are extensible without modifying ethos — add a YAML file
-  and it shows up in `ethos mission pipeline list` and is usable from
-  any contract's `type:` field.
+  under `archetypes/` and it is available for use from any contract's
+  `type:` field. There is no CLI listing for archetypes today; inspect
+  them via `ls ~/.punt-labs/ethos/archetypes/`.
 
 Design reference: [mission-archetypes.md](mission-archetypes.md).
 

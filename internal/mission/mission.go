@@ -70,8 +70,10 @@ type Contract struct {
 	Context string `yaml:"context,omitempty" json:"context,omitempty"`
 
 	// Pipeline is an optional identifier grouping related missions into a
-	// sequence. All missions in a pipeline share the same value. Free-form
-	// (the leader picks it at instantiation time).
+	// sequence. All missions in a pipeline share the same value. The leader
+	// picks it at instantiation time, or ethos auto-generates one. Validate
+	// requires a slug-like value: lowercase letters, digits, and hyphens
+	// only, max 128 characters.
 	Pipeline string `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
 
 	// DependsOn is an optional list of mission IDs that must reach a

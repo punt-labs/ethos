@@ -41,7 +41,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (14 total — must match the numbered list below
+// Validation rules (16 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -64,6 +64,10 @@ const (
 //  14. current_round is in [1, budget.rounds] (3.4 round-tracking
 //     invariant; zero is rewritten to 1 by Store.Create so a
 //     pre-3.4 contract loaded in-place still parses)
+//  15. pipeline: when set, must be a valid slug (lowercase, hyphens,
+//     digits), no control characters, length ≤ 128
+//  16. depends_on: each entry must be a valid mission ID; self-reference
+//     is rejected
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).

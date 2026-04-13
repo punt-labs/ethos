@@ -209,6 +209,7 @@ func runPipelineInstantiate(name string) error {
 		Root:       root,
 		Now:        time.Now(),
 		Archetypes: as,
+		DryRun:     pipelineInstDryRun,
 	}
 
 	contracts, err := mission.Instantiate(p, opts)
@@ -321,11 +322,11 @@ func printInstantiateResult(stages []mission.Stage, contracts []*mission.Contrac
 		return nil
 	}
 
-	prefix := "Created"
 	if dryRun {
-		prefix = "Dry run"
+		fmt.Printf("Dry run pipeline %s (mission IDs are placeholders, not allocated):\n", pipelineID)
+	} else {
+		fmt.Printf("Created pipeline %s:\n", pipelineID)
 	}
-	fmt.Printf("%s pipeline %s:\n", prefix, pipelineID)
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(tw, "STAGE\tMISSION_ID\tTYPE\tDEPENDS_ON\n")

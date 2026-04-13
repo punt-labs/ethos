@@ -60,10 +60,12 @@ func NewListEntry(c *Contract) ListEntry {
 	}
 }
 
-// TopoSortContracts sorts contracts so each mission appears after all
-// missions in its DependsOn list. Missions whose dependencies are
-// missing from the input are appended at the end with a warning
-// returned in the second return value.
+// TopoSortContracts returns contracts ordered so that each contract
+// appears after any of its DependsOn entries that are also present in
+// the input slice. Dependencies outside the input slice are treated as
+// already satisfied (they are not in scope for this view). If the
+// remaining contracts form a cycle, they are appended at the end in
+// their original order.
 func TopoSortContracts(contracts []*Contract) ([]*Contract, []string) {
 	if len(contracts) <= 1 {
 		return contracts, nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -124,6 +125,8 @@ func (s *PipelineStore) Exists(name string) bool {
 }
 
 // loadPipeline reads and parses a single pipeline YAML file from dir.
+// Validates that the pipeline name is slug-safe and that stage names are
+// unique within the pipeline.
 func loadPipeline(dir, name string) (*Pipeline, error) {
 	p := filepath.Join(dir, name+".yaml")
 	data, err := os.ReadFile(p)
@@ -139,6 +142,16 @@ func loadPipeline(dir, name string) (*Pipeline, error) {
 	}
 	if pl.Name == "" {
 		pl.Name = name
+	}
+	if !pipelineNamePattern.MatchString(pl.Name) {
+		return nil, fmt.Errorf("pipeline %q (file %s): name is not a valid slug: must match ^[a-z0-9][a-z0-9-]*$", pl.Name, name+".yaml")
+	}
+	seen := make(map[string]bool, len(pl.Stages))
+	for _, s := range pl.Stages {
+		if seen[s.Name] {
+			return nil, fmt.Errorf("pipeline %q: duplicate stage name %q", pl.Name, s.Name)
+		}
+		seen[s.Name] = true
 	}
 	return &pl, nil
 }
@@ -175,6 +188,7 @@ type InstantiateOptions struct {
 	Root       string            // Mission store root for NewID calls.
 	Now        time.Time         // Timestamp for ID generation and contract fields.
 	Archetypes *ArchetypeStore   // Optional. When set, applies archetype budget defaults.
+	DryRun     bool              // When true, use synthetic IDs instead of allocating real ones.
 }
 
 // Instantiate produces one unsaved Contract per stage in the pipeline.
@@ -191,7 +205,7 @@ func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
 	if strings.TrimSpace(opts.Leader) == "" {
 		return nil, fmt.Errorf("instantiate %q: leader is required", p.Name)
 	}
-	if opts.Root == "" {
+	if opts.Root == "" && !opts.DryRun {
 		return nil, fmt.Errorf("instantiate %q: root is required", p.Name)
 	}
 	if opts.Now.IsZero() {
@@ -215,9 +229,15 @@ func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
 
 	contracts := make([]*Contract, len(p.Stages))
 	for i, stage := range p.Stages {
-		missionID, err := NewID(opts.Root, opts.Now)
-		if err != nil {
-			return nil, fmt.Errorf("instantiate %q stage %q: %w", p.Name, stage.Name, err)
+		var missionID string
+		if opts.DryRun {
+			missionID = fmt.Sprintf("m-dryrun-%03d", i+1)
+		} else {
+			var err error
+			missionID, err = NewID(opts.Root, opts.Now)
+			if err != nil {
+				return nil, fmt.Errorf("instantiate %q stage %q: %w", p.Name, stage.Name, err)
+			}
 		}
 
 		// Resolve worker: stage > opts > "".
@@ -299,9 +319,19 @@ func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
 	return contracts, nil
 }
 
+// pipelineNamePattern validates that a pipeline name is a slug-safe
+// value suitable for embedding in a pipeline ID. The generated ID
+// concatenates the name with a date and hex suffix, so the name must
+// be lowercase alphanumeric with hyphens.
+var pipelineNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
 // generatePipelineID produces a pipeline ID of the form
-// <name>-<YYYY-MM-DD>-<6 hex chars>.
+// <name>-<YYYY-MM-DD>-<6 hex chars>. Returns an error if name is
+// not a valid slug.
 func generatePipelineID(name string, now time.Time) (string, error) {
+	if !pipelineNamePattern.MatchString(name) {
+		return "", fmt.Errorf("pipeline name %q is not a valid slug: must match ^[a-z0-9][a-z0-9-]*$", name)
+	}
 	b := make([]byte, 3)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("generating random suffix: %w", err)

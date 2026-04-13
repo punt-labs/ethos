@@ -36,16 +36,17 @@ cloud, no telemetry.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/v3.3.0/install.sh | sh
-ethos create
+ethos identity create
 ```
 
 The installer places the `ethos` binary in `~/.local/bin`, seeds starter
-roles and talents, and registers the Claude Code plugin. `ethos create`
-prompts for your name, handle, personality, writing style, and talents,
-then writes the identity to `~/.punt-labs/ethos/identities/<handle>.yaml`.
+roles and talents, and registers the Claude Code plugin.
+`ethos identity create` prompts for your name, handle, personality,
+writing style, and talents, then writes the identity to
+`~/.punt-labs/ethos/identities/<handle>.yaml`.
 
-Run `ethos create` a second time to create an agent identity (set
-`kind: agent`). Then point your repo at that agent:
+Run `ethos identity create` a second time to create an agent identity
+(set `kind: agent`). Then point your repo at that agent:
 
 ```bash
 mkdir -p .punt-labs
@@ -170,7 +171,7 @@ See the [roadmap](docs/ETHOS-ROADMAP.md).
 [Archetypes and pipelines](docs/archetypes-and-pipelines.md) ·
 [Persona animation](docs/persona-animation.md) ·
 [Agent definitions](docs/agent-definitions.md) ·
-[Architecture](docs/architecture.pdf) ·
+[Architecture](docs/architecture.tex) ·
 [Agent guide (CLI, MCP, hooks)](AGENTS.md) ·
 [Design decisions](DESIGN.md) ·
 [Changelog](CHANGELOG.md) ·
