@@ -126,7 +126,7 @@ Contract context and write_set
   |      yes --> product (6 stages)
   |
   +--> mentions "z-spec", "formal spec", "model check", "invariant",
-  |    "state machine", "protocol"?
+  |    "state machine"?
   |      yes --> formal (7 stages)
   |
   +--> mentions "cause of error", "recurring bug",

@@ -430,7 +430,7 @@ func detectNature(ctx string, writeSet []string) (string, string) {
 	}
 
 	// formal
-	formalKeywords := []string{"z-spec", "zspec", "formal spec", "model check", "invariant", "state machine", "protocol"}
+	formalKeywords := []string{"z-spec", "zspec", "formal spec", "model check", "invariant", "state machine"}
 	if kw, ok := contextContainsAny(ctx, formalKeywords); ok {
 		return "formal", "context mentions " + kw
 	}
