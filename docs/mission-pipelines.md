@@ -121,7 +121,7 @@ is nature-based, with a size-based fallback.
 ```text
 Contract context and write_set
   |
-  +--> mentions "prfaq", "working backwards", "new feature", "product validation"
+  +--> mentions "prfaq", "working backwards", "product validation"
   |    AND write_set non-empty?
   |      yes --> product (6 stages)
   |

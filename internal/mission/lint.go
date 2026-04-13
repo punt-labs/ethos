@@ -423,7 +423,7 @@ func lintPipelineSelector(c *Contract, ws []Warning) []Warning {
 func detectNature(ctx string, writeSet []string) (string, string) {
 	// product: context mentions product validation AND write_set is non-empty
 	if len(writeSet) > 0 {
-		productKeywords := []string{"prfaq", "pr/faq", "working backwards", "new feature", "product validation"}
+		productKeywords := []string{"prfaq", "pr/faq", "working backwards", "product validation"}
 		if kw, ok := contextContainsAny(ctx, productKeywords); ok {
 			return "product", "context mentions " + kw
 		}
