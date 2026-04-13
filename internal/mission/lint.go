@@ -311,27 +311,9 @@ func isWriteSetPrefix(candidate string, writeSet []string) bool {
 }
 
 // isDocsOnlyWriteSet reports whether every path in write_set is a
-// markdown file or inside a docs/ directory.
+// documentation file or inside a docs/ directory.
 func isDocsOnlyWriteSet(writeSet []string) bool {
-	if len(writeSet) == 0 {
-		return false
-	}
-	for _, p := range writeSet {
-		// Check the raw entry for trailing slash (directory marker)
-		// before canonicalization, which strips trailing slashes.
-		if strings.HasSuffix(p, "/") {
-			continue
-		}
-		cp := CanonicalPath(p)
-		if strings.HasPrefix(cp, "docs/") {
-			continue
-		}
-		if strings.HasSuffix(cp, ".md") {
-			continue
-		}
-		return false
-	}
-	return true
+	return allDocPaths(writeSet)
 }
 
 // lintDesignImpact warns when the write_set is docs-only but no
@@ -388,14 +370,27 @@ func isProductionCode(p string) bool {
 	return false
 }
 
-// lintPipelineSelector suggests a pipeline template based on the size
-// and complexity of the contract. Skips when the contract already
-// specifies a pipeline (the Pipeline field does not exist on Contract
-// yet — when it is added, update hasPipeline).
+// lintPipelineSelector suggests a pipeline template based on the
+// nature and size of the contract. Nature-based detection (from
+// context and write_set patterns) takes priority over size-based
+// fallback. Skips when the contract already specifies a pipeline.
 func lintPipelineSelector(c *Contract, ws []Warning) []Warning {
 	if hasPipeline(c) {
 		return ws
 	}
+
+	ctx := strings.ToLower(c.Context)
+
+	// Nature-based selection — priority order.
+	if name, reason := detectNature(ctx, c.WriteSet); name != "" {
+		return append(ws, Warning{
+			Field:    "pipeline",
+			Message:  "consider pipeline: " + name + " (" + reason + ")",
+			Severity: SeverityInfo,
+		})
+	}
+
+	// Size-based fallback.
 	nFiles := len(c.WriteSet)
 	nCriteria := len(c.SuccessCriteria)
 
@@ -420,6 +415,96 @@ func lintPipelineSelector(c *Contract, ws []Warning) []Warning {
 		})
 	}
 	return ws
+}
+
+// detectNature checks context and write_set patterns for nature-based
+// pipeline selection. Returns the pipeline name and reason, or empty
+// strings if no nature match is found.
+func detectNature(ctx string, writeSet []string) (string, string) {
+	// product: context mentions product validation AND write_set is non-empty
+	if len(writeSet) > 0 {
+		productKeywords := []string{"prfaq", "pr/faq", "working backwards", "product validation"}
+		if kw, ok := contextContainsAny(ctx, productKeywords); ok {
+			return "product", "context mentions " + kw
+		}
+	}
+
+	// formal
+	formalKeywords := []string{"z-spec", "zspec", "formal spec", "model check", "invariant", "state machine"}
+	if kw, ok := contextContainsAny(ctx, formalKeywords); ok {
+		return "formal", "context mentions " + kw
+	}
+
+	// coe
+	coeKeywords := []string{"cause of error", "recurring bug", "data corruption", "fixed before", "postmortem"}
+	if kw, ok := contextContainsAny(ctx, coeKeywords); ok {
+		return "coe", "context mentions " + kw
+	}
+
+	// docs: ALL write_set entries match doc patterns
+	if allDocPaths(writeSet) {
+		return "docs", "write_set is all documentation files"
+	}
+
+	// coverage
+	coverageKeywords := []string{"test gap"}
+	if kw, ok := contextContainsAny(ctx, coverageKeywords); ok {
+		return "coverage", "context mentions " + kw
+	}
+
+	return "", ""
+}
+
+// contextContainsAny reports whether ctx contains any of the keywords.
+// The caller must lowercase ctx before calling; keywords are expected to
+// be lowercase. Returns the first matched keyword and true, or empty
+// string and false.
+func contextContainsAny(ctx string, keywords []string) (string, bool) {
+	for _, kw := range keywords {
+		if strings.Contains(ctx, kw) {
+			return kw, true
+		}
+	}
+	return "", false
+}
+
+// isDocPathCanonical reports whether a canonicalized path matches a
+// documentation file pattern: *.md, *.tex, docs/*, *.pdf.
+func isDocPathCanonical(cp string) bool {
+	if strings.HasPrefix(cp, "docs/") {
+		return true
+	}
+	ext := filepath.Ext(cp)
+	switch ext {
+	case ".md", ".tex", ".pdf":
+		return true
+	}
+	return false
+}
+
+// allDocPaths reports whether every entry in writeSet is a
+// documentation file. Returns false for an empty write_set.
+// Directory entries are doc paths only if under docs/.
+func allDocPaths(writeSet []string) bool {
+	if len(writeSet) == 0 {
+		return false
+	}
+	for _, p := range writeSet {
+		cp := CanonicalPath(p)
+		// Treat "docs" and "docs/..." as doc directories regardless
+		// of whether the original entry had a trailing slash.
+		if cp == "docs" || strings.HasPrefix(cp, "docs/") {
+			continue
+		}
+		if strings.HasSuffix(p, "/") {
+			// Non-doc directory.
+			return false
+		}
+		if !isDocPathCanonical(cp) {
+			return false
+		}
+	}
+	return true
 }
 
 // hasPipeline reports whether the contract already specifies a
@@ -451,7 +536,7 @@ func hasMultipleRepoRefs(s string, writeSet []string) bool {
 func pipelineReason(nFiles, nCriteria int, ctx string, writeSet []string) string {
 	parts := make([]string, 0, 2)
 	if nFiles > 10 {
-		parts = append(parts, "10+ files in write_set")
+		parts = append(parts, "11+ files in write_set")
 	} else if nFiles >= 4 {
 		parts = append(parts, "4+ files in write_set")
 	} else {
