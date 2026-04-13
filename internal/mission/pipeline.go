@@ -145,6 +145,17 @@ func loadPipeline(dir, name string) (*Pipeline, error) {
 	if !pipelineIDPattern.MatchString(pl.Name) {
 		return nil, fmt.Errorf("pipeline %q (file %s): name is not a valid slug: must match ^[a-z0-9][a-z0-9-]*$", pl.Name, name+".yaml")
 	}
+	if len(pl.Stages) == 0 {
+		return nil, fmt.Errorf("pipeline %q: stages list is empty", pl.Name)
+	}
+	for i, s := range pl.Stages {
+		if strings.TrimSpace(s.Name) == "" {
+			return nil, fmt.Errorf("pipeline %q: stage[%d] has empty name", pl.Name, i)
+		}
+		if strings.TrimSpace(s.Archetype) == "" {
+			return nil, fmt.Errorf("pipeline %q: stage %q has empty archetype", pl.Name, s.Name)
+		}
+	}
 	seen := make(map[string]bool, len(pl.Stages))
 	for _, s := range pl.Stages {
 		if seen[s.Name] {

@@ -764,6 +764,62 @@ stages:
 	}
 }
 
+func TestLoadPipeline_EmptyStages(t *testing.T) {
+	global := t.TempDir()
+	writePipelineFile(t, global, "empty", `name: empty
+description: "Pipeline with no stages"
+stages: []
+`)
+	s := NewPipelineStore("", global)
+	_, err := s.Load("empty")
+	if err == nil {
+		t.Fatal("expected error for empty stages list")
+	}
+	if !strings.Contains(err.Error(), "stages list is empty") {
+		t.Errorf("error = %v, want mention of empty stages list", err)
+	}
+}
+
+func TestLoadPipeline_EmptyStageName(t *testing.T) {
+	global := t.TempDir()
+	writePipelineFile(t, global, "noname", `name: noname
+description: "Pipeline with unnamed stage"
+stages:
+  - name: ""
+    archetype: implement
+  - name: review
+    archetype: review
+`)
+	s := NewPipelineStore("", global)
+	_, err := s.Load("noname")
+	if err == nil {
+		t.Fatal("expected error for empty stage name")
+	}
+	if !strings.Contains(err.Error(), "stage[0] has empty name") {
+		t.Errorf("error = %v, want mention of stage[0] empty name", err)
+	}
+}
+
+func TestLoadPipeline_EmptyStageArchetype(t *testing.T) {
+	global := t.TempDir()
+	writePipelineFile(t, global, "noarch", `name: noarch
+description: "Pipeline with empty archetype"
+stages:
+  - name: build
+    archetype: ""
+  - name: review
+    archetype: review
+`)
+	s := NewPipelineStore("", global)
+	_, err := s.Load("noarch")
+	if err == nil {
+		t.Fatal("expected error for empty stage archetype")
+	}
+	if !strings.Contains(err.Error(), `stage "build" has empty archetype`) {
+		t.Errorf("error = %v, want mention of stage build empty archetype", err)
+	}
+}
+
 func TestGeneratePipelineID_InvalidName(t *testing.T) {
 	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
 	_, err := generatePipelineID("Bad Name", now)

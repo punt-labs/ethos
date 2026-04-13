@@ -27,8 +27,9 @@ Ethos is a local runtime that fills three gaps:
   No dependency required. Extensions attach per-tool config without
   schema changes.
 
-All state is local YAML under `~/.punt-labs/ethos/`. No server, no
-cloud, no telemetry.
+All state is local YAML — user-global under `~/.punt-labs/ethos/`,
+with optional repo-local overrides under `.punt-labs/ethos/` for
+team-shared identities and config. No server, no cloud, no telemetry.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 
