@@ -637,9 +637,8 @@ func TestFormatOutput_Role_Show(t *testing.T) {
 // --- Mission tool tests ---
 
 // missionContractJSON is a full contract as returned by create/show.
-// Bead lives at inputs.bead — the single source of truth. An earlier
-// draft carried a top-level "bead" too, but that duplication was
-// removed when Copilot caught the divergence risk.
+// Ticket lives at inputs.ticket — the single source of truth. The
+// field was renamed from "bead" in 3.4 for tracker-agnostic language.
 const missionContractJSON = `{
   "mission_id": "m-2026-04-07-001",
   "status": "open",
@@ -651,7 +650,7 @@ const missionContractJSON = `{
     "handle": "djb",
     "pinned_at": "2026-04-07T21:30:00Z"
   },
-  "inputs": {"bead": "ethos-07m.5"},
+  "inputs": {"ticket": "ethos-07m.5"},
   "write_set": ["internal/mission/", "cmd/ethos/mission.go"],
   "tools": ["Read", "Write"],
   "success_criteria": ["make check passes"],
@@ -679,7 +678,7 @@ const missionContractJSONClosed = `{
 }`
 
 // missionContractJSONMinimal is a contract with no optional fields:
-// no bead, no tools, no inputs, no closed_at. Exercises the conditional
+// no ticket, no tools, no inputs, no closed_at. Exercises the conditional
 // rendering branches.
 const missionContractJSONMinimal = `{
   "mission_id": "m-2026-04-07-003",
@@ -724,10 +723,10 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	assert.Contains(t, ctx, missionLabel(t, "Worker:")+"bwk")
 	assert.Contains(t, ctx, missionLabel(t, "Evaluator:")+"djb (pinned ")
 	assert.Contains(t, ctx, missionLabel(t, "Budget:")+"3 round(s), reflection_after_each=true")
-	// Bead lives at inputs.bead — rendered inside the Inputs
-	// section, not as a header row. No top-level Bead: field any more.
-	assert.Contains(t, ctx, "bead: ethos-07m.5")
-	assert.NotContains(t, ctx, missionLabel(t, "Bead:")+"ethos-07m.5")
+	// Ticket lives at inputs.ticket — rendered inside the Inputs
+	// section, not as a header row.
+	assert.Contains(t, ctx, "ticket: ethos-07m.5")
+	assert.NotContains(t, ctx, missionLabel(t, "Ticket:")+"ethos-07m.5")
 	// The Created: row carries the formatted timestamp via
 	// FormatLocalTime(createdAt). Assert the row's shape directly
 	// rather than a substring that could also appear elsewhere in
@@ -793,8 +792,8 @@ func TestFormatOutput_Mission_Show_Closed(t *testing.T) {
 }
 
 func TestFormatOutput_Mission_Show_NoOptionalFields(t *testing.T) {
-	// Minimal contract — no bead, no tools, no closed_at, no
-	// inputs.bead. Optional sections must be skipped, not emit empty
+	// Minimal contract — no ticket, no tools, no closed_at, no
+	// inputs.ticket. Optional sections must be skipped, not emit empty
 	// headers.
 	payload := makeToolPayload("mission", "show", missionContractJSONMinimal)
 	out := runFormat(t, payload)
@@ -802,7 +801,7 @@ func TestFormatOutput_Mission_Show_NoOptionalFields(t *testing.T) {
 	r := parseFormatResult(t, out)
 	ctx := r.HookSpecificOutput.AdditionalContext
 	assert.Contains(t, ctx, missionLabel(t, "Mission:")+"m-2026-04-07-003")
-	assert.NotContains(t, ctx, "Bead:")
+	assert.NotContains(t, ctx, "Ticket:")
 	assert.NotContains(t, ctx, "Closed:")
 	assert.NotContains(t, ctx, "Tools:")
 }
@@ -1120,7 +1119,7 @@ func TestFormatOutput_MissionLog_RendersEventRows(t *testing.T) {
 	assert.Contains(t, ctx, "by claude")
 	assert.Contains(t, ctx, "worker=bwk")
 	assert.Contains(t, ctx, "evaluator=djb")
-	assert.Contains(t, ctx, "bead=ethos-07m.11")
+	assert.Contains(t, ctx, "ticket=ethos-07m.11")
 	assert.Contains(t, ctx, "result")
 	assert.Contains(t, ctx, "verdict=pass")
 	assert.Contains(t, ctx, "close")

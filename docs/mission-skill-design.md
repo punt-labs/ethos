@@ -191,7 +191,7 @@ leader to name a handle directly.
   the conflict to the leader; resolution is the leader's call.
   File-conflict auto-resolution is Phase C.
 - **Does not create or update beads.** Beads are optional inputs
-  (via `inputs.bead`); mission lifecycle is independent of bead
+  (via `inputs.ticket`); mission lifecycle is independent of bead
   lifecycle. Bead integration is Phase C.
 
 ### Relationship to existing tools

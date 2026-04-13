@@ -507,7 +507,7 @@ func seedVerifierMission(t *testing.T, se *subprocessEnv, evaluator string) stri
 			// Empty Hash = legacy mission, skipped by the hash gate.
 		},
 		Inputs: mission.Inputs{
-			Bead: "ethos-07m.9",
+			Ticket: "ethos-07m.9",
 		},
 		WriteSet: []string{
 			"internal/mission/store.go",

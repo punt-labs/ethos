@@ -1319,11 +1319,11 @@ func printContract(c *mission.Contract) {
 		os.Exit(1)
 	}
 
-	if len(c.Inputs.Files) > 0 || c.Inputs.Bead != "" || len(c.Inputs.References) > 0 {
+	if len(c.Inputs.Files) > 0 || c.Inputs.Ticket != "" || len(c.Inputs.References) > 0 {
 		fmt.Println()
 		fmt.Println("Inputs:")
-		if c.Inputs.Bead != "" {
-			fmt.Printf("  bead: %s\n", c.Inputs.Bead)
+		if c.Inputs.Ticket != "" {
+			fmt.Printf("  ticket: %s\n", c.Inputs.Ticket)
 		}
 		for _, f := range c.Inputs.Files {
 			fmt.Printf("  file: %s\n", f)
@@ -1560,10 +1560,14 @@ func summarizeDetails(evType string, details map[string]any) string {
 	}
 	switch evType {
 	case "create":
+		ticketVal := detailStr(details, "ticket")
+		if ticketVal == "" {
+			ticketVal = detailStr(details, "bead") // backward-compat
+		}
 		return joinParts(
 			kv("worker", detailStr(details, "worker")),
 			kv("evaluator", detailStr(details, "evaluator")),
-			kv("bead", detailStr(details, "bead")),
+			kv("ticket", ticketVal),
 		)
 	case "close":
 		return joinParts(
