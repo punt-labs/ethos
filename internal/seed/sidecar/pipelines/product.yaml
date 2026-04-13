@@ -1,9 +1,13 @@
-name: standard
-description: "Design, implement, test, review, and document — default feature lifecycle"
+name: product
+description: "New feature with product validation — Working Backwards before engineering"
 stages:
+  - name: prfaq
+    archetype: design
+    description: "Working Backwards — press release, FAQs, meeting personas"
   - name: design
     archetype: design
-    description: "Produce the design document"
+    description: "Produce the technical design document"
+    inputs_from: prfaq
   - name: implement
     archetype: implement
     description: "Write the code from the design"

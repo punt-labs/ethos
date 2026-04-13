@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **5 new pipeline templates** -- product (PR/FAQ before engineering), formal
+  (Z-Spec before implementation), docs (documentation-only), coe (cause of
+  error investigation), coverage (targeted test improvement).
+- **Pipeline decision tree** -- H10 lint heuristic rewritten from size-based to
+  nature-based selection. Checks context keywords and write_set patterns before
+  falling back to size.
+
+### Changed
+
+- **standard pipeline** gains `document` stage (5 stages, was 4)
+- **full pipeline** gains `prfaq`, `spec`, `coverage`, `document` stages (9
+  stages, was 6)
+
 ## [3.2.0] - 2026-04-12
 
 ### Added

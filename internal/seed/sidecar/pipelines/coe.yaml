@@ -1,0 +1,22 @@
+name: coe
+description: "Cause of Error investigation — recurring bugs, data corruption, incidents"
+stages:
+  - name: investigate
+    archetype: report
+    description: "Reproduce the issue, gather data, build a timeline"
+  - name: root-cause
+    archetype: report
+    description: "Analyze data, determine root cause with evidence"
+    inputs_from: investigate
+  - name: fix
+    archetype: implement
+    description: "Write the fix and regression test"
+    inputs_from: root-cause
+  - name: test
+    archetype: test
+    description: "Verify fix, check for siblings across codebase"
+    inputs_from: fix
+  - name: document
+    archetype: design
+    description: "Write COE document — timeline, root cause, fix, prevention"
+    inputs_from: test

@@ -1,0 +1,10 @@
+name: docs
+description: "Documentation-only change — design and review"
+stages:
+  - name: design
+    archetype: design
+    description: "Write or update documentation"
+  - name: review
+    archetype: review
+    description: "Review the documentation"
+    inputs_from: design

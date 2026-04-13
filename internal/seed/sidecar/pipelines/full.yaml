@@ -1,13 +1,17 @@
 name: full
-description: "Plan, design, implement, test, review, and retro — complete lifecycle with bookends"
+description: "Complete lifecycle with product validation, formal spec, and retrospective"
 stages:
-  - name: plan
+  - name: prfaq
     archetype: design
-    description: "Scope the work and define success criteria"
+    description: "Working Backwards — press release, FAQs, meeting personas"
+  - name: spec
+    archetype: design
+    description: "Formal specification for stateful systems (Z-Spec)"
+    inputs_from: prfaq
   - name: design
     archetype: design
     description: "Produce the design document"
-    inputs_from: plan
+    inputs_from: spec
   - name: implement
     archetype: implement
     description: "Write the code from the design"
@@ -16,11 +20,19 @@ stages:
     archetype: test
     description: "Add integration and edge-case tests"
     inputs_from: implement
+  - name: coverage
+    archetype: report
+    description: "Measure test coverage delta"
+    inputs_from: test
   - name: review
     archetype: review
     description: "Review the complete change"
-    inputs_from: test
+    inputs_from: coverage
+  - name: document
+    archetype: design
+    description: "Update DESIGN.md, README, CHANGELOG with design decisions"
+    inputs_from: review
   - name: retro
     archetype: report
     description: "Retrospective — summarize what shipped and lessons learned"
-    inputs_from: review
+    inputs_from: document

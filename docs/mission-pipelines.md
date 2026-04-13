@@ -98,6 +98,9 @@ Write set entries and context strings may contain `{feature}` (or
 any `{key}`) placeholders. The leader supplies values at
 instantiation time:
 
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. The current release provides `list` and `show`.
+
 ```bash
 ethos mission pipeline instantiate sprint --var feature=walk-diff
 ```
@@ -106,6 +109,58 @@ This creates one mission per stage, expanding `{feature}` to
 `walk-diff` in every write set entry and context string. The
 missions share a `pipeline` field and carry `depends_on` edges
 matching the `inputs_from` declarations.
+
+## Pipeline Selection
+
+The `ethos mission lint` H10 heuristic recommends a pipeline
+template based on the contract's context and write set. Detection
+is nature-based, with a size-based fallback.
+
+### Decision Tree
+
+```text
+Contract context and write_set
+  |
+  +--> mentions "prfaq", "pr/faq", "working backwards",
+  |    "product validation" AND write_set non-empty?
+  |      yes --> product (6 stages)
+  |
+  +--> mentions "z-spec", "zspec", "formal spec", "model check",
+  |    "invariant", "state machine"?
+  |      yes --> formal (7 stages)
+  |
+  +--> mentions "cause of error", "recurring bug",
+  |    "data corruption", "fixed before", "postmortem"?
+  |      yes --> coe (5 stages)
+  |
+  +--> ALL write_set entries match doc patterns
+  |    (*.md, *.tex, docs/*, *.pdf)?
+  |      yes --> docs (2 stages)
+  |
+  +--> mentions "test gap"?
+  |      yes --> coverage (3 stages)
+  |
+  +--> size fallback:
+       11+ files or multi-repo  --> full (9 stages)
+       4+ files or 3+ criteria  --> standard (5 stages)
+       1-3 files, 1-2 criteria  --> quick (2 stages)
+```
+
+Nature-based rules are evaluated in priority order. The first match
+wins. Size-based fallback fires only when no nature rule matches.
+
+### Template Summary
+
+| Template | Stages | When to use |
+|----------|--------|-------------|
+| quick | implement, review (2) | Well-understood, small changes |
+| standard | design, implement, test, review, document (5) | Default feature work |
+| full | prfaq, spec, design, implement, test, coverage, review, document, retro (9) | Large/cross-cutting/ambiguous |
+| product | prfaq, design, implement, test, review, document (6) | New user-facing features |
+| formal | spec, design, implement, test, coverage, review, document (7) | Stateful systems, protocols |
+| docs | design, review (2) | Docs-only changes |
+| coe | investigate, root-cause, fix, test, document (5) | Recurring bugs, incidents |
+| coverage | measure, test, verify (3) | Targeted coverage improvement |
 
 ## How Stages Connect
 
@@ -324,6 +379,9 @@ stages:
 
 ### Instantiation
 
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
+
 ```bash
 $ ethos mission pipeline instantiate sprint \
     --var feature=walk-diff \
@@ -490,6 +548,9 @@ stages:
 
 ### Instantiation
 
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
+
 ```bash
 $ ethos mission pipeline instantiate schedule-meeting \
     --var organizer=jim \
@@ -617,6 +678,318 @@ budget:
 
 6. All stages closed. Pipeline complete.
    Beadle replies to the original email: "Meeting scheduled."
+```
+
+## Worked Example: Product Pipeline
+
+A new user-facing feature: Working Backwards before engineering.
+The PR/FAQ forces product thinking before a line of code is written.
+
+### Pipeline Declaration
+
+```yaml
+# .punt-labs/ethos/pipelines/product.yaml
+name: product
+description: "New feature with product validation — Working Backwards before engineering"
+
+stages:
+  - name: prfaq
+    archetype: design
+    description: "Working Backwards — press release, FAQs, meeting personas"
+    worker: claude
+    success_criteria:
+      - "Press release is one page, customer-facing"
+      - "External FAQ answers 'why now' and 'what if it fails'"
+      - "Internal FAQ covers cost, timeline, and dependencies"
+
+  - name: design
+    archetype: design
+    description: "Produce the technical design document"
+    worker: mdm
+    inputs_from: prfaq
+    success_criteria:
+      - "Design doc covers problem, decision, and migration path"
+      - "Before/after showing user-visible change"
+
+  - name: implement
+    archetype: implement
+    write_set:
+      - "internal/{feature}/"
+    worker: bwk
+    inputs_from: design
+    success_criteria:
+      - "All design decisions from the doc are implemented"
+      - "make check passes"
+
+  - name: test
+    archetype: test
+    write_set:
+      - "internal/{feature}/"
+    worker: bwk
+    inputs_from: implement
+    success_criteria:
+      - "Integration tests cover the new behavior"
+      - "Coverage does not decrease"
+
+  - name: review
+    archetype: review
+    worker: djb
+    inputs_from: test
+    success_criteria:
+      - "No HIGH or MEDIUM findings"
+
+  - name: document
+    archetype: design
+    write_set:
+      - "DESIGN.md"
+      - "README.md"
+      - "CHANGELOG.md"
+    worker: mdm
+    inputs_from: review
+    success_criteria:
+      - "DESIGN.md has ADR for key decisions"
+      - "README documents new user-facing behavior"
+```
+
+### Instantiation
+
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
+
+```bash
+$ ethos mission pipeline instantiate product \
+    --var feature=auto-suggest \
+    --leader claude \
+    --evaluator bwk
+
+Created pipeline product-auto-suggest-2026-04-12:
+  prfaq      m-2026-04-12-050  open  (no dependencies)
+  design     m-2026-04-12-051  open  depends_on: [m-2026-04-12-050]
+  implement  m-2026-04-12-052  open  depends_on: [m-2026-04-12-051]
+  test       m-2026-04-12-053  open  depends_on: [m-2026-04-12-052]
+  review     m-2026-04-12-054  open  depends_on: [m-2026-04-12-053]
+  document   m-2026-04-12-055  open  depends_on: [m-2026-04-12-054]
+```
+
+### Generated Contracts
+
+Stage 1 (prfaq):
+
+```yaml
+mission_id: m-2026-04-12-050
+type: design
+pipeline: product-auto-suggest-2026-04-12
+leader: claude
+worker: claude
+evaluator:
+  handle: bwk
+success_criteria:
+  - "Press release is one page, customer-facing"
+  - "External FAQ answers 'why now' and 'what if it fails'"
+  - "Internal FAQ covers cost, timeline, and dependencies"
+budget:
+  rounds: 2
+  reflection_after_each: true
+```
+
+Stage 2 (design):
+
+```yaml
+mission_id: m-2026-04-12-051
+type: design
+pipeline: product-auto-suggest-2026-04-12
+depends_on:
+  - m-2026-04-12-050
+leader: claude
+worker: mdm
+evaluator:
+  handle: bwk
+inputs:
+  files:
+    # populated when prfaq stage closes
+write_set:
+  - docs/auto-suggest.md
+success_criteria:
+  - "Design doc covers problem, decision, and migration path"
+  - "Before/after showing user-visible change"
+budget:
+  rounds: 2
+  reflection_after_each: true
+```
+
+### Execution Flow
+
+```text
+1. Leader creates pipeline. Six missions exist, stages 2-6 blocked.
+
+2. Worker claude executes prfaq stage (Working Backwards).
+   Result: { verdict: pass, files_changed: [docs/auto-suggest-prfaq.md] }
+
+3. Leader reads prfaq result, populates design inputs:
+   inputs.files: [docs/auto-suggest-prfaq.md]
+   Worker mdm begins design stage.
+
+4. Worker mdm produces design doc.
+   Result: { verdict: pass, files_changed: [docs/auto-suggest.md] }
+
+5. Leader reads design result, populates implement inputs.
+   Worker bwk writes the code.
+
+6. Worker bwk writes tests. Worker djb reviews. Worker mdm documents.
+
+7. All stages closed. Pipeline complete.
+```
+
+## Worked Example: COE Pipeline
+
+A recurring bug: the same class of failure has appeared before.
+The COE pipeline forces investigation before fixing, and
+documentation before closing.
+
+### Pipeline Declaration
+
+```yaml
+# .punt-labs/ethos/pipelines/coe.yaml
+name: coe
+description: "Cause of Error investigation — recurring bugs, data corruption, incidents"
+
+stages:
+  - name: investigate
+    archetype: report
+    description: "Reproduce the issue, gather data, build a timeline"
+    worker: bwk
+    success_criteria:
+      - "Issue reproduced with steps"
+      - "Timeline of when the bug first appeared"
+      - "Data gathered: logs, stack traces, git blame"
+
+  - name: root-cause
+    archetype: report
+    description: "Analyze data, determine root cause with evidence"
+    worker: bwk
+    inputs_from: investigate
+    success_criteria:
+      - "Root cause identified with evidence, not theory"
+      - "Equivalence class enumerated — all siblings found"
+
+  - name: fix
+    archetype: implement
+    write_set:
+      - "internal/{feature}/"
+    worker: bwk
+    inputs_from: root-cause
+    success_criteria:
+      - "Fix addresses root cause, not symptom"
+      - "Regression test reproduces original failure"
+      - "All siblings in equivalence class fixed"
+
+  - name: test
+    archetype: test
+    write_set:
+      - "internal/{feature}/"
+    worker: bwk
+    inputs_from: fix
+    success_criteria:
+      - "Regression test fails without fix, passes with fix"
+      - "No sibling regressions"
+
+  - name: document
+    archetype: design
+    write_set:
+      - "docs/coe/{feature}.md"
+    worker: mdm
+    inputs_from: test
+    success_criteria:
+      - "COE doc has: timeline, root cause, fix, prevention"
+      - "Linked to the PR that ships the fix"
+```
+
+### Instantiation
+
+> **Planned**: `ethos mission pipeline instantiate` is not yet
+> implemented. This example shows the intended API.
+
+```bash
+$ ethos mission pipeline instantiate coe \
+    --var feature=stale-cache \
+    --leader claude \
+    --evaluator djb
+
+Created pipeline coe-stale-cache-2026-04-12:
+  investigate  m-2026-04-12-060  open  (no dependencies)
+  root-cause   m-2026-04-12-061  open  depends_on: [m-2026-04-12-060]
+  fix          m-2026-04-12-062  open  depends_on: [m-2026-04-12-061]
+  test         m-2026-04-12-063  open  depends_on: [m-2026-04-12-062]
+  document     m-2026-04-12-064  open  depends_on: [m-2026-04-12-063]
+```
+
+### Generated Contracts
+
+Stage 1 (investigate):
+
+```yaml
+mission_id: m-2026-04-12-060
+type: report
+pipeline: coe-stale-cache-2026-04-12
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+success_criteria:
+  - "Issue reproduced with steps"
+  - "Timeline of when the bug first appeared"
+  - "Data gathered: logs, stack traces, git blame"
+budget:
+  rounds: 2
+  reflection_after_each: true
+```
+
+Stage 2 (root-cause):
+
+```yaml
+mission_id: m-2026-04-12-061
+type: report
+pipeline: coe-stale-cache-2026-04-12
+depends_on:
+  - m-2026-04-12-060
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  files:
+    # populated when investigate stage closes
+success_criteria:
+  - "Root cause identified with evidence, not theory"
+  - "Equivalence class enumerated — all siblings found"
+budget:
+  rounds: 2
+  reflection_after_each: true
+```
+
+### Execution Flow
+
+```text
+1. Leader creates pipeline. Five missions exist, stages 2-5 blocked.
+
+2. Worker bwk executes investigate stage (report archetype, read-only).
+   Result: { verdict: pass, evidence: [{name: "reproduction", status: "pass"},
+             {name: "timeline", status: "pass"}] }
+
+3. Leader reads investigation result, populates root-cause inputs.
+   Worker bwk analyzes the data.
+   Result: { verdict: pass, evidence: [{name: "root-cause-proof", status: "pass"},
+             {name: "sibling-scan", status: "pass"}] }
+
+4. Leader reads root-cause result, populates fix inputs.
+   Worker bwk writes the fix and regression test.
+   Result: { verdict: pass, files_changed: [internal/stale-cache/cache.go,
+             internal/stale-cache/cache_test.go] }
+
+5. Worker bwk verifies fix. Worker mdm writes COE document.
+
+6. All stages closed. Pipeline complete.
+   COE document at docs/coe/stale-cache.md.
 ```
 
 ## Design Invariants

@@ -1,0 +1,14 @@
+name: coverage
+description: "Targeted test coverage improvement — measure, write tests, verify"
+stages:
+  - name: measure
+    archetype: report
+    description: "Run coverage tool, identify gaps, report current state"
+  - name: test
+    archetype: test
+    description: "Write tests for identified coverage gaps"
+    inputs_from: measure
+  - name: verify
+    archetype: report
+    description: "Re-run coverage, confirm improvement, report delta"
+    inputs_from: test
