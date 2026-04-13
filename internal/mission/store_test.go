@@ -3214,3 +3214,91 @@ func TestStore_AppendResultRollbackRemovesFile(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr),
 		"results file must be removed on rollback when no prior file existed")
 }
+
+// --- archetype type validation ---
+
+func TestStore_CreateValidatesTypeAgainstArchetypes(t *testing.T) {
+	tests := []struct {
+		name    string
+		typ     string // contract Type; "" means caller omits it
+		setup   func(t *testing.T, dir string)
+		wantErr string // substring; "" means no error
+	}{
+		{
+			name: "known type accepted",
+			typ:  "design",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "design", designYAML)
+				writeArchetypeFile(t, dir, "implement", implementYAML)
+			},
+		},
+		{
+			name: "unknown type rejected",
+			typ:  "bogus",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "design", designYAML)
+				writeArchetypeFile(t, dir, "implement", implementYAML)
+			},
+			wantErr: `unknown mission type "bogus"`,
+		},
+		{
+			name: "unknown type error lists available archetypes",
+			typ:  "bogus",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "design", designYAML)
+				writeArchetypeFile(t, dir, "implement", implementYAML)
+			},
+			wantErr: "available archetypes:",
+		},
+		{
+			name: "empty type defaults to implement and validates",
+			typ:  "",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "implement", implementYAML)
+			},
+		},
+		{
+			name: "empty type defaults to implement but rejected when implement archetype missing",
+			typ:  "",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "design", designYAML)
+			},
+			wantErr: `unknown mission type "implement"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			tc.setup(t, root)
+			as := NewArchetypeStore("", root)
+			s := NewStore(root).WithArchetypeStore(as)
+
+			c := newContract("m-2026-04-07-501")
+			c.Type = tc.typ
+			err := s.Create(c)
+
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestStore_CreateWithoutArchetypeStoreSkipsValidation(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-502")
+	c.Type = "anything-goes"
+	require.NoError(t, s.Create(c))
+	assert.Equal(t, "anything-goes", c.Type)
+}
+
+func TestStore_CreateEmptyTypeDefaultsWhenNoArchetypeStore(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-503")
+	c.Type = ""
+	require.NoError(t, s.Create(c))
+	assert.Equal(t, "implement", c.Type)
+}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -69,7 +70,9 @@ func missionStoreForCreate() *mission.Store {
 			"ethos: mission: cannot wire role overlap check: %v\n", err)
 		os.Exit(1)
 	}
-	return ms.WithRoleLister(sources.Roles)
+	repoRoot := resolve.FindRepoEthosRoot()
+	as := mission.NewArchetypeStore(repoRoot, root)
+	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as)
 }
 
 // --- mission (bare command) ---

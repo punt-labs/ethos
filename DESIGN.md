@@ -4057,3 +4057,67 @@ already checks existence across both layers before writing to global.
   forces users to duplicate repo-local identities globally just to
   set an extension. The workaround (copying the YAML) was the bug
   report that motivated this fix.
+
+## DES-045: Mission archetypes as typed subtypes (SETTLED)
+
+**Decision**: Missions declare a `type` field that maps to an archetype
+definition on the filesystem. Archetypes are YAML files under
+`~/.punt-labs/ethos/archetypes/` (global) or
+`.punt-labs/ethos/archetypes/` (repo-local). 7 archetypes ship as seed
+content: design, implement, test, review, inbox, task, report.
+
+Each archetype declares budget defaults (`rounds`, `reflection_after_each`),
+write-set constraints (open vs restricted), and required contract fields.
+The mission store applies archetype defaults at create time when the
+contract omits them, and validates archetype-specific constraints
+alongside the existing contract validation.
+
+**Reasoning**: Different mission shapes (design exploration vs
+implementation vs code review) need different defaults and constraints.
+Hard-coding these in the Go binary forces a code change for every new
+pattern. YAML on the filesystem makes archetypes extensible without
+modifying ethos -- teams add a file and it works. The `type` field
+defaults to "implement" for backward compatibility with pre-archetype
+contracts.
+
+**Rejected alternatives**:
+
+- Archetype as a Go enum with compiled-in defaults -- not extensible
+  without rebuilding the binary. Teams with custom workflows would need
+  to fork.
+- Archetype embedded in the contract with no external definition --
+  duplicates defaults across every contract and loses the single source
+  of truth for what "design" or "review" means.
+
+## DES-046: Mission pipelines as workflow composition (SETTLED)
+
+**Decision**: A pipeline is a named sequence of typed mission stages.
+Each stage references an archetype and carries stage-specific overrides.
+The pipeline is orchestration, not a new archetype -- it composes
+existing archetypes into a repeatable workflow. Stages are independent
+missions; a result artifact connects one stage's output to the next
+stage's input.
+
+3 sprint templates ship as seed content: quick (design + implement),
+standard (design + implement + test + review), and full (design +
+implement + test + review + report + inbox). `ethos mission pipeline
+list` and `ethos mission pipeline show <name>` expose the templates
+via CLI with `--json` support.
+
+**Reasoning**: Real work is rarely a single mission. A feature needs
+design, implementation, testing, and review -- each with different
+archetypes, different workers, and different success criteria. Without
+pipelines, the leader manually chains missions and remembers the
+sequence. The pipeline template encodes the sequence once. Pipelines
+do not auto-execute -- they are templates that the leader instantiates
+stage by stage, preserving human judgment at each transition.
+
+**Rejected alternatives**:
+
+- Auto-executing pipeline that spawns all stages without leader
+  intervention -- removes the reflection checkpoint between stages.
+  The bounded-rounds discipline from DES-034 applies at the pipeline
+  level too: the leader decides whether to proceed after each stage.
+- Pipeline as a special archetype -- conflates the composition layer
+  with the individual mission layer. A pipeline contains archetypes;
+  it is not one.

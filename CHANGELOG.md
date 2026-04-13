@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mission archetypes** — typed subtypes for missions. 7 archetypes shipped
+  as seed content (design, implement, test, review + inbox, task, report). Each
+  has budget defaults, write-set constraints, and required fields. Extensible
+  via YAML files.
+- **Mission pipelines** — chained typed stages as workflow. 3 sprint templates
+  (quick, standard, full). `ethos mission pipeline list/show` with `--json`.
+- **Design mission archetype** in mission `SKILL.md` with cross-repo
+  collaboration via biff.
+- **3 design mission lint heuristics** (H7-H9): cross-repo context,
+  before/after criteria, evaluator domain.
+- **Pipeline selector lint** (H10): suggests quick/standard/full based on
+  contract characteristics.
+- **Contract `Type` field** — missions declare their archetype, defaults to
+  "implement".
+
+### Docs
+
+- Ethos-biff integration design (`docs/ethos-biff-integration.md`)
+- Mission archetypes design (`docs/mission-archetypes.md`)
+- Mission pipelines design (`docs/mission-pipelines.md`)
+
 ## [3.1.0] - 2026-04-12
 
 ### Added
