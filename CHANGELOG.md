@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-04-12
+
 ### Added
 
 - **Mission archetypes** — typed subtypes for missions. 7 archetypes shipped
