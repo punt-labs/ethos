@@ -216,26 +216,43 @@ template variables, and creates one mission per stage. Each mission
 carries the pipeline ID and a `depends_on` edge pointing at the
 upstream stage.
 
-> **Built-in pipelines are skeletons.** The shipped `quick`, `standard`,
-> `full`, `product`, `formal`, `docs`, `coe`, and `coverage` pipelines
-> declare stage structure but leave stage-level fields to the user. To
-> instantiate successfully, each stage needs:
+> **Built-in pipelines expect two variables**: `{feature}` for doc paths
+> (e.g., `walk-diff`) and `{target}` for the code area being worked on
+> (e.g., `internal/mission/`). Pass both at instantiation time:
 >
-> - `write_set` entries (non-empty for archetypes that require it)
-> - `success_criteria` entries (non-empty for archetypes that require it)
-> - A resolved `worker` (from `stage.worker` or the `--worker` flag)
-> - A resolved `evaluator` (from `stage.evaluator` or the `--evaluator` flag)
+> ```bash
+> ethos mission pipeline instantiate standard \
+>   --leader claude --worker bwk --evaluator djb \
+>   --var feature=walk-diff \
+>   --var target=internal/walk-diff/
+> ```
 >
-> Copy the built-in to `.punt-labs/ethos/pipelines/<name>.yaml` and add
-> the missing fields (with optional `{key}` placeholders) before
-> running. See [Creating your own pipeline](#creating-your-own-pipeline).
+> Pipelines without code-touching stages (`docs`) only need
+> `--var feature=...`. All 8 built-ins ship with sensible `write_set`,
+> `context`, and `success_criteria` defaults -- copy one to
+> `.punt-labs/ethos/pipelines/<name>.yaml` and customize if you need
+> different defaults for your team.
+
+**Variable requirements by pipeline:**
+
+| Pipeline | `{feature}` | `{target}` |
+|----------|:-----------:|:----------:|
+| `quick` | yes | yes |
+| `standard` | yes | yes |
+| `full` | yes | yes |
+| `product` | yes | yes |
+| `formal` | yes | yes |
+| `docs` | yes | no |
+| `coe` | yes | yes |
+| `coverage` | yes | yes |
 
 ```bash
 ethos mission pipeline instantiate standard \
   --leader claude \
   --worker bwk \
   --evaluator djb \
-  --var feature=walk-diff
+  --var feature=walk-diff \
+  --var target=internal/walk-diff/
 ```
 
 Output:
@@ -263,7 +280,7 @@ Use `--dry-run` to preview generated contracts without creating them:
 
 ```bash
 ethos mission pipeline instantiate standard --leader claude --worker bwk \
-  --evaluator djb --var feature=walk-diff --dry-run
+  --evaluator djb --var feature=walk-diff --var target=internal/walk-diff/ --dry-run
 ```
 
 ### Template variables

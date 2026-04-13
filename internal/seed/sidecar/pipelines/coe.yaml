@@ -4,19 +4,49 @@ stages:
   - name: investigate
     archetype: report
     description: "Reproduce the issue, gather data, build a timeline"
+    write_set:
+      - ".tmp/investigate-{feature}.md"
+    context: "Reproduce {feature}, gather evidence, build a timeline"
+    success_criteria:
+      - "reproducer exists or infeasibility documented"
+      - "timeline built from logs and git history"
   - name: root-cause
     archetype: report
     description: "Analyze data, determine root cause with evidence"
     inputs_from: investigate
+    write_set:
+      - ".tmp/root-cause-{feature}.md"
+    context: "Determine root cause of {feature} with evidence, not theories"
+    success_criteria:
+      - "root cause identified with facts"
+      - "regression-test plan outlined"
   - name: fix
     archetype: implement
     description: "Write the fix and regression test"
     inputs_from: root-cause
+    write_set:
+      - "{target}"
+    context: "Write the fix for {feature} in {target} and a regression test"
+    success_criteria:
+      - "make check passes"
+      - "regression test fails without fix, passes with it"
   - name: test
     archetype: test
     description: "Verify fix, check for siblings across codebase"
     inputs_from: fix
+    write_set:
+      - "{target}"
+    context: "Verify the fix for {feature}; check for siblings"
+    success_criteria:
+      - "regression test covers original failure"
+      - "siblings of the bug grepped and fixed"
   - name: document
     archetype: design
     description: "Write COE document — timeline, root cause, fix, prevention"
     inputs_from: test
+    write_set:
+      - "docs/coe-{feature}.md"
+    context: "COE document for {feature} — timeline, root cause, fix, prevention"
+    success_criteria:
+      - "sections present: timeline, root cause, fix, prevention"
+      - "linked from COE index if one exists"
