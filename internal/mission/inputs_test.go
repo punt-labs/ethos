@@ -153,6 +153,42 @@ current_round: 1
 	assert.Contains(t, string(captured), "deprecation warning")
 }
 
+// Explicit empty string in `ticket:` is treated as absent by omitempty
+// semantics — both in YAML and JSON. If `bead:` is also set, the bead
+// alias applies (with the usual deprecation warning) rather than
+// triggering a "both set" error. This test documents the invariant so
+// a future refactor doesn't silently break it.
+
+func TestInputs_YAML_EmptyTicketWithBead_PromotesBead(t *testing.T) {
+	data := []byte("ticket: \"\"\nbead: ethos-123\n")
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	var in Inputs
+	require.NoError(t, yaml.Unmarshal(data, &in))
+	w.Close()
+	os.Stderr = old
+	captured, _ := io.ReadAll(r)
+	assert.Equal(t, "ethos-123", in.Ticket)
+	assert.Contains(t, string(captured), "deprecation warning")
+	assert.Contains(t, string(captured), "inputs.bead")
+}
+
+func TestInputs_JSON_EmptyTicketWithBead_PromotesBead(t *testing.T) {
+	data := []byte(`{"ticket":"","bead":"ethos-123"}`)
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	var in Inputs
+	require.NoError(t, json.Unmarshal(data, &in))
+	w.Close()
+	os.Stderr = old
+	captured, _ := io.ReadAll(r)
+	assert.Equal(t, "ethos-123", in.Ticket)
+	assert.Contains(t, string(captured), "deprecation warning")
+	assert.Contains(t, string(captured), "inputs.bead")
+}
+
 // TestInputs_StrictDecoder_AcceptsBead verifies that DecodeContractStrict
 // (which uses KnownFields=true) still accepts old "bead:" contracts
 // because the custom UnmarshalYAML handles the field internally.

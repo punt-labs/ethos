@@ -599,9 +599,10 @@ func runMissionCreate() error {
 	// tell the write landed without a follow-up `ethos mission show`.
 	// The echoed fields use the same k=v style as the `create`
 	// event-log summary in summarizeEventDetails, but are not
-	// necessarily the full same field set — bead= lives in the log
-	// (for audit) and in the contract YAML the user just submitted,
-	// so cluttering the echo with it adds no new information.
+	// necessarily the full same field set — ticket= lives in the log
+	// (bead= for pre-3.4 events) and in the contract YAML the user
+	// just submitted, so cluttering the echo with it adds no new
+	// information.
 	// Mission ID leads so it is grep-able and chain-able.
 	fmt.Printf("created: %s worker=%s evaluator=%s\n",
 		c.MissionID, c.Worker, c.Evaluator.Handle)
