@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Built-in pipelines are directly runnable** -- the 8 built-in pipeline
+  templates (quick, standard, full, product, formal, docs, coe, coverage)
+  now ship with `{feature}` and `{target}` variable conventions and
+  sensible `write_set` / `success_criteria` / `context` defaults. Running
+  `ethos mission pipeline instantiate <name> --var feature=X --var target=Y`
+  produces valid mission contracts without needing to copy and customize
+  the template.
 - **`ethos mission pipeline instantiate`** -- generate N mission contracts
   from a pipeline template. `--var key=value` for template expansion,
   `--leader`/`--evaluator`/`--worker` flags, `--id` to override the

@@ -507,11 +507,9 @@ func allDocPaths(writeSet []string) bool {
 	return true
 }
 
-// hasPipeline reports whether the contract already specifies a
-// pipeline. Returns false until the Pipeline field is added to
-// Contract.
-func hasPipeline(_ *Contract) bool {
-	return false
+// hasPipeline reports whether the contract already specifies a pipeline.
+func hasPipeline(c *Contract) bool {
+	return c != nil && c.Pipeline != ""
 }
 
 // hasMultipleRepoRefs reports whether s contains two or more distinct
