@@ -1,9 +1,13 @@
-name: standard
-description: "Design, implement, test, review, and document — default feature lifecycle"
+name: formal
+description: "Complex stateful system — formal specification before implementation"
 stages:
+  - name: spec
+    archetype: design
+    description: "Formal specification (Z-Spec) — type-check, model-check, define invariants"
   - name: design
     archetype: design
-    description: "Produce the design document"
+    description: "Produce the technical design document"
+    inputs_from: spec
   - name: implement
     archetype: implement
     description: "Write the code from the design"
@@ -12,10 +16,14 @@ stages:
     archetype: test
     description: "Add integration and edge-case tests"
     inputs_from: implement
+  - name: coverage
+    archetype: report
+    description: "Measure test coverage delta"
+    inputs_from: test
   - name: review
     archetype: review
     description: "Review the complete change"
-    inputs_from: test
+    inputs_from: coverage
   - name: document
     archetype: design
     description: "Update DESIGN.md, README, CHANGELOG with design decisions"

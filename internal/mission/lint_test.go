@@ -368,7 +368,67 @@ func TestLint(t *testing.T) {
 			},
 			wantMsg: "",
 		},
-		// Heuristic 10: pipeline selector
+		// Heuristic 10: pipeline selector — nature-based detection
+		{
+			name: "H10: product — context mentions prfaq with non-empty write_set",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/foo/bar.go", "internal/foo/bar_test.go", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"make check passes"}
+				c.Context = "This is a new feature requiring prfaq validation"
+			},
+			wantMsg: "consider pipeline: product",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: formal — context mentions z-spec",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/foo/bar.go", "internal/foo/bar_test.go", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"make check passes"}
+				c.Context = "Complex state machine requiring z-spec verification"
+			},
+			wantMsg: "consider pipeline: formal",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: coe — context mentions recurring bug",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/foo/bar.go", "internal/foo/bar_test.go", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"make check passes"}
+				c.Context = "This bug was fixed before, recurring regression"
+			},
+			wantMsg: "consider pipeline: coe",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: docs — write_set is all documentation files",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/design.md", "README.md", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"docs reviewed", "user-visible change documented"}
+			},
+			wantMsg: "consider pipeline: docs",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: coverage — context mentions test coverage",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/foo/bar.go", "internal/foo/bar_test.go", "CHANGELOG.md"}
+				c.SuccessCriteria = []string{"make check passes"}
+				c.Context = "Improve test coverage for mission package"
+			},
+			wantMsg: "consider pipeline: coverage",
+			wantSev: SeverityInfo,
+		},
+		{
+			name: "H10: nature wins over size — coe with 11 files",
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go", "g.go", "h.go", "i.go", "j.go", "k.go"}
+				c.SuccessCriteria = []string{"tests pass"}
+				c.Context = "This is a cause of error investigation for data corruption"
+			},
+			wantMsg: "consider pipeline: coe",
+			wantSev: SeverityInfo,
+		},
+		// Heuristic 10: pipeline selector — size-based fallback
 		{
 			name: "H10: quick — 1-3 files, 1-2 criteria",
 			mutate: func(c *Contract) {
@@ -384,7 +444,7 @@ func TestLint(t *testing.T) {
 				c.WriteSet = []string{"README.md"}
 				c.SuccessCriteria = []string{"updated"}
 			},
-			wantMsg: "consider pipeline: quick",
+			wantMsg: "consider pipeline: docs",
 			wantSev: SeverityInfo,
 		},
 		{
@@ -443,11 +503,11 @@ func TestLint(t *testing.T) {
 			wantSev: SeverityInfo,
 		},
 		{
-			name: "H10: single repo in context — not full",
+			name: "H10: single repo in context — falls to size",
 			mutate: func(c *Contract) {
 				c.WriteSet = []string{"a.go", "a_test.go"}
 				c.SuccessCriteria = []string{"tests pass"}
-				c.Context = "Extends punt-labs/biff with new feature"
+				c.Context = "Extends punt-labs/biff with refactoring"
 			},
 			wantMsg: "consider pipeline: quick",
 			wantSev: SeverityInfo,

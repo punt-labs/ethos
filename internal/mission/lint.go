@@ -388,14 +388,27 @@ func isProductionCode(p string) bool {
 	return false
 }
 
-// lintPipelineSelector suggests a pipeline template based on the size
-// and complexity of the contract. Skips when the contract already
-// specifies a pipeline (the Pipeline field does not exist on Contract
-// yet — when it is added, update hasPipeline).
+// lintPipelineSelector suggests a pipeline template based on the
+// nature and size of the contract. Nature-based detection (from
+// context and write_set patterns) takes priority over size-based
+// fallback. Skips when the contract already specifies a pipeline.
 func lintPipelineSelector(c *Contract, ws []Warning) []Warning {
 	if hasPipeline(c) {
 		return ws
 	}
+
+	ctx := strings.ToLower(c.Context)
+
+	// Nature-based selection — priority order.
+	if name, reason := detectNature(ctx, c.WriteSet); name != "" {
+		return append(ws, Warning{
+			Field:    "pipeline",
+			Message:  "consider pipeline: " + name + " (" + reason + ")",
+			Severity: SeverityInfo,
+		})
+	}
+
+	// Size-based fallback.
 	nFiles := len(c.WriteSet)
 	nCriteria := len(c.SuccessCriteria)
 
@@ -420,6 +433,88 @@ func lintPipelineSelector(c *Contract, ws []Warning) []Warning {
 		})
 	}
 	return ws
+}
+
+// detectNature checks context and write_set patterns for nature-based
+// pipeline selection. Returns the pipeline name and reason, or empty
+// strings if no nature match is found.
+func detectNature(ctx string, writeSet []string) (string, string) {
+	// product: context mentions product validation AND write_set is non-empty
+	if len(writeSet) > 0 {
+		productKeywords := []string{"prfaq", "pr/faq", "working backwards", "new feature", "product"}
+		if kw, ok := contextContainsAny(ctx, productKeywords); ok {
+			return "product", "context mentions " + kw
+		}
+	}
+
+	// formal
+	formalKeywords := []string{"z-spec", "zspec", "formal spec", "model check", "invariant", "state machine", "protocol"}
+	if kw, ok := contextContainsAny(ctx, formalKeywords); ok {
+		return "formal", "context mentions " + kw
+	}
+
+	// coe
+	coeKeywords := []string{"coe", "cause of error", "recurring bug", "data corruption", "incident", "regression", "fixed before", "postmortem"}
+	if kw, ok := contextContainsAny(ctx, coeKeywords); ok {
+		return "coe", "context mentions " + kw
+	}
+
+	// docs: ALL write_set entries match doc patterns
+	if allDocPaths(writeSet) {
+		return "docs", "write_set is all documentation files"
+	}
+
+	// coverage
+	coverageKeywords := []string{"coverage", "test gap", "test coverage", "coverage improvement"}
+	if kw, ok := contextContainsAny(ctx, coverageKeywords); ok {
+		return "coverage", "context mentions " + kw
+	}
+
+	return "", ""
+}
+
+// contextContainsAny reports whether ctx contains any of the keywords
+// (case-insensitive). Returns the first matched keyword and true, or
+// empty string and false.
+func contextContainsAny(ctx string, keywords []string) (string, bool) {
+	for _, kw := range keywords {
+		if strings.Contains(ctx, kw) {
+			return kw, true
+		}
+	}
+	return "", false
+}
+
+// isDocPath reports whether path matches a documentation file pattern:
+// *.md, *.tex, docs/*, *.pdf.
+func isDocPath(path string) bool {
+	cp := CanonicalPath(path)
+	if strings.HasPrefix(cp, "docs/") {
+		return true
+	}
+	ext := filepath.Ext(cp)
+	switch ext {
+	case ".md", ".tex", ".pdf":
+		return true
+	}
+	return false
+}
+
+// allDocPaths reports whether every entry in writeSet is a
+// documentation file. Returns false for an empty write_set.
+func allDocPaths(writeSet []string) bool {
+	if len(writeSet) == 0 {
+		return false
+	}
+	for _, p := range writeSet {
+		if strings.HasSuffix(p, "/") {
+			continue
+		}
+		if !isDocPath(p) {
+			return false
+		}
+	}
+	return true
 }
 
 // hasPipeline reports whether the contract already specifies a
