@@ -1002,10 +1002,11 @@ func seedBuiltInContent(t *testing.T) string {
 // and their DependsOn references to the m-YYYY-MM-DD-NNN format that
 // Contract.Validate requires. Instantiate intentionally produces
 // placeholder IDs; real IDs come from ApplyServerFields in the CLI.
-func patchPlaceholderIDs(contracts []*Contract) {
+func patchPlaceholderIDs(contracts []*Contract, now time.Time) {
+	day := now.Format("2006-01-02")
 	remap := make(map[string]string, len(contracts))
 	for i, c := range contracts {
-		real := fmt.Sprintf("m-2026-04-13-%03d", i+1)
+		real := fmt.Sprintf("m-%s-%03d", day, i+1)
 		remap[c.MissionID] = real
 		c.MissionID = real
 	}
@@ -1057,7 +1058,7 @@ func TestBuiltInPipelines_Instantiate(t *testing.T) {
 				t.Fatalf("got %d contracts, want %d", len(contracts), len(p.Stages))
 			}
 
-			patchPlaceholderIDs(contracts)
+			patchPlaceholderIDs(contracts, now)
 
 			for i, c := range contracts {
 				if err := c.Validate(); err != nil {
@@ -1125,7 +1126,7 @@ func TestBuiltInPipelines_Instantiate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Instantiate(docs) with feature-only: %v", err)
 		}
-		patchPlaceholderIDs(contracts)
+		patchPlaceholderIDs(contracts, now)
 		for i, c := range contracts {
 			if err := c.Validate(); err != nil {
 				t.Errorf("stage %d Validate: %v", i, err)
