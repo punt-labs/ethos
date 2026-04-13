@@ -295,6 +295,13 @@ design mission has a broad write-set and open-ended criteria ("evaluate
 three approaches, recommend one with tradeoffs"). The agent's expertise
 is always present; the contract determines how much latitude they have.
 
+**Archetypes and pipelines.** Missions declare a `type` field that maps
+to an archetype (design, implement, test, review, inbox, task, report).
+Each archetype carries budget defaults, write-set constraints, and
+required fields. Pipelines chain missions into sprint templates -- quick
+(2 stages), standard (4 stages), and full (6 stages) -- so multi-phase
+work follows a repeatable structure.
+
 ## Commands
 
 ### Core
@@ -318,6 +325,8 @@ is always present; the contract determines how much latitude they have.
 | `ethos mission advance <id>` | Advance to next round |
 | `ethos mission close <id>` | Close mission (requires result) |
 | `ethos mission log <id>` | Read append-only event log |
+| `ethos mission pipeline list` | List available sprint templates |
+| `ethos mission pipeline show <name>` | Show pipeline stages and defaults |
 | `ethos mission lint <contract.yaml>` | Advisory pre-delegation linter |
 
 ### Identity and Attributes
