@@ -178,7 +178,7 @@ closed, failed, and escalated missions alongside open ones. Pass
 dependency order. Pass --json for a machine-readable summary.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runMissionList(missionListStatus)
+		return runMissionList(missionListStatus, missionListPipeline)
 	},
 }
 
@@ -732,7 +732,7 @@ func runMissionResults(idOrPrefix string) error {
 	return nil
 }
 
-func runMissionList(status string) error {
+func runMissionList(status, pipeline string) error {
 	// Validate the filter at the boundary so `ethos mission list
 	// --status bogus` returns an explicit error instead of an empty
 	// table. Symmetric with the MCP handler's defense.
@@ -758,7 +758,7 @@ func runMissionList(status string) error {
 		if !mission.StatusMatches(status, c.Status) {
 			continue
 		}
-		if missionListPipeline != "" && c.Pipeline != missionListPipeline {
+		if pipeline != "" && c.Pipeline != pipeline {
 			continue
 		}
 		contracts = append(contracts, c)
@@ -766,7 +766,7 @@ func runMissionList(status string) error {
 	}
 
 	// When filtering by pipeline, sort in dependency order.
-	if missionListPipeline != "" && len(contracts) > 1 {
+	if pipeline != "" && len(contracts) > 1 {
 		sorted, warns := mission.TopoSortContracts(contracts)
 		for _, w := range warns {
 			fmt.Fprintf(os.Stderr, "ethos: warning: %s\n", w)
@@ -776,10 +776,15 @@ func runMissionList(status string) error {
 		for i, c := range contracts {
 			entryByID[c.MissionID] = entries[i]
 		}
-		entries = entries[:0]
+		newEntries := make([]mission.ListEntry, 0, len(sorted))
 		for _, c := range sorted {
-			entries = append(entries, entryByID[c.MissionID])
+			e, ok := entryByID[c.MissionID]
+			if !ok {
+				return fmt.Errorf("mission list: topo-sort returned unknown mission %q", c.MissionID)
+			}
+			newEntries = append(newEntries, e)
 		}
+		entries = newEntries
 	}
 
 	if jsonOutput {
