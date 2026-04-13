@@ -232,7 +232,6 @@ func runPipelineInstantiate(name string) error {
 		Worker:     pipelineInstWorker,
 		Now:        time.Now(),
 		Archetypes: as,
-		DryRun:     pipelineInstDryRun,
 	}
 
 	contracts, err := mission.Instantiate(p, opts)

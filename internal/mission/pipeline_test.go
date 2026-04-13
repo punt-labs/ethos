@@ -697,7 +697,6 @@ func TestInstantiate_DryRunSyntheticIDs(t *testing.T) {
 		Leader:    "claude",
 		Evaluator: "djb",
 		Now:       time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC),
-		DryRun:    true,
 	}
 
 	contracts, err := Instantiate(p, opts)

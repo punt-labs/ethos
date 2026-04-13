@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -143,7 +142,7 @@ func loadPipeline(dir, name string) (*Pipeline, error) {
 	if pl.Name == "" {
 		pl.Name = name
 	}
-	if !pipelineNamePattern.MatchString(pl.Name) {
+	if !pipelineIDPattern.MatchString(pl.Name) {
 		return nil, fmt.Errorf("pipeline %q (file %s): name is not a valid slug: must match ^[a-z0-9][a-z0-9-]*$", pl.Name, name+".yaml")
 	}
 	seen := make(map[string]bool, len(pl.Stages))
@@ -186,8 +185,7 @@ type InstantiateOptions struct {
 	Evaluator  string            // Default evaluator handle. Stage.Evaluator overrides.
 	Worker     string            // Default worker handle. Stage.Worker overrides.
 	Now        time.Time         // Timestamp for ID generation and contract fields.
-	Archetypes *ArchetypeStore   // Optional. When set, applies archetype budget defaults.
-	DryRun     bool              // When true, use synthetic IDs instead of allocating real ones.
+	Archetypes *ArchetypeStore // Optional. When set, applies archetype budget defaults.
 }
 
 // Instantiate produces one unsaved Contract per stage in the pipeline.
@@ -309,17 +307,11 @@ func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
 	return contracts, nil
 }
 
-// pipelineNamePattern validates that a pipeline name is a slug-safe
-// value suitable for embedding in a pipeline ID. The generated ID
-// concatenates the name with a date and hex suffix, so the name must
-// be lowercase alphanumeric with hyphens.
-var pipelineNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-
 // generatePipelineID produces a pipeline ID of the form
 // <name>-<YYYY-MM-DD>-<6 hex chars>. Returns an error if name is
 // not a valid slug.
 func generatePipelineID(name string, now time.Time) (string, error) {
-	if !pipelineNamePattern.MatchString(name) {
+	if !pipelineIDPattern.MatchString(name) {
 		return "", fmt.Errorf("pipeline name %q is not a valid slug: must match ^[a-z0-9][a-z0-9-]*$", name)
 	}
 	b := make([]byte, 3)
@@ -328,8 +320,8 @@ func generatePipelineID(name string, now time.Time) (string, error) {
 	}
 	day := now.UTC().Format("2006-01-02")
 	id := fmt.Sprintf("%s-%s-%x", name, day, b)
-	if len(id) > 128 {
-		return "", fmt.Errorf("pipeline name %q produces ID of length %d (max 128): shorten the pipeline name", name, len(id))
+	if len(id) > maxPipelineIDLen {
+		return "", fmt.Errorf("pipeline name %q produces ID of length %d (max %d): shorten the pipeline name", name, len(id), maxPipelineIDLen)
 	}
 	return id, nil
 }

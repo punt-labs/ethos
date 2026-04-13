@@ -229,7 +229,8 @@ upstream stage.
 ```bash
 ethos mission pipeline instantiate standard \
   --leader claude \
-  --evaluator bwk \
+  --worker bwk \
+  --evaluator djb \
   --var feature=walk-diff
 ```
 
@@ -257,8 +258,8 @@ ethos mission list --pipeline standard-2026-04-13-a3f901
 Use `--dry-run` to preview generated contracts without creating them:
 
 ```bash
-ethos mission pipeline instantiate standard --leader claude --evaluator bwk \
-  --var feature=walk-diff --dry-run
+ethos mission pipeline instantiate standard --leader claude --worker bwk \
+  --evaluator djb --var feature=walk-diff --dry-run
 ```
 
 ### Template variables
