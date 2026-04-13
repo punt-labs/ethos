@@ -1,5 +1,7 @@
 package mission
 
+import "fmt"
+
 // StatusMatches reports whether contractStatus passes the filter.
 //
 // Empty filter and "all" match any status. Any other filter is
@@ -56,4 +58,60 @@ func NewListEntry(c *Contract) ListEntry {
 		Evaluator: c.Evaluator.Handle,
 		CreatedAt: c.CreatedAt,
 	}
+}
+
+// TopoSortContracts sorts contracts so each mission appears after all
+// missions in its DependsOn list. Missions whose dependencies are
+// missing from the input are appended at the end with a warning
+// returned in the second return value.
+func TopoSortContracts(contracts []*Contract) ([]*Contract, []string) {
+	if len(contracts) <= 1 {
+		return contracts, nil
+	}
+
+	idxByID := make(map[string]int, len(contracts))
+	for i, c := range contracts {
+		idxByID[c.MissionID] = i
+	}
+
+	emitted := make(map[string]bool, len(contracts))
+	var sorted []*Contract
+	var warnings []string
+
+	remaining := make([]int, len(contracts))
+	for i := range remaining {
+		remaining[i] = i
+	}
+
+	for len(remaining) > 0 {
+		progress := false
+		var pending []int
+		for _, idx := range remaining {
+			c := contracts[idx]
+			ready := true
+			for _, dep := range c.DependsOn {
+				if _, inSet := idxByID[dep]; inSet && !emitted[dep] {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				sorted = append(sorted, c)
+				emitted[c.MissionID] = true
+				progress = true
+			} else {
+				pending = append(pending, idx)
+			}
+		}
+		if !progress {
+			for _, idx := range pending {
+				sorted = append(sorted, contracts[idx])
+				warnings = append(warnings,
+					fmt.Sprintf("mission %s has unresolved dependencies", contracts[idx].MissionID))
+			}
+			break
+		}
+		remaining = pending
+	}
+	return sorted, warnings
 }

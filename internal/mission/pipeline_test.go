@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func writePipelineFile(t *testing.T, dir, name, content string) {
@@ -437,5 +439,296 @@ func TestPipelineStore_NonYAMLIgnored(t *testing.T) {
 	}
 	if len(names) != 1 || names[0] != "standard" {
 		t.Errorf("List = %v, want [standard]", names)
+	}
+}
+
+// --- Instantiate tests ---
+
+func TestInstantiate_HappyPath(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+
+	p := &Pipeline{
+		Name:        "sprint",
+		Description: "Design, implement, and test",
+		Stages: []Stage{
+			{Name: "design", Archetype: "design", WriteSet: []string{"docs/{feature}.md"}, Worker: "mdm",
+				SuccessCriteria: []string{"Design doc covers problem"}},
+			{Name: "implement", Archetype: "implement", WriteSet: []string{"internal/{feature}/"}, Worker: "bwk",
+				InputsFrom: "design", SuccessCriteria: []string{"make check passes"}},
+			{Name: "test", Archetype: "test", Worker: "bwk", InputsFrom: "implement",
+				Context: "Test the {feature} implementation", WriteSet: []string{"internal/{feature}/"},
+				SuccessCriteria: []string{"Coverage does not decrease"}},
+		},
+	}
+
+	opts := InstantiateOptions{
+		PipelineID: "sprint-walk-diff-2026-04-13",
+		Vars:       map[string]string{"feature": "walk-diff"},
+		Leader:     "claude",
+		Evaluator:  "djb",
+		Worker:     "fallback-worker",
+		Root:       root,
+		Now:        now,
+	}
+
+	contracts, err := Instantiate(p, opts)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	if len(contracts) != 3 {
+		t.Fatalf("got %d contracts, want 3", len(contracts))
+	}
+
+	// All share the same pipeline ID.
+	for i, c := range contracts {
+		if c.Pipeline != "sprint-walk-diff-2026-04-13" {
+			t.Errorf("contracts[%d].Pipeline = %q, want sprint-walk-diff-2026-04-13", i, c.Pipeline)
+		}
+	}
+
+	// Stage 0: design
+	c := contracts[0]
+	if c.Type != "design" {
+		t.Errorf("stage 0 Type = %q, want design", c.Type)
+	}
+	if c.Worker != "mdm" {
+		t.Errorf("stage 0 Worker = %q, want mdm (stage override)", c.Worker)
+	}
+	if len(c.WriteSet) != 1 || c.WriteSet[0] != "docs/walk-diff.md" {
+		t.Errorf("stage 0 WriteSet = %v, want [docs/walk-diff.md]", c.WriteSet)
+	}
+	if len(c.DependsOn) != 0 {
+		t.Errorf("stage 0 DependsOn = %v, want empty", c.DependsOn)
+	}
+
+	// Stage 1: implement
+	c = contracts[1]
+	if c.Type != "implement" {
+		t.Errorf("stage 1 Type = %q, want implement", c.Type)
+	}
+	if c.Worker != "bwk" {
+		t.Errorf("stage 1 Worker = %q, want bwk", c.Worker)
+	}
+	if len(c.DependsOn) != 1 || c.DependsOn[0] != contracts[0].MissionID {
+		t.Errorf("stage 1 DependsOn = %v, want [%s]", c.DependsOn, contracts[0].MissionID)
+	}
+
+	// Stage 2: test
+	c = contracts[2]
+	if c.Context != "Test the walk-diff implementation" {
+		t.Errorf("stage 2 Context = %q, want expanded", c.Context)
+	}
+	if len(c.DependsOn) != 1 || c.DependsOn[0] != contracts[1].MissionID {
+		t.Errorf("stage 2 DependsOn = %v, want [%s]", c.DependsOn, contracts[1].MissionID)
+	}
+
+	// Leader and evaluator propagated.
+	for i, c := range contracts {
+		if c.Leader != "claude" {
+			t.Errorf("contracts[%d].Leader = %q, want claude", i, c.Leader)
+		}
+		if c.Evaluator.Handle != "djb" {
+			t.Errorf("contracts[%d].Evaluator = %q, want djb", i, c.Evaluator.Handle)
+		}
+	}
+}
+
+func TestInstantiate_MissingVar(t *testing.T) {
+	root := t.TempDir()
+	p := &Pipeline{
+		Name: "test-pipeline",
+		Stages: []Stage{
+			{Name: "s1", Archetype: "implement", WriteSet: []string{"internal/{feature}/"},
+				SuccessCriteria: []string{"done"}},
+		},
+	}
+	opts := InstantiateOptions{
+		Leader: "claude",
+		Vars:   map[string]string{},
+		Root:   root,
+		Now:    time.Now(),
+	}
+	_, err := Instantiate(p, opts)
+	if err == nil {
+		t.Fatal("expected error for missing var")
+	}
+	if !strings.Contains(err.Error(), "{feature}") {
+		t.Errorf("error should name the token, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "s1") {
+		t.Errorf("error should name the stage, got: %v", err)
+	}
+}
+
+func TestInstantiate_UnknownInputsFrom(t *testing.T) {
+	root := t.TempDir()
+	p := &Pipeline{
+		Name: "bad",
+		Stages: []Stage{
+			{Name: "s1", Archetype: "implement", InputsFrom: "nonexistent",
+				WriteSet: []string{"internal/"}, SuccessCriteria: []string{"done"}},
+		},
+	}
+	opts := InstantiateOptions{Leader: "claude", Root: root, Now: time.Now()}
+	_, err := Instantiate(p, opts)
+	if err == nil {
+		t.Fatal("expected error for unknown inputs_from")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("error should name the missing stage, got: %v", err)
+	}
+}
+
+func TestInstantiate_EmptyLeader(t *testing.T) {
+	root := t.TempDir()
+	p := &Pipeline{
+		Name: "test",
+		Stages: []Stage{
+			{Name: "s1", Archetype: "implement", WriteSet: []string{"a/"},
+				SuccessCriteria: []string{"done"}},
+		},
+	}
+	opts := InstantiateOptions{Leader: "", Root: root, Now: time.Now()}
+	_, err := Instantiate(p, opts)
+	if err == nil {
+		t.Fatal("expected error for empty leader")
+	}
+	if !strings.Contains(err.Error(), "leader is required") {
+		t.Errorf("wrong error: %v", err)
+	}
+}
+
+func TestInstantiate_StageWorkerOverridesOpts(t *testing.T) {
+	root := t.TempDir()
+	p := &Pipeline{
+		Name: "test",
+		Stages: []Stage{
+			{Name: "s1", Archetype: "implement", Worker: "stage-worker",
+				WriteSet: []string{"a/"}, SuccessCriteria: []string{"done"}},
+			{Name: "s2", Archetype: "test", InputsFrom: "s1",
+				WriteSet: []string{"a/"}, SuccessCriteria: []string{"done"}},
+		},
+	}
+	opts := InstantiateOptions{
+		Leader:    "claude",
+		Worker:    "opts-worker",
+		Evaluator: "djb",
+		Root:      root,
+		Now:       time.Now(),
+	}
+	cs, err := Instantiate(p, opts)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	if cs[0].Worker != "stage-worker" {
+		t.Errorf("stage 0 Worker = %q, want stage-worker", cs[0].Worker)
+	}
+	if cs[1].Worker != "opts-worker" {
+		t.Errorf("stage 1 Worker = %q, want opts-worker (default)", cs[1].Worker)
+	}
+}
+
+func TestInstantiate_AutoGeneratedPipelineID(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{
+			{Name: "s1", Archetype: "implement", WriteSet: []string{"a/"},
+				SuccessCriteria: []string{"done"}},
+		},
+	}
+	opts := InstantiateOptions{
+		Leader:    "claude",
+		Evaluator: "djb",
+		Root:      root,
+		Now:       now,
+	}
+	cs, err := Instantiate(p, opts)
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	pid := cs[0].Pipeline
+	if !strings.HasPrefix(pid, "sprint-2026-04-13-") {
+		t.Errorf("auto-generated ID = %q, want prefix sprint-2026-04-13-", pid)
+	}
+	// The suffix is 6 hex chars.
+	suffix := strings.TrimPrefix(pid, "sprint-2026-04-13-")
+	if len(suffix) != 6 {
+		t.Errorf("suffix length = %d, want 6 hex chars, got %q", len(suffix), suffix)
+	}
+}
+
+func TestInstantiate_AutoGeneratedIDCollisionResistance(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 13, 10, 0, 0, 0, time.UTC)
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{
+			{Name: "s1", Archetype: "implement", WriteSet: []string{"a/"},
+				SuccessCriteria: []string{"done"}},
+		},
+	}
+
+	seen := make(map[string]bool)
+	for i := 0; i < 50; i++ {
+		opts := InstantiateOptions{
+			Leader:    "claude",
+			Evaluator: "djb",
+			Root:      root,
+			Now:       now,
+		}
+		cs, err := Instantiate(p, opts)
+		if err != nil {
+			t.Fatalf("Instantiate %d: %v", i, err)
+		}
+		pid := cs[0].Pipeline
+		if seen[pid] {
+			t.Fatalf("collision on attempt %d: %s", i, pid)
+		}
+		seen[pid] = true
+	}
+}
+
+func TestExpandVars(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		vars    map[string]string
+		want    string
+		wantErr string
+	}{
+		{name: "no vars", input: "hello world", vars: nil, want: "hello world"},
+		{name: "single var", input: "docs/{feature}.md", vars: map[string]string{"feature": "walk-diff"},
+			want: "docs/walk-diff.md"},
+		{name: "multiple vars", input: "{a}/{b}.txt",
+			vars: map[string]string{"a": "src", "b": "main"}, want: "src/main.txt"},
+		{name: "missing var", input: "docs/{missing}.md", vars: map[string]string{},
+			wantErr: "{missing}"},
+		{name: "no braces", input: "plain text", vars: map[string]string{"x": "y"}, want: "plain text"},
+		{name: "empty input", input: "", vars: map[string]string{"x": "y"}, want: ""},
+		{name: "unclosed brace", input: "docs/{feature", vars: map[string]string{"feature": "x"},
+			want: "docs/{feature"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ExpandVars(tt.input, tt.vars)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("ExpandVars(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

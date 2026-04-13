@@ -162,7 +162,10 @@ Use --json to emit the raw contract for piping.`,
 
 // --- mission list ---
 
-var missionListStatus string
+var (
+	missionListStatus   string
+	missionListPipeline string
+)
 
 var missionListCmd = &cobra.Command{
 	Use:   "list",
@@ -171,7 +174,8 @@ var missionListCmd = &cobra.Command{
 
 Filters by --status (default "open"). Pass --status all to include
 closed, failed, and escalated missions alongside open ones. Pass
---json for a machine-readable summary.`,
+--pipeline <id> to show only missions in that pipeline, sorted in
+dependency order. Pass --json for a machine-readable summary.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runMissionList(missionListStatus)
@@ -499,6 +503,8 @@ func init() {
 
 	missionListCmd.Flags().StringVar(&missionListStatus, "status", "open",
 		"Filter by status (open|closed|failed|escalated|all)")
+	missionListCmd.Flags().StringVar(&missionListPipeline, "pipeline", "",
+		"Filter by pipeline ID")
 
 	missionCloseCmd.Flags().StringVar(&missionCloseStatus, "status", mission.StatusClosed,
 		"Terminal status (closed|failed|escalated)")
@@ -739,12 +745,12 @@ func runMissionList(status string) error {
 		return fmt.Errorf("mission list: %w", err)
 	}
 
+	// Load contracts; apply status and optional pipeline filter.
+	var contracts []*mission.Contract
 	entries := []mission.ListEntry{}
 	for _, id := range ids {
 		c, loadErr := ms.Load(id)
 		if loadErr != nil {
-			// Include the path in the warning so the operator can jump
-			// straight to the corrupt file.
 			fmt.Fprintf(os.Stderr, "ethos: warning: %s: %v\n",
 				filepath.Join(ms.Root(), "missions", id+".yaml"), loadErr)
 			continue
@@ -752,7 +758,28 @@ func runMissionList(status string) error {
 		if !mission.StatusMatches(status, c.Status) {
 			continue
 		}
+		if missionListPipeline != "" && c.Pipeline != missionListPipeline {
+			continue
+		}
+		contracts = append(contracts, c)
 		entries = append(entries, mission.NewListEntry(c))
+	}
+
+	// When filtering by pipeline, sort in dependency order.
+	if missionListPipeline != "" && len(contracts) > 1 {
+		sorted, warns := mission.TopoSortContracts(contracts)
+		for _, w := range warns {
+			fmt.Fprintf(os.Stderr, "ethos: warning: %s\n", w)
+		}
+		// Rebuild entries in sorted order.
+		entryByID := make(map[string]mission.ListEntry, len(entries))
+		for i, c := range contracts {
+			entryByID[c.MissionID] = entries[i]
+		}
+		entries = entries[:0]
+		for _, c := range sorted {
+			entries = append(entries, entryByID[c.MissionID])
+		}
 	}
 
 	if jsonOutput {
@@ -768,9 +795,6 @@ func runMissionList(status string) error {
 	headers := []string{"MISSION", "STATUS", "LEADER", "WORKER", "EVALUATOR", "CREATED"}
 	rows := make([][]string, len(entries))
 	for i, e := range entries {
-		// Mission IDs are human-scale (16 chars m-YYYY-MM-DD-NNN) and
-		// printed in full. Sessions use shortID(...) because their IDs
-		// are 36-char UUIDs — the mission case does not need truncation.
 		rows[i] = []string{
 			e.MissionID,
 			e.Status,
@@ -783,6 +807,7 @@ func runMissionList(status string) error {
 	fmt.Println(hook.FormatTable(headers, rows))
 	return nil
 }
+
 
 func runMissionClose(idOrPrefix, status string) error {
 	ms := missionStore()

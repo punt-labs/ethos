@@ -1356,6 +1356,14 @@ func (s *Store) checkWriteSetConflicts(c *Contract) error {
 			return fmt.Errorf("create: failed to load existing mission %q: %w", id, err)
 		}
 		if existing.Status == StatusOpen {
+			// Skip missions in the same pipeline. Pipeline stages
+			// execute sequentially (enforced by depends_on), so
+			// write_set overlap between stages in the same pipeline is
+			// expected and safe. Cross-pipeline overlaps are still
+			// rejected.
+			if c.Pipeline != "" && existing.Pipeline == c.Pipeline {
+				continue
+			}
 			openContracts = append(openContracts, existing)
 		}
 	}

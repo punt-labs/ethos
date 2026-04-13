@@ -1,11 +1,13 @@
 package mission
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -161,4 +163,194 @@ func listPipelineDir(dir string) ([]string, error) {
 		names = append(names, strings.TrimSuffix(e.Name(), ".yaml"))
 	}
 	return names, nil
+}
+
+// InstantiateOptions controls pipeline instantiation.
+type InstantiateOptions struct {
+	PipelineID string            // If empty, auto-generated as <name>-<YYYY-MM-DD>-<6 hex>.
+	Vars       map[string]string // Template variables for {key} substitution.
+	Leader     string            // Required. Sets Contract.Leader for every stage.
+	Evaluator  string            // Default evaluator handle. Stage.Evaluator overrides.
+	Worker     string            // Default worker handle. Stage.Worker overrides.
+	Root       string            // Mission store root for NewID calls.
+	Now        time.Time         // Timestamp for ID generation and contract fields.
+	Archetypes *ArchetypeStore   // Optional. When set, applies archetype budget defaults.
+}
+
+// Instantiate produces one unsaved Contract per stage in the pipeline.
+// Each contract has its Type set to the stage archetype, Pipeline set to
+// the resolved pipeline ID, DependsOn populated from InputsFrom, and
+// template variables expanded in WriteSet, Context, and SuccessCriteria.
+//
+// Returns the slice of unsaved contracts in stage order. The caller
+// saves them via Store.Create.
+func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
+	if p == nil {
+		return nil, fmt.Errorf("pipeline is nil")
+	}
+	if strings.TrimSpace(opts.Leader) == "" {
+		return nil, fmt.Errorf("instantiate %q: leader is required", p.Name)
+	}
+	if opts.Root == "" {
+		return nil, fmt.Errorf("instantiate %q: root is required", p.Name)
+	}
+	if opts.Now.IsZero() {
+		opts.Now = time.Now()
+	}
+
+	pipelineID := opts.PipelineID
+	if pipelineID == "" {
+		id, err := generatePipelineID(p.Name, opts.Now)
+		if err != nil {
+			return nil, fmt.Errorf("instantiate %q: generating pipeline ID: %w", p.Name, err)
+		}
+		pipelineID = id
+	}
+
+	// Build stage name → index map for InputsFrom resolution.
+	stageIndex := make(map[string]int, len(p.Stages))
+	for i, s := range p.Stages {
+		stageIndex[s.Name] = i
+	}
+
+	contracts := make([]*Contract, len(p.Stages))
+	for i, stage := range p.Stages {
+		missionID, err := NewID(opts.Root, opts.Now)
+		if err != nil {
+			return nil, fmt.Errorf("instantiate %q stage %q: %w", p.Name, stage.Name, err)
+		}
+
+		// Resolve worker: stage > opts > "".
+		worker := opts.Worker
+		if stage.Worker != "" {
+			worker = stage.Worker
+		}
+
+		// Resolve evaluator: stage > opts > "".
+		evaluator := opts.Evaluator
+		if stage.Evaluator != "" {
+			evaluator = stage.Evaluator
+		}
+
+		// Expand template variables in write_set, context, success_criteria.
+		ws, err := expandSlice(stage.WriteSet, opts.Vars, p.Name, stage.Name, "write_set")
+		if err != nil {
+			return nil, err
+		}
+		ctx, err := ExpandVars(stage.Context, opts.Vars)
+		if err != nil {
+			return nil, fmt.Errorf("instantiate %q stage %q context: %w", p.Name, stage.Name, err)
+		}
+		sc, err := expandSlice(stage.SuccessCriteria, opts.Vars, p.Name, stage.Name, "success_criteria")
+		if err != nil {
+			return nil, err
+		}
+
+		// Resolve DependsOn from InputsFrom.
+		var dependsOn []string
+		if stage.InputsFrom != "" {
+			upIdx, ok := stageIndex[stage.InputsFrom]
+			if !ok {
+				return nil, fmt.Errorf("instantiate %q: stage %q references unknown stage %q via inputs_from",
+					p.Name, stage.Name, stage.InputsFrom)
+			}
+			if contracts[upIdx] == nil {
+				return nil, fmt.Errorf("instantiate %q: stage %q depends on %q which has not been assigned an ID yet",
+					p.Name, stage.Name, stage.InputsFrom)
+			}
+			dependsOn = []string{contracts[upIdx].MissionID}
+		}
+
+		// Budget: stage override > archetype default > zero (will fail
+		// validation if neither is set).
+		var budget Budget
+		if stage.Budget != nil {
+			budget = *stage.Budget
+		} else if opts.Archetypes != nil {
+			a, loadErr := opts.Archetypes.Load(stage.Archetype)
+			if loadErr == nil {
+				budget = a.BudgetDefault
+			}
+		}
+
+		now := opts.Now.UTC().Format(time.RFC3339)
+		c := &Contract{
+			MissionID: missionID,
+			Status:    StatusOpen,
+			Type:      stage.Archetype,
+			CreatedAt: now,
+			UpdatedAt: now,
+			Leader:    opts.Leader,
+			Worker:    worker,
+			Evaluator: Evaluator{
+				Handle:   evaluator,
+				PinnedAt: now,
+			},
+			WriteSet:        ws,
+			SuccessCriteria: sc,
+			Budget:          budget,
+			CurrentRound:    1,
+			Context:         ctx,
+			Pipeline:        pipelineID,
+			DependsOn:       dependsOn,
+		}
+		contracts[i] = c
+	}
+	return contracts, nil
+}
+
+// generatePipelineID produces a pipeline ID of the form
+// <name>-<YYYY-MM-DD>-<6 hex chars>.
+func generatePipelineID(name string, now time.Time) (string, error) {
+	b := make([]byte, 3)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generating random suffix: %w", err)
+	}
+	day := now.UTC().Format("2006-01-02")
+	return fmt.Sprintf("%s-%s-%x", name, day, b), nil
+}
+
+// ExpandVars replaces {key} tokens with their values from vars. Returns
+// an error listing the first unknown token encountered.
+func ExpandVars(s string, vars map[string]string) (string, error) {
+	var result strings.Builder
+	for i := 0; i < len(s); {
+		open := strings.IndexByte(s[i:], '{')
+		if open < 0 {
+			result.WriteString(s[i:])
+			break
+		}
+		result.WriteString(s[i : i+open])
+		close := strings.IndexByte(s[i+open:], '}')
+		if close < 0 {
+			// No closing brace; write the rest literally.
+			result.WriteString(s[i+open:])
+			break
+		}
+		key := s[i+open+1 : i+open+close]
+		val, ok := vars[key]
+		if !ok {
+			return "", fmt.Errorf("unknown template variable {%s}", key)
+		}
+		result.WriteString(val)
+		i = i + open + close + 1
+	}
+	return result.String(), nil
+}
+
+// expandSlice applies ExpandVars to each entry in ss. Errors name the
+// pipeline, stage, and field for diagnostics.
+func expandSlice(ss []string, vars map[string]string, pipeline, stage, field string) ([]string, error) {
+	if len(ss) == 0 {
+		return nil, nil
+	}
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		expanded, err := ExpandVars(s, vars)
+		if err != nil {
+			return nil, fmt.Errorf("instantiate %q stage %q %s[%d]: %w", pipeline, stage, field, i, err)
+		}
+		out[i] = expanded
+	}
+	return out, nil
 }
