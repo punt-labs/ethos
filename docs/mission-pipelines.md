@@ -118,7 +118,7 @@ is nature-based, with a size-based fallback.
 ```text
 Contract context and write_set
   |
-  +--> mentions "prfaq", "working backwards", "new feature", "product"
+  +--> mentions "prfaq", "working backwards", "new feature", "product validation"
   |    AND write_set non-empty?
   |      yes --> product (6 stages)
   |
@@ -127,7 +127,7 @@ Contract context and write_set
   |      yes --> formal (7 stages)
   |
   +--> mentions "coe", "cause of error", "recurring bug",
-  |    "data corruption", "incident", "regression", "postmortem"?
+  |    "data corruption", "incident", "fixed before", "postmortem"?
   |      yes --> coe (5 stages)
   |
   +--> ALL write_set entries match doc patterns
@@ -797,7 +797,7 @@ inputs:
   files:
     # populated when prfaq stage closes
 write_set:
-  - internal/auto-suggest/
+  - docs/auto-suggest.md
 success_criteria:
   - "Design doc covers problem, decision, and migration path"
   - "Before/after showing user-visible change"

@@ -64,6 +64,16 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))
 
+	// Should have deployed all 8 pipeline files
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "quick.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "standard.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "full.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "product.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "formal.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "docs.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "coe.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "coverage.yaml"))
+
 	// Should have deployed all 7 READMEs (sessions excluded)
 	assert.FileExists(t, filepath.Join(dest, "identities", "README.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "README.md"))
