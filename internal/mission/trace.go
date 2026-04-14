@@ -41,7 +41,7 @@ func buildTraceSummary(c *Contract, result *Result) TraceSummary {
 	for _, fc := range result.FilesChanged {
 		files = append(files, fc.Path)
 	}
-	return TraceSummary{
+	ts := TraceSummary{
 		ID:              c.MissionID,
 		CreatedAt:       c.CreatedAt,
 		ClosedAt:        c.ClosedAt,
@@ -61,6 +61,16 @@ func buildTraceSummary(c *Contract, result *Result) TraceSummary {
 		Session:         c.Session,
 		Repo:            c.Repo,
 	}
+	if ts.WriteSet == nil {
+		ts.WriteSet = []string{}
+	}
+	if ts.SuccessCriteria == nil {
+		ts.SuccessCriteria = []string{}
+	}
+	if ts.FilesChanged == nil {
+		ts.FilesChanged = []string{}
+	}
+	return ts
 }
 
 // appendTraceSummary writes a single JSONL line to
@@ -82,23 +92,7 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 	}
 	data = append(data, '\n')
 
-	// Acquire an exclusive flock to serialize concurrent trace writes.
-	// The lock file is independent of the per-mission flock (which has
-	// already been released by the time appendTraceSummary runs).
-	lockFile, err := os.OpenFile(
-		filepath.Join(dir, ".trace.lock"),
-		os.O_CREATE|os.O_RDWR,
-		0o600,
-	)
-	if err != nil {
-		return err
-	}
-	defer lockFile.Close()
-	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
-	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
-
+	// Flock missions.jsonl itself to serialize concurrent trace writes.
 	f, err := os.OpenFile(
 		filepath.Join(dir, "missions.jsonl"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,
@@ -107,10 +101,12 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 	if err != nil {
 		return err
 	}
-	_, writeErr := f.Write(data)
-	closeErr := f.Close()
-	if writeErr != nil {
-		return writeErr
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		return err
 	}
-	return closeErr
+	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
+
+	_, writeErr := f.Write(data)
+	return writeErr
 }

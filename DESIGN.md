@@ -4195,7 +4195,7 @@ emits `ticket` only. Reject both keys simultaneously to prevent ambiguity.
 - New contracts and event logs use `ticket`.
 - A future major release removes the `bead` alias.
 
-## DES-050: Automatic mission traceability via repo-local JSONL (PROPOSED)
+## DES-050: Automatic mission traceability via repo-local JSONL (SETTLED)
 
 **Context**: `ethos mission close` writes contract and result data to the
 global missions directory (`~/.punt-labs/ethos/missions/`). This data

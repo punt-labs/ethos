@@ -88,8 +88,11 @@ func TestBuildTraceSummary_NoFilesChanged(t *testing.T) {
 	r := &Result{Verdict: VerdictPass}
 
 	ts := buildTraceSummary(c, r)
-	if ts.FilesChanged != nil {
-		t.Errorf("FilesChanged = %v, want nil", ts.FilesChanged)
+	if len(ts.FilesChanged) != 0 {
+		t.Errorf("FilesChanged = %v, want empty slice", ts.FilesChanged)
+	}
+	if ts.FilesChanged == nil {
+		t.Errorf("FilesChanged is nil, want non-nil empty slice")
 	}
 }
 
