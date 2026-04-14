@@ -40,6 +40,7 @@ type Store struct {
 	root       string          // e.g. ~/.punt-labs/ethos
 	roles      RoleLister      // optional; wires the Phase 3.5 role-overlap check
 	archetypes *ArchetypeStore // optional; validates Type on Create
+	repoRoot   string          // optional; when set, Close appends a trace summary to <repoRoot>/.ethos/missions.jsonl
 }
 
 // NewStore creates a Store rooted at the given directory.
@@ -76,6 +77,19 @@ func (s *Store) WithRoleLister(r RoleLister) *Store {
 //	ms := mission.NewStore(root).WithArchetypeStore(as)
 func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 	s.archetypes = as
+	return s
+}
+
+// WithRepoRoot sets the repository root directory for mission trace
+// logging. When set, Store.Close appends a JSONL summary line to
+// <repoRoot>/.ethos/missions.jsonl so every closed mission is visible
+// in the repo's git history. An empty root disables the trace.
+//
+// Returns the receiver so construction stays compact:
+//
+//	ms := mission.NewStore(root).WithRepoRoot(repoRoot)
+func (s *Store) WithRepoRoot(root string) *Store {
+	s.repoRoot = root
 	return s
 }
 
@@ -571,6 +585,7 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		return nil, fmt.Errorf("invalid close status %q: must be closed, failed, or escalated", status)
 	}
 	var satisfying *Result
+	var closed *Contract
 	err := s.withLock(missionID, func() error {
 		dest := s.contractPath(missionID)
 		// loadLocked returns both the parsed contract and the raw
@@ -634,10 +649,17 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		// the "operation did not happen" contract the Update and Close
 		// rollback paths already guarantee for on-disk state.
 		satisfying = gated
+		closed = c
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Trace: append a summary line to the repo-local JSONL log.
+	// Non-fatal — the mission is already closed; a trace failure
+	// must not roll back the close.
+	if err := s.appendTraceSummary(closed, satisfying); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
 	}
 	return satisfying, nil
 }

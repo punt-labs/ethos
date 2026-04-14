@@ -4194,3 +4194,42 @@ emits `ticket` only. Reject both keys simultaneously to prevent ambiguity.
 - Existing contracts and event logs continue to work.
 - New contracts and event logs use `ticket`.
 - A future major release removes the `bead` alias.
+
+## DES-050: Automatic mission traceability via repo-local JSONL (SETTLED)
+
+**Context**: `ethos mission close` writes contract and result data to the
+global missions directory (`~/.punt-labs/ethos/missions/`). This data
+never appears in a repo's git history. `ethos mission export` exists but
+is manual and unused. The prfaq claims "git-tracked mission export" --
+technically true, but a manual tool nobody runs is no tool.
+
+**Decision**: On every successful `Store.Close`, append a compact JSON
+summary line to `<repoRoot>/.ethos/missions.jsonl`. One line per closed
+mission (~300 bytes). The trace write runs AFTER the close event commits
+and is non-fatal: a failure prints a stderr warning but does not roll
+back the close. The full contract + result YAMLs remain in the global
+store for deep auditing; the JSONL trace is the lightweight, greppable
+git-tracked summary.
+
+**Schema**: `TraceSummary` struct with: id, created_at, closed_at,
+status, type, leader, worker, evaluator, ticket, write_set,
+success_criteria, rounds_used, rounds_budgeted, verdict, files_changed,
+pipeline.
+
+**Rejected alternatives**:
+
+- Automatic `ethos mission export` on close: exports the full contract +
+  result YAML, which is too heavy for an append-only log and produces
+  multi-file diffs per close.
+- Database (SQLite) in repo: adds a binary dependency, breaks grep, and
+  produces opaque git diffs.
+- Git notes: not greppable, not visible in `git log` without flags, and
+  most git UIs don't surface them.
+
+**Implications**:
+
+- Every repo that uses ethos missions gains a `.ethos/missions.jsonl`
+  file in its git history.
+- The `Store` gains a `repoRoot` field, wired via `WithRepoRoot`.
+- The JSONL file is append-only by convention; concurrent appends are
+  safe because each Close holds its own flock and appends a single line.
