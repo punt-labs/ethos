@@ -328,7 +328,7 @@ func (s *Store) Create(c *Contract) error {
 				Details: map[string]any{
 					"worker":    staged.Worker,
 					"evaluator": staged.Evaluator.Handle,
-					"bead":      staged.Inputs.Bead,
+					"ticket":    staged.Inputs.Ticket,
 				},
 			}); err != nil {
 				// Rollback: remove the just-written contract so the

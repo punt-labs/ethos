@@ -1,5 +1,10 @@
 # Ethos Development Lifecycle — Live Example
 
+> **Note:** This example is a frozen historical artifact from v3.2.
+> Contracts here use `inputs.bead` — the pre-3.4 name. New missions
+> should use `inputs.ticket`; the `bead` key is accepted as a
+> deprecated alias.
+
 A complete walkthrough of the ethos development lifecycle using a real
 bead executed on 2026-04-10: `ethos-db7` — consolidate verifier contract
 load to eliminate a TOCTOU window.

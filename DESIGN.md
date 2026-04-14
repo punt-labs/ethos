@@ -4168,3 +4168,29 @@ regardless of how the contract was framed.
 
 **Implications**: The `pipeline` field is semantically "grouping label for
 related missions that share files." It is not a security boundary.
+
+## DES-049: Rename inputs.bead to inputs.ticket (SETTLED)
+
+**Context**: The `bead` field on Contract.Inputs is named after Punt
+Labs' internal issue tracker. Ethos is open-source; non-Punt-Labs users
+of other trackers (Linear, Jira, GitHub Issues) find the name confusing.
+The value is semantically an issue-tracker ticket ID -- not specific to
+beads.
+
+**Decision**: Rename to `inputs.ticket`. Accept `inputs.bead` as a
+deprecated alias during a transition period (minor release + 1). Emit a
+stderr deprecation warning when a contract is loaded with `bead`. Marshal
+emits `ticket` only. Reject both keys simultaneously to prevent ambiguity.
+
+**Rejected alternatives**:
+
+- Hard rename (break on load): strands existing missions and event logs.
+- Two fields (Bead AND Ticket in struct): doubles API surface; users must
+  check both. Poor Go ergonomics.
+- Keep the name: hostile to adoption for a naming debt.
+
+**Implications**:
+
+- Existing contracts and event logs continue to work.
+- New contracts and event logs use `ticket`.
+- A future major release removes the `bead` alias.

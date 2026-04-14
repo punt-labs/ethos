@@ -23,8 +23,8 @@ func validContract() Contract {
 			PinnedAt: "2026-04-07T21:30:00Z",
 		},
 		Inputs: Inputs{
-			Bead:  "ethos-07m.5",
-			Files: []string{"internal/session/store.go"},
+			Ticket: "ethos-07m.5",
+			Files:  []string{"internal/session/store.go"},
 		},
 		WriteSet:        []string{"internal/mission/", "cmd/ethos/mission.go"},
 		Tools:           []string{"Read", "Write", "Edit"},
