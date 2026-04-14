@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covering built-in archetypes and pipelines, customization, and the
   pipeline selection heuristic.
 
+### Fixed
+
+- **PostToolUse hook** propagates `make check` exit code instead of
+  masking it behind `head`. POSIX-sh compatible (no pipefail).
+
 ## [3.3.0] - 2026-04-13
 
 ### Added
