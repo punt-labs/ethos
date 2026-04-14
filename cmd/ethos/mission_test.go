@@ -70,6 +70,16 @@ func missionTestEnv(t *testing.T) string {
 	// keeps the fixture cost out of every test body.
 	seedEvaluator(t, filepath.Join(tmp, ".punt-labs", "ethos"))
 
+	// Create a fake git repo so FindRepoRoot() stops here instead
+	// of finding the real ethos repo — prevents trace writes from
+	// polluting the real .ethos/missions.jsonl.
+	repoDir := filepath.Join(tmp, "repo")
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755))
+	oldDir, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repoDir))
+	t.Cleanup(func() { os.Chdir(oldDir) })
+
 	// Reset the package-level flag globals so cross-test contamination
 	// (e.g. a leaked --json from a prior test) does not bleed in.
 	jsonOutput = false

@@ -39,7 +39,7 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	return mission.NewStore(root)
+	return mission.NewStore(root).WithRepoRoot(resolve.FindRepoRoot())
 }
 
 // missionStoreForCreate returns a mission store with the Phase 3.5
@@ -72,7 +72,7 @@ func missionStoreForCreate() *mission.Store {
 	}
 	repoRoot := resolve.FindRepoEthosRoot()
 	as := mission.NewArchetypeStore(repoRoot, root)
-	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as)
+	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as).WithRepoRoot(resolve.FindRepoRoot())
 }
 
 // --- mission (bare command) ---

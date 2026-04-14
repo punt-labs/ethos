@@ -3,6 +3,8 @@
 package mission
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -3024,6 +3026,45 @@ func TestStore_Close_EventLogRecordsRoundAndVerdict(t *testing.T) {
 		"close event must carry the satisfying result's round")
 	assert.Equal(t, VerdictFail, closeEvent.Details["verdict"],
 		"close event must carry the satisfying result's verdict, not the close status")
+}
+
+// TestStore_Close_WritesTraceSummary exercises the full Close →
+// appendTraceSummary → JSONL file path. The store is constructed with
+// WithRepoRoot pointing at a temp dir so the trace lands there.
+func TestStore_Close_WritesTraceSummary(t *testing.T) {
+	repoDir := t.TempDir()
+	s := NewStore(t.TempDir()).WithRepoRoot(repoDir)
+	c := newContract("m-2026-04-08-099")
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+
+	_, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
+
+	path := filepath.Join(repoDir, ".ethos", "missions.jsonl")
+	f, err := os.Open(path)
+	require.NoError(t, err, "trace file should exist after Close")
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	var lines []TraceSummary
+	for scanner.Scan() {
+		var ts TraceSummary
+		require.NoError(t, json.Unmarshal(scanner.Bytes(), &ts))
+		lines = append(lines, ts)
+	}
+	require.NoError(t, scanner.Err())
+	require.Len(t, lines, 1, "exactly one trace line expected")
+
+	ts := lines[0]
+	assert.Equal(t, c.MissionID, ts.ID)
+	assert.Equal(t, StatusClosed, ts.Status)
+	assert.Equal(t, c.Leader, ts.Leader)
+	assert.Equal(t, c.Worker, ts.Worker)
+	assert.Equal(t, c.Evaluator.Handle, ts.Evaluator)
+	assert.Equal(t, VerdictPass, ts.Verdict)
+	assert.Equal(t, 1, ts.RoundsUsed)
+	assert.Equal(t, c.Budget.Rounds, ts.RoundsBudgeted)
 }
 
 // TestStore_AppendResult_LogsEvent asserts that a successful
