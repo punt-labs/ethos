@@ -159,13 +159,14 @@ markdown cannot represent it). Coexistence rather than competition.
 
 ## Status
 
-v3.4.0 — all five planned phases shipped. 21+ KLOC production Go,
-34+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
+v3.5.0 — all five planned phases shipped. 22+ KLOC production Go,
+35+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
 write-set admission, frozen evaluators, bounded rounds, audit logs,
-archetypes, and pipelines are in daily use by Punt Labs.
+archetypes, pipelines, and automatic mission traceability are in daily
+use by Punt Labs.
 
-Remaining work is adoption-driven: customer validation interviews,
-additional third-party integration examples, the agent marketplace.
+Remaining work is adoption-driven: reducing mission ceremony,
+customer validation interviews, cross-tool integration.
 See the [roadmap](docs/ETHOS-ROADMAP.md).
 
 ## Documentation

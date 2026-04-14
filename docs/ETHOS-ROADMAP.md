@@ -2,9 +2,13 @@
 
 Where ethos is going. Organized into phases that build on each other.
 
-## Current Status (2026-04-10)
+## Current Status (2026-04-14)
 
-Ethos is on `main` with Phases 1–4 complete. 20.1 KLOC production Go, 26.8 KLOC tests. Go Report Card: A+. Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run) remains planned.
+Ethos is on `main` at v3.5.0 with all five original phases complete.
+22.4 KLOC production Go, 35.8 KLOC tests, 2,058 tests across 14
+packages. Go Report Card: A+. 8 pipeline templates, 7 archetypes,
+24 identities, 13 team members. Phase 2.6 (`/mission` Phase B–C:
+conflict detection and dry-run) remains planned.
 
 | Phase | Status | Summary |
 |---|---|---|
@@ -12,12 +16,15 @@ Ethos is on `main` with Phases 1–4 complete. 20.1 KLOC production Go, 26.8 KLO
 | **Phase 2 — Production-Quality Agents** | SHIPPED (2.1–2.5); 2.6 PLANNED | Anti-responsibilities, role hooks, structured output, baseline-ops injection, `/mission` skill Phase A (beads `ethos-9ai.1`–`.5`). `/mission` Phase B–C (conflict detection, dry-run) remains planned (`ethos-9ai.5`). |
 | **Phase 3 — Workflow Primitives** | **SHIPPED** | All 7 primitives: mission contract, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log reader (beads `ethos-07m.5`–`07m.11`, ADRs DES-031 through DES-037) |
 | **Phase 4 — Operational Excellence** | **SHIPPED** | SessionStart working context (PR #205), role-based safety constraints + session audit logging (PR #207). Beads `ethos-gcq.1`–`.3`, all closed. |
-| **Phase 5 — Ecosystem** | FUTURE | Starter team templates, agent marketplace |
+| **Post-Phase 4** | **SHIPPED** | Archetypes, pipelines, pipeline instantiate, automatic traceability (v3.2.0–v3.5.0). See details below. |
+| **Phase 5 — Reliability & Friction** | NEXT | Mission dispatch one-liner, agent regen diff logging, doctor orphan check, inputs.trigger schema, deprecation migration tooling |
+| **Phase 6 — Ecosystem** | FUTURE | Starter team templates, agent marketplace, cross-tool integration |
 
 Phase 3 shipped 2026-04-08 on PR #184, merge `c16715f`. Phase 4
-shipped 2026-04-10 across PRs #205 and #207. The four architecture
-rules from the agents architecture document are runtime-enforced
-for the first time in the project's history.
+shipped 2026-04-10 across PRs #205 and #207. v3.2.0–v3.5.0
+(2026-04-12 through 2026-04-14) shipped archetypes, pipelines,
+pipeline instantiate, archetype constraint enforcement, automatic
+mission traceability, and 89.8% mission package coverage.
 
 ## Phase 4 — Operational Excellence (SHIPPED 2026-04-10)
 
@@ -41,8 +48,143 @@ Epic `ethos-gcq` closed.
 | `ethos-g2f` | Integration: ethos + beadle — identity-aware email | After Phase 4 |
 
 Cross-tool integration is deliberately sequenced after Phase 4 because
-it requires coordinated changes across multiple repos. Call it Phase 5
-work in everything but name.
+it requires coordinated changes across multiple repos.
+
+## Post-Phase 4: Archetypes, Pipelines, and Traceability (v3.2.0–v3.5.0)
+
+Work after Phase 4 focused on turning the mission primitive into a
+practical workflow layer: typed archetypes, composable pipelines, and
+automatic traceability.
+
+### v3.3.0 (April 13, 2026)
+
+- 5 new pipeline templates (product, formal, docs, coe, coverage) — 8 total
+- Nature-based H10 decision tree for pipeline selection in the linter
+- Standard/full stage expansion: `document` stage added to multi-stage pipelines
+
+### v3.4.0 (April 14, 2026)
+
+- `ethos mission pipeline instantiate` command — create N missions from a pipeline template in one step
+- Built-in pipeline `{feature}/{target}` variable defaults for all 8 templates
+- `inputs.bead` renamed to `inputs.ticket` with back-compat alias (DES-049)
+- Archetype constraint enforcement: `allow_empty_write_set`, `write_set_constraints`, `required_fields`
+- PostToolUse hook exit code propagation fix
+- 24 pipeline CLI tests
+- Contract `pipeline` and `depends_on` fields (DES-048)
+
+### v3.5.0 (April 14, 2026)
+
+- Automatic mission traceability — `Store.Close` auto-appends a summary JSONL line to `<repo>/.ethos/missions.jsonl` (DES-050). Commit-ready without manual bookkeeping.
+- Suppress duplicate `inputs.bead` deprecation warnings via `sync.Once`
+
+---
+
+## Phase 5: Reliability & Friction
+
+Items sourced from biff office hours (2026-04-14). The mechanism
+layer is complete; what remains is reducing the friction that
+prevents adoption under time pressure.
+
+### 5.1 Mission Dispatch One-Liner
+
+**Problem**: Mission ceremony is 4 steps (create YAML, `ethos mission
+create`, pass ID to agent, agent reads it). Under time pressure,
+teams skip missions entirely because bare `Agent` calls are 1 step.
+This is the #1 adoption blocker.
+
+**Evidence**: tty5 (claude-agent-sdk-smalltalk) reported a 10-task,
+8-PR day where zero missions were used. The cost of structured
+delegation exceeded its perceived benefit.
+
+**Solution**: `ethos mission dispatch --agent bwk --prompt "..." --write-set "internal/foo/"` — one command that creates the contract,
+spawns the agent with the mission injected, and tracks the result.
+
+### 5.2 Agent Regeneration Diff Logging
+
+**Problem**: When ethos regenerates `.claude/agents/*.md` on session
+start, the operation is silent. Users discover content changes later
+via `git diff`, with no indication of what triggered the change.
+
+**Evidence**: Reported by tty5 after noticing unexpected agent file
+diffs with no explanation of what changed or why.
+
+**Solution**: Emit a summary of what changed (files modified, lines
+added/removed) when `GenerateAgentFiles` modifies any file.
+
+### 5.3 Doctor: Orphaned Agent Check
+
+**Problem**: Agent files can exist in `.claude/agents/` for
+identities that are not on any team. These come from the static
+fallback, not the generator — a sign of missing team membership.
+
+**Evidence**: Reported by tty5 after the kpz identity gap: an agent
+file existed but the identity was not on any team, so it received
+no role-based constraints.
+
+**Solution**: Add an `ethos doctor` check that flags agent files
+whose handle is not a member of any team.
+
+### 5.4 inputs.trigger Schema
+
+**Problem**: `inputs.trigger` is rejected by strict `KnownFields`
+validation. Beadle's orchestrator needs this field for email
+provenance (type, message_id, from, subject) in email-triggered
+missions.
+
+**Evidence**: Reported by tty109 (beadle). Tracked as beadle-40k.
+
+**Solution**: Add `inputs.trigger` to the `Contract.Inputs` schema
+with a typed sub-struct for email provenance.
+
+### 5.5 Deprecation Warning UX
+
+**Problem**: The `inputs.bead` to `inputs.ticket` deprecation is
+partially fixed (v3.5.0 deduplicates warnings), but the migration
+path is unclear. Users don't know which missions to update or how.
+
+**Solution**: `ethos mission migrate` — batch-update old missions
+that use deprecated field names. Show a dry-run summary of what
+would change before applying.
+
+---
+
+## Phase 6: Ecosystem
+
+Long-term investments in the ethos ecosystem.
+
+### 6.1 Starter Team Templates
+
+**Problem**: Setting up a team from scratch requires creating
+identities, personalities, writing styles, talents, roles, and teams.
+The team-setup guide explains how, but it's still manual.
+
+**Solution**: Ship team templates for common setups:
+
+- **Solo developer** — 1 human + 3 agents (implementer, reviewer,
+  researcher)
+- **Small team** — 2-3 humans + 5 agents (Go/Python implementers,
+  reviewer, security reviewer, architect)
+- **Full team** — punt-labs/team as the reference implementation
+
+Templates are directories that `ethos init` can scaffold from.
+
+### 6.2 Agent Marketplace
+
+**Problem**: Teams create effective agent definitions that could benefit
+others. No mechanism to share.
+
+**Solution**: A curated registry of agent identity packages (identity +
+personality + writing style + talents + role). Teams publish and
+discover compositions that work.
+
+**Delivery**: Future — requires community adoption first.
+
+### 6.3 Cross-Tool Integration
+
+| Bead | What | Notes |
+|---|---|---|
+| `ethos-wb4` | Integration: ethos + biff — identity-aware messaging | Requires coordinated cross-repo changes |
+| `ethos-g2f` | Integration: ethos + beadle — identity-aware email | Requires coordinated cross-repo changes |
 
 ## Context
 
@@ -746,56 +888,6 @@ session_context.
 
 ---
 
-## Phase 5: Ecosystem
-
-Long-term investments in the ethos ecosystem.
-
-### 5.1 Starter Team Templates
-
-**Problem**: Setting up a team from scratch requires creating
-identities, personalities, writing styles, talents, roles, and teams.
-The team-setup guide explains how, but it's still manual.
-
-**Solution**: Ship team templates for common setups:
-
-- **Solo developer** — 1 human + 3 agents (implementer, reviewer,
-  researcher)
-- **Small team** — 2-3 humans + 5 agents (Go/Python implementers,
-  reviewer, security reviewer, architect)
-- **Full team** — punt-labs/team as the reference implementation
-
-Templates are directories that `ethos init` can scaffold from.
-
-### 5.2 Agent Marketplace
-
-**Problem**: Teams create effective agent definitions that could benefit
-others. No mechanism to share.
-
-**Solution**: A curated registry of agent identity packages (identity +
-personality + writing style + talents + role). Teams publish and
-discover compositions that work.
-
-**Delivery**: Future — requires community adoption first.
-
-### 5.3 Cross-Tool Workflow Orchestration
-
-**Problem**: Complex workflows span multiple tools — ethos (identity),
-quarry (knowledge), beads (tracking), biff (coordination), feature-dev
-(development). No orchestrator ties them together.
-
-**Evidence**: claude-config-template's `orchestrator.py` and
-`sprint_runner.py` demonstrate multi-phase orchestration with
-reflection checkpoints.
-
-**Solution**: A workflow orchestrator that leverages ethos identity
-context, quarry knowledge, beads tracking, and feature-dev phases.
-This is above the ethos layer — likely a punt-kit or feature-dev
-concern.
-
-**Delivery**: Future — requires Phase 1-3 content to be shipped first.
-
----
-
 ## Priority and Sequencing
 
 ```text
@@ -822,18 +914,33 @@ Phase 3 (Workflow Primitives)            ← SHIPPED
 ├── 3.6 Result artifacts and close gate (DES-036, ethos-07m.10)
 └── 3.7 Event log reader API (DES-037, ethos-07m.11)
 
-Phase 4 (Operational Excellence)         ← NEXT
+Phase 4 (Operational Excellence)         ← SHIPPED
 ├── 4.1 SessionStart working context (ethos-gcq.1)
 ├── 4.2 Role-based pre-tool safety (ethos-gcq.2)
 └── 4.3 PostToolUse audit logging (ethos-gcq.3)
 
-Phase 5 (Ecosystem)                      ← FUTURE
-├── 5.1 Starter team templates
-├── 5.2 Agent marketplace
-└── 5.3 Cross-tool integration (ethos-wb4, ethos-g2f)
+Post-Phase 4 (v3.2.0–v3.5.0)            ← SHIPPED
+├── Archetypes (7 types) and pipelines (8 templates)
+├── Pipeline instantiate with {feature}/{target} variables
+├── inputs.ticket rename (DES-049)
+├── Archetype constraint enforcement
+├── Automatic mission traceability (DES-050)
+└── Deprecation warning deduplication
+
+Phase 5 (Reliability & Friction)         ← NEXT
+├── 5.1 Mission dispatch one-liner
+├── 5.2 Agent regeneration diff logging
+├── 5.3 Doctor: orphaned agent check
+├── 5.4 inputs.trigger schema (beadle-40k)
+└── 5.5 Deprecation migration tooling
+
+Phase 6 (Ecosystem)                      ← FUTURE
+├── 6.1 Starter team templates
+├── 6.2 Agent marketplace
+└── 6.3 Cross-tool integration (ethos-wb4, ethos-g2f)
 ```
 
-Phases 1, 2, and 3 shipped. Phase 4 is the immediate priority. It is
-independent of cross-tool integration and can ship before the
-ethos+biff and ethos+beadle bindings, which require coordinated
-cross-repo work.
+Phases 1–4 plus post-Phase 4 work shipped. Phase 5 targets the
+friction that prevents mission adoption under time pressure — sourced
+from biff office hours feedback. Phase 6 is long-term ecosystem work
+that depends on broader adoption.
