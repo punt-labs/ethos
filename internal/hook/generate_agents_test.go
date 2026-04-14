@@ -204,7 +204,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -n 60\"\n"+
+						"          command: \"_out=$((cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n"+
 						"---\n")
 
 				// Body checks.
@@ -385,7 +385,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -n 60\"\n")
+						"          command: \"_out=$((cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n")
 
 				// Log the generated file so binary verification is visible
 				// in -v test output (spec success criterion 5).
@@ -414,7 +414,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -n 60\"\n" +
+					"          command: \"_out=$((cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -724,9 +724,38 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -n 60\"\n" +
+					"          command: \"_out=$((cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
+			},
+		},
+		{
+			// PostToolUse command captures exit code from make check
+			// instead of masking it behind the pipe to head. The
+			// command saves the exit code in _rc before the pipe and
+			// exits with it at the end (POSIX-sh compatible).
+			name: "PostToolUse propagates make check exit code",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				// The exit-capture pattern must be present.
+				assert.Contains(t, content, "_rc=$?",
+					"command must capture exit code in _rc")
+				assert.Contains(t, content, "exit $_rc",
+					"command must exit with the captured exit code")
+
+				// No bare "| head" without the exit-capture wrapper.
+				// A regression would revert to the old form:
+				//   (cd ... && make check) 2>&1 | head -n 60
+				// which masks make check's exit code.
+				assert.NotContains(t, content,
+					`make check) 2>&1 | head`,
+					"must not pipe make check directly to head (masks exit code)")
 			},
 		},
 	}

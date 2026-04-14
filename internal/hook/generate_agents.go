@@ -283,18 +283,16 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// prints one line per package on the success path and a
 		// single `--- FAIL:` block for the first failing package,
 		// which is typically tens of lines — still inside the 60-line
-		// window. The pipe to `head` masks the exit code, so the hook
-		// stays advisory: Claude Code does not gate the next Write on
-		// a broken build. This is the intentional shape — a blocking
-		// hook would create friction during refactors where
-		// intermediate states are knowingly broken, and Claude Code
-		// has no --skip-hook escape hatch. The command must stay
-		// POSIX-sh compatible (it runs under /bin/sh, which is dash
-		// on Debian/Ubuntu): no `set -o pipefail`, no process
-		// substitution. `head -n 60` uses the POSIX-canonical `-n N`
-		// form rather than the BSD shortcut `-N` for the same reason
-		// — portability is the whole point of the pin.
-		b.WriteString("          command: \"(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1 | head -n 60\"\n")
+		// window. Output is captured to a variable first, then
+		// truncated with head; the exit code reflects make check, not
+		// head. PostToolUse hooks are advisory regardless — Claude
+		// Code does not gate the next tool on exit code — but the
+		// signal is now accurate (non-zero = check failed). The
+		// command stays POSIX-sh compatible (it runs under /bin/sh,
+		// which is dash on Debian/Ubuntu): no `set -o pipefail`, no
+		// process substitution. Variable capture, printf, and
+		// `head -n 60` all work in dash.
+		b.WriteString("          command: \"_out=$((cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n")
 	}
 	b.WriteString("---\n")
 
