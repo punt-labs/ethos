@@ -58,7 +58,9 @@ const (
 //  10. evaluator.pinned_at is parseable as RFC3339
 //  11. write_set is non-empty AND every entry: no null byte, no other
 //     control character, no `..` segment, not absolute (including
-//     Windows drive letters and UNC), not empty after trimming
+//     Windows drive letters and UNC), not empty after trimming.
+//     When an Archetype with AllowEmptyWriteSet is provided via
+//     ValidateWithArchetype, rule 11 permits an empty write_set.
 //  12. budget.rounds is in [1, 10]
 //  13. success_criteria has at least one entry
 //  14. current_round is in [1, budget.rounds] (3.4 round-tracking
@@ -72,6 +74,13 @@ const (
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
 func (c *Contract) Validate() error {
+	return c.ValidateWithArchetype(nil)
+}
+
+// ValidateWithArchetype runs the same rules as Validate but adjusts
+// rule 11 (write_set non-empty) based on the archetype. When a is nil,
+// all rules apply unconditionally (backward compatible).
+func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
@@ -151,9 +160,13 @@ func (c *Contract) Validate() error {
 		return fmt.Errorf("invalid evaluator.pinned_at %q: %w", c.Evaluator.PinnedAt, err)
 	}
 
-	// write_set is non-empty and every entry is well-formed
+	// write_set is non-empty and every entry is well-formed.
+	// When the archetype sets AllowEmptyWriteSet, an empty write_set
+	// is accepted (report and inbox archetypes are read-only missions).
 	if len(c.WriteSet) == 0 {
-		return fmt.Errorf("write_set must contain at least one entry")
+		if a == nil || !a.AllowEmptyWriteSet {
+			return fmt.Errorf("write_set must contain at least one entry")
+		}
 	}
 	for i, entry := range c.WriteSet {
 		if err := validateWriteSetEntry(entry); err != nil {
