@@ -5,15 +5,17 @@ described in `docs/testing-strategy.tex`.
 
 ---
 
-## Current State (v3.2.0)
+## Current State (v3.4.0)
 
-- **1,055 tests**, 75.6% total coverage (was 63.5% at v3.0.0 baseline)
+- **1,157 tests**, 77.1% total coverage (was 63.5% at v3.0.0 baseline)
 - **1.54:1 test-to-production code ratio**
 - L1 content validation, L2 CLI subprocess, L3 MCP integration, L4 behavioral: all shipped in v3.1.0
 - CI coverage reporting wired (`-coverprofile`, summary in CI)
 - 8 behavioral scenarios: 4 deterministic (Layer A), 2 LLM-judged (Layer B), 2 adversarial (Layer C)
 - Daily behavioral CI via `.github/workflows/behavioral.yml`
 - v3.2.0 added archetypes (7 types), pipelines (3 templates), archetype validation, 10 lint heuristics
+- v3.3.0 expanded to 8 pipeline templates with nature-based H10 decision tree
+- v3.4.0 added pipeline instantiate, archetype constraint enforcement, inputs.ticket rename, 24 pipeline CLI tests, PostToolUse exit code fix
 
 ---
 
@@ -174,6 +176,10 @@ Added `-coverprofile=coverage.out` to `make test` and CI summary reporting. Cove
 **v3.1.0** (April 12, 2026) shipped L1 through L4 of the test pyramid plus RunE refactor, ext bug fix, mission features (lint, walked-diff, PreToolUse allowlist), and verifier read policy. Coverage went from 63.5% to 75.6%.
 
 **v3.2.0** (April 12, 2026) shipped archetypes (7 types), pipelines (3 sprint templates), the `Type` field on mission contracts, archetype validation, and 10 lint heuristics. No new test levels; test infrastructure stabilized.
+
+**v3.3.0** (April 13, 2026) expanded pipelines from 3 to 8 templates with a nature-based H10 decision tree for template selection. No new test levels.
+
+**v3.4.0** (April 14, 2026) shipped pipeline instantiate, archetype constraint enforcement (allow_empty_write_set, write_set_constraints, required_fields), inputs.bead to inputs.ticket rename with back-compat, 8 built-in pipeline templates with {feature}/{target} defaults, PostToolUse exit code propagation, and 24 pipeline CLI tests. Coverage went from 75.6% to 77.1%.
 
 L5 sprint integration tests remain the sole unimplemented phase. They depend on the pipeline execution primitive (`ethos mission pipeline create <template>`) which is not yet implemented.
 
