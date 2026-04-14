@@ -30,11 +30,11 @@ type Contract struct {
 	Repo      string `yaml:"repo,omitempty" json:"repo,omitempty"`
 
 	// Ticket ID lives at inputs.ticket — the single source of truth.
-	// An earlier draft carried both a top-level Bead and Inputs.Bead,
-	// but the duplication made divergence trivial and silent. 3.1
-	// removed the top-level field. 3.4 renamed Bead → Ticket for
-	// tracker-agnostic language; inputs.bead is accepted as a
-	// deprecated alias during YAML/JSON decode.
+	// An earlier draft carried both a top-level Bead and Inputs.Ticket
+	// (then called Bead), but the duplication made divergence trivial
+	// and silent. 3.1 removed the top-level field. 3.4 renamed
+	// Bead → Ticket for tracker-agnostic language; inputs.bead is
+	// accepted as a deprecated alias during YAML/JSON decode.
 
 	Leader    string    `yaml:"leader" json:"leader"`
 	Worker    string    `yaml:"worker" json:"worker"`

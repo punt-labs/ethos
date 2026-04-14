@@ -11,6 +11,7 @@ import (
 // UnmarshalYAML accepts both "ticket" (canonical) and "bead"
 // (deprecated alias). Setting both is an error.
 func (in *Inputs) UnmarshalYAML(node *yaml.Node) error {
+	*in = Inputs{} // reset for defensive re-decode safety
 	var raw struct {
 		Ticket     string   `yaml:"ticket,omitempty"`
 		Bead       string   `yaml:"bead,omitempty"`
@@ -39,6 +40,7 @@ func (in *Inputs) UnmarshalYAML(node *yaml.Node) error {
 // UnmarshalJSON accepts both "ticket" (canonical) and "bead"
 // (deprecated alias). Setting both is an error.
 func (in *Inputs) UnmarshalJSON(data []byte) error {
+	*in = Inputs{} // reset for defensive re-decode safety
 	var raw struct {
 		Ticket     string   `json:"ticket,omitempty"`
 		Bead       string   `json:"bead,omitempty"`

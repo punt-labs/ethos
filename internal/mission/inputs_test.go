@@ -21,14 +21,19 @@ func TestInputs_YAML_Ticket(t *testing.T) {
 
 func TestInputs_YAML_Bead_BackCompat(t *testing.T) {
 	data := []byte("bead: ethos-42\n")
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	old := os.Stderr
-	r, w, _ := os.Pipe()
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = old
+		_ = r.Close()
+	})
 	var in Inputs
 	require.NoError(t, yaml.Unmarshal(data, &in))
-	w.Close()
-	os.Stderr = old
-	captured, _ := io.ReadAll(r)
+	require.NoError(t, w.Close())
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
 	assert.Equal(t, "ethos-42", in.Ticket)
 	assert.Contains(t, string(captured), "deprecation warning")
 	assert.Contains(t, string(captured), "inputs.bead")
@@ -60,14 +65,19 @@ func TestInputs_JSON_Ticket(t *testing.T) {
 
 func TestInputs_JSON_Bead_BackCompat(t *testing.T) {
 	data := []byte(`{"bead":"ethos-42"}`)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	old := os.Stderr
-	r, w, _ := os.Pipe()
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = old
+		_ = r.Close()
+	})
 	var in Inputs
 	require.NoError(t, json.Unmarshal(data, &in))
-	w.Close()
-	os.Stderr = old
-	captured, _ := io.ReadAll(r)
+	require.NoError(t, w.Close())
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
 	assert.Equal(t, "ethos-42", in.Ticket)
 	assert.Contains(t, string(captured), "deprecation warning")
 }
@@ -141,14 +151,19 @@ budget:
   reflection_after_each: true
 current_round: 1
 `)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	old := os.Stderr
-	r, w, _ := os.Pipe()
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = old
+		_ = r.Close()
+	})
 	var c Contract
 	require.NoError(t, yaml.Unmarshal(data, &c))
-	w.Close()
-	os.Stderr = old
-	captured, _ := io.ReadAll(r)
+	require.NoError(t, w.Close())
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
 	assert.Equal(t, "ethos-old", c.Inputs.Ticket)
 	assert.Contains(t, string(captured), "deprecation warning")
 }
@@ -161,14 +176,19 @@ current_round: 1
 
 func TestInputs_YAML_EmptyTicketWithBead_PromotesBead(t *testing.T) {
 	data := []byte("ticket: \"\"\nbead: ethos-123\n")
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	old := os.Stderr
-	r, w, _ := os.Pipe()
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = old
+		_ = r.Close()
+	})
 	var in Inputs
 	require.NoError(t, yaml.Unmarshal(data, &in))
-	w.Close()
-	os.Stderr = old
-	captured, _ := io.ReadAll(r)
+	require.NoError(t, w.Close())
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
 	assert.Equal(t, "ethos-123", in.Ticket)
 	assert.Contains(t, string(captured), "deprecation warning")
 	assert.Contains(t, string(captured), "inputs.bead")
@@ -176,14 +196,19 @@ func TestInputs_YAML_EmptyTicketWithBead_PromotesBead(t *testing.T) {
 
 func TestInputs_JSON_EmptyTicketWithBead_PromotesBead(t *testing.T) {
 	data := []byte(`{"ticket":"","bead":"ethos-123"}`)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	old := os.Stderr
-	r, w, _ := os.Pipe()
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = old
+		_ = r.Close()
+	})
 	var in Inputs
 	require.NoError(t, json.Unmarshal(data, &in))
-	w.Close()
-	os.Stderr = old
-	captured, _ := io.ReadAll(r)
+	require.NoError(t, w.Close())
+	captured, err := io.ReadAll(r)
+	require.NoError(t, err)
 	assert.Equal(t, "ethos-123", in.Ticket)
 	assert.Contains(t, string(captured), "deprecation warning")
 	assert.Contains(t, string(captured), "inputs.bead")
@@ -216,13 +241,18 @@ budget:
   reflection_after_each: true
 current_round: 1
 `)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
 	old := os.Stderr
-	r, w, _ := os.Pipe()
 	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = old
+		_ = r.Close()
+	})
 	c, err := DecodeContractStrict(data, "test")
-	w.Close()
-	os.Stderr = old
-	captured, _ := io.ReadAll(r)
+	require.NoError(t, w.Close())
+	captured, readErr := io.ReadAll(r)
+	require.NoError(t, readErr)
 	require.NoError(t, err)
 	assert.Equal(t, "ethos-strict", c.Inputs.Ticket)
 	assert.Contains(t, string(captured), "deprecation warning")
