@@ -32,8 +32,9 @@ make check                              # All quality gates (vet, staticcheck, s
 ./ethos session                         # Show current session participants
 ./ethos session purge                   # Clean up stale sessions
 ./ethos mission lint <contract.yaml>    # Advisory pre-delegation linter
-./ethos mission pipeline list           # List available sprint templates
+./ethos mission pipeline list           # List available pipeline templates
 ./ethos mission pipeline show <name>    # Show pipeline stages and defaults
+./ethos mission pipeline instantiate <name> --var key=value  # Create N missions from a pipeline template
 ```
 
 Use `.tmp/` for scratch files — `TMPDIR` is set via `.envrc` so subprocesses use it automatically.
