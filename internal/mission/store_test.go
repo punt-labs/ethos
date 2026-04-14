@@ -3523,3 +3523,36 @@ func TestStore_CreateEnforcesArchetypeConstraints(t *testing.T) {
 		})
 	}
 }
+
+// TestStore_ReportArchetypeRoundTrip verifies that a report-archetype
+// contract with empty write_set survives create → load → update → close.
+// Before the fix, Load/Update/Close called Validate() which delegated to
+// ValidateWithArchetype(nil), enforcing rule 11 unconditionally and
+// rejecting the empty write_set that Create had accepted.
+func TestStore_ReportArchetypeRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	writeArchetypeFile(t, root, "report", reportYAML)
+	writeArchetypeFile(t, root, "implement", implementYAML)
+	as := NewArchetypeStore("", root)
+	s := NewStore(root).WithArchetypeStore(as)
+
+	c := newContract("m-2026-04-07-701")
+	c.Type = "report"
+	c.WriteSet = nil
+	require.NoError(t, s.Create(c), "Create should accept report with empty write_set")
+
+	// Load
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err, "Load should accept report with empty write_set")
+	assert.Equal(t, "report", loaded.Type)
+	assert.Empty(t, loaded.WriteSet)
+
+	// Update
+	loaded.Context = "updated context"
+	require.NoError(t, s.Update(loaded), "Update should accept report with empty write_set")
+
+	// Close requires a result artifact.
+	submitRoundResult(t, s, loaded, "pass")
+	_, err = s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err, "Close should accept report with empty write_set")
+}

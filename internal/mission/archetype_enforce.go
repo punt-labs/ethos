@@ -44,7 +44,11 @@ func enforceWriteSetConstraints(c *Contract, a *Archetype) error {
 		if strings.HasSuffix(entry, "/") {
 			continue // directory envelope — not subject to file-pattern constraints
 		}
-		if !matchesAnyConstraint(entry, a.WriteSetConstraints) {
+		ok, err := matchesAnyConstraint(entry, a.WriteSetConstraints)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			return fmt.Errorf("write_set entry %q does not match any constraint: %v",
 				entry, a.WriteSetConstraints)
 		}
@@ -53,23 +57,28 @@ func enforceWriteSetConstraints(c *Contract, a *Archetype) error {
 }
 
 // matchesAnyConstraint reports whether entry matches at least one of the
-// constraint patterns.
-func matchesAnyConstraint(entry string, constraints []string) bool {
+// constraint patterns. Returns an error if any pattern is malformed so
+// archetype configuration bugs surface immediately.
+func matchesAnyConstraint(entry string, constraints []string) (bool, error) {
 	base := filepath.Base(entry)
 	for _, pattern := range constraints {
 		// Strategy 1: glob match against the base name.
-		if ok, err := filepath.Match(pattern, base); err == nil && ok {
-			return true
+		ok, err := filepath.Match(pattern, base)
+		if err != nil {
+			return false, fmt.Errorf("invalid constraint pattern %q: %w", pattern, err)
+		}
+		if ok {
+			return true, nil
 		}
 		// Strategy 2: "dir/**" prefix match against the full path.
 		if strings.HasSuffix(pattern, "/**") {
 			prefix := strings.TrimSuffix(pattern, "/**")
 			if entry == prefix || strings.HasPrefix(entry, prefix+"/") {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 // enforceRequiredFields checks that every field named in

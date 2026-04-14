@@ -66,6 +66,12 @@ func TestEnforceWriteSetConstraints(t *testing.T) {
 			constraints: []string{"*_test.go"},
 			wantErr:     `write_set entry "store.go" does not match any constraint`,
 		},
+		{
+			name:        "malformed pattern surfaces error",
+			writeSet:    []string{"store.go"},
+			constraints: []string{"[invalid"},
+			wantErr:     `invalid constraint pattern "[invalid"`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
