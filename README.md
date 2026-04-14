@@ -159,8 +159,8 @@ markdown cannot represent it). Coexistence rather than competition.
 
 ## Status
 
-v3.3.0 — all five planned phases shipped. 20+ KLOC production Go,
-27+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
+v3.4.0 — all five planned phases shipped. 21+ KLOC production Go,
+34+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
 write-set admission, frozen evaluators, bounded rounds, audit logs,
 archetypes, and pipelines are in daily use by Punt Labs.
 
