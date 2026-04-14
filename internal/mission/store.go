@@ -256,13 +256,21 @@ func (s *Store) Create(c *Contract) error {
 	if staged.Type == "" {
 		staged.Type = "implement"
 	}
-	// Validate Type against discovered archetypes when wired.
-	if s.archetypes != nil && !s.archetypes.Exists(staged.Type) {
-		available, _ := s.archetypes.List()
-		return fmt.Errorf(
-			"unknown mission type %q; available archetypes: %s",
-			staged.Type, strings.Join(available, ", "),
-		)
+	// Validate Type against discovered archetypes and enforce constraints.
+	var arch *Archetype
+	if s.archetypes != nil {
+		if !s.archetypes.Exists(staged.Type) {
+			available, _ := s.archetypes.List()
+			return fmt.Errorf(
+				"unknown mission type %q; available archetypes: %s",
+				staged.Type, strings.Join(available, ", "),
+			)
+		}
+		a, err := s.archetypes.Load(staged.Type)
+		if err != nil {
+			return fmt.Errorf("loading archetype %q: %w", staged.Type, err)
+		}
+		arch = a
 	}
 	// 3.4: a freshly created mission begins at round 1. The caller
 	// may leave CurrentRound at its zero value; Validate would
@@ -274,8 +282,15 @@ func (s *Store) Create(c *Contract) error {
 	if staged.CurrentRound == 0 {
 		staged.CurrentRound = 1
 	}
-	if err := staged.Validate(); err != nil {
+	if err := staged.ValidateWithArchetype(arch); err != nil {
 		return fmt.Errorf("invalid contract: %w", err)
+	}
+	// Enforce archetype constraints beyond base validation: write_set
+	// glob patterns and required fields.
+	if arch != nil {
+		if err := enforceArchetypeConstraints(&staged, arch); err != nil {
+			return fmt.Errorf("archetype %q constraint: %w", staged.Type, err)
+		}
 	}
 
 	// Phase 3.5: worker-verifier role distinction.
