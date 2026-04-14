@@ -4,12 +4,21 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
+
+// resetBeadDeprecation resets the once guard so each test can observe
+// the warning independently. Must be called before any test that
+// expects the deprecation message.
+func resetBeadDeprecation() {
+	beadDeprecationOnce = sync.Once{}
+}
 
 // captureStderr runs fn with os.Stderr redirected to a pipe and returns
 // the captured output. Restores os.Stderr before returning in all cases.
@@ -39,6 +48,7 @@ func TestInputs_YAML_Ticket(t *testing.T) {
 }
 
 func TestInputs_YAML_Bead_BackCompat(t *testing.T) {
+	resetBeadDeprecation()
 	data := []byte("bead: ethos-42\n")
 	var in Inputs
 	captured := captureStderr(t, func() {
@@ -74,6 +84,7 @@ func TestInputs_JSON_Ticket(t *testing.T) {
 }
 
 func TestInputs_JSON_Bead_BackCompat(t *testing.T) {
+	resetBeadDeprecation()
 	data := []byte(`{"bead":"ethos-42"}`)
 	var in Inputs
 	captured := captureStderr(t, func() {
@@ -129,6 +140,7 @@ func TestInputs_YAML_RoundTrip_ViaContract(t *testing.T) {
 // TestInputs_YAML_OldContract_BeadKey verifies that an old contract
 // YAML file with "bead:" key loads into Ticket.
 func TestInputs_YAML_OldContract_BeadKey(t *testing.T) {
+	resetBeadDeprecation()
 	data := []byte(`
 mission_id: m-test-002
 status: open
@@ -167,6 +179,7 @@ current_round: 1
 // a future refactor doesn't silently break it.
 
 func TestInputs_YAML_EmptyTicketWithBead_PromotesBead(t *testing.T) {
+	resetBeadDeprecation()
 	data := []byte("ticket: \"\"\nbead: ethos-123\n")
 	var in Inputs
 	captured := captureStderr(t, func() {
@@ -178,6 +191,7 @@ func TestInputs_YAML_EmptyTicketWithBead_PromotesBead(t *testing.T) {
 }
 
 func TestInputs_JSON_EmptyTicketWithBead_PromotesBead(t *testing.T) {
+	resetBeadDeprecation()
 	data := []byte(`{"ticket":"","bead":"ethos-123"}`)
 	var in Inputs
 	captured := captureStderr(t, func() {
@@ -192,6 +206,7 @@ func TestInputs_JSON_EmptyTicketWithBead_PromotesBead(t *testing.T) {
 // (which uses KnownFields=true) still accepts old "bead:" contracts
 // because the custom UnmarshalYAML handles the field internally.
 func TestInputs_StrictDecoder_AcceptsBead(t *testing.T) {
+	resetBeadDeprecation()
 	data := []byte(`
 mission_id: m-test-003
 status: open
@@ -297,4 +312,20 @@ func TestInputs_JSON_AllKnownFields(t *testing.T) {
 	assert.Equal(t, "ethos-42", in.Ticket)
 	assert.Equal(t, []string{"a.go"}, in.Files)
 	assert.Equal(t, []string{"ref.md"}, in.References)
+}
+
+// TestInputs_BeadDeprecation_EmitsOnce verifies that decoding multiple
+// missions with inputs.bead emits the deprecation warning exactly once.
+func TestInputs_BeadDeprecation_EmitsOnce(t *testing.T) {
+	resetBeadDeprecation()
+	captured := captureStderr(t, func() {
+		for _, v := range []string{"ethos-1", "ethos-2", "ethos-3"} {
+			var in Inputs
+			data := []byte("bead: " + v + "\n")
+			require.NoError(t, yaml.Unmarshal(data, &in))
+			assert.Equal(t, v, in.Ticket)
+		}
+	})
+	n := strings.Count(captured, "deprecation warning")
+	assert.Equal(t, 1, n, "expected exactly 1 deprecation warning, got %d in:\n%s", n, captured)
 }
