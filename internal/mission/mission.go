@@ -29,11 +29,12 @@ type Contract struct {
 	Session   string `yaml:"session,omitempty" json:"session,omitempty"`
 	Repo      string `yaml:"repo,omitempty" json:"repo,omitempty"`
 
-	// Bead ID lives at inputs.bead — the single source of truth.
-	// An earlier draft carried both a top-level Bead and Inputs.Bead,
-	// but the duplication made divergence trivial and silent. 3.1
-	// removes the top-level field; callers should populate Inputs.Bead
-	// and consumers should read it from there.
+	// Ticket ID lives at inputs.ticket — the single source of truth.
+	// An earlier draft carried both a top-level Bead and Inputs.Ticket
+	// (then called Bead), but the duplication made divergence trivial
+	// and silent. 3.1 removed the top-level field. 3.4 renamed
+	// Bead → Ticket for tracker-agnostic language; inputs.bead is
+	// accepted as a deprecated alias during YAML/JSON decode.
 
 	Leader    string    `yaml:"leader" json:"leader"`
 	Worker    string    `yaml:"worker" json:"worker"`
@@ -99,8 +100,12 @@ type Evaluator struct {
 
 // Inputs are what the worker reads from. Files are paths the worker
 // MUST read; references are supporting docs the worker MAY consult.
+//
+// Custom UnmarshalYAML/UnmarshalJSON accept both "ticket" (canonical)
+// and "bead" (deprecated alias). Setting both is an error. Marshal
+// emits "ticket" only.
 type Inputs struct {
-	Bead       string   `yaml:"bead,omitempty" json:"bead,omitempty"`
+	Ticket     string   `yaml:"ticket,omitempty" json:"ticket,omitempty"`
 	Files      []string `yaml:"files,omitempty" json:"files,omitempty"`
 	References []string `yaml:"references,omitempty" json:"references,omitempty"`
 }

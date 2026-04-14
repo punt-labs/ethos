@@ -355,7 +355,7 @@ design — the implementer, not another writer.
 - Does not evaluate results. The leader decides pass, continue,
   fail, or escalate.
 - Does not create or update beads. Bead integration is via
-  `inputs.bead` only.
+  `inputs.ticket` only.
 
 ## Reference
 

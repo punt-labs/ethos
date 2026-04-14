@@ -793,10 +793,14 @@ func summarizeEventDetailsRaw(evType string, details map[string]any) string {
 	}
 	switch evType {
 	case "create":
+		ticketVal := eventStr(details, "ticket")
+		if ticketVal == "" {
+			ticketVal = eventStr(details, "bead") // backward-compat
+		}
 		return joinEventParts(
 			eventKV("worker", eventStr(details, "worker")),
 			eventKV("evaluator", eventStr(details, "evaluator")),
-			eventKV("bead", eventStr(details, "bead")),
+			eventKV("ticket", ticketVal),
 		)
 	case "close":
 		return joinEventParts(
@@ -1216,22 +1220,26 @@ func writeMissionFields(ctx *strings.Builder, c map[string]any) {
 
 // writeMissionInputs renders the Inputs section for writeMissionFields,
 // matching the CLI's printContract layout: labeled lines under an
-// "Inputs:" header (bead, file, ref). Empty or missing inputs emit
-// nothing.
+// "Inputs:" header (ticket, file, ref). Accepts both "ticket" and
+// legacy "bead" keys for backward compatibility with old event logs.
+// Empty or missing inputs emit nothing.
 func writeMissionInputs(ctx *strings.Builder, raw any) {
 	inputs, ok := raw.(map[string]any)
 	if !ok {
 		return
 	}
-	bead, _ := inputs["bead"].(string)
+	ticket, _ := inputs["ticket"].(string)
+	if ticket == "" {
+		ticket, _ = inputs["bead"].(string) // backward-compat
+	}
 	files, _ := inputs["files"].([]any)
 	refs, _ := inputs["references"].([]any)
-	if bead == "" && len(files) == 0 && len(refs) == 0 {
+	if ticket == "" && len(files) == 0 && len(refs) == 0 {
 		return
 	}
 	ctx.WriteString("\n\nInputs:")
-	if bead != "" {
-		ctx.WriteString("\n  bead: " + bead)
+	if ticket != "" {
+		ctx.WriteString("\n  ticket: " + ticket)
 	}
 	for _, f := range files {
 		if s, ok := f.(string); ok {

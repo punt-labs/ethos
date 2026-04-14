@@ -165,12 +165,10 @@ Field reference:
 Rules:
 
 - The filename without `.yaml` is the archetype name.
-- Required fields use dotted paths: `inputs.files`, `inputs.bead`,
-  `context`, `success_criteria`. The `inputs.bead` field accepts any
-  issue-tracker ticket ID (named `bead` for historical reasons — ethos
-  originated alongside the [beads](https://github.com/punt-labs/beads)
-  issue tracker, but any tracker ID works: Linear, Jira, GitHub issues,
-  etc.).
+- Required fields use dotted paths: `inputs.files`, `inputs.ticket`,
+  `context`, `success_criteria`. The `inputs.ticket` field accepts any
+  issue-tracker ticket ID (Linear, Jira, GitHub issues, beads, etc.).
+  The older name `inputs.bead` is accepted as a deprecated alias.
 - Write-set constraints use `filepath.Match` glob syntax. Entries must
   match at least one pattern.
 - Archetypes are extensible without modifying ethos — add a YAML file

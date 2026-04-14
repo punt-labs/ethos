@@ -96,7 +96,7 @@ For a real mission — issue ticket claim to merged PR in 12m55s, with
 every command and output — see [docs/example/](docs/example/). The
 walkthrough uses [beads](https://github.com/punt-labs/beads) as the
 issue tracker, but ethos accepts any tracker ID (Linear, Jira, GitHub
-issues, etc.) via the `inputs.bead` contract field.
+issues, etc.) via the `inputs.ticket` contract field.
 
 ## Scale up as you need
 

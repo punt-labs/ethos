@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Contract field `inputs.bead` renamed to `inputs.ticket`** for
+  tracker-agnostic language. `inputs.bead` is accepted as a deprecated
+  alias during the transition -- loading an old contract with `bead:`
+  logs a deprecation warning to stderr and populates `ticket`. Setting
+  both `ticket:` and `bead:` in the same contract is rejected. Event
+  logs written going forward use `ticket`; old event-log entries with
+  `bead` keys still render correctly.
 - **README** -- rewritten for approachability. Three-gap intro (identity,
   delegation, integration), shorter quick start, linked guides for team
   setup and archetypes/pipelines.

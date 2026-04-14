@@ -395,7 +395,7 @@ func validVerifierContract(evaluator string) mission.Contract {
 			Handle: evaluator,
 		},
 		Inputs: mission.Inputs{
-			Bead: "ethos-07m.7",
+			Ticket: "ethos-07m.7",
 		},
 		WriteSet:        []string{"internal/test/"},
 		SuccessCriteria: []string{"hash gate is enforced"},

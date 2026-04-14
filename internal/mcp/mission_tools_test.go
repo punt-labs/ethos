@@ -861,7 +861,7 @@ func TestHandleMission_CreateMatchesCLIHashWithRoles(t *testing.T) {
 		Leader:          "claude",
 		Worker:          "bwk",
 		Evaluator:       mission.Evaluator{Handle: "djb"},
-		Inputs:          mission.Inputs{Bead: "ethos-07m.5"},
+		Inputs:          mission.Inputs{Ticket: "ethos-07m.5"},
 		WriteSet:        []string{"tests/parity-cli/"},
 		SuccessCriteria: []string{"make check passes"},
 		Budget:          mission.Budget{Rounds: 3, ReflectionAfterEach: true},

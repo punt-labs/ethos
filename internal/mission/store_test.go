@@ -90,7 +90,7 @@ func TestStore_RoundTrip(t *testing.T) {
 	assert.Equal(t, c.SuccessCriteria, loaded.SuccessCriteria)
 	assert.Equal(t, c.Budget.Rounds, loaded.Budget.Rounds)
 	assert.Equal(t, c.Budget.ReflectionAfterEach, loaded.Budget.ReflectionAfterEach)
-	assert.Equal(t, c.Inputs.Bead, loaded.Inputs.Bead)
+	assert.Equal(t, c.Inputs.Ticket, loaded.Inputs.Ticket)
 	assert.Equal(t, c.Inputs.Files, loaded.Inputs.Files)
 }
 
