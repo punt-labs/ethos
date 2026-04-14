@@ -38,7 +38,7 @@ func (in *Inputs) UnmarshalYAML(node *yaml.Node) error {
 		References []string `yaml:"references,omitempty"`
 	}
 	if err := node.Decode(&raw); err != nil {
-		return err
+		return fmt.Errorf("inputs: %w", err)
 	}
 	return in.applyParsed(raw.Files, raw.Ticket, raw.Bead, raw.References)
 }
