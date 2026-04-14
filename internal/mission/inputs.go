@@ -5,9 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 )
+
+// beadDeprecationOnce ensures the bead→ticket deprecation warning is
+// emitted at most once per process, avoiding N duplicate warnings when
+// Store.checkWriteSetConflicts loads many old missions.
+var beadDeprecationOnce sync.Once
 
 // knownInputKeys is the set of valid field names under "inputs:".
 var knownInputKeys = map[string]bool{
@@ -76,9 +82,10 @@ func (in *Inputs) applyParsed(files []string, ticket, bead string, references []
 		in.Ticket = ticket
 	} else if bead != "" {
 		in.Ticket = bead
-		fmt.Fprintf(os.Stderr,
-			"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket' (value %q carried forward)\n",
-			bead)
+		beadDeprecationOnce.Do(func() {
+			fmt.Fprintf(os.Stderr,
+				"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket' (first seen value: %q)\n", bead)
+		})
 	}
 	return nil
 }
