@@ -269,9 +269,9 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// Pin cwd to the project root via $CLAUDE_PROJECT_DIR (exposed
 		// by Claude Code to hook commands) so `make check` resolves
 		// against the repo Makefile even if the sub-agent has cd'd into
-		// a subdirectory before the Write or Edit tool fires. The
-		// subshell keeps the cd from leaking to the outer shell, and
-		// the quoted expansion handles paths with spaces. `head -n 60`
+		// a subdirectory before the Write or Edit tool fires. The cd
+		// runs inside $() which is already a subshell, so it does not
+		// leak to the outer shell. `head -n 60`
 		// (not `tail -20`) catches the FIRST failure. `make check` is
 		// a sequence of quiet-on-success stages — go vet, staticcheck,
 		// shellcheck, markdownlint, then non-verbose
@@ -292,7 +292,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// which is dash on Debian/Ubuntu): no `set -o pipefail`, no
 		// process substitution. Variable capture, printf, and
 		// `head -n 60` all work in dash.
-		b.WriteString("          command: \"_out=$((cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check) 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n")
+		b.WriteString("          command: \"_out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n")
 	}
 	b.WriteString("---\n")
 
