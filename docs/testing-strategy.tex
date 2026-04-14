@@ -40,7 +40,7 @@
 
 \title{Ethos: Testing Strategy}
 \author{Test Pyramid, Coverage Model, and Behavioral Verification}
-\date{April 2026 --- v3.2.0}
+\date{April 2026 --- v3.5.0}
 \hypersetup{
   pdftitle={Ethos: Testing Strategy},
   pdfauthor={Punt Labs},
@@ -570,14 +570,15 @@ Gaps identified at v3.0.0 (all resolved by v3.1.0):
     submodule.
 \end{itemize}
 
-\subsection{Current State (v3.2.0)}
+\subsection{Current State (v3.5.0)}
 
-As of v3.2.0, the test pyramid through L4 is fully implemented:
+As of v3.5.0, the test pyramid through L4 is fully implemented:
 
 \begin{itemize}
-  \item \textbf{1,055 tests}, 75.6\% total coverage (up from 63.5\%
-    at v3.0.0).
-  \item \textbf{1.54:1 test-to-production code ratio.}
+  \item \textbf{2,058 tests} across 14 packages, 89.8\% mission
+    package coverage.
+  \item \textbf{22.4 KLOC production Go, 35.8 KLOC test Go} (1.60:1
+    test-to-production ratio).
   \item L1 content validation, L2 CLI subprocess, L3 MCP integration,
     and L4 behavioral tests all shipped in v3.1.0.
   \item 8 behavioral scenarios: 4 deterministic (Layer~A), 2
@@ -592,8 +593,14 @@ As of v3.2.0, the test pyramid through L4 is fully implemented:
 
 L5 sprint integration tests remain planned.  v3.2.0 added archetypes
 (7 types), pipelines (3 sprint templates), archetype validation, and
-10 lint heuristics --- no new test levels, but the pipeline primitive
-is prerequisite infrastructure for L5.
+10 lint heuristics.  v3.3.0 expanded to 8 pipeline templates with a
+nature-based H10 decision tree.  v3.4.0 added pipeline instantiate,
+archetype constraint enforcement, and 24 pipeline CLI tests.  v3.5.0
+added automatic mission traceability (TraceSummary,
+appendTraceSummary, flock-based writes), deprecation warning
+deduplication via \texttt{sync.Once}, and an integration test for the
+Close-to-JSONL path.  No new test levels since v3.1.0, but test count
+grew from 1,055 to 2,058 through feature-level test coverage.
 
 \subsection{Coverage Gate Policy}
 

@@ -412,6 +412,17 @@ Rules:
 
 Design reference: [mission-pipelines.md](mission-pipelines.md).
 
+## Traceability
+
+When a mission closes, `Store.Close` auto-appends a one-line JSON
+summary to `<repo>/.ethos/missions.jsonl`. This file is
+commit-ready — add it to your PR and the mission history is part of
+the repo's permanent record. No manual bookkeeping required.
+
+The summary includes mission ID, status, worker, archetype, pipeline
+ID (if any), round count, and timestamps. See DES-050 in
+[DESIGN.md](../DESIGN.md) for the schema.
+
 ## When to use what
 
 | Situation | Approach |
