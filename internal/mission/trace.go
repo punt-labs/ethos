@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 )
 
 // TraceSummary is one JSONL line appended to <repoRoot>/.ethos/missions.jsonl
@@ -29,6 +30,8 @@ type TraceSummary struct {
 	Verdict         string   `json:"verdict"`
 	FilesChanged    []string `json:"files_changed"`
 	Pipeline        string   `json:"pipeline,omitempty"`
+	Session         string   `json:"session,omitempty"`
+	Repo            string   `json:"repo,omitempty"`
 }
 
 // buildTraceSummary maps a closed contract and its satisfying result
@@ -55,6 +58,8 @@ func buildTraceSummary(c *Contract, result *Result) TraceSummary {
 		Verdict:         result.Verdict,
 		FilesChanged:    files,
 		Pipeline:        c.Pipeline,
+		Session:         c.Session,
+		Repo:            c.Repo,
 	}
 }
 
@@ -76,6 +81,24 @@ func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 		return err
 	}
 	data = append(data, '\n')
+
+	// Acquire an exclusive flock to serialize concurrent trace writes.
+	// The lock file is independent of the per-mission flock (which has
+	// already been released by the time appendTraceSummary runs).
+	lockFile, err := os.OpenFile(
+		filepath.Join(dir, ".trace.lock"),
+		os.O_CREATE|os.O_RDWR,
+		0o600,
+	)
+	if err != nil {
+		return err
+	}
+	defer lockFile.Close()
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+
 	f, err := os.OpenFile(
 		filepath.Join(dir, "missions.jsonl"),
 		os.O_APPEND|os.O_CREATE|os.O_WRONLY,

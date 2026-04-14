@@ -26,6 +26,8 @@ func TestBuildTraceSummary(t *testing.T) {
 		CurrentRound:    1,
 		Budget:          Budget{Rounds: 2},
 		Pipeline:        "pipe-1",
+		Session:         "sess-001",
+		Repo:            "punt-labs/ethos",
 	}
 	r := &Result{
 		Verdict: VerdictPass,
@@ -54,6 +56,8 @@ func TestBuildTraceSummary(t *testing.T) {
 		{"RoundsBudgeted", ts.RoundsBudgeted, 2},
 		{"Verdict", ts.Verdict, "pass"},
 		{"Pipeline", ts.Pipeline, "pipe-1"},
+		{"Session", ts.Session, "sess-001"},
+		{"Repo", ts.Repo, "punt-labs/ethos"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
