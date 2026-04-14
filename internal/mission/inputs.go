@@ -84,7 +84,7 @@ func (in *Inputs) applyParsed(files []string, ticket, bead string, references []
 		in.Ticket = bead
 		beadDeprecationOnce.Do(func() {
 			fmt.Fprintf(os.Stderr,
-				"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket'\n")
+				"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket' (first seen value: %q)\n", bead)
 		})
 	}
 	return nil
