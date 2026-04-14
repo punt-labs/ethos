@@ -3222,6 +3222,7 @@ func TestStore_CreateValidatesTypeAgainstArchetypes(t *testing.T) {
 		name    string
 		typ     string // contract Type; "" means caller omits it
 		setup   func(t *testing.T, dir string)
+		mutate  func(c *Contract)
 		wantErr string // substring; "" means no error
 	}{
 		{
@@ -3230,6 +3231,12 @@ func TestStore_CreateValidatesTypeAgainstArchetypes(t *testing.T) {
 			setup: func(t *testing.T, dir string) {
 				writeArchetypeFile(t, dir, "design", designYAML)
 				writeArchetypeFile(t, dir, "implement", implementYAML)
+			},
+			mutate: func(c *Contract) {
+				// design archetype requires context and constrains
+				// write_set to *.md and docs/**.
+				c.WriteSet = []string{"docs/design.md"}
+				c.Context = "Design the feature"
 			},
 		},
 		{
@@ -3275,6 +3282,9 @@ func TestStore_CreateValidatesTypeAgainstArchetypes(t *testing.T) {
 
 			c := newContract("m-2026-04-07-501")
 			c.Type = tc.typ
+			if tc.mutate != nil {
+				tc.mutate(c)
+			}
 			err := s.Create(c)
 
 			if tc.wantErr != "" {
@@ -3301,4 +3311,248 @@ func TestStore_CreateEmptyTypeDefaultsWhenNoArchetypeStore(t *testing.T) {
 	c.Type = ""
 	require.NoError(t, s.Create(c))
 	assert.Equal(t, "implement", c.Type)
+}
+
+// --- archetype constraint enforcement (end-to-end via Store.Create) ---
+
+const reportYAML = `name: report
+description: "Report mission"
+budget_default:
+  rounds: 1
+  reflection_after_each: true
+allow_empty_write_set: true
+required_fields: []
+write_set_constraints: []
+`
+
+const testArchYAML = `name: test
+description: "Test mission"
+budget_default:
+  rounds: 2
+  reflection_after_each: true
+allow_empty_write_set: false
+required_fields: []
+write_set_constraints:
+  - "*_test.go"
+  - "testdata/**"
+  - "docs/**"
+  - "*.md"
+`
+
+const reviewYAML = `name: review
+description: "Review mission"
+budget_default:
+  rounds: 1
+  reflection_after_each: true
+allow_empty_write_set: false
+required_fields:
+  - inputs.files
+write_set_constraints:
+  - "*.md"
+  - "*.yaml"
+  - ".tmp/**"
+`
+
+func TestStore_CreateEnforcesArchetypeConstraints(t *testing.T) {
+	tests := []struct {
+		name    string
+		typ     string
+		setup   func(t *testing.T, dir string)
+		mutate  func(c *Contract)
+		wantErr string
+	}{
+		{
+			name: "report archetype allows empty write_set",
+			typ:  "report",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "report", reportYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = nil
+			},
+		},
+		{
+			name: "inbox archetype allows empty write_set",
+			typ:  "inbox",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "inbox", inboxYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = nil
+			},
+		},
+		{
+			name: "implement archetype rejects empty write_set",
+			typ:  "implement",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "implement", implementYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = nil
+			},
+			wantErr: "write_set must contain at least one entry",
+		},
+		{
+			name: "test archetype accepts test files",
+			typ:  "test",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "test", testArchYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/store_test.go"}
+			},
+		},
+		{
+			name: "test archetype accepts directory envelopes",
+			typ:  "test",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "test", testArchYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/"}
+			},
+		},
+		{
+			name: "test archetype accepts testdata/** entries",
+			typ:  "test",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "test", testArchYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"testdata/golden/output.txt"}
+			},
+		},
+		{
+			name: "test archetype accepts docs/** entries",
+			typ:  "test",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "test", testArchYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/testing.md"}
+			},
+		},
+		{
+			name: "test archetype accepts .md files",
+			typ:  "test",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "test", testArchYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"CHANGELOG.md"}
+			},
+		},
+		{
+			name: "test archetype rejects non-test Go file",
+			typ:  "test",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "test", testArchYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"internal/mission/store.go"}
+			},
+			wantErr: `write_set entry "internal/mission/store.go" does not match any constraint`,
+		},
+		{
+			name: "design archetype rejects empty context",
+			typ:  "design",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "design", designYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/design.md"}
+				c.Context = ""
+			},
+			wantErr: `required field "context" is empty`,
+		},
+		{
+			name: "design archetype accepts non-empty context",
+			typ:  "design",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "design", designYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"docs/design.md"}
+				c.Context = "Design the new feature"
+			},
+		},
+		{
+			name: "review archetype rejects empty inputs.files",
+			typ:  "review",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "review", reviewYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"findings.md"}
+				c.Inputs.Files = nil
+			},
+			wantErr: `required field "inputs.files" is empty`,
+		},
+		{
+			name: "review archetype accepts non-empty inputs.files",
+			typ:  "review",
+			setup: func(t *testing.T, dir string) {
+				writeArchetypeFile(t, dir, "review", reviewYAML)
+			},
+			mutate: func(c *Contract) {
+				c.WriteSet = []string{"findings.md"}
+				c.Inputs.Files = []string{"internal/mission/store.go"}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			tc.setup(t, root)
+			as := NewArchetypeStore("", root)
+			s := NewStore(root).WithArchetypeStore(as)
+
+			c := newContract("m-2026-04-07-601")
+			c.Type = tc.typ
+			if tc.mutate != nil {
+				tc.mutate(c)
+			}
+			err := s.Create(c)
+
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestStore_ReportArchetypeRoundTrip verifies that a report-archetype
+// contract with empty write_set survives create → load → update → close.
+// Before the fix, Load/Update/Close called Validate() which delegated to
+// ValidateWithArchetype(nil), enforcing rule 11 unconditionally and
+// rejecting the empty write_set that Create had accepted.
+func TestStore_ReportArchetypeRoundTrip(t *testing.T) {
+	root := t.TempDir()
+	writeArchetypeFile(t, root, "report", reportYAML)
+	writeArchetypeFile(t, root, "implement", implementYAML)
+	as := NewArchetypeStore("", root)
+	s := NewStore(root).WithArchetypeStore(as)
+
+	c := newContract("m-2026-04-07-701")
+	c.Type = "report"
+	c.WriteSet = nil
+	require.NoError(t, s.Create(c), "Create should accept report with empty write_set")
+
+	// Load
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err, "Load should accept report with empty write_set")
+	assert.Equal(t, "report", loaded.Type)
+	assert.Empty(t, loaded.WriteSet)
+
+	// Update
+	loaded.Context = "updated context"
+	require.NoError(t, s.Update(loaded), "Update should accept report with empty write_set")
+
+	// Close requires a result artifact.
+	submitRoundResult(t, s, loaded, "pass")
+	_, err = s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err, "Close should accept report with empty write_set")
 }

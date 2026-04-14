@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Archetype constraints enforced** -- `allow_empty_write_set` now permits
+  empty write-sets for report/inbox archetypes (was unconditionally rejected).
+  `write_set_constraints` glob patterns now validated against every write-set
+  entry at contract creation. `required_fields` checked at creation time.
 - **PostToolUse hook** propagates `make check` exit code instead of
   masking it behind `head`. POSIX-sh compatible (no pipefail).
 

@@ -82,6 +82,21 @@ func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 // Root returns the store's root directory.
 func (s *Store) Root() string { return s.root }
 
+// validateContract resolves the archetype from the contract's Type
+// (if an archetype store is wired) and runs ValidateWithArchetype.
+// When no archetype store is set, falls back to Validate() (all rules).
+func (s *Store) validateContract(c *Contract) error {
+	if s.archetypes != nil && c.Type != "" {
+		arch, err := s.archetypes.Load(c.Type)
+		if err != nil {
+			// Unknown type — fall back to base validation.
+			return c.Validate()
+		}
+		return c.ValidateWithArchetype(arch)
+	}
+	return c.Validate()
+}
+
 // ContractPath returns the absolute path to a mission contract file
 // on disk. Exposed so the Phase 3.5 verifier context-isolation path
 // can read the contract byte-for-byte before injecting it into the
@@ -256,13 +271,21 @@ func (s *Store) Create(c *Contract) error {
 	if staged.Type == "" {
 		staged.Type = "implement"
 	}
-	// Validate Type against discovered archetypes when wired.
-	if s.archetypes != nil && !s.archetypes.Exists(staged.Type) {
-		available, _ := s.archetypes.List()
-		return fmt.Errorf(
-			"unknown mission type %q; available archetypes: %s",
-			staged.Type, strings.Join(available, ", "),
-		)
+	// Validate Type against discovered archetypes and enforce constraints.
+	var arch *Archetype
+	if s.archetypes != nil {
+		if !s.archetypes.Exists(staged.Type) {
+			available, _ := s.archetypes.List()
+			return fmt.Errorf(
+				"unknown mission type %q; available archetypes: %s",
+				staged.Type, strings.Join(available, ", "),
+			)
+		}
+		a, err := s.archetypes.Load(staged.Type)
+		if err != nil {
+			return fmt.Errorf("loading archetype %q: %w", staged.Type, err)
+		}
+		arch = a
 	}
 	// 3.4: a freshly created mission begins at round 1. The caller
 	// may leave CurrentRound at its zero value; Validate would
@@ -274,8 +297,15 @@ func (s *Store) Create(c *Contract) error {
 	if staged.CurrentRound == 0 {
 		staged.CurrentRound = 1
 	}
-	if err := staged.Validate(); err != nil {
+	if err := staged.ValidateWithArchetype(arch); err != nil {
 		return fmt.Errorf("invalid contract: %w", err)
+	}
+	// Enforce archetype constraints beyond base validation: write_set
+	// glob patterns and required fields.
+	if arch != nil {
+		if err := enforceArchetypeConstraints(&staged, arch); err != nil {
+			return fmt.Errorf("archetype %q constraint: %w", staged.Type, err)
+		}
 	}
 
 	// Phase 3.5: worker-verifier role distinction.
@@ -399,7 +429,7 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 		}
 		return nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
-	c, err := decodeAndValidate(data, missionID)
+	c, err := s.decodeAndValidate(data, missionID)
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +443,12 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 // being silently accepted — a later Close would write the mutated
 // contract to m-....yaml (because writeContract uses c.MissionID),
 // producing a second file and leaving foo.yaml stale.
-func decodeAndValidate(data []byte, missionID string) (*Contract, error) {
+//
+// Validation is archetype-aware: the contract's Type field is resolved
+// against the Store's ArchetypeStore (when wired) so that archetypes
+// permitting empty write_set are honored on the load path, not only
+// on the create path.
+func (s *Store) decodeAndValidate(data []byte, missionID string) (*Contract, error) {
 	c, err := DecodeContractStrict(data, missionID)
 	if err != nil {
 		return nil, err
@@ -434,7 +469,9 @@ func decodeAndValidate(data []byte, missionID string) (*Contract, error) {
 	}
 	// Defense in depth: even on read, run Validate. A corrupt or
 	// hand-edited contract should be flagged before callers act on it.
-	if err := c.Validate(); err != nil {
+	// Uses archetype-aware validation so archetypes permitting empty
+	// write_set (report, inbox) are honored on load, not only on create.
+	if err := s.validateContract(c); err != nil {
 		return nil, fmt.Errorf("contract %q failed validation on load: %w", missionID, err)
 	}
 	// The on-disk filename must match the contract's own mission_id.
@@ -483,7 +520,7 @@ func (s *Store) Update(c *Contract) error {
 		}
 		updated := *c
 		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		if err := updated.Validate(); err != nil {
+		if err := s.validateContract(&updated); err != nil {
 			return fmt.Errorf("invalid contract: %w", err)
 		}
 		if err := s.writeContract(&updated); err != nil {
@@ -570,7 +607,7 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		c.Status = status
 		c.ClosedAt = now
 		c.UpdatedAt = now
-		if err := c.Validate(); err != nil {
+		if err := s.validateContract(c); err != nil {
 			return fmt.Errorf("invalid contract after close: %w", err)
 		}
 		if err := s.writeContract(c); err != nil {
@@ -628,7 +665,7 @@ func (s *Store) loadLocked(missionID string) (*Contract, []byte, error) {
 		}
 		return nil, nil, fmt.Errorf("reading mission %q: %w", missionID, err)
 	}
-	c, err := decodeAndValidate(data, missionID)
+	c, err := s.decodeAndValidate(data, missionID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1133,7 +1170,7 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 		dest := s.contractPath(missionID)
 		c.CurrentRound++
 		c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		if err := c.Validate(); err != nil {
+		if err := s.validateContract(c); err != nil {
 			return fmt.Errorf("invalid contract after advance: %w", err)
 		}
 		if err := s.writeContract(c); err != nil {
