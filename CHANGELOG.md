@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Automatic mission traceability** -- `ethos mission close` now appends
+  a summary JSONL line to `<repo>/.ethos/missions.jsonl`. One line per
+  closed mission with id, timestamps, leader/worker/evaluator, ticket,
+  write_set, success_criteria, rounds, verdict, and files_changed. The
+  file is append-only and git-tracked, so every closed mission appears
+  in the repo's git history. Non-fatal: a trace write failure prints a
+  warning but does not roll back the close.
+
 ## [3.4.0] - 2026-04-14
 
 ### Added
