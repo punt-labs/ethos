@@ -220,6 +220,33 @@ func TestCLI_ResolveAgent(t *testing.T) {
 	assert.Contains(t, stdout, "test-agent")
 }
 
+// TestCLI_MissingActiveBundle verifies that a repo configured with an
+// active_bundle that does not exist produces a fatal error on stderr
+// rather than silently falling back to 2-layer resolution. Users with
+// misconfigured bundles must see a diagnostic.
+func TestCLI_MissingActiveBundle(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+
+	se := setupCLISubprocessEnv(t)
+
+	// Point active_bundle at a name that has no matching directory
+	// in either repo or global scope.
+	cfgData, err := yaml.Marshal(map[string]string{
+		"agent":         "test-agent",
+		"active_bundle": "does-not-exist",
+	})
+	require.NoError(t, err)
+	cfgPath := filepath.Join(se.repo, ".punt-labs", "ethos.yaml")
+	require.NoError(t, os.WriteFile(cfgPath, cfgData, 0o644))
+
+	_, stderr, exitCode := runCLI(t, se, "list")
+	assert.NotEqual(t, 0, exitCode, "CLI must fail when active_bundle is missing")
+	assert.Contains(t, stderr, "bundle resolution failed")
+	assert.Contains(t, stderr, "does-not-exist")
+}
+
 func TestCLI_Doctor(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")

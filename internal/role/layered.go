@@ -1,23 +1,41 @@
 package role
 
-// LayeredStore reads from both repo and global role stores.
-// The repo store is checked first for Load and Exists.
-// List merges results, deduplicating by name (repo wins).
-// Save and Delete operate on the global store.
+import (
+	"errors"
+	"fmt"
+	"os"
+)
+
+// LayeredStore reads from repo-local, bundle, and user-global role stores.
+// Load and Exists check repo first, then bundle, then global. List merges
+// all three, deduplicating by name (repo wins, then bundle, then global).
+// Save and Delete always target the global store.
 type LayeredStore struct {
-	repo   *Store
+	repo   *Store // may be nil when not in a repo
+	bundle *Store // may be nil when no bundle is active
 	global *Store
 }
 
-// NewLayeredStore creates a layered role store. If repoRoot is empty,
-// returns a store backed only by the global root.
+// NewLayeredStore creates a two-layer role store (repo + global). Kept
+// as a thin wrapper over NewLayeredStoreWithBundle for callers that do
+// not participate in bundle resolution.
 func NewLayeredStore(repoRoot, globalRoot string) *LayeredStore {
-	var repo *Store
+	return NewLayeredStoreWithBundle(repoRoot, "", globalRoot)
+}
+
+// NewLayeredStoreWithBundle creates a three-layer role store. Any of
+// repoRoot or bundleRoot may be empty; globalRoot must be set.
+func NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot string) *LayeredStore {
+	var repo, bundle *Store
 	if repoRoot != "" {
 		repo = NewStore(repoRoot)
 	}
+	if bundleRoot != "" {
+		bundle = NewStore(bundleRoot)
+	}
 	return &LayeredStore{
 		repo:   repo,
+		bundle: bundle,
 		global: NewStore(globalRoot),
 	}
 }
@@ -27,47 +45,73 @@ func (ls *LayeredStore) Save(r *Role) error {
 	return ls.global.Save(r)
 }
 
-// Load reads a role, checking repo first then global.
+// Load reads a role, checking repo, then bundle, then global. Only
+// falls through on not-found; real I/O errors (permission denied,
+// parse failure) are surfaced rather than masked by falling through.
 func (ls *LayeredStore) Load(name string) (*Role, error) {
 	if ls.repo != nil {
 		r, err := ls.repo.Load(name)
 		if err == nil {
 			return r, nil
 		}
-		// Fall through to global only on not-found.
-		if !ls.repo.Exists(name) {
-			return ls.global.Load(name)
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("repo role layer: %w", err)
 		}
-		// Real error from repo (permission, parse).
-		return nil, err
+	}
+	if ls.bundle != nil {
+		r, err := ls.bundle.Load(name)
+		if err == nil {
+			return r, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("bundle role layer: %w", err)
+		}
 	}
 	return ls.global.Load(name)
 }
 
-// List returns role names from both stores, deduplicated (repo wins).
+// List returns role names from all three stores, deduplicated.
+// Precedence when deduping: repo > bundle > global.
 func (ls *LayeredStore) List() ([]string, error) {
-	globalNames, err := ls.global.List()
-	if err != nil {
-		return nil, err
-	}
-	if ls.repo == nil {
-		return globalNames, nil
-	}
-	repoNames, err := ls.repo.List()
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool, len(repoNames))
+	seen := make(map[string]struct{})
 	var merged []string
-	for _, n := range repoNames {
-		seen[n] = true
-		merged = append(merged, n)
-	}
-	for _, n := range globalNames {
-		if !seen[n] {
+
+	if ls.repo != nil {
+		names, err := ls.repo.List()
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			if _, ok := seen[n]; ok {
+				continue
+			}
+			seen[n] = struct{}{}
 			merged = append(merged, n)
 		}
+	}
+	if ls.bundle != nil {
+		names, err := ls.bundle.List()
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			if _, ok := seen[n]; ok {
+				continue
+			}
+			seen[n] = struct{}{}
+			merged = append(merged, n)
+		}
+	}
+	names, err := ls.global.List()
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range names {
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		merged = append(merged, n)
 	}
 	return merged, nil
 }
@@ -77,9 +121,12 @@ func (ls *LayeredStore) Delete(name string) error {
 	return ls.global.Delete(name)
 }
 
-// Exists checks both stores.
+// Exists reports whether the role exists in any layer.
 func (ls *LayeredStore) Exists(name string) bool {
 	if ls.repo != nil && ls.repo.Exists(name) {
+		return true
+	}
+	if ls.bundle != nil && ls.bundle.Exists(name) {
 		return true
 	}
 	return ls.global.Exists(name)
