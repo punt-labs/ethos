@@ -98,6 +98,16 @@ type Evaluator struct {
 	Hash     string `yaml:"hash,omitempty" json:"hash"`
 }
 
+// Trigger captures the provenance of an externally-triggered mission
+// (e.g., an email that caused the mission to be created). Optional —
+// most missions are leader-initiated and have no trigger.
+type Trigger struct {
+	Type      string `yaml:"type,omitempty" json:"type,omitempty"`
+	MessageID string `yaml:"message_id,omitempty" json:"message_id,omitempty"`
+	From      string `yaml:"from,omitempty" json:"from,omitempty"`
+	Subject   string `yaml:"subject,omitempty" json:"subject,omitempty"`
+}
+
 // Inputs are what the worker reads from. Files are paths the worker
 // MUST read; references are supporting docs the worker MAY consult.
 //
@@ -108,6 +118,7 @@ type Inputs struct {
 	Ticket     string   `yaml:"ticket,omitempty" json:"ticket,omitempty"`
 	Files      []string `yaml:"files,omitempty" json:"files,omitempty"`
 	References []string `yaml:"references,omitempty" json:"references,omitempty"`
+	Trigger    *Trigger `yaml:"trigger,omitempty" json:"trigger,omitempty"`
 }
 
 // Budget is the round limit and reflection requirement for the mission.

@@ -209,7 +209,9 @@ func runVersion(cmd *cobra.Command) error {
 func runDoctor(cmd *cobra.Command) error {
 	is := identityStore()
 	ss := sessionStore()
-	results := doctor.RunAll(is, ss)
+	ts := teamStore()
+	repoRoot := resolve.FindRepoRoot()
+	results := doctor.RunAll(is, ss, repoRoot, ts)
 
 	out := cmd.OutOrStdout()
 	if jsonOutput {

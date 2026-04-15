@@ -329,3 +329,88 @@ func TestInputs_BeadDeprecation_EmitsOnce(t *testing.T) {
 	n := strings.Count(captured, "deprecation warning")
 	assert.Equal(t, 1, n, "expected exactly 1 deprecation warning, got %d in:\n%s", n, captured)
 }
+
+func TestInputs_TriggerYAML(t *testing.T) {
+	data := []byte(`
+ticket: ethos-50
+trigger:
+  type: email
+  message_id: "<abc@example.com>"
+  from: mal@serenity.ship
+  subject: "cargo run"
+files:
+  - a.go
+`)
+	var in Inputs
+	require.NoError(t, yaml.Unmarshal(data, &in))
+	require.NotNil(t, in.Trigger)
+	assert.Equal(t, "email", in.Trigger.Type)
+	assert.Equal(t, "<abc@example.com>", in.Trigger.MessageID)
+	assert.Equal(t, "mal@serenity.ship", in.Trigger.From)
+	assert.Equal(t, "cargo run", in.Trigger.Subject)
+	assert.Equal(t, "ethos-50", in.Ticket)
+
+	// Round-trip: marshal and re-decode.
+	out, err := yaml.Marshal(&in)
+	require.NoError(t, err)
+	var rt Inputs
+	require.NoError(t, yaml.Unmarshal(out, &rt))
+	assert.Equal(t, in.Trigger, rt.Trigger)
+}
+
+func TestInputs_TriggerJSON(t *testing.T) {
+	data := []byte(`{
+		"ticket": "ethos-50",
+		"trigger": {
+			"type": "email",
+			"message_id": "<abc@example.com>",
+			"from": "mal@serenity.ship",
+			"subject": "cargo run"
+		},
+		"files": ["a.go"]
+	}`)
+	var in Inputs
+	require.NoError(t, json.Unmarshal(data, &in))
+	require.NotNil(t, in.Trigger)
+	assert.Equal(t, "email", in.Trigger.Type)
+	assert.Equal(t, "<abc@example.com>", in.Trigger.MessageID)
+	assert.Equal(t, "mal@serenity.ship", in.Trigger.From)
+	assert.Equal(t, "cargo run", in.Trigger.Subject)
+
+	// Round-trip: marshal and re-decode.
+	out, err := json.Marshal(&in)
+	require.NoError(t, err)
+	var rt Inputs
+	require.NoError(t, json.Unmarshal(out, &rt))
+	assert.Equal(t, in.Trigger, rt.Trigger)
+}
+
+func TestInputs_TriggerOmittedWhenNil(t *testing.T) {
+	in := Inputs{Ticket: "ethos-51", Files: []string{"a.go"}}
+	// YAML
+	ydata, err := yaml.Marshal(&in)
+	require.NoError(t, err)
+	assert.NotContains(t, string(ydata), "trigger")
+	// JSON
+	jdata, err := json.Marshal(&in)
+	require.NoError(t, err)
+	assert.NotContains(t, string(jdata), "trigger")
+}
+
+func TestInputs_TriggerWithTicket(t *testing.T) {
+	data := []byte(`
+ticket: ethos-52
+trigger:
+  type: email
+  from: wash@serenity.ship
+files:
+  - b.go
+`)
+	var in Inputs
+	require.NoError(t, yaml.Unmarshal(data, &in))
+	assert.Equal(t, "ethos-52", in.Ticket)
+	require.NotNil(t, in.Trigger)
+	assert.Equal(t, "email", in.Trigger.Type)
+	assert.Equal(t, "wash@serenity.ship", in.Trigger.From)
+	assert.Equal(t, []string{"b.go"}, in.Files)
+}

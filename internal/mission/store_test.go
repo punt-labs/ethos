@@ -96,6 +96,30 @@ func TestStore_RoundTrip(t *testing.T) {
 	assert.Equal(t, c.Inputs.Files, loaded.Inputs.Files)
 }
 
+// TestStore_RoundTrip_Trigger verifies that a contract with inputs.trigger
+// survives Create → Load through the strict YAML decoder.
+func TestStore_RoundTrip_Trigger(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-14-001")
+	c.WriteSet = []string{"tests/m-2026-04-14-001/"}
+	c.Inputs.Trigger = &Trigger{
+		Type:      "email",
+		MessageID: "<abc@example.com>",
+		From:      "mal@serenity.ship",
+		Subject:   "cargo run",
+	}
+	require.NoError(t, s.Create(c))
+
+	loaded, err := s.Load("m-2026-04-14-001")
+	require.NoError(t, err)
+	require.NotNil(t, loaded.Inputs.Trigger)
+	assert.Equal(t, "email", loaded.Inputs.Trigger.Type)
+	assert.Equal(t, "<abc@example.com>", loaded.Inputs.Trigger.MessageID)
+	assert.Equal(t, "mal@serenity.ship", loaded.Inputs.Trigger.From)
+	assert.Equal(t, "cargo run", loaded.Inputs.Trigger.Subject)
+	assert.Equal(t, c.Inputs.Ticket, loaded.Inputs.Ticket)
+}
+
 // TestStore_RejectsSymlink_Load creates a real contract, replaces it with
 // a symlink, and asserts that Load refuses to follow it.
 func TestStore_RejectsSymlink_Load(t *testing.T) {

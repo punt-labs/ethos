@@ -134,7 +134,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
-	require.Len(t, results, 4)
+	require.Len(t, results, 5)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
