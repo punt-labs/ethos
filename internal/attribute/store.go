@@ -147,7 +147,9 @@ func (s *Store) Load(slug string) (*Attribute, error) {
 
 // List returns all attributes in this store's directory. When a fallback
 // store is set, merges results from both layers (fallback wins on slug
-// collision). Files that cannot be read are reported as warnings.
+// collision); the call recurses through chained fallbacks so 3-layer
+// stacks (repo → bundle → global) work transparently. Files that cannot
+// be read are reported as warnings.
 func (s *Store) List() (*ListResult, error) {
 	result, err := s.listLocal()
 	if err != nil {
@@ -156,11 +158,12 @@ func (s *Store) List() (*ListResult, error) {
 	if s.fallback == nil {
 		return result, nil
 	}
-	fbResult, err := s.fallback.listLocal()
+	fbResult, err := s.fallback.List()
 	if err != nil {
 		return nil, err
 	}
-	// Merge: fallback (repo) entries first, then global entries not in repo.
+	// Merge: fallback (higher-precedence) entries first, then this
+	// store's entries that the fallback did not cover.
 	seen := make(map[string]bool, len(fbResult.Attributes))
 	merged := &ListResult{}
 	for _, a := range fbResult.Attributes {

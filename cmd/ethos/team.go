@@ -21,7 +21,7 @@ func teamStore() *team.LayeredStore {
 // layeredTeamStore creates a layered team store from an identity store.
 func layeredTeamStore(is identity.IdentityStore) *team.LayeredStore {
 	if ls, ok := is.(*identity.LayeredStore); ok {
-		return team.NewLayeredStore(ls.RepoRoot(), ls.GlobalRoot())
+		return team.NewLayeredStoreWithBundle(ls.RepoRoot(), ls.BundleRoot(), ls.GlobalRoot())
 	}
 	return team.NewLayeredStore("", is.Root())
 }
