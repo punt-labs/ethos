@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Team bundle activation** (Phase 6.1, DES-051) -- switchable starter
+  teams. `ethos team available/activate/active/deactivate` for managing
+  which team is active. Three-layer resolution: repo-local -> active
+  bundle -> global. Gstack starter team ships embedded and deploys on
+  `ethos seed`.
+- **`ethos team migrate`** -- detects legacy `.punt-labs/ethos/` submodule
+  and converts to the new bundles layout. Dry-run default; `--apply`
+  to execute.
+- **`ethos team add-bundle <git-url>`** -- add a user-authored bundle
+  via git submodule (repo-local) or git clone (global).
+- **Gstack starter team bundle** -- 6 agents (architect, implementer,
+  reviewer, qa, security, product) + 5 pipelines (gstack-plan, ship,
+  design, debug, review) + 2 talents + 6 personalities + 6 writing
+  styles. Self-contained. Ships embedded in ethos.
+
+### Changed
+
+- `internal/seed/seed.go` deploys `bundles/` subdirs to
+  `<destRoot>/bundles/<name>/`.
+- 5 `gstack-*.yaml` pipeline templates moved from the top-level
+  sidecar into the gstack bundle.
+
+### Deprecated
+
+- Submodule at `.punt-labs/ethos/` is the legacy layout. Use
+  `ethos team migrate` to move to bundles. The legacy path continues
+  to work without changes. Follow-up bead
+  `ethos-gstack-submodule-cleanup` tracks removing gstack content
+  from the `punt-labs/team` submodule after the release ships.
+
 ## [3.6.0] - 2026-04-14
 
 ### Added

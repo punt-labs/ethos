@@ -27,15 +27,19 @@ type bundleTestEnv struct {
 func setupBundleTestEnv(t *testing.T) *bundleTestEnv {
 	t.Helper()
 
-	// Reset add-bundle flag state — cobra persists these across
-	// in-process test runs.
+	// Reset add-bundle and migrate flag state — cobra persists these
+	// across in-process test runs.
 	addBundleName = ""
 	addBundleGlobal = false
 	addBundleApply = false
+	migrateName = ""
+	migrateApply = false
 	t.Cleanup(func() {
 		addBundleName = ""
 		addBundleGlobal = false
 		addBundleApply = false
+		migrateName = ""
+		migrateApply = false
 	})
 
 	home := t.TempDir()
@@ -317,4 +321,85 @@ func TestTeamAddBundle_InvalidName(t *testing.T) {
 	_, _, err := execHandler(t, "team", "add-bundle", "git@github.com:acme/.git")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid bundle name")
+}
+
+// --- team migrate ---
+
+// writeGitmodulesLegacy writes a .gitmodules at repo root with a single
+// legacy entry pointing .punt-labs/ethos at url.
+func writeGitmodulesLegacy(t *testing.T, repo, url string) {
+	t.Helper()
+	body := "[submodule \".punt-labs/ethos\"]\n\tpath = .punt-labs/ethos\n\turl = " + url + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitmodules"), []byte(body), 0o644))
+}
+
+func TestMigrate_NoSubmodule(t *testing.T) {
+	setupBundleTestEnv(t)
+	stdout, _, err := execHandler(t, "team", "migrate")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "nothing to migrate")
+}
+
+func TestMigrate_NoGitmodulesEntry(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	// Directory exists but no .gitmodules entry → not a submodule.
+	require.NoError(t, os.MkdirAll(filepath.Join(env.repo, ".punt-labs", "ethos"), 0o755))
+
+	stdout, _, err := execHandler(t, "team", "migrate")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "nothing to migrate")
+}
+
+func TestMigrate_DryRun(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(env.repo, ".punt-labs", "ethos"), 0o755))
+	writeGitmodulesLegacy(t, env.repo, "git@github.com:punt-labs/team.git")
+
+	stdout, _, err := execHandler(t, "team", "migrate")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "Would run:")
+	assert.Contains(t, stdout, "git submodule deinit")
+	assert.Contains(t, stdout, "git rm -f .punt-labs/ethos")
+	assert.Contains(t, stdout, "git submodule add")
+	assert.Contains(t, stdout, "ethos-bundles/team")
+	assert.Contains(t, stdout, "active_bundle: team")
+	assert.Contains(t, stdout, "--apply")
+
+	// Dry-run must not touch the repo config.
+	_, err = os.Stat(filepath.Join(env.repo, ".punt-labs", "ethos.yaml"))
+	assert.True(t, os.IsNotExist(err), "dry-run must not write config")
+}
+
+func TestMigrate_CustomName(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(env.repo, ".punt-labs", "ethos"), 0o755))
+	writeGitmodulesLegacy(t, env.repo, "git@github.com:punt-labs/team.git")
+
+	stdout, _, err := execHandler(t, "team", "migrate", "--name", "punt-labs")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "ethos-bundles/punt-labs")
+	assert.Contains(t, stdout, "active_bundle: punt-labs")
+}
+
+func TestMigrate_InvalidName(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(env.repo, ".punt-labs", "ethos"), 0o755))
+	writeGitmodulesLegacy(t, env.repo, "git@github.com:punt-labs/team.git")
+
+	_, _, err := execHandler(t, "team", "migrate", "--name", "Bad Name")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid bundle name")
+}
+
+func TestMigrate_AlreadyMigrated(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(env.repo, ".punt-labs", "ethos"), 0o755))
+	writeGitmodulesLegacy(t, env.repo, "git@github.com:punt-labs/team.git")
+	// Target bundle path already exists.
+	require.NoError(t, os.MkdirAll(
+		filepath.Join(env.repo, ".punt-labs", "ethos-bundles", "team"), 0o755))
+
+	stdout, _, err := execHandler(t, "team", "migrate")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "migration already done")
 }

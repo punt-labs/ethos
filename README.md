@@ -29,7 +29,10 @@ Ethos is a local runtime that fills three gaps:
 
 All state is local YAML — user-global under `~/.punt-labs/ethos/`,
 with optional repo-local overrides under `.punt-labs/ethos/` for
-team-shared identities and config. No server, no cloud, no telemetry.
+team-shared identities and config. Starter teams ship as
+**bundles** — self-contained directories activated per repo — so
+new users can adopt a production-ready team in one command. No
+server, no cloud, no telemetry.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 
@@ -54,6 +57,13 @@ mkdir -p .punt-labs
 cat > .punt-labs/ethos.yaml <<'EOF'
 agent: claude
 EOF
+```
+
+(Optional) Activate a starter team — `gstack` ships embedded and
+deploys on `ethos seed`:
+
+```bash
+ethos team activate gstack
 ```
 
 Start Claude Code. Ethos hooks load your agent's identity at session
@@ -167,6 +177,12 @@ archetypes, pipelines, automatic mission traceability, and mission
 dispatch one-liner are in daily use by Punt Labs. The gstack starter
 team (6 agents + 5 pipeline templates) ships as optional content
 via the team submodule.
+
+Gstack also ships as an embedded, activatable **team bundle**:
+`ethos seed` deploys it to the global store and
+`ethos team activate gstack` turns it on per repo. Existing users on
+the legacy `punt-labs/team` submodule can move to the bundles layout
+with `ethos team migrate` (dry-run by default).
 
 Remaining work is adoption-driven: reducing mission ceremony,
 customer validation interviews, cross-tool integration.
