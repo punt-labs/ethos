@@ -87,7 +87,7 @@ func (s *Store) Load(name string) (*Role, error) {
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("role %q not found", name)
+			return nil, fmt.Errorf("role %q not found: %w", name, err)
 		}
 		return nil, fmt.Errorf("reading role: %w", err)
 	}

@@ -112,6 +112,30 @@ func TestThreeLayer_SaveTargetsGlobalOnly(t *testing.T) {
 	}
 }
 
+// TestThreeLayer_BundleIOErrorPropagates verifies that an I/O failure
+// in the bundle layer (e.g. permission denied on the role file) is
+// surfaced rather than masked by silently falling through to global.
+func TestThreeLayer_BundleIOErrorPropagates(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission tests do not apply to root")
+	}
+	ls, _, bundle, global := setupThreeLayer(t)
+
+	require.NoError(t, bundle.Save(&Role{Name: "foo", Responsibilities: []string{"bundle"}}))
+	require.NoError(t, global.Save(&Role{Name: "foo", Responsibilities: []string{"global"}}))
+
+	// Make the bundle role file unreadable.
+	p := filepath.Join(bundle.root, "roles", "foo.yaml")
+	require.NoError(t, os.Chmod(p, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+
+	_, err := ls.Load("foo")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bundle role layer")
+	// Must not have silently resolved to the global copy.
+	assert.NotContains(t, err.Error(), "global")
+}
+
 func TestThreeLayer_NoBundleMatchesLegacyBehavior(t *testing.T) {
 	// NewLayeredStore (2-layer wrapper) must behave exactly as before.
 	repoRoot := t.TempDir()

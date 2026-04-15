@@ -362,8 +362,10 @@ func (ls *LayeredStore) Update(handle string, fn func(*Identity) error) error {
 	switch {
 	case ls.repo != nil && ls.repo.Exists(handle):
 		owner = ls.repo
-	case ls.bundle != nil && ls.bundle.Exists(handle) && !ls.global.Exists(handle):
-		return fmt.Errorf("identity %q is bundle-only and cannot be modified via CLI; edit the bundle directly", handle)
+	case ls.bundle != nil && ls.bundle.Exists(handle):
+		// Reject even when a global copy exists: bundle shadows global on
+		// read, so editing global would be silently invisible.
+		return fmt.Errorf("identity %q is provided by the active bundle and cannot be modified via CLI; edit the bundle directly", handle)
 	}
 	validated := func(id *Identity) error {
 		if err := fn(id); err != nil {

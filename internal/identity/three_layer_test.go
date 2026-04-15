@@ -110,7 +110,30 @@ func TestThreeLayer_BundleIdentityReadOnly(t *testing.T) {
 		return nil
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bundle-only")
+	assert.Contains(t, err.Error(), "active bundle")
+}
+
+// TestThreeLayer_BundleShadowsGlobalUpdateRejected verifies that when an
+// identity exists in BOTH the bundle and the global layer (bundle has
+// higher read precedence), Update refuses rather than silently writing
+// to the invisible global copy.
+func TestThreeLayer_BundleShadowsGlobalUpdateRejected(t *testing.T) {
+	ls, _, bundle, global := setupThreeLayer(t)
+
+	require.NoError(t, bundle.Save(&Identity{Name: "Bundle", Handle: "shadowed", Kind: "human"}))
+	require.NoError(t, global.Save(&Identity{Name: "Global", Handle: "shadowed", Kind: "human"}))
+
+	err := ls.Update("shadowed", func(id *Identity) error {
+		id.Email = "shadowed@example.com"
+		return nil
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "active bundle")
+
+	// Global copy must not have been modified.
+	g, err := global.Load("shadowed", Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "", g.Email)
 }
 
 func TestThreeLayer_AttributeResolutionBundleLayer(t *testing.T) {

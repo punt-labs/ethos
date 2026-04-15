@@ -1,5 +1,10 @@
 package role
 
+import (
+	"errors"
+	"fmt"
+	"os"
+)
 
 // LayeredStore reads from repo-local, bundle, and user-global role stores.
 // Load and Exists check repo first, then bundle, then global. List merges
@@ -41,16 +46,25 @@ func (ls *LayeredStore) Save(r *Role) error {
 }
 
 // Load reads a role, checking repo, then bundle, then global. Only
-// falls through on not-found; real I/O errors are surfaced.
+// falls through on not-found; real I/O errors (permission denied,
+// parse failure) are surfaced rather than masked by falling through.
 func (ls *LayeredStore) Load(name string) (*Role, error) {
 	if ls.repo != nil {
-		if ls.repo.Exists(name) {
-			return ls.repo.Load(name)
+		r, err := ls.repo.Load(name)
+		if err == nil {
+			return r, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("repo role layer: %w", err)
 		}
 	}
 	if ls.bundle != nil {
-		if ls.bundle.Exists(name) {
-			return ls.bundle.Load(name)
+		r, err := ls.bundle.Load(name)
+		if err == nil {
+			return r, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("bundle role layer: %w", err)
 		}
 	}
 	return ls.global.Load(name)
