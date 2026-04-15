@@ -20,8 +20,9 @@ import (
 
 // RepoConfig holds the repo-local ethos configuration.
 type RepoConfig struct {
-	Agent string `yaml:"agent,omitempty"` // default agent identity handle
-	Team  string `yaml:"team,omitempty"`  // team that owns this repo
+	Agent        string `yaml:"agent,omitempty"`         // default agent identity handle
+	Team         string `yaml:"team,omitempty"`          // team that owns this repo
+	ActiveBundle string `yaml:"active_bundle,omitempty"` // currently active team bundle name
 }
 
 // Resolve returns the identity handle for the current caller.
@@ -198,6 +199,24 @@ func ResolveTeam(repoRoot string) (string, error) {
 		return "", nil
 	}
 	return cfg.Team, nil
+}
+
+// ResolveActiveBundle returns the configured active_bundle name for a
+// repo, or empty string if not configured (or not in a repo). Same
+// error contract as ResolveAgent: ("", nil) for no-repo and
+// not-configured, ("", err) for read or parse failures.
+func ResolveActiveBundle(repoRoot string) (string, error) {
+	if repoRoot == "" {
+		return "", nil
+	}
+	cfg, err := LoadRepoConfig(repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve active bundle: %w", err)
+	}
+	if cfg == nil {
+		return "", nil
+	}
+	return cfg.ActiveBundle, nil
 }
 
 // FindRepoRoot walks from the current working directory upward looking
