@@ -139,12 +139,13 @@ func TestResolve_PriorityOrder(t *testing.T) {
 
 func TestLoadRepoConfig(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(t *testing.T, root string)
-		wantAgent string
-		wantTeam  string
-		wantNil   bool
-		wantErr   bool
+		name       string
+		setup      func(t *testing.T, root string)
+		wantAgent  string
+		wantTeam   string
+		wantBundle string
+		wantNil    bool
+		wantErr    bool
 	}{
 		{
 			name: "new path only",
@@ -154,10 +155,11 @@ func TestLoadRepoConfig(t *testing.T) {
 				require.NoError(t, os.MkdirAll(dir, 0o755))
 				require.NoError(t, os.WriteFile(
 					filepath.Join(dir, "ethos.yaml"),
-					[]byte("agent: claude\nteam: engineering\n"), 0o644))
+					[]byte("agent: claude\nteam: engineering\nactive_bundle: gstack\n"), 0o644))
 			},
-			wantAgent: "claude",
-			wantTeam:  "engineering",
+			wantAgent:  "claude",
+			wantTeam:   "engineering",
+			wantBundle: "gstack",
 		},
 		{
 			name: "old path only",
@@ -225,6 +227,7 @@ func TestLoadRepoConfig(t *testing.T) {
 			require.NotNil(t, cfg)
 			assert.Equal(t, tt.wantAgent, cfg.Agent)
 			assert.Equal(t, tt.wantTeam, cfg.Team)
+			assert.Equal(t, tt.wantBundle, cfg.ActiveBundle)
 		})
 	}
 }
@@ -425,6 +428,62 @@ func TestResolveTeam_PermissionError(t *testing.T) {
 	assert.Equal(t, "", team)
 	assert.Contains(t, err.Error(), "resolve team")
 	assert.Contains(t, err.Error(), "reading")
+}
+
+// --- ResolveActiveBundle tests ---
+
+func TestResolveActiveBundle(t *testing.T) {
+	tests := []struct {
+		name     string
+		yaml     string
+		wantName string
+	}{
+		{"set", "active_bundle: gstack\n", "gstack"},
+		{"empty", "agent: claude\n", ""},
+		{"with other fields", "agent: claude\nteam: eng\nactive_bundle: punt-labs\n", "punt-labs"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, ".punt-labs")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dir, "ethos.yaml"),
+				[]byte(tt.yaml), 0o644))
+
+			got, err := ResolveActiveBundle(root)
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantName, got)
+		})
+	}
+}
+
+func TestResolveActiveBundle_MissingConfig(t *testing.T) {
+	got, err := ResolveActiveBundle(t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, "", got)
+}
+
+func TestResolveActiveBundle_EmptyRoot(t *testing.T) {
+	got, err := ResolveActiveBundle("")
+	require.NoError(t, err)
+	assert.Equal(t, "", got)
+}
+
+func TestResolveActiveBundle_MalformedYAML(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".punt-labs")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "ethos.yaml"),
+		[]byte("active_bundle: [unclosed\n"), 0o644))
+
+	got, err := ResolveActiveBundle(root)
+	require.Error(t, err)
+	assert.Equal(t, "", got)
+	assert.Contains(t, err.Error(), "resolve active bundle")
+	assert.Contains(t, err.Error(), "parsing repo config")
 }
 
 // --- FindRepoRoot tests ---
