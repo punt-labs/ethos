@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`ethos mission dispatch`** -- create a mission contract from CLI flags
   in one step. Required: `--worker`, `--evaluator`, `--write-set`, `--criteria`.
-  Optional: `--context`, `--ticket`, `--type`, `--budget`. Leader auto-detected.
+  Optional: `--context`, `--ticket`, `--type`, `--budget`. Leader resolved
+  from repo config `agent:` field, falls back to `claude` if unset.
 - **`ethos doctor` orphaned agent check** -- flags `.claude/agents/*.md`
   files whose handle is not a member of any team.
 - **`inputs.trigger` schema** -- new Trigger struct (type, message\_id,

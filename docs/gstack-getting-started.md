@@ -1,7 +1,7 @@
 # Gstack Starter Team
 
 A ready-made team of 6 agents ported from the gstack builder
-framework. Ship with ethos v3.6.0.
+framework. Ships with ethos v3.6.0 via the team submodule.
 
 ## Philosophy
 
@@ -43,6 +43,16 @@ report to architect. Product collaborates with architect.
 ## Quick Start
 
 ### 1. Configure your repo
+
+The gstack team and identities live in the shared team submodule
+(`.punt-labs/ethos/`). If your repo already has the submodule,
+the gstack team is available. If not, add it:
+
+```bash
+git submodule add git@github.com:punt-labs/team.git .punt-labs/ethos
+```
+
+Then configure:
 
 ```yaml
 # .punt-labs/ethos.yaml
@@ -103,7 +113,7 @@ Create a new identity YAML and add it to the team:
 
 ```bash
 ethos identity create -f my-agent.yaml
-ethos team add-member gstack --identity my-agent --role implementer
+ethos team add-member gstack my-agent implementer
 ```
 
 ### Create custom pipelines

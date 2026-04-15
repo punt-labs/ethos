@@ -163,9 +163,10 @@ markdown cannot represent it). Coexistence rather than competition.
 v3.6.0 — all five planned phases shipped. 22+ KLOC production Go,
 35+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
 write-set admission, frozen evaluators, bounded rounds, audit logs,
-archetypes, pipelines, automatic mission traceability, mission dispatch
-one-liner, and the gstack starter team (6 agents + 5 pipeline
-templates + 3 archetypes) are in daily use by Punt Labs.
+archetypes, pipelines, automatic mission traceability, and mission
+dispatch one-liner are in daily use by Punt Labs. The gstack starter
+team (6 agents + 5 pipeline templates) ships as optional content
+via the team submodule.
 
 Remaining work is adoption-driven: reducing mission ceremony,
 customer validation interviews, cross-tool integration.

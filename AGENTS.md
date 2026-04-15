@@ -432,8 +432,8 @@ ethos mission dispatch \
 
 Required flags: `--worker`, `--evaluator`, `--write-set`, `--criteria`.
 Optional: `--context`, `--ticket`, `--type` (default: implement),
-`--budget` (default: 2). Leader is auto-detected from the current
-session.
+`--budget` (default: 2). Leader is resolved from the repo's configured
+`agent:` value; if unset or outside a repo, falls back to `"claude"`.
 
 Via MCP:
 
