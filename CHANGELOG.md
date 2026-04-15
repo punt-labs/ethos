@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.6.0] - 2026-04-14
 
+### Added
+
+- **`ethos mission dispatch`** -- create a mission contract from CLI flags
+  in one step. Required: `--worker`, `--evaluator`, `--write-set`, `--criteria`.
+  Optional: `--context`, `--ticket`, `--type`, `--budget`. Leader resolved
+  from repo config `agent:` field, falls back to `claude` if unset.
+- **`ethos doctor` orphaned agent check** -- flags `.claude/agents/*.md`
+  files whose handle is not a member of any team.
+- **`inputs.trigger` schema** -- new Trigger struct (type, message\_id,
+  from, subject) on Contract.Inputs for email-triggered missions.
+- **Gstack starter team** -- 6 agents (architect, implementer, reviewer,
+  qa, security, product) with personalities from gstack's builder
+  philosophy. 5 pipeline templates (gstack-plan, gstack-ship,
+  gstack-design, gstack-debug, gstack-review). 3 new archetypes
+  (investigate, audit, orchestrate).
+
+### Fixed
+
+- **Resilient conflict scan** -- `checkWriteSetConflicts` now skips
+  unloadable missions with a warning instead of blocking all creates.
+- **Agent regeneration diff summary** -- `GenerateAgentFiles` emits net
+  line-count delta when updating existing agent files.
+- **`inputs.bead` deprecation warning** -- fires once per process via
+  sync.Once (was N times for N old missions).
+
 ## [3.5.0] - 2026-04-14
 
 ### Added
@@ -1362,7 +1387,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP handlers receive `Store` via injection (no `os.Exit` in handler context)
 - ShellCheck added to CI and `make lint`
 
-[Unreleased]: https://github.com/punt-labs/ethos/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/punt-labs/ethos/compare/v3.6.0...HEAD
+[3.6.0]: https://github.com/punt-labs/ethos/compare/v3.5.0...v3.6.0
+[3.5.0]: https://github.com/punt-labs/ethos/compare/v3.4.0...v3.5.0
+[3.4.0]: https://github.com/punt-labs/ethos/compare/v3.3.0...v3.4.0
+[3.3.0]: https://github.com/punt-labs/ethos/compare/v3.2.0...v3.3.0
+[3.2.0]: https://github.com/punt-labs/ethos/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/punt-labs/ethos/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/punt-labs/ethos/compare/v2.8.0...v3.0.0
+[2.8.0]: https://github.com/punt-labs/ethos/compare/v2.7.0...v2.8.0
+[2.7.0]: https://github.com/punt-labs/ethos/compare/v2.6.1...v2.7.0
 [2.6.1]: https://github.com/punt-labs/ethos/compare/v2.6.0...v2.6.1
 [2.6.0]: https://github.com/punt-labs/ethos/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/punt-labs/ethos/compare/v2.4.1...v2.5.0
