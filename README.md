@@ -36,7 +36,7 @@ team-shared identities and config. No server, no cloud, no telemetry.
 ## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/77fb88e/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/40ac145/install.sh | sh
 ethos identity create
 ```
 
