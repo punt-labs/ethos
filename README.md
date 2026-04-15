@@ -139,6 +139,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos doctor` | Check installation health |
 | `ethos identity list` / `get <handle>` | Query identities |
 | `ethos mission create --file <path>` | Create a mission contract |
+| `ethos mission dispatch` | Create a mission from CLI flags (no YAML needed) |
 | `ethos mission show <id>` | Show contract, results, reflections |
 | `ethos mission pipeline list` / `show <name>` | Query pipeline templates |
 | `ethos mission pipeline instantiate <name> --var key=value` | Create N missions from a pipeline |
@@ -159,11 +160,12 @@ markdown cannot represent it). Coexistence rather than competition.
 
 ## Status
 
-v3.5.0 — all five planned phases shipped. 22+ KLOC production Go,
+v3.6.0 — all five planned phases shipped. 22+ KLOC production Go,
 35+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
 write-set admission, frozen evaluators, bounded rounds, audit logs,
-archetypes, pipelines, and automatic mission traceability are in daily
-use by Punt Labs.
+archetypes, pipelines, automatic mission traceability, mission dispatch
+one-liner, and the gstack starter team (6 agents + 5 pipeline
+templates + 3 archetypes) are in daily use by Punt Labs.
 
 Remaining work is adoption-driven: reducing mission ceremony,
 customer validation interviews, cross-tool integration.
@@ -174,6 +176,7 @@ See the [roadmap](docs/ETHOS-ROADMAP.md).
 [Live example](docs/example/) ·
 [Team setup](docs/team-setup.md) ·
 [Archetypes and pipelines](docs/archetypes-and-pipelines.md) ·
+[Gstack starter team](docs/gstack-getting-started.md) ·
 [Persona animation](docs/persona-animation.md) ·
 [Agent definitions](docs/agent-definitions.md) ·
 [Architecture](docs/architecture.tex) ·
