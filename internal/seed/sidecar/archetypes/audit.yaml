@@ -1,0 +1,9 @@
+name: audit
+description: "Audit mission — scan, evaluate, and report findings, read-only"
+budget_default:
+  rounds: 1
+  reflection_after_each: true
+allow_empty_write_set: true
+required_fields:
+  - context
+write_set_constraints: []

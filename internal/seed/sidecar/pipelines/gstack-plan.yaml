@@ -1,0 +1,74 @@
+name: gstack-plan
+description: "gstack planning pipeline: validate idea, expand scope, lock architecture, rate design"
+stages:
+  - name: validate
+    archetype: design
+    description: "YC Office Hours validation — six forcing questions"
+    context: |
+      YC Office Hours validation. Six forcing questions: Who is the user?
+      What is the problem? Why now? What is the insight? What is the unfair
+      advantage? What is the ask? Challenge the idea honestly. If the problem
+      is not real, say so.
+    success_criteria:
+      - "problem is validated with evidence"
+      - "target user is specific, not abstract"
+      - "insight is differentiated from competitors"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: scope
+    archetype: design
+    description: "CEO scope review — dream big, then scope to ship this week"
+    inputs_from: validate
+    context: |
+      CEO scope review. Dream big — what is the 10-star version? Then scope
+      down to what ships this week. Expand scope where it creates better product.
+      Reduce scope where it delays shipping.
+    success_criteria:
+      - "10-star vision documented"
+      - "shipable scope defined with timeline"
+      - "scope cuts justified with rationale"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: architecture
+    archetype: design
+    description: "Engineering plan review — lock architecture before implementation"
+    inputs_from: scope
+    context: |
+      Engineering plan review. Lock the architecture. Enumerate every edge
+      case. Define data flow. Identify what can go wrong. No implementation
+      until architecture is signed off.
+    success_criteria:
+      - "architecture documented with component diagram"
+      - "edge cases enumerated"
+      - "data flow defined"
+      - "failure modes identified"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: design-review
+    archetype: report
+    description: "Design plan review — rate each dimension 0-10"
+    inputs_from: architecture
+    context: |
+      Design plan review. Rate each dimension 0-10: usability, visual
+      hierarchy, responsiveness, accessibility, consistency with design system.
+      Recommend specific improvements for any dimension below 7.
+    success_criteria:
+      - "all dimensions rated"
+      - "no dimension below 7 without remediation plan"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false

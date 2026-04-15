@@ -64,7 +64,7 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))
 
-	// Should have deployed all 8 pipeline files
+	// Should have deployed all 13 pipeline files
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "quick.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "standard.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "full.yaml"))
@@ -73,6 +73,11 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "docs.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "coe.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "coverage.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-plan.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-ship.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-design.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-debug.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-review.yaml"))
 
 	// Should have deployed all 7 READMEs (sessions excluded)
 	assert.FileExists(t, filepath.Join(dest, "identities", "README.md"))
