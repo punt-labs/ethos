@@ -1,11 +1,9 @@
 name: gstack-ship
-description: "gstack shipping pipeline: review, test, security audit, ship, deploy, document, retro"
+description: "gstack shipping pipeline: review, test, security audit, ship, document"
 stages:
   - name: review
-    archetype: review
+    archetype: report
     description: "Pre-landing code review with severity levels"
-    worker: gstack-reviewer
-    evaluator: gstack-architect
     context: |
       Pre-landing code review. Check SQL safety, LLM trust boundaries,
       performance implications, error handling completeness. Report findings
@@ -20,10 +18,8 @@ stages:
       reflection_after_each: true
 
   - name: test
-    archetype: test
+    archetype: implement
     description: "QA testing — golden path and edge cases"
-    worker: gstack-qa
-    evaluator: gstack-reviewer
     inputs_from: review
     context: |
       QA testing through the user's eyes. Test the golden path and edge cases.
@@ -42,8 +38,6 @@ stages:
   - name: security
     archetype: audit
     description: "Security audit — OWASP Top 10 and STRIDE"
-    worker: gstack-security
-    evaluator: gstack-architect
     inputs_from: test
     context: |
       Security audit using OWASP Top 10 and STRIDE. Check secrets handling,
@@ -62,8 +56,6 @@ stages:
   - name: ship
     archetype: implement
     description: "Ship the release — merge, bump, changelog, PR"
-    worker: gstack-implementer
-    evaluator: gstack-reviewer
     inputs_from: security
     context: |
       Ship the release. Merge to base branch, run full test suite, bump
@@ -83,8 +75,6 @@ stages:
   - name: document
     archetype: design
     description: "Post-ship documentation — update all affected docs"
-    worker: gstack-implementer
-    evaluator: gstack-product
     inputs_from: ship
     context: |
       Post-ship documentation. Read the diff between this release and the

@@ -4,8 +4,6 @@ stages:
   - name: investigate
     archetype: investigate
     description: "Systematic root cause investigation — reproduce, trace, confirm"
-    worker: gstack-qa
-    evaluator: gstack-architect
     context: |
       Systematic root cause investigation. Step 1: reproduce the bug
       reliably. Step 2: trace the origin in code. Step 3: form a hypothesis.
@@ -24,8 +22,6 @@ stages:
   - name: fix
     archetype: implement
     description: "Fix the bug with a regression test"
-    worker: gstack-implementer
-    evaluator: gstack-reviewer
     inputs_from: investigate
     context: |
       Fix the bug with a regression test. The test must fail before the fix
@@ -42,10 +38,8 @@ stages:
       reflection_after_each: true
 
   - name: verify
-    archetype: test
+    archetype: report
     description: "End-to-end verification — original failure, full suite, new edges"
-    worker: gstack-qa
-    evaluator: gstack-architect
     inputs_from: fix
     context: |
       Verify the fix end-to-end. Reproduce the original failure path — it

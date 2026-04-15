@@ -2,10 +2,8 @@ name: gstack-review
 description: "gstack review pipeline: CEO scope, design audit, engineering review, DevEx check"
 stages:
   - name: ceo-review
-    archetype: review
+    archetype: report
     description: "CEO-level scope review — opportunity cost and 10-star vision"
-    worker: gstack-product
-    evaluator: gstack-architect
     context: |
       CEO-level scope review. Is this worth building? What is the 10-star
       version? What are we NOT building by building this? Challenge assumptions.
@@ -22,10 +20,8 @@ stages:
       reflection_after_each: false
 
   - name: design-audit
-    archetype: review
+    archetype: report
     description: "Design plan audit — rate dimensions 0-10 with remediation"
-    worker: gstack-architect
-    evaluator: gstack-product
     inputs_from: ceo-review
     context: |
       Design plan audit. Rate usability, visual hierarchy, responsiveness,
@@ -41,10 +37,8 @@ stages:
       reflection_after_each: false
 
   - name: eng-review
-    archetype: review
+    archetype: report
     description: "Engineering plan review — lock architecture and test strategy"
-    worker: gstack-reviewer
-    evaluator: gstack-architect
     inputs_from: design-audit
     context: |
       Engineering plan review. Lock the architecture. Verify data flow is
@@ -63,10 +57,8 @@ stages:
       reflection_after_each: false
 
   - name: devex-review
-    archetype: review
+    archetype: report
     description: "Developer experience review — test as three personas"
-    worker: gstack-qa
-    evaluator: gstack-product
     inputs_from: eng-review
     context: |
       Developer experience review. Test as three personas: new developer

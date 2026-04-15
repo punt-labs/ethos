@@ -4,8 +4,6 @@ stages:
   - name: validate
     archetype: design
     description: "YC Office Hours validation — six forcing questions"
-    worker: gstack-product
-    evaluator: gstack-architect
     context: |
       YC Office Hours validation. Six forcing questions: Who is the user?
       What is the problem? Why now? What is the insight? What is the unfair
@@ -24,8 +22,6 @@ stages:
   - name: scope
     archetype: design
     description: "CEO scope review — dream big, then scope to ship this week"
-    worker: gstack-product
-    evaluator: gstack-architect
     inputs_from: validate
     context: |
       CEO scope review. Dream big — what is the 10-star version? Then scope
@@ -44,8 +40,6 @@ stages:
   - name: architecture
     archetype: design
     description: "Engineering plan review — lock architecture before implementation"
-    worker: gstack-architect
-    evaluator: gstack-reviewer
     inputs_from: scope
     context: |
       Engineering plan review. Lock the architecture. Enumerate every edge
@@ -63,10 +57,8 @@ stages:
       reflection_after_each: true
 
   - name: design-review
-    archetype: review
+    archetype: report
     description: "Design plan review — rate each dimension 0-10"
-    worker: gstack-architect
-    evaluator: gstack-product
     inputs_from: architecture
     context: |
       Design plan review. Rate each dimension 0-10: usability, visual

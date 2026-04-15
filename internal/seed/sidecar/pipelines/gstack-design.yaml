@@ -4,8 +4,6 @@ stages:
   - name: system
     archetype: design
     description: "Design system definition — typography, color, spacing, motion"
-    worker: gstack-architect
-    evaluator: gstack-product
     context: |
       Design system definition. Define typography (display, body, mono),
       color palette (primary, neutrals, semantic), spacing scale, and motion
@@ -25,8 +23,6 @@ stages:
   - name: explore
     archetype: design
     description: "Generate 4-6 design directions with explicit tradeoffs"
-    worker: gstack-architect
-    evaluator: gstack-product
     inputs_from: system
     context: |
       Generate 4-6 design directions. Each direction applies the design
@@ -43,15 +39,13 @@ stages:
       reflection_after_each: true
 
   - name: audit
-    archetype: review
-    description: "Design audit — rate dimensions 0-10, fix any below 7"
-    worker: gstack-reviewer
-    evaluator: gstack-architect
+    archetype: report
+    description: "Design audit — rate dimensions 0-10, report deficiencies"
     inputs_from: explore
     context: |
       Design audit. Rate each dimension 0-10: visual hierarchy, whitespace
       usage, typography consistency, color usage, responsive behavior,
-      accessibility. Fix any dimension below 7 before proceeding.
+      accessibility. Report dimensions below 7 for the implement stage to fix.
     success_criteria:
       - "all dimensions rated 7+"
       - "accessibility verified"
@@ -64,8 +58,6 @@ stages:
   - name: implement
     archetype: implement
     description: "Generate production HTML/CSS from approved design system"
-    worker: gstack-implementer
-    evaluator: gstack-reviewer
     inputs_from: audit
     context: |
       Generate production HTML/CSS matching the approved design system and
