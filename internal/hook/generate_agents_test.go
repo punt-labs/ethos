@@ -1701,3 +1701,39 @@ func TestGenerateAgentFiles_PartialWriteFailure(t *testing.T) {
 	assert.True(t, info.IsDir(),
 		"pre-created directory at bwk.md must stay a directory")
 }
+
+// TestGenerateAgentFiles_UpdateDiffSummary verifies that regenerating
+// a changed agent file logs an "updated" message with a line delta,
+// and that a newly created file logs "wrote" instead.
+func TestGenerateAgentFiles_UpdateDiffSummary(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+
+	// First generation — creates bwk.md from scratch.
+	stderr1 := captureStderr(t, func() {
+		require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
+	})
+	assert.Contains(t, stderr1, "wrote", "first generation must log 'wrote'")
+	assert.NotContains(t, stderr1, "updated", "first generation must not log 'updated'")
+
+	// Modify personality to change the generated content.
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	writeFile(t, filepath.Join(ethosDir, "personalities", "kernighan.md"),
+		"# Kernighan\n\nGo specialist sub-agent.\n\n## Core Principles\n\nSimplicity, clarity, generality.\n\n## Extra Section\n\nNew content added here.\n")
+
+	// Rebuild stores so the new personality is picked up.
+	ids = identity.NewLayeredStore(
+		identity.NewStore(ethosDir),
+		identity.NewStore(ethosDir),
+	)
+	teams = team.NewLayeredStore(ethosDir, ethosDir)
+	roles = role.NewLayeredStore(ethosDir, ethosDir)
+
+	// Second generation — updates bwk.md with different content.
+	stderr2 := captureStderr(t, func() {
+		require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
+	})
+	assert.Contains(t, stderr2, "updated")
+	assert.Contains(t, stderr2, "bwk.md")
+	assert.Contains(t, stderr2, "lines")
+	assert.NotContains(t, stderr2, "wrote", "update path must not log 'wrote'")
+}

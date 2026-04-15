@@ -1393,8 +1393,9 @@ func canonicalRoleSlug(name string) string {
 // The caller must hold the directory-level create lock so that the
 // scan-then-write transition is atomic with respect to other Creates.
 //
-// A Load failure on any existing mission is fatal — silently skipping
-// a corrupt mission would defeat the conflict check.
+// A mission that fails to load is skipped with a stderr warning.
+// Unloadable missions cannot conflict — the safe default is skip,
+// not block all future creates.
 func (s *Store) checkWriteSetConflicts(c *Contract) error {
 	ids, err := s.List()
 	if err != nil {
@@ -1412,7 +1413,8 @@ func (s *Store) checkWriteSetConflicts(c *Contract) error {
 		}
 		existing, err := s.Load(id)
 		if err != nil {
-			return fmt.Errorf("create: failed to load existing mission %q: %w", id, err)
+			fmt.Fprintf(os.Stderr, "ethos: warning: skipping mission %q during conflict check: %v\n", id, err)
+			continue
 		}
 		if existing.Status == StatusOpen {
 			// Skip missions in the same pipeline. Pipeline stages are
