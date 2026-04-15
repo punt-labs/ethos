@@ -333,6 +333,38 @@ func writeGitmodulesLegacy(t *testing.T, repo, url string) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitmodules"), []byte(body), 0o644))
 }
 
+// TestLegacySubmoduleURL_URLBeforePath verifies that the parser finds
+// the url even when it appears before path within a section. Git config
+// format does not mandate key order.
+func TestLegacySubmoduleURL_URLBeforePath(t *testing.T) {
+	repo := t.TempDir()
+	body := "[submodule \".punt-labs/ethos\"]\n" +
+		"\turl = git@github.com:punt-labs/team.git\n" +
+		"\tpath = .punt-labs/ethos\n"
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitmodules"), []byte(body), 0o644))
+
+	url, err := legacySubmoduleURL(repo)
+	require.NoError(t, err)
+	assert.Equal(t, "git@github.com:punt-labs/team.git", url)
+}
+
+// TestLegacySubmoduleURL_MultipleSections verifies that a non-matching
+// section before the target does not leak its url into the result.
+func TestLegacySubmoduleURL_MultipleSections(t *testing.T) {
+	repo := t.TempDir()
+	body := "[submodule \"other\"]\n" +
+		"\tpath = vendor/other\n" +
+		"\turl = git@github.com:acme/other.git\n" +
+		"[submodule \".punt-labs/ethos\"]\n" +
+		"\turl = git@github.com:punt-labs/team.git\n" +
+		"\tpath = .punt-labs/ethos\n"
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitmodules"), []byte(body), 0o644))
+
+	url, err := legacySubmoduleURL(repo)
+	require.NoError(t, err)
+	assert.Equal(t, "git@github.com:punt-labs/team.git", url)
+}
+
 func TestMigrate_NoSubmodule(t *testing.T) {
 	setupBundleTestEnv(t)
 	stdout, _, err := execHandler(t, "team", "migrate")

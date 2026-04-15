@@ -404,8 +404,8 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 
 // legacySubmoduleURL scans .gitmodules under repoRoot for an entry
 // whose path is .punt-labs/ethos and returns its url. Returns "" if no
-// such entry exists. Parsing is line-oriented — .gitmodules is INI-ish
-// and not worth a full parser for two fields.
+// such entry exists. Key order within a section does not matter — url
+// and path can appear in any order.
 func legacySubmoduleURL(repoRoot string) (string, error) {
 	p := filepath.Join(repoRoot, ".gitmodules")
 	f, err := os.Open(p)
@@ -417,20 +417,24 @@ func legacySubmoduleURL(repoRoot string) (string, error) {
 	}
 	defer f.Close()
 
-	const target = ".punt-labs/ethos"
-	var inMatch bool
-	var url string
+	type section struct {
+		path, url string
+	}
+	var sections []section
+	var cur *section
+
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
 		if strings.HasPrefix(line, "[submodule") {
-			// New section resets match state; commit url if we already
-			// found one for the target path.
-			if inMatch && url != "" {
-				return url, nil
-			}
-			inMatch = false
-			url = ""
+			sections = append(sections, section{})
+			cur = &sections[len(sections)-1]
+			continue
+		}
+		if cur == nil {
 			continue
 		}
 		eq := strings.IndexByte(line, '=')
@@ -441,20 +445,20 @@ func legacySubmoduleURL(repoRoot string) (string, error) {
 		val := strings.TrimSpace(line[eq+1:])
 		switch key {
 		case "path":
-			if val == target {
-				inMatch = true
-			}
+			cur.path = val
 		case "url":
-			if inMatch {
-				url = val
-			}
+			cur.url = val
 		}
 	}
 	if err := sc.Err(); err != nil {
 		return "", fmt.Errorf("scanning .gitmodules: %w", err)
 	}
-	if inMatch {
-		return url, nil
+
+	const target = ".punt-labs/ethos"
+	for _, s := range sections {
+		if s.path == target {
+			return s.url, nil
+		}
 	}
 	return "", nil
 }
@@ -467,7 +471,15 @@ func runTeamMigrate(cmd *cobra.Command) error {
 	out := cmd.OutOrStdout()
 
 	legacyDir := filepath.Join(repoRoot, ".punt-labs", "ethos")
-	if info, err := os.Stat(legacyDir); err != nil || !info.IsDir() {
+	info, err := os.Stat(legacyDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintln(out, "no legacy submodule detected at .punt-labs/ethos/ — nothing to migrate")
+			return nil
+		}
+		return fmt.Errorf("stat %s: %w", legacyDir, err)
+	}
+	if !info.IsDir() {
 		fmt.Fprintln(out, "no legacy submodule detected at .punt-labs/ethos/ — nothing to migrate")
 		return nil
 	}

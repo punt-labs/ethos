@@ -256,6 +256,10 @@ func TestCLI_BundleFlow(t *testing.T) {
 		t.Skip("ethos binary not built")
 	}
 
+	// setupCLISubprocessEnv pre-creates .punt-labs/ethos/ as a legacy
+	// repo-local layer, which makes `team active` report "(legacy)"
+	// before any bundle activation. The bundle flow test needs a clean
+	// repo with no legacy directory, so set up inline.
 	home := t.TempDir()
 	repo := t.TempDir()
 

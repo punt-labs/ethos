@@ -7,10 +7,11 @@ for any organization using ethos, not specific to Punt Labs.
 
 ## Overview
 
-Ethos stores identity data in `.punt-labs/ethos/` relative to the repo
-root. You populate this directory with identities, personalities,
-writing styles, talents, roles, and teams. Three distribution options
-fit three user profiles:
+Ethos resolves identity data through three layers, in order:
+repo-local `.punt-labs/ethos/` (override), the active bundle, and
+global `~/.punt-labs/ethos/`. Each layer holds the same subdirectories
+— identities, personalities, writing styles, talents, roles, and teams.
+Three distribution options fit three user profiles:
 
 1. **Bundle (preferred for starter teams)** — a self-contained team
    directory activated per repo. Gstack ships embedded in ethos and
