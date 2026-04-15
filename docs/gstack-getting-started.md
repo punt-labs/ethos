@@ -105,9 +105,12 @@ ethos mission log <id>                # Event audit trail
 ### Override personalities
 
 The gstack agents use personalities from
-`~/.punt-labs/ethos/bundles/gstack/personalities/gstack-*.md`. Bundle
-content is read-only; to override an agent's personality, edit the
-identity in your repo-local or global layer:
+`~/.punt-labs/ethos/bundles/gstack/personalities/gstack-*.md`. Treat
+bundle content like vendored defaults: you can edit seeded files in
+place if needed, and reseeding preserves those edits unless you pass
+`--force`. For routine customization, prefer overriding in your
+repo-local or global layer (the three-layer resolver picks up shadows
+automatically):
 
 ```yaml
 # .punt-labs/ethos/identities/gstack-implementer.yaml

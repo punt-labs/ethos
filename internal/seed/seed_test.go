@@ -88,6 +88,8 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "personalities", "gstack-architect.md"))
 	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "writing-styles", "gstack-builder.md"))
 	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "roles", "architect.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "talents", "engineering.md"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "talents", "product-development.md"))
 	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-plan.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-ship.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-design.yaml"))
