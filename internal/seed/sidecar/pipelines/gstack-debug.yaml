@@ -2,7 +2,7 @@ name: gstack-debug
 description: "gstack debug pipeline: investigate root cause, fix with regression test, verify"
 stages:
   - name: investigate
-    archetype: report
+    archetype: investigate
     description: "Systematic root cause investigation — reproduce, trace, confirm"
     worker: gstack-qa
     evaluator: gstack-architect

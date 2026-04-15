@@ -40,7 +40,7 @@ stages:
       reflection_after_each: true
 
   - name: security
-    archetype: review
+    archetype: audit
     description: "Security audit — OWASP Top 10 and STRIDE"
     worker: gstack-security
     evaluator: gstack-architect
