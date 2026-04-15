@@ -398,6 +398,240 @@ Use the team and role MCP tools when you need to look up specific
 details: who has a particular role, which repos a team covers, or what
 tools a role permits.
 
+## Missions
+
+A mission is a typed delegation contract between a leader, a worker,
+and an evaluator. It binds a write-set (which files the worker may
+touch), success criteria, a round budget, and an optional ticket
+reference into a single artifact that ethos enforces at runtime.
+
+### Creating Missions
+
+Two paths: YAML file for full control, or `dispatch` for quick
+one-liners.
+
+**From a YAML file:**
+
+```bash
+ethos mission create --file contract.yaml
+```
+
+**From CLI flags (dispatch):**
+
+```bash
+ethos mission dispatch \
+  --worker bwk \
+  --evaluator djb \
+  --write-set "internal/session/store.go,internal/session/store_test.go" \
+  --criteria "purge removes stale entries,test covers TTL edge case" \
+  --context "Follow-up from PR #280" \
+  --ticket ethos-7al \
+  --type implement \
+  --budget 2
+```
+
+Required flags: `--worker`, `--evaluator`, `--write-set`, `--criteria`.
+Optional: `--context`, `--ticket`, `--type` (default: implement),
+`--budget` (default: 2). Leader is resolved from the repo's configured
+`agent:` value; if unset or outside a repo, falls back to `"claude"`.
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__mission with method="create", contract={...}
+```
+
+### Showing and Listing
+
+```bash
+ethos mission show <id>               # Contract, results, reflections
+ethos mission show <id> --json        # JSON payload
+ethos mission list                    # All missions
+ethos mission list --status open      # Filter by status
+ethos mission list --pipeline <id>    # Pipeline missions in stage order
+```
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__mission with method="show", mission_id="m-2026-04-14-001"
+Call mcp__plugin_ethos_self__mission with method="list", status="open"
+```
+
+### Result Artifacts
+
+Before closing a mission, the worker submits a structured result:
+
+```bash
+ethos mission result <id> --file result.yaml
+ethos mission results <id>            # List all results for a mission
+```
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__mission with method="result", mission_id="...", result={...}
+Call mcp__plugin_ethos_self__mission with method="results", mission_id="..."
+```
+
+### Reflections and Round Advancement
+
+After each round, the leader records a reflection and optionally
+advances to the next round:
+
+```bash
+ethos mission reflect <id> --file reflection.yaml
+ethos mission advance <id>
+ethos mission reflections <id>
+```
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__mission with method="reflect", mission_id="...", reflection={...}
+Call mcp__plugin_ethos_self__mission with method="advance", mission_id="..."
+Call mcp__plugin_ethos_self__mission with method="reflections", mission_id="..."
+```
+
+### Closing
+
+Closing requires a valid result artifact for the current round:
+
+```bash
+ethos mission close <id>
+ethos mission close <id> --status failed
+ethos mission close <id> --status escalated
+```
+
+Closing auto-appends a summary line to `.ethos/missions.jsonl` for
+commit-ready traceability. The JSONL file is append-only and intended
+to be committed.
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__mission with method="close", mission_id="...", status="closed"
+```
+
+### Audit Trail
+
+Every mission operation appends to a per-mission JSONL event log:
+
+```bash
+ethos mission log <id>                # Full event history
+ethos mission log <id> --event create,close   # Filter by event type
+ethos mission log <id> --since 2026-04-14T00:00:00Z
+ethos mission log <id> --json
+```
+
+Via MCP:
+
+```text
+Call mcp__plugin_ethos_self__mission with method="log", mission_id="..."
+```
+
+### Linting
+
+Advisory pre-delegation linter with heuristic checks:
+
+```bash
+ethos mission lint contract.yaml
+ethos mission lint contract.yaml --json
+```
+
+## Pipelines
+
+Pipeline templates are multi-stage workflows composed from archetypes.
+Each stage becomes a mission with dependency ordering.
+
+### Listing and Showing
+
+```bash
+ethos mission pipeline list                   # All 13 templates
+ethos mission pipeline list --json
+ethos mission pipeline show gstack-debug      # Stages, archetypes, defaults
+ethos mission pipeline show gstack-debug --json
+```
+
+### Instantiating
+
+```bash
+ethos mission pipeline instantiate gstack-debug \
+  --var target=internal/session/ \
+  --leader gstack-architect \
+  --worker gstack-implementer \
+  --evaluator gstack-reviewer
+```
+
+Creates one mission per stage with `depends_on` references linking
+them in order. Use `--dry-run` to preview the contracts without
+creating them.
+
+Full flag list: `--var key=value` (repeatable), `--leader`, `--worker`,
+`--evaluator`, `--id` (override auto-generated pipeline ID),
+`--dry-run`.
+
+### Available Templates
+
+| Template | Stages | Purpose |
+|----------|--------|---------|
+| `quick` | 2 | Minimal implement + review |
+| `standard` | 5 | Implement, test, review, document, coverage |
+| `full` | 9 | PR/FAQ through coverage |
+| `product` | 3 | PR/FAQ before engineering |
+| `formal` | 4 | Z-Spec before implementation |
+| `docs` | 3 | Documentation-only |
+| `coe` | 3 | Cause of error investigation |
+| `coverage` | 3 | Targeted test improvement |
+| `gstack-plan` | 4 | Idea validation to architecture lock |
+| `gstack-ship` | 5 | Code review to released and documented |
+| `gstack-design` | 4 | Design system to production HTML/CSS |
+| `gstack-debug` | 3 | Root cause investigation to verified fix |
+| `gstack-review` | 4 | Multi-perspective review pipeline |
+
+## Archetypes
+
+Archetypes are typed subtypes for missions. Each defines default
+constraints: whether an empty write-set is allowed, write-set glob
+patterns, and required fields.
+
+| Archetype | Empty write-set | Typical use |
+|-----------|-----------------|-------------|
+| `implement` | No | Code changes, feature work |
+| `design` | No | Architecture, system design |
+| `review` | No | Code review, findings reports |
+| `test` | No | Test writing, coverage improvement |
+| `report` | Yes | Status reports, audit summaries |
+| `task` | No | Generic bounded tasks |
+| `inbox` | Yes | Triage, email-triggered work |
+| `investigate` | No | Root cause analysis, debugging |
+| `audit` | No | Security audits, compliance checks |
+| `orchestrate` | No | Multi-agent coordination |
+
+Set the archetype via `--type` on dispatch or the `type` field in
+contract YAML. Defaults to `implement`.
+
+## Gstack Starter Team
+
+Ethos ships with a gstack starter team: 6 agents (architect,
+implementer, reviewer, qa, security, product) with personalities
+ported from the gstack builder framework's principles -- Boil the
+Lake, Search Before Building, User Sovereignty. 5 pipeline templates
+(gstack-plan, gstack-ship, gstack-design, gstack-debug,
+gstack-review) and 3 archetypes (investigate, audit, orchestrate)
+support the team's workflows.
+
+Configure your repo to use the gstack team:
+
+```yaml
+# .punt-labs/ethos.yaml
+agent: gstack-architect
+team: gstack
+```
+
+See [Gstack starter team](docs/gstack-getting-started.md) for the
+full setup guide.
+
 ## Identity Resolution
 
 Human and agent identities are resolved automatically — no manual
