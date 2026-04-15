@@ -199,7 +199,8 @@ func TestList_SortsByNameWithinSource(t *testing.T) {
 // --- LoadBundle tests ---
 
 func TestLoadBundle_WithManifest(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "my-bundle")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	writeFile(t, filepath.Join(dir, "bundle.yaml"),
 		"name: my-bundle\nversion: 2\ndescription: test\n")
 
@@ -235,7 +236,8 @@ func TestLoadBundle_Missing(t *testing.T) {
 }
 
 func TestLoadBundle_MalformedManifest(t *testing.T) {
-	dir := t.TempDir()
+	dir := filepath.Join(t.TempDir(), "b")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	writeFile(t, filepath.Join(dir, "bundle.yaml"), "name: [unclosed\n")
 
 	_, err := LoadBundle(dir)
@@ -270,9 +272,7 @@ func TestValidate_NameMismatch(t *testing.T) {
 	require.NoError(t, os.MkdirAll(bundleDir, 0o755))
 	writeFile(t, filepath.Join(bundleDir, "bundle.yaml"), "name: other\n")
 
-	b, err := LoadBundle(bundleDir)
-	require.NoError(t, err)
-	err = b.Validate()
+	_, err := LoadBundle(bundleDir)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not match")
 }
@@ -280,4 +280,118 @@ func TestValidate_NameMismatch(t *testing.T) {
 func TestValidate_MissingPath(t *testing.T) {
 	b := &Bundle{Name: "ghost", Path: filepath.Join(t.TempDir(), "nope")}
 	require.Error(t, b.Validate())
+}
+
+// --- Security and symlink tests ---
+
+func TestResolveActive_RejectsPathTraversal(t *testing.T) {
+	repo := t.TempDir()
+	global := t.TempDir()
+	writeRepoConfig(t, repo, "active_bundle: ../../etc\n")
+
+	b, err := ResolveActive(repo, global)
+	require.Error(t, err)
+	assert.Nil(t, b)
+	assert.Contains(t, err.Error(), "invalid active_bundle")
+}
+
+func TestResolveActive_RejectsAbsolutePath(t *testing.T) {
+	repo := t.TempDir()
+	global := t.TempDir()
+	writeRepoConfig(t, repo, "active_bundle: /etc\n")
+
+	b, err := ResolveActive(repo, global)
+	require.Error(t, err)
+	assert.Nil(t, b)
+	assert.Contains(t, err.Error(), "invalid active_bundle")
+}
+
+func TestResolveActive_RejectsInvalidSlug(t *testing.T) {
+	repo := t.TempDir()
+	global := t.TempDir()
+	writeRepoConfig(t, repo, "active_bundle: \"Bad Name\"\n")
+
+	b, err := ResolveActive(repo, global)
+	require.Error(t, err)
+	assert.Nil(t, b)
+	assert.Contains(t, err.Error(), "invalid active_bundle")
+}
+
+func TestLoadBundle_ValidatesManifestMismatch(t *testing.T) {
+	dir := t.TempDir()
+	bundleDir := filepath.Join(dir, "foo")
+	require.NoError(t, os.MkdirAll(bundleDir, 0o755))
+	writeFile(t, filepath.Join(bundleDir, "bundle.yaml"), "name: bar\n")
+
+	_, err := LoadBundle(bundleDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not match")
+}
+
+func TestValidateName(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"empty", "", false},
+		{"valid slug", "gstack", true},
+		{"with digits", "team-2", true},
+		{"starts with digit", "9to5", true},
+		{"uppercase", "Gstack", false},
+		{"space", "bad name", false},
+		{"slash", "a/b", false},
+		{"backslash", `a\b`, false},
+		{"dotdot", "..", false},
+		{"parent ref", "../etc", false},
+		{"trailing dotdot", "foo/..", false},
+		{"dot", ".", false},
+		{"leading hyphen", "-foo", false},
+		{"absolute", "/etc", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateName(c.in)
+			if c.ok {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestList_SkipsInvalidBundle(t *testing.T) {
+	repo := t.TempDir()
+	global := t.TempDir()
+	// Good bundle.
+	mkRepoBundle(t, repo, "good", "name: good\n")
+	// Bad bundle: manifest name mismatches directory basename.
+	mkRepoBundle(t, repo, "bad", "name: wrong\n")
+
+	got, err := List(repo, global)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "good", got[0].Name)
+}
+
+func TestList_SymlinkedBundleDiscovered(t *testing.T) {
+	repo := t.TempDir()
+	global := t.TempDir()
+
+	// Create the real bundle outside the bundles dir, then symlink it in.
+	realDir := filepath.Join(t.TempDir(), "real")
+	require.NoError(t, os.MkdirAll(realDir, 0o755))
+	writeFile(t, filepath.Join(realDir, "bundle.yaml"), "name: linked\n")
+
+	bundlesDir := filepath.Join(repo, ".punt-labs", "ethos-bundles")
+	require.NoError(t, os.MkdirAll(bundlesDir, 0o755))
+	link := filepath.Join(bundlesDir, "linked")
+	require.NoError(t, os.Symlink(realDir, link))
+
+	got, err := List(repo, global)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, "linked", got[0].Name)
+	assert.Equal(t, SourceRepo, got[0].Source)
 }

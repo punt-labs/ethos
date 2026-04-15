@@ -33,6 +33,9 @@ func ResolveActive(repoRoot, globalRoot string) (*Bundle, error) {
 	}
 
 	if name != "" {
+		if err := validateName(name); err != nil {
+			return nil, fmt.Errorf("bundle: invalid active_bundle name %q: %w", name, err)
+		}
 		if repoRoot != "" {
 			p := filepath.Join(repoRoot, ".punt-labs", "ethos-bundles", name)
 			if isDir(p) {
@@ -119,10 +122,11 @@ func List(repoRoot, globalRoot string) ([]Bundle, error) {
 	return out, nil
 }
 
-// LoadBundle loads a bundle from a path. Returns an error if the path
-// does not exist or is not a directory. If bundle.yaml is present it is
-// parsed; otherwise HasManifest is false and Name is derived from the
-// directory basename.
+// LoadBundle loads a bundle from a path and validates its structure.
+// Returns an error if the path does not exist, is not a directory,
+// has an invalid manifest name, or fails Validate. If bundle.yaml is
+// present it is parsed; otherwise HasManifest is false and Name is
+// derived from the directory basename.
 func LoadBundle(path string) (*Bundle, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -141,6 +145,9 @@ func LoadBundle(path string) (*Bundle, error) {
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
+			if err := b.Validate(); err != nil {
+				return nil, err
+			}
 			return b, nil
 		}
 		return nil, fmt.Errorf("reading %s: %w", manifestPath, err)
@@ -150,13 +157,23 @@ func LoadBundle(path string) (*Bundle, error) {
 	}
 	b.HasManifest = true
 	if b.Manifest.Name != "" {
+		if err := validateName(b.Manifest.Name); err != nil {
+			return nil, fmt.Errorf("bundle %q: invalid manifest name %q: %w",
+				filepath.Base(path), b.Manifest.Name, err)
+		}
 		b.Name = b.Manifest.Name
+	}
+	if err := b.Validate(); err != nil {
+		return nil, err
 	}
 	return b, nil
 }
 
-// scanBundles returns every immediate subdirectory of dir as a Bundle.
-// A missing dir is not an error — returns an empty slice.
+// scanBundles returns every immediate subdirectory of dir as a Bundle,
+// following symlinks so that symlinked bundle dirs are discovered.
+// A missing dir is not an error — returns an empty slice. Invalid
+// bundles are logged to stderr and skipped; a single broken entry
+// must not poison the whole list.
 func scanBundles(dir string, src Source) ([]Bundle, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -167,13 +184,14 @@ func scanBundles(dir string, src Source) ([]Bundle, error) {
 	}
 	var out []Bundle
 	for _, e := range entries {
-		if !e.IsDir() {
+		p := filepath.Join(dir, e.Name())
+		if !isDir(p) {
 			continue
 		}
-		p := filepath.Join(dir, e.Name())
 		b, err := LoadBundle(p)
 		if err != nil {
-			return nil, fmt.Errorf("bundle %q: %w", e.Name(), err)
+			fmt.Fprintf(os.Stderr, "ethos: skipping bundle %q: %v\n", e.Name(), err)
+			continue
 		}
 		b.Source = src
 		out = append(out, *b)
