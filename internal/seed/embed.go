@@ -14,6 +14,9 @@ var Archetypes embed.FS
 //go:embed sidecar/pipelines/*.yaml
 var Pipelines embed.FS
 
+//go:embed all:sidecar/bundles
+var Bundles embed.FS
+
 //go:embed sidecar/skills/baseline-ops/SKILL.md sidecar/skills/mission/SKILL.md sidecar/skills/create-from-project/SKILL.md
 var Skills embed.FS
 

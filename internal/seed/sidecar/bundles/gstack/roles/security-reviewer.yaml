@@ -1,0 +1,12 @@
+name: security-reviewer
+responsibilities:
+  - OWASP Top 10 and STRIDE threat modeling
+  - trust boundary and input validation audit
+  - credential handling and dependency supply chain review
+permissions:
+  - block-merge-on-security
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
