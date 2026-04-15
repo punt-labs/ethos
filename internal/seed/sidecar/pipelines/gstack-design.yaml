@@ -1,0 +1,83 @@
+name: gstack-design
+description: "gstack design pipeline: define system, explore variants, audit, fix, generate HTML"
+stages:
+  - name: system
+    archetype: design
+    description: "Design system definition — typography, color, spacing, motion"
+    worker: gstack-architect
+    evaluator: gstack-product
+    context: |
+      Design system definition. Define typography (display, body, mono),
+      color palette (primary, neutrals, semantic), spacing scale, and motion
+      principles. The system must be internally consistent and serve the
+      product's personality.
+    success_criteria:
+      - "typography hierarchy defined (3+ levels)"
+      - "color palette defined with semantic meanings"
+      - "spacing scale documented"
+      - "motion principles stated"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: explore
+    archetype: design
+    description: "Generate 4-6 design directions with explicit tradeoffs"
+    worker: gstack-architect
+    evaluator: gstack-product
+    inputs_from: system
+    context: |
+      Generate 4-6 design directions. Each direction applies the design
+      system differently. Present as a comparison board with explicit
+      tradeoffs. The user picks the direction — AI recommends, user decides.
+    success_criteria:
+      - "4+ distinct directions presented"
+      - "tradeoffs explicit for each direction"
+      - "user approval on direction"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: audit
+    archetype: review
+    description: "Design audit — rate dimensions 0-10, fix any below 7"
+    worker: gstack-reviewer
+    evaluator: gstack-architect
+    inputs_from: explore
+    context: |
+      Design audit. Rate each dimension 0-10: visual hierarchy, whitespace
+      usage, typography consistency, color usage, responsive behavior,
+      accessibility. Fix any dimension below 7 before proceeding.
+    success_criteria:
+      - "all dimensions rated 7+"
+      - "accessibility verified"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: implement
+    archetype: implement
+    description: "Generate production HTML/CSS from approved design system"
+    worker: gstack-implementer
+    evaluator: gstack-reviewer
+    inputs_from: audit
+    context: |
+      Generate production HTML/CSS matching the approved design system and
+      direction. Use semantic HTML. CSS must follow the design system tokens
+      exactly — no magic numbers. Responsive from mobile to desktop.
+    success_criteria:
+      - "HTML is semantic and accessible"
+      - "CSS uses design system tokens only"
+      - "responsive across breakpoints"
+      - "visual match to approved direction"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true

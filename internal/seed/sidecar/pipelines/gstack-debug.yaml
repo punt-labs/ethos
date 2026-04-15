@@ -1,0 +1,62 @@
+name: gstack-debug
+description: "gstack debug pipeline: investigate root cause, fix with regression test, verify"
+stages:
+  - name: investigate
+    archetype: report
+    description: "Systematic root cause investigation — reproduce, trace, confirm"
+    worker: gstack-qa
+    evaluator: gstack-architect
+    context: |
+      Systematic root cause investigation. Step 1: reproduce the bug
+      reliably. Step 2: trace the origin in code. Step 3: form a hypothesis.
+      Step 4: confirm the hypothesis with evidence. No fixes until root cause
+      is proven — not guessed.
+    success_criteria:
+      - "bug reproduced reliably"
+      - "root cause identified with evidence"
+      - "hypothesis confirmed, not guessed"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: fix
+    archetype: implement
+    description: "Fix the bug with a regression test"
+    worker: gstack-implementer
+    evaluator: gstack-reviewer
+    inputs_from: investigate
+    context: |
+      Fix the bug with a regression test. The test must fail before the fix
+      and pass after. The fix must address the root cause, not the symptom.
+      Check for sibling bugs — the same pattern may exist elsewhere.
+    success_criteria:
+      - "regression test fails before fix, passes after"
+      - "root cause addressed, not symptom"
+      - "sibling instances checked across codebase"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: verify
+    archetype: test
+    description: "End-to-end verification — original failure, full suite, new edges"
+    worker: gstack-qa
+    evaluator: gstack-architect
+    inputs_from: fix
+    context: |
+      Verify the fix end-to-end. Reproduce the original failure path — it
+      must no longer fail. Run the full test suite — no regressions. Check
+      that the fix does not introduce new edge cases.
+    success_criteria:
+      - "original failure no longer reproduces"
+      - "full test suite passes"
+      - "no new edge cases introduced"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false

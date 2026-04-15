@@ -1,0 +1,101 @@
+name: gstack-ship
+description: "gstack shipping pipeline: review, test, security audit, ship, deploy, document, retro"
+stages:
+  - name: review
+    archetype: review
+    description: "Pre-landing code review with severity levels"
+    worker: gstack-reviewer
+    evaluator: gstack-architect
+    context: |
+      Pre-landing code review. Check SQL safety, LLM trust boundaries,
+      performance implications, error handling completeness. Report findings
+      with severity levels. Do not fix — report only.
+    success_criteria:
+      - "all critical findings addressed"
+      - "no unresolved blockers"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: test
+    archetype: test
+    description: "QA testing — golden path and edge cases"
+    worker: gstack-qa
+    evaluator: gstack-reviewer
+    inputs_from: review
+    context: |
+      QA testing through the user's eyes. Test the golden path and edge cases.
+      For each bug found: fix atomically, take before/after evidence, verify
+      the fix. Track health score improvement.
+    success_criteria:
+      - "golden path works end-to-end"
+      - "all critical bugs fixed with evidence"
+      - "health score stable or improved"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+
+  - name: security
+    archetype: review
+    description: "Security audit — OWASP Top 10 and STRIDE"
+    worker: gstack-security
+    evaluator: gstack-architect
+    inputs_from: test
+    context: |
+      Security audit using OWASP Top 10 and STRIDE. Check secrets handling,
+      dependency supply chain, CI/CD pipeline integrity, LLM trust boundaries.
+      Report severity levels. No fixes — report only.
+    success_criteria:
+      - "no critical or high severity findings unaddressed"
+      - "secrets audit complete"
+      - "dependency versions current"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false
+
+  - name: ship
+    archetype: implement
+    description: "Ship the release — merge, bump, changelog, PR"
+    worker: gstack-implementer
+    evaluator: gstack-reviewer
+    inputs_from: security
+    context: |
+      Ship the release. Merge to base branch, run full test suite, bump
+      version, create PR with changelog entry. Commits must be bisectable —
+      each commit is a single logical change.
+    success_criteria:
+      - "all tests pass"
+      - "version bumped"
+      - "changelog updated"
+      - "PR created and approved"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false
+
+  - name: document
+    archetype: design
+    description: "Post-ship documentation — update all affected docs"
+    worker: gstack-implementer
+    evaluator: gstack-product
+    inputs_from: ship
+    context: |
+      Post-ship documentation. Read the diff between this release and the
+      last. Update all affected docs: README, API docs, changelog, migration
+      guides. Every user-visible change must be documented.
+    success_criteria:
+      - "all user-visible changes documented"
+      - "changelog entry written for users, not developers"
+      - "migration guide added if breaking changes"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false

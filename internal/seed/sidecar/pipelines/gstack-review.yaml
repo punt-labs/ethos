@@ -1,0 +1,84 @@
+name: gstack-review
+description: "gstack review pipeline: CEO scope, design audit, engineering review, DevEx check"
+stages:
+  - name: ceo-review
+    archetype: review
+    description: "CEO-level scope review — opportunity cost and 10-star vision"
+    worker: gstack-product
+    evaluator: gstack-architect
+    context: |
+      CEO-level scope review. Is this worth building? What is the 10-star
+      version? What are we NOT building by building this? Challenge assumptions.
+      Expand scope where it makes the product better. Reduce scope where it
+      delays shipping without user impact.
+    success_criteria:
+      - "opportunity cost evaluated"
+      - "scope justified against alternatives"
+      - "10-star vision articulated"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false
+
+  - name: design-audit
+    archetype: review
+    description: "Design plan audit — rate dimensions 0-10 with remediation"
+    worker: gstack-architect
+    evaluator: gstack-product
+    inputs_from: ceo-review
+    context: |
+      Design plan audit. Rate usability, visual hierarchy, responsiveness,
+      accessibility, consistency each 0-10. Any dimension below 7 requires
+      a specific recommendation. Show mockups for recommended changes.
+    success_criteria:
+      - "all dimensions rated"
+      - "remediation for any score below 7"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false
+
+  - name: eng-review
+    archetype: review
+    description: "Engineering plan review — lock architecture and test strategy"
+    worker: gstack-reviewer
+    evaluator: gstack-architect
+    inputs_from: design-audit
+    context: |
+      Engineering plan review. Lock the architecture. Verify data flow is
+      correct. Enumerate edge cases. Identify failure modes. Confirm test
+      strategy covers the critical paths. No implementation until engineering
+      signs off.
+    success_criteria:
+      - "architecture locked"
+      - "edge cases enumerated"
+      - "failure modes identified"
+      - "test strategy confirmed"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false
+
+  - name: devex-review
+    archetype: review
+    description: "Developer experience review — test as three personas"
+    worker: gstack-qa
+    evaluator: gstack-product
+    inputs_from: eng-review
+    context: |
+      Developer experience review. Test as three personas: new developer
+      (first 5 minutes), regular user (daily workflow), power user (edge
+      cases). Check: getting started, error messages, recovery paths,
+      documentation completeness.
+    success_criteria:
+      - "getting started works in under 5 minutes"
+      - "error messages are actionable"
+      - "recovery paths exist for common failures"
+    write_set:
+      - "{target}"
+    budget:
+      rounds: 1
+      reflection_after_each: false

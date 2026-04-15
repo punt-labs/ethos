@@ -1,0 +1,9 @@
+name: investigate
+description: "Investigation mission — reproduce, trace, and fix with evidence"
+budget_default:
+  rounds: 2
+  reflection_after_each: true
+allow_empty_write_set: false
+required_fields:
+  - context
+write_set_constraints: []
