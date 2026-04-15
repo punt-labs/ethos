@@ -230,8 +230,10 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// and trigger a non-deterministic result.
 	t.Chdir(outsideRepoTempDir(t))
 
-	results := RunAll(s, ss)
-	require.Len(t, results, 4)
+	// Pass empty repoRoot and nil teams — the orphaned-agent check
+	// degrades to PASS ("not in a repo") in this configuration.
+	results := RunAll(s, ss, "", nil)
+	require.Len(t, results, 5)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -242,17 +244,18 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Human identity",
 		"Default agent",
 		"Duplicate fields",
+		"Orphaned agent files",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 4, PassedCount(results))
+	assert.Equal(t, 5, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-	results = RunAll(s, ss)
+	results = RunAll(s, ss, "", nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 4)
+	assert.Less(t, PassedCount(results), 5)
 
 	// At least one result should name the identity directory failure.
 	var found bool

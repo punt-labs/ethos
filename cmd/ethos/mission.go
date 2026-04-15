@@ -434,6 +434,41 @@ Examples:
 	},
 }
 
+// --- mission dispatch ---
+
+var (
+	dispatchWorker    string
+	dispatchEvaluator string
+	dispatchWriteSet  string
+	dispatchCriteria  string
+	dispatchContext   string
+	dispatchTicket    string
+	dispatchType      string
+	dispatchBudget    int
+)
+
+var missionDispatchCmd = &cobra.Command{
+	Use:   "dispatch",
+	Short: "Create a mission from flags (no YAML file needed)",
+	Long: `Create a mission contract from command-line flags.
+
+Collapses the write-YAML-then-create ceremony into a single step.
+The leader is auto-detected from the repo's ethos config; falls back
+to "claude" when not in a repo or when no agent is configured.
+
+Required: --worker, --evaluator, --write-set, --criteria.
+Optional: --context, --ticket, --type (default "implement"),
+--budget (default 2).
+
+Uses the same creation path as "ethos mission create --file", including
+the write-set overlap check, evaluator pinning, and archetype
+validation.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionDispatch()
+	},
+}
+
 // --- mission lint ---
 
 var missionLintCmd = &cobra.Command{
@@ -527,6 +562,15 @@ func init() {
 	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".ethos/missions",
 		"Directory to export artifacts into")
 
+	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
+	missionDispatchCmd.Flags().StringVar(&dispatchEvaluator, "evaluator", "", "Evaluator handle (required)")
+	missionDispatchCmd.Flags().StringVar(&dispatchWriteSet, "write-set", "", "Comma-separated file/dir paths (required)")
+	missionDispatchCmd.Flags().StringVar(&dispatchCriteria, "criteria", "", "Comma-separated success criteria (required)")
+	missionDispatchCmd.Flags().StringVar(&dispatchContext, "context", "", "Free-text context")
+	missionDispatchCmd.Flags().StringVar(&dispatchTicket, "ticket", "", "Ticket/bead ID")
+	missionDispatchCmd.Flags().StringVar(&dispatchType, "type", "implement", "Archetype type")
+	missionDispatchCmd.Flags().IntVar(&dispatchBudget, "budget", 2, "Round budget")
+
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
@@ -540,6 +584,7 @@ func init() {
 		missionLogCmd,
 		missionExportCmd,
 		missionLintCmd,
+		missionDispatchCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -1231,6 +1276,86 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("exported: %s\n", resultPath)
 	return nil
+}
+
+// runMissionDispatch handles `ethos mission dispatch`. Builds a
+// Contract from flag values and runs through the same creation path
+// as runMissionCreate — evaluator pinning, write-set overlap check,
+// archetype validation all fire identically.
+func runMissionDispatch() error {
+	if dispatchWorker == "" {
+		return fmt.Errorf("mission dispatch: --worker is required")
+	}
+	if dispatchEvaluator == "" {
+		return fmt.Errorf("mission dispatch: --evaluator is required")
+	}
+	if dispatchWriteSet == "" {
+		return fmt.Errorf("mission dispatch: --write-set is required")
+	}
+	if dispatchCriteria == "" {
+		return fmt.Errorf("mission dispatch: --criteria is required")
+	}
+
+	c := mission.Contract{
+		Leader:          resolveLeader(),
+		Worker:          dispatchWorker,
+		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
+		WriteSet:        splitCSV(dispatchWriteSet),
+		SuccessCriteria: splitCSV(dispatchCriteria),
+		Context:         dispatchContext,
+		Type:            dispatchType,
+		Inputs:          mission.Inputs{Ticket: dispatchTicket},
+		Budget:          mission.Budget{Rounds: dispatchBudget, ReflectionAfterEach: true},
+	}
+
+	ms := missionStoreForCreate()
+	is := identityStore()
+	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
+	if err != nil {
+		return fmt.Errorf("mission dispatch: %w", err)
+	}
+	if err := ms.ApplyServerFields(&c, time.Now(), sources); err != nil {
+		return fmt.Errorf("mission dispatch: %w", err)
+	}
+	if err := ms.Create(&c); err != nil {
+		return fmt.Errorf("mission dispatch: %w", err)
+	}
+
+	if jsonOutput {
+		printJSON(&c)
+		return nil
+	}
+	fmt.Printf("dispatched: %s worker=%s evaluator=%s write_set=%d criteria=%d budget=%d\n",
+		c.MissionID, c.Worker, c.Evaluator.Handle,
+		len(c.WriteSet), len(c.SuccessCriteria), c.Budget.Rounds)
+	return nil
+}
+
+// resolveLeader returns the agent handle from the repo's ethos config.
+// Falls back to "claude" when not in a repo or when no agent is
+// configured — the common case for dispatch is a leader session inside
+// a repo, but dispatch should not fail when run outside one.
+func resolveLeader() string {
+	repoRoot := resolve.FindRepoRoot()
+	agent, err := resolve.ResolveAgent(repoRoot)
+	if err == nil && agent != "" {
+		return agent
+	}
+	return "claude"
+}
+
+// splitCSV splits s on commas, trims whitespace from each element,
+// and drops empty strings.
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // runMissionLint handles `ethos mission lint <contract.yaml>`.

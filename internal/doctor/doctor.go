@@ -5,11 +5,14 @@ package doctor
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/team"
 )
 
 // Result holds the outcome of a single health check.
@@ -25,7 +28,7 @@ func (r Result) Passed() bool {
 }
 
 // RunAll executes every standard health check and returns the results.
-func RunAll(s identity.IdentityStore, ss *session.Store) []Result {
+func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, teams *team.LayeredStore) []Result {
 	checks := []struct {
 		name string
 		fn   func(identity.IdentityStore, *session.Store) (string, bool)
@@ -36,7 +39,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store) []Result {
 		{"Duplicate fields", CheckDuplicateFields},
 	}
 
-	results := make([]Result, 0, len(checks))
+	results := make([]Result, 0, len(checks)+1)
 	for _, c := range checks {
 		detail, ok := c.fn(s, ss)
 		status := "PASS"
@@ -45,6 +48,8 @@ func RunAll(s identity.IdentityStore, ss *session.Store) []Result {
 		}
 		results = append(results, Result{Name: c.name, Status: status, Detail: detail})
 	}
+
+	results = append(results, CheckOrphanedAgentFiles(repoRoot, teams))
 	return results
 }
 
@@ -67,6 +72,60 @@ func PassedCount(results []Result) int {
 		}
 	}
 	return n
+}
+
+// CheckOrphanedAgentFiles flags agent files in .claude/agents/ whose
+// handle is not a member of any configured team.
+func CheckOrphanedAgentFiles(repoRoot string, teams *team.LayeredStore) Result {
+	name := "Orphaned agent files"
+
+	if repoRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+
+	pattern := filepath.Join(repoRoot, ".claude", "agents", "*.md")
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not glob agents: %s", err)}
+	}
+	if len(matches) == 0 {
+		return Result{Name: name, Status: "PASS", Detail: "no agent files"}
+	}
+
+	teamName, err := resolve.ResolveTeam(repoRoot)
+	if err != nil {
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not load repo config: %s", err)}
+	}
+	if teamName == "" {
+		return Result{Name: name, Status: "PASS", Detail: "no team configured"}
+	}
+	if teams == nil {
+		return Result{Name: name, Status: "PASS", Detail: "no team store available"}
+	}
+
+	t, err := teams.Load(teamName)
+	if err != nil {
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not load team %q: %s", teamName, err)}
+	}
+
+	members := make(map[string]bool, len(t.Members))
+	for _, m := range t.Members {
+		members[m.Identity] = true
+	}
+
+	var orphaned []string
+	for _, path := range matches {
+		handle := strings.TrimSuffix(filepath.Base(path), ".md")
+		if !members[handle] {
+			orphaned = append(orphaned, handle)
+		}
+	}
+
+	if len(orphaned) == 0 {
+		return Result{Name: name, Status: "PASS", Detail: "no orphaned agent files"}
+	}
+	sort.Strings(orphaned)
+	return Result{Name: name, Status: "FAIL", Detail: "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")}
 }
 
 // CheckIdentityDir verifies the identity directory exists.
