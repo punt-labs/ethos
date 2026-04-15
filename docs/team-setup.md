@@ -7,11 +7,24 @@ for any organization using ethos, not specific to Punt Labs.
 
 ## Overview
 
-Ethos stores identity data in `.punt-labs/ethos/` relative to the repo
-root. You populate this directory with identities, personalities,
-writing styles, talents, roles, and teams. Every project that shares
-the same team data points to the same directory — either by copying
-the files or (recommended) by sharing them as a git submodule.
+Ethos resolves identity data through three layers, in order:
+repo-local `.punt-labs/ethos/` (override), the active bundle, and
+global `~/.punt-labs/ethos/`. Each layer holds the same subdirectories
+— identities, personalities, writing styles, talents, roles, and teams.
+Three distribution options fit three user profiles:
+
+1. **Bundle (preferred for starter teams)** — a self-contained team
+   directory activated per repo. Gstack ships embedded in ethos and
+   deploys on `ethos seed`. Activate with
+   `ethos team activate gstack`. Add your own with
+   `ethos team add-bundle <git-url>`.
+2. **Repo-local files (for bespoke teams)** — author YAML directly
+   under `.punt-labs/ethos/` in the repo. Best when the team lives
+   alongside the code and nowhere else.
+3. **Submodule (legacy)** — share `.punt-labs/ethos/` across repos as
+   a git submodule of a team registry. Still supported. New users
+   should prefer bundles; `ethos team migrate` converts a legacy
+   submodule to the bundles layout.
 
 ## Directory Structure
 
@@ -201,7 +214,27 @@ Code session and which team context to inject.
 
 ## Sharing Across Repos
 
-For teams that work across multiple repositories, extract the
+For teams that work across multiple repositories, two options exist.
+
+### Option A: Bundle (recommended)
+
+Package the team as a bundle — a directory with a `bundle.yaml`
+manifest and the standard subdirectories (`identities/`, `teams/`,
+etc.). Publish it as a git repo and add it to consumers:
+
+```bash
+ethos team add-bundle git@github.com:myorg/team.git --name myorg --apply
+ethos team activate myorg
+```
+
+`add-bundle` submodules the bundle under
+`.punt-labs/ethos-bundles/<name>/` by default; `--global` clones it
+to `~/.punt-labs/ethos/bundles/<name>/` instead. Activation is
+per-repo via `active_bundle` in `.punt-labs/ethos.yaml`.
+
+### Option B: Legacy submodule at `.punt-labs/ethos/`
+
+The original sharing mechanism. Still supported. Extract the
 `.punt-labs/ethos/` directory into its own git repo and add it as a
 submodule in each project:
 
@@ -247,6 +280,9 @@ git commit -m "chore: update team submodule"
 
 The `.punt-labs/ethos.yaml` config file lives in each project (not in
 the submodule) because `agent` and `team` bindings are repo-specific.
+
+To move a legacy submodule to the bundles layout, run
+`ethos team migrate` (dry-run by default; `--apply` to execute).
 
 ## What Happens Automatically
 
