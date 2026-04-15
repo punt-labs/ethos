@@ -9,12 +9,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LayeredStore implements IdentityStore with two layers:
-// repo-local (git-tracked) and user-global (~/.punt-labs/ethos/).
-// Repo-local takes precedence for identity lookup. Extensions
-// always resolve from the global layer.
+// LayeredStore implements IdentityStore with up to three layers:
+// repo-local (git-tracked), bundle (read-only shared content), and
+// user-global (~/.punt-labs/ethos/). Repo-local takes precedence for
+// identity lookup, then bundle, then global. Extensions always resolve
+// from the global layer.
 type LayeredStore struct {
 	repo   *Store // may be nil (not in a git repo)
+	bundle *Store // may be nil (no active bundle)
 	global *Store
 }
 
@@ -22,9 +24,17 @@ type LayeredStore struct {
 var _ IdentityStore = (*LayeredStore)(nil)
 
 // NewLayeredStore creates a two-layer store. repo may be nil when
-// the caller is not inside a git repository.
+// the caller is not inside a git repository. Kept as a thin wrapper
+// over NewLayeredStoreWithBundle for callers that do not participate
+// in bundle resolution.
 func NewLayeredStore(repo *Store, global *Store) *LayeredStore {
 	return &LayeredStore{repo: repo, global: global}
+}
+
+// NewLayeredStoreWithBundle creates a three-layer store. Any of repo
+// or bundle may be nil.
+func NewLayeredStoreWithBundle(repo, bundle, global *Store) *LayeredStore {
+	return &LayeredStore{repo: repo, bundle: bundle, global: global}
 }
 
 // Load reads an identity by handle, checking repo first then global.
@@ -55,9 +65,9 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 }
 
 // loadRaw loads the identity YAML without attribute resolution or ext.
-// Returns the identity, which store it came from ("repo" or "global"),
-// and any error. Parse errors from the repo layer are surfaced (not
-// silently fallen through to global). File-not-found falls through.
+// Returns the identity, which store it came from ("repo", "bundle", or
+// "global"), and any error. Parse errors from any layer are surfaced
+// (not silently fallen through). File-not-found falls through.
 func (ls *LayeredStore) loadRaw(handle string) (*Identity, string, error) {
 	if ls.repo != nil {
 		id, err := ls.repo.loadNoMigrate(handle)
@@ -67,8 +77,15 @@ func (ls *LayeredStore) loadRaw(handle string) (*Identity, string, error) {
 			}
 			return id, "repo", nil
 		}
-		// Only fall through to global on file-not-found.
-		// Surface parse errors and other I/O failures.
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, "", err
+		}
+	}
+	if ls.bundle != nil {
+		id, err := ls.bundle.loadNoMigrate(handle)
+		if err == nil {
+			return id, "bundle", nil
+		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, "", err
 		}
@@ -127,24 +144,27 @@ func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 }
 
 // resolveAttributesLayered resolves attribute content, trying the source
-// store first and falling back to global for any missing attributes.
+// layer first and falling through to any remaining layers for missing
+// attributes. The chain is: start from source; then the layers of
+// lower precedence (repo → bundle → global).
 func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []string {
-	var primary, fallback *Store
-	if source == "repo" && ls.repo != nil {
-		primary = ls.repo
-		fallback = ls.global
-	} else {
-		primary = ls.global
-		fallback = nil
-	}
+	chain := ls.attrChain(source)
 
 	var warnings []string
+	resolve := func(kind attribute.Kind, slug string) (string, error) {
+		var lastErr error
+		for _, s := range chain {
+			content, err := loadAttribute(s, kind, slug)
+			if err == nil {
+				return content, nil
+			}
+			lastErr = err
+		}
+		return "", lastErr
+	}
 
 	if id.Personality != "" {
-		content, err := loadAttribute(primary, attribute.Personalities, id.Personality)
-		if err != nil && fallback != nil {
-			content, err = loadAttribute(fallback, attribute.Personalities, id.Personality)
-		}
+		content, err := resolve(attribute.Personalities, id.Personality)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("personality %q: %v", id.Personality, err))
 		} else {
@@ -153,10 +173,7 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []
 	}
 
 	if id.WritingStyle != "" {
-		content, err := loadAttribute(primary, attribute.WritingStyles, id.WritingStyle)
-		if err != nil && fallback != nil {
-			content, err = loadAttribute(fallback, attribute.WritingStyles, id.WritingStyle)
-		}
+		content, err := resolve(attribute.WritingStyles, id.WritingStyle)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("writing_style %q: %v", id.WritingStyle, err))
 		} else {
@@ -167,10 +184,7 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []
 	if len(id.Talents) > 0 {
 		id.TalentContents = make([]string, len(id.Talents))
 		for i, slug := range id.Talents {
-			content, err := loadAttribute(primary, attribute.Talents, slug)
-			if err != nil && fallback != nil {
-				content, err = loadAttribute(fallback, attribute.Talents, slug)
-			}
+			content, err := resolve(attribute.Talents, slug)
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("talent %q: %v", slug, err))
 			} else {
@@ -180,6 +194,31 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []
 	}
 
 	return warnings
+}
+
+// attrChain returns the ordered list of stores to consult when
+// resolving attribute content, starting from the identity's source
+// layer and falling through to lower-precedence layers.
+func (ls *LayeredStore) attrChain(source string) []*Store {
+	var chain []*Store
+	switch source {
+	case "repo":
+		if ls.repo != nil {
+			chain = append(chain, ls.repo)
+		}
+		if ls.bundle != nil {
+			chain = append(chain, ls.bundle)
+		}
+		chain = append(chain, ls.global)
+	case "bundle":
+		if ls.bundle != nil {
+			chain = append(chain, ls.bundle)
+		}
+		chain = append(chain, ls.global)
+	default:
+		chain = append(chain, ls.global)
+	}
+	return chain
 }
 
 // loadAttribute loads a single attribute's content from a store.
@@ -224,49 +263,62 @@ func (ls *LayeredStore) Save(id *Identity) error {
 	return os.MkdirAll(ls.global.ExtDir(id.Handle), 0o700)
 }
 
-// List returns identities from both stores, deduplicated by handle.
-// Repo identities win on collision. Returned identities are in
-// reference mode (attribute slugs only, no resolved .md content),
+// List returns identities from all layers, deduplicated by handle.
+// Precedence on collision: repo > bundle > global. Returned identities
+// are in reference mode (attribute slugs only, no resolved .md content),
 // consistent with Store.List.
 func (ls *LayeredStore) List() (*ListResult, error) {
-	var repoResult *ListResult
-	if ls.repo != nil {
-		var err error
-		repoResult, err = ls.repo.listNoMigrate()
-		if err != nil {
-			return nil, fmt.Errorf("listing repo identities: %w", err)
-		}
-	}
-
-	globalResult, err := ls.global.List()
-	if err != nil {
-		return nil, fmt.Errorf("listing global identities: %w", err)
-	}
-
-	// Merge: repo wins on handle collision.
 	seen := make(map[string]bool)
 	result := &ListResult{}
 
-	if repoResult != nil {
+	if ls.repo != nil {
+		repoResult, err := ls.repo.listNoMigrate()
+		if err != nil {
+			return nil, fmt.Errorf("listing repo identities: %w", err)
+		}
 		for _, id := range repoResult.Identities {
+			if seen[id.Handle] {
+				continue
+			}
 			seen[id.Handle] = true
 			result.Identities = append(result.Identities, id)
 		}
 		result.Warnings = append(result.Warnings, repoResult.Warnings...)
 	}
 
-	for _, id := range globalResult.Identities {
-		if !seen[id.Handle] {
+	if ls.bundle != nil {
+		bundleResult, err := ls.bundle.listNoMigrate()
+		if err != nil {
+			return nil, fmt.Errorf("listing bundle identities: %w", err)
+		}
+		for _, id := range bundleResult.Identities {
+			if seen[id.Handle] {
+				continue
+			}
+			seen[id.Handle] = true
 			result.Identities = append(result.Identities, id)
 		}
+		result.Warnings = append(result.Warnings, bundleResult.Warnings...)
+	}
+
+	globalResult, err := ls.global.List()
+	if err != nil {
+		return nil, fmt.Errorf("listing global identities: %w", err)
+	}
+	for _, id := range globalResult.Identities {
+		if seen[id.Handle] {
+			continue
+		}
+		seen[id.Handle] = true
+		result.Identities = append(result.Identities, id)
 	}
 	result.Warnings = append(result.Warnings, globalResult.Warnings...)
 
 	return result, nil
 }
 
-// FindBy searches repo first, then global. Propagates repo I/O errors.
-// Falls through to global only when repo returns no match (nil, nil).
+// FindBy searches repo, then bundle, then global. Propagates I/O errors
+// from any layer. Falls through only when a layer returns no match.
 func (ls *LayeredStore) FindBy(field, value string) (*Identity, error) {
 	if ls.repo != nil {
 		id, err := ls.repo.FindBy(field, value)
@@ -277,28 +329,44 @@ func (ls *LayeredStore) FindBy(field, value string) (*Identity, error) {
 			return id, nil
 		}
 	}
+	if ls.bundle != nil {
+		id, err := ls.bundle.FindBy(field, value)
+		if err != nil {
+			return nil, fmt.Errorf("bundle FindBy: %w", err)
+		}
+		if id != nil {
+			return id, nil
+		}
+	}
 	return ls.global.FindBy(field, value)
 }
 
-// Exists returns true if the handle exists in either store.
+// Exists returns true if the handle exists in any layer.
 func (ls *LayeredStore) Exists(handle string) bool {
 	if ls.repo != nil && ls.repo.Exists(handle) {
+		return true
+	}
+	if ls.bundle != nil && ls.bundle.Exists(handle) {
 		return true
 	}
 	return ls.global.Exists(handle)
 }
 
-// Update applies a mutation to the identity in the owning store.
-// If the identity exists in repo, updates repo; otherwise updates global.
-// Uses cross-layer ValidateRefs so attribute references in either store
-// are accepted. Bypasses the inner Store.ValidateRefs which only checks
-// a single layer.
+// Update applies a mutation to the identity in the owning writable
+// store. If the identity exists in repo, updates repo; otherwise
+// updates global. Bundle-layer identities are read-only — attempting
+// to update one returns an error. Uses cross-layer ValidateRefs so
+// attribute references in any store are accepted.
 func (ls *LayeredStore) Update(handle string, fn func(*Identity) error) error {
 	owner := ls.global
-	if ls.repo != nil && ls.repo.Exists(handle) {
+	switch {
+	case ls.repo != nil && ls.repo.Exists(handle):
 		owner = ls.repo
+	case ls.bundle != nil && ls.bundle.Exists(handle):
+		// Reject even when a global copy exists: bundle shadows global on
+		// read, so editing global would be silently invisible.
+		return fmt.Errorf("identity %q is provided by the active bundle and cannot be modified via CLI; edit the bundle directly", handle)
 	}
-	// Wrap the mutation to include cross-layer validation.
 	validated := func(id *Identity) error {
 		if err := fn(id); err != nil {
 			return err
@@ -346,16 +414,19 @@ func (ls *LayeredStore) ValidateRefs(id *Identity) error {
 	return nil
 }
 
-// attrExists checks if an attribute slug exists in repo or global.
+// attrExists checks if an attribute slug exists in any layer.
 func (ls *LayeredStore) attrExists(kind attribute.Kind, slug string) bool {
 	if ls.repo != nil {
-		s := attribute.NewStore(ls.repo.Root(), kind)
-		if s.Exists(slug) {
+		if attribute.NewStore(ls.repo.Root(), kind).Exists(slug) {
 			return true
 		}
 	}
-	s := attribute.NewStore(ls.global.Root(), kind)
-	return s.Exists(slug)
+	if ls.bundle != nil {
+		if attribute.NewStore(ls.bundle.Root(), kind).Exists(slug) {
+			return true
+		}
+	}
+	return attribute.NewStore(ls.global.Root(), kind).Exists(slug)
 }
 
 // Root returns the repo root if available, otherwise global root.
@@ -376,6 +447,15 @@ func (ls *LayeredStore) GlobalRoot() string {
 func (ls *LayeredStore) RepoRoot() string {
 	if ls.repo != nil {
 		return ls.repo.Root()
+	}
+	return ""
+}
+
+// BundleRoot returns the active bundle's root directory, or empty string
+// if no bundle is active.
+func (ls *LayeredStore) BundleRoot() string {
+	if ls.bundle != nil {
+		return ls.bundle.Root()
 	}
 	return ""
 }

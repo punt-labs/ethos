@@ -22,15 +22,25 @@ func globalStore() *identity.Store {
 }
 
 // identityStore returns a layered identity store that checks repo-local
-// first, then user-global. Falls back to global-only when not inside a
-// git repo with a .punt-labs/ethos/ directory.
+// first, then the active bundle (if any), then user-global. Falls back
+// to global-only when not inside a git repo with a .punt-labs/ethos/
+// directory and no bundle is active.
 func identityStore() identity.IdentityStore {
 	g := globalStore()
 	repoRoot := resolve.FindRepoEthosRoot()
-	if repoRoot == "" {
+	bundleRoot := resolveBundleRoot()
+	if repoRoot == "" && bundleRoot == "" {
 		return g
 	}
-	return identity.NewLayeredStore(identity.NewStore(repoRoot), g)
+	var repo *identity.Store
+	if repoRoot != "" {
+		repo = identity.NewStore(repoRoot)
+	}
+	var bundle *identity.Store
+	if bundleRoot != "" {
+		bundle = identity.NewStore(bundleRoot)
+	}
+	return identity.NewLayeredStoreWithBundle(repo, bundle, g)
 }
 
 // sessionStore returns the default session store rooted at the same

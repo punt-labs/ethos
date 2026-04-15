@@ -24,7 +24,7 @@ func attributeStore(kind attribute.Kind) *attribute.Store {
 // to a single-root store.
 func layeredAttributeStore(is identity.IdentityStore, kind attribute.Kind) *attribute.Store {
 	if ls, ok := is.(*identity.LayeredStore); ok {
-		return attribute.NewLayeredStore(ls.RepoRoot(), ls.GlobalRoot(), kind)
+		return attribute.NewLayeredStoreWithBundle(ls.RepoRoot(), ls.BundleRoot(), ls.GlobalRoot(), kind)
 	}
 	return attribute.NewStore(is.Root(), kind)
 }
