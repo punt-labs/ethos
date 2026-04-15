@@ -3597,3 +3597,33 @@ func TestStore_ReportArchetypeRoundTrip(t *testing.T) {
 	_, err = s.Close(c.MissionID, StatusClosed)
 	require.NoError(t, err, "Close should accept report with empty write_set")
 }
+
+// TestStore_CreateSkipsCorruptMissionDuringConflictCheck verifies that a
+// corrupt mission file in the store does not block Create for an unrelated
+// mission. The corrupt file is skipped with a stderr warning.
+func TestStore_CreateSkipsCorruptMissionDuringConflictCheck(t *testing.T) {
+	s := testStore(t)
+
+	// Create a valid mission so the store directory exists.
+	c1 := disjointContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c1))
+
+	// Write a corrupt YAML file that looks like a contract filename but
+	// has unknown fields. Store.Load uses strict contract decoding
+	// (yaml.Decoder.KnownFields(true) via DecodeContractStrict), so
+	// this triggers a decode error.
+	corruptPath := filepath.Join(s.Root(), "missions", "m-2026-04-08-099.yaml")
+	require.NoError(t, os.WriteFile(corruptPath, []byte("garbage_field: true\n"), 0o644))
+
+	// Create a second mission with a disjoint write_set. Before the fix,
+	// this returned a fatal error from checkWriteSetConflicts.
+	c2 := disjointContract("m-2026-04-08-002")
+	stderr := captureStderr(t, func() {
+		err := s.Create(c2)
+		require.NoError(t, err, "corrupt sibling must not block Create")
+	})
+
+	// The warning must name the corrupt mission ID.
+	assert.Contains(t, stderr, "m-2026-04-08-099")
+	assert.Contains(t, stderr, "skipping mission")
+}

@@ -104,7 +104,22 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 			failedMembers = append(failedMembers, m.Identity)
 			continue
 		}
-		fmt.Fprintf(os.Stderr, "ethos: generate-agents: wrote %s\n", destPath)
+		if readErr == nil {
+			// Existing file was different — report a net line delta.
+			oldLines := strings.Count(string(existing), "\n") + 1
+			newLines := strings.Count(content, "\n") + 1
+			delta := newLines - oldLines
+			if delta >= 0 {
+				fmt.Fprintf(os.Stderr, "ethos: generate-agents: updated %s (net +%d lines, %d → %d)\n",
+					filepath.Base(destPath), delta, oldLines, newLines)
+			} else {
+				fmt.Fprintf(os.Stderr, "ethos: generate-agents: updated %s (net %d lines, %d → %d)\n",
+					filepath.Base(destPath), delta, oldLines, newLines)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "ethos: generate-agents: wrote %s\n",
+				filepath.Base(destPath))
+		}
 		generated++
 	}
 
