@@ -46,6 +46,11 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 	// READMEs
 	seedReadmes(Readmes, destRoot, force, r)
 
+	// Bundles (gstack and any other embedded team bundles).
+	// Each top-level directory under sidecar/bundles/ deploys to
+	// <destRoot>/bundles/<name>/ preserving its internal structure.
+	seedBundles(Bundles, filepath.Join(destRoot, "bundles"), force, r)
+
 	if len(r.Errors) > 0 {
 		return r, fmt.Errorf("seed encountered %d errors", len(r.Errors))
 	}
@@ -112,6 +117,39 @@ func seedReadmes(fsys embed.FS, destRoot string, force bool, r *Result) {
 	})
 	if err != nil {
 		r.Errors = append(r.Errors, fmt.Sprintf("walking sidecar for READMEs: %v", err))
+	}
+}
+
+// seedBundles walks every file under sidecar/bundles/ and copies it
+// to destBundlesRoot, preserving the path below "sidecar/bundles/".
+// For example, sidecar/bundles/gstack/teams/gstack.yaml lands at
+// <destBundlesRoot>/gstack/teams/gstack.yaml.
+func seedBundles(fsys embed.FS, destBundlesRoot string, force bool, r *Result) {
+	const root = "sidecar/bundles"
+	err := fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("walking %s: %v", path, walkErr))
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("computing relative path for %s: %v", path, relErr))
+			return nil
+		}
+		data, readErr := fs.ReadFile(fsys, path)
+		if readErr != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("reading %s: %v", path, readErr))
+			return nil
+		}
+		dest := filepath.Join(destBundlesRoot, rel)
+		writeFile(dest, data, force, r)
+		return nil
+	})
+	if err != nil {
+		r.Errors = append(r.Errors, fmt.Sprintf("walking bundles: %v", err))
 	}
 }
 
