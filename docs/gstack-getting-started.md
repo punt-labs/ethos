@@ -1,7 +1,8 @@
 # Gstack Starter Team
 
 A ready-made team of 6 agents ported from the gstack builder
-framework. Ships with ethos v3.6.0 via the team submodule.
+framework. Ships with ethos as an embedded team bundle; no submodule
+required.
 
 ## Philosophy
 
@@ -42,38 +43,43 @@ report to architect. Product collaborates with architect.
 
 ## Quick Start
 
-### 1. Configure your repo
+### 1. Install ethos
 
-The gstack team and identities live in the shared team submodule
-(`.punt-labs/ethos/`). If your repo already has the submodule,
-the gstack team is available. If not, add it:
+The gstack bundle ships with ethos. Running `ethos seed` (done
+automatically by the installer) deploys it to
+`~/.punt-labs/ethos/bundles/gstack/`.
+
+### 2. Activate the bundle in your repo
 
 ```bash
-git submodule add git@github.com:punt-labs/team.git .punt-labs/ethos
+cd my-project
+ethos team activate gstack
 ```
 
-Then configure:
+This writes `active_bundle: gstack` to `.punt-labs/ethos.yaml`.
 
-```yaml
-# .punt-labs/ethos.yaml
-agent: gstack-architect
-team: gstack
+### 3. Verify
+
+```bash
+ethos team active                # gstack
+ethos team available             # shows gstack row marked *
+ethos team show gstack           # shows members
 ```
 
-### 2. Instantiate a pipeline
+### 4. Instantiate a pipeline
 
 ```bash
 ethos mission pipeline instantiate gstack-debug \
-  --var target=internal/session/ \
   --leader gstack-architect \
   --worker gstack-implementer \
-  --evaluator gstack-reviewer
+  --evaluator gstack-reviewer \
+  --var target=internal/session/
 ```
 
 This creates 3 missions (one per stage) with dependency ordering.
 Use `--dry-run` to preview without creating.
 
-### 3. Run a single mission
+### 5. Run a single mission
 
 For one-off work without a pipeline:
 
@@ -85,7 +91,7 @@ ethos mission dispatch \
   --criteria "session purge removes stale entries,test covers TTL edge case"
 ```
 
-### 4. List and track
+### 6. List and track
 
 ```bash
 ethos mission list                    # All missions
@@ -99,13 +105,19 @@ ethos mission log <id>                # Event audit trail
 ### Override personalities
 
 The gstack agents use personalities from
-`.punt-labs/ethos/personalities/gstack-*.md`. To change an agent's
-personality, edit its identity YAML:
+`~/.punt-labs/ethos/bundles/gstack/personalities/gstack-*.md`. Treat
+bundle content like vendored defaults: you can edit seeded files in
+place if needed, and reseeding preserves those edits unless you pass
+`--force`. For routine customization, prefer overriding in your
+repo-local or global layer (the three-layer resolver picks up shadows
+automatically):
 
 ```yaml
 # .punt-labs/ethos/identities/gstack-implementer.yaml
 personality: kernighan    # Use a different personality
 ```
+
+The repo-local copy shadows the bundle identity with the same handle.
 
 ### Add agents
 
@@ -118,9 +130,10 @@ ethos team add-member gstack my-agent implementer
 
 ### Create custom pipelines
 
-Pipeline templates are YAML files in
-`internal/seed/sidecar/pipelines/`. Copy an existing template and
-modify the stages:
+The gstack pipeline templates ship inside the bundle at
+`~/.punt-labs/ethos/bundles/gstack/pipelines/`. Copy one into your
+writable layer (`~/.punt-labs/ethos/pipelines/` or the repo-local
+`.punt-labs/ethos/pipelines/`) and modify the stages:
 
 ```bash
 ethos mission pipeline show gstack-debug    # See the template

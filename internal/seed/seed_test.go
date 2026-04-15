@@ -64,7 +64,9 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))
 
-	// Should have deployed all 13 pipeline files
+	// Should have deployed all 8 generic pipeline files at the top
+	// level. The 5 gstack-* pipelines now ship inside the gstack
+	// bundle (asserted below) and no longer live at sidecar/pipelines.
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "quick.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "standard.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "full.yaml"))
@@ -73,11 +75,26 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "docs.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "coe.yaml"))
 	assert.FileExists(t, filepath.Join(dest, "pipelines", "coverage.yaml"))
-	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-plan.yaml"))
-	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-ship.yaml"))
-	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-design.yaml"))
-	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-debug.yaml"))
-	assert.FileExists(t, filepath.Join(dest, "pipelines", "gstack-review.yaml"))
+	assert.NoFileExists(t, filepath.Join(dest, "pipelines", "gstack-plan.yaml"),
+		"gstack pipelines must live inside the bundle, not at the top level")
+
+	// Gstack bundle — manifest + representative content from every
+	// subdirectory. Covers manifest deploy, team copy, identity copy,
+	// and pipeline migration into the bundle tree.
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "bundle.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "teams", "gstack.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "identities", "gstack-architect.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "identities", "gstack-implementer.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "personalities", "gstack-architect.md"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "writing-styles", "gstack-builder.md"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "roles", "architect.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "talents", "engineering.md"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "talents", "product-development.md"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-plan.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-ship.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-design.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-debug.yaml"))
+	assert.FileExists(t, filepath.Join(dest, "bundles", "gstack", "pipelines", "gstack-review.yaml"))
 
 	// Should have deployed all 7 READMEs (sessions excluded)
 	assert.FileExists(t, filepath.Join(dest, "identities", "README.md"))
@@ -268,6 +285,39 @@ func TestSeedIntegrationWithRoleStore(t *testing.T) {
 	assert.Contains(t, string(data), "name: implementer")
 	assert.Contains(t, string(data), "model: sonnet")
 	assert.Contains(t, string(data), "- Bash")
+}
+
+// TestSeedBundleNoClobber checks that a user's edits to a bundle
+// file are not overwritten by a second Seed. Bundles are shipped as
+// starter content; consumers may edit in place before migrating to a
+// writable layer, and the no-clobber contract must hold for the
+// whole bundle tree, not only the legacy flat directories.
+func TestSeedBundleNoClobber(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	_, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	manifest := filepath.Join(dest, "bundles", "gstack", "bundle.yaml")
+	custom := []byte("name: gstack\nversion: 999\n")
+	require.NoError(t, os.WriteFile(manifest, custom, 0o644))
+
+	result, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(manifest)
+	require.NoError(t, err)
+	assert.Equal(t, custom, data, "bundle file must not be overwritten without --force")
+
+	found := false
+	for _, s := range result.Skipped {
+		if s == manifest {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "bundle manifest should be in skipped list on second seed")
 }
 
 func TestSeedIdempotent(t *testing.T) {
