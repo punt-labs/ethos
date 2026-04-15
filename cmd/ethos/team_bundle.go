@@ -103,11 +103,14 @@ func runTeamAvailable(cmd *cobra.Command) error {
 		return fmt.Errorf("listing bundles: %w", err)
 	}
 
-	var activeName string
+	// Resolve the actually-active bundle (honors repo-over-global
+	// precedence) so we mark only the bundle ResolveActive picks —
+	// not every bundle whose name matches.
+	var activePath string
 	if repoRoot != "" {
-		activeName, err = resolve.ResolveActiveBundle(repoRoot)
-		if err != nil {
-			return fmt.Errorf("reading active bundle: %w", err)
+		if active, err := bundle.ResolveActive(repoRoot, globalRoot); err == nil &&
+			active != nil && active.Source != bundle.SourceLegacy {
+			activePath = active.Path
 		}
 	}
 
@@ -117,7 +120,7 @@ func runTeamAvailable(cmd *cobra.Command) error {
 			Name:   b.Name,
 			Source: string(b.Source),
 			Path:   b.Path,
-			Active: activeName != "" && b.Name == activeName && b.Source != bundle.SourceLegacy,
+			Active: activePath != "" && b.Path == activePath,
 		})
 	}
 
@@ -321,6 +324,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 
 	var gitArgs []string
 	var targetDir string
+	var gitDir string
 	if addBundleGlobal {
 		globalRoot := defaultGlobalRoot()
 		if globalRoot == "" {
@@ -334,7 +338,12 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 			return fmt.Errorf("not in a git repository (use --global to install without a repo)")
 		}
 		targetDir = filepath.Join(repoRoot, ".punt-labs", "ethos-bundles", name)
-		gitArgs = []string{"git", "submodule", "add", url, targetDir}
+		// git submodule add expects a path relative to the repo root.
+		// Absolute paths produce "outside repository" errors and
+		// incorrect .gitmodules entries.
+		relTarget := filepath.Join(".punt-labs", "ethos-bundles", name)
+		gitArgs = []string{"git", "submodule", "add", url, relTarget}
+		gitDir = repoRoot
 	}
 
 	out := cmd.OutOrStdout()
@@ -354,6 +363,9 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	}
 
 	c := exec.Command(gitArgs[0], gitArgs[1:]...)
+	if gitDir != "" {
+		c.Dir = gitDir
+	}
 	c.Stdout = out
 	c.Stderr = cmd.ErrOrStderr()
 	if err := c.Run(); err != nil {
