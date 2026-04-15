@@ -152,21 +152,25 @@ would change before applying.
 
 Long-term investments in the ethos ecosystem.
 
-### 6.1 Starter Team Templates
+### 6.1 Starter Team Templates — Team Bundle Activation System
 
-**Problem**: Setting up a team from scratch requires creating
-identities, personalities, writing styles, talents, roles, and teams.
-The team-setup guide explains how, but it's still manual.
+**Status**: Design approved. Target release: v3.7.0. Epic bead:
+ethos-2hh. Design doc:
+[docs/build-plan-bundles.md](build-plan-bundles.md). ADR:
+[DES-051](../DESIGN.md).
 
-**Solution**: Ship team templates for common setups:
+**Problem**: The `punt-labs/team` submodule conflates generic
+gstack content with the Punt Labs internal team registry. First-
+time users outside Punt Labs cannot adopt gstack without cloning
+the wrong submodule. Users with private teams have no mechanism
+to switch active teams.
 
-- **Solo developer** — 1 human + 3 agents (implementer, reviewer,
-  researcher)
-- **Small team** — 2-3 humans + 5 agents (Go/Python implementers,
-  reviewer, security reviewer, architect)
-- **Full team** — punt-labs/team as the reference implementation
-
-Templates are directories that `ethos init` can scaffold from.
+**Solution**: Team bundles — self-contained directories of ethos
+content, activated via `active_bundle` in `.punt-labs/ethos.yaml`.
+Three-layer resolution (repo → active bundle → global) replaces
+the current two-layer chain; existing repos keep working unchanged
+when no bundle is active. Ships in six PRs. See design doc for
+full architecture and migration story.
 
 ### 6.2 Agent Marketplace
 

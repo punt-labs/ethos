@@ -4233,3 +4233,88 @@ pipeline.
 - The `Store` gains a `repoRoot` field, wired via `WithRepoRoot`.
 - The JSONL file is append-only by convention; concurrent appends are
   safe because each Close holds its own flock and appends a single line.
+
+## DES-051: Team bundle activation (PROPOSED)
+
+**Context**: The `punt-labs/team` submodule at `.punt-labs/ethos/`
+conflates two independent concerns: the generic gstack content that
+ships with ethos (archetypes, pipelines, starter personalities) and
+the Punt Labs internal team registry (identities, roles,
+collaborations). A first-time user outside Punt Labs cannot adopt
+gstack without cloning a submodule whose identity content is wrong
+for them. A user with a private team has no mechanism to switch the
+active team — the repo-local layer is a single submodule.
+
+The existing two-layer resolver (repo-local → global) was designed
+around "one team per repo." The ecosystem now needs "one or more
+teams available, one active at a time," without breaking any repo
+that uses the current submodule layout.
+
+**Decision**: Introduce **team bundles** — self-contained
+directories of ethos content keyed by a `bundle.yaml` manifest at
+their root. Bundles ship three ways: embedded in ethos and seeded
+to `~/.punt-labs/ethos/bundles/<name>` (gstack); added as git
+submodules under `.punt-labs/ethos-bundles/<name>` (punt-labs,
+private teams); or authored locally as plain directories.
+
+Exactly one bundle is active per repo, selected by a new
+`active_bundle` field in `.punt-labs/ethos.yaml`. The resolver
+becomes three-layer: **repo-local → active bundle → global**.
+Writes still target global; the bundle layer is read-only. When
+`active_bundle` is unset, the middle layer is skipped and behavior
+is byte-identical to the current two-layer implementation. A new
+`ethos team` subcommand group (`available`, `activate`, `active`,
+`deactivate`, `add-bundle`, `migrate`) exposes bundle management.
+
+**Reasoning**:
+
+- Separates generic ethos content (gstack) from team registries
+  (punt-labs), so non-Punt-Labs users can adopt ethos without
+  cloning the wrong submodule.
+- Config-driven activation is observable in `git diff`, portable
+  across platforms, and lets comments survive YAML round-trip.
+- Adding the bundle layer between repo and global preserves every
+  existing invariant: repo-local overrides still win, global
+  fallback still catches the tail, and writes still target
+  user-owned storage.
+- Opt-in migration (`ethos team migrate`) means no existing repo
+  breaks on upgrade. The legacy submodule pattern keeps working
+  verbatim.
+- A bundle is just a directory with a manifest. No new file
+  formats, no new binary dependencies, no registry service.
+
+**Rejected alternatives**:
+
+- **Symlink-based activation** (`active -> bundles/gstack`): not
+  portable to Windows, breaks `go:embed` tests, produces no audit
+  trail in git diffs, and risks drift between symlink and config.
+- **Replace the repo layer with the bundle**: breaks every repo
+  currently using `.punt-labs/ethos/` as a submodule. The repo
+  layer's role (project-specific overrides) is orthogonal to the
+  bundle's role (shared content).
+- **Network bundle registry** (npm-style): premature without an
+  adoption signal. File-based bundles distributed by git submodule
+  cover every known use case and reuse existing infrastructure.
+- **Per-command `--bundle <name>` flag**: activation is persistent
+  state; flags are transient. Threading a flag through every code
+  path mixes the two concerns and creates surprise.
+
+**Implications**:
+
+- `.punt-labs/ethos.yaml` gains an optional `active_bundle` field.
+  Writers use `yaml.Node` to preserve comments and key ordering.
+- A new package `internal/bundle/` owns manifest parsing,
+  discovery, and validation.
+- Each layered store (`internal/identity`, `internal/team`,
+  `internal/role`, `internal/attribute`) gains a
+  `NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot)`
+  constructor alongside the existing two-argument form.
+- `internal/seed/` deploys the embedded gstack bundle to
+  `~/.punt-labs/ethos/bundles/gstack/` on `ethos seed`.
+- `punt-labs/team` keeps gstack content for one release with a
+  deprecation warning, then removes it after the migration ships.
+- Downstream consumers (Biff, Vox, Beadle) that read
+  `~/.punt-labs/ethos/identities/` directly must be audited; any
+  hard-coded path assumptions become follow-up beads.
+- Ships in v3.7.0. This ADR moves to SETTLED when the feature
+  lands.
