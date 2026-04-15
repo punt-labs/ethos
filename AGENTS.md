@@ -5,30 +5,42 @@ How to use ethos from an AI agent session — CLI, MCP tools, hooks, and extendi
 ## Prerequisites: Agent Definitions
 
 Ethos auto-generates `.claude/agents/<handle>.md` files at **SessionStart**
-from data in the team submodule at `.punt-labs/ethos/`. If `.claude/agents/`
-is empty or missing expected agent files, the submodule is not initialized.
+from team data resolved in this order: repo-local `.punt-labs/ethos/`,
+active bundle, global `~/.punt-labs/ethos/`.
 
-**New repo** — add the team submodule:
+**New repo (preferred) — activate a bundle:**
+
+```bash
+ethos seed                     # deploys embedded gstack to global
+ethos team activate gstack     # writes active_bundle: gstack
+```
+
+Or add your own bundle:
+
+```bash
+ethos team add-bundle git@github.com:myorg/team.git --apply
+ethos team activate myorg
+```
+
+**Legacy — team submodule at `.punt-labs/ethos/`:**
 
 ```bash
 git submodule add git@github.com:punt-labs/team.git .punt-labs/ethos
 ```
 
-**Existing repo** — initialize an already-registered submodule:
-
-```bash
-git submodule init
-git submodule update
-```
+For an existing clone, run `git submodule init && git submodule update`.
+To convert a legacy submodule to the bundles layout, use
+`ethos team migrate` (dry-run by default; `--apply` to execute).
 
 Then restart Claude Code to trigger the SessionStart hook. Verify with
 `ls .claude/agents/` — you should see one `.md` file per agent identity
-in the team registry.
+in the resolved team.
 
 **Troubleshooting**: if `subagent_type` fails with "agent type not found",
-check `ls .punt-labs/ethos/agents/` and `ls .claude/agents/`. If either
-is empty, the submodule needs initialization (steps above). A leading `-`
-in `git submodule status` also indicates an uninitialized submodule.
+run `ethos team active` to confirm the active team source, and
+`ls .claude/agents/` to see generated agents. For the legacy layout,
+a leading `-` in `git submodule status` indicates an uninitialized
+submodule.
 
 ## Concepts
 

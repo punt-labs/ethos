@@ -247,6 +247,82 @@ func TestCLI_MissingActiveBundle(t *testing.T) {
 	assert.Contains(t, stderr, "does-not-exist")
 }
 
+// TestCLI_BundleFlow exercises the end-to-end user story for team
+// bundles: seed gstack → list → activate → show active → show team →
+// deactivate. It uses a fresh temp HOME and a git-init'd repo so the
+// resolver stops at the test fixture rather than a real ancestor.
+func TestCLI_BundleFlow(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+
+	// setupCLISubprocessEnv pre-creates .punt-labs/ethos/ as a legacy
+	// repo-local layer, which makes `team active` report "(legacy)"
+	// before any bundle activation. The bundle flow test needs a clean
+	// repo with no legacy directory, so set up inline.
+	home := t.TempDir()
+	repo := t.TempDir()
+
+	gitInit := exec.Command("git", "init", repo)
+	gitInit.Env = []string{
+		"HOME=" + home,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"PATH=" + os.Getenv("PATH"),
+	}
+	initOut, initErr := gitInit.CombinedOutput()
+	require.NoError(t, initErr, "git init: %s", initOut)
+
+	env := []string{
+		"HOME=" + home,
+		"USER=test-user",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"PATH=" + os.Getenv("PATH"),
+	}
+
+	se := &cliSubprocessEnv{home: home, repo: repo, env: env}
+
+	// 1. seed — deploys embedded gstack bundle to ~/.punt-labs/ethos/bundles/gstack.
+	_, stderr, code := runCLI(t, se, "seed")
+	assert.Equal(t, 0, code, "seed stderr: %s", stderr)
+	bundlePath := filepath.Join(home, ".punt-labs", "ethos", "bundles", "gstack")
+	info, err := os.Stat(bundlePath)
+	require.NoError(t, err, "gstack bundle missing at %s", bundlePath)
+	assert.True(t, info.IsDir())
+
+	// 2. team available — gstack listed with source=global.
+	stdout, stderr, code := runCLI(t, se, "team", "available")
+	assert.Equal(t, 0, code, "available stderr: %s", stderr)
+	assert.Contains(t, stdout, "gstack")
+	assert.Contains(t, stdout, "global")
+
+	// 3. team activate gstack.
+	stdout, stderr, code = runCLI(t, se, "team", "activate", "gstack")
+	assert.Equal(t, 0, code, "activate stderr: %s", stderr)
+	assert.Contains(t, stdout, "activated: gstack")
+
+	// 4. team active — reports gstack.
+	stdout, stderr, code = runCLI(t, se, "team", "active")
+	assert.Equal(t, 0, code, "active stderr: %s", stderr)
+	assert.Contains(t, stdout, "gstack")
+
+	// 5. team show gstack — lists team members.
+	stdout, stderr, code = runCLI(t, se, "team", "show", "gstack")
+	assert.Equal(t, 0, code, "show stderr: %s", stderr)
+	assert.Contains(t, stdout, "gstack")
+
+	// 6. team deactivate.
+	stdout, stderr, code = runCLI(t, se, "team", "deactivate")
+	assert.Equal(t, 0, code, "deactivate stderr: %s", stderr)
+	assert.Contains(t, stdout, "deactivated")
+
+	// 7. team active → (none).
+	stdout, _, code = runCLI(t, se, "team", "active")
+	assert.Equal(t, 0, code)
+	assert.Contains(t, stdout, "(none)")
+}
+
 func TestCLI_Doctor(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")

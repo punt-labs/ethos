@@ -18,7 +18,8 @@ conflict detection and dry-run) remains planned.
 | **Phase 4 — Operational Excellence** | **SHIPPED** | SessionStart working context (PR #205), role-based safety constraints + session audit logging (PR #207). Beads `ethos-gcq.1`–`.3`, all closed. |
 | **Post-Phase 4** | **SHIPPED** | Archetypes, pipelines, pipeline instantiate, automatic traceability (v3.2.0–v3.5.0). See details below. |
 | **Phase 5 — Reliability & Friction** | NEXT | Mission dispatch one-liner, agent regen diff logging, doctor orphan check, inputs.trigger schema, deprecation migration tooling |
-| **Phase 6 — Ecosystem** | FUTURE | Starter team templates, agent marketplace, cross-tool integration |
+| **Phase 6.1 — Team Bundle Activation** | **SHIPPED** | Switchable starter teams; embedded gstack bundle; `team available/activate/deactivate/add-bundle/migrate`; three-layer resolution (repo -> active bundle -> global). DES-051, epic `ethos-2hh`. |
+| **Phase 6 — Ecosystem (remaining)** | FUTURE | Agent marketplace (6.2), cross-tool integration (6.3) |
 
 Phase 3 shipped 2026-04-08 on PR #184, merge `c16715f`. Phase 4
 shipped 2026-04-10 across PRs #205 and #207. v3.2.0–v3.5.0
@@ -152,25 +153,28 @@ would change before applying.
 
 Long-term investments in the ethos ecosystem.
 
-### 6.1 Starter Team Templates — Team Bundle Activation System
+### 6.1 Starter Team Templates — Team Bundle Activation System (SHIPPED)
 
-**Status**: Design approved. Target release: v3.7.0. Epic bead:
-ethos-2hh. Design doc:
-[docs/build-plan-bundles.md](build-plan-bundles.md). ADR:
-[DES-051](../DESIGN.md).
+**Status**: Shipped in v3.7.0 across six PRs. Epic bead: ethos-2hh.
+Design doc: [docs/build-plan-bundles.md](build-plan-bundles.md).
+ADR: [DES-051](../DESIGN.md).
 
-**Problem**: The `punt-labs/team` submodule conflates generic
-gstack content with the Punt Labs internal team registry. First-
-time users outside Punt Labs cannot adopt gstack without cloning
-the wrong submodule. Users with private teams have no mechanism
-to switch active teams.
+**Problem**: The `punt-labs/team` submodule conflated generic gstack
+content with the Punt Labs internal team registry. First-time users
+outside Punt Labs could not adopt gstack without cloning the wrong
+submodule. Users with private teams had no mechanism to switch
+active teams.
 
-**Solution**: Team bundles — self-contained directories of ethos
-content, activated via `active_bundle` in `.punt-labs/ethos.yaml`.
-Three-layer resolution (repo → active bundle → global) replaces
-the current two-layer chain; existing repos keep working unchanged
-when no bundle is active. Ships in six PRs. See design doc for
-full architecture and migration story.
+**Solution (shipped)**: Team bundles — self-contained directories of
+ethos content, activated via `active_bundle` in
+`.punt-labs/ethos.yaml`. Three-layer resolution
+(repo -> active bundle -> global) extends the prior two-layer chain;
+existing repos keep working unchanged when no bundle is active.
+Gstack ships embedded and deploys on `ethos seed`. `ethos team
+migrate` converts legacy `.punt-labs/ethos/` submodules to the new
+layout.
+
+Phase 6.2 (agent marketplace) remains future work.
 
 ### 6.2 Agent Marketplace
 
