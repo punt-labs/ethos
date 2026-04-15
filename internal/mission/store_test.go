@@ -3609,8 +3609,9 @@ func TestStore_CreateSkipsCorruptMissionDuringConflictCheck(t *testing.T) {
 	require.NoError(t, s.Create(c1))
 
 	// Write a corrupt YAML file that looks like a contract filename but
-	// has unknown fields. Store.Load uses DisallowUnknownFields, so this
-	// triggers a decode error.
+	// has unknown fields. Store.Load uses strict contract decoding
+	// (yaml.Decoder.KnownFields(true) via DecodeContractStrict), so
+	// this triggers a decode error.
 	corruptPath := filepath.Join(s.Root(), "missions", "m-2026-04-08-099.yaml")
 	require.NoError(t, os.WriteFile(corruptPath, []byte("garbage_field: true\n"), 0o644))
 
