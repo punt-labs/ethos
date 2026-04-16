@@ -40,35 +40,40 @@ server, no cloud, no telemetry.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e9a1ee7/install.sh | sh
-ethos identity create
+ethos setup
 ```
 
-The installer places the `ethos` binary in `~/.local/bin`, seeds starter
-roles and talents, and registers the Claude Code plugin.
-`ethos identity create` prompts for your name, handle, personality,
-writing style, and talents, then writes the identity to
-`~/.punt-labs/ethos/identities/<handle>.yaml`.
+The installer places the `ethos` binary in `~/.local/bin`, seeds
+starter content (roles, talents, pipelines, bundles), and registers
+the Claude Code plugin. `ethos setup` is an interactive wizard that
+asks 3 questions (name, handle, working style), then creates:
 
-Run `ethos identity create` a second time to create an agent identity
-(set `kind: agent`). Then point your repo at that agent:
+- Your human identity
+- A paired agent identity (`claude`)
+- Repo config (`.punt-labs/ethos.yaml`)
+- An active team bundle with 4 agents
+- Agent definition files (`.claude/agents/*.md`)
+
+Start Claude Code. The agent knows who it is, who you are, and how
+to delegate. Sub-agents each get their own persona and tool
+restrictions.
+
+### Team bundles
+
+`ethos setup` activates the **foundation** bundle by default — a
+4-agent general-purpose team (architect, implementer, reviewer,
+security) that works on any codebase. For the opinionated 6-agent
+startup builder team, use `ethos setup --bundle gstack`. Switch at
+any time with `ethos team activate <bundle>`.
+
+### Options
 
 ```bash
-mkdir -p .punt-labs
-cat > .punt-labs/ethos.yaml <<'EOF'
-agent: claude
-EOF
+ethos setup                           # interactive wizard
+ethos setup --solo                    # identity only, no team
+ethos setup --bundle gstack           # use gstack instead of foundation
+ethos setup --file config.yaml        # non-interactive, from file
 ```
-
-(Optional) Activate a starter team — `gstack` ships embedded and
-deploys on `ethos seed`:
-
-```bash
-ethos team activate gstack
-```
-
-Start Claude Code. Ethos hooks load your agent's identity at session
-start, re-inject it through compaction, and give every sub-agent its
-own persona.
 
 <details>
 <summary>Manual install (Go required)</summary>
@@ -144,6 +149,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 
 | Command | What it does |
 |---------|--------------|
+| `ethos setup` | Set up identities and team for the current repo |
 | `ethos whoami` | Show your resolved identity |
 | `ethos identity create` | Create a new identity (interactive) |
 | `ethos doctor` | Check installation health |
@@ -170,27 +176,26 @@ markdown cannot represent it). Coexistence rather than competition.
 
 ## Status
 
-v3.7.0 — all five planned phases shipped. 23+ KLOC production Go,
-37+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
-write-set admission, frozen evaluators, bounded rounds, audit logs,
-archetypes, pipelines, automatic mission traceability, and mission
-dispatch one-liner are in daily use by Punt Labs. The gstack starter
-team (6 agents + 5 pipeline templates) ships as optional content
-via the team submodule.
+v3.8.0 — all five planned phases shipped plus onboarding. 25+ KLOC
+production Go, 38+ KLOC tests, A+ Go Report Card. Identity, teams,
+mission contracts, write-set admission, frozen evaluators, bounded
+rounds, audit logs, archetypes, pipelines, automatic mission
+traceability, and mission dispatch one-liner are in daily use by
+Punt Labs.
 
-Gstack also ships as an embedded, activatable **team bundle**:
-`ethos seed` deploys it to the global store and
-`ethos team activate gstack` turns it on per repo. Existing users on
-the legacy `punt-labs/team` submodule can move to the bundles layout
-with `ethos team migrate` (dry-run by default).
+New users run `ethos setup` to get a working team in under 60
+seconds. Two embedded bundles ship: **foundation** (4-agent
+general-purpose team) and **gstack** (6-agent startup builder
+team). Existing users on the legacy `punt-labs/team` submodule can
+move to the bundles layout with `ethos team migrate`.
 
-Remaining work is adoption-driven: reducing mission ceremony,
-customer validation interviews, cross-tool integration.
-See the [roadmap](docs/ETHOS-ROADMAP.md).
+Remaining work is adoption-driven: customer validation interviews,
+cross-tool integration. See the [roadmap](docs/ETHOS-ROADMAP.md).
 
 ## Documentation
 
 [Live example](docs/example/) ·
+[Onboarding design](docs/onboarding.md) ·
 [Team setup](docs/team-setup.md) ·
 [Archetypes and pipelines](docs/archetypes-and-pipelines.md) ·
 [Gstack starter team](docs/gstack-getting-started.md) ·
