@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos setup`** -- interactive wizard that creates human + agent
+  identities and, when run in a git repo, writes repo config, activates
+  a team bundle, and generates agent files. Replaces the 12-step manual
+  setup path.
+  Flags: `--solo` (identity only), `--bundle <name>` (default foundation),
+  `--file <path>` (non-interactive), `--json`.
+- **Foundation bundle** -- general-purpose 4-agent team (architect,
+  implementer, reviewer, security) for any codebase. Ships embedded
+  alongside gstack. Uses global seed pipelines (standard, quick, product).
+- **Onboarding design docs** -- `docs/prfaq-onboarding.md` (Working
+  Backwards) and `docs/onboarding.md` (full CLI and bundle specification).
+
+### Changed
+
+- Quick Start reduced from 12 steps to 2: `curl ... | sh` then
+  `ethos setup`.
+
 ## [3.8.0] - 2026-04-15
 
 ## [3.7.0] - 2026-04-15
