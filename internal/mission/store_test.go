@@ -3651,3 +3651,59 @@ func TestStore_CreateSkipsCorruptMissionDuringConflictCheck(t *testing.T) {
 	assert.Contains(t, stderr, "m-2026-04-08-099")
 	assert.Contains(t, stderr, "skipping mission")
 }
+
+// TestValidateForCreate_CatchesArchetypeConstraint verifies that
+// ValidateForCreate catches archetype constraint violations without
+// writing to disk.
+func TestValidateForCreate_CatchesArchetypeConstraint(t *testing.T) {
+	root := t.TempDir()
+	writeArchetypeFile(t, root, "implement", implementYAML)
+	as := NewArchetypeStore("", root)
+	s := NewStore(root).WithArchetypeStore(as)
+
+	c := newContract("m-2026-04-15-001")
+	c.Type = "nonexistent-type"
+
+	err := s.ValidateForCreate(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown mission type")
+
+	// No files created on disk.
+	entries, dirErr := os.ReadDir(filepath.Join(root, "missions"))
+	if dirErr == nil {
+		assert.Empty(t, entries, "ValidateForCreate must not write to disk")
+	}
+}
+
+// TestValidateForCreate_PassesValidContract verifies that a valid
+// contract passes ValidateForCreate without error.
+func TestValidateForCreate_PassesValidContract(t *testing.T) {
+	root := t.TempDir()
+	writeArchetypeFile(t, root, "implement", implementYAML)
+	as := NewArchetypeStore("", root)
+	s := NewStore(root).WithArchetypeStore(as)
+
+	c := newContract("m-2026-04-15-002")
+	require.NoError(t, s.ValidateForCreate(c))
+}
+
+// TestValidateForCreate_CatchesSelfVerification verifies that
+// ValidateForCreate refuses a contract where worker == evaluator.
+func TestValidateForCreate_CatchesSelfVerification(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-15-003")
+	c.Worker = "djb"
+	c.Evaluator.Handle = "djb"
+
+	err := s.ValidateForCreate(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot also be evaluator")
+}
+
+// TestValidateForCreate_NilContract verifies the nil guard.
+func TestValidateForCreate_NilContract(t *testing.T) {
+	s := testStore(t)
+	err := s.ValidateForCreate(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "contract is nil")
+}

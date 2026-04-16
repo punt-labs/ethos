@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/mission"
@@ -381,6 +382,94 @@ func TestPipelineHandler_MissionListByPipeline(t *testing.T) {
 	var emptyEntries []map[string]interface{}
 	require.NoError(t, json.Unmarshal([]byte(empty), &emptyEntries))
 	assert.Empty(t, emptyEntries)
+}
+
+// countMissionFiles returns the number of .yaml contract files in the
+// missions directory under home. Counts only contract files — not
+// reflections, results, or dotfiles.
+func countMissionFiles(home string) int {
+	dir := filepath.Join(home, ".punt-labs", "ethos", "missions")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		name := e.Name()
+		if filepath.Ext(name) == ".yaml" &&
+			!strings.HasPrefix(name, ".") &&
+			!strings.HasSuffix(name, ".reflections.yaml") &&
+			!strings.HasSuffix(name, ".results.yaml") {
+			n++
+		}
+	}
+	return n
+}
+
+// badArchPipeline is a two-stage pipeline where the second stage
+// references an archetype that does not exist, causing validation
+// failure. The first stage uses a valid archetype.
+const badArchPipeline = `name: bad-arch-test
+description: "Pipeline with invalid archetype on stage 2"
+stages:
+  - name: implement
+    archetype: implement
+    write_set:
+      - "internal/foo/"
+    success_criteria:
+      - "make check passes"
+    context: "Implement the thing"
+    budget:
+      rounds: 2
+      reflection_after_each: true
+  - name: bogus
+    archetype: does-not-exist
+    write_set:
+      - ".tmp/review.md"
+    success_criteria:
+      - "findings reported"
+    context: "This stage should fail validation"
+    inputs_from: implement
+    budget:
+      rounds: 1
+      reflection_after_each: true
+`
+
+func TestPipelineHandler_Instantiate_AtomicRollbackOnValidationFailure(t *testing.T) {
+	home := pipelineInProcessEnv(t)
+	seedPipelineYAML(t, home, "bad-arch-test", badArchPipeline)
+
+	assert.Equal(t, 0, countMissionFiles(home), "precondition: no missions")
+
+	_, _, err := execPipelineHandler(t,
+		"mission", "pipeline", "instantiate", "bad-arch-test",
+		"--leader", "claude",
+		"--worker", "bwk",
+		"--evaluator", "djb",
+	)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown mission type")
+
+	// No missions should exist — stage 1 must not be orphaned.
+	assert.Equal(t, 0, countMissionFiles(home),
+		"atomic instantiate must leave zero missions on validation failure")
+}
+
+func TestPipelineHandler_Instantiate_AllStagesCreatedOnSuccess(t *testing.T) {
+	home := pipelineInProcessEnv(t)
+	seedPipelineYAML(t, home, "quick-test", quickPipeline)
+
+	stdout, _, err := execPipelineHandler(t,
+		"mission", "pipeline", "instantiate", "quick-test",
+		"--leader", "claude",
+		"--worker", "bwk",
+		"--evaluator", "djb",
+		"--var", "target=internal/foo/",
+	)
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "Created pipeline")
+	assert.Equal(t, 2, countMissionFiles(home),
+		"successful instantiate must create all stages")
 }
 
 // =====================================================================

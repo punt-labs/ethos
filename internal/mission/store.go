@@ -96,6 +96,57 @@ func (s *Store) WithRepoRoot(root string) *Store {
 // Root returns the store's root directory.
 func (s *Store) Root() string { return s.root }
 
+// ValidateForCreate runs the same pre-lock validation chain that
+// Create uses — type defaults, archetype lookup, ValidateWithArchetype,
+// enforceArchetypeConstraints, checkSelfVerification — without
+// acquiring any locks or writing to disk.
+//
+// Pipeline instantiation uses this to validate all stages before
+// creating any of them, so a failure at stage N does not leave
+// stages 1..N-1 orphaned on disk.
+func (s *Store) ValidateForCreate(c *Contract) error {
+	if c == nil {
+		return fmt.Errorf("contract is nil")
+	}
+	staged := *c
+	if staged.UpdatedAt == "" {
+		staged.UpdatedAt = staged.CreatedAt
+	}
+	if staged.Type == "" {
+		staged.Type = "implement"
+	}
+	var arch *Archetype
+	if s.archetypes != nil {
+		if !s.archetypes.Exists(staged.Type) {
+			available, _ := s.archetypes.List()
+			return fmt.Errorf(
+				"unknown mission type %q; available archetypes: %s",
+				staged.Type, strings.Join(available, ", "),
+			)
+		}
+		a, err := s.archetypes.Load(staged.Type)
+		if err != nil {
+			return fmt.Errorf("loading archetype %q: %w", staged.Type, err)
+		}
+		arch = a
+	}
+	if staged.CurrentRound == 0 {
+		staged.CurrentRound = 1
+	}
+	if err := staged.ValidateWithArchetype(arch); err != nil {
+		return fmt.Errorf("invalid contract: %w", err)
+	}
+	if arch != nil {
+		if err := enforceArchetypeConstraints(&staged, arch); err != nil {
+			return fmt.Errorf("archetype %q constraint: %w", staged.Type, err)
+		}
+	}
+	if err := checkSelfVerification(&staged); err != nil {
+		return err
+	}
+	return nil
+}
+
 // validateContract resolves the archetype from the contract's Type
 // (if an archetype store is wired) and runs ValidateWithArchetype.
 // When no archetype store is set, falls back to Validate() (all rules).

@@ -251,18 +251,16 @@ func runPipelineInstantiate(name string) error {
 		return fmt.Errorf("pipeline instantiate: %w", err)
 	}
 
+	// Phase 1: Apply server fields, re-derive DependsOn, and validate
+	// every stage. No disk writes. A failure here leaves no orphaned
+	// missions on disk.
 	for i, c := range contracts {
-		// ApplyServerFields overwrites MissionID, timestamps, hash etc.
 		pipeline := c.Pipeline
 		if err := ms.ApplyServerFields(c, opts.Now, sources); err != nil {
 			return fmt.Errorf("pipeline instantiate: stage %q: %w", p.Stages[i].Name, err)
 		}
-		// Restore pipeline (ApplyServerFields does not set it).
 		c.Pipeline = pipeline
 
-		// Re-derive DependsOn from InputsFrom. Earlier stages have
-		// already been processed so contracts[j].MissionID is the
-		// server-assigned ID.
 		c.DependsOn = nil
 		if p.Stages[i].InputsFrom != "" {
 			found := false
@@ -279,8 +277,24 @@ func runPipelineInstantiate(name string) error {
 			}
 		}
 
-		if err := ms.Create(c); err != nil {
+		if err := ms.ValidateForCreate(c); err != nil {
 			return fmt.Errorf("pipeline instantiate: stage %q (mission %s): %w",
+				p.Stages[i].Name, c.MissionID, err)
+		}
+	}
+
+	// Phase 2: Create all stages. Only runs if every stage passed
+	// validation. On failure, roll back any missions already created
+	// in this batch so the operation is all-or-nothing.
+	for i, c := range contracts {
+		if err := ms.Create(c); err != nil {
+			for j := 0; j < i; j++ {
+				_ = os.Remove(ms.ContractPath(contracts[j].MissionID))
+				logPath := ms.ContractPath(contracts[j].MissionID)
+				logPath = logPath[:len(logPath)-len(".yaml")] + ".jsonl"
+				_ = os.Remove(logPath)
+			}
+			return fmt.Errorf("pipeline instantiate: stage %q (mission %s): %w (all prior stages rolled back)",
 				p.Stages[i].Name, c.MissionID, err)
 		}
 	}
