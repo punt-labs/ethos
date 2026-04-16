@@ -11,7 +11,7 @@ stages:
       - "make check passes"
       - "new code has tests"
   - name: review
-    archetype: review
+    archetype: report
     description: "Review the implementation"
     inputs_from: implement
     write_set:
