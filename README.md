@@ -39,7 +39,7 @@ server, no cloud, no telemetry.
 ## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e9a1ee7/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c5222ef/install.sh | sh
 ethos setup
 ```
 
