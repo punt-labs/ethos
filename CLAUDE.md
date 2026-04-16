@@ -39,6 +39,34 @@ make check                              # All quality gates (vet, staticcheck, s
 
 Use `.tmp/` for scratch files — `TMPDIR` is set via `.envrc` so subprocesses use it automatically.
 
+## Use Ethos to Build Ethos
+
+This project uses its own pipeline and mission system for ALL work —
+design, implementation, review, documentation. Not just code.
+
+**Product design work** uses the `product` pipeline:
+
+```bash
+ethos mission pipeline instantiate product \
+  --var feature=<name> --var target=<path> \
+  --leader claude --worker ghr --evaluator adt
+```
+
+The `--worker` flag sets the default for all stages. The leader
+reassigns workers per stage at delegation time: Stage 1 (prfaq) → ghr,
+Stage 2 (design) → edt + mdm, Stages 3-6 → bwk. Design is reviewed
+before code starts.
+
+**Engineering work** uses `standard` or `quick` pipelines. Delegate to
+specialists: bwk (Go), mdm (CLI), djb (security), rmh (Python).
+
+**Never solo-design in plan mode.** Instantiate a pipeline, delegate to
+specialists, review their output. The system exists for this purpose.
+
+**Dogfood before shipping.** Build the binary, run the commands, walk
+the user journey. `make check` passing is necessary but not sufficient.
+A feature that fails when used is not shipped — it's fiction.
+
 ## Quality Gates
 
 The Makefile is the source of truth (`make help`).
@@ -65,7 +93,11 @@ Expands to `make lint docs test`: `go vet`, `staticcheck`, `shellcheck hooks/*.s
 | `internal/doctor/` | Installation health checks |
 | `internal/role/` | Role model, CRUD, layered store |
 | `internal/team/` | Team model, CRUD, layered store, referential integrity enforcement |
-| `internal/mcp/` | MCP tool definitions and handlers (9 tools) |
+| `internal/mission/` | Mission contracts, pipelines, archetypes, write-set enforcement, result artifacts, event log |
+| `internal/bundle/` | Team bundle discovery, resolution, validation (three-layer: repo → bundle → global) |
+| `internal/seed/` | Embedded starter content (roles, talents, archetypes, pipelines, bundles) deployed by `ethos seed` |
+| `internal/adr/` | ADR model and storage backing the `adr` MCP tool |
+| `internal/mcp/` | MCP tool definitions and handlers (11 tools) |
 
 ### Storage Layout
 
@@ -86,6 +118,11 @@ Expands to `make lint docs test`: `go vet`, `staticcheck`, `shellcheck hooks/*.s
 | Global writing styles | `~/.punt-labs/ethos/writing-styles/<slug>.md` | No |
 | Global roles | `~/.punt-labs/ethos/roles/<name>.yaml` | No |
 | Global teams | `~/.punt-labs/ethos/teams/<name>.yaml` | No |
+| Global bundles | `~/.punt-labs/ethos/bundles/<name>/` | No |
+| ADRs | `~/.punt-labs/ethos/adrs/<id>.yaml` | No |
+| Repo bundles | `.punt-labs/ethos-bundles/<name>/` | Yes |
+| Missions | `~/.punt-labs/ethos/missions/<id>.yaml` | No |
+| Mission traces | `<repo>/.ethos/missions.jsonl` | Yes |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 
 ### Identity Schema
@@ -111,6 +148,8 @@ talents:                               # slugs → talents/<slug>.md
 - **Agent definition is a channel binding.** Like voice or email — the `.md` file defines tools and workflow, ethos defines who.
 - **No consumer-specific fields.** Never add fields for a specific consumer (Beadle, Biff, Vox). Use the generic extension mechanism — any tool can read/write arbitrary key-value pairs scoped to a namespace. Ethos validates constraints but does not know what the keys mean.
 - **Preserve identity content.** Source `.md` files are the authority on personality, writing style, and talent content. Hooks and persona blocks may restructure (strip leading headings, fold the first paragraph into the opening line, list talents as slugs) but must not discard or summarize the underlying meaning.
+- **Three-layer resolution.** All layered stores resolve repo-local → active bundle → global. Bundle layer is read-only. `active_bundle` in `.punt-labs/ethos.yaml` selects the bundle; when unset and `.punt-labs/ethos/` exists as a directory, legacy two-layer behavior is preserved (DES-051).
+- **Pipeline instantiation validates before creation.** If any stage fails validation (missing worker, evaluator, or archetype), zero missions are created. During Create, missions are persisted sequentially; if a later stage fails, earlier stages remain and must be cleaned up manually before retrying.
 
 ## Go Standards
 

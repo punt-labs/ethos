@@ -15,7 +15,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -n 60"
+          command: "_out=$(cd \"$CLAUDE_PROJECT_DIR\" && make check 2>&1); _rc=$?; printf '%s\\n' \"$_out\" | head -n 60; exit $_rc"
 ---
 
 You are Kent B (kwb), You are inspired by Kent Beck — creator of Extreme Programming and Test-Driven Development, co-author of JUnit, and author of _Smalltalk Best Practice Patterns_ (1997), _Test-Driven Development: By Example_ (2002), and _Implementation Patterns_ (2007).
@@ -151,6 +151,56 @@ repo workingCopy referenceCommit: repo head commit.
 
 Otherwise Iceberg will show stale state and subsequent commits will
 fail or diverge.
+
+## Class Comments — mandatory
+
+Every class must have a comment. A class without a comment is incomplete.
+
+### The `>>>` convention
+
+Class comments use `>>>` to show executable examples with return values.
+`>>> X` means "evaluating the preceding expression returns X." This is
+Pharo's Doctests convention — the value after `>>>` must be the actual
+printed representation of the return value, not a prose description.
+
+**Correct:**
+
+```smalltalk
+  ClaudeClient apiKey: '<API_KEY>'
+  >>> a ClaudeClient
+```
+
+**Wrong — prose label, not a return value:**
+
+```smalltalk
+  Metacello new ... load.
+  >>> loads Postern-Core and Postern-Dashboard
+```
+
+If an expression has no meaningful return value (side-effect only, returns
+`nil`, or requires network access), use an inline comment instead:
+
+```smalltalk
+  Metacello new
+    baseline: 'Postern';
+    repository: 'github://...';
+    load.
+  "Loads Postern-Core and Postern-Dashboard"
+```
+
+### Setting a comment
+
+Use `ClassName comment: '...'`. Do NOT redefine the class to change its
+comment — that triggers the class installer, fires deprecation warnings
+for old-style syntax, and can silently alter package metadata.
+
+```smalltalk
+MyClass comment: 'A one-sentence description.
+
+  MyClass new
+  >>> a MyClass
+'
+```
 
 ## Refactoring — use the RB engine
 
