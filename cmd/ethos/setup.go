@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -177,6 +178,8 @@ func runSetup(cmd *cobra.Command) error {
 		}
 		if jsonOutput {
 			writeJSON(cmd.OutOrStdout(), result)
+		} else {
+			printSetupTable(cmd.OutOrStdout(), result)
 		}
 		return nil
 	}
@@ -203,6 +206,8 @@ func runSetup(cmd *cobra.Command) error {
 		}
 		if jsonOutput {
 			writeJSON(cmd.OutOrStdout(), result)
+		} else {
+			printSetupTable(cmd.OutOrStdout(), result)
 		}
 		return nil
 	}
@@ -267,6 +272,8 @@ func runSetup(cmd *cobra.Command) error {
 	}
 	if jsonOutput {
 		writeJSON(cmd.OutOrStdout(), result)
+	} else {
+		printSetupTable(cmd.OutOrStdout(), result)
 	}
 	return nil
 }
@@ -332,17 +339,13 @@ func resolveStyleChoice(choice string, attrs []*attribute.Attribute) string {
 	return choice
 }
 
+// setupHandleRe matches the same pattern as identity.validHandle:
+// lowercase alphanumeric, internal hyphens only, no leading or trailing hyphen.
+var setupHandleRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+
 // validSetupHandle checks the handle matches the identity package's pattern.
 func validSetupHandle(h string) bool {
-	if h == "" {
-		return false
-	}
-	for _, c := range h {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
-			return false
-		}
-	}
-	return h[0] != '-'
+	return setupHandleRe.MatchString(h)
 }
 
 // mergeRepoConfig writes .punt-labs/ethos.yaml, merging with any existing
@@ -369,22 +372,12 @@ func mergeRepoConfig(repoRoot string, cfg setupConfig) error {
 		}
 	}
 
-	// Merge: add missing keys only.
+	// Merge: add missing keys only. Bundle-related keys (active_bundle, team)
+	// are written by runSetup's bundle activation section, not here, so the
+	// idempotency check can distinguish first-run from re-run.
 	if _, ok := existing["agent"]; !ok {
 		if err := setConfigKey(repoRoot, "agent", "claude"); err != nil {
 			return err
-		}
-	}
-	if !cfg.Solo {
-		if _, ok := existing["team"]; !ok {
-			if err := setConfigKey(repoRoot, "team", cfg.Bundle); err != nil {
-				return err
-			}
-		}
-		if _, ok := existing["active_bundle"]; !ok {
-			if err := setConfigKey(repoRoot, "active_bundle", cfg.Bundle); err != nil {
-				return err
-			}
 		}
 	}
 	return nil

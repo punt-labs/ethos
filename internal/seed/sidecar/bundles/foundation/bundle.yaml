@@ -1,4 +1,4 @@
 name: foundation
 version: 1
 description: "General-purpose 4-agent team for any codebase"
-ethos_min_version: "3.8.0"
+ethos_min_version: "3.7.0"

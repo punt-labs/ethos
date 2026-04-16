@@ -101,6 +101,11 @@ writing_style: concise-quantified
 	entries, err := os.ReadDir(agentsDir)
 	require.NoError(t, err)
 	assert.NotEmpty(t, entries, "agent files should be generated")
+
+	// Non-JSON mode prints a summary table to stdout.
+	assert.Contains(t, stdout, "human identity")
+	assert.Contains(t, stdout, "agent identity")
+	assert.Contains(t, stdout, "bundle")
 }
 
 func TestSetup_FileMode_JSON(t *testing.T) {
@@ -199,6 +204,7 @@ handle: repeat-user
 	require.NoError(t, err)
 	assert.Contains(t, stderr, `skipped: identity "repeat-user" already exists`)
 	assert.Contains(t, stderr, `skipped: identity "claude" already exists`)
+	assert.Contains(t, stderr, `skipped: bundle "foundation" already active`)
 }
 
 func TestSetup_Idempotent_JSON(t *testing.T) {
@@ -314,17 +320,27 @@ func TestSetup_NameRequired(t *testing.T) {
 }
 
 func TestSetup_HandleValidation(t *testing.T) {
-	_, repo := setupTestEnv(t)
+	cases := []struct {
+		name   string
+		handle string
+	}{
+		{"uppercase and spaces", "BAD HANDLE"},
+		{"trailing hyphen", "abc-"},
+		{"leading hyphen", "-abc"},
+		{"double hyphen only", "--"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, repo := setupTestEnv(t)
 
-	cfgPath := filepath.Join(repo, "setup.yaml")
-	writeSetupFile(t, cfgPath, `
-name: Bad Handle
-handle: BAD HANDLE
-`)
+			cfgPath := filepath.Join(repo, "setup.yaml")
+			writeSetupFile(t, cfgPath, "name: Bad Handle\nhandle: "+tc.handle+"\n")
 
-	_, _, err := execHandler(t, "setup", "--file", cfgPath)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must be lowercase alphanumeric")
+			_, _, err := execHandler(t, "setup", "--file", cfgPath)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "must be lowercase alphanumeric")
+		})
+	}
 }
 
 func TestSetup_DefaultHandle(t *testing.T) {
@@ -439,13 +455,3 @@ handle: plain-jane
 	assert.Empty(t, human.WritingStyle)
 }
 
-// --- helpers ---
-
-type execExitError = os.ProcessState
-
-// buildCmd creates an exec.Cmd for the ethos binary with isolated env.
-func buildCmd(t *testing.T, home, repo string, args ...string) *os.Process {
-	t.Helper()
-	// Unused - use the exec.Command approach.
-	return nil
-}
