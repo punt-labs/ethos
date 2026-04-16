@@ -194,7 +194,7 @@ func runSetup(cmd *cobra.Command) error {
 	configPath := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
 	result.RepoConfig = ".punt-labs/ethos.yaml"
 
-	if err := mergeRepoConfig(repoRoot, cfg); err != nil {
+	if err := mergeRepoConfig(repoRoot); err != nil {
 		return fmt.Errorf("setup: writing repo config: %w", err)
 	}
 	fmt.Fprintf(errw, "wrote: %s\n", configPath)
@@ -350,7 +350,7 @@ func validSetupHandle(h string) bool {
 
 // mergeRepoConfig writes .punt-labs/ethos.yaml, merging with any existing
 // content. Existing keys are never overwritten.
-func mergeRepoConfig(repoRoot string, cfg setupConfig) error {
+func mergeRepoConfig(repoRoot string) error {
 	path := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
 
 	// Ensure parent dir exists.
