@@ -10,7 +10,7 @@ stages:
     success_criteria:
       - "covers problem, chosen approach, concrete examples"
   - name: review
-    archetype: review
+    archetype: report
     description: "Review the documentation"
     inputs_from: design
     write_set:
