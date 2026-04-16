@@ -1,0 +1,7 @@
+name: Architect
+handle: foundation-architect
+kind: agent
+personality: foundation-architect
+writing_style: foundation-clear
+talents:
+  - engineering

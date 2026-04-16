@@ -1,0 +1,8 @@
+name: Reviewer
+handle: foundation-reviewer
+kind: agent
+personality: foundation-reviewer
+writing_style: foundation-reviewer
+talents:
+  - engineering
+  - code-review

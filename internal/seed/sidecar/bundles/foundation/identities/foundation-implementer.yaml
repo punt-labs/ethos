@@ -1,0 +1,7 @@
+name: Implementer
+handle: foundation-implementer
+kind: agent
+personality: foundation-implementer
+writing_style: foundation-clear
+talents:
+  - engineering
