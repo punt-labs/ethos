@@ -51,7 +51,7 @@ stages:
       - "coverage delta per package reported"
       - "uncovered paths identified"
   - name: review
-    archetype: review
+    archetype: report
     description: "Review the complete change"
     inputs_from: coverage
     write_set:

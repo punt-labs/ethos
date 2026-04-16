@@ -30,7 +30,7 @@ stages:
       - "coverage does not decrease"
       - "edge cases and error paths covered"
   - name: review
-    archetype: review
+    archetype: report
     description: "Review the complete change"
     inputs_from: test
     write_set:
