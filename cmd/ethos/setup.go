@@ -15,6 +15,7 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -177,7 +178,9 @@ func runSetup(cmd *cobra.Command) error {
 			result.Skipped = []string{}
 		}
 		if jsonOutput {
-			writeJSON(cmd.OutOrStdout(), result)
+			if err := writeJSON(cmd.OutOrStdout(), result); err != nil {
+				return fmt.Errorf("setup: writing JSON output: %w", err)
+			}
 		} else {
 			printSetupTable(cmd.OutOrStdout(), result)
 		}
@@ -205,7 +208,9 @@ func runSetup(cmd *cobra.Command) error {
 			result.Skipped = []string{}
 		}
 		if jsonOutput {
-			writeJSON(cmd.OutOrStdout(), result)
+			if err := writeJSON(cmd.OutOrStdout(), result); err != nil {
+				return fmt.Errorf("setup: writing JSON output: %w", err)
+			}
 		} else {
 			printSetupTable(cmd.OutOrStdout(), result)
 		}
@@ -231,12 +236,17 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: bundle %q not found; available bundles:\n%s", cfg.Bundle, listBundleNames(bundles))
 	}
 
-	// Check if already active.
+	// Check if already active. If --bundle wasn't explicit and a bundle
+	// is already active, keep the existing one.
 	current, err := resolve.ResolveActiveBundle(repoRoot)
 	if err != nil {
 		return fmt.Errorf("setup: reading active bundle: %w", err)
 	}
-	if current == cfg.Bundle {
+	if current != "" && !cmd.Flags().Changed("bundle") {
+		fmt.Fprintf(errw, "skipped: bundle %q already active (use --bundle to switch)\n", current)
+		result.Skipped = append(result.Skipped, "bundle")
+		cfg.Bundle = current
+	} else if current == cfg.Bundle {
 		fmt.Fprintf(errw, "skipped: bundle %q already active\n", cfg.Bundle)
 		result.Skipped = append(result.Skipped, "bundle")
 	} else {
@@ -255,12 +265,15 @@ func runSetup(cmd *cobra.Command) error {
 	ts := layeredTeamStore(is)
 	rs := layeredRoleStore(is)
 	if err := hook.GenerateAgentFiles(repoRoot, is, ts, rs); err != nil {
-		fmt.Fprintf(errw, "ethos: setup: generating agent files: %v\n", err)
+		return fmt.Errorf("setup: generating agent files: %w", err)
 	}
 
 	// List generated agent files.
 	agentsDir := filepath.Join(repoRoot, ".claude", "agents")
-	entries, _ := os.ReadDir(agentsDir)
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(errw, "ethos: setup: reading agent files: %v\n", err)
+	}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
 			result.AgentFiles = append(result.AgentFiles, filepath.Join(".claude", "agents", e.Name()))
@@ -271,7 +284,9 @@ func runSetup(cmd *cobra.Command) error {
 		result.Skipped = []string{}
 	}
 	if jsonOutput {
-		writeJSON(cmd.OutOrStdout(), result)
+		if err := writeJSON(cmd.OutOrStdout(), result); err != nil {
+			return fmt.Errorf("setup: writing JSON output: %w", err)
+		}
 	} else {
 		printSetupTable(cmd.OutOrStdout(), result)
 	}
@@ -417,11 +432,7 @@ func saveIdentityNoRefs(store *identity.Store, id *identity.Identity) error {
 
 // isTTY reports whether f is connected to a terminal.
 func isTTY(f *os.File) bool {
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return term.IsTerminal(int(f.Fd()))
 }
 
 // hasLegacySubmodule checks if .punt-labs/ethos/ exists as a directory

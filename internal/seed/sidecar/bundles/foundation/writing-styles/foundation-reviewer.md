@@ -4,7 +4,7 @@ Finding-oriented review output.
 
 ## Findings
 
-- Lead with severity: CRITICAL, HIGH, MEDIUM, LOW.
+- Lead with severity: CRITICAL, WARNING, NOTE.
 - One finding per comment with exact file:line reference.
 - Suggest the fix, not just the problem.
 - Distinguish genuine issues from style preferences.

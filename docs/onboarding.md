@@ -96,8 +96,8 @@ Working style:
 Choice:
 ```
 
-Lists the writing styles available in the global store (seeded by
-`ethos seed`). Accepts a number, a slug, or empty to skip. If
+The slugs above are illustrative. The actual menu lists writing
+styles available in the global store (seeded by `ethos seed`). Accepts a number, a slug, or empty to skip. If
 skipped, human identity gets no writing style; agent identity gets
 `concise-quantified` (the default for agents).
 
@@ -307,7 +307,7 @@ When run outside a git repository:
 name: foundation
 version: 1
 description: "General-purpose 4-agent team for any codebase"
-ethos_min_version: "3.8.0"
+ethos_min_version: "3.7.0"
 ```
 
 ### Directory Structure
@@ -334,7 +334,9 @@ bundles/foundation/
     reviewer.yaml
     security-reviewer.yaml
   talents/
+    code-review.md
     engineering.md
+    security.md
   teams/
     foundation.yaml
 ```
@@ -544,8 +546,9 @@ one sentence per finding. Used by reviewer and security-reviewer.
 
 ### Talents
 
-One talent file: `engineering.md`. References the global
-`engineering` talent from seed but can be overridden per-bundle.
+Three talent files: `engineering.md`, `code-review.md`, and
+`security.md`. These reference the corresponding global talents
+from seed but can be overridden per-bundle.
 
 ### Pipeline Templates
 
