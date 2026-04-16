@@ -170,8 +170,8 @@ markdown cannot represent it). Coexistence rather than competition.
 
 ## Status
 
-v3.6.0 — all five planned phases shipped. 22+ KLOC production Go,
-35+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
+v3.7.0 — all five planned phases shipped. 23+ KLOC production Go,
+37+ KLOC tests, A+ Go Report Card. Identity, teams, mission contracts,
 write-set admission, frozen evaluators, bounded rounds, audit logs,
 archetypes, pipelines, automatic mission traceability, and mission
 dispatch one-liner are in daily use by Punt Labs. The gstack starter

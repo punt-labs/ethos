@@ -5,10 +5,10 @@ described in `docs/testing-strategy.tex`.
 
 ---
 
-## Current State (v3.5.0)
+## Current State (v3.7.0)
 
-- **2,058 tests** across 14 packages, 89.8% mission package coverage
-- **22.4 KLOC production Go, 35.8 KLOC test Go** (1.60:1 test-to-production ratio)
+- **2,187 tests** across 14 packages, 89.8% mission package coverage
+- **23.9 KLOC production Go, 37.7 KLOC test Go** (1.58:1 test-to-production ratio)
 - L1 content validation, L2 CLI subprocess, L3 MCP integration, L4 behavioral: all shipped in v3.1.0
 - CI coverage reporting wired (`-coverprofile`, summary in CI)
 - 8 behavioral scenarios: 4 deterministic (Layer A), 2 LLM-judged (Layer B), 2 adversarial (Layer C)
@@ -182,7 +182,11 @@ Added `-coverprofile=coverage.out` to `make test` and CI summary reporting. Cove
 
 **v3.4.0** (April 14, 2026) shipped pipeline instantiate, archetype constraint enforcement (allow_empty_write_set, write_set_constraints, required_fields), inputs.bead to inputs.ticket rename with back-compat, 8 built-in pipeline templates with {feature}/{target} defaults, PostToolUse exit code propagation, and 24 pipeline CLI tests. Coverage went from 75.6% to 77.1%.
 
-**v3.5.0** (April 14, 2026) shipped automatic mission traceability (`Store.Close` auto-appends summary JSONL to `<repo>/.ethos/missions.jsonl`, DES-050), deprecation warning deduplication via `sync.Once`, and an integration test for the Close-to-JSONL path. 2,058 tests across 14 packages, 89.8% mission package coverage.
+**v3.5.0** (April 14, 2026) shipped automatic mission traceability (`Store.Close` auto-appends summary JSONL to `<repo>/.ethos/missions.jsonl`, DES-050), deprecation warning deduplication via `sync.Once`, and an integration test for the Close-to-JSONL path.
+
+**v3.6.0** (April 15, 2026) shipped mission dispatch one-liner, resilient conflict scan, `inputs.trigger` schema, and doctor orphan check (Phase 5 items).
+
+**v3.7.0** (April 15, 2026) shipped team bundle activation (Phase 6.1): three-layer stores (repo, active bundle, global), bundle resolver, five CLI commands (`available`, `activate`, `active`, `deactivate`, `add-bundle`), embedded gstack bundle (5 pipeline templates), and `ethos team migrate`. 2,187 tests across 14 packages, 23.9 KLOC production Go, 37.7 KLOC test Go.
 
 L5 sprint integration tests remain the sole unimplemented phase. The pipeline instantiate primitive shipped in v3.4.0; L5 depends on fixture repo construction and harness authoring.
 

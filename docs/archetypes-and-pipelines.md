@@ -76,8 +76,8 @@ the write-set may be empty (the output is a report, not code).
 
 ### Built-in archetypes
 
-Seven archetypes ship in the box. All live as YAML at
-`~/.punt-labs/ethos/archetypes/`.
+Ten archetypes ship in the box (7 core + 3 from gstack bundle). All
+live as YAML at `~/.punt-labs/ethos/archetypes/`.
 
 | Archetype | Purpose | Budget default | Write-set constraints | Required fields |
 |-----------|---------|----------------|-----------------------|-----------------|
@@ -187,8 +187,9 @@ four mission contracts wired together with `depends_on` edges.
 
 ### Built-in pipelines
 
-Eight pipelines ship in the box. Pick based on the nature of the work,
-not just its size:
+Eight core pipelines ship in the box. An additional 5 are available
+via the gstack team bundle (`ethos team activate gstack`), for 13
+total. Pick based on the nature of the work, not just its size:
 
 | Pipeline | Stages | Use when |
 |----------|--------|----------|
