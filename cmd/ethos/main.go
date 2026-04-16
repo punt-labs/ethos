@@ -30,7 +30,9 @@ func (silentError) Error() string { return "" }
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		if _, ok := err.(silentError); !ok {
-			fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			if _, ok := err.(usageError); !ok {
+				fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			}
 		}
 		if isUsageError(err) {
 			os.Exit(2)
@@ -44,6 +46,9 @@ func main() {
 // error for these; we match on the message prefixes cobra itself
 // generates.
 func isUsageError(err error) bool {
+	if _, ok := err.(usageError); ok {
+		return true
+	}
 	msg := err.Error()
 	prefixes := []string{
 		"unknown command",

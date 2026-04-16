@@ -1,0 +1,12 @@
+name: security-reviewer
+responsibilities:
+  - security audit against OWASP Top 10
+  - secrets and credential scanning
+  - dependency supply chain review
+permissions:
+  - read-code
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash

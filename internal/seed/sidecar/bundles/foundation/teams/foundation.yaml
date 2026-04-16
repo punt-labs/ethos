@@ -1,0 +1,20 @@
+name: foundation
+members:
+  - identity: foundation-architect
+    role: architect
+  - identity: foundation-implementer
+    role: implementer
+  - identity: foundation-reviewer
+    role: reviewer
+  - identity: foundation-security
+    role: security-reviewer
+collaborations:
+  - from: implementer
+    to: architect
+    type: reports_to
+  - from: reviewer
+    to: architect
+    type: reports_to
+  - from: security-reviewer
+    to: architect
+    type: reports_to

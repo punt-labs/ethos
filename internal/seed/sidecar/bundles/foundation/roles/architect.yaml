@@ -1,0 +1,14 @@
+name: architect
+responsibilities:
+  - design review and tradeoff evaluation
+  - architecture decisions and documentation
+  - cross-component coordination
+permissions:
+  - edit-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob

@@ -1,0 +1,8 @@
+name: Security Reviewer
+handle: foundation-security
+kind: agent
+personality: foundation-security
+writing_style: foundation-reviewer
+talents:
+  - engineering
+  - security
