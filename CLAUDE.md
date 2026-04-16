@@ -45,11 +45,13 @@ This project uses its own pipeline and mission system for ALL work —
 design, implementation, review, documentation. Not just code.
 
 **Product design work** uses the `product` pipeline:
+
 ```bash
 ethos mission pipeline instantiate product \
   --var feature=<name> --var target=<path> \
   --leader claude --worker ghr --evaluator adt
 ```
+
 Stage 1 (prfaq) → ghr for product thinking. Stage 2 (design) → edt +
 mdm for UX + CLI. Stages 3-6 → bwk for implementation, tests, review,
 docs. Design is reviewed before code starts.
