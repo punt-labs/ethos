@@ -1,0 +1,11 @@
+name: reviewer
+responsibilities:
+  - code review with severity-rated findings
+  - correctness, performance, and maintainability assessment
+  - file:line references for every finding
+permissions:
+  - read-code
+tools:
+  - Read
+  - Grep
+  - Glob

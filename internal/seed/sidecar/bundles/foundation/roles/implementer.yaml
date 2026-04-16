@@ -1,0 +1,14 @@
+name: implementer
+responsibilities:
+  - feature implementation with tests
+  - make check passes before reporting done
+  - atomic commits with clear messages
+permissions:
+  - edit-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
