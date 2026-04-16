@@ -45,7 +45,8 @@ ethos setup
 
 The installer places the `ethos` binary in `~/.local/bin`, seeds
 starter content (roles, talents, pipelines, bundles), and registers
-the Claude Code plugin. `ethos setup` is an interactive wizard that
+the Claude Code plugin when `claude` and `git` are available.
+`ethos setup` is an interactive wizard that
 asks 3 questions (name, handle, working style), then creates:
 
 - Your human identity

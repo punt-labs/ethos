@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`ethos setup`** -- interactive wizard that creates human + agent
-  identities, writes repo config, activates a team bundle, and generates
-  agent files in one command. Replaces the 12-step manual setup path.
+  identities and, when run in a git repo, writes repo config, activates
+  a team bundle, and generates agent files. Replaces the 12-step manual
+  setup path.
   Flags: `--solo` (identity only), `--bundle <name>` (default foundation),
   `--file <path>` (non-interactive), `--json`.
 - **Foundation bundle** -- general-purpose 4-agent team (architect,
