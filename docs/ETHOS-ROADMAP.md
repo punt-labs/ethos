@@ -4,11 +4,11 @@ Where ethos is going. Organized into phases that build on each other.
 
 ## Current Status (2026-04-14)
 
-Ethos is on `main` at v3.5.0 with all five original phases complete.
-22.4 KLOC production Go, 35.8 KLOC tests, 2,058 tests across 14
-packages. Go Report Card: A+. 8 pipeline templates, 7 archetypes,
-24 identities, 13 team members. Phase 2.6 (`/mission` Phase B–C:
-conflict detection and dry-run) remains planned.
+Ethos is on `main` at v3.7.0 with all five original phases complete.
+23.9 KLOC production Go, 37.7 KLOC tests, 2,187 tests across 14
+packages. Go Report Card: A+. 13 pipeline templates (8 core + 5 in
+gstack bundle), 10 archetypes, 26 identities, 4 teams. Phase 2.6
+(`/mission` Phase B–C: conflict detection and dry-run) remains planned.
 
 | Phase | Status | Summary |
 |---|---|---|
@@ -77,6 +77,21 @@ automatic traceability.
 
 - Automatic mission traceability — `Store.Close` auto-appends a summary JSONL line to `<repo>/.ethos/missions.jsonl` (DES-050). Commit-ready without manual bookkeeping.
 - Suppress duplicate `inputs.bead` deprecation warnings via `sync.Once`
+
+### v3.6.0 (April 15, 2026)
+
+- Mission dispatch one-liner (`ethos mission dispatch`)
+- Resilient conflict scan for write-set admission
+- `inputs.trigger` schema for email-triggered missions (beadle-40k)
+- Doctor orphan check for agent files without team membership
+
+### v3.7.0 (April 15, 2026)
+
+- Team bundle activation system (Phase 6.1, DES-051, epic `ethos-2hh`)
+- Three-layer resolution: repo → active bundle → global
+- Bundle resolver, embedded gstack bundle (5 pipeline templates), `ethos seed` deploys gstack
+- Five CLI commands: `team available`, `activate`, `active`, `deactivate`, `add-bundle`
+- `ethos team migrate` converts legacy submodule layouts to bundles
 
 ---
 
@@ -935,20 +950,24 @@ Post-Phase 4 (v3.2.0–v3.5.0)            ← SHIPPED
 ├── Automatic mission traceability (DES-050)
 └── Deprecation warning deduplication
 
-Phase 5 (Reliability & Friction)         ← NEXT
+Phase 5 (Reliability & Friction, v3.6.0) ← SHIPPED
 ├── 5.1 Mission dispatch one-liner
 ├── 5.2 Agent regeneration diff logging
 ├── 5.3 Doctor: orphaned agent check
 ├── 5.4 inputs.trigger schema (beadle-40k)
 └── 5.5 Deprecation migration tooling
 
-Phase 6 (Ecosystem)                      ← FUTURE
-├── 6.1 Starter team templates
+Phase 6.1 (Team Bundles, v3.7.0)         ← SHIPPED
+├── Three-layer resolution (repo → active bundle → global)
+├── Bundle resolver and embedded gstack (5 pipeline templates)
+├── CLI: available/activate/active/deactivate/add-bundle
+└── ethos team migrate
+
+Phase 6 (Ecosystem, remaining)            ← FUTURE
 ├── 6.2 Agent marketplace
 └── 6.3 Cross-tool integration (ethos-wb4, ethos-g2f)
 ```
 
-Phases 1–4 plus post-Phase 4 work shipped. Phase 5 targets the
-friction that prevents mission adoption under time pressure — sourced
-from biff office hours feedback. Phase 6 is long-term ecosystem work
-that depends on broader adoption.
+Phases 1–4, post-Phase 4, Phase 5, and Phase 6.1 shipped. Phase 6.2
+(agent marketplace) and 6.3 (cross-tool integration) are long-term
+ecosystem work that depends on broader adoption.

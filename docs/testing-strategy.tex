@@ -40,7 +40,7 @@
 
 \title{Ethos: Testing Strategy}
 \author{Test Pyramid, Coverage Model, and Behavioral Verification}
-\date{April 2026 --- v3.5.0}
+\date{April 2026 --- v3.7.0}
 \hypersetup{
   pdftitle={Ethos: Testing Strategy},
   pdfauthor={Punt Labs},
@@ -570,14 +570,14 @@ Gaps identified at v3.0.0 (all resolved by v3.1.0):
     submodule.
 \end{itemize}
 
-\subsection{Current State (v3.5.0)}
+\subsection{Current State (v3.7.0)}
 
-As of v3.5.0, the test pyramid through L4 is fully implemented:
+As of v3.7.0, the test pyramid through L4 is fully implemented:
 
 \begin{itemize}
-  \item \textbf{2,058 tests} across 14 packages, 89.8\% mission
+  \item \textbf{2,187 tests} across 14 packages, 89.8\% mission
     package coverage.
-  \item \textbf{22.4 KLOC production Go, 35.8 KLOC test Go} (1.60:1
+  \item \textbf{23.9 KLOC production Go, 37.7 KLOC test Go} (1.58:1
     test-to-production ratio).
   \item L1 content validation, L2 CLI subprocess, L3 MCP integration,
     and L4 behavioral tests all shipped in v3.1.0.
@@ -599,8 +599,15 @@ archetype constraint enforcement, and 24 pipeline CLI tests.  v3.5.0
 added automatic mission traceability (TraceSummary,
 appendTraceSummary, flock-based writes), deprecation warning
 deduplication via \texttt{sync.Once}, and an integration test for the
-Close-to-JSONL path.  No new test levels since v3.1.0, but test count
-grew from 1,055 to 2,058 through feature-level test coverage.
+Close-to-JSONL path.  v3.6.0 added mission dispatch one-liner,
+resilient conflict scan, \texttt{inputs.trigger} schema, and doctor
+orphan check.  v3.7.0 shipped team bundle activation with three-layer
+stores (repo, active bundle, global), bundle resolver, five CLI
+commands (\texttt{available}, \texttt{activate}, \texttt{active},
+\texttt{deactivate}, \texttt{add-bundle}), embedded gstack bundle,
+and \texttt{ethos team migrate}.  No new test levels since v3.1.0,
+but test count grew from 1,055 to 2,187 through feature-level test
+coverage.
 
 \subsection{Coverage Gate Policy}
 
