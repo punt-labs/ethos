@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{2}{5}
+\prfaqversion{3}{0}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -146,10 +146,10 @@
 
 % ── Headline block ───────────────────────────────────────────────────────────
 \begin{center}
-  {\LARGE\bfseries\color{SectionBlue} Open-Source Tool Gives Human-Agent Teams\\Persistent Identity and Structured Delegation} \\[0.8em]
-  {\large\color{AccentGray} Punt Labs releases ethos, a runtime that binds identity, typed mission contracts,} \\[0.3em]
-  {\large\color{AccentGray} and role-based boundaries into one layer for humans and AI agents---} \\[0.3em]
-  {\large\color{AccentGray} accessible via filesystem, CLI, or MCP, with zero vendor lock-in}
+  {\LARGE\bfseries\color{SectionBlue} Open-Source Harness Gives AI Agents Persistent Identity,\\Personality, and Team Structure} \\[0.8em]
+  {\large\color{AccentGray} Punt Labs releases ethos---an agent harness where humans and AI agents} \\[0.3em]
+  {\large\color{AccentGray} work together like a remote-first team, with persistent identity,} \\[0.3em]
+  {\large\color{AccentGray} structured delegation, and composable tool integrations}
 \end{center}
 
 \vspace{0.5em}
@@ -160,7 +160,9 @@
 
 \section*{Press Release}
 
-SAN FRANCISCO --- October 1, 2026 --- Punt Labs today announced ethos, a free, open-source runtime that gives human-agent engineering teams three capabilities no existing tool provides together: persistent identity for every participant, typed mission contracts for structured delegation, and a loose integration pattern that lets any tool---first-party or third-party---read identity and workflow state without taking a dependency (see \faqref{faq:differentiation}). Unlike agent persona conventions such as SoulSpec~\cite{soulspec2026standard}, which address agent-only identity, or orchestration frameworks such as CrewAI and Mastra, which coordinate agents without persistent identity or file-level ownership, ethos treats humans and agents as first-class team members with the same schema, the same delegation contracts, and the same audit trail. Whether developers want identity, delegation, and integration from one tool---rather than from separate specialized layers---is the central hypothesis this product tests (see \faqref{faq:customer-evidence}).
+SAN FRANCISCO --- October 1, 2026 --- Punt Labs today announced ethos, a free, open-source agent harness that makes humans and AI agents work together like a remote-first team. Agents get persistent identity---name, personality, writing style, domain expertise---that loads automatically every session and survives context compaction. Teams get structured delegation with typed mission contracts, file-level ownership, and bounded review cycles. Every tool in the developer's stack---messaging, voice, email, semantic search, product evaluation---gains richer context when ethos is present, and works without it when it is not (see \faqref{faq:integrations}).
+
+The insight behind ethos is that agents work best when animated as specialists in a human team pattern. A Go specialist with Kernighan's principles writes better Go than an anonymous agent---not because of magic, but because personality constrains and focuses the model's output the same way a real colleague's expertise would. Models were trained on human collaboration; ethos gives that collaboration structure and persistence. The central hypothesis: do developers want a shared identity and workflow layer for their human-agent team---rather than anonymous agents with prose delegation? (See \faqref{faq:customer-evidence}.)
 
 \prsection{Problem}
 
@@ -172,11 +174,28 @@ The third problem is tool fragmentation. A messaging tool reinvents usernames. A
 
 \prsection{Solution}
 
-Ethos solves all three problems with one runtime. \textbf{Identity}: a developer runs {\small\texttt{ethos create}} once to define their persona---name, email, voice, writing style, personality---and creates agent personas the same way. Hooks load identity automatically at session start, survive context compaction, and inject matched personas when sub-agents spawn. Roles define tool restrictions and responsibilities; the team graph derives anti-responsibilities (``don't make architectural decisions---the COO handles that'') from {\small\texttt{reports\_to}} edges (\featureref{feat:teams}).
+Ethos is an agent harness---the shared layer that other tools compose with. It solves three problems with one design principle: agents are teammates, not computation endpoints.
 
-\textbf{Workflow}: the leader writes a typed mission contract---worker, write-set, success criteria, evaluator, round budget---and delegates. The store refuses overlapping write-sets, pins the evaluator's content hash at launch, and blocks close without a structured result for the current round. The same contract works for tight implementation (``one ReadFile, make check passes'') and open design (``evaluate three approaches, recommend one with tradeoffs''). The leader controls the agency level through contract specificity, not a mode switch (\featureref{feat:missions}).
+\textbf{Identity}: a developer runs {\small\texttt{ethos setup}} to create a working team in under 60 seconds. The wizard creates human and agent identities, activates a team bundle with specialist agents (architect, implementer, reviewer, security), and generates agent definition files. Hooks load identity automatically at session start, survive context compaction, and inject matched personas when sub-agents spawn. Roles define tool restrictions and responsibilities; the team graph derives anti-responsibilities from {\small\texttt{reports\_to}} edges (\featureref{feat:teams}).
 
-\textbf{Integration}: any tool reads identity through the pattern that fits---YAML files at a known path (zero dependency), CLI commands from hooks and scripts, or the MCP server for structured operations. Three Punt Labs tools (Biff, Vox, Beadle) integrate this way today; any third-party tool can do the same. Extensions let tools attach per-persona config (voice profile, GPG key, routing preferences) without schema changes (\featureref{feat:extensions}).
+\textbf{Workflow}: the leader writes a typed mission contract---worker, write-set, success criteria, evaluator, round budget---and delegates. Pipeline templates chain missions into multi-stage workflows (design $\to$ implement $\to$ test $\to$ review $\to$ document). The store refuses overlapping write-sets, pins the evaluator's content hash at launch, and blocks close without a structured result. The leader controls the agency level through contract specificity, not a mode switch (\featureref{feat:missions}).
+
+\textbf{Composable integrations}: every tool in the stack gains richer context when ethos is present and works without it when it is not. This is the core architectural pattern---not a feature, but the design thesis:
+
+\begin{tabularx}{\textwidth}{@{} l X X @{}}
+\toprule
+\textbf{Tool} & \textbf{Without ethos} & \textbf{With ethos} \\
+\midrule
+Biff (messaging) & Team chat & + identity, presence, team graph \\
+Vox (voice) & Text-to-speech & + voice persona per agent \\
+Beadle (email) & Send/receive & + email identity binding \\
+Quarry (search) & Semantic search & + per-agent mission memory \\
+PR/FAQ (product) & Working Backwards & + pipeline stage invocation \\
+\bottomrule
+\end{tabularx}
+
+\vspace{0.5em}
+\noindent Any tool reads identity through the pattern that fits---YAML files at a known path (zero dependency), CLI commands from hooks, or the MCP server for structured operations. Extensions let tools attach per-persona config (voice profile, GPG key, routing preferences) without schema changes (\featureref{feat:extensions}).
 
 \prsection{Customer Quote}
 
@@ -188,15 +207,14 @@ Ethos solves all three problems with one runtime. \textbf{Identity}: a developer
 
 \prsection{Getting Started}
 
-Getting started takes under five minutes. First, install the binary with a single command:
+Two commands, under 60 seconds:
 
-{\small\texttt{curl -fsSL https://punt-labs.github.io/ethos/install.sh | sh}}
+{\small\texttt{curl -fsSL https://punt-labs.com/ethos/install.sh | sh}} \\
+{\small\texttt{ethos setup}}
 
-\noindent The installer seeds 6 starter roles, 10 domain talents, and the baseline-ops skill. Second, create your persona with
-{\small\texttt{ethos create}}. If a
-{\small\texttt{CLAUDE.md}} exists in the current project, the command detects it and fine-tunes starter content defaults---pre-filling writing style, personality, and role suggestions from the project context. 90\% of the result is batteries-included starter content; the remaining 10\% is LLM-inferred personalization from what the developer already has. The developer confirms or adjusts the suggestions and moves on. Create agent personas the same way. Third, add
-{\small\texttt{agent: claude}} to your repo's
-{\small\texttt{.punt-labs/ethos.yaml}}, optionally define a team with roles, and start a session. Hooks handle everything automatically. For structured delegation, write a mission contract and let the lifecycle drive the work.
+\noindent The installer places the binary, seeds starter content (roles, talents, pipelines, two team bundles), and registers the Claude Code plugin. {\small\texttt{ethos setup}} is an interactive wizard that asks three questions---name, handle, working style---then creates human and agent identities, writes the repo config, activates the \textbf{foundation} team bundle (4 specialist agents), and generates agent definition files. Start Claude Code. The agent knows who it is, who you are, and how to delegate.
+
+On day one, the team works with defaults. On day three, the developer runs their first pipeline ({\small\texttt{ethos mission pipeline instantiate standard}}). On day seven, they customize: override a personality, add a domain talent, create a custom pipeline for their review process. The progression is use the defaults, then make them yours.
 
 \prsection{Spokesperson Quote}
 
@@ -224,7 +242,7 @@ under the MIT license. It ships as a single Go binary with zero runtime dependen
 \subsection*{External FAQs}
 
 \begin{faqpair}{What is ethos and who is it for?}\label{faq:what}
-Ethos is an open-source runtime for engineering teams that work with AI agents. It provides three things: persistent identity (personality, writing style, talents, roles, team structure) that loads automatically every session; typed mission contracts for structured delegation with file-level ownership, bounded rounds, and audit trails; and a loose integration pattern where any tool reads identity state via filesystem, CLI, or MCP without taking a dependency. It is for developers who delegate real work to AI agents and need that delegation to be reliable, auditable, and bounded.
+Ethos is an open-source agent harness for engineering teams where humans and AI agents work together like a remote-first team. It provides persistent identity (personality, writing style, domain expertise, team structure) that loads automatically every session; typed mission contracts for structured delegation with file-level ownership, bounded rounds, and audit trails; and a composable integration pattern where every tool in the stack---messaging, voice, email, search, product evaluation---gains richer context when ethos is present and works without it when it is not. Agents are animated as specialists with names, expertise, and communication styles---not anonymous computation endpoints. It is for developers who delegate real work to AI agents and need that delegation to be reliable, personality-consistent, and bounded.
 \end{faqpair}
 
 \begin{faqpair}{How is ethos different from SoulSpec, CLAUDE.md, or agent orchestration frameworks?}\label{faq:differentiation}
@@ -234,11 +252,7 @@ Ethos is the only tool that combines human-agent parity (same schema for both), 
 \end{faqpair}
 
 \begin{faqpair}{How do I get started?}
-Install
-({\small\texttt{curl -fsSL .../install.sh | sh}}),
-run {\small\texttt{ethos create}} to define your persona, add
-{\small\texttt{agent: claude}} to your repo's
-{\small\texttt{.punt-labs/ethos.yaml}}, and start a session. Under five minutes. No account, no cloud, no API key.
+Install ({\small\texttt{curl -fsSL .../install.sh | sh}}), then run {\small\texttt{ethos setup}} in your project directory. The wizard asks three questions and creates a working team in under 60 seconds. No account, no cloud, no API key. For non-interactive environments, use {\small\texttt{ethos setup --file config.yaml}}.
 \end{faqpair}
 
 \begin{faqpair}{How much does it cost?}
@@ -253,15 +267,19 @@ No server, no telemetry, no cloud sync. Identity files are plain YAML, human-rea
 \end{faqpair}
 
 \begin{faqpair}{What tools integrate with ethos today?}\label{faq:integrations}
-Three integration patterns, any coupling level:
+Three Punt Labs tools integrate today, each following the same pattern: \textbf{works without ethos, better with it.} Biff (team messaging) gains identity and presence. Vox (voice) gains per-agent voice personas. Beadle (email) gains email identity bindings.
+
+Two additional integrations are in design, following the same pattern. Quarry (semantic search) will gain per-agent mission memory---agents learning from their own outcomes across sessions (ethos-d17). The product pipeline already includes a PR/FAQ stage; deeper integration with the PR/FAQ plugin---meeting personas as evaluation gates, LaTeX output---is planned (ethos-iax).
+
+Three integration surfaces, any coupling level:
 
 \begin{itemize}[nosep]
   \item \textbf{Filesystem.} Read YAML at known paths. Zero dependency.
   \item \textbf{CLI.} Call {\small\texttt{ethos whoami}}, {\small\texttt{ethos mission show}}, {\small\texttt{ethos session}} from hooks and scripts.
-  \item \textbf{MCP server.} 10 tools covering identity, sessions, teams, roles, missions, and extensions.
+  \item \textbf{MCP server.} 11 tools covering identity, sessions, teams, roles, missions, ADRs, and extensions.
 \end{itemize}
 
-Three Punt Labs tools (Biff for messaging, Vox for voice, Beadle for email) integrate today. Each works without ethos but gains richer identity context when it is present. The integration surface is open to any third-party tool---Zed's Agent Client Protocol~\cite{zedacp2026} is one example of a new interoperability surface ethos could target.
+The composable integration pattern is the core architectural thesis. Ethos is the harness---it doesn't do the messaging, the voice, the email, or the search. It gives each tool the identity context that makes its output feel like working with a real colleague. The integration surface is open to any third-party tool.
 \end{faqpair}
 
 \begin{faqpair}{Can I use missions for design work, not just implementation?}
@@ -375,17 +393,16 @@ None. Ethos is a standalone Go binary with zero runtime dependencies. It does no
 \end{faqpair}
 
 \begin{faqpair}{What is the development status?}
-Ethos has shipped all 5 planned phases. Go Report Card: A+.
+v3.9.0 shipped. 25+ KLOC production Go, 39+ KLOC tests, A+ Go Report Card.
 
 \begin{itemize}[nosep]
-  \item \textbf{Phase 1 (Shipped):} Identity, sessions, persona animation, teams, roles, 10 talents, 6 role archetypes, baseline-ops skill.
-  \item \textbf{Phase 2 (Shipped):} Anti-responsibility generation, role-based hooks, structured output, baseline-ops injection, mission skill MVP.
-  \item \textbf{Phase 3 (Shipped):} All 7 workflow primitives: mission contract, write-set admission, frozen evaluator, bounded rounds with reflection, verifier isolation, result artifacts, append-only event log. 7 ADRs (DES-031 through DES-037).
-  \item \textbf{Phase 4 (Shipped):} SessionStart working context (git branch, dirty files), role-based safety constraints, session audit logging.
-  \item \textbf{Phase 5 (Shipped):} Sprint team template (6 personas, roles with safety constraints), mission archetypes, typed ADRs, git-tracked mission export, SoulSpec import/export, LLM-assisted identity creation, integration guides. Cross-tool integration (ethos+biff, ethos+beadle, quarry transcript tagging) planned.
+  \item \textbf{Phases 1--5 (Shipped):} Identity, sessions, persona animation, teams, roles, anti-responsibility generation, all 7 workflow primitives (mission contracts, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log), role-based safety constraints, session audit logging, typed ADRs, mission archetypes, SoulSpec import/export.
+  \item \textbf{Phase 6 (Shipped):} Team bundles---config-driven switchable starter teams with three-layer resolution (repo $\to$ bundle $\to$ global). Foundation bundle (4-agent general-purpose team) and gstack bundle (6-agent startup builder team) ship embedded.
+  \item \textbf{Onboarding (Shipped):} {\small\texttt{ethos setup}} wizard---working team in 60 seconds. Pipeline templates (standard, quick, product) for multi-stage workflows. Mission dispatch one-liner. Automatic mission traceability to {\small\texttt{.ethos/missions.jsonl}}.
+  \item \textbf{In design:} ethos+quarry integration (per-agent mission memory, ethos-d17), ethos+prfaq integration (pipeline stages invoke Working Backwards, ethos-iax).
 \end{itemize}
 
-Remaining work is adoption-driven: customer validation, integration guides for third-party tools, and Phase 5 ecosystem features.
+Remaining work is integration-driven: composing ethos with quarry (agent memory), prfaq (product evaluation), and third-party tools. Customer validation interviews are the next adoption gate.
 \end{faqpair}
 
 \begin{faqpair}{What is the scaling story?}
@@ -517,12 +534,21 @@ Three scenarios would cause ethos to fail:
   \featureitem{Typed ADRs}{Architecture Decision Records as ethos artifacts with schema validation, lifecycle status (proposed/settled/superseded), CLI, and MCP tool~\cite{promptpals2026adrsai}}\label{feat:typed-adrs}
   \featureitem{Git-tracked mission export}{{\small\texttt{ethos mission export}} copies contracts and results to the repo for version control. Lightweight alternative to Entire.io's checkpoint branch~\cite{entireio2026docs}}\label{feat:git-missions}
   \featureitem{Integration guides}{filesystem, CLI, and MCP guides with working examples for third-party tools}\label{feat:guides}
+  \featureitem{Team bundles}{config-driven switchable starter teams. Three-layer resolution: repo-local $\to$ active bundle $\to$ global. {\small\texttt{ethos team activate/deactivate/available/migrate}}}\label{feat:bundles}
+  \featureitem{Foundation bundle}{4-agent general-purpose team (architect, implementer, reviewer, security) for any codebase. Language-agnostic. Ships embedded alongside gstack}\label{feat:foundation}
+  \featureitem{Setup wizard}{{\small\texttt{ethos setup}}---3-prompt interactive wizard creates human + agent identities, writes repo config, activates bundle, generates agent files. {\small\texttt{--solo}}, {\small\texttt{--bundle}}, {\small\texttt{--file}}, {\small\texttt{--json}} flags}\label{feat:setup}
+  \featureitem{Pipeline templates}{multi-stage mission workflows: standard (design-implement-test-review-document), quick (implement-review), product (prfaq-design-implement-test-review-document). {\small\texttt{ethos mission pipeline instantiate}}}\label{feat:pipelines}
+  \featureitem{Mission dispatch}{one-liner mission creation from CLI flags. {\small\texttt{ethos mission dispatch --worker --evaluator --write-set --criteria}}}\label{feat:dispatch}
+  \featureitem{Mission traceability}{{\small\texttt{Store.Close}} auto-appends summary JSONL to {\small\texttt{.ethos/missions.jsonl}} for commit-ready traceability}\label{feat:traceability}
 \end{enumerate}
 
 \subsection*{Should Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Quarry transcript tagging}{when Quarry is installed, conversation transcripts captured before context compaction are tagged with the active mission ID. Semantic search retrieves the reasoning behind specific missions---the unstructured ``why'' layer that completes the three-layer audit model}\label{feat:quarry-tag}
+  \featureitem{Per-agent mission memory (ethos+quarry)}{each agent gets a quarry collection. Mission close prompts the agent for key takeaways. Mission dispatch searches the agent's collection for relevant prior work. Agents accumulate craft across sessions---findings that cost rounds, API discoveries, patterns that worked or failed}\label{feat:agent-memory}
+  \featureitem{Pipeline stage invocation (ethos+prfaq)}{when the prfaq plugin is present, the product pipeline's prfaq stage invokes the full Working Backwards workflow---research, structured discovery, meeting personas, peer review, LaTeX output. Fallback: generic worker writes freeform markdown}\label{feat:prfaq-integration}
+  \featureitem{Release externalization (ethos+prfaq)}{{\small\texttt{/prfaq:externalize}} runs as part of the release process, generating a release-scoped press release from CHANGELOG entries}\label{feat:externalize}
+  \featureitem{Quarry transcript tagging}{conversation transcripts captured before context compaction are tagged with the active mission ID. Semantic search retrieves the reasoning behind specific missions}\label{feat:quarry-tag}
 \end{enumerate}
 
 \subsection*{Won't Do}
