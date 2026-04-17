@@ -1,6 +1,6 @@
 # ethos
 
-> Persistent identity and structured delegation for human-agent teams.
+> An agent harness where humans and AI agents work together like a remote-first team.
 
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
@@ -10,22 +10,33 @@
 
 ## What ethos is
 
-Every Claude Code session starts anonymous. The agent doesn't know who
-it is, who you are, or how your team works. When you delegate to a
-sub-agent, the contract is prose. When something goes wrong, there's no
-audit trail. Every tool you pair with Claude — messaging, voice, email —
-reinvents the same identity fragment.
+Agents work best when animated as specialists in a human team
+pattern. A Go specialist with Kernighan's principles writes better
+Go than an anonymous agent — not because of magic, but because
+personality constrains and focuses the model's output the same way
+a real colleague's expertise would. Models were trained on human
+collaboration; ethos gives that collaboration structure and
+persistence.
 
-Ethos is a local runtime that fills three gaps:
+Ethos is an agent harness — the shared identity and workflow layer
+that other tools compose with:
 
 - **Identity** — one schema for humans and agents. Personality, writing
-  style, talents, role, email, voice config. Loads automatically at
-  session start and survives context compaction.
+  style, domain expertise, role, email, voice config. Loads automatically
+  at session start and survives context compaction.
 - **Delegation** — typed mission contracts with file-level write-sets,
   frozen evaluators, bounded rounds, and an append-only audit log.
-- **Integration** — any tool reads ethos through filesystem, CLI, or MCP.
-  No dependency required. Extensions attach per-tool config without
-  schema changes.
+  Pipeline templates chain missions into multi-stage workflows.
+- **Composable integrations** — every tool in the stack gains richer
+  context when ethos is present and works without it when it is not.
+  This is the core design principle, not a feature.
+
+| Tool | Without ethos | With ethos |
+|------|--------------|------------|
+| Biff (messaging) | Team chat | + identity, presence, team graph |
+| Vox (voice) | Text-to-speech | + voice persona per agent |
+| Beadle (email) | Send/receive | + email identity binding |
+| Quarry (search) | Semantic search | + per-agent mission memory |
 
 All state is local YAML — user-global under `~/.punt-labs/ethos/`,
 with optional repo-local overrides under `.punt-labs/ethos/` for
