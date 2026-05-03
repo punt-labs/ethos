@@ -4318,3 +4318,283 @@ is byte-identical to the current two-layer implementation. A new
   hard-coded path assumptions become follow-up beads.
 - Ships in v3.7.0. This ADR moves to SETTLED when the feature
   lands.
+
+## DES-052: Conversation and mission capture as a pre-commit feature (PROPOSED)
+
+**Context**: Claude Code session JSONLs and ethos mission state live
+outside any repo. They are not signed, not reviewed, and disappear on
+machine wipe. Quarry is a rebuildable index, so anything that lives
+only there is gone after re-index. Reasoning behind code changes is
+durable only if it ships in git alongside the change.
+
+A spike (research/research-2026-04-25-hook-timing-spike.md) compared
+pre-commit, sync post-commit, and async post-commit hooks across 8
+representative commits per mode plus three failure-mode probes.
+Pre-commit costs the user 1.24 s per commit; sync post-commit costs
+1.26 s and produces 2N commits; async post-commit costs 0.07 s
+visible but trails by 1.16 s and produces 2N commits. Both
+post-commit variants degrade silently on three of three tested
+failure modes; pre-commit aborts the commit and surfaces every
+failure.
+
+**Decision**: Add a pre-commit hook that distills the active session
+JSONL and any open mission state into markdown, scrubs for
+secrets/profanity, writes to `.ethos/sessions/<id>.md` and
+`.ethos/missions/<id>.md`, and stages the files so they are
+included in the developer's commit. Capture is a first-class ethos
+feature in `internal/capture`, `internal/distill`, `internal/scrub`.
+
+**Reasoning**: Atomicity is the entire point. A capture system whose
+failures are invisible is worse than no capture system because it
+gives false confidence in the record. Pre-commit makes capture a
+commit precondition: code and reasoning ship together, or neither
+ships, with a useful error message.
+
+The 1.24 s per-commit cost is the right thing to spend, given the
+alternative is silent corruption. The cost is also addressable
+through a native Go port (DES-054) which the spike data implies will
+take it to ~0.5 s per commit.
+
+**Rejected alternatives**:
+
+- Sync post-commit: same wall-time as pre-commit, doubles commit
+  count, silently drops captures on three of three failure modes.
+- Async post-commit: hides 1.16 s of working-tree dirtiness in which
+  subsequent user actions race with the in-flight capture child;
+  doubles commit count; recursion guard becomes complex (post-commit
+  fires on merge, amend, rebase).
+- Manual `ethos capture` invocation: discipline-dependent; misses
+  the commits the developer forgot. The whole point is automation
+  on the same trigger as the code change.
+- Out-of-tree capture (e.g. write to `~/.punt-labs/ethos/captures/`):
+  no atomic guarantee with the code commit; recovers nothing on
+  machine wipe; quarry-only persistence rebuilds away.
+
+**Implications**:
+
+- Three new packages: `internal/capture` (orchestration, I/O, hook
+  install), `internal/distill` (JSONL → markdown), `internal/scrub`
+  (markdown → scrubbed markdown).
+- New CLI surface: `ethos capture install|uninstall|run|backfill|
+  private|distill|scrub`.
+- New shell hook in `hooks/capture-precommit.sh` plus install logic
+  that detects existing pre-commit hooks (chain, framework, replace
+  modes — see `docs/design-conversation-mission-capture.md`).
+- Failure modes use exit codes 1 (capture failed), 2
+  (misconfigured), 3 (internal error). Exit 0 always indicates a
+  successful or intentional skip.
+
+## DES-053: Mission capture lives in the leader's repo (PROPOSED)
+
+**Context**: A mission can span multiple repos. The leader runs
+`ethos mission create` in their cwd; the worker may commit code in
+a different repo. The mission's audit artifact must have one
+canonical home so a reader finds it predictably and so the same
+artifact is not duplicated across repos.
+
+Two pieces of the runtime today do not record where the mission
+was created: the contract has no `created_in_repo` field, and the
+event log records `agent_started` events without the spawned
+agent's session id, so the capture pipeline cannot find the worker
+JSONL deterministically.
+
+**Decision**: The mission capture file lives in
+`<leader-repo>/.ethos/missions/<mission-id>.md` exclusively. To
+support discovery, two additive runtime changes:
+
+1. The `Contract` struct gains a top-level server-controlled
+   `created_in_repo` field (string, absolute repo path). Set by
+   `Store.ApplyServerFields` from cwd at create time, alongside
+   `mission_id` and `created_at`. Leaders do not author the
+   field; the store stamps it. Existing contracts without it
+   continue to work; the capture system falls back to the cwd
+   of the first event-log entry.
+2. The mission event log gains an `agent_started` event type
+   that records `{round, agent_session_id, agent_handle, started_at}`.
+   The session id is what the worker prints to its first JSONL
+   record; ethos can capture it via the SubagentStart hook.
+
+Worker commits in non-leader repos generate only conversation
+capture (per DES-052). Cross-repo links use a `Mission:
+m-<id>` trailer in commit messages.
+
+**Reasoning**: One canonical location is simpler to reason about,
+to back up, and to search. Putting the capture in every touched
+repo creates N copies that drift; each copy is its own
+correctness problem.
+
+`created_in_repo` belongs at the top level of the contract, not
+on `Inputs`. `Inputs` is the user-authored bag of references the
+worker reads (files, references, ticket, context). The repo of
+record is operational metadata stamped by the store at create
+time — same shape as `mission_id`, `created_at`, `closed_at`,
+`evaluator.pinned_at`. The existing convention for
+server-controlled fields is the right home.
+
+The team submodule (`.punt-labs/ethos/missions/`) was a tempting
+location — every team member already pulls it — but the team
+submodule is for org identity registry, not work artifacts.
+Conflating the two would mean every mission requires a push to
+the team repo, which is the wrong access pattern.
+
+**Rejected alternatives**:
+
+- Capture in every repo a mission's write_set touches: produces
+  duplicate, divergent records. The single canonical artifact is
+  more valuable than per-repo locality.
+- Capture in the team submodule: misuses the submodule, requires
+  push access to team repo for every contributor.
+- Capture in the global mission store outside any repo: breaks
+  the "ship with the code" property that motivates capture in the
+  first place.
+- Capture in the *worker's* repo: the worker is the agent doing
+  the typing, but the leader is the one whose narrative ties the
+  rounds together. The leader's repo holds the framing; the
+  worker's repo gets conversation capture, which is enough.
+- `Contract.Inputs.CreatedInRepo` (user-authored under Inputs):
+  conflates user-supplied references with server-stamped
+  operational metadata. Leaders should not have to set it; the
+  store should. The top-level location matches the existing
+  pattern.
+
+**Implications**:
+
+- `Contract.CreatedInRepo` is added as an optional top-level
+  string. Set by `Store.ApplyServerFields`; never decoded from
+  user-supplied YAML in the typical path. Strict-decoder
+  additive; existing contracts without the field continue to
+  validate.
+- A new event type `agent_started` is appended to the event log
+  enum; old code reading the log ignores unknown types per the
+  existing reader's contract (DES-037).
+- Cross-repo workers do not get mission capture in their own
+  repos; they document the mission via commit trailer.
+
+## DES-054: Native Go port of distill and scrub primitives (PROPOSED)
+
+**Context**: The reference primitives are Python:
+`punt-labs/.bin/jsonl-to-quarry.py` (705 LoC, ~700 ms per session)
+and `punt-labs/.bin/scrub-pre-ingest.py` (481 LoC, ~250 ms per
+session). Python startup adds ~200 ms × 2 = ~400 ms when the two
+scripts are piped together. Total commit-time wall is ~1.24 s on
+the spike's reference session, of which ~50 ms is git itself.
+
+Ethos is Go, motivated in part by avoiding the Python startup
+tax (DES-003). Three integration paths:
+
+A. Subprocess: Go shells out to the Python scripts.
+B. Native port: re-implement in `internal/distill` and
+   `internal/scrub`.
+C. Hybrid: subprocess in v1, port in v2.
+
+**Decision**: Native Go port (Option B). Re-implement the
+distillation and scrubbing logic in `internal/distill` and
+`internal/scrub`. The Python scripts remain in `punt-labs/.bin/`
+for non-ethos use; ethos does not invoke them.
+
+**Reasoning**:
+
+1. Latency is product UX. Python startup × 2 (~400 ms) is
+   eliminated. Go's `regexp` (RE2-based, linear time) is faster
+   than Python's `re` on the inputs we see and provides
+   adversarial-input safety. Estimated post-port wall: 0.4-0.6 s
+   per commit, a 2-3x improvement on the spike numbers.
+2. Single-binary distribution. Ethos avoids "you also need
+   Python 3 + scripts at this path" runtime requirements. This
+   matters most for non-Punt-Labs users adopting ethos
+   independently.
+3. Boundary clarity. Capture is an ethos feature; its code lives
+   in ethos. Versioning, testing, releases all use the same
+   `make check` gate as the rest of ethos.
+4. Determinism. RE2's linear-time guarantee makes the scrubber
+   safe under adversarial input. The Python `re` engine does
+   not guarantee this; the existing patterns happen to be safe
+   on real input but the property is incidental.
+
+**Rejected alternatives**:
+
+- Subprocess (Option A): adds Python runtime dependency, adds
+  ~400 ms of startup tax we just eliminated by choosing Go in
+  DES-003, creates an awkward cross-repo ownership boundary
+  (scripts in `punt-labs/.bin/`, hook in ethos), and pipe-based
+  composition makes error handling fragile.
+- Hybrid (Option C): worst-of-both-worlds for v1 users (Python
+  required, slow capture), and "we'll port it later" is
+  deferral the org's Fix-It-Now principle rejects.
+
+**Implications**:
+
+- ~1500 LoC of Go production code plus ~1500 LoC of Go test
+  code. The port carries existing test cases as fixtures; the
+  Python tests do not transfer mechanically.
+- An `internal/scrub/compat_test.go` runs the Python and Go
+  scrubbers on a shared corpus and asserts identical output.
+  Catches porting bugs at compile-time of the regression
+  fixture.
+- Python pattern features that RE2 does not support
+  (variable-width look-behind, conditional groups, possessive
+  quantifiers, backreferences) require an explicit audit
+  during the port. The existing patterns appear to be RE2-safe
+  but this must be verified per category.
+- The Python scripts continue to exist for ad-hoc use. They
+  are not deleted, not deprecated. Ethos simply does not call
+  them.
+
+## DES-055: Mission markdown is leader-narrative outer, worker transcripts as collapsible (PROPOSED)
+
+**Context**: A mission combines five inputs into one markdown
+artifact: contract YAML, event log JSONL, per-round result YAMLs,
+reflections YAML, and N worker JSONLs. Three layouts were sketched:
+
+A. Strict timeline — one chronological stream, transcripts inline
+   as quoted blocks.
+B. Layered — leader narrative outer, worker transcripts in
+   `<details>` collapsibles.
+C. Round-major sections — each round its own section, transcripts
+   inline, summary table at top.
+
+**Decision**: Layout B. The mission file's body has the contract
+inline (in a code fence), then a `## Round N` section per round
+that contains a `<details>` collapsible with the worker
+transcript, followed by the round's `### Result` and `###
+Reflection` sections, followed by the close section.
+
+**Reasoning**: The load-bearing reader profile is "why this
+mission, why this verdict?" The leader's framing is the answer.
+Layout B makes the framing foreground while keeping every byte
+of worker transcript content present (and indexable by quarry,
+greppable on disk) but folded so it does not visually drown the
+narrative.
+
+`<details>` and `<summary>` are explicitly permitted by the
+project's markdownlint config (`MD033 allowed_elements`). No
+configuration change is needed.
+
+A 30-round mission renders cleanly because the document's
+visible-width is bounded by the leader's framing volume, not the
+worker's transcript volume. Layouts A and C scale with transcript
+volume and become unreadable.
+
+**Rejected alternatives**:
+
+- Layout A (strict timeline, transcripts as `>` blockquotes):
+  worker transcripts visually dominate the leader's reasoning,
+  which is the part the reader most often needs.
+- Layout C (round-major, transcripts inline): produces multi-MB
+  documents at high round counts; scrolling becomes the only
+  navigation; impossible to "skim just the leader's reasoning."
+
+**Implications**:
+
+- A Go template renders the mission markdown from the contract,
+  event log, results, reflections, and per-round distilled
+  transcripts. Template lives in `internal/capture/mission.go`
+  alongside the mission capture path.
+- Markdown consumers that do not parse HTML (grep, the quarry
+  chunker) see the transcript content inline. This is the
+  desired property; semantic indexing operates on the full
+  text.
+- HTML renderers (GitHub blob view, IDE preview) collapse the
+  transcript by default. Readers expand explicitly.
+- `<details>` is the only HTML element used. No `<div>`,
+  `<span>`, or other custom rendering. Pure markdown otherwise.
