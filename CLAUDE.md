@@ -57,7 +57,7 @@ reassigns workers per stage at delegation time: Stage 1 (prfaq) → ghr,
 Stage 2 (design) → edt + mdm, Stages 3-6 → bwk. Design is reviewed
 before code starts.
 
-**Engineering work** uses `standard` or `quick` pipelines. Two specialists per domain — within each row, the worker and evaluator must be distinct handles. Across rows, swap pairs are intentional: `bwk`/`rsc` trade worker/evaluator on Go internals vs. module/dependency work, `mdm`/`rop` likewise on CLI vs. MCP surface. The pairing brings complementary perspectives without ever putting a handle in conflict with itself on a single task.
+**Engineering work** uses `standard` or `quick` pipelines. Two specialists per domain — within each row, the worker and evaluator must be distinct handles. Across rows, `bwk` and `rsc` trade worker/evaluator on Go internals vs. module/dependency work — bringing complementary perspectives without ever putting a handle in conflict with itself on a single task.
 
 | Task type | Worker | Evaluator |
 |-----------|--------|-----------|
