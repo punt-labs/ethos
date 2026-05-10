@@ -1,7 +1,9 @@
 ---
+vibe_tags: "[neutral]"
+vibe_signals: ""
 notify: "y"
-speak: "n"
+speak: "y"
 voice: "helmut"
-vibe_signals: "tests-fail@20:46"
-vibe_tags: ""
+vibe: "neutral"
+vibe_mode: "manual"
 ---

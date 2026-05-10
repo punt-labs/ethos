@@ -57,11 +57,24 @@ reassigns workers per stage at delegation time: Stage 1 (prfaq) → ghr,
 Stage 2 (design) → edt + mdm, Stages 3-6 → bwk. Design is reviewed
 before code starts.
 
-**Engineering work** uses `standard` or `quick` pipelines. Delegate to
-specialists: bwk (Go), mdm (CLI), djb (security), rmh (Python).
+**Engineering work** uses `standard` or `quick` pipelines. Two specialists per domain — pair them so worker and evaluator never share a role:
 
-**Never solo-design in plan mode.** Instantiate a pipeline, delegate to
-specialists, review their output. The system exists for this purpose.
+| Task type | Worker | Evaluator |
+|-----------|--------|-----------|
+| Go internals (resolve, store, hooks) | `bwk` (Kernighan) | `rsc` (Cox) — toolchain, supply-chain |
+| Go module / dependency / vuln tooling | `rsc` | `bwk` |
+| CLI / command surface | `mdm` (McIlroy) | `rop` (Pike) — Plan 9 minimalism |
+| MCP tool definition / format_output | `mdm` | `rop` |
+| Cryptographic primitives (key handling, signing) | `bwk` | `djb` (Bernstein) |
+| Threat modeling — multi-tenant identity, session trust | `claude` (leader) | `bcs` (Schneier) |
+| Infra / CI / release / homebrew tap | `adb` (Lovelace) | `kth` (Hightower) |
+| Mission / pipeline schema design | `claude` (leader) | `mcg` (Cagan) — frameworks for empowered teams |
+| Onboarding / `ethos seed` / first-run UX | `claude` (leader) | `dna` (Norman) — affordances, mental models |
+| `ethos team migrate` / bundle layout | `bwk` | `rsc` (compatibility / migration cost) |
+| Persona-animation (SessionStart, PreCompact) | `bwk` | `mdm` |
+| Z spec for the contract or session schemas | `jms` (Spivey) | `jra` (Abrial) |
+
+**Never solo-design in plan mode.** Instantiate a pipeline, delegate to specialists, review their output. The system exists for this purpose. The full org roster is available via `ethos identity list`.
 
 **Dogfood before shipping.** Build the binary, run the commands, walk
 the user journey. `make check` passing is necessary but not sufficient.
