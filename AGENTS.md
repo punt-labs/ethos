@@ -71,7 +71,7 @@ ethos iam mal                         # Declare active persona (ethos session ia
 ethos create                          # Interactive identity creation
 ethos create -f persona.yaml          # Create from YAML file
 ethos list                            # List all identities   (ethos identity list)
-ethos show mal                        # Full identity          (ethos identity get)
+ethos show mal                        # Full identity          (ethos identity show)
 ethos show mal --json                 # JSON output
 ```
 
@@ -231,10 +231,10 @@ ethos ext list mal
 # → beadle biff vox
 
 # Delete a key
-ethos ext del mal vox default_mood
+ethos ext delete mal vox default_mood
 
 # Delete an entire namespace
-ethos ext del mal vox
+ethos ext delete mal vox
 ```
 
 ### MCP Tools

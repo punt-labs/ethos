@@ -145,7 +145,7 @@ Any tool reads ethos at the coupling level that fits:
 | Pattern | How | Dependency |
 |---------|-----|------------|
 | Filesystem | Read YAML at `~/.punt-labs/ethos/` | None |
-| CLI | `ethos whoami --json`, `ethos identity get <handle> --json` | Binary |
+| CLI | `ethos whoami --json`, `ethos identity show <handle> --json` | Binary |
 | MCP | `ethos serve` exposes 11 tools | Binary |
 
 Three Punt Labs tools integrate today: Biff (team messaging), Vox
