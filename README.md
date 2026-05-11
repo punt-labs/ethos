@@ -57,7 +57,8 @@ ethos setup
 ```
 
 The installer places the `ethos` binary in `~/.local/bin`, seeds
-starter content (roles, talents, pipelines, bundles), and registers
+starter content (roles, talents, archetypes, pipelines, skills, bundles),
+and registers
 the Claude Code plugin when `claude` and `git` are available.
 `ethos setup` is an interactive wizard that
 asks 3 questions (name, handle, working style), then creates:
@@ -145,7 +146,7 @@ Any tool reads ethos at the coupling level that fits:
 |---------|-----|------------|
 | Filesystem | Read YAML at `~/.punt-labs/ethos/` | None |
 | CLI | `ethos whoami --json`, `ethos identity get <handle> --json` | Binary |
-| MCP | `ethos serve` exposes 10 tools | Binary |
+| MCP | `ethos serve` exposes 11 tools | Binary |
 
 Three Punt Labs tools integrate today: Biff (team messaging), Vox
 (voice), and Beadle (email). Each works without ethos and gains
@@ -184,14 +185,15 @@ Essentials below. Every command accepts `--json`. Full reference in
 | [CrewAI](https://www.crewai.com) | Role-based agent orchestration | Prose delegation, no typed contracts, no persistent identity, no reflection gates |
 | [Claude Managed Agents](https://docs.anthropic.com/en/docs/claude-code/managed-agents) | Hosted stateful agent sessions | Vendor-specific; "persona" means deployment config, not rich identity; no human developer identity |
 
-Ethos ingests SoulSpec and CLAUDE.md on the way in, exports to both
-formats on the way out (lossy — structural enforcement drops because
-markdown cannot represent it). Coexistence rather than competition.
+Ethos ingests SoulSpec on the way in (`ethos import --from soulspec`),
+exports to SoulSpec and CLAUDE.md on the way out (lossy — structural
+enforcement drops because markdown cannot represent it). Coexistence
+rather than competition.
 
 ## Status
 
-v3.8.0 — all five planned phases shipped plus onboarding. 25+ KLOC
-production Go, 38+ KLOC tests, A+ Go Report Card. Identity, teams,
+v3.9.0 — all five planned phases shipped plus onboarding. 24 KLOC
+production Go, 38 KLOC tests, A+ Go Report Card. Identity, teams,
 mission contracts, write-set admission, frozen evaluators, bounded
 rounds, audit logs, archetypes, pipelines, automatic mission
 traceability, and mission dispatch one-liner are in daily use by

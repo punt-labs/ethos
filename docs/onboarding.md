@@ -82,8 +82,9 @@ Handle [priya-chandran]:
 ```
 
 Default: slugified name (lowercase, spaces to hyphens, non-alnum
-stripped). Validation: matches `^[a-z0-9][a-z0-9-]*$` (same as
-`identity.validHandle`).
+stripped). Validation: matches `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+(same as `identity.validHandle` — no trailing hyphens, single-char
+handles allowed).
 
 #### Prompt 3: Working style
 
@@ -675,10 +676,11 @@ internal functions as `identity create`, `team activate`, and
 `GenerateAgentFiles`. No existing command behavior changes. Users
 who prefer the manual path can still use individual commands.
 
-The `identity create` command remains available (currently marked
-`Hidden: true` because `ethos create` is the public alias). Setup
-does not deprecate it -- it is the power-user path for creating
-additional identities beyond the initial pair.
+The `identity create` command remains available (the top-level
+`ethos create` alias is marked `Hidden: true`; `identity create`
+is the visible subcommand). Setup does not deprecate it -- it is
+the power-user path for creating additional identities beyond the
+initial pair.
 
 ## Implementation Notes
 
