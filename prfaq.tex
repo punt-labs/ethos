@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{3}{0}
+\prfaqversion{3}{2}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -160,7 +160,7 @@
 
 \section*{Press Release}
 
-SAN FRANCISCO --- October 1, 2026 --- Punt Labs today announced ethos, a free, open-source agent harness that makes humans and AI agents work together like a remote-first team. Agents get persistent identity---name, personality, writing style, domain expertise---that loads automatically every session and survives context compaction. Teams get structured delegation with typed mission contracts, file-level ownership, and bounded review cycles. Every tool in the developer's stack---messaging, voice, email, semantic search, product evaluation---gains richer context when ethos is present, and works without it when it is not (see \faqref{faq:integrations}).
+SAN FRANCISCO --- July 1, 2026 --- Punt Labs today announced ethos, a free, open-source agent harness that makes humans and AI agents work together like a remote-first team. Agents get persistent identity---name, personality, writing style, domain expertise---that loads automatically every session and survives context compaction. Teams get structured delegation with typed mission contracts, file-level ownership, and bounded review cycles. Every tool in the developer's stack---messaging, voice, email, semantic search, product evaluation---gains richer context when ethos is present, and works without it when it is not (see \faqref{faq:integrations}).
 
 The insight behind ethos is that agents work best when animated as specialists in a human team pattern. A Go specialist with Kernighan's principles writes better Go than an anonymous agent---not because of magic, but because personality constrains and focuses the model's output the same way a real colleague's expertise would. Models were trained on human collaboration; ethos gives that collaboration structure and persistence. The central hypothesis: do developers want a shared identity and workflow layer for their human-agent team---rather than anonymous agents with prose delegation? (See \faqref{faq:customer-evidence}.)
 
@@ -182,7 +182,7 @@ Ethos is an agent harness---the shared layer that other tools compose with. It s
 
 \textbf{Composable integrations}: every tool in the stack gains richer context when ethos is present and works without it when it is not. This is the core architectural pattern---not a feature, but the design thesis:
 
-\begin{tabularx}{\textwidth}{@{} l X X @{}}
+\noindent\begin{tabularx}{\textwidth}{@{} l X X @{}}
 \toprule
 \textbf{Tool} & \textbf{Without ethos} & \textbf{With ethos} \\
 \midrule
@@ -190,7 +190,7 @@ Biff (messaging) & Team chat & + identity, presence, team graph \\
 Vox (voice) & Text-to-speech & + voice persona per agent \\
 Beadle (email) & Send/receive & + email identity binding \\
 Quarry (search) & Semantic search & + per-agent mission memory \\
-PR/FAQ (product) & Working Backwards & + pipeline stage invocation \\
+PR/FAQ & Working Backwards & + pipeline stage invocation \\
 \bottomrule
 \end{tabularx}
 
@@ -209,7 +209,7 @@ PR/FAQ (product) & Working Backwards & + pipeline stage invocation \\
 
 Two commands, under 60 seconds:
 
-{\small\texttt{curl -fsSL https://punt-labs.com/ethos/install.sh | sh}} \\
+{\small\texttt{curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/main/install.sh | sh}} \\
 {\small\texttt{ethos setup}}
 
 \noindent The installer places the binary, seeds starter content (roles, talents, pipelines, two team bundles), and registers the Claude Code plugin. {\small\texttt{ethos setup}} is an interactive wizard that asks three questions---name, handle, working style---then creates human and agent identities, writes the repo config, activates the \textbf{foundation} team bundle (4 specialist agents), and generates agent definition files. Start Claude Code. The agent knows who it is, who you are, and how to delegate.
@@ -246,7 +246,7 @@ Ethos is an open-source agent harness for engineering teams where humans and AI 
 \end{faqpair}
 
 \begin{faqpair}{How is ethos different from SoulSpec, CLAUDE.md, or agent orchestration frameworks?}\label{faq:differentiation}
-SoulSpec~\cite{soulspec2026standard} provides structured agent personas (SOUL.md, IDENTITY.md, STYLE.md) adopted by OpenClaw (350,000+ GitHub stars)~\cite{arxiv2510soulmd}. It addresses agent-only personality with no human identity, no team model, no delegation contracts, and no cross-tool integration surface beyond file discovery. CLAUDE.md describes project conventions---coding standards, architecture decisions---not people~\cite{claudemd2025pnote}. Orchestration frameworks like CrewAI and Mastra~\cite{mastra2026supervisor} coordinate agents with roles and typed schemas but have no persistent identity across sessions, no file-level write-set boundaries, and no frozen evaluator to prevent criteria drift.
+SoulSpec~\cite{soulspec2026standard} provides structured agent personas (SOUL.md, IDENTITY.md, STYLE.md) adopted by OpenClaw (370,000+ GitHub stars)~\cite{arxiv2510soulmd}. It addresses agent-only personality with no human identity, no team model, no delegation contracts, and no cross-tool integration surface beyond file discovery. CLAUDE.md describes project conventions---coding standards, architecture decisions---not people~\cite{claudemd2025pnote}. Orchestration frameworks like CrewAI and Mastra~\cite{mastra2026supervisor} coordinate agents with roles and typed schemas but have no persistent identity across sessions, no file-level write-set boundaries, and no frozen evaluator to prevent criteria drift.
 
 Ethos is the only tool that combines human-agent parity (same schema for both), typed delegation contracts (write-set, evaluator pinning, bounded rounds), and multi-surface integration (filesystem + CLI + MCP). The bet is that these three capabilities need to be one layer, not three separate tools.
 \end{faqpair}
@@ -269,7 +269,7 @@ No server, no telemetry, no cloud sync. Identity files are plain YAML, human-rea
 \begin{faqpair}{What tools integrate with ethos today?}\label{faq:integrations}
 Three Punt Labs tools integrate today, each following the same pattern: \textbf{works without ethos, better with it.} Biff (team messaging) gains identity and presence. Vox (voice) gains per-agent voice personas. Beadle (email) gains email identity bindings.
 
-Two additional integrations are in design, following the same pattern. Quarry (semantic search) will gain per-agent mission memory---agents learning from their own outcomes across sessions (ethos-d17). The product pipeline already includes a PR/FAQ stage; deeper integration with the PR/FAQ plugin---meeting personas as evaluation gates, LaTeX output---is planned (ethos-iax).
+Quarry (semantic search) already supports per-agent memory---the {\small\texttt{remember}} and {\small\texttt{find}} tools accept an {\small\texttt{agent\_handle}} parameter, so agents write to and search their own collections. What remains is the ethos-side hooks: mission close prompting the agent for takeaways, and mission dispatch searching the agent's collection for relevant prior work (ethos-d17). The PR/FAQ plugin already produces LaTeX output, runs meeting personas as evaluation gates, and has peer review---the product pipeline's prfaq stage invokes this workflow today.
 
 Three integration surfaces, any coupling level:
 
@@ -302,7 +302,7 @@ Yes. Ethos both ingests and exports these formats.
 \subsubsection*{Value \& Market}
 
 \begin{faqpair}{What is the total addressable market?}\label{faq:tam}
-\textbf{Bottoms-up estimate.} The immediate market is developers using terminal-based agentic coding tools: Claude Code, Codex CLI, OpenCode. Claude Code is the most-loved AI coding tool at 46\% (vs.\ Cursor 19\%, GitHub Copilot 9\%) per the Pragmatic Engineer survey ($n{\approx}906$)~\cite{pragmaticengsurvey2026}. 71\% of developers who regularly use AI agents use Claude Code. Anthropic's Claude Code run-rate is \$2.5B~\cite{demandsageclaude2026}. We estimate 200,000--500,000 developers in the terminal-first agentic segment based on Claude Code's 115,000 floor (July 2025)~\cite{claudecode2025stats} plus 2026 growth trajectory.
+\textbf{Bottoms-up estimate.} The immediate market is developers using terminal-based agentic coding tools: Claude Code, Codex CLI, OpenCode. Claude Code is the most-loved AI coding tool at 46\% (vs.\ Cursor 19\%, GitHub Copilot 9\%) per the Pragmatic Engineer survey ($n{\approx}906$)~\cite{pragmaticengsurvey2026}. 71\% of agentic-tool users in the Pragmatic Engineer survey use Claude Code. Anthropic's Claude Code run-rate was \$2.5B as of February 2026~\cite{demandsageclaude2026}. We estimate 200,000--500,000 developers in the terminal-first agentic segment based on Claude Code's 115,000 floor (July 2025)~\cite{claudecode2025stats} plus 2026 growth trajectory.
 
 \textbf{Assumption:} Terminal-first segment size is inferred, not measured. The estimate assumes it grows faster than the broader market because multi-agent workflows are exclusively terminal-based today. Ethos is free; TAM is measured in adoption (installations, missions created), not revenue.
 \end{faqpair}
@@ -332,7 +332,7 @@ Evidence is structural and observational. No customer interviews have been condu
 
 \begin{faqpair}{Who are the competitors and why will we win?}\label{faq:competitors}
 \begin{itemize}[nosep]
-  \item \textbf{SoulSpec / OpenClaw}~\cite{soulspec2026standard,arxiv2510soulmd} --- structured agent personas (SOUL.md, IDENTITY.md, STYLE.md). Agent-only; no human identity, no teams, no delegation, no MCP/CLI surface. 350,000+ GitHub stars via OpenClaw. The closest identity competitor. Ethos ingests SoulSpec files as an onboarding path---SoulSpec users import their existing personas and gain structural enforcement (typed roles, team graphs, mission contracts) without starting from scratch. Ethos differentiates on human-agent parity, team graphs, and the workflow pillar.
+  \item \textbf{SoulSpec / OpenClaw}~\cite{soulspec2026standard,arxiv2510soulmd} --- structured agent personas (SOUL.md, IDENTITY.md, STYLE.md). Agent-only; no human identity, no teams, no delegation, no MCP/CLI surface. 370,000+ GitHub stars via OpenClaw. The closest identity competitor. Ethos ingests SoulSpec files as an onboarding path---SoulSpec users import their existing personas and gain structural enforcement (typed roles, team graphs, mission contracts) without starting from scratch. Ethos differentiates on human-agent parity, team graphs, and the workflow pillar.
   \item \textbf{Mastra}~\cite{mastra2026supervisor} --- typed Zod request schemas and pre-delegation hooks. 300,000+ weekly npm downloads. Closest to typed delegation. No write-set boundaries, no frozen evaluator, no append-only audit, no identity layer.
   \item \textbf{Claude Managed Agents}~\cite{claudemanagedagents2026} --- Anthropic's hosted agent infrastructure (April 2026). Stateful sessions, scoped permissions. ``Persona'' means deployment configuration, not rich identity. No human developer identity. Vendor-specific.
   \item \textbf{A2A v1.0}~\cite{a2av1milestone2026} --- 150+ organizations, Signed Agent Cards for cryptographic identity. Agent discovery protocol, not a persona or delegation layer. No human identity model.
@@ -393,16 +393,13 @@ None. Ethos is a standalone Go binary with zero runtime dependencies. It does no
 \end{faqpair}
 
 \begin{faqpair}{What is the development status?}
-v3.9.0 shipped. 25+ KLOC production Go, 39+ KLOC tests, A+ Go Report Card.
+v3.9.0 shipped. 24 KLOC production Go, 38 KLOC tests, A+ Go Report Card.
 
-\begin{itemize}[nosep]
-  \item \textbf{Phases 1--5 (Shipped):} Identity, sessions, persona animation, teams, roles, anti-responsibility generation, all 7 workflow primitives (mission contracts, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log), role-based safety constraints, session audit logging, typed ADRs, mission archetypes, SoulSpec import/export.
-  \item \textbf{Phase 6 (Shipped):} Team bundles---config-driven switchable starter teams with three-layer resolution (repo $\to$ bundle $\to$ global). Foundation bundle (4-agent general-purpose team) and gstack bundle (6-agent startup builder team) ship embedded.
-  \item \textbf{Onboarding (Shipped):} {\small\texttt{ethos setup}} wizard---working team in 60 seconds. Pipeline templates (standard, quick, product) for multi-stage workflows. Mission dispatch one-liner. Automatic mission traceability to {\small\texttt{.ethos/missions.jsonl}}.
-  \item \textbf{In design:} ethos+quarry integration (per-agent mission memory, ethos-d17), ethos+prfaq integration (pipeline stages invoke Working Backwards, ethos-iax).
-\end{itemize}
+\textbf{Shipped:} Identity, sessions, persona animation, teams, roles, anti-responsibilities, all~7 workflow primitives, safety constraints, audit logging, ADRs, archetypes, import\slash export, team bundles with three-layer resolution, foundation and gstack bundles, {\small\texttt{ethos setup}} wizard, 13 pipeline templates, mission dispatch one-liner, automatic mission traceability, PR/FAQ pipeline integration (LaTeX output, meeting personas, peer review).
 
-Remaining work is integration-driven: composing ethos with quarry (agent memory), prfaq (product evaluation), and third-party tools. Customer validation interviews are the next adoption gate.
+\textbf{In progress:} Per-agent mission memory---quarry already supports agent-scoped {\small\texttt{remember}} and {\small\texttt{find}}. Remaining: ethos-side hooks for mission-close takeaways and mission-dispatch prior-work search (ethos-d17).
+
+Remaining work is integration-driven: ethos-side hooks for quarry agent memory, and third-party tool integrations. Customer validation interviews are the next adoption gate.
 \end{faqpair}
 
 \begin{faqpair}{What is the scaling story?}
@@ -466,7 +463,7 @@ Five shifts converged:
   \item \textbf{The delegation gap became a security problem.} 93\% of agent projects use unscoped credentials~\cite{grantexagentsec2026}. 48.9\% of organizations are blind to machine-to-machine traffic~\cite{saltsecurity2026agentsec}. NIST is drafting agent governance standards for 2027~\cite{nistcosais2026}. Ethos ships the controls ahead of the standard.
   \item \textbf{Agent identity became a real category.} SoulSpec launched as an open standard~\cite{soulspec2026standard}. Claude Managed Agents uses ``persona'' in its model~\cite{claudemanagedagents2026}. A2A v1.0 introduced Signed Agent Cards~\cite{a2av1milestone2026}. The vocabulary and demand exist---but no tool addresses humans, delegation, and cross-tool integration together.
   \item \textbf{The community built workarounds.} SOUL.md, IDENTITY.md, USER.md appeared as informal conventions~\cite{blueoctopus2025soulmd}. None standardized, none portable, none covering delegation. Ethos provides the structured, portable layer these workarounds approximate.
-  \item \textbf{The market is growing fast enough to support new infrastructure.} The AI agent market is \$7.63B in 2025, growing at 45.8\% CAGR to \$50.31B by 2030~\cite{aidemandsageagents2026}. 79\% of enterprises have adopted AI agents, but only 11\% are in production---the adoption-production gap is where governance tools like ethos create value. Gartner projects 40\% of enterprise apps will embed agents by end of 2026, but warns over 40\% of agentic AI projects risk cancellation without governance~\cite{gartner2025multiagentsurge}.
+  \item \textbf{The market is growing fast enough to support new infrastructure.} The AI agent market is \$7.63B in 2025, growing at 45.8\% CAGR to \$50.31B by 2030~\cite{aidemandsageagents2026}. 79\% of enterprises have adopted AI agents, but only 11\% are in production---the adoption-production gap is where governance tools like ethos create value. Gartner projects 40\% of enterprise apps will embed task-specific AI agents by end of 2026~\cite{gartner2025multiagentsurge}. Separately, Gartner warns that over 40\% of agentic AI projects risk cancellation by end of 2027 without adequate governance~\cite{gartner2025agenticcancellation}.
 \end{enumerate}
 \end{faqpair}
 
@@ -484,7 +481,7 @@ Five shifts converged:
 \midrule
 Value      & \textcolor{RiskAmber}{Medium} & The identity gap is structurally confirmed (253 CLAUDE.md files, 466 SoulSpec projects, OWASP top 10). The delegation gap is confirmed (93\% unscoped credentials, 48.9\% blind to M2M traffic). The combined product---identity + workflow + integration in one layer---is untested with customers. SoulSpec validates identity demand but only for agents. Missions validated in practice (12m55s end-to-end) but not by external users. The ``pull'' signal is untested: do developers want a unified layer, or do they expect identity and delegation from separate tools? \\
 Usability  & \textcolor{RiskAmber}{Medium} & Identity onboarding is simple (three commands, five minutes). The mission workflow introduces 7 primitives that have not been tested with external users. The live example demonstrates feasibility, not usability---it was operated by the builder. \\
-Feasibility & \textcolor{RiskGreen}{Low} & 4 of 5 phases shipped. 20.1 KLOC production Go, 26.8 KLOC tests, A+ Go Report Card. All 7 workflow primitives, 4 integration hooks, audit logging, and safety constraints are implemented and tested. No unsolved technical problems. \\
+Feasibility & \textcolor{RiskGreen}{Low} & All 6 phases shipped (1--5 + 6.1). 24 KLOC production Go, 38 KLOC tests, A+ Go Report Card. All 7 workflow primitives, 6 integration hooks, audit logging, safety constraints, team bundles, setup wizard, 13 pipeline templates, 10 archetypes, and 2 embedded bundles are implemented and tested. No unsolved technical problems. \\
 Viability  & \textcolor{RiskAmber}{Medium} & Ethos is free infrastructure whose viability depends on adoption and downstream tool value. Maintenance cost is low (40--80 hrs/year). If SoulSpec captures agent identity and a dominant tool ships native delegation, both pillars face competition. The cross-tool integration pattern is the most defensible value---it is the only structural advantage that requires a shared layer rather than per-tool features. \\
 \bottomrule
 \end{tabularx}
@@ -524,7 +521,7 @@ Three scenarios would cause ethos to fail:
   \featureitem{SessionStart working context}{git branch, uncommitted changes, dirty file count injected at session start}\label{feat:workctx}
   \featureitem{Role-based safety constraints}{tool + message pairs emitted in generated agent files}\label{feat:safety}
   \featureitem{Session audit logging}{PostToolUse hook appends one JSONL line per tool invocation to a per-session audit log}\label{feat:auditlog}
-  \featureitem{Three integration surfaces}{filesystem (zero dependency), CLI (hooks/scripts), MCP server (10 tools)}\label{feat:surfaces}
+  \featureitem{Three integration surfaces}{filesystem (zero dependency), CLI (hooks/scripts), MCP server (11 tools)}\label{feat:surfaces}
   \featureitem{Extension model}{per-tool attributes under <handle>.ext/<tool>.yaml; any tool attaches config without schema changes}\label{feat:extensions}
   \featureitem{Starter content}{10 domain talents, 6 role archetypes, baseline-ops skill ship in the box}\label{feat:starter}
   \featureitem{Mission archetypes}{named contract conventions---implement (tight write-set, specific criteria, agent executes), design (broad write-set, open criteria, agent proposes and pushes back), review (read-only, findings with confidence), investigate (read-only, questions answered). Agency is expressed through contract specificity, not a mode switch}\label{feat:archetypes}
@@ -537,17 +534,17 @@ Three scenarios would cause ethos to fail:
   \featureitem{Team bundles}{config-driven switchable starter teams. Three-layer resolution: repo-local $\to$ active bundle $\to$ global. {\small\texttt{ethos team activate/deactivate/available/migrate}}}\label{feat:bundles}
   \featureitem{Foundation bundle}{4-agent general-purpose team (architect, implementer, reviewer, security) for any codebase. Language-agnostic. Ships embedded alongside gstack}\label{feat:foundation}
   \featureitem{Setup wizard}{{\small\texttt{ethos setup}}---3-prompt interactive wizard creates human + agent identities, writes repo config, activates bundle, generates agent files. {\small\texttt{--solo}}, {\small\texttt{--bundle}}, {\small\texttt{--file}}, {\small\texttt{--json}} flags}\label{feat:setup}
-  \featureitem{Pipeline templates}{multi-stage mission workflows: standard (design-implement-test-review-document), quick (implement-review), product (prfaq-design-implement-test-review-document). {\small\texttt{ethos mission pipeline instantiate}}}\label{feat:pipelines}
-  \featureitem{Mission dispatch}{one-liner mission creation from CLI flags. {\small\texttt{ethos mission dispatch --worker --evaluator --write-set --criteria}}}\label{feat:dispatch}
-  \featureitem{Mission traceability}{{\small\texttt{Store.Close}} auto-appends summary JSONL to {\small\texttt{.ethos/missions.jsonl}} for commit-ready traceability}\label{feat:traceability}
+  \featureitem{Pipeline templates}{multi-stage mission workflows: 8 global pipelines (standard, quick, product, full, formal, docs, coverage, coe) plus 5 gstack-specific templates (13 total). {\small\texttt{ethos mission pipeline instantiate}}}\label{feat:pipelines}
+  \featureitem{Mission dispatch}{one-liner creation from CLI flags: {\small\texttt{--worker}}, {\small\texttt{--evaluator}}, {\small\texttt{--write-set}}, {\small\texttt{--criteria}}}\label{feat:dispatch}
+  \featureitem{Mission traceability}{close auto-appends summary JSONL to {\small\texttt{.ethos/missions.jsonl}} for commit-ready traceability}\label{feat:traceability}
+  \featureitem{PR/FAQ pipeline integration}{product pipeline's prfaq stage invokes the full Working Backwards workflow---research, structured discovery, meeting personas, peer review, LaTeX output}\label{feat:prfaq-integration}
+  \featureitem{Release externalization}{{\small\texttt{/prfaq:externalize}} generates a release-scoped press release from CHANGELOG entries}\label{feat:externalize}
 \end{enumerate}
 
 \subsection*{Should Do}
 
 \begin{enumerate}[nosep,leftmargin=2.5em]
-  \featureitem{Per-agent mission memory (ethos+quarry)}{each agent gets a quarry collection. Mission close prompts the agent for key takeaways. Mission dispatch searches the agent's collection for relevant prior work. Agents accumulate craft across sessions---findings that cost rounds, API discoveries, patterns that worked or failed}\label{feat:agent-memory}
-  \featureitem{Pipeline stage invocation (ethos+prfaq)}{when the prfaq plugin is present, the product pipeline's prfaq stage invokes the full Working Backwards workflow---research, structured discovery, meeting personas, peer review, LaTeX output. Fallback: generic worker writes freeform markdown}\label{feat:prfaq-integration}
-  \featureitem{Release externalization (ethos+prfaq)}{{\small\texttt{/prfaq:externalize}} runs as part of the release process, generating a release-scoped press release from CHANGELOG entries}\label{feat:externalize}
+  \featureitem{Per-agent mission memory (ethos hooks)}{quarry already supports agent-scoped {\small\texttt{remember}} and {\small\texttt{find}} with {\small\texttt{agent\_handle}}. Remaining: ethos-side hooks---mission close prompts the agent for takeaways, mission dispatch searches the agent's collection for prior work}\label{feat:agent-memory}
   \featureitem{Quarry transcript tagging}{conversation transcripts captured before context compaction are tagged with the active mission ID. Semantic search retrieves the reasoning behind specific missions}\label{feat:quarry-tag}
 \end{enumerate}
 

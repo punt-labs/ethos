@@ -26,6 +26,7 @@ func init() {
 		&cobra.Group{ID: "identity", Title: "Identity:"},
 		&cobra.Group{ID: "attributes", Title: "Attributes:"},
 		&cobra.Group{ID: "session", Title: "Session:"},
+		&cobra.Group{ID: "mission", Title: "Mission:"},
 		&cobra.Group{ID: "admin", Title: "Admin:"},
 	)
 }

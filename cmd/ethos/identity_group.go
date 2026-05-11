@@ -6,7 +6,7 @@ import (
 
 var identityCmd = &cobra.Command{
 	Use:     "identity",
-	Short:   "Manage identities (whoami, list, get, create)",
+	Short:   "Manage identities (whoami, list, show, create)",
 	GroupID: "identity",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runWhoami(cmd)
@@ -36,10 +36,22 @@ func init() {
 		},
 	}
 
-	identityGetCmd := &cobra.Command{
-		Use:   "get <handle>",
+	identityShowCmd := &cobra.Command{
+		Use:   "show <handle>",
 		Short: "Show identity details",
 		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runShow(cmd, args[0], getReference)
+		},
+	}
+	identityShowCmd.Flags().BoolVar(&getReference, "reference", false, "Include reference identity data")
+
+	// Hidden alias so existing scripts using "identity get" still work.
+	identityGetCmd := &cobra.Command{
+		Use:    "get <handle>",
+		Short:  "Show identity details",
+		Hidden: true,
+		Args:   cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runShow(cmd, args[0], getReference)
 		},
@@ -62,6 +74,7 @@ func init() {
 	identityCmd.AddCommand(
 		identityWhoamiCmd,
 		identityListCmd,
+		identityShowCmd,
 		identityGetCmd,
 		identityCreateCmd,
 	)

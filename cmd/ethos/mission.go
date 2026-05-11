@@ -90,7 +90,7 @@ need to touch), submit a result with verdict: escalate and files_changed: []
 — put the reason in open_questions. The leader will close the mission as
 escalated and re-scope. See "ethos mission result --help" for the full
 escalate example.`,
-	GroupID: "session",
+	GroupID: "mission",
 	Args:    cobra.NoArgs,
 }
 

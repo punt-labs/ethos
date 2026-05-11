@@ -31,10 +31,21 @@ var extSetCmd = &cobra.Command{
 	},
 }
 
-var extDelCmd = &cobra.Command{
-	Use:   "del <handle> <namespace> [key]",
+var extDeleteCmd = &cobra.Command{
+	Use:   "delete <handle> <namespace> [key]",
 	Short: "Delete extension values",
 	Args:  cobra.RangeArgs(2, 3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runExtDel(cmd, args)
+	},
+}
+
+// Hidden alias so existing scripts using "ext del" still work.
+var extDelCmd = &cobra.Command{
+	Use:    "del <handle> <namespace> [key]",
+	Short:  "Delete extension values",
+	Hidden: true,
+	Args:   cobra.RangeArgs(2, 3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runExtDel(cmd, args)
 	},
@@ -50,7 +61,7 @@ var extListCmd = &cobra.Command{
 }
 
 func init() {
-	extCmd.AddCommand(extGetCmd, extSetCmd, extDelCmd, extListCmd)
+	extCmd.AddCommand(extGetCmd, extSetCmd, extDeleteCmd, extDelCmd, extListCmd)
 	rootCmd.AddCommand(extCmd)
 }
 
