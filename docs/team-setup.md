@@ -7,7 +7,8 @@ for any organization using ethos, not specific to Punt Labs.
 
 ## Overview
 
-Ethos resolves identity data through three layers. First match wins:
+Ethos resolves identities, roles, and teams through three layers.
+First match wins:
 
 1. **Repo-local** — `.punt-labs/ethos/` in the repo
 2. **Active bundle** — `.punt-labs/ethos-bundles/<name>/` (repo-local)
@@ -16,6 +17,13 @@ Ethos resolves identity data through three layers. First match wins:
 
 Each layer holds the same subdirectories: `identities/`,
 `personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`.
+
+Attribute content (personalities, writing styles, talents) resolves
+starting from the layer where the identity was found, then falls
+through to lower-precedence layers. For example, a bundle-sourced
+identity looks up its personality in the bundle first, then global —
+not repo-local. To override attributes for a bundle identity, override
+the identity itself in repo-local.
 
 Three ways to provide team data:
 

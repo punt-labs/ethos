@@ -662,8 +662,8 @@ active_bundle: gstack     # optional: bundle for layer 2 resolution
 
 ### Three-layer resolution
 
-Ethos resolves identities, personalities, writing styles, talents,
-roles, and teams through three layers. First match wins:
+Ethos resolves identities, roles, and teams through three layers.
+First match wins:
 
 1. **Repo-local** — `.punt-labs/ethos/` in the repo (files checked in
    directly, or a shared team repo mounted as a git submodule)
@@ -675,6 +675,13 @@ roles, and teams through three layers. First match wins:
 Each layer holds the same subdirectories (`identities/`,
 `personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`).
 When no `active_bundle` is set, layer 2 is skipped.
+
+Attribute content (personalities, writing styles, talents) resolves
+starting from the layer where the identity was found, then falls
+through to lower-precedence layers. A bundle-sourced identity looks
+up its personality in the bundle first, then global — not repo-local.
+To override attributes for a bundle identity, override the identity
+itself in repo-local.
 
 Three ways to provide team data:
 

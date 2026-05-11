@@ -38,7 +38,8 @@ that other tools compose with:
 | Beadle (email) | Send/receive | + email identity binding |
 | Quarry (search) | Semantic search | + per-agent mission memory |
 
-Identity and team state is local YAML resolved through three layers
+Identity and team state is stored in local files (YAML + Markdown)
+and resolved through three layers
 (first match wins): repo-local `.punt-labs/ethos/`, active bundle,
 global `~/.punt-labs/ethos/`. Orgs with a shared team repo mount it
 as a submodule at `.punt-labs/ethos/`; new users activate a starter
