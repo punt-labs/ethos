@@ -5,6 +5,10 @@
 > bundle activation). That feature shipped in v3.7.0 across PRs
 > #287–#292; the current state is documented in AGENTS.md, CLAUDE.md,
 > and `docs/gstack-getting-started.md`.
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
 
 Epic bead: ethos-2hh
 Target release: v3.7.0
