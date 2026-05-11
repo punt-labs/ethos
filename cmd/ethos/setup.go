@@ -26,8 +26,12 @@ var (
 )
 
 var setupCmd = &cobra.Command{
-	Use:          "setup",
-	Short:        "Set up ethos identities and team for the current repo",
+	Use:   "setup",
+	Short: "Set up ethos identities and team for the current repo",
+	Long: `Set up ethos identities and team for the current repo.
+
+For fresh installs, run 'ethos seed' first to deploy starter content
+to global directories.`,
 	GroupID:      "admin",
 	Args:         cobra.NoArgs,
 	SilenceUsage: true,
