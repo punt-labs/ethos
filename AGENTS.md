@@ -646,7 +646,7 @@ full setup guide.
 
 ## Repo Configuration
 
-Every repo that uses ethos has a config file at `.punt-labs/ethos.yaml`:
+Ethos reads per-repo configuration from `.punt-labs/ethos.yaml`:
 
 ```yaml
 agent: claude             # handle of the primary agent identity
@@ -654,11 +654,11 @@ team: engineering         # team name for session context
 active_bundle: gstack     # optional: bundle for layer 2 resolution
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `agent` | Yes | Handle of the primary agent identity. Injected at session start. |
-| `team` | Yes | Team name. Members, roles, and collaboration graph injected into session context. |
-| `active_bundle` | No | Bundle name for layer 2 resolution. Omit if not using bundles. |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `agent` | *(none)* | Handle of the primary agent identity. When set, ethos injects this persona at session start. When omitted, no agent persona is injected. |
+| `team` | *(none)* | Team name. When set, ethos injects members, roles, and collaboration graph into session context. |
+| `active_bundle` | *(none)* | Bundle name for layer 2 resolution. Omit if not using bundles. |
 
 ### Three-layer resolution
 
@@ -669,22 +669,22 @@ roles, and teams through three layers. First match wins:
    directly, or a shared team repo mounted as a git submodule)
 2. **Active bundle** — `.punt-labs/ethos-bundles/<name>/` (repo-local)
    or `~/.punt-labs/ethos/bundles/<name>/` (global), controlled by the
-   `active_bundle` field in `ethos.yaml`
+   `active_bundle` field in `.punt-labs/ethos.yaml`
 3. **Global** — `~/.punt-labs/ethos/`
 
 Each layer holds the same subdirectories (`identities/`,
 `personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`).
 When no `active_bundle` is set, layer 2 is skipped.
 
-Three ways to populate layer 1:
+Three ways to provide team data:
 
-- **Shared team submodule** — `git submodule add` your org's team repo
-  at `.punt-labs/ethos/`. All repos share one source of truth.
-- **Repo-local files** — check project-specific identities directly
-  into `.punt-labs/ethos/`. For teams unique to one project.
-- **Bundle** — set `active_bundle` in `ethos.yaml`. Ethos ships starter
-  bundles (foundation, gstack) for new orgs. Custom bundles added via
-  `ethos team add-bundle <git-url>`.
+- **Shared team submodule** (layer 1) — `git submodule add` your org's
+  team repo at `.punt-labs/ethos/`. All repos share one source of truth.
+- **Repo-local files** (layer 1) — check project-specific identities
+  directly into `.punt-labs/ethos/`. For teams unique to one project.
+- **Bundle** (layer 2) — set `active_bundle` in `.punt-labs/ethos.yaml`.
+  Ethos ships starter bundles (foundation, gstack) for new orgs. Custom
+  bundles added via `ethos team add-bundle <git-url>`.
 
 These compose: a repo can override bundle identities with repo-local
 files, or use a shared submodule with global fallbacks.

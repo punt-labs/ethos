@@ -17,19 +17,21 @@ Ethos resolves identity data through three layers. First match wins:
 Each layer holds the same subdirectories: `identities/`,
 `personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`.
 
-Three ways to populate `.punt-labs/ethos/`:
+Three ways to provide team data:
 
-1. **Shared team submodule** — mount your org's team repo at
+1. **Shared team submodule** (layer 1) — mount your org's team repo at
    `.punt-labs/ethos/` via `git submodule add`. All repos in the org
    share the same identities, roles, and teams. Changes go through the
    team repo; each consuming project updates its submodule ref.
-2. **Repo-local files** — check project-specific identities directly
-   into `.punt-labs/ethos/`. Use when the team is unique to the project
-   (e.g., game-specific personas that don't belong in the org registry).
-3. **Bundle** — a self-contained team directory activated per repo via
-   `ethos team activate <name>`. Ethos ships starter bundles (foundation,
-   gstack) for new orgs and users who don't have a shared team repo yet.
-   Add custom bundles with `ethos team add-bundle <git-url>`.
+2. **Repo-local files** (layer 1) — check project-specific identities
+   directly into `.punt-labs/ethos/`. Use when the team is unique to the
+   project (e.g., game-specific personas that don't belong in the org
+   registry).
+3. **Bundle** (layer 2) — a self-contained team directory activated per
+   repo via `ethos team activate <name>`. Ethos ships starter bundles
+   (foundation, gstack) for new orgs and users who don't have a shared
+   team repo yet. Add custom bundles with
+   `ethos team add-bundle <git-url>`.
 
 These compose. A repo can use a bundle as the base layer and override
 specific identities with repo-local files. Or use a shared submodule
@@ -220,15 +222,16 @@ team: engineering        # team name for hook context
 active_bundle: gstack    # optional: which bundle to activate (layer 2)
 ```
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `agent` | Yes | Handle of the primary agent identity. Ethos injects this identity's persona at session start. |
-| `team` | Yes | Team name. Ethos injects this team's members, roles, and collaboration graph into session context. |
-| `active_bundle` | No | Bundle name for layer 2 resolution. Omit if using a shared submodule or repo-local files only. |
+| Field | Default | Description |
+|-------|---------|-------------|
+| `agent` | *(none)* | Handle of the primary agent identity. When set, ethos injects this persona at session start. When omitted, no agent persona is injected. |
+| `team` | *(none)* | Team name. When set, ethos injects members, roles, and collaboration graph into session context. |
+| `active_bundle` | *(none)* | Bundle name for layer 2 resolution. Omit if using a shared submodule or repo-local files only. |
 
-Ethos resolves the `agent` and `team` values through the three-layer
-search described in [Overview](#overview). The `active_bundle` field
-controls which bundle is checked at layer 2.
+The `agent` and `team` values name a handle and team defined in the
+identity/team stores. Ethos looks up those definitions through the
+three-layer search described in [Overview](#overview). The
+`active_bundle` field controls which bundle is checked at layer 2.
 
 ## Sharing Across Repos
 

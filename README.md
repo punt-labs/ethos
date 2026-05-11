@@ -38,10 +38,10 @@ that other tools compose with:
 | Beadle (email) | Send/receive | + email identity binding |
 | Quarry (search) | Semantic search | + per-agent mission memory |
 
-All state is local YAML resolved through three layers (first match
-wins): repo-local `.punt-labs/ethos/`, active bundle, global
-`~/.punt-labs/ethos/`. Orgs with a shared team repo mount it as a
-submodule at `.punt-labs/ethos/`; new users activate a starter
+Identity and team state is local YAML resolved through three layers
+(first match wins): repo-local `.punt-labs/ethos/`, active bundle,
+global `~/.punt-labs/ethos/`. Orgs with a shared team repo mount it
+as a submodule at `.punt-labs/ethos/`; new users activate a starter
 **bundle** to get a production-ready team in one command. See
 [Team Setup](docs/team-setup.md) for the full configuration guide.
 No server, no cloud, no telemetry.
