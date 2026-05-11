@@ -7,24 +7,34 @@ for any organization using ethos, not specific to Punt Labs.
 
 ## Overview
 
-Ethos resolves identity data through three layers, in order:
-repo-local `.punt-labs/ethos/` (override), the active bundle, and
-global `~/.punt-labs/ethos/`. Each layer holds the same subdirectories
-— identities, personalities, writing styles, talents, roles, and teams.
-Three distribution options fit three user profiles:
+Ethos resolves identity data through three layers. First match wins:
 
-1. **Bundle (preferred for starter teams)** — a self-contained team
-   directory activated per repo. Gstack ships embedded in ethos and
-   deploys on `ethos seed`. Activate with
-   `ethos team activate gstack`. Add your own with
-   `ethos team add-bundle <git-url>`.
-2. **Repo-local files (for bespoke teams)** — author YAML directly
-   under `.punt-labs/ethos/` in the repo. Best when the team lives
-   alongside the code and nowhere else.
-3. **Submodule (legacy)** — share `.punt-labs/ethos/` across repos as
-   a git submodule of a team registry. Still supported. New users
-   should prefer bundles; `ethos team migrate` converts a legacy
-   submodule to the bundles layout.
+1. **Repo-local** — `.punt-labs/ethos/` in the repo
+2. **Active bundle** — `.punt-labs/ethos-bundles/<name>/` (repo-local)
+   or `~/.punt-labs/ethos/bundles/<name>/` (global)
+3. **Global** — `~/.punt-labs/ethos/`
+
+Each layer holds the same subdirectories: `identities/`,
+`personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`.
+
+Three ways to populate `.punt-labs/ethos/`:
+
+1. **Shared team submodule** — mount your org's team repo at
+   `.punt-labs/ethos/` via `git submodule add`. All repos in the org
+   share the same identities, roles, and teams. Changes go through the
+   team repo; each consuming project updates its submodule ref.
+2. **Repo-local files** — check project-specific identities directly
+   into `.punt-labs/ethos/`. Use when the team is unique to the project
+   (e.g., game-specific personas that don't belong in the org registry).
+3. **Bundle** — a self-contained team directory activated per repo via
+   `ethos team activate <name>`. Ethos ships starter bundles (foundation,
+   gstack) for new orgs and users who don't have a shared team repo yet.
+   Add custom bundles with `ethos team add-bundle <git-url>`.
+
+These compose. A repo can use a bundle as the base layer and override
+specific identities with repo-local files. Or use a shared submodule
+with global fallbacks for personal identities. The three-layer
+resolution makes them all work the same way.
 
 ## Directory Structure
 
@@ -207,10 +217,18 @@ Create `.punt-labs/ethos.yaml` at the repo root:
 ```yaml
 agent: code-reviewer     # handle of the primary agent identity
 team: engineering        # team name for hook context
+active_bundle: gstack    # optional: which bundle to activate (layer 2)
 ```
 
-This tells ethos which agent persona to use for the primary Claude
-Code session and which team context to inject.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `agent` | Yes | Handle of the primary agent identity. Ethos injects this identity's persona at session start. |
+| `team` | Yes | Team name. Ethos injects this team's members, roles, and collaboration graph into session context. |
+| `active_bundle` | No | Bundle name for layer 2 resolution. Omit if using a shared submodule or repo-local files only. |
+
+Ethos resolves the `agent` and `team` values through the three-layer
+search described in [Overview](#overview). The `active_bundle` field
+controls which bundle is checked at layer 2.
 
 ## Sharing Across Repos
 
@@ -232,9 +250,9 @@ ethos team activate myorg
 to `~/.punt-labs/ethos/bundles/<name>/` instead. Activation is
 per-repo via `active_bundle` in `.punt-labs/ethos.yaml`.
 
-### Option B: Legacy submodule at `.punt-labs/ethos/`
+### Option B: Shared submodule at `.punt-labs/ethos/`
 
-The original sharing mechanism. Still supported. Extract the
+Extract the
 `.punt-labs/ethos/` directory into its own git repo and add it as a
 submodule in each project:
 
