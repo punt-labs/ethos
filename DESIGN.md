@@ -4234,7 +4234,7 @@ pipeline.
 - The JSONL file is append-only by convention; concurrent appends are
   safe because each Close holds its own flock and appends a single line.
 
-## DES-051: Team bundle activation (PROPOSED)
+## DES-051: Team bundle activation (SETTLED)
 
 **Context**: The `punt-labs/team` submodule at `.punt-labs/ethos/`
 conflates two independent concerns: the generic gstack content that

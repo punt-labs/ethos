@@ -1,5 +1,15 @@
 # Build Plan: Team Bundle Activation
 
+> **HISTORICAL — SHIPPED**: This build plan is preserved for reference.
+> It describes the Phase 6.1 implementation work for `ethos-2hh` (team
+> bundle activation). That feature shipped in v3.7.0 across PRs
+> #287–#292; the current state is documented in AGENTS.md, CLAUDE.md,
+> and `docs/gstack-getting-started.md`.
+>
+> **Current build planning lives in
+> [`ETHOS-ROADMAP.md`](ETHOS-ROADMAP.md)**. Do not use this file as a
+> source of truth for current priorities.
+
 Epic bead: ethos-2hh
 Target release: v3.7.0
 Design record: [DES-051](../DESIGN.md)
