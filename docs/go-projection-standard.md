@@ -108,7 +108,7 @@ canonical resource group is the primary form.
 
 ### CLI (cobra)
 
-- Resource group commands as primary (`ethos identity get`, `ethos talent list`)
+- Resource group commands as primary (`ethos identity show`, `ethos talent list`)
 - Top-level shortcuts for brand commands only (`ethos whoami`)
 - Other shortcuts hidden (`Hidden: true`) for backward compatibility
 - `--json` persistent flag on root command for machine-readable output
