@@ -250,7 +250,7 @@ info "Verifying installation..."
 printf '\n'
 if "$INSTALL_DIR/$BINARY" doctor; then
   printf '\n%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$BINARY" "$NC"
-  printf 'Run "ethos create" to create your first identity.\n'
+  printf 'Run "ethos setup" in your project directory to get started.\n'
   printf 'Restart Claude Code twice to activate the plugin.\n\n'
 else
   printf '\n'
