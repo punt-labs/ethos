@@ -644,6 +644,60 @@ team: gstack
 See [Gstack starter team](docs/gstack-getting-started.md) for the
 full setup guide.
 
+## Repo Configuration
+
+Ethos reads per-repo configuration from `.punt-labs/ethos.yaml`:
+
+```yaml
+agent: claude             # handle of the primary agent identity
+team: engineering         # team name for session context
+active_bundle: gstack     # optional: bundle for layer 2 resolution
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `agent` | *(none)* | Handle of the primary agent identity. When set, ethos injects this persona at session start. When omitted, no agent persona is injected. |
+| `team` | *(none)* | Team name. When set, ethos injects members, roles, and collaboration graph into session context. |
+| `active_bundle` | *(none)* | Bundle name for layer 2 resolution. Omit if not using bundles. |
+
+### Three-layer resolution
+
+Ethos resolves identities, roles, and teams through three layers.
+First match wins:
+
+1. **Repo-local** — `.punt-labs/ethos/` in the repo (files checked in
+   directly, or a shared team repo mounted as a git submodule)
+2. **Active bundle** — `.punt-labs/ethos-bundles/<name>/` (repo-local)
+   or `~/.punt-labs/ethos/bundles/<name>/` (global), controlled by the
+   `active_bundle` field in `.punt-labs/ethos.yaml`
+3. **Global** — `~/.punt-labs/ethos/`
+
+Each layer holds the same subdirectories (`identities/`,
+`personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`).
+When no `active_bundle` is set, layer 2 is skipped.
+
+Attribute content (personalities, writing styles, talents) resolves
+starting from the layer where the identity was found, then falls
+through to lower-precedence layers. A bundle-sourced identity looks
+up its personality in the bundle first, then global — not repo-local.
+To override attributes for a bundle identity, override the identity
+itself in repo-local.
+
+Three ways to provide team data:
+
+- **Shared team submodule** (layer 1) — `git submodule add` your org's
+  team repo at `.punt-labs/ethos/`. All repos share one source of truth.
+- **Repo-local files** (layer 1) — check project-specific identities
+  directly into `.punt-labs/ethos/`. For teams unique to one project.
+- **Bundle** (layer 2) — set `active_bundle` in `.punt-labs/ethos.yaml`.
+  Ethos ships starter bundles (foundation, gstack) for new orgs. Custom
+  bundles added via `ethos team add-bundle <git-url>`.
+
+These compose: a repo can override bundle identities with repo-local
+files, or use a shared submodule with global fallbacks.
+
+Full setup guide: [docs/team-setup.md](docs/team-setup.md).
+
 ## Identity Resolution
 
 Human and agent identities are resolved automatically — no manual
@@ -764,14 +818,12 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Repo identities | `.punt-labs/ethos/identities/<handle>.yaml` | Yes |
-| Repo talents | `.punt-labs/ethos/talents/<slug>.md` | Yes |
-| Repo personalities | `.punt-labs/ethos/personalities/<slug>.md` | Yes |
-| Repo writing styles | `.punt-labs/ethos/writing-styles/<slug>.md` | Yes |
-| Repo roles | `.punt-labs/ethos/roles/<name>.yaml` | Yes |
-| Repo teams | `.punt-labs/ethos/teams/<name>.yaml` | Yes |
 | Repo config | `.punt-labs/ethos.yaml` | Yes |
-| Repo agents | `.punt-labs/ethos/agents/<name>.md` | Yes |
+| Repo-local (layer 1) | `.punt-labs/ethos/<subdir>/<file>` | Yes |
+| Bundle — repo (layer 2) | `.punt-labs/ethos-bundles/<name>/<subdir>/<file>` | Yes |
+| Bundle — global (layer 2) | `~/.punt-labs/ethos/bundles/<name>/<subdir>/<file>` | No |
+| Global (layer 3) | `~/.punt-labs/ethos/<subdir>/<file>` | No |
+| Repo agents | `.claude/agents/<handle>.md` | Yes |
 | Global identities | `~/.punt-labs/ethos/identities/<handle>.yaml` | No |
 | Extensions | `~/.punt-labs/ethos/identities/<handle>.ext/<ns>.yaml` | No |
 | Global talents | `~/.punt-labs/ethos/talents/<slug>.md` | No |

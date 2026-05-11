@@ -38,12 +38,14 @@ that other tools compose with:
 | Beadle (email) | Send/receive | + email identity binding |
 | Quarry (search) | Semantic search | + per-agent mission memory |
 
-All state is local YAML — user-global under `~/.punt-labs/ethos/`,
-with optional repo-local overrides under `.punt-labs/ethos/` for
-team-shared identities and config. Starter teams ship as
-**bundles** — self-contained directories activated per repo — so
-new users can adopt a production-ready team in one command. No
-server, no cloud, no telemetry.
+Identity and team state is stored in local files (YAML + Markdown)
+and resolved through three layers
+(first match wins): repo-local `.punt-labs/ethos/`, active bundle,
+global `~/.punt-labs/ethos/`. Orgs with a shared team repo mount it
+as a submodule at `.punt-labs/ethos/`; new users activate a starter
+**bundle** to get a production-ready team in one command. See
+[Team Setup](docs/team-setup.md) for the full configuration guide.
+No server, no cloud, no telemetry.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 
