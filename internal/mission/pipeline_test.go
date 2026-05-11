@@ -447,6 +447,132 @@ func TestPipelineStore_NonYAMLIgnored(t *testing.T) {
 	}
 }
 
+// --- Three-layer (bundle) tests ---
+
+func TestPipelineStoreWithBundle_LoadFromBundle(t *testing.T) {
+	repo := t.TempDir()
+	bundle := t.TempDir()
+	global := t.TempDir()
+	writePipelineFile(t, bundle, "quick", quickPipelineYAML)
+
+	s := NewPipelineStoreWithBundle(repo, bundle, global)
+	p, err := s.Load("quick")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.Name != "quick" {
+		t.Errorf("Name = %q, want quick", p.Name)
+	}
+	if len(p.Stages) != 2 {
+		t.Errorf("len(Stages) = %d, want 2", len(p.Stages))
+	}
+}
+
+func TestPipelineStoreWithBundle_RepoOverridesBundle(t *testing.T) {
+	repo := t.TempDir()
+	bundle := t.TempDir()
+	global := t.TempDir()
+
+	writePipelineFile(t, repo, "standard", `name: standard
+description: "Repo version"
+stages:
+  - name: s1
+    archetype: implement
+`)
+	writePipelineFile(t, bundle, "standard", standardPipelineYAML)
+
+	s := NewPipelineStoreWithBundle(repo, bundle, global)
+	p, err := s.Load("standard")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.Description != "Repo version" {
+		t.Errorf("Description = %q, want Repo version (repo should win)", p.Description)
+	}
+}
+
+func TestPipelineStoreWithBundle_BundleOverridesGlobal(t *testing.T) {
+	repo := t.TempDir()
+	bundle := t.TempDir()
+	global := t.TempDir()
+
+	writePipelineFile(t, bundle, "standard", `name: standard
+description: "Bundle version"
+stages:
+  - name: s1
+    archetype: implement
+`)
+	writePipelineFile(t, global, "standard", standardPipelineYAML)
+
+	s := NewPipelineStoreWithBundle(repo, bundle, global)
+	p, err := s.Load("standard")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.Description != "Bundle version" {
+		t.Errorf("Description = %q, want Bundle version (bundle should win)", p.Description)
+	}
+}
+
+func TestPipelineStoreWithBundle_ListMergesThreeLayers(t *testing.T) {
+	repo := t.TempDir()
+	bundle := t.TempDir()
+	global := t.TempDir()
+
+	writePipelineFile(t, repo, "standard", standardPipelineYAML)
+	writePipelineFile(t, bundle, "quick", quickPipelineYAML)
+	writePipelineFile(t, bundle, "standard", standardPipelineYAML) // dup — repo wins
+	writePipelineFile(t, global, "sprint", sprintPipelineYAML)
+
+	s := NewPipelineStoreWithBundle(repo, bundle, global)
+	names, err := s.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	wantSet := map[string]bool{"standard": true, "quick": true, "sprint": true}
+	if len(names) != len(wantSet) {
+		t.Fatalf("List = %v, want %v", names, wantSet)
+	}
+	for _, n := range names {
+		if !wantSet[n] {
+			t.Errorf("unexpected name %q in List()", n)
+		}
+	}
+}
+
+func TestPipelineStoreWithBundle_ExistsChecksBundle(t *testing.T) {
+	repo := t.TempDir()
+	bundle := t.TempDir()
+	global := t.TempDir()
+
+	writePipelineFile(t, bundle, "quick", quickPipelineYAML)
+
+	s := NewPipelineStoreWithBundle(repo, bundle, global)
+	if !s.Exists("quick") {
+		t.Error("Exists(quick) = false, want true (bundle layer)")
+	}
+	if s.Exists("nonexistent") {
+		t.Error("Exists(nonexistent) = true, want false")
+	}
+}
+
+func TestPipelineStoreWithBundle_EmptyBundle(t *testing.T) {
+	repo := t.TempDir()
+	global := t.TempDir()
+	writePipelineFile(t, global, "standard", standardPipelineYAML)
+
+	// Empty bundle root behaves like two-layer.
+	s := NewPipelineStoreWithBundle(repo, "", global)
+	p, err := s.Load("standard")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if p.Name != "standard" {
+		t.Errorf("Name = %q, want standard", p.Name)
+	}
+}
+
 // --- Instantiate tests ---
 
 func TestInstantiate_HappyPath(t *testing.T) {

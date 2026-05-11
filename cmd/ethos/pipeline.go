@@ -13,9 +13,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// pipelineStore returns a layered PipelineStore that checks repo-local
-// first, then user-global. Mirrors identityStore() — repo layer comes
-// from FindRepoEthosRoot, global from ~/.punt-labs/ethos.
+// pipelineStore returns a three-layer PipelineStore: repo-local, active
+// bundle, then user-global. Mirrors identityStore() — repo layer comes
+// from FindRepoEthosRoot, bundle from resolveBundleRoot, global from
+// ~/.punt-labs/ethos.
 func pipelineStore() *mission.PipelineStore {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -24,7 +25,8 @@ func pipelineStore() *mission.PipelineStore {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	repoRoot := resolve.FindRepoEthosRoot()
-	return mission.NewPipelineStore(repoRoot, globalRoot)
+	bundleRoot := resolveBundleRoot()
+	return mission.NewPipelineStoreWithBundle(repoRoot, bundleRoot, globalRoot)
 }
 
 // --- mission pipeline (bare command) ---
@@ -42,10 +44,10 @@ var pipelineListCmd = &cobra.Command{
 	Short: "List available pipelines",
 	Long: `List available pipelines.
 
-Discovers pipeline YAML files from both the repo-local
-.punt-labs/ethos/pipelines/ directory and the user-global
-~/.punt-labs/ethos/pipelines/ directory. Repo-local pipelines
-override global pipelines with the same name.
+Discovers pipeline YAML files from three layers: repo-local
+(.punt-labs/ethos/pipelines/), the active bundle's pipelines/
+directory, and user-global (~/.punt-labs/ethos/pipelines/).
+Repo-local overrides bundle; bundle overrides global.
 
 Use --json for a machine-readable array of pipeline summaries.`,
 	Args: cobra.NoArgs,
