@@ -36,11 +36,16 @@ Then restart Claude Code to trigger the SessionStart hook. Verify with
 `ls .claude/agents/` — you should see one `.md` file per agent identity
 in the resolved team.
 
-**Troubleshooting**: if `subagent_type` fails with "agent type not found",
-run `ethos team active` to confirm the active team source, and
-`ls .claude/agents/` to see generated agents. For the legacy layout,
-a leading `-` in `git submodule status` indicates an uninitialized
-submodule.
+**Troubleshooting**: if `subagent_type` fails with "agent type not found":
+
+1. Run `ls .claude/agents/<handle>.md` — if the file exists, **restart
+   Claude Code**. Agent types are discovered at session start; files
+   added after launch are not visible until restart.
+2. If the file is missing, check the team source: `ethos team active`
+   (bundle layout) or `git submodule status` (legacy layout — a
+   leading `-` means uninitialized). Then restart Claude Code to
+   trigger the SessionStart hook, which generates agent files from
+   resolved team data.
 
 ## Concepts
 
