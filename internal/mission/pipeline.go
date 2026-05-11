@@ -36,33 +36,45 @@ type Pipeline struct {
 	Stages      []Stage `yaml:"stages" json:"stages"`
 }
 
-// PipelineStore discovers pipeline YAML files from two directories
-// (repo-local and global), with repo-local overriding global.
+// PipelineStore discovers pipeline YAML files from three directories
+// (repo-local, active bundle, and global), with repo overriding bundle
+// and bundle overriding global.
 type PipelineStore struct {
 	repo   string // repo pipelines dir, may be empty
+	bundle string // active bundle pipelines dir, may be empty
 	global string // global pipelines dir
 }
 
-// NewPipelineStore creates a layered pipeline store. repoRoot is the
-// ethos root within the repo (e.g. ".punt-labs/ethos"); globalRoot is
-// the user-global ethos root (e.g. "~/.punt-labs/ethos"). Either may
-// be empty, in which case that layer is skipped.
+// NewPipelineStore creates a two-layer pipeline store (repo + global).
+// Equivalent to NewPipelineStoreWithBundle(repoRoot, "", globalRoot).
 func NewPipelineStore(repoRoot, globalRoot string) *PipelineStore {
-	var repo, global string
+	return NewPipelineStoreWithBundle(repoRoot, "", globalRoot)
+}
+
+// NewPipelineStoreWithBundle creates a three-layer pipeline store: repo
+// first, then bundle, then global. Any root may be empty, in which case
+// that layer is skipped. The bundle layer is read-only by convention.
+func NewPipelineStoreWithBundle(repoRoot, bundleRoot, globalRoot string) *PipelineStore {
+	var repo, bun, global string
 	if repoRoot != "" {
 		repo = filepath.Join(repoRoot, "pipelines")
+	}
+	if bundleRoot != "" {
+		bun = filepath.Join(bundleRoot, "pipelines")
 	}
 	if globalRoot != "" {
 		global = filepath.Join(globalRoot, "pipelines")
 	}
-	return &PipelineStore{repo: repo, global: global}
+	return &PipelineStore{repo: repo, bundle: bun, global: global}
 }
 
-// Load reads a pipeline by name. The repo layer is checked first;
-// if not found, the global layer is checked.
+// Load reads a pipeline by name. Checks repo, then bundle, then global.
 func (s *PipelineStore) Load(name string) (*Pipeline, error) {
-	if s.repo != "" {
-		p, err := loadPipeline(s.repo, name)
+	for _, dir := range []string{s.repo, s.bundle, s.global} {
+		if dir == "" {
+			continue
+		}
+		p, err := loadPipeline(dir, name)
 		if err == nil {
 			return p, nil
 		}
@@ -70,52 +82,36 @@ func (s *PipelineStore) Load(name string) (*Pipeline, error) {
 			return nil, err
 		}
 	}
-	if s.global != "" {
-		return loadPipeline(s.global, name)
-	}
 	return nil, fmt.Errorf("pipeline %q: %w", name, ErrPipelineNotFound)
 }
 
-// List returns the names of all discovered pipelines. Repo-local
-// names override global names with the same slug.
+// List returns the names of all discovered pipelines. Higher-precedence
+// layers (repo > bundle > global) override lower ones with the same slug.
 func (s *PipelineStore) List() ([]string, error) {
-	globalNames, err := listPipelineDir(s.global)
-	if err != nil {
-		return nil, err
-	}
-	if s.repo == "" {
-		return globalNames, nil
-	}
-	repoNames, err := listPipelineDir(s.repo)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool, len(repoNames))
+	seen := make(map[string]bool)
 	var merged []string
-	for _, n := range repoNames {
-		seen[n] = true
-		merged = append(merged, n)
-	}
-	for _, n := range globalNames {
-		if !seen[n] {
-			merged = append(merged, n)
+	for _, dir := range []string{s.repo, s.bundle, s.global} {
+		names, err := listPipelineDir(dir)
+		if err != nil {
+			return nil, err
+		}
+		for _, n := range names {
+			if !seen[n] {
+				seen[n] = true
+				merged = append(merged, n)
+			}
 		}
 	}
 	return merged, nil
 }
 
-// Exists reports whether a pipeline with the given name exists in
-// either layer.
+// Exists reports whether a pipeline with the given name exists in any layer.
 func (s *PipelineStore) Exists(name string) bool {
-	if s.repo != "" {
-		p := filepath.Join(s.repo, name+".yaml")
-		if _, err := os.Stat(p); err == nil {
-			return true
+	for _, dir := range []string{s.repo, s.bundle, s.global} {
+		if dir == "" {
+			continue
 		}
-	}
-	if s.global != "" {
-		p := filepath.Join(s.global, name+".yaml")
+		p := filepath.Join(dir, name+".yaml")
 		if _, err := os.Stat(p); err == nil {
 			return true
 		}

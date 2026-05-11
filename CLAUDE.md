@@ -22,16 +22,21 @@ Before specifying work, check the relevant standard:
 ```bash
 make build                              # Build ethos binary
 make install                            # Build and install to ~/.local/bin
-make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, tests)
+make check                              # All quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests)
 ./ethos version                         # Print version
 ./ethos doctor                          # Check installation health
+./ethos setup                           # Interactive repo setup wizard
 ./ethos whoami                          # Show caller's identity (iam/git/OS)
 ./ethos resolve-agent                   # Show default agent from repo config
 ./ethos serve                           # Start MCP server (stdio transport)
 ./ethos iam <persona>                   # Declare persona in current session
 ./ethos session                         # Show current session participants
 ./ethos session purge                   # Clean up stale sessions
+./ethos adr list                        # List architecture decision records
+./ethos import --from soulspec <file>   # Import identity from SoulSpec
+./ethos export --to soulspec <handle>   # Export identity to SoulSpec or claude-md
 ./ethos mission lint <contract.yaml>    # Advisory pre-delegation linter
+./ethos mission dispatch --worker bwk --evaluator djb --write-set "..." --criteria "..."
 ./ethos mission pipeline list           # List available pipeline templates
 ./ethos mission pipeline show <name>    # Show pipeline stages and defaults
 ./ethos mission pipeline instantiate <name> --var key=value  # Create N missions from a pipeline template
@@ -88,7 +93,7 @@ The Makefile is the source of truth (`make help`).
 make check                             # All gates: lint + docs + test
 ```
 
-Expands to `make lint docs test`: `go vet`, `staticcheck`, `shellcheck hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`.
+Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `shellcheck hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`.
 
 ## Architecture
 
@@ -102,7 +107,7 @@ Expands to `make lint docs test`: `go vet`, `staticcheck`, `shellcheck hooks/*.s
 | `internal/process/` | Process tree walker: find topmost Claude ancestor PID |
 | `internal/session/` | Session roster model, store with flock-based concurrency |
 | `internal/resolve/` | Identity resolution chain: repo-local → global → error |
-| `internal/hook/` | Hook handlers (SessionStart, PreCompact, SubagentStart/Stop, SessionEnd, PostToolUse) and format output |
+| `internal/hook/` | Hook handlers (SessionStart, PreCompact, SubagentStart/Stop, SessionEnd, PreToolUse, PostToolUse), agent generation, format output |
 | `internal/doctor/` | Installation health checks |
 | `internal/role/` | Role model, CRUD, layered store |
 | `internal/team/` | Team model, CRUD, layered store, referential integrity enforcement |
