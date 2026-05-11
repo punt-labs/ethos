@@ -225,7 +225,7 @@ persona level and ephemeral session state at the participant level.
 ```text
 ethos ext get <handle> <namespace> [key]     Read one key or all keys
 ethos ext set <handle> <namespace> <key> <value>   Write a key
-ethos ext del <handle> <namespace> [key]     Delete one key or entire namespace
+ethos ext delete <handle> <namespace> [key]   Delete one key or entire namespace
 ethos ext list <handle>                       List all namespaces
 ```
 
@@ -4037,8 +4037,8 @@ and are too slow and expensive for CI on every push.
 
 ## DES-044: Extensions resolve through the layered identity chain (SETTLED)
 
-**Decision**: `ethos ext set/get/del/list` resolve identities through
-the same repo-local → global chain that `ethos identity get` uses.
+**Decision**: `ethos ext set/get/delete/list` resolve identities through
+the same repo-local → global chain that `ethos identity show` uses.
 Extensions still write to the global `.ext/` directory (extensions are
 personal, not git-tracked), but the identity lookup finds repo-local
 handles.

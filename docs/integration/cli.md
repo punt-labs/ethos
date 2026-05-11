@@ -33,10 +33,10 @@ ethos whoami --json | jq -r '.writing_style'
 
 ```bash
 # Full identity with resolved attribute content
-ethos identity get claude --json
+ethos identity show claude --json
 
 # Reference only (slugs, not content)
-ethos identity get claude --reference --json
+ethos identity show claude --reference --json
 ```
 
 ## Read Team Context
