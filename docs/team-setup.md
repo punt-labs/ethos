@@ -354,7 +354,7 @@ ethos doctor                       # Check installation health
 ethos whoami                       # Should resolve your identity
 ethos identity list                # Should show all team identities
 ethos team show engineering        # Should show members and roles
-ethos role show backend-engineer   # Should show responsibilities and tools
+ethos role show backend-engineer   # Should show responsibilities and permissions
 ```
 
 Start a Claude Code session — the persona block should appear in the

@@ -17,10 +17,11 @@ up the repo config, and activates the team. The next time Claude Code
 starts, the agent knows who it is, who you are, and how to delegate.
 
 Ethos ships a new **foundation** bundle alongside gstack. Foundation
-is a 4-agent general-purpose team (architect, implementer, reviewer,
-security) with 3 pipeline templates. It works for any codebase.
-Gstack remains available for the full 6-agent startup builder
-philosophy.
+is a 4-agent general-purpose team (foundation-architect,
+foundation-implementer, foundation-reviewer, foundation-security).
+It uses the global pipeline templates (standard, quick, product) and
+works for any codebase. Gstack remains available for the full 6-agent
+startup builder philosophy.
 
 "I installed ethos, ran `ethos setup`, and had structured delegation
 working on my Rails project in under a minute," said Priya Chandran,
@@ -28,7 +29,7 @@ a senior engineer. "Before this, I spent a full afternoon reading docs
 and still didn't have a working team."
 
 Ethos is free, open-source, and runs entirely on your machine.
-Install: `curl -fsSL https://punt-labs.com/ethos/install.sh | sh`.
+Install: `curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/main/install.sh | sh`.
 Then run `ethos setup`.
 
 ---
@@ -105,18 +106,19 @@ You can activate a team later when you want more.
 
 ### 6. Does this work with existing projects that use `.punt-labs/ethos/` as a submodule?
 
-Yes. `ethos setup` detects the legacy submodule layout and offers to
-migrate it with `ethos team migrate`. If you decline, everything
-keeps working -- the two-layer resolver (repo + global) still applies.
+Yes. `ethos setup` detects the legacy submodule layout and prints a
+message pointing to `ethos team migrate`. The legacy layout keeps
+working unchanged -- the two-layer resolver (repo + global) still
+applies.
 The three-layer resolver (repo + bundle + global) activates only when
 you set `active_bundle` in your config.
 
 ### 7. What languages and project types does the foundation bundle support?
 
 All of them. Foundation agents use language-agnostic roles and
-starter talents (code-review, testing, security, documentation). The
-implementer role has no language-specific tools restricted -- it uses
-Read, Write, Edit, Bash, Grep, and Glob, which work on any codebase.
+starter talents (code-review, engineering, security). The implementer
+role has no language-specific tools restricted -- it uses Read, Write,
+Edit, Bash, Grep, and Glob, which work on any codebase.
 
 For language-specific expertise, add talent files. Ethos ships 10
 starter talents including Go, Python, and TypeScript.
@@ -171,7 +173,8 @@ Two metrics:
   within 7 days.
 
 Both metrics are measurable from local state (identity files, mission
-files) without telemetry. `ethos doctor` can report them optionally.
+files) without telemetry. Reporting is not yet implemented --
+`ethos doctor` currently checks installation health only.
 
 ### 4. What does this cost to build?
 
