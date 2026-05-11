@@ -5,10 +5,10 @@ described in `docs/testing-strategy.tex`.
 
 ---
 
-## Current State (v3.7.0)
+## Current State (v3.9.0)
 
-- **2,187 tests** across 14 packages, 89.8% mission package coverage
-- **23.9 KLOC production Go, 37.7 KLOC test Go** (1.58:1 test-to-production ratio)
+- **2,199 tests** across 16 packages
+- **24.4 KLOC production Go, 38.2 KLOC test Go** (1.56:1 test-to-production ratio)
 - L1 content validation, L2 CLI subprocess, L3 MCP integration, L4 behavioral: all shipped in v3.1.0
 - CI coverage reporting wired (`-coverprofile`, summary in CI)
 - 8 behavioral scenarios: 4 deterministic (Layer A), 2 LLM-judged (Layer B), 2 adversarial (Layer C)
@@ -186,7 +186,11 @@ Added `-coverprofile=coverage.out` to `make test` and CI summary reporting. Cove
 
 **v3.6.0** (April 15, 2026) shipped mission dispatch one-liner, resilient conflict scan, `inputs.trigger` schema, and doctor orphan check (Phase 5 items).
 
-**v3.7.0** (April 15, 2026) shipped team bundle activation (Phase 6.1): three-layer stores (repo, active bundle, global), bundle resolver, five CLI commands (`available`, `activate`, `active`, `deactivate`, `add-bundle`), embedded gstack bundle (5 pipeline templates), and `ethos team migrate`. 2,187 tests across 14 packages, 23.9 KLOC production Go, 37.7 KLOC test Go.
+**v3.7.0** (April 15, 2026) shipped team bundle activation (Phase 6.1): three-layer stores (repo, active bundle, global), bundle resolver, five CLI commands (`available`, `activate`, `active`, `deactivate`, `add-bundle`), embedded gstack bundle (5 pipeline templates), and `ethos team migrate`.
+
+**v3.8.0** (April 15, 2026) fixed all core pipelines' review stages to use the `report` archetype.
+
+**v3.9.0** (April 16, 2026) shipped `ethos setup` interactive wizard and the foundation bundle (4-agent general-purpose team). Quick Start reduced from 12 steps to 2. 2,199 tests across 16 packages, 24.4 KLOC production Go, 38.2 KLOC test Go.
 
 L5 sprint integration tests remain the sole unimplemented phase. The pipeline instantiate primitive shipped in v3.4.0; L5 depends on fixture repo construction and harness authoring.
 

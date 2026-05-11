@@ -2,13 +2,14 @@
 
 Where ethos is going. Organized into phases that build on each other.
 
-## Current Status (2026-04-14)
+## Current Status (2026-05-11)
 
-Ethos is on `main` at v3.7.0 with all five original phases complete.
-23.9 KLOC production Go, 37.7 KLOC tests, 2,187 tests across 14
+Ethos is on `main` at v3.9.0 with all six original phases complete
+(Phases 1–5 + 6.1). 24.4 KLOC production Go, 38.2 KLOC tests, 16
 packages. Go Report Card: A+. 13 pipeline templates (8 core + 5 in
-gstack bundle), 10 archetypes, 26 identities, 4 teams. Phase 2.6
-(`/mission` Phase B–C: conflict detection and dry-run) remains planned.
+gstack bundle), 10 archetypes, 2 embedded bundles (gstack, foundation).
+Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run)
+remains planned.
 
 | Phase | Status | Summary |
 |---|---|---|
@@ -17,7 +18,7 @@ gstack bundle), 10 archetypes, 26 identities, 4 teams. Phase 2.6
 | **Phase 3 — Workflow Primitives** | **SHIPPED** | All 7 primitives: mission contract, write-set admission, frozen evaluator, bounded rounds, verifier isolation, result artifacts, event log reader (beads `ethos-07m.5`–`07m.11`, ADRs DES-031 through DES-037) |
 | **Phase 4 — Operational Excellence** | **SHIPPED** | SessionStart working context (PR #205), role-based safety constraints + session audit logging (PR #207). Beads `ethos-gcq.1`–`.3`, all closed. |
 | **Post-Phase 4** | **SHIPPED** | Archetypes, pipelines, pipeline instantiate, automatic traceability (v3.2.0–v3.5.0). See details below. |
-| **Phase 5 — Reliability & Friction** | NEXT | Mission dispatch one-liner, agent regen diff logging, doctor orphan check, inputs.trigger schema, deprecation migration tooling |
+| **Phase 5 — Reliability & Friction** | **SHIPPED** | Mission dispatch one-liner, agent regen diff logging, doctor orphan check, inputs.trigger schema, deprecation migration tooling |
 | **Phase 6.1 — Team Bundle Activation** | **SHIPPED** | Switchable starter teams; embedded gstack bundle; `team available/activate/deactivate/add-bundle/migrate`; three-layer resolution (repo -> active bundle -> global). DES-051, epic `ethos-2hh`. |
 | **Phase 6 — Ecosystem (remaining)** | FUTURE | Agent marketplace (6.2), cross-tool integration (6.3) |
 
@@ -92,6 +93,16 @@ automatic traceability.
 - Bundle resolver, embedded gstack bundle (5 pipeline templates), `ethos seed` deploys gstack
 - Five CLI commands: `team available`, `activate`, `active`, `deactivate`, `add-bundle`
 - `ethos team migrate` converts legacy submodule layouts to bundles
+
+### v3.8.0 (April 15, 2026)
+
+- Pipeline archetype fix: all core pipelines' review stages use `report` archetype (not `review`)
+
+### v3.9.0 (April 16, 2026)
+
+- `ethos setup` interactive wizard — creates identities, writes repo config, activates bundle, generates agent files in one command
+- Foundation bundle — general-purpose 4-agent team (architect, implementer, reviewer, security) for any codebase, ships embedded alongside gstack
+- Quick Start reduced from 12 steps to 2
 
 ---
 
@@ -968,6 +979,7 @@ Phase 6 (Ecosystem, remaining)            ← FUTURE
 └── 6.3 Cross-tool integration (ethos-wb4, ethos-g2f)
 ```
 
-Phases 1–4, post-Phase 4, Phase 5, and Phase 6.1 shipped. Phase 6.2
-(agent marketplace) and 6.3 (cross-tool integration) are long-term
-ecosystem work that depends on broader adoption.
+Phases 1–4, post-Phase 4, Phase 5, Phase 6.1, and v3.8.0–v3.9.0
+shipped. Phase 6.2 (agent marketplace) and 6.3 (cross-tool
+integration) are long-term ecosystem work that depends on broader
+adoption.
