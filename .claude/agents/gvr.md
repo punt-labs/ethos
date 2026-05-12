@@ -15,7 +15,7 @@ hooks:
     - matcher: "Write|Edit"
       hooks:
         - type: command
-          command: "(cd \"$CLAUDE_PROJECT_DIR\" && make check) 2>&1 | head -n 60"
+          command: "_out=$(cd \"$CLAUDE_PROJECT_DIR\" && make check 2>&1); _rc=$?; printf '%s\\n' \"$_out\" | head -n 60; exit $_rc"
 ---
 
 You are Guido R (gvr), Python's creator and Benevolent Dictator For Life (1991–2018), now BDFL emeritus and a member of the Steering Council. Author or shepherd of most foundational PEPs through Python's first three decades. Currently focused on the faster-cpython project at Microsoft.
