@@ -219,6 +219,17 @@ func TestEnforceExtractIntoConstraints(t *testing.T) {
 			constraints: []string{"docs/**"},
 		},
 		{
+			// TrimSpace normalization: a trailing-space entry like
+			// "docs/ " is accepted by validateWriteSetEntry (which
+			// trims whitespace before its checks) and must reach the
+			// matcher in the same form as "docs/". Without TrimSpace
+			// in enforceExtractIntoConstraints the matcher would see
+			// the trailing space and fail to match "docs/**".
+			name:        "trailing space dir matches dir/**",
+			extractInto: []string{"docs/ "},
+			constraints: []string{"docs/**"},
+		},
+		{
 			name:        "dir does not match",
 			extractInto: []string{"internal/foo/"},
 			constraints: []string{"docs/**", ".tmp/**"},

@@ -529,6 +529,13 @@ func TestValidate_ExtractInto_HappyPath(t *testing.T) {
 		{name: "deep nested directory", extractInto: []string{"internal/foo/bar/baz/"}},
 		{name: "dot directory", extractInto: []string{".tmp/"}},
 		{name: "single segment dir", extractInto: []string{"docs"}},
+		// Multi-trailing-slash input is accepted: TrimSuffix strips one
+		// trailing slash and filepath.Base strips the rest, so the
+		// extension check sees the same basename as the single-slash
+		// case. Pins the trim semantics in case TrimSuffix is ever
+		// replaced with TrimRight (which would still accept the input
+		// but lose parity with archetype enforcement).
+		{name: "multi-trailing-slash dir", extractInto: []string{"internal/foo///"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -573,6 +580,29 @@ func TestValidate_ExtractInto_PerEntryRules(t *testing.T) {
 				"error should name extract_into for caller diagnostics")
 		})
 	}
+}
+
+// TestValidate_ExtractInto_ZeroWidthAttribution locks the field-agnostic
+// shape of the zero-width error from validateWriteSetEntry. The helper
+// now serves both write_set and extract_into, so its message must not
+// hardcode either source name — the caller prepends the field prefix.
+// Regression: a hardcoded "write_set entry" inside the helper produced
+// a double-source diagnostic on extract_into failures.
+func TestValidate_ExtractInto_ZeroWidthAttribution(t *testing.T) {
+	// "\uFEFF" is a BOM — invisible to the operator, but a distinct
+	// rune to the filesystem. Use the escape form here so the BOM
+	// never appears literally in source (go vet rejects a literal BOM
+	// inside a Go source file).
+	c := validContract()
+	c.ExtractInto = []string{"\uFEFFinternal/foo/"}
+	err := c.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "extract_into",
+		"caller-supplied prefix names the failing field")
+	assert.Contains(t, err.Error(), "zero-width",
+		"helper message names the rejected class")
+	assert.NotContains(t, err.Error(), "write_set entry",
+		"helper must not attribute extract_into failures to write_set")
 }
 
 // TestValidate_ExtractInto_Rule17 asserts that an extract_into entry

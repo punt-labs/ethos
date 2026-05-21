@@ -284,7 +284,11 @@ func validateExtractIntoShape(entry string) error {
 	trimmed := strings.TrimSpace(entry)
 	// Strip a single trailing slash so "docs/" and "docs" compare the
 	// same — the file extension lives on the basename either way.
-	normalized := strings.TrimRight(strings.ReplaceAll(trimmed, `\`, "/"), "/")
+	// TrimSuffix (not TrimRight) keeps the trim semantics aligned with
+	// enforceExtractIntoConstraints; filepath.Base strips any remaining
+	// trailing slashes so a pathological "internal/foo///" still resolves
+	// to basename "foo" and passes the extension check.
+	normalized := strings.TrimSuffix(strings.ReplaceAll(trimmed, `\`, "/"), "/")
 	if normalized == "" {
 		return nil
 	}
@@ -408,7 +412,7 @@ func validateWriteSetEntry(entry string) error {
 	// the conflict checker. Rejecting at the trust boundary eliminates
 	// the class rather than trusting every downstream consumer.
 	if containsZeroWidth(trimmed) {
-		return fmt.Errorf("write_set entry %q contains zero-width Unicode character", trimmed)
+		return fmt.Errorf("%q contains zero-width Unicode character", trimmed)
 	}
 
 	// Normalize backslashes to forward slashes first. This makes

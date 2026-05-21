@@ -45,12 +45,19 @@ func enforceExtractIntoConstraints(c *Contract, a *Archetype) error {
 		return nil
 	}
 	for _, entry := range c.ExtractInto {
+		// TrimSpace before TrimSuffix so a trailing-space entry like
+		// "docs/ " (whitespace-tolerated by validateWriteSetEntry)
+		// reaches the matcher in the same form as "docs/". Without
+		// the TrimSpace the matcher would see "docs/ " and fail to
+		// match a "docs/**" constraint that the per-entry validator
+		// had already accepted.
+		//
 		// Strip a single trailing slash so the same directory entry
 		// ("docs/" vs "docs") matches the same constraint pattern.
 		// TrimSuffix (not TrimRight) keeps the intent precise — a
 		// pathological "docs///" still carries the doubled slashes
 		// down to the matcher, where they neither help nor harm.
-		normalized := strings.TrimSuffix(entry, "/")
+		normalized := strings.TrimSuffix(strings.TrimSpace(entry), "/")
 		ok, err := matchesAnyConstraint(normalized, a.ExtractIntoConstraints)
 		if err != nil {
 			return err
