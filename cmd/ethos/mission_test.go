@@ -90,6 +90,7 @@ func missionTestEnv(t *testing.T) string {
 	missionResultVerify = false
 	missionResultBase = "main"
 	missionExportDir = ".ethos/missions"
+	resetDispatchFlags()
 	t.Cleanup(func() {
 		jsonOutput = false
 		missionCreateFile = ""
@@ -99,8 +100,24 @@ func missionTestEnv(t *testing.T) string {
 		missionResultVerify = false
 		missionResultBase = "main"
 		missionExportDir = ".ethos/missions"
+		resetDispatchFlags()
 	})
 	return tmp
+}
+
+// resetDispatchFlags zeroes every dispatch package-level flag global
+// so cross-test contamination cannot bleed in. Mirrors the defaults
+// installed by missionDispatchCmd.Flags() in cmd/ethos/mission.go init.
+func resetDispatchFlags() {
+	dispatchWorker = ""
+	dispatchEvaluator = ""
+	dispatchWriteSet = ""
+	dispatchExtractInto = ""
+	dispatchCriteria = ""
+	dispatchContext = ""
+	dispatchTicket = ""
+	dispatchType = "implement"
+	dispatchBudget = 2
 }
 
 // seedEvaluator drops a minimal djb identity (the canonical evaluator
@@ -3335,4 +3352,78 @@ budget:
 
 	// Stderr must carry the warning.
 	assert.Contains(t, exportErr.String(), "no result yet")
+}
+
+// TestMissionDispatch_ExtractInto exercises the DES-052 dispatch
+// flag end-to-end. Three cases cover the additive contract:
+//
+//   - omitted: ExtractInto stays nil so a pre-3.11 one-liner reads
+//     identically through dispatch (backward compatible)
+//   - success: comma-separated directories flow through splitCSV
+//     into Contract.ExtractInto
+//   - reject: a file-shaped entry trips rule 17 with a message
+//     that names the rule so a future regression that drops the
+//     wiring is caught by the error text, not just an error count.
+func TestMissionDispatch_ExtractInto(t *testing.T) {
+	t.Run("omitted leaves ExtractInto nil", func(t *testing.T) {
+		missionTestEnv(t)
+		dispatchWorker = "bwk"
+		dispatchEvaluator = "djb"
+		dispatchWriteSet = "internal/alpha/store.go"
+		dispatchCriteria = "make check passes"
+		dispatchType = "implement"
+		dispatchBudget = 2
+
+		captureStdoutE(t, func() error { return runMissionDispatch() })
+
+		ms := missionStore()
+		ids, err := ms.List()
+		require.NoError(t, err)
+		require.Len(t, ids, 1)
+		c, err := ms.Load(ids[0])
+		require.NoError(t, err)
+		assert.Nil(t, c.ExtractInto, "omitted --extract-into must leave ExtractInto nil")
+	})
+
+	t.Run("populated flows through to Contract.ExtractInto", func(t *testing.T) {
+		missionTestEnv(t)
+		dispatchWorker = "bwk"
+		dispatchEvaluator = "djb"
+		dispatchWriteSet = "internal/beta/store.go"
+		dispatchExtractInto = "internal/foo/,internal/bar/"
+		dispatchCriteria = "make check passes"
+		dispatchType = "implement"
+		dispatchBudget = 2
+
+		captureStdoutE(t, func() error { return runMissionDispatch() })
+
+		ms := missionStore()
+		ids, err := ms.List()
+		require.NoError(t, err)
+		require.Len(t, ids, 1)
+		c, err := ms.Load(ids[0])
+		require.NoError(t, err)
+		assert.Equal(t, []string{"internal/foo/", "internal/bar/"}, c.ExtractInto)
+	})
+
+	t.Run("file-shaped entry is rejected", func(t *testing.T) {
+		missionTestEnv(t)
+		dispatchWorker = "bwk"
+		dispatchEvaluator = "djb"
+		dispatchWriteSet = "internal/gamma/store.go"
+		dispatchExtractInto = "bad.go"
+		dispatchCriteria = "make check passes"
+		dispatchType = "implement"
+		dispatchBudget = 2
+
+		err := runMissionDispatch()
+		require.Error(t, err, "file-shaped --extract-into entry must be rejected")
+		// Validate's rule 17 message names "extract_into" and the
+		// extension. Anchoring on both keeps the assertion robust
+		// against minor prose tweaks while still catching a
+		// regression that loses the wiring entirely.
+		msg := err.Error()
+		assert.Contains(t, msg, "extract_into")
+		assert.Contains(t, msg, "extension")
+	})
 }
