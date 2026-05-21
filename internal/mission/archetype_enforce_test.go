@@ -165,6 +165,104 @@ func TestEnforceRequiredFields(t *testing.T) {
 	}
 }
 
+// TestEnforceExtractIntoConstraints covers the DES-052 archetype
+// glob check for the extract_into axis. The matcher reuses the same
+// helper as enforceWriteSetConstraints; the table here pins the
+// directory-entry behavior — trailing slash stripped so "docs/" and
+// "docs" both match a "docs/**" constraint.
+func TestEnforceExtractIntoConstraints(t *testing.T) {
+	tests := []struct {
+		name        string
+		extractInto []string
+		constraints []string
+		wantErr     string
+	}{
+		{
+			name:        "no constraints passes",
+			extractInto: []string{"internal/foo/"},
+			constraints: nil,
+		},
+		{
+			name:        "empty extract_into passes",
+			extractInto: nil,
+			constraints: []string{"docs/**"},
+		},
+		{
+			name:        "single dir matches dir/** with trailing slash",
+			extractInto: []string{"docs/"},
+			constraints: []string{"docs/**"},
+		},
+		{
+			name:        "single dir matches dir/** without trailing slash",
+			extractInto: []string{"docs"},
+			constraints: []string{"docs/**"},
+		},
+		{
+			name:        "nested dir matches dir/** prefix",
+			extractInto: []string{"docs/architecture/"},
+			constraints: []string{"docs/**"},
+		},
+		{
+			name:        "multiple constraints, dir matches second",
+			extractInto: []string{".tmp/"},
+			constraints: []string{"docs/**", ".tmp/**"},
+		},
+		{
+			// TrimSuffix strips only one trailing slash. The doubled
+			// trailing slashes survive normalization; the matcher's
+			// dir/** branch sees "docs//" — still inside the docs/
+			// subtree under HasPrefix(entry, prefix+"/"). Locks the
+			// behavior so a future refactor cannot silently change
+			// the trim semantics.
+			name:        "multiple trailing slashes still matches dir/**",
+			extractInto: []string{"docs///"},
+			constraints: []string{"docs/**"},
+		},
+		{
+			// TrimSpace normalization: a trailing-space entry like
+			// "docs/ " is accepted by validateWriteSetEntry (which
+			// trims whitespace before its checks) and must reach the
+			// matcher in the same form as "docs/". Without TrimSpace
+			// in enforceExtractIntoConstraints the matcher would see
+			// the trailing space and fail to match "docs/**".
+			name:        "trailing space dir matches dir/**",
+			extractInto: []string{"docs/ "},
+			constraints: []string{"docs/**"},
+		},
+		{
+			name:        "dir does not match",
+			extractInto: []string{"internal/foo/"},
+			constraints: []string{"docs/**", ".tmp/**"},
+			wantErr:     `extract_into entry "internal/foo/" does not match any constraint`,
+		},
+		{
+			name:        "one match one mismatch",
+			extractInto: []string{"docs/", "internal/foo/"},
+			constraints: []string{"docs/**"},
+			wantErr:     `extract_into entry "internal/foo/" does not match any constraint`,
+		},
+		{
+			name:        "malformed pattern surfaces error",
+			extractInto: []string{"internal/foo/"},
+			constraints: []string{"[invalid"},
+			wantErr:     `invalid constraint pattern "[invalid"`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Contract{ExtractInto: tc.extractInto}
+			a := &Archetype{ExtractIntoConstraints: tc.constraints}
+			err := enforceExtractIntoConstraints(c, a)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestValidateWithArchetype_AllowEmptyWriteSet(t *testing.T) {
 	tests := []struct {
 		name      string

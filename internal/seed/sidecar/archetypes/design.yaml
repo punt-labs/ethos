@@ -9,3 +9,5 @@ required_fields:
 write_set_constraints:
   - "*.md"
   - "docs/**"
+extract_into_constraints:
+  - "docs/**"

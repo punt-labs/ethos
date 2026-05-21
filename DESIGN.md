@@ -4318,3 +4318,514 @@ is byte-identical to the current two-layer implementation. A new
   hard-coded path assumptions become follow-up beads.
 - Ships in v3.7.0. This ADR moves to SETTLED when the feature
   lands.
+
+## DES-052: Separate `extract_into` axis for new-file creation (SETTLED)
+
+**Status**: Settled. Implemented 2026-05-21 as bead `ethos-3emm`,
+priority P1. Design reviewed by `rop` (Pike, minimalism) on mission
+`m-2026-05-21-004` — verdict ITERATE with three named edits
+(cooperative-constraint problem statement, closed six-rule
+asymmetry table, operator audit-visibility paragraph), all applied
+before implementation. Implementation by `bwk` on mission
+`m-2026-05-21-005` across the rounds documented above, frozen
+evaluator `rsc`. Verdict PASS (0.95).
+
+### Round-by-round summary
+
+- **Round 1 — schema, validation, six-rule admission**
+  (`38ff7fb`, `64ac28f`). `Contract.ExtractInto []string` with
+  `omitempty` tag. `Validate` rule 11 walks every ExtractInto
+  entry through the existing per-entry helper (traversal,
+  absolute, drive-letter, UNC, control, null, zero-width); rule
+  17 rejects code-file extensions. `findWriteSetConflicts`
+  rewritten as the closed six-rule form via
+  `entryPairConflicts(a, aIsDir, aIsEI, b, bIsDir, bIsEI)`. The
+  new `ws-file × ei-dir` constraint closes the cross-mission race
+  where one mission's file claim collides with another's extract
+  directory. Tests: `TestEntryPairConflicts` (row-by-row matrix,
+  symmetry-verified), `TestFindWriteSetConflicts_ExtractInto`,
+  `TestIsDirEntry`. Leader committed the conflict-side work on
+  the worker's behalf after the round-1 agent session ended;
+  round 2 resumed cleanly from the committed state.
+
+- **Round 2 — hook plumbing** (`4a561a5`). `PreToolUse` stat-
+  then-allow branch: a Write/Edit that misses `ETHOS_VERIFIER_ALLOWLIST`
+  falls through to a single `os.Stat`; if the file does not exist
+  and the path is under any listed directory in
+  `ETHOS_VERIFIER_EXTRACT_INTO`, the call is allowed. Stat runs
+  only on the path that already failed the allowlist check, so
+  the hot path is unchanged. `SubagentStart` populates the new
+  env var from `m.ExtractInto` across all verifier missions
+  (deduplicated) and inserts an "Extract into (new files only)"
+  section into the isolation block with the operator audit
+  summary line first, then prose distinguishing modify from
+  create, then the per-directory list. Empty `extract_into`
+  renders identically to pre-DES-052. Tests cover all four
+  DES-named cases plus the modify-via-extract_into attack.
+
+- **Round 3 — archetype constraints, lint, changelog**
+  (`d546d19`, `a6268ba`, `73ca05f`). `Archetype.ExtractIntoConstraints`
+  via the same glob matcher as `WriteSetConstraints` (with a
+  trailing-slash strip so `docs/` and `docs` both match
+  `docs/**`). Ten seed archetype YAMLs updated per the default
+  table — `design → docs/**`, `investigate → docs/** + .tmp/**`,
+  others explicit empty list (test is `[]` per the Go convention
+  that tests live alongside source).
+  Lint `H11 lintMonolithPressure` fires only when three signals
+  align (file-only `write_set` + empty `extract_into` +
+  extraction verb in `success_criteria`). `H12
+  lintExtractIntoFileEntries` emits one warning per offending
+  entry. `CHANGELOG` Unreleased Added entry points at this DES.
+
+### Migration
+
+Every new field carries `omitempty`. Existing contracts on disk
+validate unchanged; `Store.Load` continues to accept them.
+Pre-DES-052 missions in flight at upgrade time have no
+`ExtractInto`; `PreToolUse` with no `ETHOS_VERIFIER_EXTRACT_INTO`
+falls through to the existing allowlist check unchanged;
+`SubagentStart` with empty `m.ExtractInto` omits both the env var
+and the isolation block section. The only admission-time behaviour
+change is the new `ws-file × ei-dir` conflict; `ei-dir × ei-dir`
+explicitly never conflicts, so two missions extracting into the
+same directory cooperate as the design requires.
+
+### Lessons
+
+`rop`'s ITERATE verdict caught three real defects in the draft:
+(1) the problem statement attributed worker accretion to a
+PreToolUse block that does not fire for workers — the constraint
+is cooperative, and the DES had to say so or jra would have read
+an enforced invariant where there was a cooperative one; (2) the
+original asymmetry table missed the `ws-file × ei-dir`
+cross-mission race, which the closed six-rule form
+makes structurally impossible to forget; (3) the verifier
+isolation block needed an operator audit-visibility paragraph,
+otherwise a leader who accidentally listed `extract_into: [docs/]`
+on a code-implementation mission would not have caught the
+mistake in review. All three are now in the DES and in the code.
+The Pike-minimalism lens (do we really need two slices?) was
+the right framing — the rejected-alternatives section now
+distinguishes the proposal from Shape A (redefine trailing-slash
+write_set entries), Shape B (single slice with `+` create-only
+marker), and the schema-untouched template-prose alternative,
+with the reasoning that cooperative enforcement demands the YAML
+*carry* the intent rather than delegate to implicit policy.
+
+### Problem
+
+The Phase 3.1 `write_set` field declares which paths a worker may
+modify. DES-032 added cross-mission admission control on top of it
+(segment-prefix overlap rejection). DES-035 added verifier isolation
+with a PreToolUse hook (`internal/hook/pretooluse.go`) that enforces
+the same path set as a closed write allowlist.
+
+The single-axis design conflates two distinct authorizations:
+
+1. **Modify existing files**: edit one or more files that already exist.
+2. **Create new files**: bring new files into existence as part of the
+   change — extract a function into a new module, split a package,
+   decompose a god object.
+
+Today both are governed by the same prefix-match rule. A leader
+authoring a contract picks between two bad options:
+
+- **Narrow `write_set`** (e.g., `internal/foo/bar.go`) — precise
+  scope, reviews cleanly, but forbids extraction. The worker cannot
+  create `internal/foo/cache.go` or `internal/foo/parser.go`, so the
+  only way to add structure is to accrete onto `bar.go`. The mission
+  ships with a monolith.
+- **Wide `write_set`** (e.g., `internal/foo/`) — authorizes
+  extraction, but also authorizes modification of every existing file
+  in the directory, defeats DES-032's overlap precision, and surfaces
+  in the verifier's isolation block as "may touch anything in this
+  directory" — losing the audit clarity the contract is supposed to
+  provide.
+
+Observed outcome (documented in `ethos-3emm`): workers add functions,
+methods, and helper types inline in the file listed in `write_set`
+rather than extracting into sibling files. The contract incentivizes
+the wrong shape.
+
+**The mechanism is cooperative, not enforced.** The PreToolUse hook
+in `internal/hook/pretooluse.go` is a passthrough unless
+`ETHOS_VERIFIER_ALLOWLIST` is set in the spawning process's
+environment, and `buildVerifierAllowlistEnv` in `subagent_start.go`
+sets that variable only for verifier spawns. Workers are mechanically
+unconstrained today and remain so under DES-052. The worker accretes
+because the worker reads `write_set: [foo.go]` and reasons "I am
+authorized to write only one file." DES-052 does not change worker
+enforcement; it changes the contract language the worker reads. The
+verifier sandbox then mirrors the cooperative agreement mechanically
+when it later re-creates the same files.
+
+The threat model is the same as DES-032: not adversarial, but
+uncoordinated. The leader wants the worker to decompose. The worker
+sees `write_set: [foo.go]` and reasons correctly: "I am not
+authorized to create new files; I must keep this in foo.go."
+
+### Decision
+
+Add `Contract.ExtractInto []string` — a separate field that
+authorizes new-file creation under listed directories, without
+authorizing modification of existing files in those directories.
+
+The semantics are deliberately asymmetric with `write_set`:
+
+| Operation | Authorized by |
+|-----------|---------------|
+| Modify existing file at path P | `write_set` entry matches P (existing behavior) |
+| Create new file at non-existing path P | `write_set` entry matches P **OR** an `extract_into` directory is a prefix of P |
+| Read any file | unrestricted (DES-047 verifier read-allowed policy) |
+
+`extract_into` entries are **directories**. The per-entry validator
+rejects file-shaped entries (anything with a code-file extension);
+listing a specific known new file in `write_set` is the correct
+expression for that case.
+
+**This is the default semantics for every archetype.** No opt-in
+flag, no archetype-by-archetype rollout. Workers immediately gain
+the ability to decompose whenever the leader names extraction
+directories.
+
+### Schema
+
+```yaml
+extract_into:
+  - internal/foo/    # may create new files here
+  - internal/foo/bar/
+```
+
+Field tag: `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`.
+Empty `extract_into` is valid and is the backward-compatible default —
+existing contracts behave identically to today.
+
+Per-entry validation reuses `validateWriteSetEntry` (rejects `..`,
+absolute paths, drive letters, UNC, control characters, null bytes,
+zero-width Unicode) plus one rule: the entry must not have a code-file
+extension (`.go`, `.py`, `.ts`, `.tsx`, `.js`, `.md`, `.yaml`, etc.).
+
+The directory existence check is advisory at validate time (the
+directory may be created by the same change), so the rule is purely
+shape-based on the entry text.
+
+Examples:
+
+- ✅ `internal/foo`, `internal/foo/`, `docs/api/`, `pkg/handlers`
+- ❌ `internal/foo/bar.go`, `README.md` (use `write_set`)
+- ❌ `..`, `/etc`, control characters (same rules as `write_set`)
+
+Rule 11 is extended to also validate every `extract_into` entry under
+the same per-entry rules. The shape rule is rule 17.
+
+### PreToolUse enforcement
+
+`internal/hook/pretooluse.go` currently reads `ETHOS_VERIFIER_ALLOWLIST`
+and blocks Write/Edit on any path not matching an entry via prefix.
+The new behavior:
+
+```text
+on Write/Edit(target):
+    if ETHOS_VERIFIER_ALLOWLIST not set:
+        allow  # not a verifier spawn
+    if target matches any ETHOS_VERIFIER_ALLOWLIST entry (existing
+       prefix check):
+        allow
+    if target does not exist on disk AND
+       target is under any directory in ETHOS_VERIFIER_EXTRACT_INTO:
+        allow
+    block with reason
+```
+
+The exists check is `os.Stat`. The stat is performed lazily, only on
+the path not already matched by the existing allowlist — so the hot
+path (verifier touching a declared file) is unchanged. For workers
+(non-verifier spawns), the env vars are unset and the hook is a
+passthrough, identical to today.
+
+**Subtle case — Write to a path that does not exist YET because the
+worker is about to create it.** This is the entire reason the field
+exists. The Write call's target path is what's being created; the
+file does not exist at `os.Stat` time; the `extract_into` check
+authorizes it. After the Write succeeds, subsequent Edit calls on
+the same path find the file existing — at which point the
+allowlist rule applies and `extract_into` no longer authorizes the
+operation. **Once a file is created under `extract_into`, the
+verifier cannot modify it again unless its path is also listed in
+`write_set`.** This is deliberate: allowing modify-after-create
+would turn `extract_into` into a back-door modify authority for any
+existing file under the directory (the "modify-via-extract_into"
+attack the PreToolUse test explicitly prevents — a verifier could
+simply read+rewrite a file under `extract_into` to bypass
+`write_set` integrity). A worker that needs to iterate on a freshly
+extracted file must either list the new path in `write_set`
+upfront (when the filename is known) or operate idempotently —
+prepare the file content in scratch, then Write once.
+
+**Subtle case — Race between Stat and Write.** If a parallel process
+creates the file between the Stat and the Write, the verifier (or
+worker) would still proceed via the `extract_into` branch. This is
+acceptable: the only "parallel process" creating files in a verifier
+sandbox is the verifier itself, and Phase 3.5 isolates the verifier
+per-mission. The exists check is for "did THIS verifier already
+write this file in this session?" not for filesystem-level race
+protection.
+
+### SubagentStart hook
+
+`internal/hook/subagent_start.go` builds the verifier isolation block
+and sets `ETHOS_VERIFIER_ALLOWLIST` from `m.WriteSet`. Extension:
+
+- Set `ETHOS_VERIFIER_EXTRACT_INTO` from `m.ExtractInto` (colon-
+  separated, same encoding as `ETHOS_VERIFIER_ALLOWLIST`).
+- The isolation block lists `extract_into` alongside `write_set`,
+  with the prose "new files may be created in these directories" so
+  the verifier knows the difference.
+- `WalkWriteSet` continues to walk `WriteSet` only. Walking
+  `extract_into` would mislead the verifier into thinking concrete
+  files already exist there.
+
+### Cross-mission admission control (DES-032 extension)
+
+Admission control runs at `Store.Create` and rejects a new mission
+whose declared paths could ever collide at runtime with an open
+mission's declared paths. With two axes, the invariant is the closed
+union of six rules over the entry-kind taxonomy
+`{ws-file, ws-dir, ei-dir}` (extract_into is always directory-shaped
+by per-entry validation):
+
+```text
+-- pathsOverlap is DES-032's segment-prefix relation; isPrefix is
+-- the directed "a is a path prefix of b" relation. Both operate on
+-- canonical normalized segment lists.
+
+conflict(ws-file(a),  ws-file(b))  <->  pathsOverlap(a, b)
+conflict(ws-file(a),  ws-dir(b))   <->  isPrefix(b, a)
+conflict(ws-dir(a),   ws-dir(b))   <->  pathsOverlap(a, b)
+conflict(ws-file(a),  ei-dir(b))   <->  isPrefix(b, a)
+conflict(ws-dir(a),   ei-dir(b))   <->  pathsOverlap(a, b)
+conflict(ei-dir(a),   ei-dir(b))   <->  false
+
+-- The relation is symmetric over the unordered mission pair:
+forall X, Y :  conflict(X, Y)  <->  conflict(Y, X)
+```
+
+Read in tabular form:
+
+| Mission A | Mission B | Conflict? | Rationale |
+|-----------|-----------|-----------|-----------|
+| ws-file P_A | ws-file P_B | iff segment-prefix overlap | DES-032 unchanged |
+| ws-file P_A | ws-dir D_B  | iff D_B is prefix of P_A | DES-032 unchanged |
+| ws-dir D_A  | ws-dir D_B  | iff segment-prefix overlap | DES-032 unchanged |
+| ws-file P_A | ei-dir D_B  | iff D_B is prefix of P_A | B may create P_A under D_B before A writes — same-path race; admission control rejects so the leader resolves at create time, not git-merge time |
+| ws-dir D_A  | ei-dir D_B  | iff segment-prefix overlap | A's directory authorizes any path under it including new ones in D_B's range |
+| ei-dir D_A  | ei-dir D_B  | never | Two missions may extract into the same dir or one into a subdir of the other; filenames are the contention unit, and same-filename collisions are the leader's responsibility (PreToolUse exists-check is per-verifier, not cross-mission) |
+
+The `ws-file × ei-dir` row is the new constraint. Without it, A
+listing `internal/foo/bar.go` in `write_set` and B listing
+`internal/foo/` in `extract_into` would race on `bar.go`: if A has
+not yet created the file, B's stat returns "does not exist" and B's
+`extract_into` authorizes the create; A subsequently writes its own
+body to the same path and one body is lost at git merge. Rejecting
+the create-time overlap puts the resolution where the leader sees it.
+
+`internal/mission/conflict.go` extends `findWriteSetConflicts` to
+the six-rule form. The comparison logic stays in `pathsOverlap` and
+`isPrefix`; the caller dispatches by entry kind. Entry-kind
+detection (file-shaped vs directory-shaped) is the existing
+trailing-slash heuristic plus extension scan that
+`archetype_enforce.go` already uses.
+
+### Lint warnings (advisory)
+
+`internal/mission/lint.go` gains:
+
+1. **`lintMonolithPressure`**: when `write_set` contains only file
+   entries (no directories), `extract_into` is empty, AND success
+   criteria mention "extract", "decompose", "refactor", or "split",
+   warn: `consider declaring extract_into: success criteria suggest
+   decomposition but no new-file scope is authorized`.
+2. **`lintExtractIntoFileEntries`**: when `extract_into` contains a
+   path with a code-file extension, warn: `extract_into entries
+   should be directories; <path> looks like a file (use write_set)`.
+
+Both are warnings, not validation failures — leaders can override
+with intent.
+
+### Archetype constraints
+
+`Archetype.ExtractIntoConstraints []string` parallels
+`WriteSetConstraints`. Same glob-style enforcement.
+
+Default constraints (in seed archetypes):
+
+| Archetype  | extract_into_constraints | rationale |
+|------------|--------------------------|-----------|
+| implement  | `[]` (unconstrained)     | code may extract anywhere the leader names |
+| design     | `["docs/**"]`            | design output is docs; extraction stays in `docs/` |
+| review     | `[]`                     | reviews rarely create files; empty is fine |
+| test       | `[]` (unconstrained)     | Go convention: tests alongside source; a constraint would block legitimate same-directory test extraction |
+| report     | `[]` (read-only)         | reports don't extract |
+| audit      | `[]` (read-only)         | audits don't extract |
+| investigate| `["docs/**", ".tmp/**"]` | investigation writes findings, no production code |
+| inbox      | `[]` (read-only)         | inbox missions don't write |
+| task       | `[]` (unconstrained)     | small tasks; leader decides |
+| orchestrate| `[]` (no direct writes)  | orchestration coordinates, doesn't write |
+
+### Verifier isolation context
+
+The verifier sees both fields explicitly in the isolation block:
+
+```text
+Write set (modify existing files only):
+  - internal/foo/bar.go
+
+Extract into authorizes new files under: internal/foo/
+  - internal/foo/
+
+PreToolUse hook will block Write/Edit outside these allowlists.
+Existing files: authorized only if matched by write_set above.
+New files: authorized if matched by write_set OR if the path is
+under an extract_into directory.
+```
+
+**Operator audit visibility.** When `extract_into` is populated, the
+verifier's create surface widens compared to today. A leader who
+writes `extract_into: [docs/]` has authorized the verifier to create
+any new file under `docs/` — fine for a documentation mission, a
+problem if typed by accident on an `internal/foo/parser.go` mission.
+To make the boundary loud, the isolation block prepends a one-line
+summary between the `write_set` and `extract_into` sections:
+`extract_into authorizes new files under: <comma-separated dirs>`.
+A reviewer scanning the block sees the union directory list at a
+glance and cannot misread it as "modify everywhere in these
+directories" — only "create new files there".
+
+The constraint mechanism — archetype `extract_into_constraints` —
+catches the common typo cases (a code-implementation mission with
+`extract_into: [docs/]` fails the constraint check during
+`Store.Create`). The summary line catches the cases the constraints
+do not cover, by forcing the leader to read what they wrote.
+
+**Worker-side enforcement is cooperative.** As stated in the Problem
+section, the PreToolUse hook does not fire for worker spawns — only
+for verifier spawns. `extract_into` documents the leader's grant to
+the worker and to the verifier, but mechanical enforcement applies
+only to the verifier. The worker honours the contract by reading it;
+that is the existing posture under `write_set` and DES-052 does not
+change it.
+
+### Rejected alternatives
+
+- **Implicit sibling scope**. Make any file entry in `write_set`
+  also authorize new files in its parent directory. Rejected:
+  silently widens every existing mission's scope (backward
+  incompatible at the security boundary). Operators who deliberately
+  wrote a narrow write_set expecting one-file scope would see new
+  files appear without authorizing them. An explicit `extract_into`
+  field is opt-in *by the leader* even though it is default-on as a
+  *capability*.
+
+- **Mid-mission write_set amendment protocol**. Worker proposes
+  additions; leader approves. Rejected for the same-mission case:
+  too much synchronous interaction for the common extraction case.
+  Still viable for cross-package moves (out of scope for DES-052).
+
+- **Replace `write_set` with a struct** (`{modify: [...], create: [...]}`).
+  Rejected: breaks YAML compatibility for every existing contract on
+  disk. The additive `extract_into` field is backward compatible.
+
+- **Glob patterns in `write_set`** (e.g., `internal/foo/*.go`).
+  Rejected: doesn't solve the discovery-during-extraction problem.
+  The worker often doesn't know what filename to use until they
+  decompose. A glob still has to be authored upfront with file
+  names in mind.
+
+- **Combine `extract_into` semantics into the existing prefix-match**
+  by treating any directory-shaped entry as both modify-existing AND
+  create-new. Rejected: that's what "wide write_set" already does,
+  and the whole point of DES-052 is to decouple the two.
+
+- **Treat extract_into entries as exclusive (admission-control
+  conflict with any other mission's extract_into on the same dir)**.
+  Rejected: two missions extracting into the same directory but
+  creating different filenames cooperate fine — first mover on a
+  given filename wins via the exists check. Forcing extract_into
+  exclusivity would defeat the concurrency the field is designed
+  to enable.
+
+- **Stat-free always-allow rule for new files** (skip the directory
+  check). Rejected: that's "verifier may create any file anywhere
+  it claims doesn't exist", which is exactly the boundary erosion
+  DES-035 exists to prevent.
+
+- **Shape A: redefine trailing-slash entries in `write_set` as
+  create-only.** Today directory entries in `write_set` authorize
+  modify+create under the prefix via
+  `pretooluse.go:pathAllowed`; `archetype_enforce.go` already
+  treats them as scope markers exempt from glob constraints. A
+  one-line hook-policy change — "for a directory entry in
+  `write_set`, the verifier hook authorizes Write only when the
+  target does not exist; modification of an existing file in the
+  directory still requires a file-shaped entry" — would deliver
+  the same decoupling with zero new fields and zero migration
+  cost on the byte-format side. Rejected for two reasons. First,
+  the semantics are not self-evident from the YAML — a worker
+  reading `write_set: [internal/foo/]` cannot tell whether the
+  entry means "modify everything under" (today) or "create only
+  under" (Shape A); the meaning lives in implicit policy.
+  Cooperative enforcement (the worker reads the contract and
+  obeys) demands that the YAML *carry* the intent, not delegate
+  it to a hook documentation page. Second, while the missions
+  registry shows the pattern is rarely used today, the change is
+  silently behavior-altering for any future operator who writes a
+  trailing-slash entry expecting the documented "wide write_set"
+  semantics. A separate `extract_into` field is verbose but
+  reads exactly the way it acts.
+
+- **Shape B: single slice with a `+` create-only prefix.** Entries
+  prefixed `+` (e.g., `+internal/foo/cache.go` or `+internal/foo/`)
+  authorize create-only; unprefixed entries authorize modify (with
+  trailing-slash retaining today's wide semantics or migrating per
+  Shape A). YAML-forward-compatible — `+path` is a valid string,
+  no schema break. Rejected for the same readability reason as
+  Shape A, sharpened: a marker convention requires every consumer
+  (worker, verifier, audit reader, lint, conflict checker, archetype
+  enforcement) to parse the prefix before reasoning about the entry.
+  A second slice with an explicit name lets every consumer dispatch
+  by field, not by string-parsing convention. The `+` shape also
+  composes awkwardly with the future `-` removal-marker space and
+  with the existing `..`/path-absoluteness checks (the per-entry
+  validator would have to strip the prefix before applying its
+  existing rules). A struct-tagged slice is more YAML, less
+  cleverness.
+
+- **Don't change the schema; change the contract template.** The
+  failure mode is cooperative — the worker reasons from the
+  contract context. A template-generator could emit a sentence in
+  `context` like "if you need to extract helpers, place them
+  under \<these directories\>". Zero schema change, zero hook
+  change, zero migration. Rejected because the prose loses the
+  audit trail: a reviewer scanning a closed mission cannot
+  mechanically check "did the worker stay within authorized
+  extraction directories?" without parsing free-text English. The
+  whole purpose of `write_set` is that machine-checkable scope
+  beats prose intent. `extract_into` extends that audit-trail
+  principle to the create-axis; template prose abandons it.
+
+### What DES-052 deliberately does NOT do
+
+- **Authorize cross-package extraction without leader consent.**
+  `extract_into` is a list the leader writes. A worker that
+  discovers it needs to extract into a directory the leader did
+  not name must request an amendment (out of scope) or escalate.
+- **Replace `write_set` for new files.** Listing a specific known
+  new file in `write_set` (e.g., `internal/foo/new.go`) still works
+  exactly as today. `extract_into` is for the case where the worker
+  doesn't know the filename upfront.
+- **Authorize file deletion.** Removing a file is a modify-existing
+  operation governed by `write_set`. The PreToolUse hook treats
+  Write to an existing file as modify-existing.
+- **Modify the round budget, evaluator hash gate, or any DES-033/
+  3.4/3.5/3.6 enforcement.** DES-052 is purely a write-set
+  authorization extension.

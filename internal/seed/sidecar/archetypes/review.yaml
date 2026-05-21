@@ -10,3 +10,4 @@ write_set_constraints:
   - "*.md"
   - "*.yaml"
   - ".tmp/**"
+extract_into_constraints: []
