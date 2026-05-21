@@ -4319,10 +4319,97 @@ is byte-identical to the current two-layer implementation. A new
 - Ships in v3.7.0. This ADR moves to SETTLED when the feature
   lands.
 
-## DES-052: Separate `extract_into` axis for new-file creation (DRAFT)
+## DES-052: Separate `extract_into` axis for new-file creation (SETTLED)
 
-**Status**: Draft. Bead `ethos-3emm`, priority P1. Implementation
-mission pending design review.
+**Status**: Settled. Implemented 2026-05-21 as bead `ethos-3emm`,
+priority P1. Design reviewed by `rop` (Pike, minimalism) on mission
+`m-2026-05-21-004` — verdict ITERATE with three named edits
+(cooperative-constraint problem statement, closed six-rule
+asymmetry table, operator audit-visibility paragraph), all applied
+before implementation. Implementation by `bwk` on mission
+`m-2026-05-21-005` over three logical rounds, six commits, frozen
+evaluator `rsc`. Verdict PASS (0.95).
+
+### Round-by-round summary
+
+- **Round 1 — schema, validation, six-rule admission**
+  (`38ff7fb`, `64ac28f`). `Contract.ExtractInto []string` with
+  `omitempty` tag. `Validate` rule 11 walks every ExtractInto
+  entry through the existing per-entry helper (traversal,
+  absolute, drive-letter, UNC, control, null, zero-width); rule
+  17 rejects code-file extensions. `findWriteSetConflicts`
+  rewritten as the closed six-rule form via
+  `entryPairConflicts(a, aIsDir, aIsEI, b, bIsDir, bIsEI)`. The
+  new `ws-file × ei-dir` constraint closes the cross-mission race
+  where one mission's file claim collides with another's extract
+  directory. Tests: `TestEntryPairConflicts` (row-by-row matrix,
+  symmetry-verified), `TestFindWriteSetConflicts_ExtractInto`,
+  `TestIsDirEntry`. Leader committed the conflict-side work on
+  the worker's behalf after the round-1 agent session ended;
+  round 2 resumed cleanly from the committed state.
+
+- **Round 2 — hook plumbing** (`4a561a5`). `PreToolUse` stat-
+  then-allow branch: a Write/Edit that misses `ETHOS_VERIFIER_ALLOWLIST`
+  falls through to a single `os.Stat`; if the file does not exist
+  and the path is under any listed directory in
+  `ETHOS_VERIFIER_EXTRACT_INTO`, the call is allowed. Stat runs
+  only on the path that already failed the allowlist check, so
+  the hot path is unchanged. `SubagentStart` populates the new
+  env var from `m.ExtractInto` across all verifier missions
+  (deduplicated) and inserts an "Extract into (new files only)"
+  section into the isolation block with the operator audit
+  summary line first, then prose distinguishing modify from
+  create, then the per-directory list. Empty `extract_into`
+  renders identically to pre-DES-052. Tests cover all four
+  DES-named cases plus the modify-via-extract_into attack.
+
+- **Round 3 — archetype constraints, lint, changelog**
+  (`d546d19`, `a6268ba`, `73ca05f`). `Archetype.ExtractIntoConstraints`
+  via the same glob matcher as `WriteSetConstraints` (with a
+  trailing-slash strip so `docs/` and `docs` both match
+  `docs/**`). Ten seed archetype YAMLs updated per the default
+  table — `design → docs/**`, `test → **/*_test.go + tests/**`,
+  `investigate → docs/** + .tmp/**`, others explicit empty list.
+  Lint `H11 lintMonolithPressure` fires only when three signals
+  align (file-only `write_set` + empty `extract_into` +
+  extraction verb in `success_criteria`). `H12
+  lintExtractIntoFileEntries` emits one warning per offending
+  entry. `CHANGELOG` Unreleased Added entry points at this DES.
+
+### Migration
+
+Every new field carries `omitempty`. Existing contracts on disk
+validate unchanged; `Store.Load` continues to accept them.
+Pre-DES-052 missions in flight at upgrade time have no
+`ExtractInto`; `PreToolUse` with no `ETHOS_VERIFIER_EXTRACT_INTO`
+falls through to the existing allowlist check unchanged;
+`SubagentStart` with empty `m.ExtractInto` omits both the env var
+and the isolation block section. The only admission-time behaviour
+change is the new `ws-file × ei-dir` conflict; `ei-dir × ei-dir`
+explicitly never conflicts, so two missions extracting into the
+same directory cooperate as the design requires.
+
+### Lessons
+
+`rop`'s ITERATE verdict caught three real defects in the draft:
+(1) the problem statement attributed worker accretion to a
+PreToolUse block that does not fire for workers — the constraint
+is cooperative, and the DES had to say so or jra would have read
+an enforced invariant where there was a cooperative one; (2) the
+original asymmetry table missed the `ws-file × ei-dir`
+cross-mission race, which the closed six-rule form
+makes structurally impossible to forget; (3) the verifier
+isolation block needed an operator audit-visibility paragraph,
+otherwise a leader who accidentally listed `extract_into: [docs/]`
+on a code-implementation mission would not have caught the
+mistake in review. All three are now in the DES and in the code.
+The Pike-minimalism lens (do we really need two slices?) was
+the right framing — the rejected-alternatives section now
+distinguishes the proposal from Shape A (redefine trailing-slash
+write_set entries), Shape B (single slice with `+` create-only
+marker), and the schema-untouched template-prose alternative,
+with the reasoning that cooperative enforcement demands the YAML
+*carry* the intent rather than delegate to implicit policy.
 
 ### Problem
 
