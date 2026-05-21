@@ -693,6 +693,62 @@ func TestEntryPairConflicts(t *testing.T) {
 	}
 }
 
+// TestEntryPairConflicts_UnreachableCombination pins the defensive
+// guard for the (isEI=true, isDir=false) combination. Rule 17 rejects
+// file-shaped extract_into entries at validate time, so this shape
+// cannot reach the dispatch in production — but a caller that bypasses
+// the validator must not produce a false-positive conflict against an
+// entry that the schema does not allow.
+func TestEntryPairConflicts_UnreachableCombination(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b struct {
+			path  string
+			isDir bool
+			isEI  bool
+		}
+	}{
+		{
+			name: "ei flagged but not dir-shaped (a)",
+			a: struct {
+				path  string
+				isDir bool
+				isEI  bool
+			}{path: "internal/foo.go", isDir: false, isEI: true},
+			b: struct {
+				path  string
+				isDir bool
+				isEI  bool
+			}{path: "internal/foo.go", isDir: false, isEI: false},
+		},
+		{
+			name: "ei flagged but not dir-shaped (b)",
+			a: struct {
+				path  string
+				isDir bool
+				isEI  bool
+			}{path: "internal/foo/", isDir: true, isEI: false},
+			b: struct {
+				path  string
+				isDir bool
+				isEI  bool
+			}{path: "internal/foo/bar.go", isDir: false, isEI: true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, entryPairConflicts(
+				tt.a.path, tt.a.isDir, tt.a.isEI,
+				tt.b.path, tt.b.isDir, tt.b.isEI),
+				"unreachable (ei && !dir) must short-circuit to no conflict")
+			assert.False(t, entryPairConflicts(
+				tt.b.path, tt.b.isDir, tt.b.isEI,
+				tt.a.path, tt.a.isDir, tt.a.isEI),
+				"symmetric direction must also short-circuit")
+		})
+	}
+}
+
 // TestFindWriteSetConflicts_ExtractInto covers the cross-mission race
 // scenarios the new ei-dir axis introduces. The critical row is the
 // ws-file × ei-dir race in DES-052: A declares write_set:

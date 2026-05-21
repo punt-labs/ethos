@@ -133,6 +133,15 @@ func anyEntryConflicts(newEntry string, newIsEI bool, ec *Contract) bool {
 // are always directory-shaped — but the function guards it so a
 // future schema change cannot silently misclassify.
 func entryPairConflicts(a string, aIsDir, aIsEI bool, b string, bIsDir, bIsEI bool) bool {
+	// Defensive guard: an extract_into entry that is not
+	// directory-shaped is unreachable in production — rule 17 rejects
+	// file-shaped extract_into entries at validate time. Treat the
+	// impossible (ei, !dir) combination as a no-conflict so a future
+	// caller that bypasses the validator cannot trigger an
+	// undefined-by-design branch in the dispatch below.
+	if (aIsEI && !aIsDir) || (bIsEI && !bIsDir) {
+		return false
+	}
 	// Per DES-052, ei-dir × ei-dir never conflicts. Two missions may
 	// extract into the same directory or one into a subdir of the
 	// other; same-filename collisions are the leader's responsibility,
