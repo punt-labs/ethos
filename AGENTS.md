@@ -433,6 +433,27 @@ one-liners.
 ethos mission create --file contract.yaml
 ```
 
+```yaml
+# contract.yaml
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  ticket: ethos-7al
+write_set:                  # modify existing files (and create within)
+  - internal/session/store.go
+  - internal/session/store_test.go
+extract_into:               # create new files only — never modify (DES-052)
+  - internal/session/
+success_criteria:
+  - purge removes stale entries
+  - test covers TTL edge case
+budget:
+  rounds: 2
+  reflection_after_each: true
+```
+
 **From CLI flags (dispatch):**
 
 ```bash
@@ -440,6 +461,7 @@ ethos mission dispatch \
   --worker bwk \
   --evaluator djb \
   --write-set "internal/session/store.go,internal/session/store_test.go" \
+  --extract-into "internal/session/" \
   --criteria "purge removes stale entries,test covers TTL edge case" \
   --context "Follow-up from PR #280" \
   --ticket ethos-7al \
@@ -448,9 +470,21 @@ ethos mission dispatch \
 ```
 
 Required flags: `--worker`, `--evaluator`, `--write-set`, `--criteria`.
-Optional: `--context`, `--ticket`, `--type` (default: implement),
-`--budget` (default: 2). Leader is resolved from the repo's configured
-`agent:` value; if unset or outside a repo, falls back to `"claude"`.
+Optional: `--extract-into`, `--context`, `--ticket`, `--type`
+(default: implement), `--budget` (default: 2). Leader is resolved from
+the repo's configured `agent:` value; if unset or outside a repo,
+falls back to `"claude"`.
+
+**Asymmetric semantics (DES-052).** `write_set` authorizes
+modification of existing files at the listed paths; `extract_into`
+authorizes only the creation of new files under listed directories.
+A new file at path P is permitted when an `extract_into` directory is
+a prefix of P **or** P is in `write_set`; modifying an existing file
+always requires a `write_set` match — `extract_into` never grants
+modify rights. Entries in `extract_into` are directory-shaped: a
+file-shaped entry (anything with a code-file extension) is rejected
+by rule 17 at validate time. See DES-052 in DESIGN.md for the full
+design, including the closed six-rule cross-mission admission table.
 
 Via MCP:
 
@@ -627,6 +661,12 @@ patterns, and required fields.
 
 Set the archetype via `--type` on dispatch or the `type` field in
 contract YAML. Defaults to `implement`.
+
+Each archetype also carries `extract_into_constraints` — a glob
+allowlist that bounds the directories a leader may name in
+`extract_into` (DES-052). For example, `design` constrains
+extraction to `docs/**`; `investigate` permits `docs/**` and
+`.tmp/**`. The default table lives in DESIGN.md under DES-052.
 
 ## Gstack Starter Team
 

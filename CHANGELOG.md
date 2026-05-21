@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos mission dispatch --extract-into`** — DES-052's asymmetric
+  new-file axis now reaches the dispatch one-liner. Optional and
+  additive: existing dispatch one-liners work unchanged. Comma-
+  separated relative directories flow through to `Contract.ExtractInto`
+  under the same per-entry rules as `write_set` plus rule 17
+  (file-shaped entries rejected).
+- **AGENTS.md alignment with DES-052** — mission contract YAML example
+  carries `extract_into` alongside `write_set` with annotations
+  distinguishing modify-existing from create-new, the dispatch example
+  shows `--extract-into`, a new paragraph names the asymmetric
+  semantics and points at DES-052, and the archetypes section names
+  `extract_into_constraints` with a pointer to the DESIGN.md table.
+
 ## [3.11.0] - 2026-05-21
 
 ### Added
