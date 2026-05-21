@@ -4327,7 +4327,7 @@ priority P1. Design reviewed by `rop` (Pike, minimalism) on mission
 (cooperative-constraint problem statement, closed six-rule
 asymmetry table, operator audit-visibility paragraph), all applied
 before implementation. Implementation by `bwk` on mission
-`m-2026-05-21-005` over three logical rounds, six commits, frozen
+`m-2026-05-21-005` across the rounds documented above, frozen
 evaluator `rsc`. Verdict PASS (0.95).
 
 ### Round-by-round summary
