@@ -41,7 +41,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (16 total — must match the numbered list below
+// Validation rules (17 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -61,6 +61,8 @@ const (
 //     Windows drive letters and UNC), not empty after trimming.
 //     When an Archetype with AllowEmptyWriteSet is provided via
 //     ValidateWithArchetype, rule 11 permits an empty write_set.
+//     Every extract_into entry runs through the same per-entry
+//     check (the same helper that validates write_set entries).
 //  12. budget.rounds is in [1, 10]
 //  13. success_criteria has at least one entry
 //  14. current_round is in [1, budget.rounds] (3.4 round-tracking
@@ -70,6 +72,11 @@ const (
 //     digits), no control characters, length ≤ 128
 //  16. depends_on: each entry must be a valid mission ID; self-reference
 //     is rejected
+//  17. extract_into entries must be directory-shaped: an entry whose
+//     basename carries a code-file extension (.go, .py, .ts, .tsx,
+//     .js, .md, .yaml, .yml, .json, .toml, .rs, .java, .cpp, .h, .c)
+//     is rejected. List specific known new files in write_set
+//     instead. DES-052.
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
@@ -174,6 +181,19 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		}
 	}
 
+	// extract_into entries reuse the per-entry rules (rule 11) and add
+	// rule 17 — entries must be directory-shaped (no code-file
+	// extension on the basename). Empty extract_into is the
+	// backward-compatible default.
+	for i, entry := range c.ExtractInto {
+		if err := validateWriteSetEntry(entry); err != nil {
+			return fmt.Errorf("extract_into[%d]: extract_into entry: %w", i, err)
+		}
+		if err := validateExtractIntoShape(entry); err != nil {
+			return fmt.Errorf("extract_into[%d]: %w", i, err)
+		}
+	}
+
 	// budget.rounds in [1, 10]
 	if c.Budget.Rounds < minRounds || c.Budget.Rounds > maxRounds {
 		return fmt.Errorf("budget.rounds %d out of range [%d, %d]", c.Budget.Rounds, minRounds, maxRounds)
@@ -221,6 +241,61 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		}
 	}
 
+	return nil
+}
+
+// codeFileExtensions lists the file extensions a directory-shaped
+// extract_into entry must not carry. The set covers Go, Python,
+// TypeScript, JavaScript, Markdown, YAML/JSON/TOML configuration,
+// Rust, Java, C, and C++ — the language families ethos sees across
+// the punt-labs workspace. Adding a new code extension is additive
+// and safe: an existing contract that listed a directory named after
+// the new extension would now fail validation on next load, which
+// is the intended failure mode (the entry was always shape-ambiguous).
+//
+// Comparison is case-insensitive — the per-entry validator already
+// rejected zero-width characters and control bytes, so a lowercased
+// suffix match on the basename's extension is sufficient.
+var codeFileExtensions = map[string]bool{
+	".go":   true,
+	".py":   true,
+	".ts":   true,
+	".tsx":  true,
+	".js":   true,
+	".md":   true,
+	".yaml": true,
+	".yml":  true,
+	".json": true,
+	".toml": true,
+	".rs":   true,
+	".java": true,
+	".cpp":  true,
+	".h":    true,
+	".c":    true,
+}
+
+// validateExtractIntoShape rejects entries whose basename carries a
+// code-file extension. The per-entry validator (validateWriteSetEntry)
+// has already accepted the entry as a well-formed relative path; this
+// helper only checks the directory-shaped invariant of rule 17. The
+// entry text alone decides the shape — the directory may or may not
+// exist on disk at validate time (it may be created by the same change).
+func validateExtractIntoShape(entry string) error {
+	trimmed := strings.TrimSpace(entry)
+	// Strip a single trailing slash so "docs/" and "docs" compare the
+	// same — the file extension lives on the basename either way.
+	normalized := strings.TrimRight(strings.ReplaceAll(trimmed, `\`, "/"), "/")
+	if normalized == "" {
+		return nil
+	}
+	base := filepath.Base(normalized)
+	ext := strings.ToLower(filepath.Ext(base))
+	if ext == "" {
+		return nil
+	}
+	if codeFileExtensions[ext] {
+		return fmt.Errorf("extract_into entry %q looks like a file (extension %q); list specific new files in write_set instead", trimmed, ext)
+	}
 	return nil
 }
 

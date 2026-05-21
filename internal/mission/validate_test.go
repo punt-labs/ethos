@@ -506,6 +506,125 @@ func TestValidate_Pipeline(t *testing.T) {
 	}
 }
 
+// TestValidate_ExtractInto_HappyPath asserts that valid extract_into
+// entries pass validation alongside an unchanged write_set. The empty
+// case is the backward-compatible default — pre-DES-052 contracts
+// must continue to validate.
+func TestValidate_ExtractInto_HappyPath(t *testing.T) {
+	tests := []struct {
+		name        string
+		extractInto []string
+	}{
+		{name: "empty extract_into accepted", extractInto: nil},
+		{name: "single directory", extractInto: []string{"internal/foo/"}},
+		{name: "directory without trailing slash", extractInto: []string{"internal/foo"}},
+		{name: "multiple directories", extractInto: []string{"internal/foo/", "docs/"}},
+		{name: "deep nested directory", extractInto: []string{"internal/foo/bar/baz/"}},
+		{name: "dot directory", extractInto: []string{".tmp/"}},
+		{name: "single segment dir", extractInto: []string{"docs"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			c.ExtractInto = tt.extractInto
+			require.NoError(t, c.Validate())
+		})
+	}
+}
+
+// TestValidate_ExtractInto_PerEntryRules asserts that the per-entry
+// validator (rule 11) applies to every extract_into entry: traversal,
+// absolute paths, control chars, drive letters, UNC, zero-width, and
+// root-claim entries are rejected the same as for write_set.
+func TestValidate_ExtractInto_PerEntryRules(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		wantErrMatch string
+	}{
+		{name: "parent escape", path: "../etc", wantErrMatch: "path traversal"},
+		{name: "absolute unix path", path: "/etc/", wantErrMatch: "relative path"},
+		{name: "empty entry", path: "", wantErrMatch: "empty or whitespace"},
+		{name: "null byte", path: "internal/\x00foo/", wantErrMatch: "null byte"},
+		{name: "newline", path: "internal/foo\n/", wantErrMatch: "control character"},
+		{name: "drive letter", path: `C:\foo\`, wantErrMatch: "drive letter"},
+		{name: "UNC forward slash", path: "//server/share/", wantErrMatch: "relative path"},
+		{name: "BOM prefix", path: "\uFEFFinternal/foo/", wantErrMatch: "zero-width"},
+		{name: "lone dot", path: ".", wantErrMatch: "claims the project root"},
+		{name: "dot slash", path: "./", wantErrMatch: "claims the project root"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			c.ExtractInto = []string{tt.path}
+			err := c.Validate()
+			require.Error(t, err, "expected validation error for extract_into %q", tt.path)
+			assert.Contains(t, err.Error(), tt.wantErrMatch)
+			assert.Contains(t, err.Error(), "extract_into",
+				"error should name extract_into for caller diagnostics")
+		})
+	}
+}
+
+// TestValidate_ExtractInto_Rule17 asserts that an extract_into entry
+// whose basename carries a code-file extension is rejected. Listing a
+// specific known new file in write_set is the correct expression for
+// that case.
+func TestValidate_ExtractInto_Rule17(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "go file", path: "internal/foo/bar.go"},
+		{name: "test go file", path: "internal/foo/bar_test.go"},
+		{name: "python file", path: "scripts/run.py"},
+		{name: "typescript file", path: "app/component.ts"},
+		{name: "tsx file", path: "app/component.tsx"},
+		{name: "javascript file", path: "app/index.js"},
+		{name: "markdown file", path: "README.md"},
+		{name: "yaml file", path: "config.yaml"},
+		{name: "yml file", path: "config.yml"},
+		{name: "json file", path: "config.json"},
+		{name: "toml file", path: "config.toml"},
+		{name: "rust file", path: "src/lib.rs"},
+		{name: "java file", path: "src/Main.java"},
+		{name: "cpp file", path: "src/main.cpp"},
+		{name: "c header", path: "src/main.h"},
+		{name: "c file", path: "src/main.c"},
+		{name: "uppercase extension", path: "README.MD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			c.ExtractInto = []string{tt.path}
+			err := c.Validate()
+			require.Error(t, err, "expected rule 17 rejection for %q", tt.path)
+			assert.Contains(t, err.Error(), "looks like a file",
+				"error must point the leader at write_set: %v", err)
+		})
+	}
+}
+
+// TestValidate_ExtractInto_Rule17_AcceptsNonCodeExtensions asserts
+// that directory-shaped entries whose basenames carry unfamiliar
+// extensions are accepted. Rule 17 only forbids the closed code-file
+// set so a directory like "data/v1.2/" or "reports/2026.05/" passes.
+func TestValidate_ExtractInto_Rule17_AcceptsNonCodeExtensions(t *testing.T) {
+	tests := []string{
+		"data/v1.2/",
+		"reports/2026.05",
+		"internal/foo.bar/",
+		"internal/foo.bar.baz",
+	}
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			c := validContract()
+			c.ExtractInto = []string{path}
+			require.NoError(t, c.Validate())
+		})
+	}
+}
+
 func TestValidate_DependsOn(t *testing.T) {
 	tests := []struct {
 		name      string
