@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -447,20 +448,106 @@ func TestHandlePreToolUse_ExtractInto(t *testing.T) {
 	})
 }
 
-// TestTargetExists pins the os.Stat wrapper. The conservative branch
-// — any non-IsNotExist error treats the path as existing — keeps the
-// PreToolUse hook from authorizing a write under an ambiguous stat
-// result (the hook falls through to block).
+// TestTargetExists pins the os.Stat wrapper. Clean existence and
+// clean non-existence both report nil error; only the ambiguous
+// branch (any non-IsNotExist stat failure) surfaces the error so the
+// caller can audit-log it.
 func TestTargetExists(t *testing.T) {
 	dir := t.TempDir()
 	file := dir + "/present.go"
 	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
 
-	assert.True(t, targetExists(file), "existing file must report as existing")
-	assert.False(t, targetExists(dir+"/missing.go"),
+	exists, err := targetExists(file)
+	require.NoError(t, err)
+	assert.True(t, exists, "existing file must report as existing")
+
+	exists, err = targetExists(dir + "/missing.go")
+	require.NoError(t, err)
+	assert.False(t, exists,
 		"missing file under existing dir must report as not existing")
-	assert.True(t, targetExists(dir),
-		"existing directory must report as existing")
+
+	exists, err = targetExists(dir)
+	require.NoError(t, err)
+	assert.True(t, exists, "existing directory must report as existing")
+}
+
+// TestTargetExists_AmbiguousStat exercises the non-IsNotExist branch.
+// A path under a directory with mode 0 (no execute permission)
+// produces an EACCES on stat — neither nil-existence nor nil-error,
+// so the caller must surface both signals to its audit log.
+func TestTargetExists_AmbiguousStat(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses unix permission checks")
+	}
+	parent := t.TempDir()
+	locked := parent + "/locked"
+	require.NoError(t, os.Mkdir(locked, 0o700))
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() {
+		_ = os.Chmod(locked, 0o700)
+	})
+
+	exists, err := targetExists(locked + "/anything.go")
+	require.Error(t, err, "permission-denied stat must surface as error")
+	assert.True(t, exists,
+		"ambiguous stat must report as existing so the caller blocks")
+}
+
+// TestHandlePreToolUse_StatAmbiguous_LogsAndBlocks asserts the audit
+// trail and the block decision when the stat returns a non-IsNotExist
+// error. The verifier session must see "ethos: pre-tool-use: stat ..."
+// on stderr so the operator can diagnose permission-denied paths,
+// and the decision must still be block — the conservative default.
+func TestHandlePreToolUse_StatAmbiguous_LogsAndBlocks(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses unix permission checks")
+	}
+	parent := t.TempDir()
+	locked := parent + "/locked"
+	require.NoError(t, os.Mkdir(locked, 0o700))
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() {
+		_ = os.Chmod(locked, 0o700)
+	})
+	target := locked + "/anything.go"
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", parent+"/declared.go")
+	t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", locked)
+
+	// Redirect stderr to a pipe so the test can read the audit line.
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	t.Cleanup(func() {
+		os.Stderr = oldStderr
+	})
+
+	payload := map[string]any{
+		"tool_name":  "Write",
+		"tool_input": map[string]any{"file_path": target},
+	}
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	hookErr := HandlePreToolUse(strings.NewReader(string(data)), &out)
+	require.NoError(t, w.Close())
+	os.Stderr = oldStderr
+	require.NoError(t, hookErr)
+
+	stderrBytes, err := io.ReadAll(r)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	var result PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
+	assert.Equal(t, "block", result.Decision,
+		"ambiguous stat must fall through to block")
+	assert.Contains(t, stderrText, "pre-tool-use: stat",
+		"stderr audit line must fire on the non-IsNotExist branch")
+	assert.Contains(t, stderrText, target,
+		"stderr audit line must name the target path")
 }
 
 // Confirm that os.Getenv is the actual mechanism (not a mock).

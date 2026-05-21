@@ -79,8 +79,20 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	// applies. This prevents the modify-via-extract_into attack.
 	if extractInto := os.Getenv("ETHOS_VERIFIER_EXTRACT_INTO"); extractInto != "" {
 		eiEntries := splitAllowlist(extractInto)
-		if pathAllowed(target, eiEntries) && !targetExists(target) {
-			return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
+		if pathAllowed(target, eiEntries) {
+			exists, statErr := targetExists(target)
+			if statErr != nil {
+				// Non-IsNotExist stat failure (EACCES, EIO, ELOOP,
+				// broken symlink). The conservative branch falls
+				// through to block; log to stderr so the verifier
+				// session has an audit trail of the ambiguous stat.
+				fmt.Fprintf(os.Stderr,
+					"ethos: pre-tool-use: stat %s: %v\n",
+					target, statErr)
+			}
+			if !exists {
+				return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
+			}
 		}
 	}
 
@@ -92,12 +104,19 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 }
 
 // targetExists reports whether target points at an existing
-// filesystem entry. A stat error other than IsNotExist is treated as
-// "exists" — the safe default is to fall through to the block branch
-// rather than authorize a write under an ambiguous stat result.
-func targetExists(target string) bool {
+// filesystem entry. Returns (true, nil) for an existing entry,
+// (false, nil) for a clean IsNotExist, and (true, err) for any
+// other stat error — the caller falls through to the block branch
+// in the ambiguous case rather than authorize a write.
+func targetExists(target string) (bool, error) {
 	_, err := os.Stat(target)
-	return err == nil || !os.IsNotExist(err)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return true, err
 }
 
 // extractTargetPath returns the file path a tool call targets for
