@@ -25,7 +25,7 @@ type Warning struct {
 // warnings. It does not require a store round-trip. All checks are
 // non-blocking — callers should print warnings but not fail on them.
 //
-// Ten heuristics:
+// Twelve heuristics:
 //  1. write_set contains a .go file but not the adjacent _test.go
 //  2. write_set contains production code but no CHANGELOG.md entry
 //  3. success_criteria mention README/docs but README.md is not in write_set
@@ -36,6 +36,10 @@ type Warning struct {
 //  8. design mission has no user-visible impact criterion
 //  9. docs write-set with a generalist evaluator
 //  10. pipeline selector: suggests quick/standard/full based on contract size
+//  11. monolith pressure (DES-052): file-only write_set + empty
+//     extract_into + decomposition mention in success_criteria
+//  12. extract_into file entries (DES-052): extract_into entry that
+//     looks like a file (has a code-file extension)
 func Lint(c *Contract) []Warning {
 	if c == nil {
 		return nil
@@ -51,6 +55,8 @@ func Lint(c *Contract) []Warning {
 	ws = lintDesignImpact(c, ws)
 	ws = lintDocsEvaluator(c, ws)
 	ws = lintPipelineSelector(c, ws)
+	ws = lintMonolithPressure(c, ws)
+	ws = lintExtractIntoFileEntries(c, ws)
 	return ws
 }
 
@@ -549,4 +555,86 @@ func pipelineReason(nFiles, nCriteria int, ctx string, writeSet []string) string
 		parts = append(parts, "multiple repos in context")
 	}
 	return strings.Join(parts, ", ")
+}
+
+// decompositionKeywords are the success-criteria phrases that
+// signal a refactor or extraction is in scope. Matching is
+// case-insensitive on the lowercased criterion.
+var decompositionKeywords = []string{
+	"extract", "decompose", "refactor", "split",
+}
+
+// lintMonolithPressure warns when a contract that mentions
+// decomposition in its success criteria carries a file-only write_set
+// and no extract_into. DES-052 introduces extract_into precisely so
+// the worker can break the leader's tight write_set into helper files
+// without a wide-directory grant; the lint nudges the leader toward
+// naming the extraction destination at create time.
+//
+// The check is non-blocking and only fires when all three signals
+// align — a contract with at least one criterion that uses an
+// extraction verb, every write_set entry is file-shaped, and
+// extract_into is empty. Either an explicit extract_into or a
+// directory-shaped write_set entry silences the warning.
+func lintMonolithPressure(c *Contract, ws []Warning) []Warning {
+	if len(c.ExtractInto) > 0 || len(c.WriteSet) == 0 {
+		return ws
+	}
+	for _, p := range c.WriteSet {
+		if strings.HasSuffix(strings.TrimSpace(p), "/") {
+			return ws
+		}
+	}
+	matched := ""
+	for _, sc := range c.SuccessCriteria {
+		low := strings.ToLower(sc)
+		for _, kw := range decompositionKeywords {
+			if strings.Contains(low, kw) {
+				matched = kw
+				break
+			}
+		}
+		if matched != "" {
+			break
+		}
+	}
+	if matched == "" {
+		return ws
+	}
+	return append(ws, Warning{
+		Field:    "extract_into",
+		Message:  "consider declaring extract_into: success criteria mention " + matched + " but no new-file scope is authorized",
+		Severity: SeverityWarn,
+	})
+}
+
+// lintExtractIntoFileEntries warns when an extract_into entry carries
+// a code-file extension. The per-entry validator (rule 17) rejects
+// these outright at Store.Create — the lint surfaces the same problem
+// earlier, at advisory mission lint time, so the leader sees the
+// shape mistake before the create call fails.
+//
+// One warning per offending entry so a contract with multiple
+// file-shaped extract_into entries surfaces every problem at once.
+func lintExtractIntoFileEntries(c *Contract, ws []Warning) []Warning {
+	for _, entry := range c.ExtractInto {
+		trimmed := strings.TrimSpace(entry)
+		normalized := strings.TrimRight(strings.ReplaceAll(trimmed, `\`, "/"), "/")
+		if normalized == "" {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(filepath.Base(normalized)))
+		if ext == "" {
+			continue
+		}
+		if !codeFileExtensions[ext] {
+			continue
+		}
+		ws = append(ws, Warning{
+			Field:    "extract_into",
+			Message:  "extract_into entries should be directories; " + entry + " looks like a file (use write_set)",
+			Severity: SeverityWarn,
+		})
+	}
+	return ws
 }

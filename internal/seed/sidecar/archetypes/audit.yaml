@@ -7,3 +7,4 @@ allow_empty_write_set: true
 required_fields:
   - context
 write_set_constraints: []
+extract_into_constraints: []

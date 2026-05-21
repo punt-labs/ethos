@@ -1429,7 +1429,7 @@ func (s *Store) checkWriteSetConflicts(c *Contract) error {
 			openContracts = append(openContracts, existing)
 		}
 	}
-	conflicts := findWriteSetConflicts(c.WriteSet, openContracts)
+	conflicts := findWriteSetConflicts(c.WriteSet, c.ExtractInto, openContracts)
 	if len(conflicts) == 0 {
 		return nil
 	}

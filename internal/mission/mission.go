@@ -40,8 +40,21 @@ type Contract struct {
 	Worker    string    `yaml:"worker" json:"worker"`
 	Evaluator Evaluator `yaml:"evaluator" json:"evaluator"`
 
-	Inputs          Inputs   `yaml:"inputs" json:"inputs"`
-	WriteSet        []string `yaml:"write_set" json:"write_set"`
+	Inputs   Inputs   `yaml:"inputs" json:"inputs"`
+	WriteSet []string `yaml:"write_set" json:"write_set"`
+	// ExtractInto authorizes new-file creation under listed directories
+	// without authorizing modification of existing files in those
+	// directories. Entries are directories — the per-entry validator
+	// (rule 17) rejects file-shaped entries with code-file extensions.
+	// Empty is the backward-compatible default: contracts that omit the
+	// field behave identically to pre-DES-052 behavior.
+	//
+	// PreToolUse honours ETHOS_VERIFIER_EXTRACT_INTO (set by
+	// SubagentStart) to allow Write/Edit of non-existing paths under
+	// any listed directory; existing path Write/Edit still requires
+	// ETHOS_VERIFIER_ALLOWLIST match. See DES-052 in DESIGN.md for full
+	// rationale and the cross-mission admission control table.
+	ExtractInto     []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`
 	Tools           []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 	SuccessCriteria []string `yaml:"success_criteria" json:"success_criteria"`
 

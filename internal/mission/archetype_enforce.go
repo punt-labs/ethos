@@ -9,17 +9,63 @@ import (
 // enforceArchetypeConstraints checks the contract against its archetype's
 // constraints. Called by Store.Create after Validate passes.
 //
-// Three constraint families:
+// Four constraint families:
 //   - AllowEmptyWriteSet: handled by ValidateWithArchetype (rule 11).
 //   - WriteSetConstraints: every non-directory write_set entry must match
 //     at least one glob pattern.
+//   - ExtractIntoConstraints (DES-052): every extract_into entry must
+//     match at least one glob pattern.
 //   - RequiredFields: named fields must be non-empty.
 func enforceArchetypeConstraints(c *Contract, a *Archetype) error {
 	if err := enforceWriteSetConstraints(c, a); err != nil {
 		return err
 	}
+	if err := enforceExtractIntoConstraints(c, a); err != nil {
+		return err
+	}
 	if err := enforceRequiredFields(c, a); err != nil {
 		return err
+	}
+	return nil
+}
+
+// enforceExtractIntoConstraints checks that every extract_into entry
+// matches at least one of the archetype's glob patterns. Same matching
+// strategy as enforceWriteSetConstraints — the per-entry validator
+// guarantees extract_into entries are directory-shaped, but the glob
+// check is applied uniformly: a constraint like "docs/**" matches any
+// path under docs/ regardless of whether the trailing slash is present
+// on the entry.
+//
+// An archetype with no ExtractIntoConstraints accepts any extract_into
+// entry the contract names (default behavior preserves backward
+// compatibility).
+func enforceExtractIntoConstraints(c *Contract, a *Archetype) error {
+	if len(a.ExtractIntoConstraints) == 0 || len(c.ExtractInto) == 0 {
+		return nil
+	}
+	for _, entry := range c.ExtractInto {
+		// TrimSpace before TrimSuffix so a trailing-space entry like
+		// "docs/ " (whitespace-tolerated by validateWriteSetEntry)
+		// reaches the matcher in the same form as "docs/". Without
+		// the TrimSpace the matcher would see "docs/ " and fail to
+		// match a "docs/**" constraint that the per-entry validator
+		// had already accepted.
+		//
+		// Strip a single trailing slash so the same directory entry
+		// ("docs/" vs "docs") matches the same constraint pattern.
+		// TrimSuffix (not TrimRight) keeps the intent precise — a
+		// pathological "docs///" still carries the doubled slashes
+		// down to the matcher, where they neither help nor harm.
+		normalized := strings.TrimSuffix(strings.TrimSpace(entry), "/")
+		ok, err := matchesAnyConstraint(normalized, a.ExtractIntoConstraints)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("extract_into entry %q does not match any constraint: %v",
+				entry, a.ExtractIntoConstraints)
+		}
 	}
 	return nil
 }

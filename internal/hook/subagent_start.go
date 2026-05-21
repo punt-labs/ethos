@@ -347,6 +347,28 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot stri
 	b.WriteString("Any Write or Edit against a path outside this list is blocked by the\n")
 	b.WriteString("PreToolUse hook. You may read any file in the repo for context.\n")
 
+	// DES-052 extract_into: list directories under which new files
+	// may be created. The audit summary line goes first so a reviewer
+	// scanning the block sees the union directory list at a glance
+	// and cannot misread it as "modify everywhere in these
+	// directories" — only "create new files there".
+	if len(m.ExtractInto) > 0 {
+		b.WriteString("\n### Extract into (new files only)\n\n")
+		fmt.Fprintf(&b,
+			"extract_into authorizes new files under: %s\n\n",
+			strings.Join(m.ExtractInto, ", "))
+		b.WriteString("These directories permit the creation of new files at paths that do\n")
+		b.WriteString("not yet exist on disk. Modification of an existing file under one\n")
+		b.WriteString("of these directories is NOT authorized by this section — that\n")
+		b.WriteString("requires a matching write_set entry above. The PreToolUse hook\n")
+		b.WriteString("enforces both rules: existing-file Write/Edit checks the write_set\n")
+		b.WriteString("allowlist, and new-file Write/Edit (target does not yet exist)\n")
+		b.WriteString("checks the extract_into list.\n\n")
+		for _, dir := range m.ExtractInto {
+			fmt.Fprintf(&b, "  - %s\n", dir)
+		}
+	}
+
 	// Walk the write_set to concrete files on disk so the verifier
 	// sees exactly which files exist, not just the static entries.
 	if repoRoot != "" {
@@ -429,6 +451,13 @@ func verifierAllowlistSplit(m *mission.Contract, store *mission.Store) (repo, ab
 // subagent. The ETHOS_VERIFIER_ALLOWLIST value is a colon-separated
 // list of all allowed paths across all verifier missions. PreToolUse
 // reads this env var and blocks tool calls targeting paths outside it.
+//
+// DES-052: when at least one verifier mission has a non-empty
+// extract_into list, ETHOS_VERIFIER_EXTRACT_INTO is also set to the
+// deduplicated colon-separated union of those entries. PreToolUse
+// reads that var and authorizes Write/Edit to non-existing paths
+// under any listed directory; existing-file Write/Edit still
+// requires the allowlist match.
 func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store) map[string]string {
 	seen := make(map[string]struct{})
 	var entries []string
@@ -444,9 +473,31 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 	if len(entries) == 0 {
 		return nil
 	}
-	return map[string]string{
+	env := map[string]string{
 		"ETHOS_VERIFIER_ALLOWLIST": strings.Join(entries, ":"),
 	}
+
+	eiSeen := make(map[string]struct{})
+	var eiEntries []string
+	for _, vm := range missions {
+		if vm.Contract == nil {
+			continue
+		}
+		for _, dir := range vm.Contract.ExtractInto {
+			if dir == "" {
+				continue
+			}
+			if _, ok := eiSeen[dir]; ok {
+				continue
+			}
+			eiSeen[dir] = struct{}{}
+			eiEntries = append(eiEntries, dir)
+		}
+	}
+	if len(eiEntries) > 0 {
+		env["ETHOS_VERIFIER_EXTRACT_INTO"] = strings.Join(eiEntries, ":")
+	}
+	return env
 }
 
 // checkVerifierHash recomputes the evaluator hash for every open

@@ -648,3 +648,176 @@ func TestLint_MultipleWarnings(t *testing.T) {
 	assert.Contains(t, joined, "README")
 	assert.Contains(t, joined, "placeholder")
 }
+
+// TestLintMonolithPressure pins H11 (DES-052). The heuristic fires
+// when every write_set entry is file-shaped, extract_into is empty,
+// and at least one success criterion mentions an extraction verb. Any
+// of the three signals missing silences the warning.
+func TestLintMonolithPressure(t *testing.T) {
+	tests := []struct {
+		name        string
+		writeSet    []string
+		extractInto []string
+		criteria    []string
+		wantWarn    bool
+	}{
+		{
+			name:     "extract verb without authorization fires",
+			writeSet: []string{"internal/foo/bar.go"},
+			criteria: []string{"extract helpers from bar.go"},
+			wantWarn: true,
+		},
+		{
+			name:     "decompose verb without authorization fires",
+			writeSet: []string{"internal/foo/bar.go"},
+			criteria: []string{"decompose the god object"},
+			wantWarn: true,
+		},
+		{
+			name:     "refactor verb without authorization fires",
+			writeSet: []string{"internal/foo/bar.go"},
+			criteria: []string{"refactor the package layout"},
+			wantWarn: true,
+		},
+		{
+			name:     "split verb without authorization fires",
+			writeSet: []string{"internal/foo/bar.go"},
+			criteria: []string{"split bar.go into smaller files"},
+			wantWarn: true,
+		},
+		{
+			name:        "extract_into populated silences warning",
+			writeSet:    []string{"internal/foo/bar.go"},
+			extractInto: []string{"internal/foo/"},
+			criteria:    []string{"extract helpers from bar.go"},
+			wantWarn:    false,
+		},
+		{
+			name:     "directory in write_set silences warning",
+			writeSet: []string{"internal/foo/bar.go", "internal/foo/"},
+			criteria: []string{"extract helpers from bar.go"},
+			wantWarn: false,
+		},
+		{
+			name:     "no decomposition mention silences warning",
+			writeSet: []string{"internal/foo/bar.go"},
+			criteria: []string{"add JSON output flag"},
+			wantWarn: false,
+		},
+		{
+			name:     "case-insensitive verb match",
+			writeSet: []string{"internal/foo/bar.go"},
+			criteria: []string{"REFACTOR the package"},
+			wantWarn: true,
+		},
+		{
+			name:     "empty write_set does not fire",
+			writeSet: nil,
+			criteria: []string{"extract helpers"},
+			wantWarn: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Contract{
+				WriteSet:        tt.writeSet,
+				ExtractInto:     tt.extractInto,
+				SuccessCriteria: tt.criteria,
+			}
+			ws := lintMonolithPressure(c, nil)
+			if tt.wantWarn {
+				if assert.Len(t, ws, 1) {
+					assert.Equal(t, "extract_into", ws[0].Field)
+					assert.Equal(t, SeverityWarn, ws[0].Severity)
+					assert.Contains(t, ws[0].Message,
+						"consider declaring extract_into")
+				}
+			} else {
+				assert.Empty(t, ws)
+			}
+		})
+	}
+}
+
+// TestLintExtractIntoFileEntries pins H12 (DES-052). One warning per
+// extract_into entry whose basename carries a code-file extension.
+// Validate would reject the contract outright at create time; lint
+// surfaces the same problem earlier and per-entry.
+func TestLintExtractIntoFileEntries(t *testing.T) {
+	tests := []struct {
+		name        string
+		extractInto []string
+		wantCount   int
+		wantPaths   []string
+	}{
+		{
+			name:        "empty extract_into no warning",
+			extractInto: nil,
+			wantCount:   0,
+		},
+		{
+			name:        "directory entry no warning",
+			extractInto: []string{"internal/foo/", "docs/"},
+			wantCount:   0,
+		},
+		{
+			name:        "go file extension warns",
+			extractInto: []string{"internal/foo/bar.go"},
+			wantCount:   1,
+			wantPaths:   []string{"internal/foo/bar.go"},
+		},
+		{
+			name:        "markdown file extension warns",
+			extractInto: []string{"README.md"},
+			wantCount:   1,
+			wantPaths:   []string{"README.md"},
+		},
+		{
+			name: "one warning per offending entry",
+			extractInto: []string{
+				"internal/foo/bar.go",
+				"docs/",
+				"internal/foo/baz.go",
+			},
+			wantCount: 2,
+			wantPaths: []string{
+				"internal/foo/bar.go",
+				"internal/foo/baz.go",
+			},
+		},
+		{
+			name:        "uppercase extension still detected",
+			extractInto: []string{"README.MD"},
+			wantCount:   1,
+		},
+		{
+			name:        "directory with dot in name no warning",
+			extractInto: []string{"data/v1.2/"},
+			wantCount:   0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := &Contract{ExtractInto: tt.extractInto}
+			ws := lintExtractIntoFileEntries(c, nil)
+			assert.Len(t, ws, tt.wantCount)
+			for _, w := range ws {
+				assert.Equal(t, "extract_into", w.Field)
+				assert.Equal(t, SeverityWarn, w.Severity)
+				assert.Contains(t, w.Message,
+					"extract_into entries should be directories")
+			}
+			for _, p := range tt.wantPaths {
+				found := false
+				for _, w := range ws {
+					if strings.Contains(w.Message, p) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found,
+					"expected warning for %q", p)
+			}
+		})
+	}
+}

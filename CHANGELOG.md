@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`extract_into` axis on the mission Contract** (DES-052) — a
+  separate `extract_into: []string` field authorizes new-file
+  creation under listed directories without authorizing
+  modification of existing files in those directories. Per-entry
+  validation rejects file-shaped entries; the PreToolUse hook
+  honours `ETHOS_VERIFIER_EXTRACT_INTO` so verifier spawns may
+  Write/Edit non-existing paths under any listed directory while
+  existing-file Write/Edit still requires a `write_set` match.
+  Cross-mission admission control extends to a closed six-rule
+  form over `{ws-file, ws-dir, ei-dir}`. See DES-052 in DESIGN.md
+  for the full design.
+
 ## [3.10.0] - 2026-05-11
 
 ## [3.9.0] - 2026-04-16

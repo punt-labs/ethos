@@ -7,3 +7,6 @@ allow_empty_write_set: false
 required_fields:
   - context
 write_set_constraints: []
+extract_into_constraints:
+  - "docs/**"
+  - ".tmp/**"
