@@ -4547,11 +4547,19 @@ worker is about to create it.** This is the entire reason the field
 exists. The Write call's target path is what's being created; the
 file does not exist at `os.Stat` time; the `extract_into` check
 authorizes it. After the Write succeeds, subsequent Edit calls on
-the same path find the file existing — and the allowlist rule
-applies. This means **a freshly-extracted file is implicitly
-modifiable by the mission that created it**, which is the correct
-semantics (the worker can iterate on the new file without listing it
-in `write_set` upfront).
+the same path find the file existing — at which point the
+allowlist rule applies and `extract_into` no longer authorizes the
+operation. **Once a file is created under `extract_into`, the
+verifier cannot modify it again unless its path is also listed in
+`write_set`.** This is deliberate: allowing modify-after-create
+would turn `extract_into` into a back-door modify authority for any
+existing file under the directory (the "modify-via-extract_into"
+attack the PreToolUse test explicitly prevents — a verifier could
+simply read+rewrite a file under `extract_into` to bypass
+`write_set` integrity). A worker that needs to iterate on a freshly
+extracted file must either list the new path in `write_set`
+upfront (when the filename is known) or operate idempotently —
+prepare the file content in scratch, then Write once.
 
 **Subtle case — Race between Stat and Write.** If a parallel process
 creates the file between the Stat and the Write, the verifier (or
