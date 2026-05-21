@@ -17,12 +17,19 @@ var ErrArchetypeNotFound = errors.New("archetype not found")
 // Contract.Validate rules. Archetypes are YAML files discovered from
 // the filesystem, not registered in Go code.
 type Archetype struct {
-	Name                string        `yaml:"name" json:"name"`
-	Description         string        `yaml:"description" json:"description"`
-	BudgetDefault       Budget        `yaml:"budget_default" json:"budget_default"`
-	AllowEmptyWriteSet  bool          `yaml:"allow_empty_write_set" json:"allow_empty_write_set"`
-	RequiredFields      []string      `yaml:"required_fields,omitempty" json:"required_fields,omitempty"`
-	WriteSetConstraints []string      `yaml:"write_set_constraints,omitempty" json:"write_set_constraints,omitempty"`
+	Name                string   `yaml:"name" json:"name"`
+	Description         string   `yaml:"description" json:"description"`
+	BudgetDefault       Budget   `yaml:"budget_default" json:"budget_default"`
+	AllowEmptyWriteSet  bool     `yaml:"allow_empty_write_set" json:"allow_empty_write_set"`
+	RequiredFields      []string `yaml:"required_fields,omitempty" json:"required_fields,omitempty"`
+	WriteSetConstraints []string `yaml:"write_set_constraints,omitempty" json:"write_set_constraints,omitempty"`
+	// ExtractIntoConstraints parallels WriteSetConstraints for the
+	// extract_into axis (DES-052). Same glob-style enforcement: every
+	// extract_into entry must match at least one pattern, or the
+	// archetype check rejects the contract. Empty is the
+	// backward-compatible default — archetypes that omit the field
+	// authorize any extract_into directory the leader names.
+	ExtractIntoConstraints []string `yaml:"extract_into_constraints,omitempty" json:"extract_into_constraints,omitempty"`
 }
 
 // ArchetypeStore discovers archetype YAML files from two directories
