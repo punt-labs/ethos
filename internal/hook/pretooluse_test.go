@@ -320,6 +320,149 @@ func TestHandlePreToolUse_EmptyInput(t *testing.T) {
 	assert.Equal(t, "allow", r.Decision)
 }
 
+// TestHandlePreToolUse_ExtractInto covers the DES-052 stat-then-allow
+// branch. Four cases pin the contract:
+//
+//  1. ETHOS_VERIFIER_ALLOWLIST unset -> allow (passthrough).
+//  2. Existing file under write_set -> allow via the allowlist match;
+//     extract_into is not consulted.
+//  3. Non-existing file under an extract_into directory -> allow via
+//     the stat-then-allow branch.
+//  4. Existing file under extract_into but NOT under write_set ->
+//     block. This is the modify-via-extract_into attack the field is
+//     designed to prevent.
+func TestHandlePreToolUse_ExtractInto(t *testing.T) {
+	dir := t.TempDir()
+	existing := dir + "/existing.go"
+	require.NoError(t, os.WriteFile(existing, []byte("package x"), 0o600))
+	missing := dir + "/missing.go"
+
+	t.Run("env unset -> allow", func(t *testing.T) {
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+		t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", "")
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": missing},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "allow", r.Decision)
+	})
+
+	t.Run("existing file under write_set -> allow", func(t *testing.T) {
+		// write_set allowlist contains the existing file; extract_into is
+		// not even consulted because the allowlist match short-circuits.
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", existing)
+		t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", dir+"/other-dir")
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": existing},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "allow", r.Decision)
+	})
+
+	t.Run("non-existing file under extract_into -> allow", func(t *testing.T) {
+		// write_set allowlist names a different file so the allowlist
+		// check fails and the stat-then-allow branch fires.
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", dir+"/declared.go")
+		t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", dir)
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": missing},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "allow", r.Decision)
+	})
+
+	t.Run("existing file under extract_into but not write_set -> block", func(t *testing.T) {
+		// The modify-via-extract_into attack: extract_into authorizes
+		// creation under dir, but the file already exists. PreToolUse
+		// must block — modification requires a write_set match.
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", dir+"/declared.go")
+		t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", dir)
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": existing},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "block", r.Decision,
+			"existing file under extract_into must require write_set match")
+		assert.Contains(t, r.Reason, "outside the verifier file allowlist")
+	})
+
+	t.Run("Edit existing under extract_into -> block", func(t *testing.T) {
+		// Edit is treated symmetrically with Write for the
+		// stat-then-allow branch.
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", dir+"/declared.go")
+		t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", dir)
+		payload := map[string]any{
+			"tool_name":  "Edit",
+			"tool_input": map[string]any{"file_path": existing},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "block", r.Decision)
+	})
+
+	t.Run("missing file outside extract_into -> block", func(t *testing.T) {
+		// New file outside every extract_into entry must still block.
+		other := t.TempDir() + "/elsewhere.go"
+		t.Setenv("ETHOS_VERIFIER_ALLOWLIST", dir+"/declared.go")
+		t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", dir)
+		payload := map[string]any{
+			"tool_name":  "Write",
+			"tool_input": map[string]any{"file_path": other},
+		}
+		data, err := json.Marshal(payload)
+		require.NoError(t, err)
+		var out bytes.Buffer
+		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+		var r PreToolUseResult
+		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+		assert.Equal(t, "block", r.Decision)
+	})
+}
+
+// TestTargetExists pins the os.Stat wrapper. The conservative branch
+// — any non-IsNotExist error treats the path as existing — keeps the
+// PreToolUse hook from authorizing a write under an ambiguous stat
+// result (the hook falls through to block).
+func TestTargetExists(t *testing.T) {
+	dir := t.TempDir()
+	file := dir + "/present.go"
+	require.NoError(t, os.WriteFile(file, []byte("x"), 0o600))
+
+	assert.True(t, targetExists(file), "existing file must report as existing")
+	assert.False(t, targetExists(dir+"/missing.go"),
+		"missing file under existing dir must report as not existing")
+	assert.True(t, targetExists(dir),
+		"existing directory must report as existing")
+}
+
 // Confirm that os.Getenv is the actual mechanism (not a mock).
 func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	key := "ETHOS_VERIFIER_ALLOWLIST"

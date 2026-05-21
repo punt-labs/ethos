@@ -1251,3 +1251,140 @@ func TestSubagentStart_NonVerifierOmitsAllowlistEnv(t *testing.T) {
 	assert.Nil(t, result.Env,
 		"non-verifier spawn must not set env vars")
 }
+
+// TestBuildVerifierAllowlistEnv_ExtractInto pins the DES-052 env
+// propagation: a verifier mission whose contract carries extract_into
+// produces a colon-separated ETHOS_VERIFIER_EXTRACT_INTO entry
+// alongside the allowlist. Missions without extract_into produce no
+// EXTRACT_INTO key — empty is the backward-compatible default.
+func TestBuildVerifierAllowlistEnv_ExtractInto(t *testing.T) {
+	store := mission.NewStore(t.TempDir())
+
+	t.Run("emits ETHOS_VERIFIER_EXTRACT_INTO when set", func(t *testing.T) {
+		c := &mission.Contract{
+			MissionID:   "m-2026-05-21-200",
+			WriteSet:    []string{"internal/foo/bar.go"},
+			ExtractInto: []string{"internal/foo/", "docs/"},
+		}
+		env := buildVerifierAllowlistEnv(
+			[]verifierMission{{Contract: c}}, store)
+		require.NotNil(t, env)
+		assert.Equal(t, "internal/foo/:docs/",
+			env["ETHOS_VERIFIER_EXTRACT_INTO"])
+	})
+
+	t.Run("omits ETHOS_VERIFIER_EXTRACT_INTO when empty", func(t *testing.T) {
+		c := &mission.Contract{
+			MissionID: "m-2026-05-21-201",
+			WriteSet:  []string{"internal/foo/bar.go"},
+		}
+		env := buildVerifierAllowlistEnv(
+			[]verifierMission{{Contract: c}}, store)
+		require.NotNil(t, env)
+		_, ok := env["ETHOS_VERIFIER_EXTRACT_INTO"]
+		assert.False(t, ok,
+			"empty extract_into must not populate the env var")
+		_, ok = env["ETHOS_VERIFIER_ALLOWLIST"]
+		assert.True(t, ok,
+			"allowlist must still be present")
+	})
+
+	t.Run("deduplicates across missions", func(t *testing.T) {
+		a := &mission.Contract{
+			MissionID:   "m-2026-05-21-202",
+			WriteSet:    []string{"internal/foo/bar.go"},
+			ExtractInto: []string{"internal/foo/"},
+		}
+		b := &mission.Contract{
+			MissionID:   "m-2026-05-21-203",
+			WriteSet:    []string{"docs/architecture.md"},
+			ExtractInto: []string{"internal/foo/", "docs/"},
+		}
+		env := buildVerifierAllowlistEnv(
+			[]verifierMission{{Contract: a}, {Contract: b}}, store)
+		require.NotNil(t, env)
+		assert.Equal(t, "internal/foo/:docs/",
+			env["ETHOS_VERIFIER_EXTRACT_INTO"],
+			"duplicate entry must appear once")
+	})
+}
+
+// TestSubagentStart_VerifierEmitsExtractIntoEnv exercises the
+// end-to-end path: a verifier mission with extract_into in its
+// contract produces ETHOS_VERIFIER_EXTRACT_INTO in the spawn result.
+func TestSubagentStart_VerifierEmitsExtractIntoEnv(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	c.WriteSet = []string{"internal/foo/bar.go"}
+	c.ExtractInto = []string{"internal/foo/", "docs/"}
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+
+	require.NotNil(t, result.Env)
+	ei, ok := result.Env["ETHOS_VERIFIER_EXTRACT_INTO"]
+	require.True(t, ok, "extract_into env var must be set")
+	assert.Contains(t, ei, "internal/foo/")
+	assert.Contains(t, ei, "docs/")
+}
+
+// TestSubagentStart_VerifierIsolationBlockExtractInto_Rendered pins the
+// renderer side of DES-052: when extract_into is non-empty, the
+// verifier isolation block contains the audit summary line and the
+// per-directory bullet list.
+func TestSubagentStart_VerifierIsolationBlockExtractInto_Rendered(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	c.WriteSet = []string{"internal/foo/bar.go"}
+	c.ExtractInto = []string{"internal/foo/", "docs/"}
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	out, err := runHookForVerifier(
+		t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+
+	assert.Contains(t, ctx,
+		"extract_into authorizes new files under: internal/foo/, docs/",
+		"isolation block must carry the audit summary line")
+	assert.Contains(t, ctx, "### Extract into (new files only)",
+		"isolation block must label the extract_into section")
+	assert.Contains(t, ctx, "  - internal/foo/")
+	assert.Contains(t, ctx, "  - docs/")
+}
+
+// TestSubagentStart_VerifierIsolationBlockExtractInto_Empty pins the
+// backward-compatible branch: a mission with an empty extract_into
+// produces no audit summary and no section header. Existing missions
+// render identically to pre-DES-052.
+func TestSubagentStart_VerifierIsolationBlockExtractInto_Empty(t *testing.T) {
+	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	c.WriteSet = []string{"internal/foo/bar.go"}
+	c.ExtractInto = nil
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	out, err := runHookForVerifier(
+		t, idStore, sessions, missions, hash, "djb")
+	require.NoError(t, err)
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+
+	assert.NotContains(t, ctx, "extract_into authorizes new files under:",
+		"empty extract_into must omit the audit summary")
+	assert.NotContains(t, ctx, "### Extract into (new files only)",
+		"empty extract_into must omit the section header")
+}
