@@ -4804,17 +4804,6 @@ change it.
   beats prose intent. `extract_into` extends that audit-trail
   principle to the create-axis; template prose abandons it.
 
-### Migration
-
-- Existing contracts have no `extract_into` → behavior identical to
-  today.
-- Existing missions in flight at upgrade time: still no
-  `extract_into` set; PreToolUse falls through to the existing
-  allowlist check; no behavior change.
-- Existing archetypes: gain `extract_into_constraints` with
-  documented defaults. Operator-customized archetypes that don't
-  set the field default to unconstrained (empty list).
-
 ### What DES-052 deliberately does NOT do
 
 - **Authorize cross-package extraction without leader consent.**
