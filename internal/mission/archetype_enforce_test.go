@@ -208,6 +208,17 @@ func TestEnforceExtractIntoConstraints(t *testing.T) {
 			constraints: []string{"docs/**", ".tmp/**"},
 		},
 		{
+			// TrimSuffix strips only one trailing slash. The doubled
+			// trailing slashes survive normalization; the matcher's
+			// dir/** branch sees "docs//" — still inside the docs/
+			// subtree under HasPrefix(entry, prefix+"/"). Locks the
+			// behavior so a future refactor cannot silently change
+			// the trim semantics.
+			name:        "multiple trailing slashes still matches dir/**",
+			extractInto: []string{"docs///"},
+			constraints: []string{"docs/**"},
+		},
+		{
 			name:        "dir does not match",
 			extractInto: []string{"internal/foo/"},
 			constraints: []string{"docs/**", ".tmp/**"},
