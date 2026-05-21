@@ -437,14 +437,15 @@ Examples:
 // --- mission dispatch ---
 
 var (
-	dispatchWorker    string
-	dispatchEvaluator string
-	dispatchWriteSet  string
-	dispatchCriteria  string
-	dispatchContext   string
-	dispatchTicket    string
-	dispatchType      string
-	dispatchBudget    int
+	dispatchWorker      string
+	dispatchEvaluator   string
+	dispatchWriteSet    string
+	dispatchExtractInto string
+	dispatchCriteria    string
+	dispatchContext     string
+	dispatchTicket      string
+	dispatchType        string
+	dispatchBudget      int
 )
 
 var missionDispatchCmd = &cobra.Command{
@@ -457,8 +458,14 @@ The leader is auto-detected from the repo's ethos config; falls back
 to "claude" when not in a repo or when no agent is configured.
 
 Required: --worker, --evaluator, --write-set, --criteria.
-Optional: --context, --ticket, --type (default "implement"),
---budget (default 2).
+Optional: --extract-into, --context, --ticket,
+--type (default "implement"), --budget (default 2).
+
+--write-set authorizes modification of existing files at the listed
+paths (and creation of files within listed directories). --extract-into
+authorizes only the creation of new files under listed directories — it
+never grants modify rights on existing files. See DES-052 in DESIGN.md
+for the asymmetric semantics.
 
 Uses the same creation path as "ethos mission create --file", including
 the write-set overlap check, evaluator pinning, and archetype
@@ -564,7 +571,8 @@ func init() {
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchEvaluator, "evaluator", "", "Evaluator handle (required)")
-	missionDispatchCmd.Flags().StringVar(&dispatchWriteSet, "write-set", "", "Comma-separated file/dir paths (required)")
+	missionDispatchCmd.Flags().StringVar(&dispatchWriteSet, "write-set", "", "Comma-separated file/dir paths authorized for modify and create (required)")
+	missionDispatchCmd.Flags().StringVar(&dispatchExtractInto, "extract-into", "", "Comma-separated directories authorized for new-file creation only (DES-052)")
 	missionDispatchCmd.Flags().StringVar(&dispatchCriteria, "criteria", "", "Comma-separated success criteria (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchContext, "context", "", "Free-text context")
 	missionDispatchCmd.Flags().StringVar(&dispatchTicket, "ticket", "", "Ticket/bead ID")
@@ -1301,6 +1309,7 @@ func runMissionDispatch() error {
 		Worker:          dispatchWorker,
 		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
 		WriteSet:        splitCSV(dispatchWriteSet),
+		ExtractInto:     splitCSV(dispatchExtractInto),
 		SuccessCriteria: splitCSV(dispatchCriteria),
 		Context:         dispatchContext,
 		Type:            dispatchType,
