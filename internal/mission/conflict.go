@@ -23,36 +23,60 @@ type Conflict struct {
 	Paths     []string // Overlapping entries from the new contract's write_set
 }
 
-// findWriteSetConflicts compares newWriteSet against the write_set of
-// each contract in existing. Returns one Conflict per existing
-// contract that has at least one overlapping path. The caller is
-// responsible for filtering existing to open missions only — this
-// helper does no status filtering.
+// findWriteSetConflicts compares the new contract's write_set and
+// extract_into against the write_set and extract_into of each contract
+// in existing. Returns one Conflict per existing contract that has at
+// least one overlapping path. The caller is responsible for filtering
+// existing to open missions only — this helper does no status filtering.
 //
 // Returned conflicts are sorted by MissionID for deterministic output;
-// each Conflict's Paths slice is sorted and deduplicated. An empty
-// newWriteSet or empty existing slice returns nil.
+// each Conflict's Paths slice is sorted and deduplicated. An empty new
+// write_set AND empty new extract_into, or empty existing slice,
+// returns nil.
 //
-// See pathsOverlap for the segment-prefix overlap rule.
-func findWriteSetConflicts(newWriteSet []string, existing []*Contract) []Conflict {
-	if len(newWriteSet) == 0 || len(existing) == 0 {
+// The relation is the closed six-rule form over the entry-kind
+// taxonomy {ws-file, ws-dir, ei-dir} per DES-052:
+//
+//	ws-file × ws-file  -> conflict iff pathsOverlap
+//	ws-file × ws-dir   -> conflict iff dir is prefix of file
+//	ws-dir  × ws-dir   -> conflict iff pathsOverlap
+//	ws-file × ei-dir   -> conflict iff dir is prefix of file
+//	ws-dir  × ei-dir   -> conflict iff pathsOverlap
+//	ei-dir  × ei-dir   -> never
+//
+// The relation is symmetric over the unordered mission pair. The
+// reported Paths list names the NEW-side entries that hit at least
+// one existing-side entry; the leader sees what they wrote, not what
+// the other mission wrote.
+func findWriteSetConflicts(newWriteSet, newExtractInto []string, existing []*Contract) []Conflict {
+	if len(newWriteSet) == 0 && len(newExtractInto) == 0 {
+		return nil
+	}
+	if len(existing) == 0 {
 		return nil
 	}
 
 	var conflicts []Conflict
 	for _, ec := range existing {
-		if ec == nil || len(ec.WriteSet) == 0 {
+		if ec == nil {
+			continue
+		}
+		if len(ec.WriteSet) == 0 && len(ec.ExtractInto) == 0 {
 			continue
 		}
 		// Collect overlapping new-side entries into a set so a
-		// duplicate entry in the new write_set is reported once.
+		// duplicate entry in the new contract is reported once. The
+		// new side mixes write_set and extract_into entries because
+		// either kind can hit either kind on the existing side.
 		seen := make(map[string]struct{})
 		for _, np := range newWriteSet {
-			for _, ep := range ec.WriteSet {
-				if pathsOverlap(np, ep) {
-					seen[np] = struct{}{}
-					break
-				}
+			if anyEntryConflicts(np, false, ec) {
+				seen[np] = struct{}{}
+			}
+		}
+		for _, np := range newExtractInto {
+			if anyEntryConflicts(np, true, ec) {
+				seen[np] = struct{}{}
 			}
 		}
 		if len(seen) == 0 {
@@ -74,6 +98,71 @@ func findWriteSetConflicts(newWriteSet []string, existing []*Contract) []Conflic
 		return conflicts[i].MissionID < conflicts[j].MissionID
 	})
 	return conflicts
+}
+
+// anyEntryConflicts reports whether newEntry (from the new contract)
+// conflicts with any entry of ec under the six-rule form. newIsEI
+// flags whether newEntry comes from extract_into (ei-dir) or
+// write_set (ws-file or ws-dir, distinguished by isDirEntry).
+func anyEntryConflicts(newEntry string, newIsEI bool, ec *Contract) bool {
+	newDir := newIsEI || isDirEntry(newEntry)
+	for _, ep := range ec.WriteSet {
+		if entryPairConflicts(newEntry, newDir, newIsEI, ep, isDirEntry(ep), false) {
+			return true
+		}
+	}
+	for _, ep := range ec.ExtractInto {
+		// extract_into entries are directory-shaped by per-entry
+		// validation (rule 17), so pass true for both isDir and isEI.
+		if entryPairConflicts(newEntry, newDir, newIsEI, ep, true, true) {
+			return true
+		}
+	}
+	return false
+}
+
+// entryPairConflicts answers the six-rule question for one new-side
+// entry against one existing-side entry. The (isDir, isEI) tuple
+// fully encodes the entry kind for the dispatch:
+//
+//	(false, false) = ws-file
+//	(true,  false) = ws-dir
+//	(true,  true)  = ei-dir
+//
+// The (false, true) combination is unreachable — extract_into entries
+// are always directory-shaped — but the function guards it so a
+// future schema change cannot silently misclassify.
+func entryPairConflicts(a string, aIsDir, aIsEI bool, b string, bIsDir, bIsEI bool) bool {
+	// Per DES-052, ei-dir × ei-dir never conflicts. Two missions may
+	// extract into the same directory or one into a subdir of the
+	// other; same-filename collisions are the leader's responsibility,
+	// not admission control's.
+	if aIsEI && bIsEI {
+		return false
+	}
+	// ws-file × ws-dir or ws-file × ei-dir: conflict iff the directory
+	// is a prefix of the file. pathContainedBy(file, dir) answers
+	// exactly that. Apply in whichever direction the file/dir lands.
+	switch {
+	case !aIsDir && bIsDir:
+		return pathContainedBy(a, b)
+	case aIsDir && !bIsDir:
+		return pathContainedBy(b, a)
+	default:
+		// Both directories (ws-dir × ws-dir, ws-dir × ei-dir) or both
+		// files (ws-file × ws-file): the segment-prefix overlap rule
+		// covers every remaining row.
+		return pathsOverlap(a, b)
+	}
+}
+
+// isDirEntry reports whether a write_set entry is directory-shaped
+// for the conflict check. The conflict check treats any entry ending
+// in a slash as a directory marker; everything else is treated as a
+// file claim. This matches the existing trailing-slash heuristic that
+// archetype_enforce.go uses for the same dispatch.
+func isDirEntry(entry string) bool {
+	return strings.HasSuffix(strings.TrimSpace(entry), "/")
 }
 
 // pathsOverlap reports whether two write_set entries describe

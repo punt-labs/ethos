@@ -544,8 +544,283 @@ func TestFindWriteSetConflicts(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findWriteSetConflicts(tt.newSet, tt.existing)
+			got := findWriteSetConflicts(tt.newSet, nil, tt.existing)
 			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestEntryPairConflicts is the row-by-row exercise of the six-rule
+// table in DES-052. Each row pins one cell of the {ws-file, ws-dir,
+// ei-dir} × {ws-file, ws-dir, ei-dir} matrix so a regression in any
+// branch surfaces as a single named test.
+//
+// The kinds are encoded as (isDir, isEI):
+//
+//	(false, false) = ws-file
+//	(true,  false) = ws-dir
+//	(true,  true)  = ei-dir
+func TestEntryPairConflicts(t *testing.T) {
+	type kind struct {
+		path  string
+		isDir bool
+		isEI  bool
+	}
+	tests := []struct {
+		name string
+		a, b kind
+		want bool
+	}{
+		// Row 1: ws-file × ws-file
+		{
+			name: "ws-file x ws-file exact match",
+			a:    kind{path: "internal/foo/bar.go"},
+			b:    kind{path: "internal/foo/bar.go"},
+			want: true,
+		},
+		{
+			name: "ws-file x ws-file disjoint",
+			a:    kind{path: "internal/foo/bar.go"},
+			b:    kind{path: "cmd/ethos/main.go"},
+			want: false,
+		},
+		// Row 2: ws-file × ws-dir
+		{
+			name: "ws-file x ws-dir prefix matches",
+			a:    kind{path: "internal/foo/bar.go"},
+			b:    kind{path: "internal/foo/", isDir: true},
+			want: true,
+		},
+		{
+			name: "ws-file x ws-dir file outside dir",
+			a:    kind{path: "cmd/ethos/main.go"},
+			b:    kind{path: "internal/foo/", isDir: true},
+			want: false,
+		},
+		{
+			name: "ws-file x ws-dir parent of file (H1 exploit)",
+			// DES-032 still triggers here because pathsOverlap goes
+			// both ways for ws-dir × anything when the directions agree
+			// on a directory entry. The dir is "cmd"; the file is
+			// "cmd/foo/bar.go" — dir is a prefix of file.
+			a: kind{path: "cmd/foo/bar.go"},
+			b: kind{path: "cmd", isDir: true},
+			want: true,
+		},
+		// Row 3: ws-dir × ws-dir
+		{
+			name: "ws-dir x ws-dir nested",
+			a:    kind{path: "internal/foo/", isDir: true},
+			b:    kind{path: "internal/foo/bar/", isDir: true},
+			want: true,
+		},
+		{
+			name: "ws-dir x ws-dir disjoint",
+			a:    kind{path: "internal/foo/", isDir: true},
+			b:    kind{path: "internal/bar/", isDir: true},
+			want: false,
+		},
+		// Row 4: ws-file × ei-dir — the new constraint
+		{
+			name: "ws-file x ei-dir dir is prefix of file",
+			a:    kind{path: "internal/foo/bar.go"},
+			b:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			want: true,
+		},
+		{
+			name: "ws-file x ei-dir file outside dir",
+			a:    kind{path: "cmd/ethos/main.go"},
+			b:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			want: false,
+		},
+		{
+			name: "ws-file x ei-dir file with sibling-prefix-substring no overlap",
+			a:    kind{path: "internal/foobar/baz.go"},
+			b:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			want: false,
+		},
+		// Row 5: ws-dir × ei-dir
+		{
+			name: "ws-dir x ei-dir overlap",
+			a:    kind{path: "internal/foo/", isDir: true},
+			b:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			want: true,
+		},
+		{
+			name: "ws-dir x ei-dir ei is subdir of ws",
+			a:    kind{path: "internal/", isDir: true},
+			b:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			want: true,
+		},
+		{
+			name: "ws-dir x ei-dir disjoint",
+			a:    kind{path: "internal/foo/", isDir: true},
+			b:    kind{path: "internal/bar/", isDir: true, isEI: true},
+			want: false,
+		},
+		// Row 6: ei-dir × ei-dir — never
+		{
+			name: "ei-dir x ei-dir exact same dir never conflicts",
+			a:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			b:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			want: false,
+		},
+		{
+			name: "ei-dir x ei-dir nested never conflicts",
+			a:    kind{path: "internal/", isDir: true, isEI: true},
+			b:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			want: false,
+		},
+		{
+			name: "ei-dir x ei-dir disjoint never conflicts",
+			a:    kind{path: "internal/foo/", isDir: true, isEI: true},
+			b:    kind{path: "internal/bar/", isDir: true, isEI: true},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ab := entryPairConflicts(tt.a.path, tt.a.isDir, tt.a.isEI,
+				tt.b.path, tt.b.isDir, tt.b.isEI)
+			ba := entryPairConflicts(tt.b.path, tt.b.isDir, tt.b.isEI,
+				tt.a.path, tt.a.isDir, tt.a.isEI)
+			assert.Equal(t, tt.want, ab,
+				"forward direction: %#v vs %#v", tt.a, tt.b)
+			assert.Equal(t, tt.want, ba,
+				"symmetry violated: forward=%v reverse=%v for %#v vs %#v",
+				ab, ba, tt.a, tt.b)
+		})
+	}
+}
+
+// TestFindWriteSetConflicts_ExtractInto covers the cross-mission race
+// scenarios the new ei-dir axis introduces. The critical row is the
+// ws-file × ei-dir race in DES-052: A declares write_set:
+// internal/foo/bar.go, B declares extract_into: internal/foo/ —
+// without rejection, B can create bar.go before A writes it and one
+// body is lost at git merge.
+func TestFindWriteSetConflicts_ExtractInto(t *testing.T) {
+	makeFull := func(id, worker string, writeSet, extractInto []string) *Contract {
+		return &Contract{
+			MissionID:   id,
+			Worker:      worker,
+			WriteSet:    writeSet,
+			ExtractInto: extractInto,
+		}
+	}
+
+	tests := []struct {
+		name        string
+		newSet      []string
+		newExtract  []string
+		existing    []*Contract
+		wantPaths   []string
+		wantBlocker string
+	}{
+		{
+			name:   "ws-file new vs ei-dir existing rejects same-path race",
+			newSet: []string{"internal/foo/bar.go"},
+			existing: []*Contract{
+				makeFull("m-2026-05-21-100", "rmh", nil, []string{"internal/foo/"}),
+			},
+			wantPaths:   []string{"internal/foo/bar.go"},
+			wantBlocker: "m-2026-05-21-100",
+		},
+		{
+			name:       "ei-dir new vs ws-file existing rejects same-path race",
+			newExtract: []string{"internal/foo/"},
+			existing: []*Contract{
+				makeFull("m-2026-05-21-101", "rmh",
+					[]string{"internal/foo/bar.go"}, nil),
+			},
+			wantPaths:   []string{"internal/foo/"},
+			wantBlocker: "m-2026-05-21-101",
+		},
+		{
+			name:       "two missions extracting into same dir never conflict",
+			newExtract: []string{"internal/foo/"},
+			existing: []*Contract{
+				makeFull("m-2026-05-21-102", "rmh", nil, []string{"internal/foo/"}),
+			},
+			wantPaths: nil,
+		},
+		{
+			name:       "two missions extracting into nested dirs never conflict",
+			newExtract: []string{"internal/foo/bar/"},
+			existing: []*Contract{
+				makeFull("m-2026-05-21-103", "rmh", nil, []string{"internal/foo/"}),
+			},
+			wantPaths: nil,
+		},
+		{
+			name:       "ei-dir new vs ws-dir existing conflicts on overlap",
+			newExtract: []string{"internal/foo/"},
+			existing: []*Contract{
+				makeFull("m-2026-05-21-104", "rmh", []string{"internal/foo/"}, nil),
+			},
+			wantPaths:   []string{"internal/foo/"},
+			wantBlocker: "m-2026-05-21-104",
+		},
+		{
+			name:       "ei-dir new vs disjoint ws-file existing does not conflict",
+			newExtract: []string{"internal/foo/"},
+			existing: []*Contract{
+				makeFull("m-2026-05-21-105", "rmh",
+					[]string{"cmd/ethos/main.go"}, nil),
+			},
+			wantPaths: nil,
+		},
+		{
+			name:   "mixed new write_set and extract_into report both hit entries",
+			newSet: []string{"internal/foo/bar.go"},
+			newExtract: []string{
+				"docs/",
+			},
+			existing: []*Contract{
+				makeFull("m-2026-05-21-106", "rmh",
+					[]string{"internal/foo/"}, []string{"docs/"}),
+			},
+			// docs/ matches the existing ei-dir (ei x ei -> never), so
+			// only the ws-file entry hits via the existing ws-dir.
+			wantPaths:   []string{"internal/foo/bar.go"},
+			wantBlocker: "m-2026-05-21-106",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findWriteSetConflicts(tt.newSet, tt.newExtract, tt.existing)
+			if tt.wantPaths == nil {
+				assert.Empty(t, got, "expected no conflicts")
+				return
+			}
+			if assert.Len(t, got, 1, "expected one conflict") {
+				assert.Equal(t, tt.wantBlocker, got[0].MissionID)
+				assert.Equal(t, tt.wantPaths, got[0].Paths)
+			}
+		})
+	}
+}
+
+// TestIsDirEntry locks the trailing-slash heuristic findWriteSetConflicts
+// uses to dispatch ws-file vs ws-dir on the new side. Whitespace is
+// trimmed first so an operator-written " internal/ " classifies as a
+// directory the same as "internal/".
+func TestIsDirEntry(t *testing.T) {
+	tests := []struct {
+		entry string
+		want  bool
+	}{
+		{entry: "internal/foo/", want: true},
+		{entry: "internal/foo", want: false},
+		{entry: "  internal/foo/  ", want: true},
+		{entry: "foo.go", want: false},
+		{entry: "docs/architecture.md", want: false},
+		{entry: "docs/", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.entry, func(t *testing.T) {
+			assert.Equal(t, tt.want, isDirEntry(tt.entry))
 		})
 	}
 }
