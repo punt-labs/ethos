@@ -27,6 +27,51 @@ func TestHandlePreToolUse_NoAllowlist(t *testing.T) {
 	assert.Empty(t, result.Reason)
 }
 
+// TestHandlePreToolUse_NoAllowlistWithExtractInto pins the worker
+// passthrough invariant: ETHOS_VERIFIER_ALLOWLIST gates the hook
+// firing at all, so a worker spawn that somehow has
+// ETHOS_VERIFIER_EXTRACT_INTO set in its environment (a mis-set
+// inherited variable, a test leak) must still pass every tool call
+// through. Workers are unconstrained by design — only verifier
+// spawns set the allowlist.
+func TestHandlePreToolUse_NoAllowlistWithExtractInto(t *testing.T) {
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", "internal/foo/:docs/")
+
+	tests := []struct {
+		name    string
+		tool    string
+		path    string
+	}{
+		{"Write outside any directory", "Write", "/etc/passwd"},
+		{"Edit outside any directory", "Edit", "/tmp/anywhere.go"},
+		{"Write inside an extract_into dir", "Write", "internal/foo/new.go"},
+		{"Read anywhere", "Read", "/anywhere"},
+		{"Bash anywhere", "Bash", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toolInput := map[string]any{}
+			if tt.path != "" {
+				toolInput["file_path"] = tt.path
+			}
+			payload := map[string]any{
+				"tool_name":  tt.tool,
+				"tool_input": toolInput,
+			}
+			data, err := json.Marshal(payload)
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+			var r PreToolUseResult
+			require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+			assert.Equal(t, "allow", r.Decision,
+				"worker spawn (no ALLOWLIST) must pass through regardless of EXTRACT_INTO")
+		})
+	}
+}
+
 func TestHandlePreToolUse_AllowAndBlock(t *testing.T) {
 	allowlist := "internal/hook/pretooluse.go:internal/hook/pretooluse_test.go:cmd/ethos/hook.go:/home/user/.punt-labs/ethos/missions/m-001.yaml"
 
