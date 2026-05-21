@@ -475,14 +475,15 @@ Optional: `--extract-into`, `--context`, `--ticket`, `--type`
 the repo's configured `agent:` value; if unset or outside a repo,
 falls back to `"claude"`.
 
-**Asymmetric semantics (DES-052).** `write_set` authorizes
-modification of existing files at the listed paths; `extract_into`
-authorizes only the creation of new files under listed directories.
-A new file at path P is permitted when an `extract_into` directory is
-a prefix of P **or** P is in `write_set`; modifying an existing file
-always requires a `write_set` match — `extract_into` never grants
-modify rights. Entries in `extract_into` are directory-shaped: a
-file-shaped entry (anything with a code-file extension) is rejected
+**Asymmetric semantics (DES-052).** `write_set` authorizes both
+modification of existing files and creation of new files at or under
+its listed paths; `extract_into` authorizes only the creation of new
+files under listed directories. A new file at path P is permitted
+when an `extract_into` directory is a prefix of P **or** P is
+covered by `write_set`; modifying an existing file always requires a
+`write_set` match — `extract_into` never grants modify rights, even
+for files it created. Entries in `extract_into` are directory-shaped:
+a file-shaped entry (anything with a code-file extension) is rejected
 by rule 17 at validate time. See DES-052 in DESIGN.md for the full
 design, including the closed six-rule cross-mission admission table.
 
