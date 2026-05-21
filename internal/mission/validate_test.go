@@ -287,6 +287,13 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 		{name: "windows drive letter with forward slash", path: "E:/foo", wantErrMatch: "drive letter"},
 		{name: "UNC path backslash", path: `\\server\share\file`, wantErrMatch: "relative path"},
 		{name: "UNC path forward slash", path: "//server/share/file", wantErrMatch: "relative path"},
+		// Colon rejection: SubagentStart joins write_set entries with
+		// `:` into ETHOS_VERIFIER_ALLOWLIST. A contract entry with an
+		// embedded colon would smuggle a second allowlist entry past
+		// admission control. Reject at the trust boundary.
+		{name: "rejects embedded colon", path: "foo:/etc/passwd", wantErrMatch: "contains colon"},
+		{name: "rejects mid-path colon", path: "internal/foo:bar.go", wantErrMatch: "contains colon"},
+		{name: "rejects trailing colon", path: "internal/foo:", wantErrMatch: "contains colon"},
 		// Root-claim rejection: a write_set entry that normalizes to
 		// "the project root" (only `.` segments and slashes) would
 		// silently bypass the conflict check because pathsOverlap
@@ -552,6 +559,8 @@ func TestValidate_ExtractInto_PerEntryRules(t *testing.T) {
 		{name: "BOM prefix", path: "\uFEFFinternal/foo/", wantErrMatch: "zero-width"},
 		{name: "lone dot", path: ".", wantErrMatch: "claims the project root"},
 		{name: "dot slash", path: "./", wantErrMatch: "claims the project root"},
+		{name: "embedded colon", path: "foo:/etc", wantErrMatch: "contains colon"},
+		{name: "mid-path colon", path: "internal/foo:bar/", wantErrMatch: "contains colon"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

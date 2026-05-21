@@ -370,6 +370,25 @@ func validateWriteSetEntry(entry string) error {
 		return fmt.Errorf("%q contains null byte", trimmed)
 	}
 
+	// Reject Windows drive-letter prefixes (`C:\foo`, `D:/bar`)
+	// before the general colon check so the diagnostic names the
+	// real category. The colon check below catches every other
+	// colon-bearing path.
+	if len(trimmed) >= 2 && trimmed[1] == ':' &&
+		((trimmed[0] >= 'A' && trimmed[0] <= 'Z') || (trimmed[0] >= 'a' && trimmed[0] <= 'z')) {
+		return fmt.Errorf("%q must be a relative path (drive letter)", trimmed)
+	}
+
+	// Reject colons. SubagentStart joins write_set and extract_into
+	// entries with `:` into ETHOS_VERIFIER_ALLOWLIST and
+	// ETHOS_VERIFIER_EXTRACT_INTO; a contract entry containing a
+	// colon would smuggle a second allowlist entry past admission
+	// control. Reject at the trust boundary so the env-var separator
+	// is unambiguous on both axes.
+	if strings.ContainsRune(trimmed, ':') {
+		return fmt.Errorf("%q contains colon (allowlist separator)", trimmed)
+	}
+
 	// Reject any other control character (newline, CR, ESC, tab, etc.).
 	// JSON marshaling escapes these inside strings, so a newline in a
 	// write_set entry doesn't literally forge a new JSONL log line —
@@ -402,16 +421,10 @@ func validateWriteSetEntry(entry string) error {
 	//   - Unix root:   `/etc/passwd`
 	//   - UNC (post-normalize): `//server/share`
 	//   - Platform-specific forms via filepath.IsAbs
+	// Windows drive-letter prefixes are rejected upstream by the
+	// drive-letter check; the slash check below handles the rest.
 	if strings.HasPrefix(normalized, "/") || filepath.IsAbs(trimmed) {
 		return fmt.Errorf("%q must be a relative path", trimmed)
-	}
-
-	// Reject Windows drive-letter prefixes (`C:\foo`, `D:/bar`).
-	// Neither filepath.IsAbs nor the slash check catches these on Unix,
-	// so a future base-dir join could be bypassed.
-	if len(trimmed) >= 2 && trimmed[1] == ':' &&
-		((trimmed[0] >= 'A' && trimmed[0] <= 'Z') || (trimmed[0] >= 'a' && trimmed[0] <= 'z')) {
-		return fmt.Errorf("%q must be a relative path (drive letter)", trimmed)
 	}
 
 	// Reject root claims — entries that consist only of `.` segments
