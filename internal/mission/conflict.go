@@ -9,18 +9,38 @@ import (
 	"strings"
 )
 
-// Conflict describes a write_set overlap between a new mission contract
-// and an existing open mission. One Conflict is emitted per blocking
-// existing mission, with the union of overlapping paths from the new
-// contract's perspective.
+// ConflictSource identifies which field of the new contract an
+// overlapping entry came from. Stored as a string for stable
+// serialization across the CLI and MCP surfaces.
+const (
+	ConflictSourceWriteSet    = "write_set"
+	ConflictSourceExtractInto = "extract_into"
+)
+
+// ConflictPath is one overlapping entry from the new contract — the
+// path text plus the field it came from. Operators need to know which
+// field to edit when admission control blocks a mission, so the
+// per-entry source travels with the path through the error message.
+type ConflictPath struct {
+	Path   string
+	Source string // ConflictSourceWriteSet or ConflictSourceExtractInto
+}
+
+// Conflict describes an overlap between a new mission contract and an
+// existing open mission. One Conflict is emitted per blocking
+// existing mission, with the union of overlapping entries from the
+// new contract's perspective.
 //
-// Paths is the set of entries from the NEW contract's write_set that
-// overlap at least one entry in the existing mission's write_set,
-// sorted lexicographically for deterministic error messages and tests.
+// Paths is the set of entries from the NEW contract (drawn from
+// write_set and extract_into) that overlap at least one entry on the
+// existing side. Each entry carries its source field. The slice is
+// sorted by (Source, Path) for deterministic error messages — write_set
+// entries appear before extract_into entries, with each group sorted
+// lexicographically by path.
 type Conflict struct {
-	MissionID string   // ID of the existing open mission
-	Worker    string   // Worker handle of the existing open mission
-	Paths     []string // Overlapping entries from the new contract's write_set
+	MissionID string         // ID of the existing open mission
+	Worker    string         // Worker handle of the existing open mission
+	Paths     []ConflictPath // Overlapping entries from the new contract
 }
 
 // findWriteSetConflicts compares the new contract's write_set and
@@ -64,29 +84,29 @@ func findWriteSetConflicts(newWriteSet, newExtractInto []string, existing []*Con
 		if len(ec.WriteSet) == 0 && len(ec.ExtractInto) == 0 {
 			continue
 		}
-		// Collect overlapping new-side entries into a set so a
-		// duplicate entry in the new contract is reported once. The
-		// new side mixes write_set and extract_into entries because
-		// either kind can hit either kind on the existing side.
-		seen := make(map[string]struct{})
+		// Collect overlapping new-side entries into a set keyed by
+		// (Source, Path) so a duplicate entry in the new contract is
+		// reported once and a path that appears in both write_set and
+		// extract_into surfaces under each source.
+		seen := make(map[ConflictPath]struct{})
 		for _, np := range newWriteSet {
 			if anyEntryConflicts(np, false, ec) {
-				seen[np] = struct{}{}
+				seen[ConflictPath{Path: np, Source: ConflictSourceWriteSet}] = struct{}{}
 			}
 		}
 		for _, np := range newExtractInto {
 			if anyEntryConflicts(np, true, ec) {
-				seen[np] = struct{}{}
+				seen[ConflictPath{Path: np, Source: ConflictSourceExtractInto}] = struct{}{}
 			}
 		}
 		if len(seen) == 0 {
 			continue
 		}
-		paths := make([]string, 0, len(seen))
+		paths := make([]ConflictPath, 0, len(seen))
 		for p := range seen {
 			paths = append(paths, p)
 		}
-		sort.Strings(paths)
+		sortConflictPaths(paths)
 		conflicts = append(conflicts, Conflict{
 			MissionID: ec.MissionID,
 			Worker:    ec.Worker,
@@ -98,6 +118,21 @@ func findWriteSetConflicts(newWriteSet, newExtractInto []string, existing []*Con
 		return conflicts[i].MissionID < conflicts[j].MissionID
 	})
 	return conflicts
+}
+
+// sortConflictPaths orders ConflictPath values primarily by Source —
+// write_set first, then extract_into — and within each group by Path
+// lexicographically. The grouping keeps the error message readable:
+// the leader sees every write_set hit, then every extract_into hit,
+// rather than the two interleaved.
+func sortConflictPaths(paths []ConflictPath) {
+	sort.Slice(paths, func(i, j int) bool {
+		if paths[i].Source != paths[j].Source {
+			// write_set sorts before extract_into deterministically.
+			return paths[i].Source == ConflictSourceWriteSet
+		}
+		return paths[i].Path < paths[j].Path
+	})
 }
 
 // anyEntryConflicts reports whether newEntry (from the new contract)
@@ -341,6 +376,11 @@ func CanonicalPath(p string) string {
 // one or more Conflicts. Each conflict is on its own line so the
 // operator sees every blocker at once.
 //
+// The header names every contributing source ("write_set conflict",
+// "extract_into conflict", or "write_set + extract_into conflict")
+// so the leader knows which field to edit. Per-source path lists
+// follow so the leader sees exactly which entries hit.
+//
 // Returns nil for an empty input slice — the caller is expected to
 // only call this when there is at least one conflict, but the empty
 // case is handled defensively so a refactor cannot accidentally
@@ -351,10 +391,41 @@ func formatConflictError(conflicts []Conflict) error {
 	}
 	lines := make([]string, len(conflicts))
 	for i, c := range conflicts {
-		lines[i] = fmt.Sprintf(
-			"write_set conflict with mission %s (worker: %s): overlapping paths [%s]",
-			c.MissionID, c.Worker, strings.Join(c.Paths, " "),
-		)
+		lines[i] = formatConflictLine(c)
 	}
 	return errors.New(strings.Join(lines, "\n"))
+}
+
+// formatConflictLine renders a single Conflict into its operator-facing
+// line. Sources are reported separately so the leader can locate the
+// offending field; when both sources contributed, the line names them
+// in declaration order (write_set first, then extract_into).
+func formatConflictLine(c Conflict) string {
+	var wsPaths, eiPaths []string
+	for _, p := range c.Paths {
+		switch p.Source {
+		case ConflictSourceExtractInto:
+			eiPaths = append(eiPaths, p.Path)
+		default:
+			wsPaths = append(wsPaths, p.Path)
+		}
+	}
+	var header string
+	switch {
+	case len(wsPaths) > 0 && len(eiPaths) > 0:
+		header = "write_set + extract_into conflict"
+	case len(eiPaths) > 0:
+		header = "extract_into conflict"
+	default:
+		header = "write_set conflict"
+	}
+	var parts []string
+	if len(wsPaths) > 0 {
+		parts = append(parts, fmt.Sprintf("write_set [%s]", strings.Join(wsPaths, " ")))
+	}
+	if len(eiPaths) > 0 {
+		parts = append(parts, fmt.Sprintf("extract_into [%s]", strings.Join(eiPaths, " ")))
+	}
+	return fmt.Sprintf("%s with mission %s (worker: %s): %s",
+		header, c.MissionID, c.Worker, strings.Join(parts, " "))
 }

@@ -448,7 +448,9 @@ func TestFindWriteSetConflicts(t *testing.T) {
 				{
 					MissionID: "m-2026-04-08-001",
 					Worker:    "bwk",
-					Paths:     []string{"internal/mission/store.go"},
+					Paths: []ConflictPath{
+						{Path: "internal/mission/store.go", Source: ConflictSourceWriteSet},
+					},
 				},
 			},
 		},
@@ -462,7 +464,9 @@ func TestFindWriteSetConflicts(t *testing.T) {
 				{
 					MissionID: "m-2026-04-08-001",
 					Worker:    "bwk",
-					Paths:     []string{"internal/mission/store.go"},
+					Paths: []ConflictPath{
+						{Path: "internal/mission/store.go", Source: ConflictSourceWriteSet},
+					},
 				},
 			},
 		},
@@ -476,7 +480,9 @@ func TestFindWriteSetConflicts(t *testing.T) {
 				{
 					MissionID: "m-2026-04-08-001",
 					Worker:    "bwk",
-					Paths:     []string{"internal/mission/"},
+					Paths: []ConflictPath{
+						{Path: "internal/mission/", Source: ConflictSourceWriteSet},
+					},
 				},
 			},
 		},
@@ -492,12 +498,16 @@ func TestFindWriteSetConflicts(t *testing.T) {
 				{
 					MissionID: "m-2026-04-08-002",
 					Worker:    "bwk",
-					Paths:     []string{"internal/foo/bar.go"},
+					Paths: []ConflictPath{
+						{Path: "internal/foo/bar.go", Source: ConflictSourceWriteSet},
+					},
 				},
 				{
 					MissionID: "m-2026-04-08-003",
 					Worker:    "rmh",
-					Paths:     []string{"cmd/ethos/serve.go"},
+					Paths: []ConflictPath{
+						{Path: "cmd/ethos/serve.go", Source: ConflictSourceWriteSet},
+					},
 				},
 			},
 		},
@@ -511,9 +521,9 @@ func TestFindWriteSetConflicts(t *testing.T) {
 				{
 					MissionID: "m-2026-04-08-001",
 					Worker:    "bwk",
-					Paths: []string{
-						"internal/mission/log.go",
-						"internal/mission/store.go",
+					Paths: []ConflictPath{
+						{Path: "internal/mission/log.go", Source: ConflictSourceWriteSet},
+						{Path: "internal/mission/store.go", Source: ConflictSourceWriteSet},
 					},
 				},
 			},
@@ -528,7 +538,9 @@ func TestFindWriteSetConflicts(t *testing.T) {
 				{
 					MissionID: "m-2026-04-08-001",
 					Worker:    "bwk",
-					Paths:     []string{"internal/mission/store.go"},
+					Paths: []ConflictPath{
+						{Path: "internal/mission/store.go", Source: ConflictSourceWriteSet},
+					},
 				},
 			},
 		},
@@ -770,7 +782,7 @@ func TestFindWriteSetConflicts_ExtractInto(t *testing.T) {
 		newSet      []string
 		newExtract  []string
 		existing    []*Contract
-		wantPaths   []string
+		wantPaths   []ConflictPath
 		wantBlocker string
 	}{
 		{
@@ -779,7 +791,9 @@ func TestFindWriteSetConflicts_ExtractInto(t *testing.T) {
 			existing: []*Contract{
 				makeFull("m-2026-05-21-100", "rmh", nil, []string{"internal/foo/"}),
 			},
-			wantPaths:   []string{"internal/foo/bar.go"},
+			wantPaths: []ConflictPath{
+				{Path: "internal/foo/bar.go", Source: ConflictSourceWriteSet},
+			},
 			wantBlocker: "m-2026-05-21-100",
 		},
 		{
@@ -789,7 +803,9 @@ func TestFindWriteSetConflicts_ExtractInto(t *testing.T) {
 				makeFull("m-2026-05-21-101", "rmh",
 					[]string{"internal/foo/bar.go"}, nil),
 			},
-			wantPaths:   []string{"internal/foo/"},
+			wantPaths: []ConflictPath{
+				{Path: "internal/foo/", Source: ConflictSourceExtractInto},
+			},
 			wantBlocker: "m-2026-05-21-101",
 		},
 		{
@@ -814,7 +830,9 @@ func TestFindWriteSetConflicts_ExtractInto(t *testing.T) {
 			existing: []*Contract{
 				makeFull("m-2026-05-21-104", "rmh", []string{"internal/foo/"}, nil),
 			},
-			wantPaths:   []string{"internal/foo/"},
+			wantPaths: []ConflictPath{
+				{Path: "internal/foo/", Source: ConflictSourceExtractInto},
+			},
 			wantBlocker: "m-2026-05-21-104",
 		},
 		{
@@ -838,7 +856,9 @@ func TestFindWriteSetConflicts_ExtractInto(t *testing.T) {
 			},
 			// docs/ matches the existing ei-dir (ei x ei -> never), so
 			// only the ws-file entry hits via the existing ws-dir.
-			wantPaths:   []string{"internal/foo/bar.go"},
+			wantPaths: []ConflictPath{
+				{Path: "internal/foo/bar.go", Source: ConflictSourceWriteSet},
+			},
 			wantBlocker: "m-2026-05-21-106",
 		},
 	}
@@ -882,19 +902,53 @@ func TestIsDirEntry(t *testing.T) {
 }
 
 // TestFormatConflictError asserts the operator-facing error string is
-// stable, deterministic, and includes mission ID, worker, and the
-// overlapping paths for every conflict — one line per blocker.
+// stable, deterministic, names the source field, and includes mission
+// ID, worker, and overlapping paths for every conflict — one line per
+// blocker.
 func TestFormatConflictError(t *testing.T) {
-	t.Run("single conflict", func(t *testing.T) {
+	t.Run("single write_set conflict", func(t *testing.T) {
 		conflicts := []Conflict{
 			{
 				MissionID: "m-2026-04-07-002",
 				Worker:    "bwk",
-				Paths:     []string{"internal/mission/store.go"},
+				Paths: []ConflictPath{
+					{Path: "internal/mission/store.go", Source: ConflictSourceWriteSet},
+				},
 			},
 		}
 		err := formatConflictError(conflicts)
-		want := "write_set conflict with mission m-2026-04-07-002 (worker: bwk): overlapping paths [internal/mission/store.go]"
+		want := "write_set conflict with mission m-2026-04-07-002 (worker: bwk): write_set [internal/mission/store.go]"
+		assert.EqualError(t, err, want)
+	})
+
+	t.Run("single extract_into conflict names extract_into", func(t *testing.T) {
+		conflicts := []Conflict{
+			{
+				MissionID: "m-2026-05-21-100",
+				Worker:    "bwk",
+				Paths: []ConflictPath{
+					{Path: "internal/foo/", Source: ConflictSourceExtractInto},
+				},
+			},
+		}
+		err := formatConflictError(conflicts)
+		want := "extract_into conflict with mission m-2026-05-21-100 (worker: bwk): extract_into [internal/foo/]"
+		assert.EqualError(t, err, want)
+	})
+
+	t.Run("mixed sources name both fields", func(t *testing.T) {
+		conflicts := []Conflict{
+			{
+				MissionID: "m-2026-05-21-101",
+				Worker:    "bwk",
+				Paths: []ConflictPath{
+					{Path: "internal/foo/bar.go", Source: ConflictSourceWriteSet},
+					{Path: "docs/", Source: ConflictSourceExtractInto},
+				},
+			},
+		}
+		err := formatConflictError(conflicts)
+		want := "write_set + extract_into conflict with mission m-2026-05-21-101 (worker: bwk): write_set [internal/foo/bar.go] extract_into [docs/]"
 		assert.EqualError(t, err, want)
 	})
 
@@ -903,12 +957,17 @@ func TestFormatConflictError(t *testing.T) {
 			{
 				MissionID: "m-2026-04-07-002",
 				Worker:    "bwk",
-				Paths:     []string{"internal/mission/store.go"},
+				Paths: []ConflictPath{
+					{Path: "internal/mission/store.go", Source: ConflictSourceWriteSet},
+				},
 			},
 			{
 				MissionID: "m-2026-04-07-003",
 				Worker:    "rmh",
-				Paths:     []string{"cmd/ethos/mission.go", "cmd/ethos/serve.go"},
+				Paths: []ConflictPath{
+					{Path: "cmd/ethos/mission.go", Source: ConflictSourceWriteSet},
+					{Path: "cmd/ethos/serve.go", Source: ConflictSourceWriteSet},
+				},
 			},
 		}
 		err := formatConflictError(conflicts)
@@ -916,10 +975,10 @@ func TestFormatConflictError(t *testing.T) {
 		lines := strings.Split(msg, "\n")
 		if assert.Len(t, lines, 2, "multi-conflict error must be one line per blocker") {
 			assert.Equal(t,
-				"write_set conflict with mission m-2026-04-07-002 (worker: bwk): overlapping paths [internal/mission/store.go]",
+				"write_set conflict with mission m-2026-04-07-002 (worker: bwk): write_set [internal/mission/store.go]",
 				lines[0])
 			assert.Equal(t,
-				"write_set conflict with mission m-2026-04-07-003 (worker: rmh): overlapping paths [cmd/ethos/mission.go cmd/ethos/serve.go]",
+				"write_set conflict with mission m-2026-04-07-003 (worker: rmh): write_set [cmd/ethos/mission.go cmd/ethos/serve.go]",
 				lines[1])
 		}
 	})
