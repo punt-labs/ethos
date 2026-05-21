@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-05-21
+
 ### Added
 
 - **`extract_into` axis on the mission Contract** (DES-052) — a
