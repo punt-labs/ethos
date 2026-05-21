@@ -4368,8 +4368,9 @@ evaluator `rsc`. Verdict PASS (0.95).
   via the same glob matcher as `WriteSetConstraints` (with a
   trailing-slash strip so `docs/` and `docs` both match
   `docs/**`). Ten seed archetype YAMLs updated per the default
-  table — `design → docs/**`, `test → **/*_test.go + tests/**`,
-  `investigate → docs/** + .tmp/**`, others explicit empty list.
+  table — `design → docs/**`, `investigate → docs/** + .tmp/**`,
+  others explicit empty list (test is `[]` per the Go convention
+  that tests live alongside source).
   Lint `H11 lintMonolithPressure` fires only when three signals
   align (file-only `write_set` + empty `extract_into` +
   extraction verb in `success_criteria`). `H12
@@ -4663,7 +4664,7 @@ Default constraints (in seed archetypes):
 | implement  | `[]` (unconstrained)     | code may extract anywhere the leader names |
 | design     | `["docs/**"]`            | design output is docs; extraction stays in `docs/` |
 | review     | `[]`                     | reviews rarely create files; empty is fine |
-| test       | `["**/*_test.go", "tests/**"]` | new test files go in test dirs |
+| test       | `[]` (unconstrained)     | Go convention: tests alongside source; a constraint would block legitimate same-directory test extraction |
 | report     | `[]` (read-only)         | reports don't extract |
 | audit      | `[]` (read-only)         | audits don't extract |
 | investigate| `["docs/**", ".tmp/**"]` | investigation writes findings, no production code |

@@ -10,6 +10,4 @@ write_set_constraints:
   - "testdata/**"
   - "docs/**"
   - "*.md"
-extract_into_constraints:
-  - "**/*_test.go"
-  - "tests/**"
+extract_into_constraints: []
