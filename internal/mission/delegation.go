@@ -57,10 +57,13 @@ const MaxDelegationDepthDefault = 16
 // per DES-054 v5 §"PreToolUse-on-Agent" dispatch rule (a).
 //
 // SpawnPattern is a regular expression anchored at both ends.
-// Empty pattern never matches. Patterns are user-authored; a
-// malformed pattern surfaces at admission time, not at hook fire
-// time, so an unparseable regex on disk does not silently let
-// every spawn pass.
+// Empty pattern never matches. Patterns are user-authored.
+// Admission-time validation (Contract.Validate compiling the regex
+// up front) is a phase 3 deliverable; today MatchSpawnPattern
+// compiles at match time and a malformed pattern surfaces as a
+// stderr warning + no-match. An unparseable regex therefore falls
+// through to MISSION_ID-explicit dispatch or Tier A rather than
+// silently matching every spawn.
 type DelegationTemplate struct {
 	Role             string   `yaml:"role" json:"role"`
 	SpawnPattern     string   `yaml:"spawn_pattern" json:"spawn_pattern"`
@@ -459,6 +462,17 @@ func LoadDelegation(recordPath string) (*Delegation, error) {
 // a half-written close is unacceptable — the on-disk record either
 // keeps its prior contents or carries the new verdict in full.
 func CloseDelegation(recordPath, verdict, reason string) error {
+	switch verdict {
+	case DelegationVerdictPass,
+		DelegationVerdictFail,
+		DelegationVerdictError,
+		DelegationVerdictAborted:
+	default:
+		return fmt.Errorf(
+			"close delegation: invalid verdict %q (must be one of pass|fail|error|aborted)",
+			verdict,
+		)
+	}
 	d, err := LoadDelegation(recordPath)
 	if err != nil {
 		return fmt.Errorf("close delegation: loading record: %w", err)

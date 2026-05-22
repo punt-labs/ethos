@@ -104,9 +104,13 @@ type Contract struct {
 	// contract to the child spawn. Empty list disables inheritance; the
 	// child falls through to MISSION_ID-explicit dispatch or Tier A.
 	//
-	// Patterns are regular expressions anchored at both ends, validated
-	// at admission time. See DelegationTemplate in delegation.go for the
-	// per-entry shape.
+	// Patterns are regular expressions anchored at both ends. Admission-
+	// time validation is a phase 3 deliverable (Contract.Validate does
+	// not yet compile spawn_pattern); today MatchSpawnPattern compiles
+	// at match time and emits a stderr warning on a malformed pattern,
+	// allowing the spawn to fall through to MISSION_ID-explicit
+	// dispatch or Tier A. See DelegationTemplate in delegation.go for
+	// the per-entry shape.
 	Delegations []DelegationTemplate `yaml:"delegations,omitempty" json:"delegations,omitempty"`
 }
 
