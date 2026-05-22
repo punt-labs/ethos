@@ -276,18 +276,49 @@ func (s *Store) DeleteCurrentSession(claudePID string) error {
 	return nil
 }
 
-// writeRoster marshals and writes a roster atomically via temp file + rename.
+// writeRoster marshals and writes a roster atomically via
+// os.CreateTemp + Chmod(0o600) + Sync + Close + Rename in the
+// sessions directory. Sync errors propagate so a failed fsync
+// surfaces — djb evaluator gate: a half-written roster is
+// unacceptable. The temp file is removed on every error path. A
+// random suffix (via os.CreateTemp) avoids the predictable ".tmp"
+// suffix that two concurrent writers could trample.
 func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	data, err := yaml.Marshal(roster)
 	if err != nil {
 		return fmt.Errorf("marshaling roster: %w", err)
 	}
 	dest := s.rosterPath(sessionID)
-	tmp := dest + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp roster: %w", err)
+	dir := filepath.Dir(dest)
+	tmp, err := os.CreateTemp(dir, "roster-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp roster in %s: %w", dir, err)
 	}
-	return os.Rename(tmp, dest)
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("writing temp roster %s: %w", tmpPath, err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp roster %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("syncing temp roster %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("closing temp roster %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("renaming temp roster %s -> %s: %w", tmpPath, dest, err)
+	}
+	return nil
 }
 
 // WithSessionLock executes fn while holding an exclusive flock on the

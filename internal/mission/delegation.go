@@ -397,6 +397,16 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("creating delegation directory %s: %w", dir, err)
 	}
+	// Order: prompt.md FIRST, then record.yaml. A half-built skeleton
+	// (writer crash between the two writes) must have no record.yaml on
+	// disk — readers branch on record.yaml's presence, so its absence
+	// signals "skeleton not yet committed" and avoids a torn read.
+	if len(payload.Prompt) > 0 {
+		if err := writeAtomicFile(dir, "prompt-*.md.tmp",
+			filepath.Join(dir, "prompt.md"), payload.Prompt); err != nil {
+			return "", fmt.Errorf("writing delegation prompt: %w", err)
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	d := Delegation{
 		ID:               filepath.Base(delegationID),
@@ -416,36 +426,50 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 		return "", fmt.Errorf("marshaling delegation: %w", err)
 	}
 	recordPath := filepath.Join(dir, "record.yaml")
-	tmp, err := os.CreateTemp(dir, "record-*.yaml.tmp")
+	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+		return "", fmt.Errorf("writing delegation record: %w", err)
+	}
+	return recordPath, nil
+}
+
+// writeAtomicFile writes data to destPath atomically via os.CreateTemp
+// in dir, Chmod(0o600), Sync, Close, Rename. Sync errors propagate so
+// a failed fsync surfaces — djb evaluator gate: a half-written file
+// is unacceptable. The temp file is removed on every error path.
+//
+// pattern is the os.CreateTemp pattern (e.g. "record-*.yaml.tmp"); the
+// random component avoids the predictable ".tmp" suffix that a second
+// writer could trample.
+func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
+	tmp, err := os.CreateTemp(dir, pattern)
 	if err != nil {
-		return "", fmt.Errorf("creating temp delegation record in %s: %w", dir, err)
+		return fmt.Errorf("creating temp file in %s: %w", dir, err)
 	}
 	tmpPath := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("writing temp delegation record %s: %w", tmpPath, err)
+		return fmt.Errorf("writing %s: %w", tmpPath, err)
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("chmod temp delegation record %s: %w", tmpPath, err)
+		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("syncing %s: %w", tmpPath, err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("closing temp delegation record %s: %w", tmpPath, err)
+		return fmt.Errorf("closing %s: %w", tmpPath, err)
 	}
-	if err := os.Rename(tmpPath, recordPath); err != nil {
+	if err := os.Rename(tmpPath, destPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("renaming delegation record %s -> %s: %w", tmpPath, recordPath, err)
+		return fmt.Errorf("renaming %s -> %s: %w", tmpPath, destPath, err)
 	}
-	if len(payload.Prompt) > 0 {
-		promptPath := filepath.Join(dir, "prompt.md")
-		if err := os.WriteFile(promptPath, payload.Prompt, 0o600); err != nil {
-			return "", fmt.Errorf("writing delegation prompt %s: %w", promptPath, err)
-		}
-	}
-	return recordPath, nil
+	return nil
 }
 
 // AcquireMissionLock opens (and creates if needed) the per-mission
@@ -541,7 +565,11 @@ func LoadDelegation(recordPath string) (*Delegation, error) {
 // for not re-closing legitimately-pass'd records (the refusal paths
 // only fire on records that were just written and never advanced).
 //
-// Atomic via temp+rename.
+// Atomic via os.CreateTemp + Chmod(0o600) + Sync + Close + Rename in
+// the record's own directory. A predictable ".tmp" suffix is avoided
+// so a second writer cannot trample the first. djb evaluator gate:
+// a half-written close is unacceptable — the on-disk record either
+// keeps its prior contents or carries the new verdict in full.
 func CloseDelegation(recordPath, verdict, reason string) error {
 	d, err := LoadDelegation(recordPath)
 	if err != nil {
@@ -556,13 +584,34 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	if err != nil {
 		return fmt.Errorf("close delegation: marshaling record: %w", err)
 	}
-	tmp := recordPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("close delegation: writing temp record: %w", err)
+	dir := filepath.Dir(recordPath)
+	tmp, err := os.CreateTemp(dir, "record-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("close delegation: creating temp file in %s: %w", dir, err)
 	}
-	if err := os.Rename(tmp, recordPath); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("close delegation: renaming record: %w", err)
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation: writing %s: %w", tmpPath, err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation: chmod %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation: syncing %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation: closing %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, recordPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation: renaming %s -> %s: %w", tmpPath, recordPath, err)
 	}
 	return nil
 }
@@ -645,6 +694,11 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("close delegation skeleton: chmod %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation skeleton: syncing %s: %w", tmpPath, err)
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)

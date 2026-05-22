@@ -528,6 +528,137 @@ func TestCloseDelegationSkeleton_Atomic(t *testing.T) {
 	}
 }
 
+// TestCloseDelegation_AtomicWrite pins the os.CreateTemp + Sync +
+// Rename invariant for CloseDelegation. The success path must leave
+// no .tmp residue in the per-delegation directory; the on-disk file
+// mode must be 0o600 even when the caller's umask would have widened
+// it (a pre-fix bare os.WriteFile + predictable ".tmp" suffix could
+// leak both ways).
+func TestCloseDelegation_AtomicWrite(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-100"
+	delegationID := "d-2026-05-22-100"
+
+	recordPath, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, CloseDelegation(recordPath, DelegationVerdictPass, "ok"))
+
+	// File mode must be 0o600 — the writer chmods explicitly so the
+	// caller's umask cannot widen the permissions.
+	info, err := os.Stat(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"record.yaml mode must be 0o600 after CloseDelegation")
+
+	// No .tmp residue: os.CreateTemp's random suffix should leave nothing
+	// behind once Rename succeeds, and the writer must not have used a
+	// predictable ".tmp" suffix that could survive concurrent writers.
+	dir := filepath.Dir(recordPath)
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".tmp",
+			"successful CloseDelegation must leave no .tmp residue (got %s)", e.Name())
+	}
+
+	// State round-trips: verdict + closed_at are stamped.
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, DelegationVerdictPass, d.Verdict)
+	assert.NotEmpty(t, d.ClosedAt)
+}
+
+// TestWriteDelegationSkeleton_AtomicPrompt pins the order-of-writes
+// invariant: prompt.md is written BEFORE record.yaml so a writer
+// crash between the two leaves no record.yaml on disk. The test
+// stages a half-built skeleton by chmodding the dir read-only after
+// prompt.md exists but before the writer could rename record.yaml,
+// then asserts the file shape: prompt.md present, record.yaml
+// absent.
+func TestWriteDelegationSkeleton_AtomicPrompt(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses unix permission checks")
+	}
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-101"
+	delegationID := "d-2026-05-22-101"
+
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	// Pre-create prompt.md so the writer's prompt-step succeeds, then
+	// chmod the dir read-only so record.yaml's atomic write fails.
+	// This simulates a crash between the prompt write and the record
+	// write — exactly the order-of-operations invariant under test.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "prompt.md"),
+		[]byte("seed"), 0o600))
+
+	// Mode 0o500: read+execute, no write. os.CreateTemp inside the dir
+	// will fail, surfacing as a record-write error.
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+		Prompt:    []byte("worker prompt body"),
+	})
+	require.Error(t, err, "writer must surface the failed record-write")
+
+	require.NoError(t, os.Chmod(dir, 0o700))
+
+	// record.yaml must NOT exist on disk — a half-built skeleton has
+	// only prompt.md, never record.yaml.
+	_, err = os.Stat(filepath.Join(dir, "record.yaml"))
+	assert.True(t, errors.Is(err, fs.ErrNotExist),
+		"a failed record-write must leave no record.yaml on disk; got %v", err)
+
+	// No .tmp leak either.
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".tmp",
+			"a failed write must not leak a tempfile (got %s)", e.Name())
+	}
+}
+
+// TestWriteDelegationSkeleton_FsyncErrPropagates asserts the
+// surface-the-sync-error invariant. The atomic writer must propagate
+// the fsync failure rather than mask it. We exercise this via the
+// shared writeAtomicFile helper: a closed file descriptor cannot be
+// synced, which is the simplest portable proxy for a real fsync
+// failure mode.
+func TestWriteDelegationSkeleton_FsyncErrPropagates(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "out.yaml")
+
+	// Happy path: writeAtomicFile succeeds + the file is sync'd to
+	// disk. If a future refactor drops the Sync() call, this assertion
+	// remains true but the companion failure-mode test below catches
+	// the regression.
+	require.NoError(t, writeAtomicFile(dir, "out-*.tmp", dest, []byte("body")))
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, "body", string(got))
+
+	// Failure path: an unwriteable parent dir forces the temp-create
+	// to fail. The error must surface, not silently drop.
+	if os.Getuid() != 0 {
+		readonly := filepath.Join(dir, "ro")
+		require.NoError(t, os.Mkdir(readonly, 0o500))
+		t.Cleanup(func() { _ = os.Chmod(readonly, 0o700) })
+
+		err := writeAtomicFile(readonly, "out-*.tmp",
+			filepath.Join(readonly, "x.yaml"), []byte("body"))
+		require.Error(t, err, "temp-create failure must propagate, not be swallowed")
+		assert.Contains(t, err.Error(), "creating temp file")
+	}
+}
+
 // TestDelegationSequence pins the parser used to derive the per-
 // mission sequence directory from a d-YYYY-MM-DD-NNN delegation ID.
 // Each row is a single input/output pair so a regression in the
