@@ -104,34 +104,3 @@ func findSessionDir(base, sessionID string) (string, error) {
 	}
 	return "", nil
 }
-
-// readAuditEntriesForSession loads the JSONL audit log for a single
-// session. Tries the DES-054 phase 1 repo path first
-// (<repoRoot>/.ethos/sessions/<date>-<id>/audit.jsonl); falls back
-// to the legacy <globalSessionsDir>/<id>.audit.jsonl shape when the
-// repo path does not carry the session.
-//
-// Both paths use the same partial-trailing-line tolerant decoder so
-// a crash mid-write does not lose the rest of the file. Returns nil
-// when neither path carries the session — symmetric with the
-// per-mission readers that treat a missing log as the normal state
-// for a freshly-created entity.
-func readAuditEntriesForSession(repoRoot, globalSessionsDir, sessionID string) ([]auditEntry, error) {
-	if repoRoot != "" {
-		dir, err := findSessionDir(filepath.Join(repoRoot, ".ethos", "sessions"), sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if dir != "" {
-			entries, err := readAuditEntries(filepath.Join(dir, "audit.jsonl"))
-			if err != nil {
-				return nil, err
-			}
-			if entries != nil {
-				return entries, nil
-			}
-		}
-	}
-	legacy := filepath.Join(globalSessionsDir, filepath.Base(sessionID)+".audit.jsonl")
-	return readAuditEntries(legacy)
-}
