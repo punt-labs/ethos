@@ -51,12 +51,15 @@ import (
 //
 // The function never silently drops a write: an mkdir or open
 // failure writes a warning to stderr but allows the tool call to
-// proceed. A v3.11.0 reader (legacy fallback path only) continues to
-// see logs from sessions whose wall-clock date matches today's UTC
-// date — see resolveAuditWritePath and resolveRepoSessionDir in
-// audit_paths.go for the full migration contract. Phase 2 will
-// introduce a unified reader that tries the repo tree first and
-// falls back to the legacy path.
+// proceed. Migration: in phase 1, repo-tree writes use the new
+// <repoRoot>/.ethos/sessions/<date>-<id>/audit.jsonl layout; only
+// sessions launched outside a repo still write to the legacy
+// <globalSessionsDir>/<id>.audit.jsonl path. A v3.11.0 reader sees
+// only the legacy path, so repo-tree sessions written under v3.12
+// are not visible to a v3.11.0 reader regardless of date. See
+// resolveAuditWritePath and resolveRepoSessionDir in audit_paths.go.
+// Phase 2 will introduce a unified reader that tries the repo tree
+// first and falls back to the legacy path.
 func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {

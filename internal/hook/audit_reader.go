@@ -18,11 +18,11 @@ import (
 // Partial trailing line: a writer that crashed mid-line leaves a
 // final fragment with no '\n'. The reader emits a stderr warning
 // naming the line number, skips the fragment, and returns the
-// well-formed entries. This is the failure mode DES-054
-// I10-audit-atomic accepts — appends are flock-serialized per
-// session, but a power loss can still truncate the most recent line.
+// well-formed entries. Phase 2 will flock-serialize appends per
+// session; in phase 1, the per-line f.Sync inside writeAuditEntry
+// is the only atomicity guarantee.
 //
-// Missing file is not an error: returns an empty slice and nil.
+// Missing file is not an error: returns (nil, nil).
 //
 // On read error (permission denied, directory at path) returns the
 // wrapped error and the entries decoded up to the failure.

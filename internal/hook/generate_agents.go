@@ -289,9 +289,13 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// ethos-m3gh). The hook reads the tool's target path from the
 		// Claude Code hook stdin payload via jq, then routes:
 		//
-		//   1. jq missing or unreadable input — fail closed: run
-		//      make check. A missing jq must not silently disable the
-		//      gate (Copilot review on PR #326).
+		//   1. jq missing OR empty $_path (jq ran but stdin had no
+		//      .tool_input.file_path, or jq itself errored and the
+		//      2>/dev/null swallowed it) — fail closed: run make
+		//      check. The path filter only short-circuits the gate
+		//      when we KNOW the write is scratch/markdown; absence of
+		//      a path is "unknown", which must trigger the gate, not
+		//      skip it (Copilot reviews on PR #326).
 		//
 		//   2. Paths under .tmp/ or .ethos/ — bypass (exit 0). These
 		//      are scratch and trace dirs; nothing under them is
@@ -331,7 +335,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// command stays POSIX-sh compatible (it runs under /bin/sh,
 		// which is dash on Debian/Ubuntu): no `set -o pipefail`, no
 		// process substitution, no bash-isms in the case patterns.
-		b.WriteString("          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); case \\\"$_path\\\" in */.tmp/*|*/.ethos/*|.tmp/*|.ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
+		b.WriteString("          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.ethos/*|.tmp/*|.ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
 	}
 	b.WriteString("---\n")
 

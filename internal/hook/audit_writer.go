@@ -19,10 +19,11 @@ import (
 //
 // Atomicity: a successful return guarantees the entry is on disk; an
 // error return leaves the file in its pre-write state up to a partial
-// trailing line (which the reader skips with a warning). Audit
-// logging is advisory — every error path here writes a warning to
-// stderr and returns nil from the caller so a logging failure cannot
-// block the tool call being audited.
+// trailing line (which the reader skips with a warning). This helper
+// only marshals, appends, fsyncs, and returns. The advisory policy
+// (log a warning to stderr, emit the sentinel, return nil so the
+// tool call is not blocked) lives in HandleAuditLog — the helper is
+// pure error-bubbling.
 func writeAuditEntry(path string, entry auditEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
