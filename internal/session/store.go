@@ -341,11 +341,17 @@ func (s *Store) WithSessionLock(sessionID string, fn func() error) error {
 	return s.withLock(sessionID, fn)
 }
 
-// withLock executes fn while holding an exclusive flock on the session's
-// lock file. Internal callers reach the same lock via WithSessionLock;
-// the two share the same fd lifecycle so a caller that already holds
-// the lock via the public surface cannot deadlock against a Join or
-// Leave inside the same goroutine.
+// withLock executes fn while holding an exclusive flock on the
+// session's lock file. The public WithSessionLock wraps this helper
+// and shares no fd state with it.
+//
+// withLock is NOT re-entrant. Each call opens a fresh file descriptor
+// on the per-session lock path and acquires LOCK_EX on it; a nested
+// call from within fn (or from any path WithSessionLock already
+// holds) opens a second fd against the same inode and blocks waiting
+// for the first holder to release. The same goroutine then deadlocks
+// against itself. Callers must structure their work so the lock is
+// acquired exactly once at the top of any session-write path.
 func (s *Store) withLock(sessionID string, fn func() error) error {
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)

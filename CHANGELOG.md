@@ -63,8 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `MISSION_ID` env, `HandlePreToolUse` writes a single-line advisory
     to stderr (literal pinned by test against `DESIGN.md`). Suppression
     via `ETHOS_QUIET_ADVICE=1` or a non-empty `PARENT_SESSION_ID`
-    (nested ad-hoc spawn). The advisory is informational; the hook
-    always returns allow on Agent tools.
+    (nested ad-hoc spawn). The advisory is informational and the Tier
+    A path returns allow; Tier B dispatch (next bullet) can return
+    block on malformed `MISSION_ID`, lock-acquire failure, ID
+    allocation error, depth refusal, or config resolution error.
   - **Tier B dispatch** — when `MISSION_ID` is set,
     `pretooluse_dispatch.dispatchTierB` resolves the mission via
     `mission.Store.Load`, allocates a delegation_id via `mission.NewID`
@@ -87,8 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     depth would exceed the limit from `resolve.ResolveMaxDelegationDepth`
     (default 16, configurable via `max_delegation_depth` in
     `.punt-labs/ethos.yaml`), the just-written skeleton is closed with
-    `verdict=aborted` and the hook response carries `continue=false` +
-    reason naming the limit. No env propagation on refusal.
+    `verdict=aborted` and the hook response sets `decision=block`
+    with a reason naming the limit (`PreToolUseResult.Continue` is
+    `omitempty` so the field is absent on the wire; consumers decode
+    the absent field as `false`). No env propagation on refusal.
   - **Hash-gate refusal sentinel cleanup** — when `SubagentStart`'s
     DES-033 evaluator-hash check refuses a Tier B verifier spawn AFTER
     the skeleton has been written, the refusal path now closes the
