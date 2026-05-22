@@ -237,6 +237,59 @@ func TestNewID_ReleaseSkipsIfAdvanced(t *testing.T) {
 		"counter must not be rolled back when a later allocation has already advanced past it")
 }
 
+// TestNewID_ReleaseConcurrentAdvanceEmitsStderr covers mission
+// m-2026-05-22-027 fix 2: when a later allocation has advanced the
+// counter past the value this release was about to roll back, the
+// no-op MUST emit a stderr line so the un-rolled-back ID is
+// observable. Without the line, the burn rate is invisible.
+func TestNewID_ReleaseConcurrentAdvanceEmitsStderr(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+
+	_, rel1, err := NewIDAt(root, NamespaceMissions, now)
+	require.NoError(t, err)
+
+	// Advance the counter past rel1's allocation.
+	_, rel2, err := NewIDAt(root, NamespaceMissions, now)
+	require.NoError(t, err)
+	rel2(true)
+
+	stderr := captureStderr(t, func() {
+		rel1(false) // counter is now at 2; the rollback must skip and report.
+	})
+	assert.Contains(t, stderr,
+		"ethos: id release: counter at 2, expected 1, skipping decrement",
+		"concurrent-advance no-op must emit a stderr signal")
+}
+
+// TestNewID_ReleaseReadCounterFailureEmitsStderr covers the other
+// silent branch in fix 2: when the rollback's readCounter fails
+// (counter file replaced with a directory, EACCES, etc.), the
+// release must report the failure on stderr rather than swallowing
+// it. The format matches the spec: "read counter <path>: <err>".
+func TestNewID_ReleaseReadCounterFailureEmitsStderr(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)
+
+	_, rel, err := NewIDAt(root, NamespaceMissions, now)
+	require.NoError(t, err)
+
+	// Replace the counter file with a directory so the rollback's
+	// readCounter returns an error other than os.IsNotExist.
+	counterPath := filepath.Join(root, "counters",
+		NamespaceMissions+"-"+now.UTC().Format("2006-01-02"))
+	require.NoError(t, os.Remove(counterPath))
+	require.NoError(t, os.Mkdir(counterPath, 0o700))
+
+	stderr := captureStderr(t, func() {
+		rel(false)
+	})
+	assert.Contains(t, stderr, "ethos: id release: read counter ",
+		"unreadable counter must emit a stderr signal")
+	assert.Contains(t, stderr, counterPath,
+		"stderr must name the counter path")
+}
+
 func TestNewID_RejectsEmptyNamespace(t *testing.T) {
 	root := t.TempDir()
 	now := time.Date(2026, 4, 7, 12, 0, 0, 0, time.UTC)

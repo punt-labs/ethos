@@ -195,14 +195,26 @@ func newReleaseFunc(counterPath, lockPath string, allocated int) func(commit boo
 
 		current, err := readCounter(counterPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: id release: reading counter %q: %v\n", counterPath, err)
+			// Silent-failure fix (mission m-2026-05-22-027 fix 2):
+			// the doc claims best-effort rollback, but a read failure
+			// here drops the rollback on the floor with no operator-
+			// visible signal. Surface the failure so burn rate is
+			// observable. The original allocation still stands; one
+			// burned ID is non-fatal, but the failure must be visible.
+			fmt.Fprintf(os.Stderr, "ethos: id release: read counter %s: %v\n", counterPath, err)
 			return
 		}
 		// Idempotency: only decrement when the on-disk value is still
 		// the one we allocated. A concurrent caller may have advanced
 		// past it — in which case rolling back here would leave the
 		// counter pointing at an ID someone else already returned.
+		// Silent-failure fix: emit stderr so an operator watching the
+		// daily counter burn rate sees the concurrent-advance event
+		// and can correlate it with the un-rolled-back ID.
 		if current != allocated {
+			fmt.Fprintf(os.Stderr,
+				"ethos: id release: counter at %d, expected %d, skipping decrement\n",
+				current, allocated)
 			return
 		}
 		if err := writeCounterAtomic(counterPath, allocated-1); err != nil {
