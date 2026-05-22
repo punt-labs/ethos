@@ -184,10 +184,10 @@ func TestWriteDelegationSkeleton_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	want := filepath.Join(
-		repoRoot, ".ethos", "missions", missionID, "delegations", "001", "record.yaml",
+		repoRoot, ".ethos", "missions", missionID, "delegations", delegationID, "record.yaml",
 	)
 	assert.Equal(t, want, recordPath,
-		"record.yaml must land under .ethos/missions/<mission>/delegations/<NN>/")
+		"record.yaml must land under .ethos/missions/<mission>/delegations/<delegation-id>/")
 
 	info, err := os.Stat(recordPath)
 	require.NoError(t, err)
@@ -689,28 +689,27 @@ func TestWriteDelegationSkeleton_FsyncErrPropagates(t *testing.T) {
 	}
 }
 
-// TestDelegationSequence pins the parser used to derive the per-
-// mission sequence directory from a d-YYYY-MM-DD-NNN delegation ID.
-// Each row is a single input/output pair so a regression in the
-// parser surfaces against a known string.
-func TestDelegationSequence(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"canonical shape", "d-2026-05-22-001", "001"},
-		{"three-digit tail", "d-2026-05-22-123", "123"},
-		{"bare id no dashes", "abc", "abc"},
-		{"trailing dash falls back to base", "d-2026-05-22-", "d-2026-05-22-"},
-		{"path stripped via base", "../etc/d-2026-05-22-001", "001"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := delegationSequence(tt.in)
-			assert.Equal(t, tt.want, got)
-		})
-	}
+// TestDelegationDir_CrossDayUnique asserts that two delegations
+// allocated on different days (the per-date counter namespace would
+// produce d-2026-05-22-001 and d-2026-05-23-001) resolve to DISTINCT
+// per-mission directories. Prior shape (sequence-only leaf "001")
+// collided across the day boundary — Bugbot HIGH on PR #327. The
+// fix uses the full delegation ID as the leaf.
+func TestDelegationDir_CrossDayUnique(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-099"
+
+	day1 := DelegationDir(repoRoot, missionID, "d-2026-05-22-001")
+	day2 := DelegationDir(repoRoot, missionID, "d-2026-05-23-001")
+	assert.NotEqual(t, day1, day2,
+		"per-mission delegation dirs must be unique across day boundaries")
+
+	// Defense in depth: a tainted ID with path separators still
+	// resolves under <missions>/<mission>/delegations/.
+	tainted := DelegationDir(repoRoot, missionID, "../etc/d-2026-05-22-001")
+	wantBase := filepath.Join(repoRoot, ".ethos", "missions", missionID, "delegations")
+	assert.Equal(t, filepath.Join(wantBase, "d-2026-05-22-001"), tainted,
+		"filepath.Base must strip path separators from a tainted delegation ID")
 }
 
 // TestDelegationDepth_ParameterizedBound pins MEDIUM-2: the cycle-

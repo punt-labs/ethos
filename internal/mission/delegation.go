@@ -349,29 +349,19 @@ type DelegationSkeleton struct {
 // depth — a tainted ID with path separators can only ever resolve to
 // a leaf under <repo>/.ethos/missions/<mission-id>/delegations/.
 //
-// The two-digit sequence is the trailing numeric segment of the
-// d-YYYY-MM-DD-NNN shape; that segment is what nests under the mission
-// per DES-054 v5 §"Per-mission delegation tree".
+// The full delegation ID (after filepath.Base) is the directory leaf.
+// The DES-054 v5 design diagram uses <NN> for compactness, but using
+// the trailing numeric segment alone collides across day boundaries:
+// a mission spanning two days would produce d-2026-05-22-001 AND
+// d-2026-05-23-001 (the counter resets per date namespace) which
+// both share the leaf "001" → directory collision (Bugbot HIGH on
+// PR #327). The full ID is unambiguous and still nests cleanly.
 func DelegationDir(repoRoot, missionID, delegationID string) string {
 	return filepath.Join(
 		repoRoot, ".ethos", "missions",
 		filepath.Base(missionID), "delegations",
-		delegationSequence(delegationID),
+		filepath.Base(delegationID),
 	)
-}
-
-// delegationSequence pulls the trailing numeric segment from a
-// d-YYYY-MM-DD-NNN delegation ID. When the shape does not match (a
-// bare ID, an over-trimmed handle, or anything filepath.Base would
-// keep as a single segment), the full base is returned so the caller
-// still gets a stable, sanitized leaf.
-func delegationSequence(delegationID string) string {
-	base := filepath.Base(delegationID)
-	idx := strings.LastIndex(base, "-")
-	if idx < 0 || idx == len(base)-1 {
-		return base
-	}
-	return base[idx+1:]
 }
 
 // WriteDelegationSkeleton writes a freshly-constructed Delegation
@@ -764,7 +754,7 @@ func DelegationDepth(d *Delegation, loader func(id string) (*Delegation, error),
 			return 0, fmt.Errorf("delegation chain cycle at %q", currentID)
 		}
 		seen[currentID] = struct{}{}
-		if depth > backstop {
+		if depth >= backstop {
 			return 0, fmt.Errorf(
 				"delegation chain exceeds %d ancestors (current: %q); "+
 					"a runaway recursive spawn pattern is likely",
