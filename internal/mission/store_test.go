@@ -28,6 +28,41 @@ func testStore(t *testing.T) *Store {
 	return NewStore(t.TempDir())
 }
 
+// mustContractPath returns the contract path for missionID or fails
+// the test. Mirrors the old string-returning helper that tests used
+// before mission m-2026-05-22-027 fix 3 changed the signature to
+// (string, error); keeps test churn confined to one helper per
+// per-artifact path. The unwrapped path is what every test wants.
+func mustContractPath(t *testing.T, s *Store, missionID string) string {
+	t.Helper()
+	p, err := s.contractPath(missionID)
+	require.NoError(t, err)
+	return p
+}
+
+// mustLogPath, mustReflectionsPath, mustResultsPath are the siblings
+// of mustContractPath for the three per-artifact path helpers.
+func mustLogPath(t *testing.T, s *Store, missionID string) string {
+	t.Helper()
+	p, err := s.logPath(missionID)
+	require.NoError(t, err)
+	return p
+}
+
+func mustReflectionsPath(t *testing.T, s *Store, missionID string) string {
+	t.Helper()
+	p, err := s.reflectionsPath(missionID)
+	require.NoError(t, err)
+	return p
+}
+
+func mustResultsPath(t *testing.T, s *Store, missionID string) string {
+	t.Helper()
+	p, err := s.resultsPath(missionID)
+	require.NoError(t, err)
+	return p
+}
+
 // newContract returns a fresh, valid contract with the given mission ID
 // for use in store tests.
 func newContract(missionID string) *Contract {
@@ -128,12 +163,13 @@ func TestStore_RejectsSymlink_Load(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	// Replace the contract file with a symlink.
-	path := s.ContractPath("m-2026-04-07-001")
+	path, err := s.ContractPath("m-2026-04-07-001")
+	require.NoError(t, err)
 	target := path + ".target"
 	require.NoError(t, os.Rename(path, target))
 	require.NoError(t, os.Symlink(target, path))
 
-	_, err := s.Load("m-2026-04-07-001")
+	_, err = s.Load("m-2026-04-07-001")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "refusing to follow symlink")
 }
@@ -595,14 +631,14 @@ func TestStore_UpdateRollsBackOnEventAppendFailure(t *testing.T) {
 
 	// Snapshot the on-disk contract and the caller's struct before
 	// the sabotaged update.
-	contractPath := s.contractPath(c.MissionID)
+	contractPath := mustContractPath(t, s, c.MissionID)
 	originalBytes, err := os.ReadFile(contractPath)
 	require.NoError(t, err)
 	originalUpdatedAt := c.UpdatedAt
 
 	// Sabotage: remove the log file and replace it with a directory
 	// so appendEventLocked's OpenFile call fails.
-	logPath := s.logPath(c.MissionID)
+	logPath := mustLogPath(t, s, c.MissionID)
 	require.NoError(t, os.Remove(logPath))
 	require.NoError(t, os.Mkdir(logPath, 0o700))
 
@@ -634,12 +670,12 @@ func TestStore_CloseRollsBackOnEventAppendFailure(t *testing.T) {
 	// not the gate refusal.
 	submitRoundResult(t, s, c, VerdictPass)
 
-	contractPath := s.contractPath(c.MissionID)
+	contractPath := mustContractPath(t, s, c.MissionID)
 	originalBytes, err := os.ReadFile(contractPath)
 	require.NoError(t, err)
 
 	// Sabotage the log path the same way as the Update test.
-	logPath := s.logPath(c.MissionID)
+	logPath := mustLogPath(t, s, c.MissionID)
 	require.NoError(t, os.Remove(logPath))
 	require.NoError(t, os.Mkdir(logPath, 0o700))
 
@@ -673,7 +709,7 @@ func TestStore_CreateRollsBackOnEventAppendFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "contract rolled back")
 
 	// The contract file must not exist after rollback.
-	_, statErr := os.Stat(s.contractPath(missionID))
+	_, statErr := os.Stat(mustContractPath(t, s, missionID))
 	assert.True(t, os.IsNotExist(statErr), "contract file must be removed on rollback")
 }
 
@@ -726,7 +762,7 @@ success_criteria:
 budget:
   rounds: 3
 `)
-	path := s.contractPath(missionID)
+	path := mustContractPath(t, s, missionID)
 	require.NoError(t, os.WriteFile(path, corrupt, 0o600))
 
 	originalBytes, err := os.ReadFile(path)
@@ -836,7 +872,7 @@ func TestStore_FilePermissions(t *testing.T) {
 	c := newContract("m-2026-04-07-001")
 	require.NoError(t, s.Create(c))
 
-	info, err := os.Stat(s.contractPath("m-2026-04-07-001"))
+	info, err := os.Stat(mustContractPath(t, s, "m-2026-04-07-001"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 }
@@ -934,10 +970,10 @@ func TestStore_CreateRejectsCrossMissionConflict(t *testing.T) {
 
 	// Snapshot mission A on disk so we can prove a rejected create
 	// does not perturb existing missions.
-	aPath := s.contractPath(a.MissionID)
+	aPath := mustContractPath(t, s, a.MissionID)
 	aBytesBefore, err := os.ReadFile(aPath)
 	require.NoError(t, err)
-	aLogPath := s.logPath(a.MissionID)
+	aLogPath := mustLogPath(t, s, a.MissionID)
 	aLogBefore, err := os.ReadFile(aLogPath)
 	require.NoError(t, err)
 
@@ -950,9 +986,9 @@ func TestStore_CreateRejectsCrossMissionConflict(t *testing.T) {
 	assert.Contains(t, err.Error(), "internal/foo/bar.go")
 
 	// No on-disk traces for the rejected mission B.
-	_, statErr := os.Stat(s.contractPath(b.MissionID))
+	_, statErr := os.Stat(mustContractPath(t, s, b.MissionID))
 	assert.True(t, os.IsNotExist(statErr), "B's contract file must not exist")
-	_, statErr = os.Stat(s.logPath(b.MissionID))
+	_, statErr = os.Stat(mustLogPath(t, s, b.MissionID))
 	assert.True(t, os.IsNotExist(statErr), "B's log file must not exist")
 
 	// Mission A's contract and log are byte-identical to before the
@@ -1054,9 +1090,9 @@ func TestStore_CreateConflictLeavesNoArtifacts(t *testing.T) {
 	require.Error(t, err)
 
 	// No contract or log file for the rejected mission.
-	_, statErr := os.Stat(s.contractPath(b.MissionID))
+	_, statErr := os.Stat(mustContractPath(t, s, b.MissionID))
 	assert.True(t, os.IsNotExist(statErr), "rejected mission must have no contract file")
-	_, statErr = os.Stat(s.logPath(b.MissionID))
+	_, statErr = os.Stat(mustLogPath(t, s, b.MissionID))
 	assert.True(t, os.IsNotExist(statErr), "rejected mission must have no log file")
 
 	// No .tmp leftovers anywhere in the missions directory.
@@ -1710,7 +1746,7 @@ func TestStore_AppendReflection_RejectsMalformed(t *testing.T) {
 	assert.Contains(t, err.Error(), "signals")
 
 	// No reflections file should exist.
-	_, statErr := os.Stat(s.reflectionsPath(c.MissionID))
+	_, statErr := os.Stat(mustReflectionsPath(t, s, c.MissionID))
 	assert.True(t, os.IsNotExist(statErr), "rejected reflection must leave no file")
 }
 
@@ -1904,7 +1940,7 @@ func TestStore_LoadReflections_RejectsUnknownField(t *testing.T) {
     reason: ok
     bogus: smuggled
 `)
-	require.NoError(t, os.WriteFile(s.reflectionsPath(c.MissionID), body, 0o600))
+	require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), body, 0o600))
 
 	_, err := s.LoadReflections(c.MissionID)
 	require.Error(t, err)
@@ -2025,7 +2061,7 @@ func TestStore_ListSkipsReflectionsFile(t *testing.T) {
 
 	// Verify both files actually exist — the test is meaningless if
 	// the reflections file was not written.
-	_, err := os.Stat(s.reflectionsPath(c.MissionID))
+	_, err := os.Stat(mustReflectionsPath(t, s, c.MissionID))
 	require.NoError(t, err, "reflections file must exist for the test to be meaningful")
 
 	// Failure mode 1: List must return exactly one mission ID, not
@@ -2077,7 +2113,7 @@ func TestStore_CreateRejectsWorkerEqualsEvaluator(t *testing.T) {
 
 	// No file was written — the self-verification guard fires before
 	// the create lock is taken.
-	_, statErr := os.Stat(s.contractPath(c.MissionID))
+	_, statErr := os.Stat(mustContractPath(t, s, c.MissionID))
 	assert.True(t, os.IsNotExist(statErr),
 		"rejected self-verification contract must leave no file on disk")
 }
@@ -2139,7 +2175,7 @@ func TestStore_CreateRejectsSameTeamRoleBinding(t *testing.T) {
 	assert.Contains(t, msg, "engineering/go-specialist")
 	assert.Contains(t, msg, "recovery")
 
-	_, statErr := os.Stat(s.contractPath(c.MissionID))
+	_, statErr := os.Stat(mustContractPath(t, s, c.MissionID))
 	assert.True(t, os.IsNotExist(statErr),
 		"rejected role-overlap contract must leave no file on disk")
 }
@@ -2428,7 +2464,7 @@ func TestStore_AppendResult_RejectsMalformed(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "evidence")
 
-	_, statErr := os.Stat(s.resultsPath(c.MissionID))
+	_, statErr := os.Stat(mustResultsPath(t, s, c.MissionID))
 	assert.True(t, os.IsNotExist(statErr), "rejected result must leave no file")
 }
 
@@ -2553,7 +2589,7 @@ func TestStore_AppendResult_FilesChangedContainment(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 			// No results file should exist for the rejected input.
-			_, statErr := os.Stat(s.resultsPath(c.MissionID))
+			_, statErr := os.Stat(mustResultsPath(t, s, c.MissionID))
 			assert.True(t, os.IsNotExist(statErr),
 				"rejected result must leave no file for case %q", tt.name)
 		})
@@ -2685,7 +2721,7 @@ func TestStore_LoadResults_RejectsUnknownField(t *testing.T) {
         status: pass
     bogus: smuggled
 `)
-	require.NoError(t, os.WriteFile(s.resultsPath(c.MissionID), body, 0o600))
+	require.NoError(t, os.WriteFile(mustResultsPath(t, s, c.MissionID), body, 0o600))
 
 	_, err := s.LoadResults(c.MissionID)
 	require.Error(t, err)
@@ -2734,7 +2770,7 @@ func TestStore_LoadResults_RejectsMismatchedMissionID(t *testing.T) {
       - name: make check
         status: pass
 `)
-	require.NoError(t, os.WriteFile(s.resultsPath(missionA), body, 0o600))
+	require.NoError(t, os.WriteFile(mustResultsPath(t, s, missionA), body, 0o600))
 
 	// Surface 1: LoadResults names both IDs in the mismatch error.
 	_, err := s.LoadResults(missionA)
@@ -2803,9 +2839,9 @@ func TestStore_LoadResult_FileRemovedAfterAppendReturnsNil(t *testing.T) {
 	// Confirm the file exists before removing it — otherwise a
 	// silent path regression would make the removal a no-op and
 	// the assertion below would pass for the wrong reason.
-	_, statErr := os.Stat(s.resultsPath(c.MissionID))
+	_, statErr := os.Stat(mustResultsPath(t, s, c.MissionID))
 	require.NoError(t, statErr)
-	require.NoError(t, os.Remove(s.resultsPath(c.MissionID)))
+	require.NoError(t, os.Remove(mustResultsPath(t, s, c.MissionID)))
 
 	r, err := s.LoadResult(c.MissionID, c.CurrentRound)
 	require.NoError(t, err)
@@ -2929,7 +2965,7 @@ func TestStore_ListSkipsResultsFile(t *testing.T) {
 
 	// Verify the sibling file actually exists — the test is
 	// meaningless if AppendResult silently dropped the write.
-	_, err := os.Stat(s.resultsPath(c.MissionID))
+	_, err := os.Stat(mustResultsPath(t, s, c.MissionID))
 	require.NoError(t, err, "results file must exist for the test to be meaningful")
 
 	// Failure mode 1: List must return exactly one mission ID.
@@ -3231,7 +3267,7 @@ func TestStore_AppendReflectionRollbackRemovesFile(t *testing.T) {
 
 	// Sabotage: replace the event log with a directory so
 	// appendEventLocked fails.
-	logPath := s.logPath(c.MissionID)
+	logPath := mustLogPath(t, s, c.MissionID)
 	require.NoError(t, os.Remove(logPath))
 	require.NoError(t, os.Mkdir(logPath, 0o700))
 
@@ -3243,7 +3279,7 @@ func TestStore_AppendReflectionRollbackRemovesFile(t *testing.T) {
 
 	// The reflections file must not exist — rollback should have
 	// removed it, not written an empty stub.
-	_, statErr := os.Stat(s.reflectionsPath(c.MissionID))
+	_, statErr := os.Stat(mustReflectionsPath(t, s, c.MissionID))
 	assert.True(t, os.IsNotExist(statErr),
 		"reflections file must be removed on rollback when no prior file existed")
 }
@@ -3256,7 +3292,7 @@ func TestStore_AppendResultRollbackRemovesFile(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	// Sabotage the event log.
-	logPath := s.logPath(c.MissionID)
+	logPath := mustLogPath(t, s, c.MissionID)
 	require.NoError(t, os.Remove(logPath))
 	require.NoError(t, os.Mkdir(logPath, 0o700))
 
@@ -3275,7 +3311,7 @@ func TestStore_AppendResultRollbackRemovesFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "event append failed")
 
 	// The results file must not exist.
-	_, statErr := os.Stat(s.resultsPath(c.MissionID))
+	_, statErr := os.Stat(mustResultsPath(t, s, c.MissionID))
 	assert.True(t, os.IsNotExist(statErr),
 		"results file must be removed on rollback when no prior file existed")
 }

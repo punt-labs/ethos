@@ -75,7 +75,11 @@ func (s *Store) appendEventLocked(missionID string, e Event) error {
 	if err := s.ensureMissionDir(missionID); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(s.logPath(missionID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	logPath, err := s.logPath(missionID)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening event log: %w", err)
 	}
@@ -196,7 +200,11 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 	// sibling path anchored at a known-good contract. os.Stat is the
 	// light-weight option: we do not need to parse or validate the
 	// contract, only confirm the mission was ever created.
-	if _, err := os.Stat(s.ContractPath(missionID)); err != nil {
+	contractPath, err := s.ContractPath(missionID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, err)
+	}
+	if _, err := os.Stat(contractPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil, fmt.Errorf("mission %q not found", missionID)
 		}
@@ -205,7 +213,10 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 	// Reject symlinks before opening. A symlink pointing outside the
 	// missions directory could trick the log reader into parsing
 	// attacker-controlled content as event data.
-	logPath := s.logPath(missionID)
+	logPath, err := s.logPath(missionID)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := rejectSymlink(logPath); err != nil {
 		return nil, nil, err
 	}

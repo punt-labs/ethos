@@ -173,7 +173,15 @@ func (s *Store) validateContract(c *Contract) error {
 // Mission ID is run through filepath.Base as defense in depth, the
 // same way contractPath does internally. A caller passing a relative
 // or traversal-laced ID will only ever get a path under missionsDir.
-func (s *Store) ContractPath(missionID string) string {
+//
+// Returns (string, error) so a stat error on the repo-tree layer
+// (EACCES on a chmod-locked parent, for instance) surfaces as a
+// wrapped error rather than collapsing to the writeLayer fallback —
+// the silent-failure mode local review flagged on mission
+// m-2026-05-22-027 fix 3. Callers that already accept "best-effort
+// path" can wrap the error or call ContractPath under a recover; new
+// callers should propagate.
+func (s *Store) ContractPath(missionID string) (string, error) {
 	return s.contractPath(missionID)
 }
 
@@ -272,11 +280,24 @@ func (s *Store) missionsDir() string {
 // The mission ID is run through filepath.Base as a defense-in-depth
 // measure: even if a caller somehow passed an absolute or
 // traversal-laced ID, only the final element survives.
-func (s *Store) contractPath(missionID string) string {
-	if ps, err := s.pathSetForExisting(missionID); err == nil {
-		return ps.contract
+//
+// Distinguishes "not found" (fall back to writeLayer, nil error) from
+// real stat errors (EACCES, EIO) which are wrapped and returned. The
+// silent-failure mode m-2026-05-22-027 fix 3 closed: under a
+// chmod-locked parent, pathSetForExisting returns the EACCES error
+// and contractPath used to swallow it and fall back to writeLayer —
+// hiding the permission failure behind an os.ErrNotExist surfaced
+// from a stale writeLayer path.
+func (s *Store) contractPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.contract, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).contract, nil
+	default:
+		return "", fmt.Errorf("resolving contract path for %q: %w", missionID, err)
 	}
-	return s.pathSetFor(missionID, s.writeLayer()).contract
 }
 
 // lockPath returns the per-mission flock path. Always under the
@@ -313,12 +334,18 @@ func (s *Store) repoCreateLockPath() string {
 // logPath returns the JSONL event log path for a mission. Dispatches
 // through pathSetForExisting / writeLayer the same way contractPath
 // does — read paths see the existing layer, write paths see the
-// writeLayer.
-func (s *Store) logPath(missionID string) string {
-	if ps, err := s.pathSetForExisting(missionID); err == nil {
-		return ps.log
+// writeLayer. Wraps stat errors instead of collapsing to writeLayer
+// (mission m-2026-05-22-027 fix 3).
+func (s *Store) logPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.log, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).log, nil
+	default:
+		return "", fmt.Errorf("resolving log path for %q: %w", missionID, err)
 	}
-	return s.pathSetFor(missionID, s.writeLayer()).log
 }
 
 // reflectionsPath returns the sibling YAML file that holds the
@@ -331,12 +358,18 @@ func (s *Store) logPath(missionID string) string {
 //
 // Layer dispatch mirrors contractPath — when the mission already
 // exists, the layer it lives in determines the path; otherwise the
-// writeLayer wins.
-func (s *Store) reflectionsPath(missionID string) string {
-	if ps, err := s.pathSetForExisting(missionID); err == nil {
-		return ps.reflections
+// writeLayer wins. Wraps stat errors instead of collapsing to
+// writeLayer (mission m-2026-05-22-027 fix 3).
+func (s *Store) reflectionsPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.reflections, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).reflections, nil
+	default:
+		return "", fmt.Errorf("resolving reflections path for %q: %w", missionID, err)
 	}
-	return s.pathSetFor(missionID, s.writeLayer()).reflections
 }
 
 // resultsPath returns the sibling YAML file that holds the
@@ -352,11 +385,19 @@ func (s *Store) reflectionsPath(missionID string) string {
 // as a contract; adding a second sibling without teaching List about
 // it would reproduce the same regression for anyone with a result
 // file on disk.
-func (s *Store) resultsPath(missionID string) string {
-	if ps, err := s.pathSetForExisting(missionID); err == nil {
-		return ps.results
+//
+// Wraps stat errors instead of collapsing to writeLayer (mission
+// m-2026-05-22-027 fix 3).
+func (s *Store) resultsPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.results, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).results, nil
+	default:
+		return "", fmt.Errorf("resolving results path for %q: %w", missionID, err)
 	}
-	return s.pathSetFor(missionID, s.writeLayer()).results
 }
 
 // ensureMissionDir creates the per-mission directory in the repo
@@ -476,7 +517,10 @@ func (s *Store) Create(c *Contract) error {
 
 	err := s.withCreateLock(func() error {
 		return s.withLock(staged.MissionID, func() error {
-			dest := s.contractPath(staged.MissionID)
+			dest, err := s.contractPath(staged.MissionID)
+			if err != nil {
+				return err
+			}
 			// Refuse to overwrite an existing contract via Create — Update
 			// is the explicit mutation path.
 			if _, statErr := os.Stat(dest); statErr == nil {
@@ -572,7 +616,10 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	path := s.contractPath(missionID)
+	path, err := s.contractPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -663,7 +710,10 @@ func (s *Store) Update(c *Contract) error {
 		return fmt.Errorf("contract is nil")
 	}
 	return s.withLock(c.MissionID, func() error {
-		dest := s.contractPath(c.MissionID)
+		dest, err := s.contractPath(c.MissionID)
+		if err != nil {
+			return err
+		}
 		// Read the current bytes for rollback before touching the file.
 		oldData, err := os.ReadFile(dest)
 		if err != nil {
@@ -727,7 +777,10 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	var satisfying *Result
 	var closed *Contract
 	err := s.withLock(missionID, func() error {
-		dest := s.contractPath(missionID)
+		dest, err := s.contractPath(missionID)
+		if err != nil {
+			return err
+		}
 		// loadLocked returns both the parsed contract and the raw
 		// bytes, so Close reads the file only once and keeps the
 		// original bytes for rollback if the event append fails.
@@ -816,7 +869,10 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 // post-mutation Validate because the mutation fixed the field under
 // inspection.
 func (s *Store) loadLocked(missionID string) (*Contract, []byte, error) {
-	path := s.contractPath(missionID)
+	path, err := s.contractPath(missionID)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, nil, err
 	}
@@ -1016,7 +1072,10 @@ func (s *Store) writeContract(c *Contract) error {
 	if err := s.ensureMissionDir(c.MissionID); err != nil {
 		return err
 	}
-	dest := s.contractPath(c.MissionID)
+	dest, err := s.contractPath(c.MissionID)
+	if err != nil {
+		return err
+	}
 	tmp := dest + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp contract: %w", err)
@@ -1089,6 +1148,29 @@ func (s *Store) withCreateLock(fn func() error) error {
 	}
 	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
+	// DES-054 v5 rolling-upgrade fence — when a repoRoot is in scope,
+	// also acquire the per-repo create lock as a nested flock so two
+	// processes that share the same repo but different global roots
+	// (e.g., separate ~/.punt-labs/ trees in containers) still
+	// serialize on Create. Acquisition order is global → repo;
+	// release is reverse via defer LIFO. v3.13.0 drops the global
+	// acquisition once the field is fully on v3.12+.
+	if repoLockPath := s.repoCreateLockPath(); repoLockPath != "" {
+		if err := os.MkdirAll(filepath.Dir(repoLockPath), 0o700); err != nil {
+			return fmt.Errorf("creating repo missions directory: %w", err)
+		}
+		rf, rerr := os.OpenFile(repoLockPath, os.O_CREATE|os.O_RDWR, 0o600)
+		if rerr != nil {
+			return fmt.Errorf("opening repo create lock file: %w", rerr)
+		}
+		defer rf.Close()
+
+		if rerr := syscall.Flock(int(rf.Fd()), syscall.LOCK_EX); rerr != nil {
+			return fmt.Errorf("acquiring repo create lock: %w", rerr)
+		}
+		defer func() { _ = syscall.Flock(int(rf.Fd()), syscall.LOCK_UN) }()
+	}
+
 	return fn()
 }
 
@@ -1121,7 +1203,10 @@ func (s *Store) LoadReflections(missionID string) ([]Reflection, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	path := s.reflectionsPath(missionID)
+	path, err := s.reflectionsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1261,7 +1346,11 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 			// was nil), remove it entirely rather than writing an
 			// empty reflections: [] stub that would confuse readers.
 			if existing == nil {
-				if rbErr := os.Remove(s.reflectionsPath(missionID)); rbErr != nil && !os.IsNotExist(rbErr) {
+				rbPath, pErr := s.reflectionsPath(missionID)
+				if pErr != nil {
+					return fmt.Errorf("reflect: event append failed: %w; rollback path failed: %v", err, pErr)
+				}
+				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("reflect: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
 			} else if rbErr := s.writeReflectionsLocked(missionID, existing); rbErr != nil {
@@ -1284,7 +1373,10 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 // and AdvanceRound use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadReflectionsLocked(missionID string) ([]Reflection, error) {
-	path := s.reflectionsPath(missionID)
+	path, err := s.reflectionsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1312,7 +1404,10 @@ func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error 
 	if err := s.ensureMissionDir(missionID); err != nil {
 		return err
 	}
-	dest := s.reflectionsPath(missionID)
+	dest, err := s.reflectionsPath(missionID)
+	if err != nil {
+		return err
+	}
 	tmp := dest + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp reflections: %w", err)
@@ -1391,7 +1486,10 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 			)
 		}
 		// All gates passed; commit the bump.
-		dest := s.contractPath(missionID)
+		dest, err := s.contractPath(missionID)
+		if err != nil {
+			return err
+		}
 		c.CurrentRound++
 		c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := s.validateContract(c); err != nil {
@@ -1666,7 +1764,10 @@ func (s *Store) LoadResults(missionID string) ([]Result, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	path := s.resultsPath(missionID)
+	path, err := s.resultsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1874,7 +1975,11 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 			// was nil), remove it entirely rather than writing an
 			// empty results: [] stub.
 			if existing == nil {
-				if rbErr := os.Remove(s.resultsPath(missionID)); rbErr != nil && !os.IsNotExist(rbErr) {
+				rbPath, pErr := s.resultsPath(missionID)
+				if pErr != nil {
+					return fmt.Errorf("result: event append failed: %w; rollback path failed: %v", err, pErr)
+				}
+				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("result: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
 			} else if rbErr := s.writeResultsLocked(missionID, existing); rbErr != nil {
@@ -1895,7 +2000,10 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 // checkResultGateLocked use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadResultsLocked(missionID string) ([]Result, error) {
-	path := s.resultsPath(missionID)
+	path, err := s.resultsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1923,7 +2031,10 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 	if err := s.ensureMissionDir(missionID); err != nil {
 		return err
 	}
-	dest := s.resultsPath(missionID)
+	dest, err := s.resultsPath(missionID)
+	if err != nil {
+		return err
+	}
 	tmp := dest + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp results: %w", err)
