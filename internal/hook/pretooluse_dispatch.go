@@ -2,8 +2,10 @@ package hook
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -240,9 +242,21 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 		repoRoot, missionID, delegationID,
 		mission.DelegationVerdictAborted, closedAt,
 	); err != nil {
+		// fs.ErrNotExist on the close path means the skeleton was
+		// never written — an order-of-operations bug in the dispatch
+		// (depth refusal fired before WriteDelegationSkeleton). The
+		// generic close-failure line would hide that distinction;
+		// name it explicitly so the operator can find the offending
+		// call order in the source.
+		if errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: order-of-operations bug — depth refusal fired but skeleton was never written (delegation=%s mission=%s)\n",
+				delegationID, missionID,
+			)
+			return
+		}
 		fmt.Fprintf(os.Stderr,
-			"ethos pre-tool-use: closing aborted skeleton %q: %v\n",
-			delegationID, err,
+			"ethos: pre-tool-use: closing aborted skeleton: %v\n", err,
 		)
 	}
 }
@@ -259,6 +273,12 @@ func tierBRepoRoot() string {
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
+		// Getwd failure here is rare (deleted cwd, permission loss).
+		// Downstream call sites are defensive against the empty
+		// return, but a silent fall-through leaves no trace — surface
+		// the underlying error so the operator can correlate a
+		// downstream "repoRoot is required" with its cause.
+		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: getwd failed: %v\n", err)
 		return ""
 	}
 	return cwd

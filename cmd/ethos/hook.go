@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -220,9 +222,19 @@ func runHookAuditLog() error {
 		return nil
 	}
 	ss := sessionStore()
-	_ = ss.WithSessionLock(sessionID, func() error {
+	if lockErr := ss.WithSessionLock(sessionID, func() error {
 		return hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
-	})
+	}); lockErr != nil {
+		// Lock acquisition failed — typically a permissions or fs
+		// problem on the session lock file. Surface the failure on
+		// stderr so the operator sees it, then fall through to the
+		// unlocked legacy path so the audit entry still lands. A lost
+		// audit entry is the worse outcome.
+		fmt.Fprintf(os.Stderr,
+			"ethos: audit-log: acquiring session lock %s: %v; falling through unlocked\n",
+			sessionID, lockErr)
+		_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
+	}
 	return nil
 }
 
@@ -238,7 +250,11 @@ func drainAuditStdin() []byte {
 		ch := make(chan []byte, 1)
 		go func() {
 			buf := make([]byte, 65536)
-			n, _ := os.Stdin.Read(buf)
+			n, err := os.Stdin.Read(buf)
+			if err != nil && !errors.Is(err, io.EOF) {
+				fmt.Fprintf(os.Stderr,
+					"ethos: audit-log: stdin read error: %v\n", err)
+			}
 			ch <- buf[:n]
 		}()
 		select {
@@ -260,6 +276,14 @@ func drainAuditStdin() []byte {
 			}
 		}
 		if err != nil {
+			// EOF is the normal terminator — silent. Any other error
+			// (deadline exceeded, EBADF, EIO) is a real failure that
+			// should be visible on stderr so the operator can correlate
+			// a truncated audit entry with the underlying fault.
+			if !errors.Is(err, io.EOF) {
+				fmt.Fprintf(os.Stderr,
+					"ethos: audit-log: stdin read error: %v\n", err)
+			}
 			break
 		}
 	}

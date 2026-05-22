@@ -972,6 +972,43 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 	}
 }
 
+// TestCloseDelegationAborted_NotExistDistinctMessage pins the D4
+// silent-failure contract: when the skeleton CloseDelegationSkeleton
+// returns an fs.ErrNotExist error, the stderr line names it as an
+// order-of-operations bug rather than the generic close-failure
+// message. The distinction matters because fs.ErrNotExist on close
+// means the depth-refusal path fired before WriteDelegationSkeleton —
+// a programmer bug, not a runtime fault — and the operator needs that
+// signal to find the offending call ordering in source.
+func TestCloseDelegationAborted_NotExistDistinctMessage(t *testing.T) {
+	// No skeleton on disk at this path — every CloseDelegationSkeleton
+	// call will return fs.ErrNotExist.
+	repo := t.TempDir()
+	missionID := "m-2026-05-22-005"
+	delegationID := "d-2026-05-22-077"
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = oldStderr })
+
+	closeDelegationAborted(repo, missionID, delegationID)
+	require.NoError(t, w.Close())
+	os.Stderr = oldStderr
+
+	stderrBytes, err := io.ReadAll(r)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	assert.Contains(t, stderrText, "order-of-operations bug",
+		"fs.ErrNotExist on close must surface as the distinct order-of-operations diagnostic")
+	assert.Contains(t, stderrText, delegationID)
+	assert.Contains(t, stderrText, missionID)
+	assert.NotContains(t, stderrText, "closing aborted skeleton:",
+		"the generic close-failure line must be suppressed on the fs.ErrNotExist branch")
+}
+
 // TestDispatchTierB_LockAcquireFailureRollsBackCounter asserts the
 // ID-rollback contract on the lock-acquisition failure path. NewID
 // allocates a delegation_id and bumps the counter; if a subsequent
