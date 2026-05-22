@@ -972,6 +972,71 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 	}
 }
 
+// TestDispatchTierB_LockAcquireFailureRollsBackCounter asserts the
+// ID-rollback contract on the lock-acquisition failure path. NewID
+// allocates a delegation_id and bumps the counter; if a subsequent
+// step in dispatchTierB fails — here, AcquireMissionLock — the
+// deferred release(false) must decrement the counter back. Otherwise
+// every transient lock failure permanently burns one delegation ID,
+// drifting the per-day counter away from the actual on-disk record
+// count.
+//
+// Failure injection: pre-create a directory at the per-mission .lock
+// path. os.OpenFile(O_RDWR) refuses to open a directory, so
+// AcquireMissionLock returns an error and the dispatch falls into
+// the deferred rollback path.
+func TestDispatchTierB_LockAcquireFailureRollsBackCounter(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-05-22-004"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	// Stage a directory at the lock path so AcquireMissionLock's
+	// os.OpenFile call fails with EISDIR. The mission directory itself
+	// must exist; the .lock entry must be a directory rather than a
+	// regular file.
+	missionDir := filepath.Join(repo, ".ethos", "missions", missionID)
+	require.NoError(t, os.MkdirAll(filepath.Join(missionDir, ".lock"), 0o700))
+
+	// Snapshot the counter before dispatch. The counter file lives at
+	// <home>/.punt-labs/ethos/counters/delegations-YYYY-MM-DD. We have
+	// to allocate one ID first to materialize the counter file (a
+	// missing file reads as 0), then check that the rollback returns
+	// to that pre-dispatch value.
+	day := time.Now().UTC().Format("2006-01-02")
+	counterPath := filepath.Join(
+		home, ".punt-labs", "ethos", "counters", "delegations-"+day,
+	)
+	primer, primerRelease, err := mission.NewID(mission.NamespaceDelegations, time.Now())
+	require.NoError(t, err)
+	require.NotEmpty(t, primer)
+	primerRelease(true)
+	preValue, err := os.ReadFile(counterPath)
+	require.NoError(t, err)
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-roll"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "block", r.Decision,
+		"a lock-acquire failure must surface as a named block, not an allow")
+	assert.Contains(t, r.Reason, "acquiring mission lock")
+
+	postValue, err := os.ReadFile(counterPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(preValue), string(postValue),
+		"counter must roll back to pre-dispatch value when the lock acquire fails")
+}
+
 // TestHandlePreToolUse_TierBMalformedMissionID asserts the
 // security-review contract: a MISSION_ID that does not resolve to a
 // contract on disk surfaces as a block decision with a named reason.

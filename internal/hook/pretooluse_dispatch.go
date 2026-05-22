@@ -107,7 +107,14 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: allocating delegation id: %v", err))
 	}
-	releaseID(true)
+	// Deferred rollback: every dispatch failure between NewID and the
+	// successful skeleton write must return the counter to its pre-call
+	// value so the allocated ID is not burned. success flips to true
+	// only after WriteDelegationSkeleton returns nil — every earlier
+	// failure path leaves success=false and the deferred release(false)
+	// decrements the counter.
+	success := false
+	defer func() { releaseID(success) }()
 
 	repoRoot := tierBRepoRoot()
 	releaseMission, err := mission.AcquireMissionLock(repoRoot, missionID)
@@ -139,6 +146,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))
 	}
+	success = true
 
 	// Depth gate (DES-054 v5): walk parent_delegation chain and refuse
 	// if adding this spawn would exceed the configured ceiling. The
