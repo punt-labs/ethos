@@ -870,17 +870,63 @@ func DecodeContractStrict(data []byte, label string) (*Contract, error) {
 	return &c, nil
 }
 
-// List returns all mission IDs known to the store.
+// List returns all mission IDs known to the store. In two-tree
+// mode (NewStoreWithRoots), the union of the repo and global trees
+// is returned with repo-wins dedup — a mission ID present in both
+// trees appears once, sourced from the repo. In legacy single-tree
+// mode (NewStore), only the flat global directory is walked.
+//
+// The two trees have different file shapes: the repo tree carries
+// per-mission directories (<repoRoot>/.ethos/missions/<id>/contract.yaml),
+// the global tree carries flat files (<globalRoot>/missions/<id>.yaml).
+// Both shapes are normalized to a bare mission ID before merging.
 func (s *Store) List() ([]string, error) {
-	entries, err := os.ReadDir(s.missionsDir())
+	seen := make(map[string]struct{})
+	var ids []string
+
+	// Repo tree (when active). A per-mission subdirectory holding
+	// contract.yaml counts as one mission. Empty subdirectories or
+	// directories without a contract.yaml are skipped — they may be
+	// in-flight Creates or stale state, not first-class entries.
+	if s.twoTreeStorage && s.repoRoot != "" {
+		repoEntries, err := os.ReadDir(s.repoMissionsDir())
+		switch {
+		case err == nil:
+			for _, entry := range repoEntries {
+				if !entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if strings.HasPrefix(name, ".") {
+					continue
+				}
+				contractFile := filepath.Join(s.repoMissionsDir(), name, "contract.yaml")
+				if _, statErr := os.Stat(contractFile); statErr != nil {
+					continue
+				}
+				if _, dup := seen[name]; dup {
+					continue
+				}
+				seen[name] = struct{}{}
+				ids = append(ids, name)
+			}
+		case os.IsNotExist(err):
+			// First-run repo with no missions yet — fall through.
+		default:
+			return nil, fmt.Errorf("reading repo missions directory: %w", err)
+		}
+	}
+
+	// Global tree. Flat-shape files; sibling artifacts are filtered
+	// by isContractFile.
+	globalEntries, err := os.ReadDir(s.missionsDir())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return ids, nil
 		}
 		return nil, fmt.Errorf("reading missions directory: %w", err)
 	}
-	var ids []string
-	for _, entry := range entries {
+	for _, entry := range globalEntries {
 		if entry.IsDir() {
 			continue
 		}
@@ -888,7 +934,12 @@ func (s *Store) List() ([]string, error) {
 		if !isContractFile(name) {
 			continue
 		}
-		ids = append(ids, strings.TrimSuffix(name, ".yaml"))
+		id := strings.TrimSuffix(name, ".yaml")
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
 	}
 	return ids, nil
 }

@@ -3651,3 +3651,208 @@ func TestStore_CreateSkipsCorruptMissionDuringConflictCheck(t *testing.T) {
 	assert.Contains(t, stderr, "m-2026-04-08-099")
 	assert.Contains(t, stderr, "skipping mission")
 }
+
+// --- DES-054 phase 1: two-root Store dispatch ---
+
+// TestStore_TwoRoot_CreateWritesToRepoTree asserts that a Store
+// constructed with NewStoreWithRoots writes a new mission under
+// <repoRoot>/.ethos/missions/<id>/ rather than the legacy
+// <globalRoot>/missions/<id>.yaml shape.
+func TestStore_TwoRoot_CreateWritesToRepoTree(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-05-22-001")
+
+	require.NoError(t, s.Create(c))
+
+	// The per-mission directory must exist under the repo tree.
+	repoContract := filepath.Join(repoRoot, ".ethos", "missions",
+		"m-2026-05-22-001", "contract.yaml")
+	_, err := os.Stat(repoContract)
+	require.NoError(t, err, "contract must land under repo tree")
+
+	// The legacy global path must NOT exist.
+	globalContract := filepath.Join(globalRoot, "missions",
+		"m-2026-05-22-001.yaml")
+	_, err = os.Stat(globalContract)
+	assert.True(t, os.IsNotExist(err),
+		"two-tree Create must not touch the global tree")
+}
+
+// TestStore_TwoRoot_LoadFallsBackToGlobal asserts that a mission
+// living only in the legacy global tree is still loadable by a
+// two-tree Store — the read path is repo-first with global fallback,
+// the DES-054 backward-compat contract.
+func TestStore_TwoRoot_LoadFallsBackToGlobal(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	// Plant a mission directly in the legacy global tree via a
+	// legacy single-root Store.
+	legacy := NewStore(globalRoot)
+	c := newContract("m-2026-05-22-002")
+	require.NoError(t, legacy.Create(c))
+
+	// A fresh two-tree Store must see the legacy mission via the
+	// global fallback even though the repo tree has nothing.
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	loaded, err := s.Load("m-2026-05-22-002")
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-05-22-002", loaded.MissionID)
+}
+
+// TestStore_TwoRoot_ListUnionsBothTrees asserts that List walks
+// both trees and dedups by mission ID. Repo entries win on
+// collision.
+func TestStore_TwoRoot_ListUnionsBothTrees(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	// Mission A in global only.
+	legacy := NewStore(globalRoot)
+	require.NoError(t, legacy.Create(disjointContract("m-2026-05-22-010")))
+
+	// Mission B in repo only (via the two-tree store).
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	require.NoError(t, s.Create(disjointContract("m-2026-05-22-011")))
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "m-2026-05-22-010", "global-only mission must be listed")
+	assert.Contains(t, ids, "m-2026-05-22-011", "repo-only mission must be listed")
+}
+
+// TestStore_TwoRoot_UpdateStaysInItsLayer asserts that an Update
+// on a mission loaded from the global tree writes back to the global
+// tree, never silently copying to the repo tree. DES-054 phase 1
+// promise: "layer where Load found it; never copy across".
+func TestStore_TwoRoot_UpdateStaysInItsLayer(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	// Plant a mission in the global tree.
+	legacy := NewStore(globalRoot)
+	c := newContract("m-2026-05-22-020")
+	require.NoError(t, legacy.Create(c))
+
+	// The two-tree Store loads and updates it.
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	loaded, err := s.Load("m-2026-05-22-020")
+	require.NoError(t, err)
+	loaded.Context = "updated via two-tree store"
+	require.NoError(t, s.Update(loaded))
+
+	// The repo tree must be empty — no silent copy.
+	repoContract := filepath.Join(repoRoot, ".ethos", "missions",
+		"m-2026-05-22-020", "contract.yaml")
+	_, err = os.Stat(repoContract)
+	assert.True(t, os.IsNotExist(err),
+		"Update must not migrate a global-tree mission to the repo tree")
+
+	// The global contract must carry the new context.
+	reloaded, err := s.Load("m-2026-05-22-020")
+	require.NoError(t, err)
+	assert.Equal(t, "updated via two-tree store", reloaded.Context)
+}
+
+// TestStore_TwoRoot_CloseStaysInItsLayer asserts that Close on a
+// mission loaded from the global tree leaves the global tree as the
+// source of truth and writes no repo-tree files (other than the
+// trace summary, which is a separate surface).
+func TestStore_TwoRoot_CloseStaysInItsLayer(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	legacy := NewStore(globalRoot)
+	c := newContract("m-2026-05-22-021")
+	require.NoError(t, legacy.Create(c))
+	submitRoundResult(t, legacy, c, VerdictPass)
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	_, err := s.Close("m-2026-05-22-021", StatusClosed)
+	require.NoError(t, err)
+
+	// The global contract must reflect the closed status.
+	reloaded, err := s.Load("m-2026-05-22-021")
+	require.NoError(t, err)
+	assert.Equal(t, StatusClosed, reloaded.Status)
+
+	// No repo-tree per-mission directory should have been created
+	// for this mission's data (the missions.jsonl trace lives at
+	// .ethos/missions.jsonl, not under .ethos/missions/<id>/).
+	repoMissionDir := filepath.Join(repoRoot, ".ethos", "missions",
+		"m-2026-05-22-021")
+	_, err = os.Stat(repoMissionDir)
+	assert.True(t, os.IsNotExist(err),
+		"Close must not create a repo-tree per-mission dir for a global mission")
+}
+
+// TestStore_TwoRoot_ResultsAndReflectionsInRepoTree asserts that
+// AppendResult and AppendReflection on a repo-tree mission write
+// their sibling YAML files under the per-mission directory, not in
+// the flat legacy global directory.
+func TestStore_TwoRoot_ResultsAndReflectionsInRepoTree(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	c := newContract("m-2026-05-22-030")
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+
+	// results.yaml must live under the per-mission directory.
+	repoResults := filepath.Join(repoRoot, ".ethos", "missions",
+		"m-2026-05-22-030", "results.yaml")
+	_, err := os.Stat(repoResults)
+	require.NoError(t, err, "results.yaml must land in the per-mission dir")
+
+	// log.jsonl must also live under the per-mission directory.
+	repoLog := filepath.Join(repoRoot, ".ethos", "missions",
+		"m-2026-05-22-030", "log.jsonl")
+	_, err = os.Stat(repoLog)
+	require.NoError(t, err, "log.jsonl must land in the per-mission dir")
+}
+
+// TestStore_TwoRoot_LoadEventsFromRepoTree asserts that the public
+// event-log read path walks the repo-tree log.jsonl when the
+// mission lives in the repo layer.
+func TestStore_TwoRoot_LoadEventsFromRepoTree(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	c := newContract("m-2026-05-22-031")
+	require.NoError(t, s.Create(c))
+
+	events, _, err := s.LoadEvents("m-2026-05-22-031")
+	require.NoError(t, err)
+	require.NotEmpty(t, events, "Create must produce at least the create event")
+	assert.Equal(t, "create", events[0].Event)
+}
+
+// TestStore_TwoRoot_LegacyTraceRepoRootStaysFlat asserts that a
+// Store built with NewStore(root).WithRepoRoot(repoRoot) keeps the
+// legacy flat <root>/missions/<id>.yaml shape — WithRepoRoot is
+// trace-only and must not silently flip storage layouts.
+func TestStore_TwoRoot_LegacyTraceRepoRootStaysFlat(t *testing.T) {
+	globalRoot := t.TempDir()
+	repoRoot := t.TempDir()
+
+	s := NewStore(globalRoot).WithRepoRoot(repoRoot)
+	c := newContract("m-2026-05-22-040")
+	require.NoError(t, s.Create(c))
+
+	// The contract must land in the flat global tree, not the
+	// per-mission repo directory.
+	flatContract := filepath.Join(globalRoot, "missions",
+		"m-2026-05-22-040.yaml")
+	_, err := os.Stat(flatContract)
+	require.NoError(t, err, "legacy WithRepoRoot must keep the flat shape")
+
+	repoMissionDir := filepath.Join(repoRoot, ".ethos", "missions",
+		"m-2026-05-22-040")
+	_, err = os.Stat(repoMissionDir)
+	assert.True(t, os.IsNotExist(err),
+		"WithRepoRoot must not create the two-tree per-mission dir")
+}
