@@ -55,7 +55,7 @@ substantively equivalent form.
 
 ## New finding from comparing v4 against the current code
 
-### [REQ] Finding 1. `counter.yaml` is a file-shape break, not a permissive-decode-compatible append.
+### [REQ] Finding 1. `counter.yaml` is a file-shape break, not a permissive-decode-compatible append
 
 The round-2 finding E8 asked for an invariant pinning `counter.yaml`
 to permissive YAML decoding so future schema additions could
@@ -163,7 +163,7 @@ final draft and the design converges.
 These are notes on shape choices in v4 that I find defensible but
 worth recording so the reasoning survives.
 
-### Observation 1. The v4 read-fallback at line 214-218 is read-only and does not concatenate.
+### Observation 1. The v4 read-fallback at line 214-218 is read-only and does not concatenate
 
 My round-2 edit-1 table proposed a **write-time** migration: the
 first write to a session whose legacy audit log exists triggers a
@@ -199,7 +199,7 @@ I would not edit v4 to add the write-time migration. The note is
 recorded so the next reviewer who asks "why isn't the migration
 transparent" has the answer.
 
-### Observation 2. Phase 1 ships the storage move; phase 3 ships the migration tool.
+### Observation 2. Phase 1 ships the storage move; phase 3 ships the migration tool
 
 Line 407 puts the two-root storage state machine in **phase 1**.
 Line 409 puts `ethos audit migrate` in **phase 3**. If phase 1 ships
@@ -219,7 +219,7 @@ wider than the create-lock window. **[IMPL]** — bwk can add the
 sentence when implementing phase 1 if the leader confirms the
 phasing.
 
-### Observation 3. I7 verdict semantics for Tier A.
+### Observation 3. I7 verdict semantics for Tier A
 
 The verdict domain at line 327-329 (`I7`) is `{open, pass, fail,
 error, aborted}`. Tier A delegations have no contract and no
@@ -236,7 +236,7 @@ the invariant at I7 should either restrict the domain to Tier B or
 add a clause for Tier A. **[IMPL]** — bwk to resolve at
 implementation time; document in the delegation record schema.
 
-### Observation 4. `max_delegation_depth` refusal leaves Tier B mission record dangling.
+### Observation 4. `max_delegation_depth` refusal leaves Tier B mission record dangling
 
 Line 281 says exceeding `max_delegation_depth` refuses the spawn at
 PreToolUse-on-Agent with a clear error. For Tier B spawns, the

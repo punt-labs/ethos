@@ -138,7 +138,7 @@ branch", add a suppression rule:
 
 I8 reads:
 
-```
+```text
 d.tier = "A"  ->  d.contract = nil
 d.tier = "B"  ->  d.contract != nil
 ```
@@ -154,7 +154,7 @@ contract layer.
 
 Suggest adding:
 
-```
+```text
 -- A Tier B delegation has a live contract at spawn time.
 I8b: forall d in delegations:
         d.tier = "B"  ->  d.contract != nil /\ d.contract.closed_at = ""

@@ -33,7 +33,7 @@ We spot-check each round-2 finding against the v4 text.
 
 v4 §"Concurrency invariants", lines 341–342:
 
-```
+```text
 -- Tier domain is closed: every delegation belongs to exactly A or B.
 -- (NEW in v4 per jra F1.)
 I8-type: forall d in delegations: d.tier ∈ {"A", "B"}
@@ -46,7 +46,7 @@ constraint on `tier` is stated. *Landed.*
 
 v4 §"Concurrency invariants", lines 344–347:
 
-```
+```text
 -- Tier is immutable: a delegation never transitions between tiers.
 -- (NEW in v4 per jra F2.)
 I8-stable: forall d in delegations, t1 < t2:
@@ -109,7 +109,7 @@ v4 §"Migration", lines 229 and 243:
 
 > **`Counter.yaml` schema versioning** (per jra F6 / rsc E8):
 > explicit `schema_version: 2` at top.
-
+>
 > `counter.yaml` is read with permissive YAML decoding (current
 > behaviour by-default; pinned by invariant in v4). Future schema
 > additions append top-level keys; existing keys never change
@@ -117,7 +117,7 @@ v4 §"Migration", lines 229 and 243:
 
 And as a first-class invariant, lines 357–358:
 
-```
+```text
 I9-counter: read(counter.yaml) uses permissive YAML decoding
     /\ forall version v, key k in v: meaning(k) is monotonic across versions
 ```

@@ -14,6 +14,7 @@ triggers:
 
 > Emit advisory to stderr UNLESS suppression conditions apply
 > (per rop R1 iii):
+>
 > - `ETHOS_QUIET_ADVICE=1` is set in the environment, OR
 > - `PARENT_SESSION_ID` is already populated (nested ad-hoc spawn —
 >   the parent already saw the advisory; suppress the recursive
@@ -28,7 +29,7 @@ inline. Pinned.
 
 **Landed.** v4 lines 351–352 add:
 
-```
+```text
 I8-live: forall d in delegations:
         d.tier = "B"  ->  d.contract != nil /\ d.contract.closed_at = ""
 ```

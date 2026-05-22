@@ -67,7 +67,7 @@ Named and justified by the phase pipeline. *Landed.*
 
 v5 invariant `I7`, lines 342–349:
 
-```
+```text
 I7: forall d in delegations, t1 < t2:
         d.verdict(t1) = "open"  \/  d.verdict(t2) = d.verdict(t1)
     /\
@@ -186,7 +186,7 @@ monotonicity across schema versions of `counter.yaml`. The v5
 form drops `counter.yaml` entirely and pins the sibling-file
 shape:
 
-```
+```text
 I9-counter: forall ns, date:
         counters/<ns>-<date> exists  ->  contents is a single integer
     /\  no counter file ever changes format
@@ -213,7 +213,7 @@ We check this against the closure arguments that depended on
   API closes the burn-on-failure case: a counter increment that
   is not committed is decremented. The sibling-file form does not
   affect this — the operation is still flock + read-int + decide
-  + write-int + flock-release. *Closed.*
+  - write-int + flock-release. *Closed.*
 
 We observe a small obligation v5 inherits from v4: the "no counter
 file ever changes format" conjunct is a *meta-invariant* on future
@@ -230,7 +230,7 @@ The v4 form pinned per-session and per-delegation audit-log
 atomicity. The v5 form collapses to per-session only, because v5
 storage drops per-delegation `audit.jsonl`:
 
-```
+```text
 I10-audit-atomic: forall e1, e2 written to <session-dir>/audit.jsonl:
         flock(<session-id>.lock) is held during each append
     /\  write_order(e1, e2) = file_position_order(e1, e2)

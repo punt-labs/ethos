@@ -86,7 +86,7 @@ the existing codebase.
   evaluator. Satisfiable. We probe the boundary in §4 below.
 
 - **I5b (fail policy).** Three-way disposition (block / block / warn
-  + allow) on predicate outcome and strict flag. Satisfiable in
+  \+ allow) on predicate outcome and strict flag. Satisfiable in
   isolation. The interaction with I8 is examined in §4.
 
 - **I6 (predicate scope under inherits_contract).** v3 makes the
@@ -128,7 +128,7 @@ enumerated. We summarise the non-trivial three-way interactions in §6.
 
 I8 says, in B notation:
 
-```
+```text
 I8: ∀ d ∈ delegations.
        (d.tier = "A"  ⇒  d.contract = nil)
     ∧  (d.tier = "B"  ⇒  d.contract ≠ nil)
@@ -136,7 +136,7 @@ I8: ∀ d ∈ delegations.
 
 The biconditional form is the cleaner statement:
 
-```
+```text
 I8 (rewritten): ∀ d ∈ delegations. d.contract = nil  ⇔  d.tier = "A"
 ```
 
@@ -145,7 +145,7 @@ yield the biconditional, *provided* `tier ∈ {"A", "B"}` is a total
 typing constraint (no third value). We register that constraint
 explicitly:
 
-```
+```text
 I8-type: ∀ d ∈ delegations. d.tier ∈ {"A", "B"}
 ```
 
@@ -188,7 +188,7 @@ We add one further refinement.
 
 **Finding F2 `[REQ]`.** Add an invariant that pins tier *immutability*:
 
-```
+```text
 I8-stable: ∀ d ∈ delegations, t1 < t2. d.tier(t1) = d.tier(t2)
 ```
 
@@ -277,7 +277,7 @@ will read this field; it is part of the contract.
 
 I5b reads:
 
-```
+```text
 I5b: evaluated(p, t) ∧ predicate(p, t) = false              ⇒  block(t)
    ∧ evaluated(p, t) ∧ predicate(p, t) = unevaluable ∧ strict   ⇒  block(t)
    ∧ evaluated(p, t) ∧ predicate(p, t) = unevaluable ∧ ¬strict  ⇒  warn(t) ∧ allow(t)
