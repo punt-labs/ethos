@@ -472,34 +472,8 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	if err != nil {
 		return fmt.Errorf("close delegation: marshaling record: %w", err)
 	}
-	dir := filepath.Dir(recordPath)
-	tmp, err := os.CreateTemp(dir, "record-*.yaml.tmp")
-	if err != nil {
-		return fmt.Errorf("close delegation: creating temp file in %s: %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation: writing %s: %w", tmpPath, err)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation: chmod %s: %w", tmpPath, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation: syncing %s: %w", tmpPath, err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation: closing %s: %w", tmpPath, err)
-	}
-	if err := os.Rename(tmpPath, recordPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation: renaming %s -> %s: %w", tmpPath, recordPath, err)
+	if err := writeAtomicFile(filepath.Dir(recordPath), "record-*.yaml.tmp", recordPath, data); err != nil {
+		return fmt.Errorf("close delegation: %w", err)
 	}
 	return nil
 }
@@ -568,33 +542,8 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 	if err != nil {
 		return fmt.Errorf("close delegation skeleton: marshaling record: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, "record-*.yaml.tmp")
-	if err != nil {
-		return fmt.Errorf("close delegation skeleton: creating temp file in %s: %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation skeleton: writing %s: %w", tmpPath, err)
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation skeleton: chmod %s: %w", tmpPath, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation skeleton: syncing %s: %w", tmpPath, err)
-	}
-	if err := tmp.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation skeleton: closing %s: %w", tmpPath, err)
-	}
-	if err := os.Rename(tmpPath, recordPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close delegation skeleton: renaming %s -> %s: %w", tmpPath, recordPath, err)
+	if err := writeAtomicFile(dir, "record-*.yaml.tmp", recordPath, data); err != nil {
+		return fmt.Errorf("close delegation skeleton: %w", err)
 	}
 	return nil
 }

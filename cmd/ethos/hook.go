@@ -265,6 +265,14 @@ func drainAuditStdin() []byte {
 		// shape — see TestSubprocess_AuditLog). Multi-chunk fallback
 		// without a per-read deadline is a deferred follow-up
 		// (Copilot on PR #327).
+		//
+		// On timeout (the 1-second outer case) the goroutine
+		// remains blocked on os.Stdin.Read; the parent hook process
+		// is single-shot per audit-log invocation and exits within
+		// seconds of this function returning, so the goroutine is
+		// cleaned up at process teardown. The leak is bounded by
+		// process lifetime, not a per-call accumulation (Bugbot LOW
+		// on PR #327).
 		ch := make(chan []byte, 1)
 		go func() {
 			buf := make([]byte, 65536)
