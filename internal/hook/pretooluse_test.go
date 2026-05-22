@@ -595,6 +595,121 @@ func TestHandlePreToolUse_StatAmbiguous_LogsAndBlocks(t *testing.T) {
 		"stderr audit line must name the target path")
 }
 
+// TestHandlePreToolUse_TierAAdvice covers the DES-054 Tier A advice
+// path. The hook emits a one-line suggestion to stderr when an
+// ad-hoc Agent spawn has no governance context, and suppresses the
+// line when the operator has opted out or when the spawn is nested
+// under a session that already saw the advice.
+//
+// Five cases pin the contract:
+//
+//  1. Non-Agent tool → no advice (the advice is Agent-specific).
+//  2. Agent tool, bare env → advice on stderr, allow.
+//  3. Agent tool, ETHOS_QUIET_ADVICE=1 → no advice, allow.
+//  4. Agent tool, PARENT_SESSION_ID set → no advice, allow.
+//  5. Agent tool, both signals set → no advice (either alone
+//     suffices, not both required).
+func TestHandlePreToolUse_TierAAdvice(t *testing.T) {
+	tests := []struct {
+		name         string
+		tool         string
+		quietAdvice  string
+		parentSessID string
+		wantAdvice   bool
+	}{
+		{"non-Agent tool emits no advice", "Read", "", "", false},
+		{"bare Agent spawn emits advice", "Agent", "", "", true},
+		{"ETHOS_QUIET_ADVICE=1 silences", "Agent", "1", "", false},
+		{"PARENT_SESSION_ID silences", "Agent", "", "outer-sess-123", false},
+		{"both signals silence", "Agent", "1", "outer-sess-123", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+			t.Setenv("ETHOS_QUIET_ADVICE", tt.quietAdvice)
+			t.Setenv("PARENT_SESSION_ID", tt.parentSessID)
+
+			oldStderr := os.Stderr
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			os.Stderr = w
+			t.Cleanup(func() { os.Stderr = oldStderr })
+
+			payload := map[string]any{
+				"tool_name":  tt.tool,
+				"tool_input": map[string]any{},
+			}
+			data, err := json.Marshal(payload)
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			hookErr := HandlePreToolUse(strings.NewReader(string(data)), &out)
+			require.NoError(t, w.Close())
+			os.Stderr = oldStderr
+			require.NoError(t, hookErr)
+
+			stderrBytes, readErr := io.ReadAll(r)
+			require.NoError(t, readErr)
+			stderrText := string(stderrBytes)
+
+			var result PreToolUseResult
+			require.NoError(t, json.Unmarshal(out.Bytes(), &result))
+			assert.Equal(t, "allow", result.Decision,
+				"PreToolUse must allow regardless of advice state")
+
+			if tt.wantAdvice {
+				assert.Contains(t, stderrText, "ad-hoc Agent spawn")
+				assert.Contains(t, stderrText, "ethos mission dispatch")
+				assert.Contains(t, stderrText, "ETHOS_QUIET_ADVICE=1")
+			} else {
+				assert.NotContains(t, stderrText, "ad-hoc Agent spawn",
+					"advice must be silenced")
+			}
+		})
+	}
+}
+
+// TestTierAAdviceLiteral pins the exact stderr line shape against
+// DESIGN.md §"PreToolUse-on-Agent". A drift here means the design
+// doc and the runtime disagree — fix one or the other.
+func TestTierAAdviceLiteral(t *testing.T) {
+	want := "ethos: ad-hoc Agent spawn (no mission contract). " +
+		"Consider 'ethos mission dispatch' for governed delegation. " +
+		"(set ETHOS_QUIET_ADVICE=1 to silence)"
+	assert.Equal(t, want, tierAAdvice)
+}
+
+// TestMaybeEmitTierAAdvice exercises the helper directly. Each
+// suppression signal is independent — clearing the other must still
+// suppress.
+func TestMaybeEmitTierAAdvice(t *testing.T) {
+	tests := []struct {
+		name         string
+		quietAdvice  string
+		parentSessID string
+		wantWrite    bool
+	}{
+		{"bare env writes advice", "", "", true},
+		{"quiet=1 suppresses", "1", "", false},
+		{"quiet=other does not suppress", "yes", "", true},
+		{"parent session suppresses", "", "sess-1", false},
+		{"both set suppresses", "1", "sess-1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ETHOS_QUIET_ADVICE", tt.quietAdvice)
+			t.Setenv("PARENT_SESSION_ID", tt.parentSessID)
+			var buf bytes.Buffer
+			maybeEmitTierAAdvice(&buf)
+			if tt.wantWrite {
+				assert.Contains(t, buf.String(), "ad-hoc Agent spawn")
+			} else {
+				assert.Empty(t, buf.String())
+			}
+		})
+	}
+}
+
 // Confirm that os.Getenv is the actual mechanism (not a mock).
 func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	key := "ETHOS_VERIFIER_ALLOWLIST"
