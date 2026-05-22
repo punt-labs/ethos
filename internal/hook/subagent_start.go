@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -114,6 +115,15 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	// without re-scanning the mission store.
 	verifierMissions, err := checkVerifierHash(agentType, deps)
 	if err != nil {
+		// DES-054 phase 2d: when the refusal fires after PreToolUse-on-
+		// Agent wrote a delegation skeleton (MISSION_ID + DELEGATION_ID
+		// both set in env), finalize the skeleton with verdict=aborted
+		// so an audit query distinguishes a hash-gate refusal from a
+		// spawn that ran and failed downstream. The close error is
+		// logged but never masks the original refusal — the operator's
+		// primary diagnostic stays the hash drift, not a follow-on
+		// audit-store failure.
+		closeSkeletonOnHashRefusal(deps.RepoRoot)
 		// Return a non-nil error so cmd/ethos/hook.go's runner exits
 		// non-zero, which Claude Code surfaces to the operator as a
 		// fatal subagent launch failure. The error string carries
@@ -782,6 +792,65 @@ func hashPrefix(h string) string {
 		return h
 	}
 	return h[:n]
+}
+
+// closeSkeletonOnHashRefusal finalizes a Tier B delegation skeleton with
+// verdict=aborted when the verifier hash gate refuses the spawn AFTER
+// PreToolUse-on-Agent has written the skeleton record. The trigger is
+// the joint presence of MISSION_ID and DELEGATION_ID in the env — only
+// the Tier B dispatch sets both, so the close call cannot misfire on a
+// Tier A spawn or a legacy hook flow.
+//
+// repoRoot may be empty; the close call surfaces the resulting error to
+// stderr and returns. Errors do NOT propagate up to the caller — the
+// hash-gate refusal already carries the operator-facing diagnostic, and
+// a follow-on audit-store failure must not mask it.
+func closeSkeletonOnHashRefusal(repoRoot string) {
+	missionID := os.Getenv("MISSION_ID")
+	delegationID := os.Getenv("DELEGATION_ID")
+	if missionID == "" || delegationID == "" {
+		return
+	}
+	if repoRoot == "" {
+		fmt.Fprintln(os.Stderr,
+			"ethos: subagent-start: hash refusal: repoRoot empty; "+
+				"skipping skeleton close for "+delegationID)
+		return
+	}
+	// Acquire the per-delegation exclusive flock around the close
+	// so a concurrent SubagentStop or CLI close cannot interleave
+	// and produce a last-writer-wins verdict (Copilot MED on PR
+	// #327: closeSkeletonOnHashRefusal wrote record.yaml without
+	// the lock the rest of the dispatch path holds). Lock path is
+	// the same global tree the PreToolUse-on-Agent dispatch uses;
+	// derive it from os.UserHomeDir here to keep the close path
+	// independent of the dispatch's tierBGlobalRoot helper.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: subagent-start: hash refusal: user home dir: %v; "+
+				"skipping skeleton close for %q\n", err, delegationID)
+		return
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDelegationLock(globalRoot, delegationID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: subagent-start: hash refusal: acquiring delegation lock for %q: %v\n",
+			delegationID, err)
+		return
+	}
+	defer release()
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := mission.CloseDelegationSkeleton(
+		repoRoot, missionID, delegationID,
+		mission.DelegationVerdictAborted, closedAt,
+	); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: subagent-start: closing aborted skeleton %q: %v\n",
+			delegationID, err,
+		)
+	}
 }
 
 // resolveParentLine finds the primary Claude agent in the session roster

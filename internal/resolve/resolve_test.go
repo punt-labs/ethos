@@ -598,6 +598,107 @@ func TestRepoName_NoRemote(t *testing.T) {
 	assert.Equal(t, "", RepoName())
 }
 
+// --- ResolveMaxDelegationDepth tests (DES-054 v5) ---
+
+func TestResolveMaxDelegationDepth(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, root string) string // returns repoRoot to pass in
+		def     int
+		want    int
+		wantErr bool
+	}{
+		{
+			name: "no repo root returns default",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				return ""
+			},
+			def:  16,
+			want: 16,
+		},
+		{
+			name: "no config returns default",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				return root
+			},
+			def:  16,
+			want: 16,
+		},
+		{
+			name: "config without field returns default",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				dir := filepath.Join(root, ".punt-labs")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "ethos.yaml"),
+					[]byte("agent: claude\n"), 0o644))
+				return root
+			},
+			def:  16,
+			want: 16,
+		},
+		{
+			name: "explicit value overrides default",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				dir := filepath.Join(root, ".punt-labs")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "ethos.yaml"),
+					[]byte("max_delegation_depth: 4\n"), 0o644))
+				return root
+			},
+			def:  16,
+			want: 4,
+		},
+		{
+			name: "zero in config means default",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				dir := filepath.Join(root, ".punt-labs")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "ethos.yaml"),
+					[]byte("max_delegation_depth: 0\n"), 0o644))
+				return root
+			},
+			def:  16,
+			want: 16,
+		},
+		{
+			name: "negative value surfaces as error",
+			setup: func(t *testing.T, root string) string {
+				t.Helper()
+				dir := filepath.Join(root, ".punt-labs")
+				require.NoError(t, os.MkdirAll(dir, 0o755))
+				require.NoError(t, os.WriteFile(
+					filepath.Join(dir, "ethos.yaml"),
+					[]byte("max_delegation_depth: -3\n"), 0o644))
+				return root
+			},
+			def:     16,
+			want:    16,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := tt.setup(t, t.TempDir())
+			got, err := ResolveMaxDelegationDepth(root, tt.def)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // runGit runs a git command in the given directory.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()

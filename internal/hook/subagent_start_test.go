@@ -532,6 +532,79 @@ func TestSubagentStart_VerifierDriftedPersonalityRefusesSpawn(t *testing.T) {
 	assert.Contains(t, msg, "relaunch", "error must offer the relaunch recovery path")
 }
 
+// TestSubagentStart_HashRefusalClosesSkeletonAborted is the DES-054
+// phase 2d round 2 anchor: when the verifier hash gate refuses a Tier B
+// verifier spawn AND the dispatch path has already written a delegation
+// skeleton (MISSION_ID + DELEGATION_ID both set in env, RepoRoot wired
+// in deps), the subagent-start hook finalizes the skeleton record with
+// verdict=aborted before returning the refusal error.
+//
+// The test stages the on-disk skeleton directly via WriteDelegationSkeleton
+// (the same writer the pretooluse_dispatch path uses) so the assertion
+// is on the close path alone, not the full Tier B chain.
+func TestSubagentStart_HashRefusalClosesSkeletonAborted(t *testing.T) {
+	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	c := validVerifierContract("djb")
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// Drift the evaluator's personality so the hash gate refuses.
+	personalityPath := filepath.Join(dir, "personalities", "bernstein.md")
+	require.NoError(t, os.WriteFile(
+		personalityPath,
+		[]byte("# Bernstein\n\nDrifted between create and verifier spawn.\n"),
+		0o600,
+	))
+
+	// Pre-write the skeleton the way pretooluse_dispatch does. The repo
+	// tree for this test lives under the same temp dir so DelegationDir
+	// resolves to a writable location.
+	repoRoot := dir
+	delegationID := "d-2026-05-22-001"
+	_, err := mission.WriteDelegationSkeleton(repoRoot, c.MissionID, delegationID,
+		mission.DelegationSkeleton{
+			Tier:      mission.TierB,
+			AgentType: "djb",
+		})
+	require.NoError(t, err)
+
+	// Both env vars set; the hash refusal must finalize the skeleton.
+	t.Setenv("MISSION_ID", c.MissionID)
+	t.Setenv("DELEGATION_ID", delegationID)
+
+	sessionID := "verifier-test-djb"
+	require.NoError(t, sessions.Create(sessionID,
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: "12345", Persona: "claude"},
+		"", "",
+	))
+
+	payload := `{"agent_id":"sub-verifier","agent_type":"djb","session_id":"verifier-test-djb"}`
+
+	hookErr := HandleSubagentStartWithDeps(bytes.NewReader([]byte(payload)),
+		SubagentStartDeps{
+			Identities: idStore,
+			Sessions:   sessions,
+			Missions:   missions,
+			Hash:       hash,
+			RepoRoot:   repoRoot,
+		})
+	require.Error(t, hookErr, "drifted hash must refuse the spawn")
+
+	// The skeleton record must now carry verdict=aborted and a ClosedAt.
+	recordPath := filepath.Join(
+		mission.DelegationDir(repoRoot, c.MissionID, delegationID),
+		"record.yaml",
+	)
+	d, err := mission.LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, mission.DelegationVerdictAborted, d.Verdict,
+		"hash refusal must finalize the skeleton with verdict=aborted")
+	assert.NotEmpty(t, d.ClosedAt,
+		"hash refusal must stamp closed_at on the skeleton")
+}
+
 // TestSubagentStart_VerifierAggregatesMultipleDriftedMissions asserts
 // the H2 invariant: when the operator has edited one evaluator whose
 // content is shared by several open missions, the hook emits a single

@@ -3,11 +3,17 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
+	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -593,6 +599,646 @@ func TestHandlePreToolUse_StatAmbiguous_LogsAndBlocks(t *testing.T) {
 		"stderr audit line must fire on the non-IsNotExist branch")
 	assert.Contains(t, stderrText, target,
 		"stderr audit line must name the target path")
+}
+
+// TestHandlePreToolUse_TierAAdvice covers the DES-054 Tier A advice
+// path. The hook emits a one-line suggestion to stderr when an
+// ad-hoc Agent spawn has no governance context, and suppresses the
+// line when the operator has opted out or when the spawn is nested
+// under a session that already saw the advice.
+//
+// Five cases pin the contract:
+//
+//  1. Non-Agent tool → no advice (the advice is Agent-specific).
+//  2. Agent tool, bare env → advice on stderr, allow.
+//  3. Agent tool, ETHOS_QUIET_ADVICE=1 → no advice, allow.
+//  4. Agent tool, PARENT_SESSION_ID set → no advice, allow.
+//  5. Agent tool, both signals set → no advice (either alone
+//     suffices, not both required).
+func TestHandlePreToolUse_TierAAdvice(t *testing.T) {
+	tests := []struct {
+		name         string
+		tool         string
+		quietAdvice  string
+		parentSessID string
+		wantAdvice   bool
+	}{
+		{"non-Agent tool emits no advice", "Read", "", "", false},
+		{"bare Agent spawn emits advice", "Agent", "", "", true},
+		{"ETHOS_QUIET_ADVICE=1 silences", "Agent", "1", "", false},
+		{"PARENT_SESSION_ID silences", "Agent", "", "outer-sess-123", false},
+		{"both signals silence", "Agent", "1", "outer-sess-123", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+			t.Setenv("ETHOS_QUIET_ADVICE", tt.quietAdvice)
+			t.Setenv("PARENT_SESSION_ID", tt.parentSessID)
+			t.Setenv("MISSION_ID", "")
+			// Isolate the per-day counter root so the Agent path's
+			// DELEGATION_ID allocation does not touch ~/.punt-labs/.
+			t.Setenv("HOME", t.TempDir())
+
+			oldStderr := os.Stderr
+			r, w, err := os.Pipe()
+			require.NoError(t, err)
+			os.Stderr = w
+			t.Cleanup(func() { os.Stderr = oldStderr })
+
+			payload := map[string]any{
+				"tool_name":  tt.tool,
+				"tool_input": map[string]any{},
+			}
+			data, err := json.Marshal(payload)
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			hookErr := HandlePreToolUse(strings.NewReader(string(data)), &out)
+			require.NoError(t, w.Close())
+			os.Stderr = oldStderr
+			require.NoError(t, hookErr)
+
+			stderrBytes, readErr := io.ReadAll(r)
+			require.NoError(t, readErr)
+			stderrText := string(stderrBytes)
+
+			var result PreToolUseResult
+			require.NoError(t, json.Unmarshal(out.Bytes(), &result))
+			assert.Equal(t, "allow", result.Decision,
+				"PreToolUse must allow regardless of advice state")
+
+			if tt.wantAdvice {
+				assert.Contains(t, stderrText, "ad-hoc Agent spawn")
+				assert.Contains(t, stderrText, "ethos mission dispatch")
+				assert.Contains(t, stderrText, "ETHOS_QUIET_ADVICE=1")
+			} else {
+				assert.NotContains(t, stderrText, "ad-hoc Agent spawn",
+					"advice must be silenced")
+			}
+		})
+	}
+}
+
+// TestTierAAdviceLiteral pins the exact stderr line shape against
+// DESIGN.md §"PreToolUse-on-Agent". A drift here means the design
+// doc and the runtime disagree — fix one or the other.
+func TestTierAAdviceLiteral(t *testing.T) {
+	want := "ethos: ad-hoc Agent spawn (no mission contract). " +
+		"Consider 'ethos mission dispatch' for governed delegation. " +
+		"(set ETHOS_QUIET_ADVICE=1 to silence)"
+	assert.Equal(t, want, tierAAdvice)
+}
+
+// TestMaybeEmitTierAAdvice exercises the helper directly. Each
+// suppression signal is independent — clearing the other must still
+// suppress.
+func TestMaybeEmitTierAAdvice(t *testing.T) {
+	tests := []struct {
+		name         string
+		quietAdvice  string
+		parentSessID string
+		wantWrite    bool
+	}{
+		{"bare env writes advice", "", "", true},
+		{"quiet=1 suppresses", "1", "", false},
+		{"quiet=other does not suppress", "yes", "", true},
+		{"parent session suppresses", "", "sess-1", false},
+		{"both set suppresses", "1", "sess-1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("ETHOS_QUIET_ADVICE", tt.quietAdvice)
+			t.Setenv("PARENT_SESSION_ID", tt.parentSessID)
+			var buf bytes.Buffer
+			maybeEmitTierAAdvice(&buf)
+			if tt.wantWrite {
+				assert.Contains(t, buf.String(), "ad-hoc Agent spawn")
+			} else {
+				assert.Empty(t, buf.String())
+			}
+		})
+	}
+}
+
+// stageContract creates a minimal valid mission contract in the
+// given home directory and returns the missionID. Used by Tier B
+// dispatch tests that need a real on-disk contract for Store.Load
+// to resolve. Isolates HOME so the counter file and contract path
+// land under t.TempDir().
+func stageContract(t *testing.T, home, missionID string) {
+	t.Helper()
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	store := mission.NewStore(root)
+	c := &mission.Contract{
+		MissionID: missionID,
+		Status:    mission.StatusOpen,
+		CreatedAt: "2026-05-22T21:30:00Z",
+		UpdatedAt: "2026-05-22T21:30:00Z",
+		Leader:    "claude",
+		Worker:    "bwk",
+		Evaluator: mission.Evaluator{
+			Handle:   "djb",
+			PinnedAt: "2026-05-22T21:30:00Z",
+		},
+		Inputs: mission.Inputs{
+			Ticket: "ethos-7i29",
+			Files:  []string{"internal/hook/pretooluse.go"},
+		},
+		WriteSet:        []string{"internal/hook/", "internal/mission/"},
+		Tools:           []string{"Read", "Write", "Edit"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget: mission.Budget{
+			Rounds:              3,
+			ReflectionAfterEach: true,
+		},
+		CurrentRound: 1,
+	}
+	require.NoError(t, store.Create(c))
+}
+
+// stageRepoRoot creates a fake repo directory and runs git init so
+// FindRepoRoot stops there rather than walking up to the real ethos
+// checkout. Returns the repo path. The test chdirs into the repo and
+// restores cwd on cleanup.
+func stageRepoRoot(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", repo)
+	cmd.Env = []string{
+		"HOME=" + t.TempDir(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"PATH=" + os.Getenv("PATH"),
+	}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git init failed: %s", out)
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	return repo
+}
+
+// TestHandlePreToolUse_TierBDispatch covers the MISSION_ID-set
+// branch. The hook resolves the contract, allocates a delegation_id,
+// writes the record skeleton, and emits additional_env with
+// DELEGATION_ID, MISSION_ID (echoed), PARENT_SESSION_ID (from input
+// session_id), and MISSION_ARTIFACTS_DIR (the per-delegation dir).
+//
+// The on-disk record.yaml is asserted at the expected path:
+// <repo>/.ethos/missions/<mission-id>/delegations/<NN>/record.yaml.
+func TestHandlePreToolUse_TierBDispatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-05-22-001"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-outer-42"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.True(t, r.Continue, "Tier B response must set continue=true")
+	require.NotNil(t, r.AdditionalEnv,
+		"Tier B response must include additional_env block")
+	assert.Equal(t, missionID, r.AdditionalEnv["MISSION_ID"],
+		"Tier B must echo MISSION_ID from the input env")
+	assert.Equal(t, "sess-outer-42", r.AdditionalEnv["PARENT_SESSION_ID"],
+		"Tier B must echo session_id as PARENT_SESSION_ID")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+		"Tier B must allocate a fresh DELEGATION_ID")
+	assert.True(t, strings.HasPrefix(r.AdditionalEnv["DELEGATION_ID"], "d-"),
+		"DELEGATION_ID must use the d-YYYY-MM-DD-NNN shape")
+	assert.Equal(t, r.AdditionalEnv["DELEGATION_ID"], r.AdditionalEnv["PARENT_DELEGATION_ID"],
+		"PARENT_DELEGATION_ID must mirror this spawn's DELEGATION_ID so the child sees a parent in its chain (Bugbot HIGH on PR #327)")
+
+	artifactsDir := r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
+	require.NotEmpty(t, artifactsDir,
+		"Tier B response must include MISSION_ARTIFACTS_DIR")
+	want := mission.DelegationDir(repo, missionID, r.AdditionalEnv["DELEGATION_ID"])
+	assert.Equal(t, want, artifactsDir,
+		"MISSION_ARTIFACTS_DIR must point at the per-delegation dir")
+
+	recordPath := filepath.Join(artifactsDir, "record.yaml")
+	info, err := os.Stat(recordPath)
+	require.NoError(t, err, "record.yaml must exist at the per-delegation path")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"record.yaml mode must be 0o600")
+
+	d, err := mission.LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, mission.TierB, d.Tier)
+	assert.Equal(t, missionID, d.Mission)
+	assert.Equal(t, mission.DelegationVerdictOpen, d.Verdict,
+		"fresh skeleton verdict must be open")
+	assert.Equal(t, "sess-outer-42", d.ParentSession)
+	assert.NotEmpty(t, d.CreatedAt, "opened_at must be stamped")
+}
+
+// TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock asserts the
+// shared mission lock contract: two Tier B spawns under the same
+// mission must both succeed without blocking each other and write
+// distinct per-delegation directories. If this test deadlocks or
+// reports both spawns writing the same delegation dir, the mission
+// lock has been silently promoted to exclusive or the delegation ID
+// allocator has lost its uniqueness.
+func TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-05-22-002"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-x"}`
+	type result struct {
+		dir string
+		err error
+	}
+	results := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			var out bytes.Buffer
+			if err := HandlePreToolUse(strings.NewReader(payload), &out); err != nil {
+				results <- result{err: err}
+				return
+			}
+			var r PreToolUseResult
+			if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+				results <- result{err: err}
+				return
+			}
+			if r.Decision != "allow" {
+				results <- result{err: errors.New("decision was not allow: " + r.Reason)}
+				return
+			}
+			results <- result{dir: r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]}
+		}()
+	}
+
+	var dirs []string
+	for i := 0; i < 2; i++ {
+		select {
+		case r := <-results:
+			require.NoError(t, r.err)
+			require.NotEmpty(t, r.dir)
+			dirs = append(dirs, r.dir)
+		case <-time.After(5 * time.Second):
+			t.Fatal("dispatch goroutines did not complete within 5s — likely lock deadlock")
+		}
+	}
+	assert.NotEqual(t, dirs[0], dirs[1],
+		"two concurrent Tier B spawns must land in distinct delegation dirs")
+}
+
+// TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks verifies the
+// exclusive-side of the lock contract: a sibling holder of LOCK_EX
+// on the per-mission .lock file must block the Tier B dispatch until
+// it releases. The test holds LOCK_EX in a goroutine for 80ms, fires
+// the dispatch in another goroutine, and asserts the dispatch's wait
+// time reflects the hold.
+func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-05-22-003"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	// Stage the per-mission dir + .lock so we can hold LOCK_EX on the
+	// same path the dispatch will try to share-lock.
+	dir := filepath.Join(repo, ".ethos", "missions", missionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	lockPath := filepath.Join(dir, ".lock")
+	excl, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_EX))
+
+	type result struct {
+		decision string
+		waited   time.Duration
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-y"}`
+		start := time.Now()
+		var out bytes.Buffer
+		if err := HandlePreToolUse(strings.NewReader(payload), &out); err != nil {
+			done <- result{err: err}
+			return
+		}
+		waited := time.Since(start)
+		var r PreToolUseResult
+		if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+			done <- result{err: err}
+			return
+		}
+		done <- result{decision: r.Decision, waited: waited}
+	}()
+
+	hold := 80 * time.Millisecond
+	time.Sleep(hold)
+	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_UN))
+	require.NoError(t, excl.Close())
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		assert.Equal(t, "allow", r.decision,
+			"dispatch must allow after exclusive holder releases")
+		assert.GreaterOrEqual(t, r.waited, 60*time.Millisecond,
+			"dispatch wait must reflect the exclusive hold (got %v)", r.waited)
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatch did not complete within 5s after exclusive release")
+	}
+}
+
+// TestCloseDelegationAborted_NotExistDistinctMessage pins the D4
+// silent-failure contract: when the skeleton CloseDelegationSkeleton
+// returns an fs.ErrNotExist error, the stderr line names it as an
+// order-of-operations bug rather than the generic close-failure
+// message. The distinction matters because fs.ErrNotExist on close
+// means the depth-refusal path fired before WriteDelegationSkeleton —
+// a programmer bug, not a runtime fault — and the operator needs that
+// signal to find the offending call ordering in source.
+func TestCloseDelegationAborted_NotExistDistinctMessage(t *testing.T) {
+	// No skeleton on disk at this path — every CloseDelegationSkeleton
+	// call will return fs.ErrNotExist.
+	repo := t.TempDir()
+	missionID := "m-2026-05-22-005"
+	delegationID := "d-2026-05-22-077"
+
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = oldStderr })
+
+	closeDelegationAborted(repo, missionID, delegationID)
+	require.NoError(t, w.Close())
+	os.Stderr = oldStderr
+
+	stderrBytes, err := io.ReadAll(r)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	assert.Contains(t, stderrText, "order-of-operations bug",
+		"fs.ErrNotExist on close must surface as the distinct order-of-operations diagnostic")
+	assert.Contains(t, stderrText, delegationID)
+	assert.Contains(t, stderrText, missionID)
+	assert.NotContains(t, stderrText, "closing aborted skeleton:",
+		"the generic close-failure line must be suppressed on the fs.ErrNotExist branch")
+}
+
+// TestDispatchTierB_LockAcquireFailureRollsBackCounter asserts the
+// ID-rollback contract on the lock-acquisition failure path. NewID
+// allocates a delegation_id and bumps the counter; if a subsequent
+// step in dispatchTierB fails — here, AcquireMissionLock — the
+// deferred release(false) must decrement the counter back. Otherwise
+// every transient lock failure permanently burns one delegation ID,
+// drifting the per-day counter away from the actual on-disk record
+// count.
+//
+// Failure injection: pre-create a directory at the per-mission .lock
+// path. os.OpenFile(O_RDWR) refuses to open a directory, so
+// AcquireMissionLock returns an error and the dispatch falls into
+// the deferred rollback path.
+func TestDispatchTierB_LockAcquireFailureRollsBackCounter(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-05-22-004"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	// Stage a directory at the lock path so AcquireMissionLock's
+	// os.OpenFile call fails with EISDIR. The mission directory itself
+	// must exist; the .lock entry must be a directory rather than a
+	// regular file.
+	missionDir := filepath.Join(repo, ".ethos", "missions", missionID)
+	require.NoError(t, os.MkdirAll(filepath.Join(missionDir, ".lock"), 0o700))
+
+	// Snapshot the counter before dispatch. The counter file lives at
+	// <home>/.punt-labs/ethos/counters/delegations-YYYY-MM-DD. We have
+	// to allocate one ID first to materialize the counter file (a
+	// missing file reads as 0), then check that the rollback returns
+	// to that pre-dispatch value.
+	day := time.Now().UTC().Format("2006-01-02")
+	counterPath := filepath.Join(
+		home, ".punt-labs", "ethos", "counters", "delegations-"+day,
+	)
+	primer, primerRelease, err := mission.NewID(mission.NamespaceDelegations, time.Now())
+	require.NoError(t, err)
+	require.NotEmpty(t, primer)
+	primerRelease(true)
+	preValue, err := os.ReadFile(counterPath)
+	require.NoError(t, err)
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-roll"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "block", r.Decision,
+		"a lock-acquire failure must surface as a named block, not an allow")
+	assert.Contains(t, r.Reason, "acquiring mission lock")
+
+	postValue, err := os.ReadFile(counterPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(preValue), string(postValue),
+		"counter must roll back to pre-dispatch value when the lock acquire fails")
+}
+
+// TestEnforceDelegationDepth_ConfigErrorClosesSkeleton pins HIGH-1.
+// When ResolveMaxDelegationDepth fails — here, the repo's
+// .punt-labs/ethos.yaml carries a negative max_delegation_depth —
+// the depth gate must refuse the spawn AND close the just-written
+// skeleton with verdict=aborted. Returning the refusal without
+// closing leaks the skeleton at verdict=open: every downstream audit
+// reader sees a spawn that "ran" but never reported in. That is the
+// silent-failure regression class DES-054 phase 2 was designed to
+// prevent; the other two refusal branches (depth-walk error, depth-
+// exceeds-limit) already close correctly, so this test pins the
+// third branch to the same contract.
+func TestEnforceDelegationDepth_ConfigErrorClosesSkeleton(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	// Stage a repo config that fails ResolveMaxDelegationDepth: a
+	// negative value surfaces as an error rather than silently
+	// flipping to the default.
+	cfgDir := filepath.Join(repo, ".punt-labs")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cfgDir, "ethos.yaml"),
+		[]byte("max_delegation_depth: -5\n"),
+		0o600,
+	))
+
+	missionID := "m-2026-05-22-005"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-cfgerr"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "block", r.Decision,
+		"a config-error must surface as a named block, not an allow")
+	assert.Contains(t, r.Reason, "max_delegation_depth",
+		"refusal reason must name the config error")
+
+	// The skeleton was written before the depth gate fired; the depth
+	// gate's config-error branch must close it with verdict=aborted.
+	// Walk the per-mission delegations directory to find the single
+	// record.yaml the dispatch produced and assert its verdict.
+	delegationsDir := filepath.Join(
+		repo, ".ethos", "missions", missionID, "delegations",
+	)
+	entries, err := os.ReadDir(delegationsDir)
+	require.NoError(t, err, "delegations dir must exist — the skeleton write came before the refusal")
+	require.Len(t, entries, 1, "exactly one delegation skeleton must be on disk")
+
+	recordPath := filepath.Join(delegationsDir, entries[0].Name(), "record.yaml")
+	d, err := mission.LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, mission.DelegationVerdictAborted, d.Verdict,
+		"config-error refusal must close the skeleton at verdict=aborted, not leave it open")
+	assert.NotEmpty(t, d.ClosedAt,
+		"config-error refusal must stamp closed_at — an open skeleton with no closed_at is the silent-failure shape")
+}
+
+// TestHandlePreToolUse_TierBMalformedMissionID asserts the
+// security-review contract: a MISSION_ID that does not resolve to a
+// contract on disk surfaces as a block decision with a named reason.
+// No silent fall-through to Tier A — Phase 2b's threat model
+// requires the Agent spawn be refused so the operator sees the
+// mismatch.
+func TestHandlePreToolUse_TierBMalformedMissionID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "m-2026-05-22-999")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-A"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "block", r.Decision,
+		"malformed MISSION_ID must block, not fall through to Tier A")
+	assert.Contains(t, r.Reason, "MISSION_ID")
+	assert.Contains(t, r.Reason, "m-2026-05-22-999")
+}
+
+// TestHandlePreToolUse_TierADispatch covers the MISSION_ID-unset
+// branch: the round-3 advice line lands on stderr, AND the response
+// carries DELEGATION_ID + PARENT_SESSION_ID in additional_env. The
+// MISSION_ID key MUST NOT appear in the Tier A response — there
+// isn't one.
+func TestHandlePreToolUse_TierADispatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	oldStderr := os.Stderr
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = pw
+	t.Cleanup(func() { os.Stderr = oldStderr })
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-outer-7"}`
+	var out bytes.Buffer
+	hookErr := HandlePreToolUse(strings.NewReader(payload), &out)
+	require.NoError(t, pw.Close())
+	os.Stderr = oldStderr
+	require.NoError(t, hookErr)
+
+	stderrBytes, err := io.ReadAll(pr)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.True(t, r.Continue, "Tier A response must set continue=true")
+	require.NotNil(t, r.AdditionalEnv,
+		"Tier A response must include additional_env block")
+	assert.Equal(t, "sess-outer-7", r.AdditionalEnv["PARENT_SESSION_ID"],
+		"Tier A must echo session_id as PARENT_SESSION_ID")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+		"Tier A must still allocate a DELEGATION_ID for audit binding")
+	assert.Equal(t, r.AdditionalEnv["DELEGATION_ID"], r.AdditionalEnv["PARENT_DELEGATION_ID"],
+		"PARENT_DELEGATION_ID must mirror DELEGATION_ID so a Tier A child spawn sees its parent in the chain")
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID,
+		"Tier A response must NOT carry MISSION_ID — there isn't one")
+
+	// Round-3 behavior preserved: advice on stderr.
+	assert.Contains(t, stderrText, "ad-hoc Agent spawn",
+		"Tier A round-3 advice must still land on stderr")
+}
+
+// TestHandlePreToolUse_NonAgentPassthroughUnchanged asserts that
+// non-Agent tools (the allowlist-enforcement path) do NOT carry
+// additional_env. The Phase 2b dispatch is Agent-only — Read, Write,
+// Edit etc. continue to emit the legacy {decision, reason} shape.
+func TestHandlePreToolUse_NonAgentPassthroughUnchanged(t *testing.T) {
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "m-anything") // ignored on non-Agent path
+
+	payload := `{"tool_name":"Read","tool_input":{"file_path":"/anywhere.go"}}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.Empty(t, r.AdditionalEnv,
+		"non-Agent passthrough must not emit additional_env")
+	assert.False(t, r.Continue,
+		"non-Agent passthrough must not set continue=true")
 }
 
 // Confirm that os.Getenv is the actual mechanism (not a mock).

@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // validContract returns a fully-populated Contract that passes Validate.
@@ -688,4 +689,40 @@ func TestValidate_DependsOn(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidate_DelegationsField (DES-054 v5) — the optional delegations
+// field round-trips through YAML and Validate accepts a contract that
+// carries one or more templates. Empty stays the default. The match
+// helper is exercised separately in delegation_test.go.
+func TestValidate_DelegationsField(t *testing.T) {
+	c := validContract()
+	c.Delegations = []DelegationTemplate{
+		{
+			Role:             "reviewer",
+			SpawnPattern:     "djb|mdm",
+			InheritsContract: true,
+		},
+		{
+			Role:         "fixer",
+			SpawnPattern: "bwk",
+			ExtractInto:  []string{"internal/hook/"},
+		},
+	}
+	require.NoError(t, c.Validate(),
+		"a populated delegations[] must not fail Validate")
+
+	data, err := yaml.Marshal(&c)
+	require.NoError(t, err)
+	var rt Contract
+	require.NoError(t, yaml.Unmarshal(data, &rt))
+	assert.Equal(t, c.Delegations, rt.Delegations,
+		"delegations[] must round-trip through YAML")
+
+	// Empty list omits the field on marshal — confirms omitempty.
+	c2 := validContract()
+	out, err := yaml.Marshal(&c2)
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), "delegations:",
+		"empty delegations[] must be omitted on marshal")
 }
