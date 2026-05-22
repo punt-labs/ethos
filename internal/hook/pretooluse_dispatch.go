@@ -181,10 +181,14 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 // an operator sees both at the refusal site. Returns ("", true) when
 // the depth is within budget and the spawn may proceed.
 //
-// The refusal path closes the just-written skeleton with
+// Every refusal path closes the just-written skeleton with
 // verdict=aborted before returning so the on-disk record reflects
 // the operator-visible state — open + abandoned would be a misleading
-// post-mortem signal.
+// post-mortem signal. The three refusal branches are: config
+// resolution error (negative or unreadable max_delegation_depth),
+// chain-walk error (corrupt or missing ancestor), and depth-exceeds-
+// limit. All three call closeDelegationAborted; omitting the close
+// on any branch leaks the skeleton at verdict=open.
 //
 // Loader failures (a corrupt or missing ancestor) surface as a refusal
 // rather than a silent admit: a runaway recursive spawn pattern is
@@ -193,6 +197,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation string) (string, bool) {
 	limit, err := resolve.ResolveMaxDelegationDepth(repoRoot, mission.MaxDelegationDepthDefault)
 	if err != nil {
+		closeDelegationAborted(repoRoot, missionID, delegationID)
 		return fmt.Sprintf(
 			"ethos pre-tool-use: resolving max_delegation_depth: %v", err,
 		), false

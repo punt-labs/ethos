@@ -1074,6 +1074,72 @@ func TestDispatchTierB_LockAcquireFailureRollsBackCounter(t *testing.T) {
 		"counter must roll back to pre-dispatch value when the lock acquire fails")
 }
 
+// TestEnforceDelegationDepth_ConfigErrorClosesSkeleton pins HIGH-1.
+// When ResolveMaxDelegationDepth fails — here, the repo's
+// .punt-labs/ethos.yaml carries a negative max_delegation_depth —
+// the depth gate must refuse the spawn AND close the just-written
+// skeleton with verdict=aborted. Returning the refusal without
+// closing leaks the skeleton at verdict=open: every downstream audit
+// reader sees a spawn that "ran" but never reported in. That is the
+// silent-failure regression class DES-054 phase 2 was designed to
+// prevent; the other two refusal branches (depth-walk error, depth-
+// exceeds-limit) already close correctly, so this test pins the
+// third branch to the same contract.
+func TestEnforceDelegationDepth_ConfigErrorClosesSkeleton(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	// Stage a repo config that fails ResolveMaxDelegationDepth: a
+	// negative value surfaces as an error rather than silently
+	// flipping to the default.
+	cfgDir := filepath.Join(repo, ".punt-labs")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cfgDir, "ethos.yaml"),
+		[]byte("max_delegation_depth: -5\n"),
+		0o600,
+	))
+
+	missionID := "m-2026-05-22-005"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-cfgerr"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "block", r.Decision,
+		"a config-error must surface as a named block, not an allow")
+	assert.Contains(t, r.Reason, "max_delegation_depth",
+		"refusal reason must name the config error")
+
+	// The skeleton was written before the depth gate fired; the depth
+	// gate's config-error branch must close it with verdict=aborted.
+	// Walk the per-mission delegations directory to find the single
+	// record.yaml the dispatch produced and assert its verdict.
+	delegationsDir := filepath.Join(
+		repo, ".ethos", "missions", missionID, "delegations",
+	)
+	entries, err := os.ReadDir(delegationsDir)
+	require.NoError(t, err, "delegations dir must exist — the skeleton write came before the refusal")
+	require.Len(t, entries, 1, "exactly one delegation skeleton must be on disk")
+
+	recordPath := filepath.Join(delegationsDir, entries[0].Name(), "record.yaml")
+	d, err := mission.LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, mission.DelegationVerdictAborted, d.Verdict,
+		"config-error refusal must close the skeleton at verdict=aborted, not leave it open")
+	assert.NotEmpty(t, d.ClosedAt,
+		"config-error refusal must stamp closed_at — an open skeleton with no closed_at is the silent-failure shape")
+}
+
 // TestHandlePreToolUse_TierBMalformedMissionID asserts the
 // security-review contract: a MISSION_ID that does not resolve to a
 // contract on disk surfaces as a block decision with a named reason.
