@@ -124,13 +124,26 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 	}
 	defer releaseDelegation()
 
+	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
 	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
-		Tier:          mission.TierB,
-		ParentSession: sessionID,
-		AgentType:     os.Getenv("CLAUDE_AGENT_TYPE"),
+		Tier:             mission.TierB,
+		ParentDelegation: parentDelegation,
+		ParentSession:    sessionID,
+		AgentType:        os.Getenv("CLAUDE_AGENT_TYPE"),
 	}); err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))
+	}
+
+	// Depth gate (DES-054 v5): walk parent_delegation chain and refuse
+	// if adding this spawn would exceed the configured ceiling. The
+	// skeleton is on disk at this point — the refusal closes it with
+	// verdict=aborted so an audit query can distinguish a depth refusal
+	// (terminated before the worker started) from a spawn that ran and
+	// failed downstream. The walker fails closed on a missing or
+	// unparseable ancestor; we refuse rather than silently admit.
+	if reason, ok := enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation); !ok {
+		return writeAgentBlock(w, reason)
 	}
 
 	env := map[string]string{
@@ -144,6 +157,81 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 		Continue:      true,
 		AdditionalEnv: env,
 	})
+}
+
+// enforceDelegationDepth walks the parent_delegation chain for the
+// just-written skeleton and reports whether the proposed depth is
+// admissible. Returns (reason, false) when the spawn must be refused;
+// the reason names the configured limit and the attempted depth so
+// an operator sees both at the refusal site. Returns ("", true) when
+// the depth is within budget and the spawn may proceed.
+//
+// The refusal path closes the just-written skeleton with
+// verdict=aborted before returning so the on-disk record reflects
+// the operator-visible state — open + abandoned would be a misleading
+// post-mortem signal.
+//
+// Loader failures (a corrupt or missing ancestor) surface as a refusal
+// rather than a silent admit: a runaway recursive spawn pattern is
+// exactly what the depth gate exists to defeat, and silently treating
+// a missing ancestor as zero depth would let one through.
+func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation string) (string, bool) {
+	limit, err := resolve.ResolveMaxDelegationDepth(repoRoot, mission.MaxDelegationDepthDefault)
+	if err != nil {
+		return fmt.Sprintf(
+			"ethos pre-tool-use: resolving max_delegation_depth: %v", err,
+		), false
+	}
+	d := &mission.Delegation{
+		ID:               delegationID,
+		ParentDelegation: parentDelegation,
+	}
+	loader := delegationLoader(repoRoot, missionID)
+	parentDepth, err := mission.DelegationDepth(d, loader)
+	if err != nil {
+		closeDelegationAborted(repoRoot, missionID, delegationID)
+		return fmt.Sprintf(
+			"ethos pre-tool-use: walking parent_delegation chain for %q: %v",
+			delegationID, err,
+		), false
+	}
+	proposed := parentDepth + 1
+	if proposed > limit {
+		closeDelegationAborted(repoRoot, missionID, delegationID)
+		return fmt.Sprintf(
+			"ethos pre-tool-use: max_delegation_depth %d exceeded by depth %d for %q",
+			limit, proposed, delegationID,
+		), false
+	}
+	return "", true
+}
+
+// delegationLoader returns a loader that reads ancestor records from
+// the per-mission delegations directory. Closures over (repoRoot,
+// missionID) so the depth walker can look up by delegation ID alone.
+func delegationLoader(repoRoot, missionID string) func(id string) (*mission.Delegation, error) {
+	return func(id string) (*mission.Delegation, error) {
+		dir := mission.DelegationDir(repoRoot, missionID, id)
+		return mission.LoadDelegation(filepath.Join(dir, "record.yaml"))
+	}
+}
+
+// closeDelegationAborted is the refusal-path helper that stamps the
+// just-written skeleton with verdict=aborted. Errors are written to
+// stderr because the refusal itself is already on its way to the
+// operator via the hook response — a follow-on close failure should
+// not mask the original refusal reason.
+func closeDelegationAborted(repoRoot, missionID, delegationID string) {
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := mission.CloseDelegationSkeleton(
+		repoRoot, missionID, delegationID,
+		mission.DelegationVerdictAborted, closedAt,
+	); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos pre-tool-use: closing aborted skeleton %q: %v\n",
+			delegationID, err,
+		)
+	}
 }
 
 // tierBRepoRoot resolves the enclosing repo root for the Tier B

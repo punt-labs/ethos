@@ -3,6 +3,8 @@
 package mission
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -373,6 +375,157 @@ func TestAcquireMissionLock_EmptyArgs(t *testing.T) {
 	_, err = AcquireMissionLock(t.TempDir(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missionID")
+}
+
+// TestCloseDelegationSkeleton_HappyPath pins the atomic rewrite: a
+// skeleton on disk with verdict=open is closed to verdict=aborted
+// and the closed_at timestamp is stamped. LoadDelegation reads the
+// new state back; every other field round-trips unchanged.
+func TestCloseDelegationSkeleton_HappyPath(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-032"
+	delegationID := "d-2026-05-22-010"
+
+	payload := DelegationSkeleton{
+		Tier:             TierB,
+		ParentDelegation: "d-2026-05-22-009",
+		ParentSession:    "sess-outer",
+		Session:          "sess-inner",
+		AgentType:        "bwk",
+		PromptHash:       "deadbeef",
+	}
+	recordPath, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, payload)
+	require.NoError(t, err)
+
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	require.NoError(t, CloseDelegationSkeleton(
+		repoRoot, missionID, delegationID, DelegationVerdictAborted, closedAt,
+	))
+
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, DelegationVerdictAborted, d.Verdict,
+		"verdict must be the value passed to CloseDelegationSkeleton")
+	assert.Equal(t, closedAt, d.ClosedAt,
+		"closed_at must be the timestamp passed to CloseDelegationSkeleton")
+	assert.Equal(t, TierB, d.Tier, "tier must round-trip")
+	assert.Equal(t, "d-2026-05-22-009", d.ParentDelegation,
+		"parent_delegation must round-trip")
+	assert.Equal(t, "sess-outer", d.ParentSession, "parent_session must round-trip")
+	assert.Equal(t, "deadbeef", d.PromptHash, "prompt_hash must round-trip")
+}
+
+// TestCloseDelegationSkeleton_VerdictValidation surfaces every
+// disallowed verdict argument. DelegationVerdictOpen is rejected
+// because closing to "open" is not a state transition; the empty
+// string and arbitrary strings are rejected so a caller cannot
+// silently corrupt the record with a typo.
+func TestCloseDelegationSkeleton_VerdictValidation(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-032"
+	delegationID := "d-2026-05-22-011"
+
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+	})
+	require.NoError(t, err)
+
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	bad := []string{
+		"",
+		"open",
+		"aborte",
+		"PASS",
+		"unknown",
+	}
+	for _, v := range bad {
+		err := CloseDelegationSkeleton(repoRoot, missionID, delegationID, v, closedAt)
+		require.Error(t, err, "verdict %q must be rejected", v)
+		assert.Contains(t, err.Error(), "invalid verdict",
+			"error for verdict %q must label the verdict validation", v)
+	}
+
+	for _, v := range []string{
+		DelegationVerdictPass,
+		DelegationVerdictFail,
+		DelegationVerdictError,
+		DelegationVerdictAborted,
+	} {
+		require.NoError(t,
+			CloseDelegationSkeleton(repoRoot, missionID, delegationID, v, closedAt),
+			"verdict %q must be accepted", v,
+		)
+	}
+}
+
+// TestCloseDelegationSkeleton_MissingRecord asserts the caller-
+// observable contract for a refusal that fires BEFORE the skeleton
+// was written. The error wraps fs.ErrNotExist so the caller can
+// distinguish "skeleton was never written" from other I/O failures
+// and report the order-of-operations bug loudly.
+func TestCloseDelegationSkeleton_MissingRecord(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-032"
+	delegationID := "d-2026-05-22-012"
+
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	err := CloseDelegationSkeleton(
+		repoRoot, missionID, delegationID, DelegationVerdictAborted, closedAt,
+	)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, fs.ErrNotExist),
+		"missing record must wrap fs.ErrNotExist; got %v", err)
+}
+
+// TestCloseDelegationSkeleton_Atomic asserts the temp+rename
+// invariant: a failure on the rename path must leave the on-disk
+// record.yaml in its prior (open) state. The test stages a skeleton,
+// chmods the per-delegation dir to read-only between open and rename
+// to force os.CreateTemp's path to fail, and asserts the original
+// record.yaml is unchanged afterwards.
+//
+// This is djb's evaluator gate: a half-written close is unacceptable.
+// Either the new verdict lands in full or the prior contents persist.
+func TestCloseDelegationSkeleton_Atomic(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses unix permission checks")
+	}
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-032"
+	delegationID := "d-2026-05-22-013"
+
+	recordPath, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+	})
+	require.NoError(t, err)
+
+	original, err := os.ReadFile(recordPath)
+	require.NoError(t, err)
+
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	closedAt := time.Now().UTC().Format(time.RFC3339)
+	err = CloseDelegationSkeleton(
+		repoRoot, missionID, delegationID, DelegationVerdictAborted, closedAt,
+	)
+	require.Error(t, err, "close must surface the I/O failure")
+
+	require.NoError(t, os.Chmod(dir, 0o700))
+	after, err := os.ReadFile(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(original), string(after),
+		"a failed close must leave the prior record.yaml unchanged")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotContains(t, e.Name(), ".tmp",
+			"a failed close must not leak a tempfile (got %s)", e.Name())
+	}
 }
 
 // TestDelegationSequence pins the parser used to derive the per-

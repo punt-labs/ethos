@@ -567,6 +567,96 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	return nil
 }
 
+// CloseDelegationSkeleton rewrites a Tier B delegation record's
+// verdict and closed_at fields and writes it back atomically via
+// temp+rename in the same directory. Used by the refusal paths that
+// run AFTER WriteDelegationSkeleton has put a record on disk but
+// BEFORE the worker spawn proceeds:
+//
+//   - PreToolUse-on-Agent: max_delegation_depth exceeded (verdict=aborted).
+//   - SubagentStart: hash-gate refusal for a Tier B verifier (verdict=aborted).
+//
+// verdict must be one of DelegationVerdict{Pass,Fail,Error,Aborted};
+// DelegationVerdictOpen is rejected because closing to "open" is not
+// a state transition. closedAt is the timestamp to stamp; pass time.
+// Now().UTC().Format(time.RFC3339) at the call site so the timestamp
+// reflects the refusal moment, not the load moment.
+//
+// Atomicity: the rewrite goes through os.CreateTemp in the record's
+// own directory and os.Rename. djb evaluates this as security — a
+// half-written close is unacceptable. The temp file is removed on
+// any failure path before return; the on-disk record either keeps
+// its prior contents or has the new verdict in full, never partial.
+//
+// Returns fs.ErrNotExist when the record does not exist on disk so
+// the caller can branch on errors.Is for the "skeleton was never
+// written" case (the refusal fired before the skeleton write, which
+// is an order-of-operations bug in the caller — surface it loudly).
+func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedAt string) error {
+	if strings.TrimSpace(repoRoot) == "" {
+		return fmt.Errorf("repoRoot is required for close delegation skeleton")
+	}
+	if strings.TrimSpace(missionID) == "" {
+		return fmt.Errorf("missionID is required for close delegation skeleton")
+	}
+	if strings.TrimSpace(delegationID) == "" {
+		return fmt.Errorf("delegationID is required for close delegation skeleton")
+	}
+	switch verdict {
+	case DelegationVerdictPass,
+		DelegationVerdictFail,
+		DelegationVerdictError,
+		DelegationVerdictAborted:
+	default:
+		return fmt.Errorf(
+			"close delegation skeleton: invalid verdict %q (must be one of pass|fail|error|aborted)",
+			verdict,
+		)
+	}
+	if strings.TrimSpace(closedAt) == "" {
+		return fmt.Errorf("closedAt is required for close delegation skeleton")
+	}
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	recordPath := filepath.Join(dir, "record.yaml")
+	d, err := LoadDelegation(recordPath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("close delegation skeleton: %s: %w", recordPath, fs.ErrNotExist)
+		}
+		return fmt.Errorf("close delegation skeleton: loading %s: %w", recordPath, err)
+	}
+	d.Verdict = verdict
+	d.ClosedAt = closedAt
+	data, err := yaml.Marshal(d)
+	if err != nil {
+		return fmt.Errorf("close delegation skeleton: marshaling record: %w", err)
+	}
+	tmp, err := os.CreateTemp(dir, "record-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("close delegation skeleton: creating temp file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation skeleton: writing %s: %w", tmpPath, err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation skeleton: chmod %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation skeleton: closing %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, recordPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close delegation skeleton: renaming %s -> %s: %w", tmpPath, recordPath, err)
+	}
+	return nil
+}
+
 // DelegationDepth walks the parent_delegation chain starting from
 // d's parent and returns the chain length. A delegation with no
 // parent has depth 0 (it is the root of its chain).
