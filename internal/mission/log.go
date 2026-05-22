@@ -72,6 +72,9 @@ func (s *Store) appendEventLocked(missionID string, e Event) error {
 	// Append a single newline so the file stays JSON-lines compliant.
 	line := append(data, '\n')
 
+	if err := s.ensureMissionDir(missionID); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(s.logPath(missionID), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening event log: %w", err)

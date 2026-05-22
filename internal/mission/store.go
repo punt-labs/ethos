@@ -40,12 +40,58 @@ type Store struct {
 	root       string          // e.g. ~/.punt-labs/ethos
 	roles      RoleLister      // optional; wires the Phase 3.5 role-overlap check
 	archetypes *ArchetypeStore // optional; validates Type on Create
-	repoRoot   string          // optional; when set, Close appends a trace summary to <repoRoot>/.ethos/missions.jsonl
+
+	// repoRoot, when set, names the repository directory under which
+	// trace summaries are written (<repoRoot>/.ethos/missions.jsonl).
+	// Set via WithRepoRoot (legacy single-tree mode) or
+	// NewStoreWithRoots (two-tree mode).
+	repoRoot string
+
+	// twoTreeStorage, when true, activates the DES-054 phase 1
+	// per-mission directory layout under <repoRoot>/.ethos/missions/.
+	// Set only by NewStoreWithRoots; WithRepoRoot leaves it false so
+	// existing callers that wired a trace destination keep the legacy
+	// flat <root>/missions/<id>.yaml shape.
+	twoTreeStorage bool
 }
 
 // NewStore creates a Store rooted at the given directory.
+//
+// Preserved as a thin wrapper over NewStoreWithRoots for backward
+// compatibility — existing callers that only know about the legacy
+// global tree compile unchanged. New callers that want the DES-054
+// two-tree storage layout (per-repo missions under .ethos/, fallback
+// reads from global) should use NewStoreWithRoots.
 func NewStore(root string) *Store {
-	return &Store{root: root}
+	return NewStoreWithRoots("", root)
+}
+
+// NewStoreWithRoots creates a Store that dispatches mission artifacts
+// across two roots — per-repo and global — per DES-054 phase 1.
+//
+// When repoRoot is non-empty, Create writes new missions under
+// <repoRoot>/.ethos/missions/<mission-id>/; Load, Update, Close, and
+// the sibling artifact paths (results, reflections, log) read the
+// repo tree first and fall back to the legacy <globalRoot>/missions/
+// shape for backward compatibility. List unions both trees with
+// repo-wins dedup.
+//
+// When repoRoot is empty, the legacy single-tree layout is the only
+// path — Create, Load, Update, Close all operate against
+// <globalRoot>/missions/<mission-id>.{yaml,jsonl,...}. This is the
+// shape NewStore(root) preserves.
+//
+// Per-mission and per-create flocks always live under globalRoot —
+// the DES-054 concurrency model pins them to a stable per-machine
+// location so two checkouts of the same repo never lock different
+// inodes for the same mission. Counter files (DES-054 sibling
+// per-namespace per-date) also live under globalRoot.
+func NewStoreWithRoots(repoRoot, globalRoot string) *Store {
+	return &Store{
+		root:           globalRoot,
+		repoRoot:       repoRoot,
+		twoTreeStorage: repoRoot != "",
+	}
 }
 
 // WithRoleLister wires a RoleLister for the Phase 3.5 role-overlap
@@ -80,10 +126,17 @@ func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 	return s
 }
 
-// WithRepoRoot sets the repository root directory for mission trace
-// logging. When set, Store.Close appends a JSONL summary line to
-// <repoRoot>/.ethos/missions.jsonl so every closed mission is visible
-// in the repo's git history. An empty root disables the trace.
+// WithRepoRoot sets the repository root for the post-close trace
+// summary. When set, Store.Close appends a JSONL summary line to
+// <repoRoot>/.ethos/missions.jsonl so every closed mission is
+// visible in the repo's git history. An empty root disables the
+// trace.
+//
+// Does NOT activate the DES-054 two-tree storage layout. Callers
+// that want both trace and the per-repo storage tree should use
+// NewStoreWithRoots, which sets both fields. WithRepoRoot stays
+// trace-only so existing tests and production callers that wired a
+// trace destination keep the legacy storage shape.
 //
 // Returns the receiver so construction stays compact:
 //
@@ -202,32 +255,70 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSource
 	return nil
 }
 
+// missionsDir returns the global tree's missions directory —
+// <root>/missions. The repo tree is reached via repoMissionsDir; the
+// callers below (List, withLock, withCreateLock) explicitly know
+// which tree they want, so the helper stays narrow.
 func (s *Store) missionsDir() string {
-	return filepath.Join(s.root, "missions")
+	return s.globalMissionsDir()
 }
 
-// contractPath builds the YAML path for a mission. The mission ID is run
-// through filepath.Base as a defense-in-depth measure: even if a caller
-// somehow passed an absolute or traversal-laced ID, only the final
-// element survives.
+// contractPath builds the YAML path for a mission. When the mission
+// already exists on disk, the layer it lives in determines the path
+// (DES-054 phase 1: repo-first read with global fallback). When the
+// mission does not yet exist, the writeLayer wins — repo if
+// repoRoot is set, global otherwise.
+//
+// The mission ID is run through filepath.Base as a defense-in-depth
+// measure: even if a caller somehow passed an absolute or
+// traversal-laced ID, only the final element survives.
 func (s *Store) contractPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".yaml")
+	if ps, err := s.pathSetForExisting(missionID); err == nil {
+		return ps.contract
+	}
+	return s.pathSetFor(missionID, s.writeLayer()).contract
 }
 
+// lockPath returns the per-mission flock path. Always under the
+// global tree per DES-054 concurrency model: locks reference live
+// inodes that must not move when a mission migrates between layers
+// or when two checkouts of the same repo coexist.
 func (s *Store) lockPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".lock")
+	return filepath.Join(s.globalMissionsDir(), filepath.Base(missionID)+".lock")
 }
 
 // createLockPath returns the directory-level lock file used by
 // Store.Create to serialize cross-mission write_set conflict scans.
 // Stable filename, never renamed or unlinked, so the flock inode does
 // not race with concurrent acquirers.
+//
+// Lives under the global tree alongside per-mission locks. v3.12.0
+// also acquires a repo-tree create lock during the transition window
+// — see Store.Create.
 func (s *Store) createLockPath() string {
-	return filepath.Join(s.missionsDir(), ".create.lock")
+	return filepath.Join(s.globalMissionsDir(), ".create.lock")
 }
 
+// repoCreateLockPath is the per-repo create lock acquired alongside
+// the global one during the DES-054 transition window. v3.13.0 drops
+// the global one and keeps only the repo lock. Returns empty when
+// repoRoot is unset (legacy single-tree mode).
+func (s *Store) repoCreateLockPath() string {
+	if s.repoRoot == "" {
+		return ""
+	}
+	return filepath.Join(s.repoMissionsDir(), ".create.lock")
+}
+
+// logPath returns the JSONL event log path for a mission. Dispatches
+// through pathSetForExisting / writeLayer the same way contractPath
+// does — read paths see the existing layer, write paths see the
+// writeLayer.
 func (s *Store) logPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".jsonl")
+	if ps, err := s.pathSetForExisting(missionID); err == nil {
+		return ps.log
+	}
+	return s.pathSetFor(missionID, s.writeLayer()).log
 }
 
 // reflectionsPath returns the sibling YAML file that holds the
@@ -237,8 +328,15 @@ func (s *Store) logPath(missionID string) string {
 // every Update to rewrite an unbounded slice. The sibling file grows
 // as rounds happen and is the single source of truth for the
 // round-advance gate.
+//
+// Layer dispatch mirrors contractPath — when the mission already
+// exists, the layer it lives in determines the path; otherwise the
+// writeLayer wins.
 func (s *Store) reflectionsPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".reflections.yaml")
+	if ps, err := s.pathSetForExisting(missionID); err == nil {
+		return ps.reflections
+	}
+	return s.pathSetFor(missionID, s.writeLayer()).reflections
 }
 
 // resultsPath returns the sibling YAML file that holds the
@@ -255,7 +353,40 @@ func (s *Store) reflectionsPath(missionID string) string {
 // it would reproduce the same regression for anyone with a result
 // file on disk.
 func (s *Store) resultsPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".results.yaml")
+	if ps, err := s.pathSetForExisting(missionID); err == nil {
+		return ps.results
+	}
+	return s.pathSetFor(missionID, s.writeLayer()).results
+}
+
+// ensureMissionDir creates the per-mission directory in the repo
+// layer when needed. Returns nil immediately for paths in the global
+// (flat) layer — those land directly in <root>/missions/ and require
+// no per-mission directory. Called by every writer before it opens a
+// file in the per-mission directory.
+func (s *Store) ensureMissionDir(missionID string) error {
+	if s.repoRoot == "" {
+		// Legacy layout: no per-mission dir.
+		return nil
+	}
+	// In the two-root model, the destination depends on where the
+	// mission already lives. A loaded mission in the global tree
+	// stays there; a new mission lands in the repo tree.
+	layer, err := s.resolveLayer(missionID)
+	if err != nil {
+		return fmt.Errorf("resolving mission layer: %w", err)
+	}
+	if layer == layerUnset {
+		layer = s.writeLayer()
+	}
+	if layer != layerRepo {
+		return nil
+	}
+	ps := s.pathSetFor(missionID, layerRepo)
+	if err := os.MkdirAll(ps.dir, 0o700); err != nil {
+		return fmt.Errorf("creating mission dir %s: %w", ps.dir, err)
+	}
+	return nil
 }
 
 // Create persists a new mission contract. The caller must supply a
@@ -819,12 +950,20 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 	}
 }
 
-// writeContract marshals and writes a contract atomically via temp file
-// plus rename. The caller must hold the contract's flock.
+// writeContract marshals and writes a contract atomically via temp
+// file plus rename. The caller must hold the contract's flock.
+//
+// In the two-root layout, ensureMissionDir creates the per-mission
+// directory under <repoRoot>/.ethos/missions/<id>/ before the temp
+// file is opened; the legacy single-root layout has no per-mission
+// directory and skips the mkdir.
 func (s *Store) writeContract(c *Contract) error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshaling contract: %w", err)
+	}
+	if err := s.ensureMissionDir(c.MissionID); err != nil {
+		return err
 	}
 	dest := s.contractPath(c.MissionID)
 	tmp := dest + ".tmp"
@@ -1118,6 +1257,9 @@ func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error 
 	data, err := yaml.Marshal(&wrapper)
 	if err != nil {
 		return fmt.Errorf("marshaling reflections: %w", err)
+	}
+	if err := s.ensureMissionDir(missionID); err != nil {
+		return err
 	}
 	dest := s.reflectionsPath(missionID)
 	tmp := dest + ".tmp"
@@ -1726,6 +1868,9 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 	data, err := yaml.Marshal(&wrapper)
 	if err != nil {
 		return fmt.Errorf("marshaling results: %w", err)
+	}
+	if err := s.ensureMissionDir(missionID); err != nil {
+		return err
 	}
 	dest := s.resultsPath(missionID)
 	tmp := dest + ".tmp"
