@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -628,6 +630,10 @@ func TestHandlePreToolUse_TierAAdvice(t *testing.T) {
 			t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 			t.Setenv("ETHOS_QUIET_ADVICE", tt.quietAdvice)
 			t.Setenv("PARENT_SESSION_ID", tt.parentSessID)
+			t.Setenv("MISSION_ID", "")
+			// Isolate the per-day counter root so the Agent path's
+			// DELEGATION_ID allocation does not touch ~/.punt-labs/.
+			t.Setenv("HOME", t.TempDir())
 
 			oldStderr := os.Stderr
 			r, w, err := os.Pipe()
@@ -708,6 +714,174 @@ func TestMaybeEmitTierAAdvice(t *testing.T) {
 			}
 		})
 	}
+}
+
+// stageContract creates a minimal valid mission contract in the
+// given home directory and returns the missionID. Used by Tier B
+// dispatch tests that need a real on-disk contract for Store.Load
+// to resolve. Isolates HOME so the counter file and contract path
+// land under t.TempDir().
+func stageContract(t *testing.T, home, missionID string) {
+	t.Helper()
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	store := mission.NewStore(root)
+	c := &mission.Contract{
+		MissionID: missionID,
+		Status:    mission.StatusOpen,
+		CreatedAt: "2026-05-22T21:30:00Z",
+		UpdatedAt: "2026-05-22T21:30:00Z",
+		Leader:    "claude",
+		Worker:    "bwk",
+		Evaluator: mission.Evaluator{
+			Handle:   "djb",
+			PinnedAt: "2026-05-22T21:30:00Z",
+		},
+		Inputs: mission.Inputs{
+			Ticket: "ethos-7i29",
+			Files:  []string{"internal/hook/pretooluse.go"},
+		},
+		WriteSet:        []string{"internal/hook/", "internal/mission/"},
+		Tools:           []string{"Read", "Write", "Edit"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget: mission.Budget{
+			Rounds:              3,
+			ReflectionAfterEach: true,
+		},
+		CurrentRound: 1,
+	}
+	require.NoError(t, store.Create(c))
+}
+
+// TestHandlePreToolUse_TierBDispatch covers the MISSION_ID-set
+// branch. The hook resolves the contract, allocates a delegation_id,
+// and emits additional_env with DELEGATION_ID, MISSION_ID (echoed),
+// and PARENT_SESSION_ID (from input session_id).
+func TestHandlePreToolUse_TierBDispatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	missionID := "m-2026-05-22-001"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-outer-42"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.True(t, r.Continue, "Tier B response must set continue=true")
+	require.NotNil(t, r.AdditionalEnv,
+		"Tier B response must include additional_env block")
+	assert.Equal(t, missionID, r.AdditionalEnv["MISSION_ID"],
+		"Tier B must echo MISSION_ID from the input env")
+	assert.Equal(t, "sess-outer-42", r.AdditionalEnv["PARENT_SESSION_ID"],
+		"Tier B must echo session_id as PARENT_SESSION_ID")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+		"Tier B must allocate a fresh DELEGATION_ID")
+	assert.True(t, strings.HasPrefix(r.AdditionalEnv["DELEGATION_ID"], "d-"),
+		"DELEGATION_ID must use the d-YYYY-MM-DD-NNN shape")
+}
+
+// TestHandlePreToolUse_TierBMalformedMissionID asserts the
+// security-review contract: a MISSION_ID that does not resolve to a
+// contract on disk surfaces as a block decision with a named reason.
+// No silent fall-through to Tier A — Phase 2b's threat model
+// requires the Agent spawn be refused so the operator sees the
+// mismatch.
+func TestHandlePreToolUse_TierBMalformedMissionID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "m-2026-05-22-999")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-A"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "block", r.Decision,
+		"malformed MISSION_ID must block, not fall through to Tier A")
+	assert.Contains(t, r.Reason, "MISSION_ID")
+	assert.Contains(t, r.Reason, "m-2026-05-22-999")
+}
+
+// TestHandlePreToolUse_TierADispatch covers the MISSION_ID-unset
+// branch: the round-3 advice line lands on stderr, AND the response
+// carries DELEGATION_ID + PARENT_SESSION_ID in additional_env. The
+// MISSION_ID key MUST NOT appear in the Tier A response — there
+// isn't one.
+func TestHandlePreToolUse_TierADispatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	oldStderr := os.Stderr
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = pw
+	t.Cleanup(func() { os.Stderr = oldStderr })
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-outer-7"}`
+	var out bytes.Buffer
+	hookErr := HandlePreToolUse(strings.NewReader(payload), &out)
+	require.NoError(t, pw.Close())
+	os.Stderr = oldStderr
+	require.NoError(t, hookErr)
+
+	stderrBytes, err := io.ReadAll(pr)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.True(t, r.Continue, "Tier A response must set continue=true")
+	require.NotNil(t, r.AdditionalEnv,
+		"Tier A response must include additional_env block")
+	assert.Equal(t, "sess-outer-7", r.AdditionalEnv["PARENT_SESSION_ID"],
+		"Tier A must echo session_id as PARENT_SESSION_ID")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+		"Tier A must still allocate a DELEGATION_ID for audit binding")
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID,
+		"Tier A response must NOT carry MISSION_ID — there isn't one")
+
+	// Round-3 behavior preserved: advice on stderr.
+	assert.Contains(t, stderrText, "ad-hoc Agent spawn",
+		"Tier A round-3 advice must still land on stderr")
+}
+
+// TestHandlePreToolUse_NonAgentPassthroughUnchanged asserts that
+// non-Agent tools (the allowlist-enforcement path) do NOT carry
+// additional_env. The Phase 2b dispatch is Agent-only — Read, Write,
+// Edit etc. continue to emit the legacy {decision, reason} shape.
+func TestHandlePreToolUse_NonAgentPassthroughUnchanged(t *testing.T) {
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "m-anything") // ignored on non-Agent path
+
+	payload := `{"tool_name":"Read","tool_input":{"file_path":"/anywhere.go"}}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.Empty(t, r.AdditionalEnv,
+		"non-Agent passthrough must not emit additional_env")
+	assert.False(t, r.Continue,
+		"non-Agent passthrough must not set continue=true")
 }
 
 // Confirm that os.Getenv is the actual mechanism (not a mock).

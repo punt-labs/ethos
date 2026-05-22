@@ -14,9 +14,17 @@ import (
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.
 // Claude Code reads the decision field to allow or block the tool call.
+//
+// Continue and AdditionalEnv carry DES-054 v5 dispatch state on Agent
+// tool calls. Continue defaults to true on allow paths; AdditionalEnv
+// is a snake_case map per the Claude Code hook protocol. Both fields
+// are omitempty so the legacy allowlist-only response shape is
+// unchanged for non-Agent tool calls.
 type PreToolUseResult struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason,omitempty"`
+	Decision      string            `json:"decision"`
+	Reason        string            `json:"reason,omitempty"`
+	Continue      bool              `json:"continue,omitempty"`
+	AdditionalEnv map[string]string `json:"additional_env,omitempty"`
 }
 
 // HandlePreToolUse handles Claude Code's PreToolUse hook. It serves
@@ -60,10 +68,10 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 
 	toolName, _ := input["tool_name"].(string)
 	toolInput, _ := input["tool_input"].(map[string]any)
+	sessionID, _ := input["session_id"].(string)
 
 	if toolName == "Agent" {
-		maybeEmitTierAAdvice(os.Stderr)
-		return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
+		return dispatchAgent(w, sessionID)
 	}
 
 	allowlist := os.Getenv("ETHOS_VERIFIER_ALLOWLIST")

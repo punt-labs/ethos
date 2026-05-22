@@ -143,6 +143,59 @@ func (s *Store) DelegationLockPath(delegationID string) string {
 	return filepath.Join(s.root, "delegations", filepath.Base(delegationID)+".lock")
 }
 
+// AcquireDelegationLock opens (and creates if needed) the per-
+// delegation lock file at `<repoRoot>/.ethos/delegations/<id>.lock`
+// and acquires an exclusive flock on it. The returned release closure
+// runs LOCK_UN + Close exactly once; subsequent calls are no-ops.
+//
+// Used by the PreToolUse-on-Agent dispatch path (DES-054 v5): the
+// hook allocates a delegation_id and holds this lock across the
+// skeleton write so the prompt.md and record.yaml writes appear
+// atomic to any reader. The skeleton writer is intentionally not
+// invoked here — that lands in a later mission.
+//
+// Acquisition failures surface with both the lock path and the
+// underlying syscall so an operator can locate the contended file.
+// On flock error the file descriptor is closed before return — no
+// leaked fd on the error path.
+//
+// Concurrency: blocks until the lock is available. Callers that
+// must not block should run AcquireDelegationLock in a goroutine
+// against their own timeout; the helper does not expose a non-
+// blocking mode because every caller in DES-054 v5 wants the
+// blocking semantics.
+func AcquireDelegationLock(repoRoot, delegationID string) (func(), error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		return nil, fmt.Errorf("repoRoot is required for delegation lock")
+	}
+	if strings.TrimSpace(delegationID) == "" {
+		return nil, fmt.Errorf("delegationID is required for delegation lock")
+	}
+	dir := filepath.Join(repoRoot, ".ethos", "delegations")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating delegation lock directory %s: %w", dir, err)
+	}
+	lockPath := filepath.Join(dir, filepath.Base(delegationID)+".lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening delegation lock %s: %w", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("acquiring exclusive delegation lock %s: %w", lockPath, err)
+	}
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}
+	return release, nil
+}
+
 // MissionLockPath returns the per-mission flock path. Same location
 // as the internal lockPath but exported so the PreToolUse-on-Agent
 // hook can acquire a shared (read) lock without going through any
