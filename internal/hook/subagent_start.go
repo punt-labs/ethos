@@ -438,10 +438,22 @@ func verifierAllowlistSplit(m *mission.Contract, store *mission.Store) (repo, ab
 		repo = append(repo, entry)
 	}
 	if store != nil {
-		contractPath := store.ContractPath(m.MissionID)
-		if _, ok := seen[contractPath]; !ok {
-			seen[contractPath] = struct{}{}
-			abs = append(abs, contractPath)
+		contractPath, err := store.ContractPath(m.MissionID)
+		switch {
+		case err != nil:
+			// Surface the failure so an operator running the
+			// SubagentStart hook with -v sees that the contract path
+			// could not be resolved — better to omit the allowlist
+			// entry than to anchor it on a stale path the verifier
+			// then cannot read.
+			fmt.Fprintf(os.Stderr,
+				"ethos: verifierAllowlist: resolving contract path for %q: %v\n",
+				m.MissionID, err)
+		default:
+			if _, ok := seen[contractPath]; !ok {
+				seen[contractPath] = struct{}{}
+				abs = append(abs, contractPath)
+			}
 		}
 	}
 	return repo, abs
@@ -579,7 +591,12 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]verifierMiss
 		// Inline symlink rejection — mirrors mission.rejectSymlink
 		// (unexported, different package). Same Lstat-before-Read
 		// TOCTOU gap as rejectSymlink; see ethos-jjm for context.
-		path := deps.Missions.ContractPath(id)
+		path, pErr := deps.Missions.ContractPath(id)
+		if pErr != nil {
+			return nil, fmt.Errorf(
+				"verifier hash gate: resolving contract path for %q: %w", id, pErr,
+			)
+		}
 		if info, lErr := os.Lstat(path); lErr == nil {
 			if info.Mode()&os.ModeSymlink != 0 {
 				return nil, fmt.Errorf(

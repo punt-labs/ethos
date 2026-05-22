@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DES-054 phase 1 — audited delegation foundations.** Three
+  storage-layer changes that the phase 2 hook dispatch and phase 3
+  migration commands will build on. No behaviour change for existing
+  callers; every new mechanism is opt-in or backward-compatible.
+  - `auditEntry` enrichment in `internal/hook/`: gains
+    `parent_session`, `agent_id`, `agent_type`, `delegation_id`,
+    `parent_delegation`, `contract_id`, the full `tool_input` map, and
+    `tool_input_hash` (sha256 of canonical-JSON). The 200-char
+    `tool_input_preview` is retained for grep convenience. All new
+    fields are `omitempty` so v3.11.0 JSONL lines decode cleanly
+    under v3.12.0. Per-line `f.Sync()` and a partial-line-tolerant
+    reader implement DES-054 invariant I10-audit-atomic.
+  - `mission.NewStoreWithRoots(repoRoot, globalRoot)`: activates the
+    DES-054 two-tree storage layout. New missions land in
+    `<repoRoot>/.ethos/missions/<mission-id>/{contract,log,results,reflections}.{yaml,jsonl}`;
+    reads fall back to the legacy `<globalRoot>/missions/<id>.yaml`
+    shape with repo-wins dedup on `List`. `NewStore(root)` preserved
+    as a thin wrapper for backward compatibility — every existing
+    caller compiles unchanged.
+  - `mission.NewID(namespace, now) (id, release, error)`: rollback
+    API replaces the prior `(root, now) (id, error)` signature.
+    Counter file moves to the DES-054 sibling per-namespace per-date
+    shape `~/.punt-labs/ethos/counters/<namespace>-YYYY-MM-DD`
+    (each a single integer, flock-guarded). `NamespaceMissions` and
+    `NamespaceDelegations` are now distinct counter files; new
+    namespaces add sibling files without touching existing ones
+    (invariant I9-counter). `release(false)` decrements; `release(true)`
+    commits; idempotent if a concurrent allocator has already advanced
+    past the rolled-back value.
 - **`ethos mission dispatch --extract-into`** — DES-052's asymmetric
   new-file axis now reaches the dispatch one-liner. Optional and
   additive: existing dispatch one-liners work unchanged. Comma-
@@ -21,6 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows `--extract-into`, a new paragraph names the asymmetric
   semantics and points at DES-052, and the archetypes section names
   `extract_into_constraints` with a pointer to the DESIGN.md table.
+- **AGENTS.md storage layout — DES-054 phase 1 addendum** — new table
+  documents the per-mission and per-session directory layouts, the
+  legacy fallback paths, and the sibling counter file pattern under
+  `~/.punt-labs/ethos/counters/`.
 
 ## [3.11.0] - 2026-05-21
 

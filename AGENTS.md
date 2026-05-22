@@ -880,3 +880,34 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 | Sessions | `~/.punt-labs/ethos/sessions/<id>.yaml` | No |
 | Session locks | `~/.punt-labs/ethos/sessions/<id>.lock` | No |
 | Current session | `~/.punt-labs/ethos/sessions/current/<pid>` | No |
+
+### DES-054 phase 1 — date-keyed two-tree mission storage
+
+Mission and session artifacts move into a per-mission and per-session
+directory layout. The mission ID encodes the date, so date browsing
+is `ls .ethos/missions/m-2026-05-22-*/`. Sessions get the date as a
+directory prefix so `ls .ethos/sessions/2026-05-22-*/` lists every
+session started that day.
+
+| Scope | Path | Git-tracked? |
+|-------|------|-------------|
+| Mission contract (repo) | `<repo>/.ethos/missions/<mission-id>/contract.yaml` | Yes |
+| Mission event log (repo) | `<repo>/.ethos/missions/<mission-id>/log.jsonl` | Yes |
+| Mission results (repo) | `<repo>/.ethos/missions/<mission-id>/results.yaml` | Yes |
+| Mission reflections (repo) | `<repo>/.ethos/missions/<mission-id>/reflections.yaml` | Yes |
+| Mission delegations (repo) | `<repo>/.ethos/missions/<mission-id>/delegations/<NN>/` | Yes |
+| Mission contract (legacy global, read-only fallback) | `~/.punt-labs/ethos/missions/<mission-id>.yaml` | No |
+| Session audit log (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | Yes |
+| Session ad-hoc delegations (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/` | Yes |
+| Session audit log (legacy global, read-only fallback) | `~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl` | No |
+| Mission ID counter | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | No |
+| Delegation ID counter | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | No |
+| Per-mission flock | `~/.punt-labs/ethos/missions/<mission-id>.lock` | No |
+| Per-delegation flock (Tier B) | `~/.punt-labs/ethos/delegations/<delegation-id>.lock` | No |
+
+Counters use the sibling per-namespace per-date pattern: each file
+is a single integer, flock-guarded, and adding a new namespace adds
+a new sibling file without changing any existing one (DES-054
+invariant I9-counter). Session rosters and PID pointers stay under
+`~/.punt-labs/ethos/sessions/` because they reference live process
+state; only audit logs move into the repo.
