@@ -54,11 +54,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents the per-mission and per-session directory layouts, the
   legacy fallback paths, and the sibling counter file pattern under
   `~/.punt-labs/ethos/counters/`.
-
-## [3.11.0] - 2026-05-21
-
-### Added
-
+- **DES-054 phase 2 — PreToolUse-on-Agent dispatch + advice + flocks.**
+  Adds the runtime layer the phase 1 storage foundation was built for.
+  Bare `Agent(...)` calls now produce an audit trail and an optional
+  stderr advisory; `mission dispatch` Agent calls produce a
+  contract-bound delegation record. Phase 2 invariants follow.
+  - **Tier A advice** — when an Agent tool call fires without
+    `MISSION_ID` env, `HandlePreToolUse` writes a single-line advisory
+    to stderr (literal pinned by test against `DESIGN.md`). Suppression
+    via `ETHOS_QUIET_ADVICE=1` or a non-empty `PARENT_SESSION_ID`
+    (nested ad-hoc spawn). The advisory is informational and the Tier
+    A path returns allow; Tier B dispatch (next bullet) can return
+    block on malformed `MISSION_ID`, lock-acquire failure, ID
+    allocation error, depth refusal, or config resolution error.
+  - **Tier B dispatch** — when `MISSION_ID` is set,
+    `pretooluse_dispatch.dispatchTierB` resolves the mission via
+    `mission.Store.Load`, allocates a delegation_id via `mission.NewID`
+    on `NamespaceDelegations`, acquires the per-mission shared flock
+    (`AcquireMissionLock`, `LOCK_SH`) and the per-delegation exclusive
+    flock (`AcquireDelegationLock`, `LOCK_EX`), writes the delegation
+    skeleton atomically (tempfile + `os.Rename`), and emits the hook
+    response env block (`MISSION_ID`, `DELEGATION_ID`,
+    `PARENT_SESSION_ID`, `MISSION_ARTIFACTS_DIR`). Release order is
+    LIFO via `defer`.
+  - **`mission.WriteDelegationSkeleton` / `CloseDelegationSkeleton`** —
+    atomic open and close of a Tier B delegation record at
+    `<repo>/.ethos/missions/<id>/delegations/<NN>/record.yaml`.
+    `CloseDelegationSkeleton` validates the verdict against
+    `DelegationVerdict{Pass,Fail,Error,Aborted}` before the rewrite.
+  - **`max_delegation_depth` refusal** —
+    `pretooluse_dispatch.enforceDelegationDepth` walks the
+    `parent_delegation` chain via `mission.DelegationDepth` (cycle
+    detection bounded by `MaxDelegationDepthDefault+1`). When the new
+    depth would exceed the limit from `resolve.ResolveMaxDelegationDepth`
+    (default 16, configurable via `max_delegation_depth` in
+    `.punt-labs/ethos.yaml`), the just-written skeleton is closed with
+    `verdict=aborted` and the hook response sets `decision=block`
+    with a reason naming the limit (`PreToolUseResult.Continue` is
+    `omitempty` so the field is absent on the wire; consumers decode
+    the absent field as `false`). No env propagation on refusal.
+  - **Hash-gate refusal sentinel cleanup** — when `SubagentStart`'s
+    DES-033 evaluator-hash check refuses a Tier B verifier spawn AFTER
+    the skeleton has been written, the refusal path now closes the
+    skeleton with `verdict=aborted` via the new
+    `closeSkeletonOnHashRefusal` helper. No orphaned skeletons.
+  - **Session-flock unification** — `cmd/ethos/hook.go` now wraps the
+    audit-log writer in `session.Store.WithSessionLock`, eliminating
+    the prior two-lock acquisition order (roster + audit log share one
+    flock per session). `cmd/ethos/hook.go` also gains a
+    deadline-aware stdin drain because the Claude Code hook protocol
+    leaves the pipe open without EOF — `io.ReadAll` would hang.
+  - **`mission.Contract.Delegations []DelegationTemplate`** — new
+    field for the Tier B inheritance dispatch rule (not wired in
+    phase 2; the schema lands now so phase 3 can consume it without
+    a contract format break).
+  - **`resolve.RepoConfig.MaxDelegationDepth`** — repo-local
+    override; `0` means "use default", negative values surface as a
+    diagnostic error rather than silently flipping to the default.
 - **`extract_into` axis on the mission Contract** (DES-052) — a
   separate `extract_into: []string` field authorizes new-file
   creation under listed directories without authorizing

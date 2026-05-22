@@ -276,22 +276,86 @@ func (s *Store) DeleteCurrentSession(claudePID string) error {
 	return nil
 }
 
-// writeRoster marshals and writes a roster atomically via temp file + rename.
+// writeRoster marshals and writes a roster atomically via
+// os.CreateTemp + Chmod(0o600) + Sync + Close + Rename in the
+// sessions directory. Sync errors propagate so a failed fsync
+// surfaces — djb evaluator gate: a half-written roster is
+// unacceptable. The temp file is removed on every error path. A
+// random suffix (via os.CreateTemp) avoids the predictable ".tmp"
+// suffix that two concurrent writers could trample.
 func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	data, err := yaml.Marshal(roster)
 	if err != nil {
 		return fmt.Errorf("marshaling roster: %w", err)
 	}
 	dest := s.rosterPath(sessionID)
-	tmp := dest + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp roster: %w", err)
+	dir := filepath.Dir(dest)
+	tmp, err := os.CreateTemp(dir, "roster-*.yaml.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp roster in %s: %w", dir, err)
 	}
-	return os.Rename(tmp, dest)
+	tmpPath := tmp.Name()
+	if n, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("writing temp roster %s: %w", tmpPath, err)
+	} else if n < len(data) {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("short write to temp roster %s: %d of %d bytes", tmpPath, n, len(data))
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp roster %s: %w", tmpPath, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("syncing temp roster %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("closing temp roster %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("renaming temp roster %s -> %s: %w", tmpPath, dest, err)
+	}
+	return nil
 }
 
-// withLock executes fn while holding an exclusive flock on the session's
-// lock file.
+// WithSessionLock executes fn while holding an exclusive flock on the
+// session's lock file. The lock covers both the session roster YAML and
+// the session audit log (DES-054 v5 unification): one flock per session
+// serializes every per-session write, eliminating the two-lock
+// acquisition order the v4 design carried. Audit log appends and roster
+// mutations therefore use the same lock; a writer must not acquire two
+// locks for one logical operation.
+//
+// Concurrency ordering when this lock is nested inside others (DES-054
+// phase 2): global mission create lock → repo mission create lock →
+// per-mission flock (shared) → per-delegation flock (exclusive) →
+// per-session flock. Release is reverse via defer LIFO.
+//
+// Exported so the audit-log entry point in cmd/ethos/hook.go can wrap
+// its write in the unified lock without re-implementing the
+// open/flock/close dance.
+func (s *Store) WithSessionLock(sessionID string, fn func() error) error {
+	return s.withLock(sessionID, fn)
+}
+
+// withLock executes fn while holding an exclusive flock on the
+// session's lock file. The public WithSessionLock wraps this helper
+// and shares no fd state with it.
+//
+// withLock is NOT re-entrant. Each call opens a fresh file descriptor
+// on the per-session lock path and acquires LOCK_EX on it; a nested
+// call from within fn (or from any path WithSessionLock already
+// holds) opens a second fd against the same inode and blocks waiting
+// for the first holder to release. The same goroutine then deadlocks
+// against itself. Callers must structure their work so the lock is
+// acquired exactly once at the top of any session-write path.
 func (s *Store) withLock(sessionID string, fn func() error) error {
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
