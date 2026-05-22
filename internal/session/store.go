@@ -290,8 +290,31 @@ func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 	return os.Rename(tmp, dest)
 }
 
+// WithSessionLock executes fn while holding an exclusive flock on the
+// session's lock file. The lock covers both the session roster YAML and
+// the session audit log (DES-054 v5 unification): one flock per session
+// serializes every per-session write, eliminating the two-lock
+// acquisition order the v4 design carried. Audit log appends and roster
+// mutations therefore use the same lock; a writer must not acquire two
+// locks for one logical operation.
+//
+// Concurrency ordering when this lock is nested inside others (DES-054
+// phase 2): global mission create lock → repo mission create lock →
+// per-mission flock (shared) → per-delegation flock (exclusive) →
+// per-session flock. Release is reverse via defer LIFO.
+//
+// Exported so the audit-log entry point in cmd/ethos/hook.go can wrap
+// its write in the unified lock without re-implementing the
+// open/flock/close dance.
+func (s *Store) WithSessionLock(sessionID string, fn func() error) error {
+	return s.withLock(sessionID, fn)
+}
+
 // withLock executes fn while holding an exclusive flock on the session's
-// lock file.
+// lock file. Internal callers reach the same lock via WithSessionLock;
+// the two share the same fd lifecycle so a caller that already holds
+// the lock via the public surface cannot deadlock against a Join or
+// Leave inside the same goroutine.
 func (s *Store) withLock(sessionID string, fn func() error) error {
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
