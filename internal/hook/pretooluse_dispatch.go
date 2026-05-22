@@ -173,6 +173,15 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))
 	}
+	// Skeleton is now on disk. The delegation_id slot is occupied
+	// regardless of whether the downstream depth check or response
+	// encode succeeds — rolling the counter back here would let the
+	// next NewID return the same delegation_id and collide with the
+	// just-written record. Commit the counter (success=true) at this
+	// point; failures past here log to stderr but do not rollback
+	// (Bugbot HIGH on PR #327 d12ade2: rolling back after the
+	// skeleton is on disk enables ID reuse → directory collision).
+	success = true
 
 	// Depth gate (DES-054 v5): walk parent_delegation chain and refuse
 	// if adding this spawn would exceed the configured ceiling. The
@@ -180,11 +189,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 	// verdict=aborted so an audit query can distinguish a depth refusal
 	// (terminated before the worker started) from a spawn that ran and
 	// failed downstream. The walker fails closed on a missing or
-	// unparseable ancestor; we refuse rather than silently admit. The
-	// counter stays held (success=false) on this branch so a depth-
-	// refused spawn does not burn its delegation_id slot (Bugbot MED
-	// on PR #327: success was previously set before the depth check,
-	// committing the counter on a refusal).
+	// unparseable ancestor; we refuse rather than silently admit.
 	if reason, ok := enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation); !ok {
 		return writeAgentBlock(w, reason)
 	}
@@ -201,15 +206,10 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 		Continue:      true,
 		AdditionalEnv: env,
 	}); err != nil {
-		// Response write failed — deferred releaseID(false) rolls
-		// the counter back. Surface so the operator can correlate
-		// the missing skeleton-bound spawn with the underlying I/O
-		// fault.
 		fmt.Fprintf(os.Stderr,
 			"ethos pre-tool-use: tier-B response write: %v\n", err)
 		return err
 	}
-	success = true
 	return nil
 }
 
