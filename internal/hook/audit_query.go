@@ -9,6 +9,58 @@ import (
 	"strings"
 )
 
+// AuditView is the exported, render-ready projection of an audit log
+// entry. The on-disk auditEntry struct stays package-private; AuditView
+// is the surface other packages — notably the CLI — consume.
+//
+// Field names mirror the on-disk JSONL shape so encoding/json reproduces
+// the original line verbatim when re-marshaling.
+type AuditView struct {
+	Ts               string         `json:"ts"`
+	Session          string         `json:"session"`
+	ParentSession    string         `json:"parent_session,omitempty"`
+	AgentID          string         `json:"agent_id,omitempty"`
+	AgentType        string         `json:"agent_type,omitempty"`
+	DelegationID     string         `json:"delegation_id,omitempty"`
+	ParentDelegation string         `json:"parent_delegation,omitempty"`
+	ContractID       string         `json:"contract_id,omitempty"`
+	Tool             string         `json:"tool"`
+	ToolInput        map[string]any `json:"tool_input,omitempty"`
+	ToolInputHash    string         `json:"tool_input_hash,omitempty"`
+	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
+}
+
+// Summary returns a single-line human description of the entry. Prefers
+// tool_input.file_path (the common case for Read/Edit/Write); falls
+// back to tool_input_preview when the input has no file_path field.
+// Used by the text render path in `ethos audit show --format text`.
+func (v AuditView) Summary() string {
+	if v.ToolInput != nil {
+		if fp, ok := v.ToolInput["file_path"].(string); ok && fp != "" {
+			return fp
+		}
+	}
+	return v.ToolInputPreview
+}
+
+// toView projects the internal auditEntry into the exported shape.
+func toView(e auditEntry) AuditView {
+	return AuditView{
+		Ts:               e.Ts,
+		Session:          e.Session,
+		ParentSession:    e.ParentSession,
+		AgentID:          e.AgentID,
+		AgentType:        e.AgentType,
+		DelegationID:     e.DelegationID,
+		ParentDelegation: e.ParentDelegation,
+		ContractID:       e.ContractID,
+		Tool:             e.Tool,
+		ToolInput:        e.ToolInput,
+		ToolInputHash:    e.ToolInputHash,
+		ToolInputPreview: e.ToolInputPreview,
+	}
+}
+
 // QueryAuditByDelegation returns every audit entry whose DelegationID
 // equals delegationID. It walks <repoRoot>/.ethos/sessions/<date>-<id>/
 // audit.jsonl first, then falls back to the legacy
@@ -25,12 +77,12 @@ import (
 //
 // Missing directories are not an error: a fresh install has neither
 // tree and the function returns an empty slice with nil error.
-func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([]auditEntry, error) {
+func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([]AuditView, error) {
 	if delegationID == "" {
 		return nil, nil
 	}
 
-	var out []auditEntry
+	var out []AuditView
 	seenSessions := make(map[string]struct{})
 
 	if repoRoot != "" {
@@ -39,7 +91,9 @@ func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([
 		if err != nil {
 			return nil, fmt.Errorf("querying repo audit %s: %w", base, err)
 		}
-		out = append(out, repoEntries...)
+		for _, e := range repoEntries {
+			out = append(out, toView(e))
+		}
 		for _, s := range sessions {
 			seenSessions[s] = struct{}{}
 		}
@@ -49,7 +103,9 @@ func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([
 	if err != nil {
 		return nil, fmt.Errorf("querying legacy audit %s: %w", globalSessionsDir, err)
 	}
-	out = append(out, legacyEntries...)
+	for _, e := range legacyEntries {
+		out = append(out, toView(e))
+	}
 
 	return out, nil
 }
