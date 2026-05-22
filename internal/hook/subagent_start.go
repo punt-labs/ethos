@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -816,6 +817,30 @@ func closeSkeletonOnHashRefusal(repoRoot string) {
 				"skipping skeleton close for "+delegationID)
 		return
 	}
+	// Acquire the per-delegation exclusive flock around the close
+	// so a concurrent SubagentStop or CLI close cannot interleave
+	// and produce a last-writer-wins verdict (Copilot MED on PR
+	// #327: closeSkeletonOnHashRefusal wrote record.yaml without
+	// the lock the rest of the dispatch path holds). Lock path is
+	// the same global tree the PreToolUse-on-Agent dispatch uses;
+	// derive it from os.UserHomeDir here to keep the close path
+	// independent of the dispatch's tierBGlobalRoot helper.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: subagent-start: hash refusal: user home dir: %v; "+
+				"skipping skeleton close for %q\n", err, delegationID)
+		return
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	release, err := mission.AcquireDelegationLock(globalRoot, delegationID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: subagent-start: hash refusal: acquiring delegation lock for %q: %v\n",
+			delegationID, err)
+		return
+	}
+	defer release()
 	closedAt := time.Now().UTC().Format(time.RFC3339)
 	if err := mission.CloseDelegationSkeleton(
 		repoRoot, missionID, delegationID,

@@ -356,8 +356,14 @@ func tierBMissionStore() (*mission.Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("user home dir: %w", err)
 	}
-	root := filepath.Join(home, ".punt-labs", "ethos")
-	return mission.NewStore(root).WithRepoRoot(resolve.FindRepoRoot()), nil
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	// NewStoreWithRoots activates the DES-054 two-tree dispatch:
+	// reads check the repo tree first (<repoRoot>/.ethos/missions/),
+	// then fall back to the global tree. WithRepoRoot alone is
+	// trace-only and would miss contracts that live in the repo tree
+	// (Copilot HIGH-equivalent on PR #327: Tier B dispatch would
+	// block "malformed MISSION_ID" on any in-repo contract).
+	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), globalRoot), nil
 }
 
 // writeAgentBlock emits a block decision with a named reason. Used on
