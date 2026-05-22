@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
@@ -196,6 +199,84 @@ func runHookAuditLog() error {
 	// sessions directory otherwise. FindRepoRoot returns the empty
 	// string outside a git tree, which routes the audit log through
 	// the legacy fallback path without further branching.
-	_ = hook.HandleAuditLog(os.Stdin, resolve.FindRepoRoot(), sessionsDir)
+	//
+	// Unified session flock — DES-054 v5 §"Storage Layout": one lock
+	// covers roster + audit log, eliminating the prior two-lock
+	// acquisition order. Drain stdin once into a buffer so the peek
+	// for session_id and the subsequent HandleAuditLog read of the
+	// same bytes do not race against a half-consumed pipe. The drain
+	// reuses the hook package's deadline-aware reader so an open pipe
+	// with no EOF (the real Claude Code shape) does not hang the
+	// process. When the peek fails to find a session_id (malformed
+	// payload, empty input, parse error), fall through to the unlocked
+	// legacy path so an unparseable input still surfaces through
+	// HandleAuditLog's stderr diagnostic rather than failing silently
+	// here.
+	data := drainAuditStdin()
+	sessionID := peekSessionID(data)
+	repoRoot := resolve.FindRepoRoot()
+	if sessionID == "" {
+		_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
+		return nil
+	}
+	ss := sessionStore()
+	_ = ss.WithSessionLock(sessionID, func() error {
+		return hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
+	})
 	return nil
+}
+
+// drainAuditStdin reads the hook payload bytes from os.Stdin with a
+// short deadline so an open pipe without EOF (the shape Claude Code
+// produces) does not block the process. Returns an empty slice on
+// every failure mode — the caller routes empty input through the
+// unlocked legacy HandleAuditLog path.
+func drainAuditStdin() []byte {
+	if err := os.Stdin.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		// Deadlines unsupported (Linux pipes) — race a goroutine
+		// against a timer so we do not block on an open pipe.
+		ch := make(chan []byte, 1)
+		go func() {
+			buf := make([]byte, 65536)
+			n, _ := os.Stdin.Read(buf)
+			ch <- buf[:n]
+		}()
+		select {
+		case b := <-ch:
+			return b
+		case <-time.After(time.Second):
+			return nil
+		}
+	}
+	defer os.Stdin.SetReadDeadline(time.Time{}) //nolint:errcheck
+	var buf []byte
+	chunk := make([]byte, 65536)
+	for {
+		n, err := os.Stdin.Read(chunk)
+		if n > 0 {
+			buf = append(buf, chunk[:n]...)
+			if sdErr := os.Stdin.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); sdErr != nil {
+				break
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	return buf
+}
+
+// peekSessionID extracts session_id from a JSON-encoded audit hook
+// payload without disturbing the bytes. Returns "" on parse error or a
+// missing field; the caller routes to the unlocked legacy path so an
+// unparseable payload still surfaces through HandleAuditLog's stderr
+// diagnostic rather than failing silently here.
+func peekSessionID(data []byte) string {
+	var probe struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return ""
+	}
+	return probe.SessionID
 }
