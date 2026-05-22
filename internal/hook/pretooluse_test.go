@@ -1427,9 +1427,16 @@ func TestDispatchAgent_InheritanceNotInheritsContract(t *testing.T) {
 }
 
 // TestDispatchAgent_InheritanceMalformedRegex pins the non-blocking
-// behavior on a bad pattern. A malformed regex in the parent
-// contract surfaces as a stderr warning + Tier A fall-through —
-// never a block. djb's rule: no silent admit, but also no refusal.
+// runtime behavior on a bad pattern. Admission-time validation
+// (Contract.Validate, DES-054 phase 3) rejects a malformed regex
+// before persistence, so reaching this code path requires a
+// hand-edited contract on disk. The runtime fallback is defense
+// in depth: a malformed regex surfaces as a stderr warning + Tier A
+// fall-through — never a block. djb's rule: no silent admit, but
+// also no refusal.
+//
+// To exercise the defense, stage a contract with a well-formed
+// pattern, then overwrite the on-disk YAML with the malformed form.
 func TestDispatchAgent_InheritanceMalformedRegex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1438,8 +1445,19 @@ func TestDispatchAgent_InheritanceMalformedRegex(t *testing.T) {
 	parentMission := "m-2026-05-22-203"
 	parentDelegation := "d-2026-05-22-203"
 	stageContractWithDelegations(t, home, parentMission, []mission.DelegationTemplate{
-		{Role: "verifier", SpawnPattern: "djb(", InheritsContract: true},
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: true},
 	})
+	// Bypass Contract.Validate by editing the on-disk YAML directly.
+	// This models a contract that was hand-edited after persistence —
+	// the only path by which a malformed pattern can reach the runtime
+	// matcher now that admission-time validation rejects it.
+	contractPath := filepath.Join(home, ".punt-labs", "ethos", "missions", parentMission+".yaml")
+	contractBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+	patched := strings.Replace(string(contractBytes),
+		"spawn_pattern: djb", "spawn_pattern: djb(", 1)
+	require.NotEqual(t, string(contractBytes), patched, "patch must change the YAML")
+	require.NoError(t, os.WriteFile(contractPath, []byte(patched), 0o600))
 	stageParentDelegationSkeleton(t, repo, parentMission, parentDelegation, "")
 
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
@@ -1473,7 +1491,12 @@ func TestDispatchAgent_InheritanceMalformedRegex(t *testing.T) {
 	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID,
 		"malformed regex falls through to Tier A — MISSION_ID must not echo")
-	assert.Contains(t, stderrText, "bad spawn_pattern",
+	// Admission-time validation (DES-054 phase 3) rejects the patched
+	// contract at Store.Load, so the runtime stderr now reports the
+	// load failure rather than the legacy "bad spawn_pattern" warning.
+	// Either form is acceptable — the requirement is that the operator
+	// sees the malformed pattern in stderr before the spawn proceeds.
+	assert.Contains(t, stderrText, "spawn_pattern",
 		"the malformed pattern must land in stderr so the operator sees it")
 }
 

@@ -41,7 +41,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (18 total — must match the numbered list below
+// Validation rules (19 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -83,6 +83,13 @@ const (
 //     is a well-formed relative path (same per-entry rules as
 //     write_set, with ${inputs.X} placeholders permitted in the path).
 //     DES-054.
+//  19. delegations entries: each SpawnPattern must compile as an
+//     anchored regular expression (the same `^(?:...)$` form
+//     MatchSpawnPattern uses at match time). Empty SpawnPattern is
+//     allowed (the runtime path treats it as never-matches). A
+//     malformed regex surfaces with the pattern and the Go regexp
+//     parser error — admission-time so the operator sees the
+//     diagnostic before any spawn fires. DES-054 phase 3.
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
@@ -255,6 +262,23 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 	for i, p := range c.Preconditions {
 		if err := validatePrecondition(p); err != nil {
 			return fmt.Errorf("preconditions[%d]: %w", i, err)
+		}
+	}
+
+	// delegations: compile each SpawnPattern under the same anchored
+	// form MatchSpawnPattern uses at match time. A malformed regex
+	// surfaces here — admission time — so the operator never deploys
+	// a contract whose inheritance dispatch path silently no-matches
+	// at runtime. Empty pattern is allowed (matches nothing); the
+	// runtime path short-circuits before regex compile in that case.
+	// DES-054 phase 3.
+	for i, t := range c.Delegations {
+		if t.SpawnPattern == "" {
+			continue
+		}
+		if _, err := regexp.Compile("^(?:" + t.SpawnPattern + ")$"); err != nil {
+			return fmt.Errorf("delegations[%d]: invalid spawn_pattern %q: %w",
+				i, t.SpawnPattern, err)
 		}
 	}
 
