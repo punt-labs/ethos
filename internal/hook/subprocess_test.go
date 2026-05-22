@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -658,8 +659,20 @@ func TestSubprocess_AuditLog(t *testing.T) {
 
 	require.NoError(t, err, "audit-log exited non-zero: %s", stderr)
 
-	// Audit log file created.
-	auditPath := filepath.Join(sessionsDir(se), sid+".audit.jsonl")
+	// DES-054 phase 1: the subprocess runs inside a git-init'd
+	// temp repo, so FindRepoRoot lands on se.repo and the audit log
+	// writes to the date-keyed per-session directory under
+	// <repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
+	sessionsBase := filepath.Join(se.repo, ".ethos", "sessions")
+	dirEntries, readErr := os.ReadDir(sessionsBase)
+	require.NoError(t, readErr,
+		"repo sessions directory must exist at %s", sessionsBase)
+	require.Len(t, dirEntries, 1, "exactly one per-session dir expected")
+	dirName := dirEntries[0].Name()
+	require.True(t, strings.HasSuffix(dirName, "-"+sid),
+		"per-session dir %q must end in -<session-id>", dirName)
+
+	auditPath := filepath.Join(sessionsBase, dirName, "audit.jsonl")
 	data, readErr := os.ReadFile(auditPath)
 	require.NoError(t, readErr, "audit log file should exist at %s", auditPath)
 

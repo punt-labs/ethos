@@ -11,6 +11,8 @@
 //                        extractToolInput, hashToolInput
 //   - audit_writer.go  — writeAuditEntry (open/write/fsync/close)
 //   - audit_reader.go  — readAuditEntries (partial-line tolerant)
+//   - audit_paths.go   — repo-tree session directory resolution +
+//                        legacy fallback for the read path
 //
 // KnownFields asymmetry (DES-054 phase 1): the contract YAML decoder
 // in internal/mission/store.go uses KnownFields(true) to refuse
@@ -26,7 +28,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"time"
 )
 
@@ -36,13 +37,26 @@ import (
 // failure path writes a warning to stderr and returns nil so a
 // broken audit pipeline cannot block the tool call.
 //
-// The on-disk layout is the legacy single-tree shape:
-// <sessionsDir>/<session-id>.audit.jsonl. The two-tree
-// repo-vs-global storage layout introduced by DES-054 phase 1 is
-// applied at the mission Store layer; the session audit hook still
-// writes through this single path until phase 2 wires the
-// repo-aware dispatcher.
-func HandleAuditLog(r io.Reader, sessionsDir string) error {
+// DES-054 phase 1 storage layout:
+//
+//   - When repoRoot is set, the write lands in
+//     <repoRoot>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
+//     The per-session directory is created on first write; subsequent
+//     writes in the same session reuse the existing date directory
+//     even if the wall clock has rolled over a day boundary.
+//   - When repoRoot is empty, the write falls back to the legacy
+//     <globalSessionsDir>/<session-id>.audit.jsonl shape so the hook
+//     keeps working in non-repo contexts (e.g. cron tasks, ad-hoc
+//     CLI sessions outside a git tree).
+//
+// The function never silently drops a write: an mkdir or open
+// failure writes a warning to stderr but allows the tool call to
+// proceed. A v3.11.0 reader (legacy fallback path only) continues to
+// see logs from sessions whose wall-clock date matches today's UTC
+// date — see resolveSessionDir's fallback behaviour and the
+// readAuditEntriesForSession reader in audit_paths.go for the full
+// migration contract.
+func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: audit-log: reading input: %v\n", err)
@@ -54,10 +68,28 @@ func HandleAuditLog(r io.Reader, sessionsDir string) error {
 		return nil
 	}
 
-	toolName, _ := input["tool_name"].(string)
+	now := time.Now().UTC()
+	entry := buildAuditEntry(input, sessionID, now)
 
+	path, err := resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID, now)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
+		return nil
+	}
+	if err := writeAuditEntry(path, entry); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
+	}
+	return nil
+}
+
+// buildAuditEntry assembles the enriched auditEntry from the hook
+// payload. Split from HandleAuditLog so the construction can be
+// exercised under test without staging a writable directory and so
+// the orchestrator stays focused on the I/O concerns.
+func buildAuditEntry(input map[string]any, sessionID string, now time.Time) auditEntry {
+	toolName, _ := input["tool_name"].(string)
 	entry := auditEntry{
-		Ts:               time.Now().UTC().Format(time.RFC3339),
+		Ts:               now.Format(time.RFC3339),
 		Session:          sessionID,
 		Tool:             toolName,
 		ToolInput:        extractToolInput(input),
@@ -85,15 +117,5 @@ func HandleAuditLog(r io.Reader, sessionsDir string) error {
 	if v, ok := input["contract_id"].(string); ok {
 		entry.ContractID = v
 	}
-
-	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: audit-log: creating %s: %v\n", sessionsDir, err)
-		return nil
-	}
-
-	path := filepath.Join(sessionsDir, filepath.Base(sessionID)+".audit.jsonl")
-	if err := writeAuditEntry(path, entry); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
-	}
-	return nil
+	return entry
 }

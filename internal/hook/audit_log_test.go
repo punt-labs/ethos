@@ -22,7 +22,7 @@ func TestHandleAuditLog_ValidPayload(t *testing.T) {
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	err = HandleAuditLog(bytes.NewReader(data), dir)
+	err = HandleAuditLog(bytes.NewReader(data), "", dir)
 	require.NoError(t, err)
 
 	path := filepath.Join(dir, "sess-abc.audit.jsonl")
@@ -46,7 +46,7 @@ func TestHandleAuditLog_NoSessionID(t *testing.T) {
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	err = HandleAuditLog(bytes.NewReader(data), dir)
+	err = HandleAuditLog(bytes.NewReader(data), "", dir)
 	require.NoError(t, err)
 
 	entries, err := os.ReadDir(dir)
@@ -65,7 +65,7 @@ func TestHandleAuditLog_LongToolInput(t *testing.T) {
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	err = HandleAuditLog(bytes.NewReader(data), dir)
+	err = HandleAuditLog(bytes.NewReader(data), "", dir)
 	require.NoError(t, err)
 
 	path := filepath.Join(dir, "sess-long.audit.jsonl")
@@ -91,7 +91,7 @@ func TestHandleAuditLog_MissingSessionsDir(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should not crash — writes warning to stderr and returns nil.
-	err = HandleAuditLog(bytes.NewReader(data), dir)
+	err = HandleAuditLog(bytes.NewReader(data), "", dir)
 	assert.NoError(t, err)
 }
 
@@ -105,7 +105,7 @@ func TestHandleAuditLog_MultipleAppends(t *testing.T) {
 		}
 		data, err := json.Marshal(payload)
 		require.NoError(t, err)
-		require.NoError(t, HandleAuditLog(bytes.NewReader(data), dir))
+		require.NoError(t, HandleAuditLog(bytes.NewReader(data), "", dir))
 	}
 
 	path := filepath.Join(dir, "sess-multi.audit.jsonl")
@@ -131,7 +131,7 @@ func TestHandleAuditLog_NoToolInput(t *testing.T) {
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	err = HandleAuditLog(bytes.NewReader(data), dir)
+	err = HandleAuditLog(bytes.NewReader(data), "", dir)
 	require.NoError(t, err)
 
 	path := filepath.Join(dir, "sess-noinput.audit.jsonl")
@@ -196,7 +196,7 @@ func TestHandleAuditLog_FullToolInputPersisted(t *testing.T) {
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	require.NoError(t, HandleAuditLog(bytes.NewReader(data), dir))
+	require.NoError(t, HandleAuditLog(bytes.NewReader(data), "", dir))
 
 	path := filepath.Join(dir, "sess-full.audit.jsonl")
 	content, err := os.ReadFile(path)
@@ -232,7 +232,7 @@ func TestHandleAuditLog_NewFieldsRoundTrip(t *testing.T) {
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	require.NoError(t, HandleAuditLog(bytes.NewReader(data), dir))
+	require.NoError(t, HandleAuditLog(bytes.NewReader(data), "", dir))
 
 	path := filepath.Join(dir, "sess-child.audit.jsonl")
 	content, err := os.ReadFile(path)
@@ -262,7 +262,7 @@ func TestHandleAuditLog_OmitsEmptyNewFields(t *testing.T) {
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 
-	require.NoError(t, HandleAuditLog(bytes.NewReader(data), dir))
+	require.NoError(t, HandleAuditLog(bytes.NewReader(data), "", dir))
 
 	path := filepath.Join(dir, "sess-bare.audit.jsonl")
 	content, err := os.ReadFile(path)
