@@ -497,12 +497,12 @@ func TestHandleAuditLog_WriteFailureSurfacesLoss(t *testing.T) {
 		"sentinel write must be attempted on writeAuditEntry failure")
 }
 
-// TestHandleAuditLog_SentinelLandsWhenPathResolverFails covers the
-// other half of Fix 1: when resolveAuditWritePath itself fails, the
-// path is unreachable, so the sentinel cannot land either. The
-// stderr line must still carry the lost tool input so the operator
-// can reconstruct it from the journal.
-func TestHandleAuditLog_SentinelLandsWhenPathResolverFails(t *testing.T) {
+// TestHandleAuditLog_StderrCarriesEntryWhenPathResolverFails covers
+// the other half of Fix 1: when resolveAuditWritePath itself fails,
+// no path is known, so neither the audit entry nor the sentinel can
+// land on disk. The stderr line must still carry the lost tool input
+// so the operator can reconstruct it from the journal.
+func TestHandleAuditLog_StderrCarriesEntryWhenPathResolverFails(t *testing.T) {
 	// A 0o000 PARENT directory defeats MkdirAll inside the
 	// resolver: the resolver tries to create a child under a
 	// directory it cannot traverse and returns an error before any

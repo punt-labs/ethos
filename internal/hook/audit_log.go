@@ -53,9 +53,10 @@ import (
 // failure writes a warning to stderr but allows the tool call to
 // proceed. A v3.11.0 reader (legacy fallback path only) continues to
 // see logs from sessions whose wall-clock date matches today's UTC
-// date — see resolveSessionDir's fallback behaviour for the full
-// migration contract. Phase 2 will introduce a unified reader that
-// tries the repo tree first and falls back to the legacy path.
+// date — see resolveAuditWritePath and resolveRepoSessionDir in
+// audit_paths.go for the full migration contract. Phase 2 will
+// introduce a unified reader that tries the repo tree first and
+// falls back to the legacy path.
 func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	input, err := ReadInput(r, time.Second)
 	if err != nil {

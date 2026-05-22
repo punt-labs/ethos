@@ -286,21 +286,26 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// stage results and traces; running `make check` after each
 		// of those writes serializes lint+test across the agent's
 		// stream and trips the 600s Claude Code watchdog (bug
-		// ethos-m3gh). The hook now reads the tool's target path from
-		// the Claude Code hook stdin payload via jq, then routes:
+		// ethos-m3gh). The hook reads the tool's target path from the
+		// Claude Code hook stdin payload via jq, then routes:
 		//
-		//   1. Paths under .tmp/ or .ethos/ — bypass (exit 0). These
+		//   1. jq missing or unreadable input — fail closed: run
+		//      make check. A missing jq must not silently disable the
+		//      gate (Copilot review on PR #326).
+		//
+		//   2. Paths under .tmp/ or .ethos/ — bypass (exit 0). These
 		//      are scratch and trace dirs; nothing under them is
 		//      production source. Patterns cover both leading and
 		//      embedded segments so worktree layouts (`*/.tmp/*`) and
 		//      cwd-relative writes (`.tmp/*`) both match.
 		//
-		//   2. *.go, Makefile, *.sh, *.yaml, *.yml — run make check
-		//      with the same output-capture + head -n 60 + exit-code
-		//      propagation as before. These are the file types whose
-		//      content gates exist in `make check`.
+		//   3. *.go, go.mod, go.sum, go.work, Makefile, *.sh, *.yaml,
+		//      *.yml — run make check with output-capture + head -n
+		//      60 + exit-code propagation. go.mod / go.sum / go.work
+		//      are dependency-graph files whose content gates live in
+		//      `make check` (Bugbot review on PR #326).
 		//
-		//   3. Anything else (markdown, JSON, text) — exit 0. Doc
+		//   4. Anything else (markdown, JSON, text) — exit 0. Doc
 		//      writes do not trigger compile or lint failures.
 		//
 		// The case statement is pure glob — no `..` resolution, no
@@ -326,7 +331,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// command stays POSIX-sh compatible (it runs under /bin/sh,
 		// which is dash on Debian/Ubuntu): no `set -o pipefail`, no
 		// process substitution, no bash-isms in the case patterns.
-		b.WriteString("          command: \"_path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); case \\\"$_path\\\" in */.tmp/*|*/.ethos/*|.tmp/*|.ethos/*) exit 0 ;; *.go|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
+		b.WriteString("          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); case \\\"$_path\\\" in */.tmp/*|*/.ethos/*|.tmp/*|.ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
 	}
 	b.WriteString("---\n")
 
