@@ -432,3 +432,100 @@ func TestWriteAuditEntry_FsyncEnforced(t *testing.T) {
 	assert.Equal(t, 3, strings.Count(string(data), "\n"),
 		"three appends must produce three newline-terminated lines")
 }
+
+// TestEmitAuditSentinel_LandsInFile is the unit test for the
+// sentinel helper. With a writable directory, the sentinel writes
+// a single JSONL line carrying ts, session, and audit_error so that
+// `ethos audit show` reveals the loss to a later reader.
+func TestEmitAuditSentinel_LandsInFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sent.audit.jsonl")
+	err := emitAuditSentinel(path, "sess-x", "2026-05-22T10:00:00Z", "fsync failed")
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	body := strings.TrimSpace(string(data))
+	var got map[string]string
+	require.NoError(t, json.Unmarshal([]byte(body), &got))
+	assert.Equal(t, "sess-x", got["session"])
+	assert.Equal(t, "2026-05-22T10:00:00Z", got["ts"])
+	assert.Equal(t, "fsync failed", got["audit_error"])
+}
+
+// TestHandleAuditLog_WriteFailureSurfacesLoss covers Fix 1 of mission
+// m-2026-05-22-027. When writeAuditEntry fails — here simulated by a
+// 0o000 per-session directory that defeats both the entry write and
+// the sentinel write — the original tool input must be recoverable
+// from stderr. The sentinel write is attempted unconditionally on
+// any writeAuditEntry failure so `ethos audit show` reveals the loss
+// when the underlying failure mode (fsync, ENOSPC) leaves the file
+// writable for a small payload.
+func TestHandleAuditLog_WriteFailureSurfacesLoss(t *testing.T) {
+	root := t.TempDir()
+	// Pre-create the global sessions directory with 0o000 so
+	// MkdirAll succeeds (directory already exists) but the
+	// subsequent OpenFile in writeAuditEntry hits EACCES. The
+	// sentinel write hits the same EACCES — neither lands on disk.
+	dir := filepath.Join(root, "sessions")
+	require.NoError(t, os.Mkdir(dir, 0o000))
+	defer func() { _ = os.Chmod(dir, 0o700) }()
+
+	payload := map[string]any{
+		"session_id": "sess-blocked",
+		"tool_name":  "Bash",
+		"tool_input": map[string]any{"command": "git status"},
+	}
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	stderr := captureStderr(t, func() {
+		err := HandleAuditLog(bytes.NewReader(data), "", dir)
+		require.NoError(t, err)
+	})
+
+	// Original tool input must be recoverable from stderr — the
+	// preview field is what an operator greps for in the journal.
+	assert.Contains(t, stderr, "sess-blocked",
+		"stderr must name the lost session")
+	assert.Contains(t, stderr, "git status",
+		"stderr must carry the lost tool input preview")
+	// The sentinel attempt fires — stderr carries the secondary
+	// failure line so the operator sees that the in-band signal
+	// was also defeated.
+	assert.Contains(t, stderr, "sentinel:",
+		"sentinel write must be attempted on writeAuditEntry failure")
+}
+
+// TestHandleAuditLog_SentinelLandsWhenPathResolverFails covers the
+// other half of Fix 1: when resolveAuditWritePath itself fails, the
+// path is unreachable, so the sentinel cannot land either. The
+// stderr line must still carry the lost tool input so the operator
+// can reconstruct it from the journal.
+func TestHandleAuditLog_SentinelLandsWhenPathResolverFails(t *testing.T) {
+	// A 0o000 PARENT directory defeats MkdirAll inside the
+	// resolver: the resolver tries to create a child under a
+	// directory it cannot traverse and returns an error before any
+	// file path is known.
+	root := t.TempDir()
+	parent := filepath.Join(root, "blocked")
+	require.NoError(t, os.Mkdir(parent, 0o000))
+	defer func() { _ = os.Chmod(parent, 0o700) }()
+	dir := filepath.Join(parent, "sessions")
+
+	payload := map[string]any{
+		"session_id": "sess-noresolve",
+		"tool_name":  "Read",
+		"tool_input": map[string]any{"file_path": "/etc/passwd"},
+	}
+	data, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	stderr := captureStderr(t, func() {
+		err := HandleAuditLog(bytes.NewReader(data), "", dir)
+		require.NoError(t, err)
+	})
+	assert.Contains(t, stderr, "sess-noresolve")
+	assert.Contains(t, stderr, "/etc/passwd",
+		"path-resolver failure must still surface the lost tool input")
+}

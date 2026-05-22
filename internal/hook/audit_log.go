@@ -73,11 +73,33 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 
 	path, err := resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID, now)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
+		// Path resolution failed — no file is reachable, so the
+		// sentinel cannot land either. Surface the original error
+		// and the preview to stderr so an operator running -v can
+		// still reconstruct the lost tool input from terminal scroll
+		// or the systemd journal.
+		fmt.Fprintf(os.Stderr,
+			"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
+			err, sessionID, entry.Tool, entry.ToolInputPreview)
 		return nil
 	}
-	if err := writeAuditEntry(path, entry); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: audit-log: %v\n", err)
+	if writeErr := writeAuditEntry(path, entry); writeErr != nil {
+		// The full entry did not persist. Always emit the entry's
+		// reason and preview to stderr so the lost tool input is
+		// recoverable even when the sentinel itself cannot land.
+		fmt.Fprintf(os.Stderr,
+			"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
+			writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
+		// Attempt the in-band sentinel so `ethos audit show` reveals
+		// the loss without an operator having to scrape stderr. A
+		// fsync, ENOSPC, or partial-write failure that defeated the
+		// full entry does not necessarily defeat a 100-byte sentinel;
+		// when the file system has truly broken (the 0o000 directory
+		// case) the sentinel write returns its own error and stderr
+		// stays the only signal.
+		if sentErr := emitAuditSentinel(path, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
+		}
 	}
 	return nil
 }
