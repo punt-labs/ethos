@@ -3,11 +3,15 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
@@ -752,13 +756,43 @@ func stageContract(t *testing.T, home, missionID string) {
 	require.NoError(t, store.Create(c))
 }
 
+// stageRepoRoot creates a fake repo directory and runs git init so
+// FindRepoRoot stops there rather than walking up to the real ethos
+// checkout. Returns the repo path. The test chdirs into the repo and
+// restores cwd on cleanup.
+func stageRepoRoot(t *testing.T) string {
+	t.Helper()
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init", repo)
+	cmd.Env = []string{
+		"HOME=" + t.TempDir(),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"PATH=" + os.Getenv("PATH"),
+	}
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git init failed: %s", out)
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(repo))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	return repo
+}
+
 // TestHandlePreToolUse_TierBDispatch covers the MISSION_ID-set
 // branch. The hook resolves the contract, allocates a delegation_id,
-// and emits additional_env with DELEGATION_ID, MISSION_ID (echoed),
-// and PARENT_SESSION_ID (from input session_id).
+// writes the record skeleton, and emits additional_env with
+// DELEGATION_ID, MISSION_ID (echoed), PARENT_SESSION_ID (from input
+// session_id), and MISSION_ARTIFACTS_DIR (the per-delegation dir).
+//
+// The on-disk record.yaml is asserted at the expected path:
+// <repo>/.ethos/missions/<mission-id>/delegations/<NN>/record.yaml.
 func TestHandlePreToolUse_TierBDispatch(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
 	missionID := "m-2026-05-22-001"
 	stageContract(t, home, missionID)
 
@@ -785,6 +819,157 @@ func TestHandlePreToolUse_TierBDispatch(t *testing.T) {
 		"Tier B must allocate a fresh DELEGATION_ID")
 	assert.True(t, strings.HasPrefix(r.AdditionalEnv["DELEGATION_ID"], "d-"),
 		"DELEGATION_ID must use the d-YYYY-MM-DD-NNN shape")
+
+	artifactsDir := r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
+	require.NotEmpty(t, artifactsDir,
+		"Tier B response must include MISSION_ARTIFACTS_DIR")
+	want := mission.DelegationDir(repo, missionID, r.AdditionalEnv["DELEGATION_ID"])
+	assert.Equal(t, want, artifactsDir,
+		"MISSION_ARTIFACTS_DIR must point at the per-delegation dir")
+
+	recordPath := filepath.Join(artifactsDir, "record.yaml")
+	info, err := os.Stat(recordPath)
+	require.NoError(t, err, "record.yaml must exist at the per-delegation path")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"record.yaml mode must be 0o600")
+
+	d, err := mission.LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, mission.TierB, d.Tier)
+	assert.Equal(t, missionID, d.Mission)
+	assert.Equal(t, mission.DelegationVerdictOpen, d.Verdict,
+		"fresh skeleton verdict must be open")
+	assert.Equal(t, "sess-outer-42", d.ParentSession)
+	assert.NotEmpty(t, d.CreatedAt, "opened_at must be stamped")
+}
+
+// TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock asserts the
+// shared mission lock contract: two Tier B spawns under the same
+// mission must both succeed without blocking each other and write
+// distinct per-delegation directories. If this test deadlocks or
+// reports both spawns writing the same delegation dir, the mission
+// lock has been silently promoted to exclusive or the delegation ID
+// allocator has lost its uniqueness.
+func TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-05-22-002"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-x"}`
+	type result struct {
+		dir string
+		err error
+	}
+	results := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			var out bytes.Buffer
+			if err := HandlePreToolUse(strings.NewReader(payload), &out); err != nil {
+				results <- result{err: err}
+				return
+			}
+			var r PreToolUseResult
+			if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+				results <- result{err: err}
+				return
+			}
+			if r.Decision != "allow" {
+				results <- result{err: errors.New("decision was not allow: " + r.Reason)}
+				return
+			}
+			results <- result{dir: r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]}
+		}()
+	}
+
+	var dirs []string
+	for i := 0; i < 2; i++ {
+		select {
+		case r := <-results:
+			require.NoError(t, r.err)
+			require.NotEmpty(t, r.dir)
+			dirs = append(dirs, r.dir)
+		case <-time.After(5 * time.Second):
+			t.Fatal("dispatch goroutines did not complete within 5s — likely lock deadlock")
+		}
+	}
+	assert.NotEqual(t, dirs[0], dirs[1],
+		"two concurrent Tier B spawns must land in distinct delegation dirs")
+}
+
+// TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks verifies the
+// exclusive-side of the lock contract: a sibling holder of LOCK_EX
+// on the per-mission .lock file must block the Tier B dispatch until
+// it releases. The test holds LOCK_EX in a goroutine for 80ms, fires
+// the dispatch in another goroutine, and asserts the dispatch's wait
+// time reflects the hold.
+func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-05-22-003"
+	stageContract(t, home, missionID)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	// Stage the per-mission dir + .lock so we can hold LOCK_EX on the
+	// same path the dispatch will try to share-lock.
+	dir := filepath.Join(repo, ".ethos", "missions", missionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	lockPath := filepath.Join(dir, ".lock")
+	excl, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_EX))
+
+	type result struct {
+		decision string
+		waited   time.Duration
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-y"}`
+		start := time.Now()
+		var out bytes.Buffer
+		if err := HandlePreToolUse(strings.NewReader(payload), &out); err != nil {
+			done <- result{err: err}
+			return
+		}
+		waited := time.Since(start)
+		var r PreToolUseResult
+		if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+			done <- result{err: err}
+			return
+		}
+		done <- result{decision: r.Decision, waited: waited}
+	}()
+
+	hold := 80 * time.Millisecond
+	time.Sleep(hold)
+	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_UN))
+	require.NoError(t, excl.Close())
+
+	select {
+	case r := <-done:
+		require.NoError(t, r.err)
+		assert.Equal(t, "allow", r.decision,
+			"dispatch must allow after exclusive holder releases")
+		assert.GreaterOrEqual(t, r.waited, 60*time.Millisecond,
+			"dispatch wait must reflect the exclusive hold (got %v)", r.waited)
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatch did not complete within 5s after exclusive release")
+	}
 }
 
 // TestHandlePreToolUse_TierBMalformedMissionID asserts the

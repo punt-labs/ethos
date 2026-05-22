@@ -72,16 +72,25 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 }
 
 // dispatchTierB resolves the MISSION_ID into a contract, allocates a
-// delegation_id, and emits the env block with DELEGATION_ID echoed
-// MISSION_ID and PARENT_SESSION_ID. A Load failure (missing contract,
-// validation failure, filename mismatch) surfaces as a block decision
+// delegation_id, writes the on-disk record skeleton, and emits the
+// env block with DELEGATION_ID, MISSION_ID, PARENT_SESSION_ID, and
+// MISSION_ARTIFACTS_DIR (the per-delegation directory the worker
+// writes results into). A Load failure surfaces as a block decision
 // — no silent fall-through to Tier A.
 //
-// The contract is loaded primarily as an existence/validity check.
-// The full skeleton write (record.yaml + prompt.md) is deferred to a
-// later mission; this round only allocates the ID and emits the env.
-// The flock helper (AcquireDelegationLock) is wired so the skeleton
-// writer can drop in without re-plumbing the hook entry point.
+// Lock acquisition order (DES-054 v5 concurrency model):
+//
+//  1. AcquireMissionLock — shared LOCK_SH on the per-mission lock so
+//     concurrent Tier B spawns under one mission do not serialize.
+//  2. AcquireDelegationLock — exclusive LOCK_EX on the per-delegation
+//     lock so the skeleton write is the sole writer for this ID.
+//  3. WriteDelegationSkeleton — atomic temp+rename of record.yaml.
+//
+// Releases run LIFO via defer.
+//
+// repoRoot resolution uses resolve.FindRepoRoot — when there is no
+// enclosing repo (test fixture, ad-hoc invocation), the helper falls
+// back to the working directory and the .ethos tree lands there.
 func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 	store, err := tierBMissionStore()
 	if err != nil {
@@ -93,23 +102,65 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 			fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err))
 	}
 
-	delegationID, release, err := mission.NewID(mission.NamespaceDelegations, time.Now())
+	delegationID, releaseID, err := mission.NewID(mission.NamespaceDelegations, time.Now())
 	if err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: allocating delegation id: %v", err))
 	}
-	release(true)
+	releaseID(true)
+
+	repoRoot := tierBRepoRoot()
+	releaseMission, err := mission.AcquireMissionLock(repoRoot, missionID)
+	if err != nil {
+		return writeAgentBlock(w,
+			fmt.Sprintf("ethos pre-tool-use: acquiring mission lock for %q: %v", missionID, err))
+	}
+	defer releaseMission()
+
+	releaseDelegation, err := mission.AcquireDelegationLock(repoRoot, delegationID)
+	if err != nil {
+		return writeAgentBlock(w,
+			fmt.Sprintf("ethos pre-tool-use: acquiring delegation lock for %q: %v", delegationID, err))
+	}
+	defer releaseDelegation()
+
+	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
+		Tier:          mission.TierB,
+		ParentSession: sessionID,
+		AgentType:     os.Getenv("CLAUDE_AGENT_TYPE"),
+	}); err != nil {
+		return writeAgentBlock(w,
+			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))
+	}
 
 	env := map[string]string{
-		"DELEGATION_ID":     delegationID,
-		"MISSION_ID":        missionID,
-		"PARENT_SESSION_ID": sessionID,
+		"DELEGATION_ID":         delegationID,
+		"MISSION_ID":            missionID,
+		"PARENT_SESSION_ID":     sessionID,
+		"MISSION_ARTIFACTS_DIR": mission.DelegationDir(repoRoot, missionID, delegationID),
 	}
 	return json.NewEncoder(w).Encode(PreToolUseResult{
 		Decision:      "allow",
 		Continue:      true,
 		AdditionalEnv: env,
 	})
+}
+
+// tierBRepoRoot resolves the enclosing repo root for the Tier B
+// skeleton write. Mirrors the resolve used by tierBMissionStore so
+// the lock files, record.yaml, and the MISSION_ARTIFACTS_DIR env all
+// agree on the same .ethos tree. Returns the working directory when
+// no enclosing repo is found — every call site downstream is
+// defensive against an empty repoRoot.
+func tierBRepoRoot() string {
+	if root := resolve.FindRepoRoot(); root != "" {
+		return root
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
 }
 
 // tierBMissionStore builds the mission store the dispatch path reads.

@@ -316,47 +316,191 @@ func DelegationRecordPath(repoRoot string, d *Delegation, sequenceDir, parentDir
 	}
 }
 
+// DelegationSkeleton is the caller-supplied payload for
+// WriteDelegationSkeleton. The fields shadow the Delegation type but
+// carry only what the PreToolUse-on-Agent dispatch path knows at
+// skeleton-write time: parent delegation, agent type, prompt hash,
+// session ids, tier, and (optionally) a prompt body to stash next to
+// record.yaml. verdict and opened_at are stamped by the writer.
+//
+// Yaml tags are present so the type can be round-tripped through
+// fixtures and golden files; the writer marshals into the on-disk
+// Delegation shape, not this struct, so the field names on disk match
+// the Delegation type that LoadDelegation expects.
+type DelegationSkeleton struct {
+	Tier             string `yaml:"tier" json:"tier"`
+	ParentDelegation string `yaml:"parent_delegation,omitempty" json:"parent_delegation,omitempty"`
+	ParentSession    string `yaml:"parent_session,omitempty" json:"parent_session,omitempty"`
+	Session          string `yaml:"session,omitempty" json:"session,omitempty"`
+	AgentType        string `yaml:"agent_type" json:"agent_type"`
+	SpawnPattern     string `yaml:"spawn_pattern,omitempty" json:"spawn_pattern,omitempty"`
+	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty"`
+	Prompt           []byte `yaml:"-" json:"-"`
+}
+
+// DelegationDir returns the on-disk per-delegation directory under a
+// mission. delegationID is run through filepath.Base for defense in
+// depth — a tainted ID with path separators can only ever resolve to
+// a leaf under <repo>/.ethos/missions/<mission-id>/delegations/.
+//
+// The two-digit sequence is the trailing numeric segment of the
+// d-YYYY-MM-DD-NNN shape; that segment is what nests under the mission
+// per DES-054 v5 §"Per-mission delegation tree".
+func DelegationDir(repoRoot, missionID, delegationID string) string {
+	return filepath.Join(
+		repoRoot, ".ethos", "missions",
+		filepath.Base(missionID), "delegations",
+		delegationSequence(delegationID),
+	)
+}
+
+// delegationSequence pulls the trailing numeric segment from a
+// d-YYYY-MM-DD-NNN delegation ID. When the shape does not match (a
+// bare ID, an over-trimmed handle, or anything filepath.Base would
+// keep as a single segment), the full base is returned so the caller
+// still gets a stable, sanitized leaf.
+func delegationSequence(delegationID string) string {
+	base := filepath.Base(delegationID)
+	idx := strings.LastIndex(base, "-")
+	if idx < 0 || idx == len(base)-1 {
+		return base
+	}
+	return base[idx+1:]
+}
+
 // WriteDelegationSkeleton writes a freshly-constructed Delegation
-// record to disk, plus an optional prompt.md sibling. The caller
-// must already hold WithDelegationFlock for d.ID.
+// record to <repoRoot>/.ethos/missions/<missionID>/delegations/<NN>/
+// record.yaml, plus an optional prompt.md sibling. The caller must
+// already hold AcquireDelegationLock for the delegation ID, and
+// should hold the mission shared lock from AcquireMissionLock so
+// concurrent Tier B spawns do not race on the missions directory
+// creation.
 //
-// Atomic via temp+rename — a partial write leaves no record file
-// on disk. The parent directory is created with 0o700.
+// Atomic via temp+rename in the same directory — a partial write
+// leaves no record.yaml on disk. The parent directory is created
+// with 0o700. opened_at is stamped at write time; the caller does
+// not need to populate it.
 //
-// Returns the path of the written record so the caller can stash
-// it for the depth/hash-gate refusal cleanup paths.
-func WriteDelegationSkeleton(recordPath string, d *Delegation, prompt []byte) error {
-	if d == nil {
-		return fmt.Errorf("delegation is nil")
+// Returns the absolute path of the written record so the caller can
+// stash it for the depth/hash-gate refusal cleanup paths.
+func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload DelegationSkeleton) (string, error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		return "", fmt.Errorf("repoRoot is required for delegation skeleton")
 	}
-	if d.Verdict == "" {
-		d.Verdict = DelegationVerdictOpen
+	if strings.TrimSpace(missionID) == "" {
+		return "", fmt.Errorf("missionID is required for delegation skeleton")
 	}
-	if d.CreatedAt == "" {
-		d.CreatedAt = time.Now().UTC().Format(time.RFC3339)
+	if strings.TrimSpace(delegationID) == "" {
+		return "", fmt.Errorf("delegationID is required for delegation skeleton")
 	}
-	if err := os.MkdirAll(filepath.Dir(recordPath), 0o700); err != nil {
-		return fmt.Errorf("creating delegation directory: %w", err)
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("creating delegation directory %s: %w", dir, err)
 	}
-	data, err := yaml.Marshal(d)
+	now := time.Now().UTC().Format(time.RFC3339)
+	d := Delegation{
+		ID:               filepath.Base(delegationID),
+		Tier:             payload.Tier,
+		Mission:          filepath.Base(missionID),
+		ParentDelegation: payload.ParentDelegation,
+		ParentSession:    payload.ParentSession,
+		Session:          payload.Session,
+		AgentType:        payload.AgentType,
+		SpawnPattern:     payload.SpawnPattern,
+		PromptHash:       payload.PromptHash,
+		CreatedAt:        now,
+		Verdict:          DelegationVerdictOpen,
+	}
+	data, err := yaml.Marshal(&d)
 	if err != nil {
-		return fmt.Errorf("marshaling delegation: %w", err)
+		return "", fmt.Errorf("marshaling delegation: %w", err)
 	}
-	tmp := recordPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("writing temp delegation record: %w", err)
+	recordPath := filepath.Join(dir, "record.yaml")
+	tmp, err := os.CreateTemp(dir, "record-*.yaml.tmp")
+	if err != nil {
+		return "", fmt.Errorf("creating temp delegation record in %s: %w", dir, err)
 	}
-	if err := os.Rename(tmp, recordPath); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("renaming delegation record: %w", err)
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("writing temp delegation record %s: %w", tmpPath, err)
 	}
-	if len(prompt) > 0 {
-		promptPath := filepath.Join(filepath.Dir(recordPath), "prompt.md")
-		if err := os.WriteFile(promptPath, prompt, 0o600); err != nil {
-			return fmt.Errorf("writing delegation prompt: %w", err)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("chmod temp delegation record %s: %w", tmpPath, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("closing temp delegation record %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, recordPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("renaming delegation record %s -> %s: %w", tmpPath, recordPath, err)
+	}
+	if len(payload.Prompt) > 0 {
+		promptPath := filepath.Join(dir, "prompt.md")
+		if err := os.WriteFile(promptPath, payload.Prompt, 0o600); err != nil {
+			return "", fmt.Errorf("writing delegation prompt %s: %w", promptPath, err)
 		}
 	}
-	return nil
+	return recordPath, nil
+}
+
+// AcquireMissionLock opens (and creates if needed) the per-mission
+// lock file at <repoRoot>/.ethos/missions/<missionID>/.lock and
+// acquires a SHARED flock on it. The returned release closure runs
+// LOCK_UN + Close exactly once; subsequent calls are no-ops.
+//
+// The shared lock complements AcquireDelegationLock (exclusive) so
+// two Tier B spawns under one mission can both hold the mission lock
+// concurrently while their per-delegation exclusive locks do not
+// contend. A separate writer that needs the mission tree quiescent —
+// for example a hypothetical mission close that wants no in-flight
+// skeletons — can take LOCK_EX on the same file and will wait for
+// every shared holder to release.
+//
+// Acquisition order when nested with other locks:
+//
+//	global → repo → per-mission(shared) → per-delegation(exclusive)
+//
+// Release reverse via defer LIFO.
+//
+// Acquisition failures surface with both the lock path and the
+// underlying syscall so an operator can locate the contended file.
+// On flock error the file descriptor is closed before return — no
+// leaked fd on the error path.
+func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
+	if strings.TrimSpace(repoRoot) == "" {
+		return nil, fmt.Errorf("repoRoot is required for mission lock")
+	}
+	if strings.TrimSpace(missionID) == "" {
+		return nil, fmt.Errorf("missionID is required for mission lock")
+	}
+	dir := filepath.Join(repoRoot, ".ethos", "missions", filepath.Base(missionID))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("creating mission lock directory %s: %w", dir, err)
+	}
+	lockPath := filepath.Join(dir, ".lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("opening mission lock %s: %w", lockPath, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("acquiring shared mission lock %s: %w", lockPath, err)
+	}
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}
+	return release, nil
 }
 
 // LoadDelegation reads a delegation record from disk. Returns

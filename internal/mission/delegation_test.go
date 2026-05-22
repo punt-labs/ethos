@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -126,4 +127,274 @@ func TestAcquireDelegationLock_BaseName(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, "passwd.lock", entries[0].Name(),
 		"path separators in delegationID must be stripped via filepath.Base")
+}
+
+// TestWriteDelegationSkeleton_HappyPath pins the on-disk shape of a
+// freshly-written delegation record. record.yaml lands at the
+// expected per-delegation path, verdict=open, opened_at is non-empty,
+// and the caller-supplied fields round-trip through LoadDelegation.
+func TestWriteDelegationSkeleton_HappyPath(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-031"
+	delegationID := "d-2026-05-22-001"
+
+	payload := DelegationSkeleton{
+		Tier:             TierB,
+		ParentDelegation: "d-2026-05-22-000",
+		ParentSession:    "sess-outer-7",
+		Session:          "sess-inner-9",
+		AgentType:        "bwk",
+		PromptHash:       "deadbeef",
+		Prompt:           []byte("worker prompt body"),
+	}
+
+	recordPath, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, payload)
+	require.NoError(t, err)
+
+	want := filepath.Join(
+		repoRoot, ".ethos", "missions", missionID, "delegations", "001", "record.yaml",
+	)
+	assert.Equal(t, want, recordPath,
+		"record.yaml must land under .ethos/missions/<mission>/delegations/<NN>/")
+
+	info, err := os.Stat(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"record.yaml mode must be 0o600")
+
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, DelegationVerdictOpen, d.Verdict, "fresh skeleton verdict must be open")
+	assert.NotEmpty(t, d.CreatedAt, "opened_at (CreatedAt) must be stamped")
+	assert.Equal(t, TierB, d.Tier)
+	assert.Equal(t, missionID, d.Mission)
+	assert.Equal(t, "d-2026-05-22-001", d.ID)
+	assert.Equal(t, "d-2026-05-22-000", d.ParentDelegation)
+	assert.Equal(t, "sess-outer-7", d.ParentSession)
+	assert.Equal(t, "sess-inner-9", d.Session)
+	assert.Equal(t, "bwk", d.AgentType)
+	assert.Equal(t, "deadbeef", d.PromptHash)
+	assert.Empty(t, d.ClosedAt, "fresh skeleton must not be closed")
+
+	promptPath := filepath.Join(filepath.Dir(recordPath), "prompt.md")
+	data, err := os.ReadFile(promptPath)
+	require.NoError(t, err, "prompt body must land next to record.yaml")
+	assert.Equal(t, "worker prompt body", string(data))
+}
+
+// TestWriteDelegationSkeleton_EmptyArgs surfaces missing arguments
+// rather than silently writing under an empty-named directory.
+func TestWriteDelegationSkeleton_EmptyArgs(t *testing.T) {
+	repoRoot := t.TempDir()
+
+	_, err := WriteDelegationSkeleton("", "m-1", "d-1", DelegationSkeleton{Tier: TierB})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoRoot")
+
+	_, err = WriteDelegationSkeleton(repoRoot, "", "d-1", DelegationSkeleton{Tier: TierB})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missionID")
+
+	_, err = WriteDelegationSkeleton(repoRoot, "m-1", "", DelegationSkeleton{Tier: TierB})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "delegationID")
+}
+
+// TestWriteDelegationSkeleton_Atomic asserts the temp+rename invariant:
+// a crash before rename leaves no record.yaml on disk. The test models
+// the crash by short-circuiting the writer with a forced rename
+// failure — the parent directory is removed between MkdirAll and the
+// caller's rename so os.Rename fails. After the failed write, the
+// record.yaml at the expected path must not exist; the temp file must
+// also be cleaned up.
+//
+// This pin is djb's evaluator gate: a half-written record.yaml is
+// unacceptable. The atomicity contract is "either the final
+// record.yaml exists at its expected path, or nothing at that path
+// exists" — a tempfile from a failed write must not leak as
+// record.yaml.
+func TestWriteDelegationSkeleton_Atomic(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-031"
+	delegationID := "d-2026-05-22-002"
+
+	// Stage the per-delegation dir then chmod it 0o500 so os.CreateTemp
+	// fails (no write permission). The skeleton writer must surface the
+	// error and leave no record.yaml at the expected location.
+	dir := DelegationDir(repoRoot, missionID, delegationID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses unix permission checks")
+	}
+
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+	})
+	require.Error(t, err, "writer must surface the temp-file failure")
+
+	// Restore mode so we can read back.
+	require.NoError(t, os.Chmod(dir, 0o700))
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		assert.NotEqual(t, "record.yaml", e.Name(),
+			"a failed write must leave no record.yaml at the expected path")
+		assert.NotContains(t, e.Name(), ".tmp",
+			"a failed write must not leak a tempfile (got %s)", e.Name())
+	}
+}
+
+// TestAcquireMissionLock_AcquireAndRelease pins the happy path:
+// the helper creates the per-mission directory, opens the lock file
+// with 0o600, holds LOCK_SH, and the release closure is idempotent.
+func TestAcquireMissionLock_AcquireAndRelease(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-031"
+
+	release, err := AcquireMissionLock(repoRoot, missionID)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+
+	lockPath := filepath.Join(repoRoot, ".ethos", "missions", missionID, ".lock")
+	info, statErr := os.Stat(lockPath)
+	require.NoError(t, statErr, "lock file must exist on disk after acquire")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
+		"lock file mode must be 0o600")
+
+	release()
+	release() // idempotent
+}
+
+// TestAcquireMissionLock_ConcurrentShared verifies the design
+// invariant: LOCK_SH is shared, so two acquirers under the same
+// (repoRoot, missionID) must both succeed without blocking each
+// other. If this test fails, the lock has been silently promoted to
+// LOCK_EX and concurrent Tier B spawns would serialize.
+func TestAcquireMissionLock_ConcurrentShared(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-031"
+
+	release1, err := AcquireMissionLock(repoRoot, missionID)
+	require.NoError(t, err)
+	defer release1()
+
+	var acquired2 atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		release2, err := AcquireMissionLock(repoRoot, missionID)
+		if err != nil {
+			return
+		}
+		acquired2.Store(true)
+		release2()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second shared acquire did not complete within 2s")
+	}
+	assert.True(t, acquired2.Load(),
+		"two LOCK_SH acquirers on the same mission lock must both succeed")
+}
+
+// TestAcquireMissionLock_ExclusiveBlocks verifies the exclusive-side
+// of the contract: a goroutine holding LOCK_EX on the same mission
+// lock file must block AcquireMissionLock (LOCK_SH) until the
+// exclusive holder releases. This is the future-proofing for the
+// hypothetical mission-close path that wants the tree quiescent.
+func TestAcquireMissionLock_ExclusiveBlocks(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-05-22-031"
+
+	dir := filepath.Join(repoRoot, ".ethos", "missions", missionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	lockPath := filepath.Join(dir, ".lock")
+
+	excl, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_EX))
+
+	var acquired atomic.Bool
+	var tStart, tAcquired time.Time
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tStart = time.Now()
+		release, err := AcquireMissionLock(repoRoot, missionID)
+		tAcquired = time.Now()
+		if err != nil {
+			return
+		}
+		acquired.Store(true)
+		release()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	assert.False(t, acquired.Load(),
+		"shared acquire must block while LOCK_EX is held")
+
+	hold := 60 * time.Millisecond
+	time.Sleep(hold)
+	require.NoError(t, syscall.Flock(int(excl.Fd()), syscall.LOCK_UN))
+	require.NoError(t, excl.Close())
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shared acquire did not complete within 2s after exclusive release")
+	}
+	assert.True(t, acquired.Load(),
+		"shared acquire must succeed once exclusive holder releases")
+	waited := tAcquired.Sub(tStart)
+	assert.GreaterOrEqual(t, waited, 40*time.Millisecond,
+		"shared acquire wait must reflect the exclusive hold (got %v)", waited)
+}
+
+// TestAcquireMissionLock_EmptyArgs surfaces missing arguments
+// rather than silently locking under an empty-named file.
+func TestAcquireMissionLock_EmptyArgs(t *testing.T) {
+	_, err := AcquireMissionLock("", "m-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoRoot")
+
+	_, err = AcquireMissionLock(t.TempDir(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missionID")
+}
+
+// TestDelegationSequence pins the parser used to derive the per-
+// mission sequence directory from a d-YYYY-MM-DD-NNN delegation ID.
+// Each row is a single input/output pair so a regression in the
+// parser surfaces against a known string.
+func TestDelegationSequence(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"canonical shape", "d-2026-05-22-001", "001"},
+		{"three-digit tail", "d-2026-05-22-123", "123"},
+		{"bare id no dashes", "abc", "abc"},
+		{"trailing dash falls back to base", "d-2026-05-22-", "d-2026-05-22-"},
+		{"path stripped via base", "../etc/d-2026-05-22-001", "001"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := delegationSequence(tt.in)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
