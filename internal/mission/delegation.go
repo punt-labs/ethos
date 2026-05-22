@@ -210,118 +210,6 @@ func (s *Store) MissionLockPath(missionID string) string {
 	return s.lockPath(missionID)
 }
 
-// WithMissionFlockShared executes fn while holding a SHARED flock on
-// the mission's lock file. DES-054 v5: per-mission flock is shared
-// during the per-delegation skeleton write so two Tier B spawns under
-// the same mission do not serialize against each other; only the
-// per-delegation exclusive lock serializes the skeleton write itself.
-//
-// Acquisition order when nested inside other locks:
-//   global → repo → per-mission(shared) → per-delegation(exclusive)
-// Release reverse via defer LIFO.
-//
-// Returns the wrapped fn error verbatim; flock acquisition failures
-// are wrapped with the mission ID and the lock path so an operator
-// can locate the contended file.
-func (s *Store) WithMissionFlockShared(missionID string, fn func() error) error {
-	if strings.TrimSpace(missionID) == "" {
-		return fmt.Errorf("missionID is required")
-	}
-	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
-		return fmt.Errorf("creating missions directory: %w", err)
-	}
-	lockFile := s.MissionLockPath(missionID)
-	f, err := os.OpenFile(lockFile, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("opening mission lock %s: %w", lockFile, err)
-	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
-		return fmt.Errorf("acquiring shared mission lock %s: %w", lockFile, err)
-	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
-	return fn()
-}
-
-// WithDelegationFlock executes fn while holding an EXCLUSIVE flock on
-// the per-delegation lock file. DES-054 v5: every read/write of a
-// delegation record skeleton goes through this lock so the prompt.md
-// and record.yaml writes appear atomic to any reader.
-//
-// Lock acquisition is wrapped so a caller forgetting to handle the
-// flock error gets a single, named diagnostic rather than a generic
-// "permission denied" pointing at an opaque fd.
-func (s *Store) WithDelegationFlock(delegationID string, fn func() error) error {
-	if strings.TrimSpace(delegationID) == "" {
-		return fmt.Errorf("delegationID is required")
-	}
-	lockPath := s.DelegationLockPath(delegationID)
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
-		return fmt.Errorf("creating delegations directory: %w", err)
-	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("opening delegation lock %s: %w", lockPath, err)
-	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("acquiring exclusive delegation lock %s: %w", lockPath, err)
-	}
-	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
-	return fn()
-}
-
-// DelegationRecordPath returns the absolute on-disk location of a
-// delegation's record.yaml. The caller supplies the parent shape:
-//
-//   - Tier B: a mission record lives at
-//     `<repoRoot>/.ethos/missions/<mission-id>/delegations/<NN>/record.yaml`,
-//     where <NN> is the delegation's two-digit sequence under the
-//     mission. The caller passes the parent missionID and the spawn
-//     sequence (typically the suffix of the delegation ID, e.g. "01").
-//   - Tier A: an ad-hoc record lives at
-//     `<repoRoot>/.ethos/sessions/<sessionDir>/adhoc/<NNN>/record.yaml`,
-//     where <sessionDir> is the date-prefixed session directory and
-//     <NNN> is the spawn sequence under the session.
-//
-// repoRoot empty surfaces an error rather than silently falling back
-// to ~/.punt-labs/ethos — phase 2 records always land in-repo. The
-// legacy fallback for audit reads stays in audit_paths.go; that path
-// is for read-only history, not new writes.
-func DelegationRecordPath(repoRoot string, d *Delegation, sequenceDir, parentDir string) (string, error) {
-	if d == nil {
-		return "", fmt.Errorf("delegation is nil")
-	}
-	if strings.TrimSpace(repoRoot) == "" {
-		return "", fmt.Errorf("repoRoot is required for delegation record path")
-	}
-	if strings.TrimSpace(sequenceDir) == "" {
-		return "", fmt.Errorf("sequence directory is required")
-	}
-	switch d.Tier {
-	case TierB:
-		if strings.TrimSpace(parentDir) == "" {
-			return "", fmt.Errorf("mission id is required for Tier B delegation path")
-		}
-		return filepath.Join(
-			repoRoot, ".ethos", "missions",
-			filepath.Base(parentDir), "delegations",
-			filepath.Base(sequenceDir), "record.yaml",
-		), nil
-	case TierA:
-		if strings.TrimSpace(parentDir) == "" {
-			return "", fmt.Errorf("session directory is required for Tier A delegation path")
-		}
-		return filepath.Join(
-			repoRoot, ".ethos", "sessions",
-			filepath.Base(parentDir), "adhoc",
-			filepath.Base(sequenceDir), "record.yaml",
-		), nil
-	default:
-		return "", fmt.Errorf("unknown delegation tier %q", d.Tier)
-	}
-}
-
 // DelegationSkeleton is the caller-supplied payload for
 // WriteDelegationSkeleton. The fields shadow the Delegation type but
 // carry only what the PreToolUse-on-Agent dispatch path knows at
@@ -442,10 +330,14 @@ func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 		return fmt.Errorf("creating temp file in %s: %w", dir, err)
 	}
 	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
+	if n, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("writing %s: %w", tmpPath, err)
+	} else if n < len(data) {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("short write to %s: %d of %d bytes", tmpPath, n, len(data))
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
@@ -555,7 +447,7 @@ func LoadDelegation(recordPath string) (*Delegation, error) {
 //   - SubagentStart's hash-gate refusal cleanup (verdict=aborted).
 //   - SubagentStop's normal-close path (verdict=pass for Tier B success).
 //
-// The caller must hold WithDelegationFlock for d.ID. Idempotent
+// The caller must hold AcquireDelegationLock for d.ID. Idempotent
 // against itself: a second close on an already-closed delegation
 // overwrites the verdict and ClosedAt — the caller is responsible
 // for not re-closing legitimately-pass'd records (the refusal paths

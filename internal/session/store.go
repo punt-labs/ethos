@@ -295,10 +295,14 @@ func (s *Store) writeRoster(sessionID string, roster *Roster) error {
 		return fmt.Errorf("creating temp roster in %s: %w", dir, err)
 	}
 	tmpPath := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
+	if n, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("writing temp roster %s: %w", tmpPath, err)
+	} else if n < len(data) {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("short write to temp roster %s: %d of %d bytes", tmpPath, n, len(data))
 	}
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()

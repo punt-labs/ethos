@@ -255,8 +255,16 @@ func runHookAuditLog() error {
 // unlocked legacy HandleAuditLog path.
 func drainAuditStdin() []byte {
 	if err := os.Stdin.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		// Deadlines unsupported (Linux pipes) — race a goroutine
-		// against a timer so we do not block on an open pipe.
+		// Deadlines unsupported (Linux pipes that the parent did
+		// not close) — race a single Read of a 64KiB buffer against
+		// a 1-second timer so we do not block on an open pipe.
+		//
+		// Single-Read truncates payloads larger than 64KiB on this
+		// platform path; a loop here would block in producers that
+		// never close the writer (the subprocess test exercise this
+		// shape — see TestSubprocess_AuditLog). Multi-chunk fallback
+		// without a per-read deadline is a deferred follow-up
+		// (Copilot on PR #327).
 		ch := make(chan []byte, 1)
 		go func() {
 			buf := make([]byte, 65536)

@@ -53,25 +53,49 @@ func dispatchAgent(w io.Writer, sessionID string) error {
 func dispatchTierA(w io.Writer, sessionID string) error {
 	maybeEmitTierAAdvice(os.Stderr)
 
+	// Tier A is informational and MUST NOT block the spawn. If
+	// delegation_id allocation fails, log the failure for audit
+	// reconstruction and allow the spawn through with PARENT_SESSION_ID
+	// only — losing a DELEGATION_ID degrades audit binding but is
+	// preferable to refusing the Agent call (Bugbot HIGH on PR #327;
+	// CHANGELOG and pretooluse.go comment both say Tier A returns
+	// allow). The counter is rolled back on every non-allow path via
+	// the deferred release(success); success flips to true after the
+	// JSON response has been encoded.
+	success := false
 	delegationID, release, err := mission.NewID(mission.NamespaceDelegations, time.Now())
 	if err != nil {
-		return writeAgentBlock(w,
-			fmt.Sprintf("ethos pre-tool-use: allocating delegation id: %v", err))
+		fmt.Fprintf(os.Stderr,
+			"ethos pre-tool-use: tier-A allocating delegation id: %v; allowing spawn without DELEGATION_ID\n",
+			err)
+		env := map[string]string{"PARENT_SESSION_ID": sessionID}
+		return json.NewEncoder(w).Encode(PreToolUseResult{
+			Decision:      "allow",
+			Continue:      true,
+			AdditionalEnv: env,
+		})
 	}
-	// Tier A succeeds: the ID is bound to this spawn and the counter
-	// stays incremented.
-	release(true)
+	defer func() { release(success) }()
 
 	env := map[string]string{
 		"DELEGATION_ID":        delegationID,
 		"PARENT_DELEGATION_ID": delegationID,
 		"PARENT_SESSION_ID":    sessionID,
 	}
-	return json.NewEncoder(w).Encode(PreToolUseResult{
+	if err := json.NewEncoder(w).Encode(PreToolUseResult{
 		Decision:      "allow",
 		Continue:      true,
 		AdditionalEnv: env,
-	})
+	}); err != nil {
+		// Response write failed — counter rolls back via the deferred
+		// release(false). Surface so the operator can correlate the
+		// missing audit entry.
+		fmt.Fprintf(os.Stderr,
+			"ethos pre-tool-use: tier-A response write: %v\n", err)
+		return err
+	}
+	success = true
+	return nil
 }
 
 // dispatchTierB resolves the MISSION_ID into a contract, allocates a
