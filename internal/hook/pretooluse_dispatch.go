@@ -24,14 +24,19 @@ import (
 //     surfaces as a block decision with a named reason — never a
 //     silent fall-through to Tier A.
 //
-//  2. MISSION_ID env unset: Tier A. Round-3 advice path preserved
-//     unchanged (stderr line, suppression signals honoured). Allocate
-//     a delegation_id and emit DELEGATION_ID + PARENT_SESSION_ID in
-//     additional_env; MISSION_ID is NOT echoed (there isn't one).
+//  2. MISSION_ID env unset, PARENT_DELEGATION_ID set: try Tier B by
+//     inheritance. Walk the parent_delegation chain; if any ancestor
+//     contract carries a Delegations[] entry whose SpawnPattern
+//     matches CLAUDE_AGENT_TYPE with InheritsContract=true, the
+//     child inherits that ancestor's missionID. Every error along
+//     the walk falls through to Tier A — inheritance is non-blocking
+//     by design (DES-054 v5 §"PreToolUse-on-Agent" inheritance rule).
 //
-// Inheritance dispatch (parent contract walk + spawn_pattern match)
-// is out of scope for this round per the contract; that path lands in
-// a later mission.
+//  3. MISSION_ID env unset, no parent delegation (or no match in the
+//     walk): Tier A. Round-3 advice path preserved unchanged (stderr
+//     line, suppression signals honoured). Allocate a delegation_id
+//     and emit DELEGATION_ID + PARENT_SESSION_ID in additional_env;
+//     MISSION_ID is NOT echoed (there isn't one).
 //
 // sessionID comes from the hook input's `session_id` field — Claude
 // Code populates it on every tool call. An empty sessionID still gets
@@ -43,7 +48,7 @@ func dispatchAgent(w io.Writer, sessionID string) error {
 	if missionID != "" {
 		return dispatchTierB(w, sessionID, missionID)
 	}
-	return dispatchTierA(w, sessionID)
+	return dispatchTierBOrTierA(w, sessionID)
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
