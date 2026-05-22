@@ -63,8 +63,9 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 	release(true)
 
 	env := map[string]string{
-		"DELEGATION_ID":     delegationID,
-		"PARENT_SESSION_ID": sessionID,
+		"DELEGATION_ID":        delegationID,
+		"PARENT_DELEGATION_ID": delegationID,
+		"PARENT_SESSION_ID":    sessionID,
 	}
 	return json.NewEncoder(w).Encode(PreToolUseResult{
 		Decision:      "allow",
@@ -163,6 +164,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 
 	env := map[string]string{
 		"DELEGATION_ID":         delegationID,
+		"PARENT_DELEGATION_ID":  delegationID,
 		"MISSION_ID":            missionID,
 		"PARENT_SESSION_ID":     sessionID,
 		"MISSION_ARTIFACTS_DIR": mission.DelegationDir(repoRoot, missionID, delegationID),

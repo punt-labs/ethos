@@ -819,6 +819,8 @@ func TestHandlePreToolUse_TierBDispatch(t *testing.T) {
 		"Tier B must allocate a fresh DELEGATION_ID")
 	assert.True(t, strings.HasPrefix(r.AdditionalEnv["DELEGATION_ID"], "d-"),
 		"DELEGATION_ID must use the d-YYYY-MM-DD-NNN shape")
+	assert.Equal(t, r.AdditionalEnv["DELEGATION_ID"], r.AdditionalEnv["PARENT_DELEGATION_ID"],
+		"PARENT_DELEGATION_ID must mirror this spawn's DELEGATION_ID so the child sees a parent in its chain (Bugbot HIGH on PR #327)")
 
 	artifactsDir := r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
 	require.NotEmpty(t, artifactsDir,
@@ -1207,6 +1209,8 @@ func TestHandlePreToolUse_TierADispatch(t *testing.T) {
 		"Tier A must echo session_id as PARENT_SESSION_ID")
 	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
 		"Tier A must still allocate a DELEGATION_ID for audit binding")
+	assert.Equal(t, r.AdditionalEnv["DELEGATION_ID"], r.AdditionalEnv["PARENT_DELEGATION_ID"],
+		"PARENT_DELEGATION_ID must mirror DELEGATION_ID so a Tier A child spawn sees its parent in the chain")
 	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID,
 		"Tier A response must NOT carry MISSION_ID — there isn't one")
