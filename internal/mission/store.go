@@ -178,10 +178,19 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSource
 		}
 		return fmt.Errorf("apply server fields: %w", err)
 	}
-	id, err := NewID(s.root, now)
+	// Allocate a fresh mission ID under the counters/ tree. The
+	// counter is committed unconditionally on the success path
+	// because ApplyServerFields itself never writes any contract — a
+	// later Create failure is the caller's concern, not this method's,
+	// and burning one ID per failed Create is acceptable. The Store
+	// path here is the legacy single-root case; the two-root paths in
+	// NewStoreWithRoots use NewIDAt with their own counter root so
+	// tests stay isolated.
+	id, release, err := NewIDAt(s.root, NamespaceMissions, now)
 	if err != nil {
 		return fmt.Errorf("generating mission ID: %w", err)
 	}
+	release(true)
 	c.MissionID = id
 	created := now.UTC().Format(time.RFC3339)
 	c.Status = StatusOpen

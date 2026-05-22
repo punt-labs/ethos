@@ -15,91 +15,234 @@ import (
 // counterDateFormat is the per-day suffix on the counter file.
 const counterDateFormat = "2006-01-02"
 
-// NewID generates a new mission ID for the given date and root directory.
+// NamespaceMissions and NamespaceDelegations are the two ID namespaces
+// the counters/ directory carries today. Each namespace owns a sibling
+// per-date counter file — adding a new namespace adds a new file and
+// touches no existing one (DES-054 invariant I9-counter).
+const (
+	NamespaceMissions    = "missions"
+	NamespaceDelegations = "delegations"
+)
+
+// defaultCounterRoot is the production root for the counters/ tree.
+// Tests use NewIDAt with t.TempDir() so production state is never
+// touched.
+func defaultCounterRoot() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Falling back to "." would race other test packages and
+		// hide configuration bugs in production. An empty string
+		// surfaces the failure at counterPath construction time.
+		return ""
+	}
+	return filepath.Join(home, ".punt-labs", "ethos")
+}
+
+// NewID allocates the next ID for the given namespace and date.
 //
-// Format: m-YYYY-MM-DD-NNN where NNN is a zero-padded 3-digit counter.
-// The counter is per-day and persisted at <root>/missions/.counter-YYYY-MM-DD.
-// Concurrent NewID calls are serialized via flock on a separate stable
-// lock file (<root>/missions/.counter-YYYY-MM-DD.lock), not on the
-// counter file itself — so the counter file can be replaced atomically
-// via temp+rename without racing a concurrent flock acquirer on the
-// unlinked inode.
+// The counter file lives at
+// <defaultCounterRoot>/counters/<namespace>-YYYY-MM-DD as a single
+// integer, flock-guarded. New namespaces add sibling files; existing
+// files never change shape (DES-054 I9-counter).
 //
-// Two callers on the same day produce strictly distinct IDs (NNN-1 and NNN).
-// Two callers on different days each start at 001.
+// The returned release function is the rollback API. The caller MUST
+// invoke it exactly once — typically `defer release(committed)`. A
+// commit=true call is a no-op (the increment already happened);
+// commit=false decrements the counter so the allocated ID is not
+// permanently burned. Idempotent: a second call does nothing.
 //
-// Atomicity: the counter update is a read-modify-write under the lock,
-// persisted via WriteFile(tmp) + Rename(tmp, counter). A partial write
-// during the temp write leaves the counter file unchanged; a rename is
-// atomic on POSIX. There is no transient empty-file window (which would
-// otherwise make the next caller reset to 1 and collide with an existing
-// mission 001).
-func NewID(root string, now time.Time) (string, error) {
-	missionsDir := filepath.Join(root, "missions")
-	if err := os.MkdirAll(missionsDir, 0o700); err != nil {
-		return "", fmt.Errorf("creating missions directory: %w", err)
+// IDs are formatted as m-YYYY-MM-DD-NNN for the missions namespace
+// and d-YYYY-MM-DD-NNN for delegations. Other namespaces use the
+// generic <namespace>-YYYY-MM-DD-NNN shape.
+//
+// Concurrency: the read-modify-write is serialized through a flock
+// on a separate stable lock file (<root>/counters/<namespace>-DATE.lock).
+// Locking the counter file itself would race the temp+rename pattern
+// since the post-rename file lives on a different inode.
+func NewID(namespace string, now time.Time) (string, func(commit bool), error) {
+	return NewIDAt(defaultCounterRoot(), namespace, now)
+}
+
+// NewIDAt is the testable form of NewID: the caller supplies the root
+// directory under which counters/ lives. Production code uses NewID,
+// which substitutes ~/.punt-labs/ethos/ automatically. Tests pass
+// t.TempDir() so concurrent test runs do not collide on shared state.
+func NewIDAt(counterRoot, namespace string, now time.Time) (string, func(commit bool), error) {
+	if strings.TrimSpace(counterRoot) == "" {
+		return "", noopRelease, fmt.Errorf("counter root is required")
+	}
+	if err := validateNamespace(namespace); err != nil {
+		return "", noopRelease, err
+	}
+	countersDir := filepath.Join(counterRoot, "counters")
+	if err := os.MkdirAll(countersDir, 0o700); err != nil {
+		return "", noopRelease, fmt.Errorf("creating counters directory: %w", err)
 	}
 
 	day := now.UTC().Format(counterDateFormat)
-	counterPath := filepath.Join(missionsDir, ".counter-"+day)
+	counterPath := filepath.Join(countersDir, namespace+"-"+day)
 	lockPath := counterPath + ".lock"
 
-	// Acquire the flock on a stable file that is never renamed or
-	// unlinked by NewID. Locking the counter file directly would race
-	// with the temp+rename pattern below: a concurrent caller could
-	// open the post-rename counter file, get a fresh unlocked inode,
-	// and re-lock it while this call still holds the lock on the
-	// pre-rename (now unlinked) inode.
+	next, err := allocateCounter(counterPath, lockPath)
+	if err != nil {
+		return "", noopRelease, err
+	}
+
+	id := formatID(namespace, day, next)
+	rel := newReleaseFunc(counterPath, lockPath, next)
+	return id, rel, nil
+}
+
+// allocateCounter performs the locked read-modify-write of the
+// per-date counter file. Returns the newly-allocated number.
+func allocateCounter(counterPath, lockPath string) (int, error) {
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return "", fmt.Errorf("opening counter lock file: %w", err)
+		return 0, fmt.Errorf("opening counter lock file: %w", err)
 	}
 	defer lockFile.Close()
 
 	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
-		return "", fmt.Errorf("acquiring counter lock: %w", err)
+		return 0, fmt.Errorf("acquiring counter lock: %w", err)
 	}
 	defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
 
-	// Read the current counter value. Missing file is treated as 0
-	// (first caller of the day).
-	data, err := os.ReadFile(counterPath)
-	if err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("reading counter file: %w", err)
-	}
-	current := 0
-	if s := strings.TrimSpace(string(data)); s != "" {
-		v, parseErr := strconv.Atoi(s)
-		if parseErr != nil {
-			return "", fmt.Errorf("parsing counter file %q: %w", counterPath, parseErr)
-		}
-		current = v
+	current, err := readCounter(counterPath)
+	if err != nil {
+		return 0, err
 	}
 	next := current + 1
-	// Bound to [1, 999] so the resulting m-YYYY-MM-DD-NNN ID always
-	// matches the schema regex. Detects both daily exhaustion and
-	// poisoned counter files (negative or huge values written by an
-	// attacker with local write access to the missions dir).
 	if next < 1 || next > 999 {
-		return "", fmt.Errorf(
-			"mission ID counter for %s is %d, outside valid range [1, 999]",
-			day, next,
+		return 0, fmt.Errorf(
+			"id counter at %q is %d, outside valid range [1, 999]",
+			counterPath, next,
 		)
 	}
-
-	// Atomic write via temp + rename. A partial write inside WriteFile
-	// leaves the counter file unchanged; os.Rename is atomic on POSIX.
-	// No transient empty-file state — the next caller either sees the
-	// old value (if this call failed before rename) or the new value
-	// (if rename committed).
-	tmp := counterPath + ".tmp"
-	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", next)), 0o600); err != nil {
-		return "", fmt.Errorf("writing temp counter: %w", err)
+	if err := writeCounterAtomic(counterPath, next); err != nil {
+		return 0, err
 	}
-	if err := os.Rename(tmp, counterPath); err != nil {
+	return next, nil
+}
+
+// readCounter returns the current value from a counter file. Missing
+// file is treated as 0 (first caller of the day).
+func readCounter(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("reading counter file %q: %w", path, err)
+	}
+	s := strings.TrimSpace(string(data))
+	if s == "" {
+		return 0, nil
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("parsing counter file %q: %w", path, err)
+	}
+	return v, nil
+}
+
+// writeCounterAtomic rewrites the counter file via temp+rename so a
+// partial write leaves the file unchanged.
+func writeCounterAtomic(path string, value int) error {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(fmt.Sprintf("%d\n", value)), 0o600); err != nil {
+		return fmt.Errorf("writing temp counter: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("renaming counter file: %w", err)
+		return fmt.Errorf("renaming counter file: %w", err)
 	}
+	return nil
+}
 
-	return fmt.Sprintf("m-%s-%03d", day, next), nil
+// newReleaseFunc builds the rollback closure for a freshly-allocated
+// counter value. The caller invokes it once via `defer
+// release(committed)`. On commit=true the function is a no-op (the
+// allocation persists). On commit=false the counter is decremented
+// back to its pre-allocation value, but only if a concurrent caller
+// has not already advanced past `allocated` — in that case the
+// release is idempotent and leaves the higher value alone.
+func newReleaseFunc(counterPath, lockPath string, allocated int) func(commit bool) {
+	called := false
+	return func(commit bool) {
+		if called {
+			return
+		}
+		called = true
+		if commit {
+			return
+		}
+		// Best-effort rollback. A failure to decrement is non-fatal —
+		// the worst case is one burned ID, not a correctness problem.
+		// Errors go to stderr so an operator running with -v sees the
+		// drift, but a programmatic caller still sees its primary
+		// error path unchanged.
+		lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: id release: opening lock %q: %v\n", lockPath, err)
+			return
+		}
+		defer lockFile.Close()
+		if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: id release: acquiring lock %q: %v\n", lockPath, err)
+			return
+		}
+		defer func() { _ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN) }()
+
+		current, err := readCounter(counterPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: id release: reading counter %q: %v\n", counterPath, err)
+			return
+		}
+		// Idempotency: only decrement when the on-disk value is still
+		// the one we allocated. A concurrent caller may have advanced
+		// past it — in which case rolling back here would leave the
+		// counter pointing at an ID someone else already returned.
+		if current != allocated {
+			return
+		}
+		if err := writeCounterAtomic(counterPath, allocated-1); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: id release: writing counter %q: %v\n", counterPath, err)
+		}
+	}
+}
+
+// noopRelease is the release returned on error paths so callers can
+// `defer release(false)` unconditionally without nil-checking.
+func noopRelease(bool) {}
+
+// validateNamespace refuses values that would let a caller inject
+// path segments into the counter filename or collide with the lock
+// suffix. Namespace is part of a filename, not user-facing text.
+func validateNamespace(ns string) error {
+	if ns == "" {
+		return fmt.Errorf("namespace is required")
+	}
+	for _, r := range ns {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-':
+		default:
+			return fmt.Errorf("namespace %q: only lowercase letters, digits, and hyphens allowed", ns)
+		}
+	}
+	return nil
+}
+
+// formatID renders a namespace + date + sequence into the canonical
+// ID shape. Missions and delegations get short prefixes (m-/d-) per
+// DES-054; other namespaces fall back to the generic shape.
+func formatID(namespace, day string, seq int) string {
+	switch namespace {
+	case NamespaceMissions:
+		return fmt.Sprintf("m-%s-%03d", day, seq)
+	case NamespaceDelegations:
+		return fmt.Sprintf("d-%s-%03d", day, seq)
+	}
+	return fmt.Sprintf("%s-%s-%03d", namespace, day, seq)
 }
