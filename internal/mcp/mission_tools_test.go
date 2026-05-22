@@ -1475,7 +1475,8 @@ func TestHandleMission_Log_UnparseableLinesCarryWarnings(t *testing.T) {
 	// Plant a garbage line in the middle of the on-disk log. The
 	// handler's missionStore is the one testHandlerWithMissions
 	// wired; find its logPath via the store helper.
-	logPath := h.missionStore.ContractPath(id)
+	logPath, err := h.missionStore.ContractPath(id)
+	require.NoError(t, err)
 	// ContractPath returns <root>/missions/<id>.yaml — the log
 	// is a sibling at <root>/missions/<id>.jsonl. Swap the suffix.
 	logPath = strings.TrimSuffix(logPath, ".yaml") + ".jsonl"
@@ -1563,7 +1564,9 @@ func TestHandleMission_Log_WarningsNoRawControlBytes(t *testing.T) {
 
 	// Plant a line whose unknown field name is an ESC sequence
 	// (hidden via \u001b so the JSON is strict-valid).
-	logPath := strings.TrimSuffix(h.missionStore.ContractPath(id), ".yaml") + ".jsonl"
+	cpath, cpErr := h.missionStore.ContractPath(id)
+	require.NoError(t, cpErr)
+	logPath := strings.TrimSuffix(cpath, ".yaml") + ".jsonl"
 	raw, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")

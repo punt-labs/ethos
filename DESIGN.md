@@ -4829,3 +4829,446 @@ change it.
 - **Modify the round budget, evaluator hash gate, or any DES-033/
   3.4/3.5/3.6 enforcement.** DES-052 is purely a write-set
   authorization extension.
+
+## DES-054: Audited delegation — Tier A audit + Tier B contracts (DRAFT)
+
+**Status**: Draft v5. Bead `ethos-98u9`. Supersedes `ethos-717p`, `ethos-gqg3`. Reviewed across four rounds (rop minimalism / rsc compatibility / jra formal invariants). Round 4 verdict: 3× APPROVE — converged.
+
+Revision history:
+
+- v1 (initial): integrated five symptoms; three-predicate language; one-line migration.
+- v2 (after round-1 peer review): 18 of 21 round-1 findings applied.
+- v2+ (after jra redo): 21 of 21 round-1 findings applied.
+- v3 (after CEO direction): policy pivot — contracts are opt-in. Bare `Agent(...)` calls audited but not synthesized. Synthesizer, meta-evaluator, `synthetic` flag, v2 invariants I8/I9/I10 dropped.
+- v4 (after round-2 peer review): 14 REQ + 13 IMPL findings applied.
+- **v5 (after round-3 + CEO clean-slate direction)**: round-3 verdicts were rop APPROVE / jra APPROVE / rsc APPROVE WITH ONE NEW REQ (counter.yaml is a file-format break, not a permissive append). CEO named this as broader over-engineering and asked for clean-slate framing. v5 restructures storage:
+  - **Two-tree top-level layout**: `<repo>/.ethos/missions/<mission-id>/` for per-mission cohesion (date encoded in ID); `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/` for per-session cohesion **1:1 with Claude Code conversation history**. One date level in the session directory name (not nested).
+  - **Single audit log per session** — `audit.jsonl` lives only under each session directory. Mission and delegation directories hold metadata only (contract, record, prompt, result). Per-delegation `audit.jsonl` dropped. Cross-delegation queries filter the session log by `delegation_id`.
+  - **Sibling-file per-namespace per-date counters** — `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` and `delegations-YYYY-MM-DD`, each a single-int file. No `counter.yaml`. No `schema_version` to pin. Preserves the existing `.counter-YYYY-MM-DD` shape verbatim; adds a namespace dimension to the filename.
+  - **Tier A delegations live under their spawning session's directory** — `sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/`. Not in a separate global tree. Their metadata (record, prompt, result) is in-repo, in the session that produced them.
+  - **`I7` verdict semantics for Tier A pinned to `{open, aborted}`** per rsc R3 O3. Tier A has no evaluator and cannot produce `pass`/`fail`.
+  - **`max_delegation_depth` refusal closes the Tier B record with `verdict=aborted`** per rsc R3 O4. No dangling state.
+  - **`I10-audit-atomic` collapses from two-store form to one-store form** — only the session audit log exists; no per-delegation audit file to be atomic about.
+  - **Phase-1 + phase-3 transition window** stated as two minor versions per rsc R3 O2.
+  - **IMPL editorial** — stale `max_delegation_depth` open-question removed per rop R3 N1.
+  - **`ethos find` query interface** (DES-056-or-later) filed as `ethos-pcra` for mid-term work, out of v5 scope.
+
+Reviewers across all rounds, all closed with proper ceremony: `rop` (Pike minimalism, mcg eval), `rsc` (Cox compatibility / migration, mdm eval), `jra` (Abrial formal invariants, jms eval). R1: 3× ITERATE. R2: 3× APPROVE WITH NAMED EDITS. R3: 2× APPROVE / 1× APPROVE WITH ONE REQ. Round 4 dispatched on v5 — design stabilizes when a review round adds zero new substantive findings.
+
+## Problem (unchanged from v2)
+
+Ethos's governance model partitions by **identity**. Missions bind to identities. Audit logs key off session_id. Mission contracts gate identity-bearing subagents. Procedure rules live in markdown.
+
+This breaks the moment a leader spawns a `general-purpose` subagent or makes any bare `Agent(...)` call. Five observable consequences:
+
+1. **Subagent activity is not linkable to its parent.** `auditEntry` (`audit_log.go:13-18`) lacks `parent_session`, `agent_id`, `agent_type`.
+2. **Prompts are unrecoverable.** `audit_log.go:86-89` truncates `tool_input` at 200 characters.
+3. **Bare `Agent(...)` calls bypass contracts.** No `write_set`, no `evaluator`, no success criteria.
+4. **Tool-call preconditions cannot be expressed.** "A verdict requires PNG inspection" is markdown discipline.
+5. **Durable mission state lives per-machine.** `~/.punt-labs/ethos/missions/<id>.*` — global, untracked.
+
+## The missing concept
+
+A **delegation** is the unit of governed work: parent → child → audit, with an OPTIONAL contract layer. Today ethos models identity, mission, audit, session — but not the delegation itself.
+
+DES-054 makes delegation a first-class concept with **two governance tiers**:
+
+- **Tier A — ungoverned, audited.** Bare `Agent(...)` calls. Audit log captures spawn, prompt, child tool use, return value, parent linkage. No contract layer. A PreToolUse advice hook emits a one-line suggestion pointing at `mission dispatch` when the operator wants governance. Default for ad-hoc spawns.
+
+- **Tier B — governed, audited.** `mission create` / `mission dispatch` (existing) or inherited via `delegations[].spawn_pattern` (new). Mission contract applies: `write_set`, `extract_into`, `preconditions`, `delegations[]`, frozen evaluator, round budget. Default for typed delegation.
+
+Both tiers share the audit enrichment. The contract layer is additive — present in Tier B, absent in Tier A. Operators choose per call.
+
+## Design
+
+### Storage layout
+
+```text
+<repo>/.ethos/
+├── index/
+│   └── missions.jsonl                                   # DES-050 cross-date summary index
+├── missions/                                            # per-mission canonical home; date in ID
+│   └── <mission-id>/                                    # e.g. m-2026-05-22-005/
+│       ├── contract.yaml
+│       ├── results.yaml
+│       ├── reflections.yaml
+│       ├── log.jsonl
+│       ├── artifacts/
+│       └── delegations/<NN>/                            # Tier B mission-bound delegations
+│           ├── record.yaml
+│           ├── prompt.md
+│           └── result.md
+└── sessions/                                            # per-session, 1:1 with conversation history
+    └── <YYYY-MM-DD>-<session-id>/                       # e.g. 2026-05-22-abc123/
+        ├── audit.jsonl                                  # universal: Tier A + Tier B entries
+        └── adhoc/<NNN>/                                 # Tier A delegations spawned in this session
+            ├── record.yaml
+            ├── prompt.md
+            └── result.md
+
+~/.punt-labs/ethos/                                      # global — ephemeral process state
+├── sessions/<session-id>.yaml                           # session roster (live PIDs, TTYs)
+├── sessions/<session-id>.lock                           # session flock
+├── sessions/current/<pid>                               # PID → session pointer
+├── missions/<mission-id>.lock                           # per-mission flock
+├── delegations/<delegation-id>.lock                     # per-delegation flock (Tier B only)
+└── counters/                                            # sibling-file per-namespace per-date counters
+    ├── missions-YYYY-MM-DD                              # single int
+    └── delegations-YYYY-MM-DD                           # single int
+```
+
+Two top-level trees: `missions/` and `sessions/`. Each artifact lives in exactly one place.
+
+**Mission cohesion** — `missions/<mission-id>/` holds everything about that mission across every session that touched it. `git log -- .ethos/missions/<mission-id>/` shows the full per-mission history.
+
+**Session cohesion** — `sessions/<YYYY-MM-DD>-<session-id>/` holds everything specific to that session: its audit log, and any Tier A delegations spawned in it. The dirname is **`<date>-<session-id>`** — date prefix sorts; session-id makes the directory 1:1 with the Claude Code conversation history file at `~/.claude/projects/<...>/<session-id>.jsonl`. A forensic operator can cross-reference by the shared session-id.
+
+**Single audit storage** — `audit.jsonl` lives only at the session level. Mission and delegation directories hold metadata only (contract, record, prompt, result). Per-delegation audit is recovered by filtering the session audit log on `delegation_id`. The `ethos audit show --delegation <id>` command does the filter; the storage stays simple.
+
+**Counters as sibling per-namespace per-date files** — same shape as today's `.counter-YYYY-MM-DD` (single int, flock-guarded read/inc/write), just adds a namespace dimension to the filename. A new namespace = a new sibling file. No `counter.yaml`, no `schema_version`, no nested map. Permissive append happens at the file-set level.
+
+**Date browsing** — `ls .ethos/sessions/2026-05-22-*/` lists all sessions started that date. `ls .ethos/missions/m-2026-05-22-*/` lists all missions started that date. The date IS in the canonical key (mission ID, session directory name); the filesystem exposes it directly.
+
+**Cross-date queries** — `ethos find` (DES-056-or-later, bead `ethos-pcra`) provides the structured query surface. For DES-054, `index/missions.jsonl` (DES-050 unchanged) is the cross-date acceleration path.
+
+### Schema changes
+
+**`auditEntry`** (universal, applies to both tiers):
+
+```go
+type auditEntry struct {
+    Ts                 string         `json:"ts"`
+    Session            string         `json:"session"`
+    ParentSession      string         `json:"parent_session,omitempty"`
+    AgentID            string         `json:"agent_id,omitempty"`
+    AgentType          string         `json:"agent_type,omitempty"`
+    DelegationID       string         `json:"delegation_id,omitempty"`
+    ParentDelegation   string         `json:"parent_delegation,omitempty"`
+    ContractID         string         `json:"contract_id,omitempty"`
+    Tool               string         `json:"tool"`
+    ToolInput          map[string]any `json:"tool_input,omitempty"`
+    ToolInputHash      string         `json:"tool_input_hash"`
+    Preview            string         `json:"tool_input_preview"`
+}
+```
+
+`DelegationID` is set for both tiers; `ContractID` is set only for Tier B (Tier A has no contract). `ParentDelegation` (added v4 per jra F3 i) makes the audit chain self-sufficient: every entry can walk to the root spawn without consulting the session roster, which the audit-log relocation in v3 made important. `tool_input_hash` shares the canonical-JSON encoder used by DES-033's `Evaluator.Hash`.
+
+**KnownFields asymmetry** (per rsc E4): `Contract` YAML is decoded with `KnownFields(true)` to refuse silent feature loss. `auditEntry` JSONL is decoded with default permissive JSON to keep older readers (vox, audit show) compatible with new optional fields. The current code already has this asymmetry; v4 names it so a future refactor does not unify them.
+
+**`Contract`** (Tier B only) gains optional `preconditions` and `delegations[]`. No `synthetic` flag — there is no synthesizer.
+
+```go
+type Contract struct {
+    // ... existing fields
+    Preconditions []ToolPrecondition    `yaml:"preconditions,omitempty" json:"preconditions,omitempty"`
+    Delegations   []DelegationTemplate  `yaml:"delegations,omitempty" json:"delegations,omitempty"`
+}
+
+type ToolPrecondition struct {
+    Tool        string   `yaml:"tool" json:"tool"`
+    PathGlob    string   `yaml:"path_glob" json:"path_glob"`
+    RequireRead []string `yaml:"require_read,omitempty" json:"require_read,omitempty"`
+    Message     string   `yaml:"message" json:"message"`
+}
+
+type DelegationTemplate struct {
+    Role             string   `yaml:"role" json:"role"`
+    SpawnPattern     string   `yaml:"spawn_pattern" json:"spawn_pattern"`
+    InheritsContract bool     `yaml:"inherits_contract,omitempty" json:"inherits_contract,omitempty"`
+    ExtractInto      []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`
+}
+```
+
+### Predicate language (closed; per round-1 rop)
+
+Two forms, applies only when a Tier B contract is in scope:
+
+1. **Implicit `must-read-inputs`** — default for any contract with `preconditions: [...]`. For path-referencing tool calls, the delegation's audit log must contain a `Read` of every referenced path.
+
+2. **Explicit `require_read: [<path>...]`** — per-precondition override with `${inputs.X}` substitution from the contract's `Inputs` block. The substitution reads from `Contract.Inputs`, not from the gated tool call's input — that closes the templating concern.
+
+Tier A calls have no contract, no preconditions. Anything beyond these two forms is a parse error.
+
+**Scope rule**: under `inherits_contract: true`, predicate lookups walk the ancestor delegation chain. The walk is bounded by `parent_delegation` chain length.
+
+### Hook architecture
+
+**1. PreToolUse-on-Agent** — the new branch (`internal/hook/pretooluse.go`).
+
+```text
+When tool = Agent:
+
+a. Resolve open mission from MISSION_ID env + session roster.
+
+b. Tier dispatch:
+
+   - Inheritance match: parent's contract has delegations[] entry whose
+     spawn_pattern matches this Agent call. Tier B. Apply parent contract.
+
+   - MISSION_ID env set, no inheritance match: Tier B by explicit dispatch.
+     The leader passed MISSION_ID through; the contract is whatever the
+     leader bound it to.
+
+   - Neither: Tier A. Ungoverned. Emit advisory to stderr UNLESS
+     suppression conditions apply (per rop R1 iii):
+       - ETHOS_QUIET_ADVICE=1 is set in the environment, OR
+       - PARENT_SESSION_ID is already populated (nested ad-hoc spawn —
+         the parent already saw the advisory; suppress the recursive
+         repeat).
+     When neither suppression condition holds, emit one stderr line:
+
+       ethos: Agent call is ungoverned. To bind a contract:
+         ethos mission dispatch --worker <agent_type> --evaluator <handle> ...
+         ethos mission create --file <contract.yaml>
+       (set ETHOS_QUIET_ADVICE=1 to silence)
+
+c. Audit setup (BOTH tiers):
+
+   - Allocate transient delegation_id via NewID API.
+   - Set DELEGATION_ID, PARENT_SESSION_ID in env block.
+   - Tier B: also set MISSION_ID, MISSION_ARTIFACTS_DIR.
+   - Tier B: write delegation record skeleton + prompt.md to per-delegation dir.
+   - Tier A: no per-delegation directory; audit entries go to the session log.
+
+d. Tier B only: acquire per-mission flock (shared/read mode) before skeleton
+   write; refuse spawn if mission is closed. Release after skeleton write.
+
+e. Allow the tool call.
+```
+
+The advice is information, not refusal. Tier A operators see the suggestion and proceed.
+
+**2. PostToolUse audit enrichment**. All audit entries are full-fidelity. `tool_input` persisted in full; preview retained for grep. JSONL atomic-write contract: `f.Sync()` after every line, line-tolerant reader, `audit migrate` rewrites via temp+rename under per-delegation flock (Tier B) or per-session flock (Tier A).
+
+**3. PreToolUse procedure preconditions** — fires only when a Tier B contract is in scope. Tier A spawns never hit precondition evaluation because no contract exists. Fail policy: violated predicate blocks; unevaluable predicate blocks unless `strict_preconditions: false` (default true), at which point it warns and allows.
+
+**4. Hash-gate refusal cleanup** — when `SubagentStart`'s evaluator-hash check (DES-033) refuses a Tier B verifier spawn, the delegation skeleton already exists. Refusal writes `verdict: aborted` and `closed_at: <now>` to the record. No orphaned skeletons.
+
+### Commit-message linkage
+
+`SubagentStart` exports `MISSION_ID` (Tier B) and `DELEGATION_ID` (both tiers) into worker spawns. A `commit-msg` hook installed by `ethos seed` appends both trailers when set. Tier A commits get only `Delegation:`; Tier B commits get both `Mission:` and `Delegation:`.
+
+### Migration
+
+**Session rosters vs session audit files**. The two are explicitly different artifacts with different storage policies:
+
+- Session **roster** files (`<session-id>.yaml`, `<session-id>.lock`, `current/<pid>`) reference live PIDs and TTYs and stay at `~/.punt-labs/ethos/sessions/`. They never move into the repo.
+- Session **audit** files move into `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl`. Legacy reader fallback applies for the transition window.
+
+**`Store` gains two roots**:
+
+| Operation | RepoRoot set | Else |
+|---|---|---|
+| Create | write to `<repoRoot>/.ethos/missions/<id>/contract.yaml`; acquire `<repoRoot>/.ethos/missions/.create.lock` AND `~/.punt-labs/ethos/missions/.create.lock` (rolling-upgrade fence) | global only |
+| Load | repo first, global fallback | global only |
+| List | union, dedup by id (repo wins) | global |
+| Update/Close | layer where Load found it; never copy across | global |
+| Migrate | explicit copy global → repo; refuse if repo target exists | no-op |
+
+**Audit-log read-path state machine**:
+
+```text
+on read_audit(session_id, start_date):
+    p_repo   = <repoRoot>/.ethos/sessions/<start_date>-<session_id>/audit.jsonl
+    p_legacy = ~/.punt-labs/ethos/sessions/<session_id>.audit.jsonl
+    if exists(p_repo):
+        return read(p_repo)
+    if exists(p_legacy):
+        return read(p_legacy)   // legacy fallback
+    return []
+```
+
+The Tier B precondition evaluator follows the same dispatch.
+
+**Rolling-upgrade**: v3.12.0 acquires both `.create.lock` files during transition; v3.13.0 drops the global. **Transition window is two minor versions** (per rsc R3 O2) because phase 1 ships the storage move and phase 3 ships the `audit migrate` tool; the gap is one minor version, and the v3.13.0 cleanup is another.
+
+**`KnownFields(true)` asymmetry**: Contract YAML decodes strict. v3.12.0 contracts (with `preconditions`/`delegations`) are not readable by v3.11.0 — one-way door, no strip flag. Audit entries decode with default permissive JSON.
+
+**`NewID` rollback API**: `NewID(namespace, date) (id string, release func(commit bool), err error)`. Caller `defer release(success)`. Counter rolls back on failure to prevent burned IDs at Tier-A-spawn-rate.
+
+**Counter file format** — sibling per-namespace per-date single-int files (per CEO clean-slate direction, rsc R3 REQ): `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` and `delegations-YYYY-MM-DD`. Each file: one int (last allocated number), `\n`-terminated. Same shape as today's `.counter-YYYY-MM-DD`, namespace added to the filename. No format break; v3.11.0 readers keep reading their own files. A v3.12.0 binary writes a sibling for the new namespace; older binaries that don't know about delegations never touch it. No `counter.yaml`, no `schema_version`, no nested map.
+
+**Day-boundary policy**: a delegation born at 00:00:01 UTC the day after its parent mission was created belongs to its parent mission's date, not wall clock. `m-2026-05-21-005-d04`, not `m-2026-05-22-005-d01`. Tier A delegations are wall-clock-indexed in `delegations-YYYY-MM-DD` because they have no parent mission.
+
+**`ethos audit migrate` behaviour**:
+
+- **No-op (no legacy state)**: exit 0 with `no legacy audit logs found`. Not an error.
+- **Idempotent (already-migrated)**: each migrated session leaves a `.migrated` tombstone in the legacy directory; subsequent runs see the tombstone (or repo-local twin), exit 0.
+- **Partial failure recovery**: each session migrates atomically via temp+rename. Failure on session N leaves earlier sessions migrated and N in its pre-migration state; next run resumes from N.
+- **Read-only legacy filesystem**: copies to repo; legacy file becomes implicit tombstone iff a repo-local twin exists.
+- **Unconfigured repo**: creates `<repo>/.ethos/sessions/` with `0o700` if absent. Refuses migration if `<repo>/.ethos/` exists but is not writable.
+- **Cross-repo policy**: migrates only sessions whose roster's `repo` field matches the current repo. Sessions with no repo binding stay in legacy and are not migrated.
+
+**`ethos mission migrate --to-repo`** is symmetric: copies historical mission state from global into the active repo, refusing if a repo-local twin already exists.
+
+### Concurrency model
+
+5 repos × 1 mission each + N Tier B delegations + M Tier A spawns on one machine:
+
+| File | Count | Location | Lifetime |
+|---|---|---|---|
+| Per-mission flock | 5 | `~/.punt-labs/ethos/missions/` | flock-held |
+| Per-delegation flock (Tier B) | N per mission | `~/.punt-labs/ethos/delegations/` | flock-held |
+| Per-repo `.create.lock` | 5 | `<repo>/.ethos/missions/.create.lock` | flock-held |
+| Global `.create.lock` (transition) | 1 | `~/.punt-labs/ethos/missions/.create.lock` | flock-held |
+| Session roster YAML | 5 | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | session lifetime |
+| Session flock (roster + audit) | 5 | `~/.punt-labs/ethos/sessions/<session-id>.lock` | flock-held |
+| PID pointer | 5 | `~/.punt-labs/ethos/sessions/current/<pid>` | session lifetime |
+| Session audit JSONL | 5 | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | persistent |
+| Mission ID counter (per date) | per date | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | persistent |
+| Delegation ID counter (per date) | per date | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | persistent |
+
+One session flock covers both the roster YAML and audit JSONL writes. Lock file is global because the session itself is a global concept; the audit data it gates is per-repo. The audit log lives ONLY at the session level — no per-delegation `audit.jsonl`; per-delegation audit is recovered by filtering the session log by `delegation_id`.
+
+**Stat–Write race** (DES-052) — unchanged: per-delegation flocks do NOT eliminate cross-delegation races on `extract_into` targets. `tool_input_hash` makes the collision detectable post-hoc.
+
+**Cross-tier audit visibility**: a Tier B mission-bound delegation that spawns a Tier A child is supported. Both audit streams (the Tier B delegation's tool calls inside the bound contract, and the Tier A child's tool calls) write to the **same session-level audit log**, with `delegation_id` and `parent_delegation` distinguishing them. `ethos audit show --delegation <id>` (per rsc E7, phase 3) filters the session log to give the operator the per-delegation view.
+
+**`max_delegation_depth`**: a global ethos setting in `.punt-labs/ethos.yaml`, default `16`. Tier A under Tier A has no per-contract budget cap, so a runaway recursive spawn pattern would have no natural backstop. The depth is read at PreToolUse-on-Agent; exceeding refuses the spawn with a clear error. **If the depth check refuses a Tier B spawn after the delegation record skeleton has been written** (rsc R3 O4), the refusal handler closes the just-created record with `verdict=aborted` and `closed_at=<now>`. No dangling state.
+
+### Concurrency invariants (revised; per round-1 jra)
+
+```text
+-- Mission IDs are globally unique.
+I1: forall m1, m2 in missions: m1.id = m2.id  ->  m1 = m2
+
+-- Delegation IDs are globally unique. Applies to both tiers; Tier A
+-- delegations get IDs of the form d-YYYY-MM-DD-NNN, Tier B get
+-- <mission-id>-d<NN>.
+I2: forall d1, d2 in delegations: d1.id = d2.id  ->  d1 = d2
+
+-- Every audit entry produced under a delegation is reachable from
+-- that delegation. Audit entries for Tier A live in the session log
+-- but carry the delegation_id field; for Tier B they live under the
+-- per-delegation directory.
+I3: forall e in audit_entries:
+        e.delegation_id != ""  ->  exists d in delegations: d.id = e.delegation_id
+
+-- Transitive closure: every non-root delegation has a parent in the
+-- delegation set; the chain terminates at parent_delegation = "".
+I4: forall d in delegations:
+        d.parent_delegation = "" \/
+        exists p in delegations: p.id = d.parent_delegation
+    /\
+    forall d in delegations: terminates(chain(d))
+
+-- Preconditions are evaluated only when a Tier B contract is in scope
+-- and the calling tool matches.
+I5a: forall t in tool_calls, p in active_contract.preconditions:
+        evaluated(p, t)  <->  (t.tool = p.tool /\ matches(t.path, p.path_glob))
+
+-- Fail policy.
+I5b: evaluated(p, t) /\ predicate(p, t) = false             ->  block(t)
+   /\ evaluated(p, t) /\ predicate(p, t) = unevaluable /\ strict   ->  block(t)
+   /\ evaluated(p, t) /\ predicate(p, t) = unevaluable /\ ¬strict  ->  warn(t) /\ allow(t)
+
+-- Predicate scope under inherits_contract: walk the ancestor chain
+-- of delegations that share this delegation's contract.
+I6: forall p in preconditions(d):
+        scope(p, d) = audit_of(d) ∪ {audit_of(a) : a in ancestors(d) /\ a.contract = d.contract}
+
+-- Delegation status is monotonic, and the legal verdict set
+-- depends on the tier. Tier B can produce evaluator verdicts
+-- (pass / fail / error); Tier A has no evaluator and can only
+-- terminate by abort. (UPDATED in v5 per rsc R3 O3.)
+I7: forall d in delegations, t1 < t2:
+        d.verdict(t1) = "open"  \/  d.verdict(t2) = d.verdict(t1)
+    /\
+    (d.tier = "A"  ->  d.verdict ∈ {"open", "aborted"})
+    /\
+    (d.tier = "B"  ->  d.verdict ∈ {"open", "pass", "fail", "error", "aborted"})
+    /\
+    d.verdict != "open"  ->  d.closed_at != ""
+
+-- Tier A delegations have no contract; Tier B delegations always do.
+-- (NEW in v3 — replaces v2's I8/I9/I10 about synthetic contracts, which
+-- are obsolete under the opt-in pivot because synthetic contracts no
+-- longer exist.)
+I8: forall d in delegations:
+        d.tier = "A"  ->  d.contract = nil
+    /\  d.tier = "B"  ->  d.contract != nil
+
+-- Tier domain is closed: every delegation belongs to exactly A or B.
+-- (NEW in v4 per jra F1.)
+I8-type: forall d in delegations: d.tier ∈ {"A", "B"}
+
+-- Tier is immutable: a delegation never transitions between tiers.
+-- (NEW in v4 per jra F2.)
+I8-stable: forall d in delegations, t1 < t2:
+        d.tier(t1) = d.tier(t2)
+
+-- Tier B contract liveness: a delegation in Tier B can only exist
+-- when its bound contract is open. (NEW in v4 per rop R2.)
+I8-live: forall d in delegations:
+        d.tier = "B"  ->  d.contract != nil /\ d.contract.closed_at = ""
+
+-- Counter file shape: sibling-file per-namespace per-date pattern.
+-- Each file is a single integer. New namespaces add sibling files;
+-- existing files never change shape. (REVISED in v5 per CEO
+-- clean-slate direction; obsoletes v4's counter.yaml + schema_version
+-- which was over-engineered.)
+I9-counter: forall ns, date:
+        counters/<ns>-<date> exists  ->  contents is a single integer
+    /\  no counter file ever changes format
+
+-- Audit-log atomicity is per-session, single-store. Appends to a
+-- session's audit JSONL serialize through the session flock; line
+-- ordering follows write order. (REVISED in v5: dropped the
+-- two-store variant from v4 — there is no per-delegation audit
+-- file in v5; all audit lives in the session log.)
+I10-audit-atomic: forall e1, e2 written to <session-dir>/audit.jsonl:
+        flock(<session-id>.lock) is held during each append
+    /\  write_order(e1, e2) = file_position_order(e1, e2)
+```
+
+Twelve invariants. v2's I8/I9/I10 (about synthetic contracts) **obsolete** under v3's opt-in pivot. v4's I8, I8-type, I8-stable, I8-live, I9-counter, and I10-audit-atomic together encode the tier discipline, counter shape, and audit append-atomicity properties. v5 sharpens I7 to make tier-specific verdict sets explicit, simplifies I9-counter to the sibling-file shape (no YAML, no schema_version), and collapses I10-audit-atomic from two-store form to single-store.
+
+### What DES-054 deliberately does NOT do
+
+- **Force every Agent call through a contract.** Tier A exists. Contracts are opt-in.
+- **Synthesize ad-hoc contracts.** No synthesizer; no meta-evaluator; no rule-6 relaxation.
+- **Eliminate the Stat–Write race in extract_into.** Detectable, not prevented.
+- **Move session rosters into the repo.** Only audit logs move; rosters stay global.
+- **Provide a general predicate language.** Two closed forms. Anything else is a future DES.
+- **Backfill historical audit logs automatically.** Operators run `ethos audit migrate` explicitly.
+- **Make v3.12.0 contracts readable by v3.11.0.** One-way door.
+
+### Rejected alternatives
+
+- **Force every Agent call through a contract** (Tier A removed). Rejected per CEO direction: governance is opt-in; ad-hoc spawns must remain frictionless. The advice hook is the soft nudge toward governance without forcing it.
+- **Synthesize an ad-hoc contract on every Agent call.** Rejected per CEO direction: ~300 LOC of synthesizer + meta-evaluator + rule-6 relaxation exists only to govern calls the operator didn't ask to govern.
+- **Move session rosters into the repo.** Rejected: rosters reference live PIDs and TTYs.
+- **Single repo-root `delegations.jsonl`.** Rejected: violates per-delegation flock semantics, breaks per-delegation `git log` granularity.
+- **Per-mission single flat file.** Rejected: same reasons.
+- **Reuse `session_id` as `delegation_id`.** Rejected: a session contains multiple delegations.
+- **Per-tool-call ID rather than per-spawn delegation_id.** Rejected: groups tool calls by their generating Agent spawn, which is the unit of operator intent.
+- **Hostable code in contracts** (general predicate language). Rejected: sandbox concern.
+- **`KnownFields(strip)` flag.** Rejected: would silently drop preconditions/delegations.
+- **Make Agent advice blocking** (refuse Tier A spawns until contract). Rejected per CEO direction.
+
+## Open questions
+
+1. **Advice hook format**: stderr line? structured JSON in hook response? Both? Operators reading from the terminal see stderr; programmatic readers may prefer JSON. Recommendation: stderr text for terminal sessions, plus a `hooks.json`-controlled flag for JSON output.
+
+2. **Cross-tool surface**: verify Vox audit-log parsing (if any), commit-msg trailer consumption by prfaq-dev / feature-dev / beads. Expected no-ops.
+
+3. **Advice tone**: prescriptive ("use `mission dispatch`") vs descriptive ("this call is ungoverned; here's how to bind a contract if you want")? Recommendation: descriptive — operators choose.
+
+## Recommended next step
+
+Three implementation phases. Each phase: bwk worker / rsc evaluator. Test coverage gate per phase. **DES-052 `extract_into` discipline applied to every new module** — no god modules; extract helpers into named files; mission contracts explicitly authorize `extract_into` directories. `make check` per commit; no suppression of quality gates.
+
+- **Phase 1 — schema + storage**: `auditEntry` enrichment (`parent_delegation` included); two-root `Store` state machine; date-bucketed mission and session directories; sibling-file per-namespace per-date counters; JSONL atomic-write contract; `NewID` rollback API; `KnownFields` asymmetry pinned (contracts strict, audit permissive).
+
+- **Phase 2 — hooks + dispatch**: `PreToolUse-on-Agent` Tier A / Tier B dispatch; advice hook with `ETHOS_QUIET_ADVICE` / `PARENT_SESSION_ID` suppression; per-mission and per-delegation flocks; session-flock unification (one flock covers roster + audit); aborted-sentinel cleanup on hash-gate refusal AND on `max_delegation_depth` refusal.
+
+- **Phase 3 — preconditions, migration, query commands**: precondition evaluator (Tier B only, short-circuits on `contract = nil`); commit-msg trailer hook; `ethos audit migrate` (no-op exit-0, idempotent, partial-failure recovery, read-only fallback, cross-repo policy); `ethos mission migrate --to-repo`; `ethos audit show --delegation <id>` filters the session audit log by delegation_id; cross-tool no-op verification (vox audit parser, prfaq-dev / feature-dev / beads trailer consumption).
+
+**Transition window** spans two minor versions: v3.12.0 ships phase 1 storage move + phase 2 hooks; phase 3 migration commands land in v3.13.0; v3.14.0 drops the global `.create.lock` rolling-upgrade fence.
+
+Final integration test: leader runs a Tier A Agent call → audit enrichment captures parent + child + prompt in the session log; leader runs a Tier B `mission dispatch` → same audit + contract + preconditions evaluable; commits from both surface via `git log --grep Mission:` and `git log --grep Delegation:`. The `ethos audit show --delegation <id>` command renders the unified view from the single session audit store.
+
+---
+
+**End of draft v5.** Round-3 verdicts (rop APPROVE / jra APPROVE / rsc APPROVE WITH ONE NEW REQ) plus CEO clean-slate direction applied. Three structural simplifications landed (date-keyed two-tree layout, single audit storage, sibling-file counters) plus three round-3 IMPL fixes (Tier A verdict semantics, `max_delegation_depth` cleanup, transition window stated). Round 4 dispatched to test stability — design converges when a review round adds zero new substantive findings.

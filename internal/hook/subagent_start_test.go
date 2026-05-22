@@ -930,7 +930,9 @@ func TestSubagentStart_VerifierIsolationBlockShape(t *testing.T) {
 		assert.Contains(t, ctx, entry,
 			"every write_set entry must appear in the allowlist")
 	}
-	contractPath := missions.ContractPath(c.MissionID)
+	contractPath, err := missions.ContractPath(c.MissionID)
+
+	require.NoError(t, err)
 	assert.Contains(t, ctx, contractPath,
 		"contract file path must be in the allowlist so the verifier can reread it")
 }
@@ -952,7 +954,9 @@ func TestSubagentStart_VerifierIsolationContractBytesExactMatch(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
 
-	contractBytes, err := os.ReadFile(missions.ContractPath(c.MissionID))
+	cp, cpErr := missions.ContractPath(c.MissionID)
+	require.NoError(t, cpErr)
+	contractBytes, err := os.ReadFile(cp)
 	require.NoError(t, err)
 
 	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
@@ -1128,7 +1132,9 @@ func TestSubagentStart_VerifierIsolationWriteSetIsAllowlist(t *testing.T) {
 		assert.Contains(t, ctx, entry,
 			"allowlist must include every write_set entry")
 	}
-	assert.Contains(t, ctx, missions.ContractPath(c.MissionID),
+	cp4, cp4Err := missions.ContractPath(c.MissionID)
+	require.NoError(t, cp4Err)
+	assert.Contains(t, ctx, cp4,
 		"allowlist must include the contract file path")
 }
 
@@ -1138,7 +1144,9 @@ func TestSubagentStart_VerifierIsolationWriteSetIsAllowlist(t *testing.T) {
 func TestVerifierAllowlist_Deduplicates(t *testing.T) {
 	tmpRoot := t.TempDir()
 	store := mission.NewStore(tmpRoot)
-	contractPath := store.ContractPath("m-2026-04-08-001")
+	contractPath, err := store.ContractPath("m-2026-04-08-001")
+
+	require.NoError(t, err)
 
 	c := &mission.Contract{
 		MissionID: "m-2026-04-08-001",
@@ -1212,7 +1220,9 @@ func TestSubagentStart_VerifierEmitsAllowlistEnv(t *testing.T) {
 		assert.Contains(t, allowlist, entry,
 			"allowlist env var must include every write_set entry")
 	}
-	contractPath := missions.ContractPath(c.MissionID)
+	contractPath, err := missions.ContractPath(c.MissionID)
+
+	require.NoError(t, err)
 	assert.Contains(t, allowlist, contractPath,
 		"allowlist env var must include the contract file path")
 }

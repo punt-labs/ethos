@@ -191,6 +191,11 @@ func runHookAuditLog() error {
 		return fmt.Errorf("hook audit-log: %w", err)
 	}
 	sessionsDir := home + "/.punt-labs/ethos/sessions"
-	_ = hook.HandleAuditLog(os.Stdin, sessionsDir)
+	// DES-054 phase 1: prefer the date-keyed repo-tree layout when
+	// the hook fires inside a repo; fall back to the legacy global
+	// sessions directory otherwise. FindRepoRoot returns the empty
+	// string outside a git tree, which routes the audit log through
+	// the legacy fallback path without further branching.
+	_ = hook.HandleAuditLog(os.Stdin, resolve.FindRepoRoot(), sessionsDir)
 	return nil
 }

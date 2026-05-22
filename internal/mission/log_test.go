@@ -180,7 +180,7 @@ func TestStoreUpdateAppendsUpdateEvent(t *testing.T) {
 // Tests use this to assert the on-disk format directly.
 func readLog(t *testing.T, s *Store, missionID string) []Event {
 	t.Helper()
-	f, err := os.Open(s.logPath(missionID))
+	f, err := os.Open(mustLogPath(t, s, missionID))
 	require.NoError(t, err)
 	defer f.Close()
 
@@ -252,7 +252,7 @@ func TestLoadEvents_EmptyFile(t *testing.T) {
 	// plus the contract-existence anchor the H4 check requires.
 	missionID := "m-2026-04-07-002"
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
-	require.NoError(t, os.WriteFile(s.logPath(missionID), []byte{}, 0o600))
+	require.NoError(t, os.WriteFile(mustLogPath(t, s, missionID), []byte{}, 0o600))
 	seedContractStub(t, s, missionID)
 
 	events, warnings, err := s.LoadEvents(missionID)
@@ -481,10 +481,10 @@ func TestLoadEvents_PermissionDenied(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-012")
 	require.NoError(t, s.Create(c))
-	require.NoError(t, os.Chmod(s.logPath("m-2026-04-07-012"), 0o000))
+	require.NoError(t, os.Chmod(mustLogPath(t, s, "m-2026-04-07-012"), 0o000))
 	t.Cleanup(func() {
 		// Restore permissions so t.TempDir cleanup can remove the file.
-		_ = os.Chmod(s.logPath("m-2026-04-07-012"), 0o600)
+		_ = os.Chmod(mustLogPath(t, s, "m-2026-04-07-012"), 0o600)
 	})
 
 	events, _, err := s.LoadEvents("m-2026-04-07-012")
@@ -521,7 +521,7 @@ func TestLoadEvents_RejectsSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(outside,
 		[]byte(`{"ts":"2026-04-07T22:00:01Z","event":"create","actor":"claude"}`+"\n"),
 		0o600))
-	require.NoError(t, os.Symlink(outside, s.logPath(missionID)))
+	require.NoError(t, os.Symlink(outside, mustLogPath(t, s, missionID)))
 	seedContractStub(t, s, missionID)
 
 	_, _, err := s.LoadEvents(missionID)
@@ -867,7 +867,7 @@ func TestLoadEvents_OversizedFileRejected(t *testing.T) {
 	// fires before any read. Writing 17 MiB is fast enough for a
 	// unit test (~50 ms on a modern laptop).
 	big := make([]byte, 17*1024*1024)
-	require.NoError(t, os.WriteFile(s.logPath(missionID), big, 0o600))
+	require.NoError(t, os.WriteFile(mustLogPath(t, s, missionID), big, 0o600))
 	seedContractStub(t, s, missionID)
 
 	events, warnings, err := s.LoadEvents(missionID)
@@ -887,7 +887,7 @@ func TestLoadEvents_DirectoryAtLogPath(t *testing.T) {
 	s := testStore(t)
 	missionID := "m-2026-04-07-018"
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
-	require.NoError(t, os.Mkdir(s.logPath(missionID), 0o700))
+	require.NoError(t, os.Mkdir(mustLogPath(t, s, missionID), 0o700))
 	seedContractStub(t, s, missionID)
 
 	events, warnings, err := s.LoadEvents(missionID)
@@ -1172,7 +1172,7 @@ func TestLoadEvents_GrowsPastCapDuringRead(t *testing.T) {
 	// its deterministic test lives in the unit-level decodeEventLog
 	// table. See the comment on this test for the rationale.
 	big := make([]byte, maxLogSize+1)
-	require.NoError(t, os.WriteFile(s.logPath(missionID), big, 0o600))
+	require.NoError(t, os.WriteFile(mustLogPath(t, s, missionID), big, 0o600))
 	seedContractStub(t, s, missionID)
 
 	events, warnings, err := s.LoadEvents(missionID)
@@ -1212,7 +1212,7 @@ func seedLogLines(t *testing.T, s *Store, missionID string, lines ...string) {
 func seedLogRaw(t *testing.T, s *Store, missionID, body string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
-	require.NoError(t, os.WriteFile(s.logPath(missionID), []byte(body), 0o600))
+	require.NoError(t, os.WriteFile(mustLogPath(t, s, missionID), []byte(body), 0o600))
 	seedContractStub(t, s, missionID)
 }
 
@@ -1226,7 +1226,9 @@ func seedLogRaw(t *testing.T, s *Store, missionID, body string) {
 func seedContractStub(t *testing.T, s *Store, missionID string) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(s.missionsDir(), 0o700))
-	require.NoError(t, os.WriteFile(s.ContractPath(missionID), []byte{}, 0o600))
+	path, err := s.ContractPath(missionID)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, []byte{}, 0o600))
 }
 
 // seededEventTime is a fixed reference timestamp for filter-class

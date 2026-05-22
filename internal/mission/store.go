@@ -40,12 +40,58 @@ type Store struct {
 	root       string          // e.g. ~/.punt-labs/ethos
 	roles      RoleLister      // optional; wires the Phase 3.5 role-overlap check
 	archetypes *ArchetypeStore // optional; validates Type on Create
-	repoRoot   string          // optional; when set, Close appends a trace summary to <repoRoot>/.ethos/missions.jsonl
+
+	// repoRoot, when set, names the repository directory under which
+	// trace summaries are written (<repoRoot>/.ethos/missions.jsonl).
+	// Set via WithRepoRoot (legacy single-tree mode) or
+	// NewStoreWithRoots (two-tree mode).
+	repoRoot string
+
+	// twoTreeStorage, when true, activates the DES-054 phase 1
+	// per-mission directory layout under <repoRoot>/.ethos/missions/.
+	// Set only by NewStoreWithRoots; WithRepoRoot leaves it false so
+	// existing callers that wired a trace destination keep the legacy
+	// flat <root>/missions/<id>.yaml shape.
+	twoTreeStorage bool
 }
 
 // NewStore creates a Store rooted at the given directory.
+//
+// Preserved as a thin wrapper over NewStoreWithRoots for backward
+// compatibility — existing callers that only know about the legacy
+// global tree compile unchanged. New callers that want the DES-054
+// two-tree storage layout (per-repo missions under .ethos/, fallback
+// reads from global) should use NewStoreWithRoots.
 func NewStore(root string) *Store {
-	return &Store{root: root}
+	return NewStoreWithRoots("", root)
+}
+
+// NewStoreWithRoots creates a Store that dispatches mission artifacts
+// across two roots — per-repo and global — per DES-054 phase 1.
+//
+// When repoRoot is non-empty, Create writes new missions under
+// <repoRoot>/.ethos/missions/<mission-id>/; Load, Update, Close, and
+// the sibling artifact paths (results, reflections, log) read the
+// repo tree first and fall back to the legacy <globalRoot>/missions/
+// shape for backward compatibility. List unions both trees with
+// repo-wins dedup.
+//
+// When repoRoot is empty, the legacy single-tree layout is the only
+// path — Create, Load, Update, Close all operate against
+// <globalRoot>/missions/<mission-id>.{yaml,jsonl,...}. This is the
+// shape NewStore(root) preserves.
+//
+// Per-mission and per-create flocks always live under globalRoot —
+// the DES-054 concurrency model pins them to a stable per-machine
+// location so two checkouts of the same repo never lock different
+// inodes for the same mission. Counter files (DES-054 sibling
+// per-namespace per-date) also live under globalRoot.
+func NewStoreWithRoots(repoRoot, globalRoot string) *Store {
+	return &Store{
+		root:           globalRoot,
+		repoRoot:       repoRoot,
+		twoTreeStorage: repoRoot != "",
+	}
 }
 
 // WithRoleLister wires a RoleLister for the Phase 3.5 role-overlap
@@ -80,10 +126,17 @@ func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 	return s
 }
 
-// WithRepoRoot sets the repository root directory for mission trace
-// logging. When set, Store.Close appends a JSONL summary line to
-// <repoRoot>/.ethos/missions.jsonl so every closed mission is visible
-// in the repo's git history. An empty root disables the trace.
+// WithRepoRoot sets the repository root for the post-close trace
+// summary. When set, Store.Close appends a JSONL summary line to
+// <repoRoot>/.ethos/missions.jsonl so every closed mission is
+// visible in the repo's git history. An empty root disables the
+// trace.
+//
+// Does NOT activate the DES-054 two-tree storage layout. Callers
+// that want both trace and the per-repo storage tree should use
+// NewStoreWithRoots, which sets both fields. WithRepoRoot stays
+// trace-only so existing tests and production callers that wired a
+// trace destination keep the legacy storage shape.
 //
 // Returns the receiver so construction stays compact:
 //
@@ -120,7 +173,15 @@ func (s *Store) validateContract(c *Contract) error {
 // Mission ID is run through filepath.Base as defense in depth, the
 // same way contractPath does internally. A caller passing a relative
 // or traversal-laced ID will only ever get a path under missionsDir.
-func (s *Store) ContractPath(missionID string) string {
+//
+// Returns (string, error) so a stat error on the repo-tree layer
+// (EACCES on a chmod-locked parent, for instance) surfaces as a
+// wrapped error rather than collapsing to the writeLayer fallback —
+// the silent-failure mode local review flagged on mission
+// m-2026-05-22-027 fix 3. Callers that already accept "best-effort
+// path" can wrap the error or call ContractPath under a recover; new
+// callers should propagate.
+func (s *Store) ContractPath(missionID string) (string, error) {
 	return s.contractPath(missionID)
 }
 
@@ -178,10 +239,19 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSource
 		}
 		return fmt.Errorf("apply server fields: %w", err)
 	}
-	id, err := NewID(s.root, now)
+	// Allocate a fresh mission ID under the counters/ tree. The
+	// counter is committed unconditionally on the success path
+	// because ApplyServerFields itself never writes any contract — a
+	// later Create failure is the caller's concern, not this method's,
+	// and burning one ID per failed Create is acceptable. The Store
+	// path here is the legacy single-root case; the two-root paths in
+	// NewStoreWithRoots use NewIDAt with their own counter root so
+	// tests stay isolated.
+	id, release, err := NewIDAt(s.root, NamespaceMissions, now)
 	if err != nil {
 		return fmt.Errorf("generating mission ID: %w", err)
 	}
+	release(true)
 	c.MissionID = id
 	created := now.UTC().Format(time.RFC3339)
 	c.Status = StatusOpen
@@ -193,32 +263,89 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSource
 	return nil
 }
 
+// missionsDir returns the global tree's missions directory —
+// <root>/missions. The repo tree is reached via repoMissionsDir; the
+// callers below (List, withLock, withCreateLock) explicitly know
+// which tree they want, so the helper stays narrow.
 func (s *Store) missionsDir() string {
-	return filepath.Join(s.root, "missions")
+	return s.globalMissionsDir()
 }
 
-// contractPath builds the YAML path for a mission. The mission ID is run
-// through filepath.Base as a defense-in-depth measure: even if a caller
-// somehow passed an absolute or traversal-laced ID, only the final
-// element survives.
-func (s *Store) contractPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".yaml")
+// contractPath builds the YAML path for a mission. When the mission
+// already exists on disk, the layer it lives in determines the path
+// (DES-054 phase 1: repo-first read with global fallback). When the
+// mission does not yet exist, the writeLayer wins — repo if
+// repoRoot is set, global otherwise.
+//
+// The mission ID is run through filepath.Base as a defense-in-depth
+// measure: even if a caller somehow passed an absolute or
+// traversal-laced ID, only the final element survives.
+//
+// Distinguishes "not found" (fall back to writeLayer, nil error) from
+// real stat errors (EACCES, EIO) which are wrapped and returned. The
+// silent-failure mode m-2026-05-22-027 fix 3 closed: under a
+// chmod-locked parent, pathSetForExisting returns the EACCES error
+// and contractPath used to swallow it and fall back to writeLayer —
+// hiding the permission failure behind an os.ErrNotExist surfaced
+// from a stale writeLayer path.
+func (s *Store) contractPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.contract, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).contract, nil
+	default:
+		return "", fmt.Errorf("resolving contract path for %q: %w", missionID, err)
+	}
 }
 
+// lockPath returns the per-mission flock path. Always under the
+// global tree per DES-054 concurrency model: locks reference live
+// inodes that must not move when a mission migrates between layers
+// or when two checkouts of the same repo coexist.
 func (s *Store) lockPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".lock")
+	return filepath.Join(s.globalMissionsDir(), filepath.Base(missionID)+".lock")
 }
 
 // createLockPath returns the directory-level lock file used by
 // Store.Create to serialize cross-mission write_set conflict scans.
 // Stable filename, never renamed or unlinked, so the flock inode does
 // not race with concurrent acquirers.
+//
+// Lives under the global tree alongside per-mission locks. v3.12.0
+// also acquires a repo-tree create lock during the transition window
+// — see Store.Create.
 func (s *Store) createLockPath() string {
-	return filepath.Join(s.missionsDir(), ".create.lock")
+	return filepath.Join(s.globalMissionsDir(), ".create.lock")
 }
 
-func (s *Store) logPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".jsonl")
+// repoCreateLockPath is the per-repo create lock acquired alongside
+// the global one during the DES-054 transition window. v3.13.0 drops
+// the global one and keeps only the repo lock. Returns empty when
+// repoRoot is unset (legacy single-tree mode).
+func (s *Store) repoCreateLockPath() string {
+	if s.repoRoot == "" {
+		return ""
+	}
+	return filepath.Join(s.repoMissionsDir(), ".create.lock")
+}
+
+// logPath returns the JSONL event log path for a mission. Dispatches
+// through pathSetForExisting / writeLayer the same way contractPath
+// does — read paths see the existing layer, write paths see the
+// writeLayer. Wraps stat errors instead of collapsing to writeLayer
+// (mission m-2026-05-22-027 fix 3).
+func (s *Store) logPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.log, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).log, nil
+	default:
+		return "", fmt.Errorf("resolving log path for %q: %w", missionID, err)
+	}
 }
 
 // reflectionsPath returns the sibling YAML file that holds the
@@ -228,8 +355,21 @@ func (s *Store) logPath(missionID string) string {
 // every Update to rewrite an unbounded slice. The sibling file grows
 // as rounds happen and is the single source of truth for the
 // round-advance gate.
-func (s *Store) reflectionsPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".reflections.yaml")
+//
+// Layer dispatch mirrors contractPath — when the mission already
+// exists, the layer it lives in determines the path; otherwise the
+// writeLayer wins. Wraps stat errors instead of collapsing to
+// writeLayer (mission m-2026-05-22-027 fix 3).
+func (s *Store) reflectionsPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.reflections, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).reflections, nil
+	default:
+		return "", fmt.Errorf("resolving reflections path for %q: %w", missionID, err)
+	}
 }
 
 // resultsPath returns the sibling YAML file that holds the
@@ -245,8 +385,49 @@ func (s *Store) reflectionsPath(missionID string) string {
 // as a contract; adding a second sibling without teaching List about
 // it would reproduce the same regression for anyone with a result
 // file on disk.
-func (s *Store) resultsPath(missionID string) string {
-	return filepath.Join(s.missionsDir(), filepath.Base(missionID)+".results.yaml")
+//
+// Wraps stat errors instead of collapsing to writeLayer (mission
+// m-2026-05-22-027 fix 3).
+func (s *Store) resultsPath(missionID string) (string, error) {
+	ps, err := s.pathSetForExisting(missionID)
+	switch {
+	case err == nil:
+		return ps.results, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return s.pathSetFor(missionID, s.writeLayer()).results, nil
+	default:
+		return "", fmt.Errorf("resolving results path for %q: %w", missionID, err)
+	}
+}
+
+// ensureMissionDir creates the per-mission directory in the repo
+// layer when needed. Returns nil immediately for paths in the global
+// (flat) layer — those land directly in <root>/missions/ and require
+// no per-mission directory. Called by every writer before it opens a
+// file in the per-mission directory.
+func (s *Store) ensureMissionDir(missionID string) error {
+	if s.repoRoot == "" {
+		// Legacy layout: no per-mission dir.
+		return nil
+	}
+	// In the two-root model, the destination depends on where the
+	// mission already lives. A loaded mission in the global tree
+	// stays there; a new mission lands in the repo tree.
+	layer, err := s.resolveLayer(missionID)
+	if err != nil {
+		return fmt.Errorf("resolving mission layer: %w", err)
+	}
+	if layer == layerUnset {
+		layer = s.writeLayer()
+	}
+	if layer != layerRepo {
+		return nil
+	}
+	ps := s.pathSetFor(missionID, layerRepo)
+	if err := os.MkdirAll(ps.dir, 0o700); err != nil {
+		return fmt.Errorf("creating mission dir %s: %w", ps.dir, err)
+	}
+	return nil
 }
 
 // Create persists a new mission contract. The caller must supply a
@@ -336,7 +517,10 @@ func (s *Store) Create(c *Contract) error {
 
 	err := s.withCreateLock(func() error {
 		return s.withLock(staged.MissionID, func() error {
-			dest := s.contractPath(staged.MissionID)
+			dest, err := s.contractPath(staged.MissionID)
+			if err != nil {
+				return err
+			}
 			// Refuse to overwrite an existing contract via Create — Update
 			// is the explicit mutation path.
 			if _, statErr := os.Stat(dest); statErr == nil {
@@ -432,7 +616,10 @@ func (s *Store) Load(missionID string) (*Contract, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	path := s.contractPath(missionID)
+	path, err := s.contractPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -523,7 +710,10 @@ func (s *Store) Update(c *Contract) error {
 		return fmt.Errorf("contract is nil")
 	}
 	return s.withLock(c.MissionID, func() error {
-		dest := s.contractPath(c.MissionID)
+		dest, err := s.contractPath(c.MissionID)
+		if err != nil {
+			return err
+		}
 		// Read the current bytes for rollback before touching the file.
 		oldData, err := os.ReadFile(dest)
 		if err != nil {
@@ -587,7 +777,10 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	var satisfying *Result
 	var closed *Contract
 	err := s.withLock(missionID, func() error {
-		dest := s.contractPath(missionID)
+		dest, err := s.contractPath(missionID)
+		if err != nil {
+			return err
+		}
 		// loadLocked returns both the parsed contract and the raw
 		// bytes, so Close reads the file only once and keeps the
 		// original bytes for rollback if the event append fails.
@@ -676,7 +869,10 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 // post-mutation Validate because the mutation fixed the field under
 // inspection.
 func (s *Store) loadLocked(missionID string) (*Contract, []byte, error) {
-	path := s.contractPath(missionID)
+	path, err := s.contractPath(missionID)
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, nil, err
 	}
@@ -730,17 +926,63 @@ func DecodeContractStrict(data []byte, label string) (*Contract, error) {
 	return &c, nil
 }
 
-// List returns all mission IDs known to the store.
+// List returns all mission IDs known to the store. In two-tree
+// mode (NewStoreWithRoots), the union of the repo and global trees
+// is returned with repo-wins dedup — a mission ID present in both
+// trees appears once, sourced from the repo. In legacy single-tree
+// mode (NewStore), only the flat global directory is walked.
+//
+// The two trees have different file shapes: the repo tree carries
+// per-mission directories (<repoRoot>/.ethos/missions/<id>/contract.yaml),
+// the global tree carries flat files (<globalRoot>/missions/<id>.yaml).
+// Both shapes are normalized to a bare mission ID before merging.
 func (s *Store) List() ([]string, error) {
-	entries, err := os.ReadDir(s.missionsDir())
+	seen := make(map[string]struct{})
+	var ids []string
+
+	// Repo tree (when active). A per-mission subdirectory holding
+	// contract.yaml counts as one mission. Empty subdirectories or
+	// directories without a contract.yaml are skipped — they may be
+	// in-flight Creates or stale state, not first-class entries.
+	if s.twoTreeStorage && s.repoRoot != "" {
+		repoEntries, err := os.ReadDir(s.repoMissionsDir())
+		switch {
+		case err == nil:
+			for _, entry := range repoEntries {
+				if !entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if strings.HasPrefix(name, ".") {
+					continue
+				}
+				contractFile := filepath.Join(s.repoMissionsDir(), name, "contract.yaml")
+				if _, statErr := os.Stat(contractFile); statErr != nil {
+					continue
+				}
+				if _, dup := seen[name]; dup {
+					continue
+				}
+				seen[name] = struct{}{}
+				ids = append(ids, name)
+			}
+		case os.IsNotExist(err):
+			// First-run repo with no missions yet — fall through.
+		default:
+			return nil, fmt.Errorf("reading repo missions directory: %w", err)
+		}
+	}
+
+	// Global tree. Flat-shape files; sibling artifacts are filtered
+	// by isContractFile.
+	globalEntries, err := os.ReadDir(s.missionsDir())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return ids, nil
 		}
 		return nil, fmt.Errorf("reading missions directory: %w", err)
 	}
-	var ids []string
-	for _, entry := range entries {
+	for _, entry := range globalEntries {
 		if entry.IsDir() {
 			continue
 		}
@@ -748,7 +990,12 @@ func (s *Store) List() ([]string, error) {
 		if !isContractFile(name) {
 			continue
 		}
-		ids = append(ids, strings.TrimSuffix(name, ".yaml"))
+		id := strings.TrimSuffix(name, ".yaml")
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
 	}
 	return ids, nil
 }
@@ -810,14 +1057,25 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 	}
 }
 
-// writeContract marshals and writes a contract atomically via temp file
-// plus rename. The caller must hold the contract's flock.
+// writeContract marshals and writes a contract atomically via temp
+// file plus rename. The caller must hold the contract's flock.
+//
+// In the two-root layout, ensureMissionDir creates the per-mission
+// directory under <repoRoot>/.ethos/missions/<id>/ before the temp
+// file is opened; the legacy single-root layout has no per-mission
+// directory and skips the mkdir.
 func (s *Store) writeContract(c *Contract) error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshaling contract: %w", err)
 	}
-	dest := s.contractPath(c.MissionID)
+	if err := s.ensureMissionDir(c.MissionID); err != nil {
+		return err
+	}
+	dest, err := s.contractPath(c.MissionID)
+	if err != nil {
+		return err
+	}
 	tmp := dest + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp contract: %w", err)
@@ -890,6 +1148,29 @@ func (s *Store) withCreateLock(fn func() error) error {
 	}
 	defer func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN) }()
 
+	// DES-054 v5 rolling-upgrade fence — when a repoRoot is in scope,
+	// also acquire the per-repo create lock as a nested flock so two
+	// processes that share the same repo but different global roots
+	// (e.g., separate ~/.punt-labs/ trees in containers) still
+	// serialize on Create. Acquisition order is global → repo;
+	// release is reverse via defer LIFO. v3.13.0 drops the global
+	// acquisition once the field is fully on v3.12+.
+	if repoLockPath := s.repoCreateLockPath(); repoLockPath != "" {
+		if err := os.MkdirAll(filepath.Dir(repoLockPath), 0o700); err != nil {
+			return fmt.Errorf("creating repo missions directory: %w", err)
+		}
+		rf, rerr := os.OpenFile(repoLockPath, os.O_CREATE|os.O_RDWR, 0o600)
+		if rerr != nil {
+			return fmt.Errorf("opening repo create lock file: %w", rerr)
+		}
+		defer rf.Close()
+
+		if rerr := syscall.Flock(int(rf.Fd()), syscall.LOCK_EX); rerr != nil {
+			return fmt.Errorf("acquiring repo create lock: %w", rerr)
+		}
+		defer func() { _ = syscall.Flock(int(rf.Fd()), syscall.LOCK_UN) }()
+	}
+
 	return fn()
 }
 
@@ -922,7 +1203,10 @@ func (s *Store) LoadReflections(missionID string) ([]Reflection, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	path := s.reflectionsPath(missionID)
+	path, err := s.reflectionsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1062,7 +1346,11 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 			// was nil), remove it entirely rather than writing an
 			// empty reflections: [] stub that would confuse readers.
 			if existing == nil {
-				if rbErr := os.Remove(s.reflectionsPath(missionID)); rbErr != nil && !os.IsNotExist(rbErr) {
+				rbPath, pErr := s.reflectionsPath(missionID)
+				if pErr != nil {
+					return fmt.Errorf("reflect: event append failed: %w; rollback path failed: %v", err, pErr)
+				}
+				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("reflect: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
 			} else if rbErr := s.writeReflectionsLocked(missionID, existing); rbErr != nil {
@@ -1085,7 +1373,10 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 // and AdvanceRound use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadReflectionsLocked(missionID string) ([]Reflection, error) {
-	path := s.reflectionsPath(missionID)
+	path, err := s.reflectionsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1110,7 +1401,13 @@ func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error 
 	if err != nil {
 		return fmt.Errorf("marshaling reflections: %w", err)
 	}
-	dest := s.reflectionsPath(missionID)
+	if err := s.ensureMissionDir(missionID); err != nil {
+		return err
+	}
+	dest, err := s.reflectionsPath(missionID)
+	if err != nil {
+		return err
+	}
 	tmp := dest + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp reflections: %w", err)
@@ -1189,7 +1486,10 @@ func (s *Store) AdvanceRound(missionID, actor string) (int, error) {
 			)
 		}
 		// All gates passed; commit the bump.
-		dest := s.contractPath(missionID)
+		dest, err := s.contractPath(missionID)
+		if err != nil {
+			return err
+		}
 		c.CurrentRound++
 		c.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := s.validateContract(c); err != nil {
@@ -1464,7 +1764,10 @@ func (s *Store) LoadResults(missionID string) ([]Result, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
 	}
-	path := s.resultsPath(missionID)
+	path, err := s.resultsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1672,7 +1975,11 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 			// was nil), remove it entirely rather than writing an
 			// empty results: [] stub.
 			if existing == nil {
-				if rbErr := os.Remove(s.resultsPath(missionID)); rbErr != nil && !os.IsNotExist(rbErr) {
+				rbPath, pErr := s.resultsPath(missionID)
+				if pErr != nil {
+					return fmt.Errorf("result: event append failed: %w; rollback path failed: %v", err, pErr)
+				}
+				if rbErr := os.Remove(rbPath); rbErr != nil && !os.IsNotExist(rbErr) {
 					return fmt.Errorf("result: event append failed: %w; rollback remove failed: %v", err, rbErr)
 				}
 			} else if rbErr := s.writeResultsLocked(missionID, existing); rbErr != nil {
@@ -1693,7 +2000,10 @@ func (s *Store) AppendResult(missionID string, r *Result) error {
 // checkResultGateLocked use it to read the existing slice without
 // re-acquiring the lock and deadlocking.
 func (s *Store) loadResultsLocked(missionID string) ([]Result, error) {
-	path := s.resultsPath(missionID)
+	path, err := s.resultsPath(missionID)
+	if err != nil {
+		return nil, err
+	}
 	if err := rejectSymlink(path); err != nil {
 		return nil, err
 	}
@@ -1718,7 +2028,13 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 	if err != nil {
 		return fmt.Errorf("marshaling results: %w", err)
 	}
-	dest := s.resultsPath(missionID)
+	if err := s.ensureMissionDir(missionID); err != nil {
+		return err
+	}
+	dest, err := s.resultsPath(missionID)
+	if err != nil {
+		return err
+	}
 	tmp := dest + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp results: %w", err)

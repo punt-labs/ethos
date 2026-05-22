@@ -281,33 +281,61 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		b.WriteString("    - matcher: \"Write|Edit\"\n")
 		b.WriteString("      hooks:\n")
 		b.WriteString("        - type: command\n")
+		// Path-filtered make check. Reviewer-style agents emit 20KB+
+		// markdown over many Write calls into .tmp/ and .ethos/ to
+		// stage results and traces; running `make check` after each
+		// of those writes serializes lint+test across the agent's
+		// stream and trips the 600s Claude Code watchdog (bug
+		// ethos-m3gh). The hook reads the tool's target path from the
+		// Claude Code hook stdin payload via jq, then routes:
+		//
+		//   1. jq missing OR empty $_path (jq ran but stdin had no
+		//      .tool_input.file_path, or jq itself errored and the
+		//      2>/dev/null swallowed it) — fail closed: run make
+		//      check. The path filter only short-circuits the gate
+		//      when we KNOW the write is scratch/markdown; absence of
+		//      a path is "unknown", which must trigger the gate, not
+		//      skip it (Copilot reviews on PR #326).
+		//
+		//   2. Paths under .tmp/ or .ethos/ — bypass (exit 0). These
+		//      are scratch and trace dirs; nothing under them is
+		//      production source. Patterns cover both leading and
+		//      embedded segments so worktree layouts (`*/.tmp/*`) and
+		//      cwd-relative writes (`.tmp/*`) both match.
+		//
+		//   3. *.go, go.mod, go.sum, go.work, Makefile, *.sh, *.yaml,
+		//      *.yml — run make check with output-capture + head -n
+		//      60 + exit-code propagation. go.mod / go.sum / go.work
+		//      are dependency-graph files whose content gates live in
+		//      `make check` (Bugbot review on PR #326).
+		//
+		//   4. Anything else (markdown, JSON, text) — exit 0. Doc
+		//      writes do not trigger compile or lint failures.
+		//
+		// The case statement is pure glob — no `..` resolution, no
+		// realpath. Sh's glob patterns are byte-literal and
+		// case-sensitive, so `.TMP/` does not match `.tmp/` and a
+		// path like `.tmp/foo/../internal/bar.go` is matched against
+		// the FIRST .tmp/ pattern (path text starts with `.tmp/`),
+		// triggering bypass. That is the correct behavior: the worker
+		// is asking to write to `.tmp/foo/../internal/bar.go`, which
+		// the OS will resolve to the same inode as `internal/bar.go`,
+		// but the user-supplied path text is the scratch dir — if a
+		// malicious worker can synthesize such a path, the bypass is
+		// the least of the problems. Production code writes use
+		// direct paths (`internal/bar.go`), which fall through to the
+		// trigger clause.
+		//
 		// Pin cwd to the project root via $CLAUDE_PROJECT_DIR (exposed
 		// by Claude Code to hook commands) so `make check` resolves
-		// against the repo Makefile even if the sub-agent has cd'd into
-		// a subdirectory before the Write or Edit tool fires. The cd
-		// runs inside $() which is already a subshell, so it does not
-		// leak to the outer shell. `head -n 60`
-		// (not `tail -20`) catches the FIRST failure. `make check` is
-		// a sequence of quiet-on-success stages — go vet, staticcheck,
-		// shellcheck, markdownlint, then non-verbose
-		// `go test -race -count=1 ./...` (no -v flag). Go compile
-		// errors short-circuit the whole sequence and land at the top
-		// in 5-30 lines, so head catches them trivially. A failing
-		// lint or test stage also surfaces at the top because every
-		// preceding stage was silent on success. Non-verbose `go test`
-		// prints one line per package on the success path and a
-		// single `--- FAIL:` block for the first failing package,
-		// which is typically tens of lines — still inside the 60-line
-		// window. Output is captured to a variable first, then
-		// truncated with head; the exit code reflects make check, not
-		// head. PostToolUse hooks are advisory regardless — Claude
-		// Code does not gate the next tool on exit code — but the
-		// signal is now accurate (non-zero = check failed). The
+		// against the repo Makefile even if the sub-agent has cd'd
+		// into a subdirectory before the Write or Edit tool fires.
+		// Output is captured to a variable first, then truncated with
+		// head; the exit code reflects make check, not head. The
 		// command stays POSIX-sh compatible (it runs under /bin/sh,
 		// which is dash on Debian/Ubuntu): no `set -o pipefail`, no
-		// process substitution. Variable capture, printf, and
-		// `head -n 60` all work in dash.
-		b.WriteString("          command: \"_out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc\"\n")
+		// process substitution, no bash-isms in the case patterns.
+		b.WriteString("          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.ethos/*|.tmp/*|.ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
 	}
 	b.WriteString("---\n")
 
