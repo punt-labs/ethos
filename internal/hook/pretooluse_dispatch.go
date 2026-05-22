@@ -117,7 +117,12 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 	}
 	defer releaseMission()
 
-	releaseDelegation, err := mission.AcquireDelegationLock(repoRoot, delegationID)
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		return writeAgentBlock(w,
+			fmt.Sprintf("ethos pre-tool-use: resolving global root for delegation lock: %v", err))
+	}
+	releaseDelegation, err := mission.AcquireDelegationLock(globalRoot, delegationID)
 	if err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: acquiring delegation lock for %q: %v", delegationID, err))
@@ -249,6 +254,20 @@ func tierBRepoRoot() string {
 		return ""
 	}
 	return cwd
+}
+
+// tierBGlobalRoot resolves the global ethos root used for per-
+// delegation lock files. DES-054 v5 §"Storage Layout" requires the
+// per-delegation flock to live at <globalRoot>/delegations/<id>.lock
+// so two checkouts of the same repo lock the same inode. Errors from
+// os.UserHomeDir surface to the caller — the hook fails closed when
+// its persistence layer is not reachable.
+func tierBGlobalRoot() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("user home dir: %w", err)
+	}
+	return filepath.Join(home, ".punt-labs", "ethos"), nil
 }
 
 // tierBMissionStore builds the mission store the dispatch path reads.

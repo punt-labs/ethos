@@ -22,14 +22,14 @@ import (
 // 0o600, holds LOCK_EX, and the returned release closure runs cleanly.
 // Calling release twice is a no-op.
 func TestAcquireDelegationLock_AcquireAndRelease(t *testing.T) {
-	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
 	delegationID := "d-2026-05-22-001"
 
-	release, err := AcquireDelegationLock(repoRoot, delegationID)
+	release, err := AcquireDelegationLock(globalRoot, delegationID)
 	require.NoError(t, err)
 	require.NotNil(t, release)
 
-	lockPath := filepath.Join(repoRoot, ".ethos", "delegations", delegationID+".lock")
+	lockPath := filepath.Join(globalRoot, "delegations", delegationID+".lock")
 	info, statErr := os.Stat(lockPath)
 	require.NoError(t, statErr, "lock file must exist on disk after acquire")
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
@@ -43,16 +43,16 @@ func TestAcquireDelegationLock_AcquireAndRelease(t *testing.T) {
 
 // TestAcquireDelegationLock_BlocksUntilRelease verifies the sibling-
 // goroutine block contract. A second AcquireDelegationLock against
-// the same (repoRoot, delegationID) must block until the first
+// the same (globalRoot, delegationID) must block until the first
 // release fires, then return cleanly. The test uses a 50ms hold on
 // the first acquire and asserts the second acquire's wait time is
 // at least 40ms — slack for scheduler jitter without false-negative
 // risk on a loaded CI host.
 func TestAcquireDelegationLock_BlocksUntilRelease(t *testing.T) {
-	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
 	delegationID := "d-2026-05-22-002"
 
-	release1, err := AcquireDelegationLock(repoRoot, delegationID)
+	release1, err := AcquireDelegationLock(globalRoot, delegationID)
 	require.NoError(t, err)
 
 	var acquired2 atomic.Bool
@@ -64,7 +64,7 @@ func TestAcquireDelegationLock_BlocksUntilRelease(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		t2Start = time.Now()
-		release2, err := AcquireDelegationLock(repoRoot, delegationID)
+		release2, err := AcquireDelegationLock(globalRoot, delegationID)
 		t2Acquired = time.Now()
 		require.NoError(t, err)
 		acquired2.Store(true)
@@ -105,7 +105,7 @@ func TestAcquireDelegationLock_BlocksUntilRelease(t *testing.T) {
 func TestAcquireDelegationLock_EmptyArgs(t *testing.T) {
 	_, err := AcquireDelegationLock("", "d-001")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "repoRoot")
+	assert.Contains(t, err.Error(), "globalRoot")
 
 	_, err = AcquireDelegationLock(t.TempDir(), "")
 	require.Error(t, err)
@@ -117,18 +117,47 @@ func TestAcquireDelegationLock_EmptyArgs(t *testing.T) {
 // being used as a filename — defense against an upstream caller
 // that hands the helper a tainted ID.
 func TestAcquireDelegationLock_BaseName(t *testing.T) {
-	repoRoot := t.TempDir()
-	release, err := AcquireDelegationLock(repoRoot, "../../etc/passwd")
+	globalRoot := t.TempDir()
+	release, err := AcquireDelegationLock(globalRoot, "../../etc/passwd")
 	require.NoError(t, err)
 	defer release()
 
-	// The lock file must land under .ethos/delegations/, not outside.
-	expectedDir := filepath.Join(repoRoot, ".ethos", "delegations")
+	// The lock file must land under <globalRoot>/delegations/, not outside.
+	expectedDir := filepath.Join(globalRoot, "delegations")
 	entries, err := os.ReadDir(expectedDir)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, "passwd.lock", entries[0].Name(),
 		"path separators in delegationID must be stripped via filepath.Base")
+}
+
+// TestAcquireDelegationLock_GlobalPath pins the DES-054 v5 storage
+// layout invariant: the per-delegation lock lives under the global
+// tree (<globalRoot>/delegations/<id>.lock), not under any repo's
+// .ethos directory. Two checkouts of the same repo must lock the
+// same inode — the only way to guarantee that is to keep the lock
+// in the global tree.
+//
+// The companion (*Store).DelegationLockPath method computes the same
+// path from its root, so this test also pins the two helpers agree.
+func TestAcquireDelegationLock_GlobalPath(t *testing.T) {
+	globalRoot := t.TempDir()
+	delegationID := "d-2026-05-22-099"
+
+	release, err := AcquireDelegationLock(globalRoot, delegationID)
+	require.NoError(t, err)
+	defer release()
+
+	wantLockPath := filepath.Join(globalRoot, "delegations", delegationID+".lock")
+	_, statErr := os.Stat(wantLockPath)
+	require.NoError(t, statErr,
+		"lock file must land at <globalRoot>/delegations/<id>.lock, NOT under any repo tree")
+
+	// The companion Store helper must agree on the same path so the
+	// dispatch path and the audit/read path lock the same inode.
+	store := NewStore(globalRoot)
+	assert.Equal(t, wantLockPath, store.DelegationLockPath(delegationID),
+		"AcquireDelegationLock and Store.DelegationLockPath must agree")
 }
 
 // TestWriteDelegationSkeleton_HappyPath pins the on-disk shape of a

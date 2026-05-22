@@ -144,15 +144,21 @@ func (s *Store) DelegationLockPath(delegationID string) string {
 }
 
 // AcquireDelegationLock opens (and creates if needed) the per-
-// delegation lock file at `<repoRoot>/.ethos/delegations/<id>.lock`
-// and acquires an exclusive flock on it. The returned release closure
+// delegation lock file at `<globalRoot>/delegations/<id>.lock` and
+// acquires an exclusive flock on it. The returned release closure
 // runs LOCK_UN + Close exactly once; subsequent calls are no-ops.
+//
+// globalRoot is `~/.punt-labs/ethos` — locks must live in the global
+// tree per DES-054 v5 §"Storage Layout" so two checkouts of the same
+// repo lock the same inode. Storing the lock under the repo tree
+// would mean two checkouts cross-write delegations because each has
+// its own .ethos/delegations/ directory. The path matches the
+// (*Store).DelegationLockPath method on the same global root.
 //
 // Used by the PreToolUse-on-Agent dispatch path (DES-054 v5): the
 // hook allocates a delegation_id and holds this lock across the
 // skeleton write so the prompt.md and record.yaml writes appear
-// atomic to any reader. The skeleton writer is intentionally not
-// invoked here — that lands in a later mission.
+// atomic to any reader.
 //
 // Acquisition failures surface with both the lock path and the
 // underlying syscall so an operator can locate the contended file.
@@ -164,14 +170,14 @@ func (s *Store) DelegationLockPath(delegationID string) string {
 // against their own timeout; the helper does not expose a non-
 // blocking mode because every caller in DES-054 v5 wants the
 // blocking semantics.
-func AcquireDelegationLock(repoRoot, delegationID string) (func(), error) {
-	if strings.TrimSpace(repoRoot) == "" {
-		return nil, fmt.Errorf("repoRoot is required for delegation lock")
+func AcquireDelegationLock(globalRoot, delegationID string) (func(), error) {
+	if strings.TrimSpace(globalRoot) == "" {
+		return nil, fmt.Errorf("globalRoot is required for delegation lock")
 	}
 	if strings.TrimSpace(delegationID) == "" {
 		return nil, fmt.Errorf("delegationID is required for delegation lock")
 	}
-	dir := filepath.Join(repoRoot, ".ethos", "delegations")
+	dir := filepath.Join(globalRoot, "delegations")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating delegation lock directory %s: %w", dir, err)
 	}
