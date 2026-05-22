@@ -102,34 +102,53 @@ type Delegation struct {
 	Reason           string    `yaml:"reason,omitempty" json:"reason,omitempty"`
 }
 
-// MatchSpawnPattern reports whether agentType matches any of the
-// templates' spawn_pattern values. The first matching template is
-// returned; an empty pattern never matches. A pattern that fails
-// to compile is treated as no-match and surfaces a stderr warning
-// so the operator sees the bad regex — fail closed, never silently
-// admit.
+// MatchSpawnPattern reports whether agentType matches pattern. The
+// pattern is anchored at both ends — a pattern of "bw." matches
+// only the three-character strings beginning with "bw", never a
+// substring of a longer agent_type. Empty pattern never matches and
+// returns (false, nil); a malformed regex returns (false, err) so
+// the caller can log or surface it. Successful compile + match
+// returns (matched, nil).
 //
-// Empty templates returns (nil, false). agentType empty returns
-// (nil, false) — an Agent call with no agent_type cannot inherit a
-// contract; the dispatch falls through to the MISSION_ID-explicit
-// branch or to Tier A.
-func MatchSpawnPattern(templates []DelegationTemplate, agentType string) (*DelegationTemplate, bool) {
+// Used by the PreToolUse-on-Agent inheritance dispatch path: the
+// hook iterates Contract.Delegations and asks MatchSpawnPattern for
+// each entry's SpawnPattern. The first true wins.
+func MatchSpawnPattern(pattern, agentType string) (bool, error) {
+	if pattern == "" {
+		return false, nil
+	}
+	re, err := regexp.Compile("^(?:" + pattern + ")$")
+	if err != nil {
+		return false, fmt.Errorf("compiling spawn_pattern %q: %w", pattern, err)
+	}
+	return re.MatchString(agentType), nil
+}
+
+// MatchTemplate scans templates for the first entry whose
+// SpawnPattern matches agentType. Returns the template plus true on
+// hit, nil + false otherwise. An empty agentType, an empty pattern,
+// or a malformed pattern is treated as no-match for that entry; a
+// malformed pattern also surfaces a stderr warning so the operator
+// sees the bad regex.
+//
+// The walker continues past a malformed entry rather than failing
+// the whole match because admission-time pattern validation lands
+// in a later phase; until then, one bad entry should not block a
+// well-formed downstream entry from matching.
+func MatchTemplate(templates []DelegationTemplate, agentType string) (*DelegationTemplate, bool) {
 	if agentType == "" {
 		return nil, false
 	}
 	for i := range templates {
 		t := &templates[i]
-		if t.SpawnPattern == "" {
-			continue
-		}
-		re, err := regexp.Compile("^(?:" + t.SpawnPattern + ")$")
+		matched, err := MatchSpawnPattern(t.SpawnPattern, agentType)
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
 				"ethos: delegation: bad spawn_pattern %q in role %q: %v\n",
 				t.SpawnPattern, t.Role, err)
 			continue
 		}
-		if re.MatchString(agentType) {
+		if matched {
 			return t, true
 		}
 	}
