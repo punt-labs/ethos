@@ -41,7 +41,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (17 total — must match the numbered list below
+// Validation rules (18 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -77,6 +77,12 @@ const (
 //     .js, .md, .yaml, .yml, .json, .toml, .rs, .java, .cpp, .h, .c)
 //     is rejected. List specific known new files in write_set
 //     instead. DES-052.
+//  18. preconditions entries: Form is one of {implicit, explicit};
+//     Message is non-empty (a failed gate is never silently named);
+//     when Form == explicit, RequireRead is non-empty and every entry
+//     is a well-formed relative path (same per-entry rules as
+//     write_set, with ${inputs.X} placeholders permitted in the path).
+//     DES-054.
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
@@ -241,7 +247,71 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		}
 	}
 
+	// preconditions: per-entry shape check. Empty list is the
+	// backward-compatible default (contract has no read-set admission
+	// requirements). DES-054 v5 §"PreToolUse procedure preconditions"
+	// defines two forms; Validate rejects any other value at the trust
+	// boundary so the evaluator never sees an unknown form.
+	for i, p := range c.Preconditions {
+		if err := validatePrecondition(p); err != nil {
+			return fmt.Errorf("preconditions[%d]: %w", i, err)
+		}
+	}
+
 	return nil
+}
+
+// validatePrecondition runs rule 18 over a single Precondition. Form
+// must be one of {implicit, explicit}; Message must be non-empty so a
+// failed gate is never silently named; explicit form requires a
+// non-empty RequireRead with every entry passing the same per-entry
+// path checks as write_set. Placeholders of the form ${inputs.X} are
+// permitted in the path — they are stripped before the per-entry
+// helper sees the string so the dollar/brace/dot characters don't
+// trip the control-char or zero-width gates.
+func validatePrecondition(p Precondition) error {
+	switch p.Form {
+	case PreconditionFormImplicit, PreconditionFormExplicit:
+		// ok
+	default:
+		return fmt.Errorf("invalid form %q: must be one of %q, %q",
+			p.Form, PreconditionFormImplicit, PreconditionFormExplicit)
+	}
+	if strings.TrimSpace(p.Message) == "" {
+		return fmt.Errorf("message is required")
+	}
+	if containsControlChar(p.Message) {
+		return fmt.Errorf("message contains control character")
+	}
+	if p.Form == PreconditionFormExplicit {
+		if len(p.RequireRead) == 0 {
+			return fmt.Errorf("explicit form requires non-empty require_read")
+		}
+		for i, entry := range p.RequireRead {
+			stripped := stripInputsPlaceholders(entry)
+			if err := validateWriteSetEntry(stripped); err != nil {
+				return fmt.Errorf("require_read[%d]: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
+// inputsPlaceholderPattern matches ${inputs.X} substitution markers in
+// a precondition require_read entry. The substitution is resolved by
+// the evaluator at PreToolUse time against the contract's Inputs map;
+// the validator only needs to strip the marker before running the
+// per-entry path checks so the dollar/brace/dot characters don't fail
+// the control-char or zero-width gates.
+var inputsPlaceholderPattern = regexp.MustCompile(`\$\{inputs\.[a-zA-Z0-9_]+\}`)
+
+// stripInputsPlaceholders returns s with every ${inputs.X} substring
+// replaced by a single 'x' character. The replacement preserves the
+// general shape of the path so the per-entry validator still sees a
+// non-empty, control-char-free relative path. The choice of 'x' is
+// arbitrary; any single ASCII letter would do.
+func stripInputsPlaceholders(s string) string {
+	return inputsPlaceholderPattern.ReplaceAllString(s, "x")
 }
 
 // codeFileExtensions lists the file extensions a directory-shaped

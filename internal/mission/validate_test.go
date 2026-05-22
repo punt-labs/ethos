@@ -726,3 +726,206 @@ func TestValidate_DelegationsField(t *testing.T) {
 	assert.NotContains(t, string(out), "delegations:",
 		"empty delegations[] must be omitted on marshal")
 }
+
+// TestValidate_Preconditions covers rule 18: per-entry shape check
+// over Contract.Preconditions. Empty list is the backward-compatible
+// default (no read-set admission requirements). Each entry must name
+// a valid Form, a non-empty Message, and (for explicit form) a non-
+// empty RequireRead whose entries pass the per-entry path validator.
+func TestValidate_Preconditions(t *testing.T) {
+	tests := []struct {
+		name    string
+		precs   []Precondition
+		wantErr string
+	}{
+		{
+			name:  "empty list is the default",
+			precs: nil,
+		},
+		{
+			name: "implicit form with message",
+			precs: []Precondition{
+				{Form: PreconditionFormImplicit, Message: "read before write"},
+			},
+		},
+		{
+			name: "explicit form with require_read",
+			precs: []Precondition{
+				{
+					Form:        PreconditionFormExplicit,
+					RequireRead: []string{"internal/mission/store.go", "${inputs.target}"},
+					Message:     "read the listed files",
+				},
+			},
+		},
+		{
+			name: "unknown form rejected",
+			precs: []Precondition{
+				{Form: "synthesized", Message: "x"},
+			},
+			wantErr: "invalid form",
+		},
+		{
+			name: "empty form rejected",
+			precs: []Precondition{
+				{Form: "", Message: "x"},
+			},
+			wantErr: "invalid form",
+		},
+		{
+			name: "empty message rejected",
+			precs: []Precondition{
+				{Form: PreconditionFormImplicit, Message: ""},
+			},
+			wantErr: "message is required",
+		},
+		{
+			name: "whitespace message rejected",
+			precs: []Precondition{
+				{Form: PreconditionFormImplicit, Message: "  \t"},
+			},
+			wantErr: "message is required",
+		},
+		{
+			name: "control char in message rejected",
+			precs: []Precondition{
+				{Form: PreconditionFormImplicit, Message: "bad\nmessage"},
+			},
+			wantErr: "message contains control character",
+		},
+		{
+			name: "explicit without require_read rejected",
+			precs: []Precondition{
+				{Form: PreconditionFormExplicit, Message: "x"},
+			},
+			wantErr: "explicit form requires non-empty require_read",
+		},
+		{
+			name: "explicit with absolute path rejected",
+			precs: []Precondition{
+				{
+					Form:        PreconditionFormExplicit,
+					RequireRead: []string{"/etc/passwd"},
+					Message:     "x",
+				},
+			},
+			wantErr: "must be a relative path",
+		},
+		{
+			name: "explicit with traversal rejected",
+			precs: []Precondition{
+				{
+					Form:        PreconditionFormExplicit,
+					RequireRead: []string{"internal/../../tmp/x"},
+					Message:     "x",
+				},
+			},
+			wantErr: "path traversal",
+		},
+		{
+			name: "explicit with empty require_read entry rejected",
+			precs: []Precondition{
+				{
+					Form:        PreconditionFormExplicit,
+					RequireRead: []string{""},
+					Message:     "x",
+				},
+			},
+			wantErr: "cannot be empty",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validContract()
+			c.Preconditions = tt.precs
+			err := c.Validate()
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidate_Preconditions_RoundTrip pins that a populated
+// Preconditions list round-trips through YAML with no field loss, and
+// that an empty list is omitted on marshal (omitempty).
+func TestValidate_Preconditions_RoundTrip(t *testing.T) {
+	c := validContract()
+	c.Preconditions = []Precondition{
+		{
+			Form:    PreconditionFormImplicit,
+			Message: "implicit gate",
+		},
+		{
+			Form:        PreconditionFormExplicit,
+			RequireRead: []string{"${inputs.target}", "internal/hook/audit_reader.go"},
+			Message:     "explicit gate",
+		},
+	}
+	require.NoError(t, c.Validate())
+
+	data, err := yaml.Marshal(&c)
+	require.NoError(t, err)
+	var rt Contract
+	require.NoError(t, yaml.Unmarshal(data, &rt))
+	assert.Equal(t, c.Preconditions, rt.Preconditions,
+		"preconditions must round-trip through YAML")
+
+	c2 := validContract()
+	out, err := yaml.Marshal(&c2)
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), "preconditions:",
+		"empty preconditions list must be omitted on marshal")
+}
+
+// TestValidate_StripInputsPlaceholders directly exercises the
+// substitution-stripping helper so the validator's accept of
+// ${inputs.X} markers is not dependent on the full Validate path.
+func TestValidate_StripInputsPlaceholders(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"plain/path.go", "plain/path.go"},
+		{"${inputs.target}", "x"},
+		{"prefix/${inputs.target}", "prefix/x"},
+		{"${inputs.a}/${inputs.b}", "x/x"},
+		{"${inputs.}/x", "${inputs.}/x"}, // malformed — left in place
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			got := stripInputsPlaceholders(tt.in)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestEffectiveStrictPreconditions pins the pointer-deref helper:
+// nil pointer resolves to true (fail closed by default), explicit
+// false resolves to false (the documented escape hatch).
+func TestEffectiveStrictPreconditions(t *testing.T) {
+	t.Run("nil contract resolves to true", func(t *testing.T) {
+		var c *Contract
+		assert.True(t, c.EffectiveStrictPreconditions())
+	})
+	t.Run("nil pointer resolves to true", func(t *testing.T) {
+		c := validContract()
+		c.StrictPreconditions = nil
+		assert.True(t, c.EffectiveStrictPreconditions())
+	})
+	t.Run("explicit true resolves to true", func(t *testing.T) {
+		c := validContract()
+		v := true
+		c.StrictPreconditions = &v
+		assert.True(t, c.EffectiveStrictPreconditions())
+	})
+	t.Run("explicit false resolves to false", func(t *testing.T) {
+		c := validContract()
+		v := false
+		c.StrictPreconditions = &v
+		assert.False(t, c.EffectiveStrictPreconditions())
+	})
+}
+
