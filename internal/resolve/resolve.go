@@ -19,10 +19,18 @@ import (
 )
 
 // RepoConfig holds the repo-local ethos configuration.
+//
+// MaxDelegationDepth bounds the parent_delegation chain length the
+// PreToolUse-on-Agent hook will admit (DES-054 v5). A spawn whose
+// depth would exceed this limit is refused with verdict=aborted on
+// the just-written skeleton. Zero means "use the package default"
+// (mission.MaxDelegationDepthDefault) so a repo with no override
+// gets a safe value rather than an unbounded chain.
 type RepoConfig struct {
-	Agent        string `yaml:"agent,omitempty"`         // default agent identity handle
-	Team         string `yaml:"team,omitempty"`          // team that owns this repo
-	ActiveBundle string `yaml:"active_bundle,omitempty"` // currently active team bundle name
+	Agent              string `yaml:"agent,omitempty"`                // default agent identity handle
+	Team               string `yaml:"team,omitempty"`                 // team that owns this repo
+	ActiveBundle       string `yaml:"active_bundle,omitempty"`        // currently active team bundle name
+	MaxDelegationDepth int    `yaml:"max_delegation_depth,omitempty"` // DES-054 v5 depth ceiling; 0 == default
 }
 
 // Resolve returns the identity handle for the current caller.
@@ -199,6 +207,37 @@ func ResolveTeam(repoRoot string) (string, error) {
 		return "", nil
 	}
 	return cfg.Team, nil
+}
+
+// ResolveMaxDelegationDepth returns the depth ceiling for the
+// PreToolUse-on-Agent dispatch (DES-054 v5). Returns (defaultValue, nil)
+// when no repo is in scope or the config file is absent; returns the
+// configured value when non-zero; returns (defaultValue, nil) when the
+// config exists but sets max_delegation_depth to zero (the "leave at
+// default" sentinel).
+//
+// A negative configured value is a configuration error and surfaces as
+// an error rather than silently flipping to the default — a negative
+// depth would refuse every spawn including the root, and an operator
+// who typed -16 instead of 16 should see the diagnostic.
+func ResolveMaxDelegationDepth(repoRoot string, defaultValue int) (int, error) {
+	if repoRoot == "" {
+		return defaultValue, nil
+	}
+	cfg, err := LoadRepoConfig(repoRoot)
+	if err != nil {
+		return defaultValue, fmt.Errorf("resolve max_delegation_depth: %w", err)
+	}
+	if cfg == nil || cfg.MaxDelegationDepth == 0 {
+		return defaultValue, nil
+	}
+	if cfg.MaxDelegationDepth < 0 {
+		return defaultValue, fmt.Errorf(
+			"resolve max_delegation_depth: configured value %d is negative",
+			cfg.MaxDelegationDepth,
+		)
+	}
+	return cfg.MaxDelegationDepth, nil
 }
 
 // ResolveActiveBundle returns the configured active_bundle name for a

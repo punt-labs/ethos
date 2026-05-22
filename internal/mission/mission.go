@@ -95,6 +95,19 @@ type Contract struct {
 	// the store does not block Create on dependency status. The leader or
 	// daemon enforces ordering.
 	DependsOn []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
+
+	// Delegations is the per-spawn template list for Tier B inheritance.
+	// DES-054 v5 §"PreToolUse-on-Agent" dispatch rule (a): when a worker
+	// running under this contract invokes the Agent tool, the hook walks
+	// this list, matches `spawn_pattern` against the agent_type, and
+	// — if a template's `inherits_contract` is true — applies this same
+	// contract to the child spawn. Empty list disables inheritance; the
+	// child falls through to MISSION_ID-explicit dispatch or Tier A.
+	//
+	// Patterns are regular expressions anchored at both ends, validated
+	// at admission time. See DelegationTemplate in delegation.go for the
+	// per-entry shape.
+	Delegations []DelegationTemplate `yaml:"delegations,omitempty" json:"delegations,omitempty"`
 }
 
 // Evaluator is the frozen reviewer pinned at mission launch.
