@@ -207,7 +207,7 @@ func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation 
 		ParentDelegation: parentDelegation,
 	}
 	loader := delegationLoader(repoRoot, missionID)
-	parentDepth, err := mission.DelegationDepth(d, loader)
+	parentDepth, err := mission.DelegationDepth(d, loader, limit)
 	if err != nil {
 		closeDelegationAborted(repoRoot, missionID, delegationID)
 		return fmt.Sprintf(

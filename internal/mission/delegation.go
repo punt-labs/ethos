@@ -725,21 +725,36 @@ func CloseDelegationSkeleton(repoRoot, missionID, delegationID, verdict, closedA
 // that maps a delegation ID to a *Delegation. Decoupling from the
 // store keeps depth computation testable without staging a Store.
 //
+// max is the configured ceiling from the call site (typically the
+// value returned by resolve.ResolveMaxDelegationDepth). The walker
+// uses max+1 as a cycle-detection backstop: a chain longer than
+// max+1 is treated as a runaway recursive spawn pattern and surfaces
+// as an error rather than spinning. Hard-coding the cap to
+// MaxDelegationDepthDefault would shadow a configured limit higher
+// than the default — a repo with max_delegation_depth: 32 must be
+// able to walk 32 ancestors without the walker tripping at 17.
+// A non-positive max collapses to MaxDelegationDepthDefault+1 so a
+// caller that forgets to thread the config through still gets a
+// safe backstop.
+//
 // Returns an error if any ancestor cannot be loaded — the walker
 // fails closed because a missing ancestor could be a deleted record
 // that should still count against the depth budget, and silently
 // treating it as zero would let runaway spawn patterns pass.
 //
-// Cycle detection: the walker bounds itself by MaxDelegationDepthDefault
-// + 1; if the chain exceeds that, the function returns an error rather
-// than spin. A malformed parent_delegation that points back at itself
-// is a corruption, not a normal state, and surfaces as an error.
-func DelegationDepth(d *Delegation, loader func(id string) (*Delegation, error)) (int, error) {
+// A malformed parent_delegation that points back at itself is a
+// corruption, not a normal state, and surfaces as a cycle error
+// before the depth backstop fires.
+func DelegationDepth(d *Delegation, loader func(id string) (*Delegation, error), max int) (int, error) {
 	if d == nil {
 		return 0, fmt.Errorf("delegation is nil")
 	}
 	if loader == nil {
 		return 0, fmt.Errorf("loader is required")
+	}
+	backstop := max + 1
+	if max <= 0 {
+		backstop = MaxDelegationDepthDefault + 1
 	}
 	depth := 0
 	currentID := d.ParentDelegation
@@ -749,11 +764,11 @@ func DelegationDepth(d *Delegation, loader func(id string) (*Delegation, error))
 			return 0, fmt.Errorf("delegation chain cycle at %q", currentID)
 		}
 		seen[currentID] = struct{}{}
-		if depth > MaxDelegationDepthDefault+1 {
+		if depth > backstop {
 			return 0, fmt.Errorf(
 				"delegation chain exceeds %d ancestors (current: %q); "+
 					"a runaway recursive spawn pattern is likely",
-				MaxDelegationDepthDefault+1, currentID,
+				backstop, currentID,
 			)
 		}
 		parent, err := loader(currentID)

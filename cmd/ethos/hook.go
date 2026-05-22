@@ -276,11 +276,14 @@ func drainAuditStdin() []byte {
 			}
 		}
 		if err != nil {
-			// EOF is the normal terminator — silent. Any other error
-			// (deadline exceeded, EBADF, EIO) is a real failure that
-			// should be visible on stderr so the operator can correlate
-			// a truncated audit entry with the underlying fault.
-			if !errors.Is(err, io.EOF) {
+			// EOF and deadline-exceeded are both normal terminators —
+			// silent. The Claude Code hook protocol leaves the pipe open
+			// without EOF, so the per-chunk SetReadDeadline above is the
+			// expected termination signal once the producer goes idle.
+			// Any other error (EBADF, EIO) is a real failure that should
+			// be visible on stderr so the operator can correlate a
+			// truncated audit entry with the underlying fault.
+			if !errors.Is(err, io.EOF) && !errors.Is(err, os.ErrDeadlineExceeded) {
 				fmt.Fprintf(os.Stderr,
 					"ethos: audit-log: stdin read error: %v\n", err)
 			}

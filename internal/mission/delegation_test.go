@@ -4,6 +4,7 @@ package mission
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -710,4 +711,82 @@ func TestDelegationSequence(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestDelegationDepth_ParameterizedBound pins MEDIUM-2: the cycle-
+// detection backstop scales with the caller-supplied max. A repo
+// that raises max_delegation_depth above the default must be able
+// to walk that many ancestors without the walker tripping on its
+// own bound.
+//
+// Two cases over the same 20-ancestor chain:
+//
+//   - max=32 (backstop=33) — the chain walks cleanly to depth 20.
+//   - max=16 (backstop=17) — the walker errors after exceeding the
+//     bound. The error message names the limit (max+1 = 17) so an
+//     operator sees the cap that fired.
+//
+// The chain is built as a slice of 20 in-memory Delegations linked
+// by parent_delegation; the loader closes over a map indexed by ID.
+// No filesystem access — this test pins DelegationDepth's contract
+// in isolation.
+func TestDelegationDepth_ParameterizedBound(t *testing.T) {
+	const chainLen = 20
+	chain := make([]Delegation, chainLen)
+	for i := 0; i < chainLen; i++ {
+		chain[i].ID = fmt.Sprintf("d-2026-05-22-%03d", i+1)
+		if i > 0 {
+			chain[i].ParentDelegation = chain[i-1].ID
+		}
+	}
+	byID := make(map[string]*Delegation, chainLen)
+	for i := range chain {
+		byID[chain[i].ID] = &chain[i]
+	}
+	loader := func(id string) (*Delegation, error) {
+		d, ok := byID[id]
+		if !ok {
+			return nil, fmt.Errorf("loader: %q not found", id)
+		}
+		return d, nil
+	}
+	leaf := &Delegation{
+		ID:               "d-2026-05-22-021",
+		ParentDelegation: chain[chainLen-1].ID,
+	}
+
+	// max=32: backstop=33, chain of 20 must succeed.
+	depth, err := DelegationDepth(leaf, loader, 32)
+	require.NoError(t, err, "max=32 must accommodate a 20-ancestor chain")
+	assert.Equal(t, chainLen, depth,
+		"depth must equal the ancestor count when within the bound")
+
+	// max=16: backstop=17, chain of 20 must error. The error message
+	// must name the configured bound so an operator sees the cap.
+	_, err = DelegationDepth(leaf, loader, 16)
+	require.Error(t, err,
+		"max=16 must surface as a chain-overrun error before walking 20 ancestors")
+	assert.Contains(t, err.Error(), "17",
+		"error must name the backstop (max+1=17) so an operator sees the cap that fired")
+	assert.Contains(t, err.Error(), "runaway recursive spawn pattern",
+		"error must label the overrun as the runaway-spawn diagnostic")
+}
+
+// TestDelegationDepth_NonPositiveMaxFallsBackToDefault pins the
+// safe-default behavior for a caller that forgets to thread the
+// configured limit through. max<=0 collapses to the package default
+// (MaxDelegationDepthDefault+1 as the backstop) so the walker still
+// has a finite bound and never spins.
+func TestDelegationDepth_NonPositiveMaxFallsBackToDefault(t *testing.T) {
+	loader := func(id string) (*Delegation, error) {
+		return nil, fmt.Errorf("loader called for %q", id)
+	}
+	d := &Delegation{ID: "d-root"}
+	depth, err := DelegationDepth(d, loader, 0)
+	require.NoError(t, err, "no parent_delegation means depth=0; loader is never called")
+	assert.Equal(t, 0, depth)
+
+	depth, err = DelegationDepth(d, loader, -1)
+	require.NoError(t, err, "negative max must collapse to the default backstop, not error")
+	assert.Equal(t, 0, depth)
 }
