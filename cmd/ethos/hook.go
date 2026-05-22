@@ -222,9 +222,19 @@ func runHookAuditLog() error {
 		return nil
 	}
 	ss := sessionStore()
+	// WithSessionLock returns errors from BOTH lock acquisition AND
+	// the callback fn. Distinguish them with a flag so a future
+	// HandleAuditLog error path does not silently double-write the
+	// audit entry (Bugbot LOW on PR #327). The flag flips only when
+	// fn returns; an error from WithSessionLock with handlerRan=false
+	// means lock acquisition failed and the unlocked fall-through is
+	// safe.
+	handlerRan := false
 	if lockErr := ss.WithSessionLock(sessionID, func() error {
-		return hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
-	}); lockErr != nil {
+		err := hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
+		handlerRan = true
+		return err
+	}); lockErr != nil && !handlerRan {
 		// Lock acquisition failed — typically a permissions or fs
 		// problem on the session lock file. Surface the failure on
 		// stderr so the operator sees it, then fall through to the
