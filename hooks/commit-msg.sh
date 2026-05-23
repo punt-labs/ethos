@@ -29,8 +29,15 @@ add_trailer() {
     return 0
   fi
   if command -v git >/dev/null 2>&1; then
-    tmp=$(mktemp "${msg_file}.XXXXXX") || return 1
-    if git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp"; then
+    # mktemp failure (no write perm on .git dir, /tmp full, etc.)
+    # falls through to the plain-append path rather than dropping
+    # the trailer — the trailer must land even when the git path
+    # is unavailable (Bugbot LOW on PR #328: previously
+    # `|| return 1` exited early with no fallback).
+    tmp=$(mktemp "${msg_file}.XXXXXX" 2>/dev/null)
+    if [ -z "$tmp" ]; then
+      printf 'ethos: commit-msg: mktemp failed; using plain append\n' >&2
+    elif git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp"; then
       # mv can fail on permissions, cross-filesystem, or
       # disk-full. If it does, the temp file is stale and the
       # commit message is untouched — fall through to the plain
