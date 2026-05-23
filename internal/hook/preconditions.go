@@ -2,7 +2,6 @@ package hook
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/resolve"
 )
 
 // EvaluatePreconditions runs the admission gates on a contract's
@@ -355,15 +355,17 @@ func readsContain(reads map[string]struct{}, path, repoRoot string) bool {
 }
 
 // envRepoRoot returns the repo root the precondition evaluator
-// should read audit entries from. Mirrors tierBRepoRoot from
-// pretooluse_dispatch.go but is kept package-internal so the
-// preconditions evaluator never silently falls back to the working
-// directory when an explicit root is supplied by the caller.
+// should read audit entries from. Delegates to resolve.EnvRepoRoot
+// (the canonical helper used by every DES-054 entry point) so
+// ETHOS_REPO_ROOT is trimmed consistently and the precondition path
+// stays in sync with audit-write / dispatch / inheritance resolution.
+// Falls back to tierBRepoRoot (which adds a Getwd fallback for the
+// hook process when no env override + no .git is found) only when
+// EnvRepoRoot returns empty.
 //
-// Exposed so HandlePreToolUse can call it with the same semantics —
-// the function is otherwise unexported.
+// Exposed so HandlePreToolUse can call it with the same semantics.
 func envRepoRoot() string {
-	if root := os.Getenv("ETHOS_REPO_ROOT"); root != "" {
+	if root := resolve.EnvRepoRoot(); root != "" {
 		return root
 	}
 	return tierBRepoRoot()
