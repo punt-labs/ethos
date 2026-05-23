@@ -14,7 +14,18 @@ msg_file="$1"
 add_trailer() {
   key=$1
   val=$2
-  if grep -q "^${key}: " "$msg_file"; then
+  # Idempotency check: scan only the trailer block (everything
+  # after the last blank line) so a commit message body that
+  # quotes a previous "Mission: " line cannot trigger a false
+  # positive (Bugbot LOW on PR #328). awk emits the paragraph
+  # following the last blank line; if no blank line exists, the
+  # whole message is one paragraph and we scan all of it.
+  trailer_block=$(awk '
+    /^[[:space:]]*$/ { block = ""; next }
+    { block = block ? block ORS $0 : $0 }
+    END { print block }
+  ' "$msg_file")
+  if printf '%s\n' "$trailer_block" | grep -q "^${key}: "; then
     return 0
   fi
   if command -v git >/dev/null 2>&1; then
@@ -35,7 +46,32 @@ add_trailer() {
       printf 'ethos: commit-msg: git interpret-trailers failed; using plain append\n' >&2
     fi
   fi
-  printf '\n%s: %s\n' "$key" "$val" >> "$msg_file"
+  # Plain-append fallback. Ensure the file ends with a blank line
+  # separating the body from the trailer block, then append the
+  # trailer without a leading newline. Multiple back-to-back
+  # add_trailer calls then form one contiguous trailer block —
+  # putting `\n` before each entry would interleave blank lines
+  # and break git's trailer parser (Bugbot MED on PR #328).
+  if [ -s "$msg_file" ]; then
+    last_char=$(tail -c1 "$msg_file" 2>/dev/null || true)
+    if [ "$last_char" != "" ] && [ "$last_char" != "$(printf '\n')" ]; then
+      printf '\n' >> "$msg_file"
+    fi
+    last_line=$(tail -n1 "$msg_file" 2>/dev/null || true)
+    # An empty last line means there's already a paragraph break.
+    # A trailer-shaped last line (Key: Value) means the previous
+    # add_trailer call planted one — continue the block, no extra
+    # blank. Anything else is body text — insert a blank line so
+    # git's trailer parser sees a separate paragraph.
+    if [ -z "$last_line" ]; then
+      :
+    elif printf '%s\n' "$last_line" | grep -Eq '^[A-Za-z][A-Za-z0-9-]*: '; then
+      :
+    else
+      printf '\n' >> "$msg_file"
+    fi
+  fi
+  printf '%s: %s\n' "$key" "$val" >> "$msg_file"
 }
 [ -n "${MISSION_ID:-}" ] && add_trailer Mission "$MISSION_ID"
 [ -n "${DELEGATION_ID:-}" ] && add_trailer Delegation "$DELEGATION_ID"
