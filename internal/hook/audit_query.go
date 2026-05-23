@@ -44,21 +44,11 @@ func (v AuditView) Summary() string {
 }
 
 // toView projects the internal auditEntry into the exported shape.
+// AuditView and auditEntry have identical field shapes; the type
+// conversion is a no-op at runtime but keeps the package-private
+// auditEntry from leaking out of the CLI render path.
 func toView(e auditEntry) AuditView {
-	return AuditView{
-		Ts:               e.Ts,
-		Session:          e.Session,
-		ParentSession:    e.ParentSession,
-		AgentID:          e.AgentID,
-		AgentType:        e.AgentType,
-		DelegationID:     e.DelegationID,
-		ParentDelegation: e.ParentDelegation,
-		ContractID:       e.ContractID,
-		Tool:             e.Tool,
-		ToolInput:        e.ToolInput,
-		ToolInputHash:    e.ToolInputHash,
-		ToolInputPreview: e.ToolInputPreview,
-	}
+	return AuditView(e)
 }
 
 // QueryAuditByDelegation returns every audit entry whose DelegationID
