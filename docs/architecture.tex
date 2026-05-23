@@ -2135,41 +2135,99 @@ Global teams       & \fpath{\~{}/.punt-labs/ethos/teams/<slug>.yaml}
                    & No \\
 \midrule
 \multicolumn{3}{@{}l}{\emph{Sessions and missions
-  (operational state):}} \\
+  (operational state, DES-054 v5 repo-tree layout):}} \\
 \midrule
-Sessions           & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
+Session rosters    & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
                    & No \\
-Session locks      & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
+Session lock       & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
                    & No \\
 Current session    & \fpath{\~{}/.punt-labs/ethos/sessions/current/<pid>}
                    & No \\
-Session audit log  & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
+Session audit log  & \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                   & Yes \\
+Mission contract   & \fpath{<repo>/.ethos/missions/<id>/contract.yaml}
+                   & Yes \\
+Mission event log  & \fpath{<repo>/.ethos/missions/<id>/log.jsonl}
+                   & Yes \\
+Mission reflections & \fpath{<repo>/.ethos/missions/<id>/reflections.yaml}
+                   & Yes \\
+Mission results    & \fpath{<repo>/.ethos/missions/<id>/results.yaml}
+                   & Yes \\
+Mission lock       & \fpath{<repo>/.ethos/missions/<id>/.lock}
                    & No \\
-Mission contracts  & \fpath{\~{}/.punt-labs/ethos/missions/<id>.yaml}
+Delegation record  & \fpath{<repo>/.ethos/missions/<id>/delegations/<NN>/record.yaml}
+                   & Yes \\
+Delegation prompt  & \fpath{<repo>/.ethos/missions/<id>/delegations/<NN>/prompt.md}
+                   & Yes \\
+Delegation lock    & \fpath{\~{}/.punt-labs/ethos/delegations/<id>.lock}
                    & No \\
-Mission event logs & \fpath{\~{}/.punt-labs/ethos/missions/<id>.jsonl}
+Mission trace      & \fpath{<repo>/.ethos/missions.jsonl}
+                   & Yes \\
+Counter (missions) & \fpath{\~{}/.punt-labs/ethos/counters/missions-<date>}
                    & No \\
-Mission reflections & \fpath{\~{}/.punt-labs/ethos/missions/<id>.reflections.yaml}
+Counter (delegations) & \fpath{\~{}/.punt-labs/ethos/counters/delegations-<date>}
                    & No \\
-Mission results    & \fpath{\~{}/.punt-labs/ethos/missions/<id>.results.yaml}
-                   & No \\
-Mission locks      & \fpath{\~{}/.punt-labs/ethos/missions/<id>.lock}
-                   & No \\
-Mission counter    & \fpath{\~{}/.punt-labs/ethos/missions/.counter-<date>}
-                   & No \\
-Mission create lock & \fpath{\~{}/.punt-labs/ethos/missions/.create.lock}
+Counter locks      & \fpath{\~{}/.punt-labs/ethos/counters/<ns>-<date>.lock}
                    & No \\
 Generated agents   & \fpath{.claude/agents/<handle>.md}
+                   & No \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Legacy paths, read-only fallback
+  (DES-054 v5):}} \\
+\midrule
+Legacy audit log   & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
+                   & No \\
+Legacy contract    & \fpath{\~{}/.punt-labs/ethos/missions/<id>.yaml}
+                   & No \\
+Legacy event log   & \fpath{\~{}/.punt-labs/ethos/missions/<id>.jsonl}
+                   & No \\
+Legacy reflections & \fpath{\~{}/.punt-labs/ethos/missions/<id>.reflections.yaml}
+                   & No \\
+Legacy results     & \fpath{\~{}/.punt-labs/ethos/missions/<id>.results.yaml}
+                   & No \\
+Legacy mission lock & \fpath{\~{}/.punt-labs/ethos/missions/<id>.lock}
+                   & No \\
+Legacy counter     & \fpath{\~{}/.punt-labs/ethos/missions/.counter-<date>}
                    & No \\
 \bottomrule
 \end{longtable}
 \end{center}
 
-All user-global state lives under \fpath{\~{}/.punt-labs/ethos/}.
-Repo-scoped state lives under \fpath{.punt-labs/ethos/} in the
-repository root (typically a git submodule of the team registry).
-Mission state is operational (per-machine, short-lived, not
-configuration) and lives under the global root.
+\paragraph{Two-tree layout.}  DES-054 v5 moved operational
+mission and audit state from \fpath{\~{}/.punt-labs/ethos/}
+(per-user) to \fpath{<repo>/.ethos/} (per-repo, git-tracked).
+The repo tree is the new source of truth: writes go there, reads
+check there first.  The global tree remains as a read-only
+fallback for sessions and missions that pre-date the migration.
+\cmd{ethos mission migrate --to-repo} and
+\cmd{ethos audit migrate} move legacy artifacts into the repo
+tree one at a time; cross-repo policy leaves a legacy session or
+mission in place when its ID has no matching repo-tree
+counterpart, so a wrong-repo migration cannot lose data.
+
+\paragraph{Locks live in the global tree.}  Per-mission shared
+flocks (\fpath{<repo>/.ethos/missions/<id>/.lock}) are
+repo-scoped because the protected resource is the per-mission
+directory tree; per-delegation exclusive flocks
+(\fpath{\~{}/.punt-labs/ethos/delegations/<id>.lock}) live in
+the global tree because two checkouts of the same repo must
+lock the same inode (DES-054 v5 §``Storage Layout'').  Storing
+delegation locks under the repo tree would let two checkouts
+cross-write delegations because each would have its own
+\fpath{.ethos/delegations/} directory.
+
+\paragraph{Sibling counters.}  Each ID namespace has its own
+counter file at
+\fpath{\~{}/.punt-labs/ethos/counters/<namespace>-YYYY-MM-DD},
+each a single integer guarded by a sibling \texttt{.lock} file
+(DES-054 invariant I9-counter).  Today's namespaces are
+\texttt{missions} and \texttt{delegations}; new namespaces add
+sibling files without touching the existing ones.  The
+\texttt{mission.NewID(namespace, now)} API returns
+\texttt{(id, release, error)} where \texttt{release(true)}
+commits the allocation and \texttt{release(false)} decrements
+the counter on a rollback path --- idempotent if a concurrent
+allocator has already advanced past the rolled-back value.
 
 % ===================================================================
 \section{CLI Surface}
