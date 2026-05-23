@@ -14,11 +14,17 @@ msg_file="$1"
 add_trailer() {
   key=$1
   val=$2
-  grep -q "^${key}: " "$msg_file" && return 0
+  if grep -q "^${key}: " "$msg_file"; then
+    return 0
+  fi
   if command -v git >/dev/null 2>&1; then
     tmp=$(mktemp "${msg_file}.XXXXXX") || return 1
-    git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp" && mv "$tmp" "$msg_file"
-    return 0
+    if git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp"; then
+      mv "$tmp" "$msg_file"
+      return 0
+    fi
+    rm -f "$tmp"
+    printf 'ethos: commit-msg: git interpret-trailers failed; using plain append\n' >&2
   fi
   printf '\n%s: %s\n' "$key" "$val" >> "$msg_file"
 }
