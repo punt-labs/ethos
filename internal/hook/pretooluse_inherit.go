@@ -142,10 +142,16 @@ func matchAncestorContract(
 		}
 		matched, err := mission.MatchSpawnPattern(entry.SpawnPattern, childAgentType)
 		if err != nil {
+			// Skip past a single malformed entry rather than
+			// abandoning every later well-formed template in the
+			// same contract. Mirrors MatchTemplate's tolerance
+			// (Bugbot MED on PR #328: previously returned
+			// (false, "", false) on first bad regex, hiding any
+			// matching downstream entry).
 			fmt.Fprintf(os.Stderr,
-				"ethos: pre-tool-use: inheritance: bad spawn_pattern %q in contract %q: %v; falling through to Tier A\n",
+				"ethos: pre-tool-use: inheritance: bad spawn_pattern %q in contract %q: %v; skipping entry\n",
 				entry.SpawnPattern, missionID, err)
-			return false, "", false
+			continue
 		}
 		if matched {
 			return true, missionID, true

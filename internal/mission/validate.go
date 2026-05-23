@@ -327,7 +327,13 @@ func validatePrecondition(p Precondition) error {
 // the validator only needs to strip the marker before running the
 // per-entry path checks so the dollar/brace/dot characters don't fail
 // the control-char or zero-width gates.
-var inputsPlaceholderPattern = regexp.MustCompile(`\$\{inputs\.[a-zA-Z0-9_]+\}`)
+// Character class matches the runtime inputsRefPattern in
+// internal/hook/preconditions.go — dotted keys like ${inputs.files.0}
+// must be stripped here so the per-entry validator sees the same
+// shape the evaluator will resolve. Without the dot, validation
+// would treat the unmatched marker as a literal path component
+// and fail the control-char gate (Bugbot LOW on PR #328).
+var inputsPlaceholderPattern = regexp.MustCompile(`\$\{inputs\.[a-zA-Z0-9_.]+\}`)
 
 // stripInputsPlaceholders returns s with every ${inputs.X} substring
 // replaced by a single 'x' character. The replacement preserves the
