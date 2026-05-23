@@ -1,0 +1,14 @@
+name: swift-platforms
+responsibilities:
+  - "Apple-platform integration: AppKit, Foundation, Cocoa interop"
+  - Objective-C bridging, sandbox, entitlement, and codesign review
+  - macOS daemon, LaunchAgent, and process lifecycle in native apps
+permissions:
+  - edit-swift-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
