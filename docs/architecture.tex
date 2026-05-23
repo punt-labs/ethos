@@ -2513,6 +2513,34 @@ Three parallel command groups: \cmd{talent}, \cmd{personality},
 \cmd{mission pipeline show <name>} & Show pipeline stages and
                                        defaults.  \cmd{--json}
                                        supported. \\
+\cmd{mission dispatch}             & One-liner contract creation:
+                                       \cmd{--worker}, \cmd{--evaluator},
+                                       \cmd{--write-set},
+                                       \cmd{--extract-into} (DES-052),
+                                       \cmd{--criteria},
+                                       \cmd{--ticket}, \cmd{--type},
+                                       \cmd{--budget},
+                                       \cmd{--context}.  Writes the
+                                       contract YAML and runs the
+                                       same gates as \cmd{create}. \\
+\cmd{mission export <id>}          & Export contract + sibling files
+                                       to \cmd{--dir} (default
+                                       \fpath{.ethos/missions}). \\
+\cmd{mission migrate [id]}         & DES-054: move a mission from
+                                       the legacy global tree to the
+                                       per-repo
+                                       \fpath{<repo>/.ethos/missions/<id>/}
+                                       tree.  \cmd{--to-repo} (default
+                                       and only target),
+                                       \cmd{--dry-run},
+                                       \cmd{--verbose}.
+                                       Without an ID argument, every
+                                       legacy mission referenced by an
+                                       audit entry in this repo's
+                                       sessions is moved; cross-repo
+                                       missions stay in place.
+                                       Idempotent; atomic per-mission.
+                                       Exit code 2 outside a repo. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -2591,6 +2619,43 @@ the production path.
 
 The \cmd{hook} group is hidden from help output.  These commands are
 invoked by Claude Code hook configuration, not by users.
+
+\subsection{Audit Commands (DES-054)}
+
+\begin{center}
+\begin{tabular}{@{}lp{6.5cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{audit show --delegation <id>} & Cross-session forensic view.
+                                     Walks
+                                     \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                                     (with legacy global-tree
+                                     fallback) and filters by
+                                     \field{delegation\_id}.
+                                     \cmd{--format json|text}
+                                     (default json: one JSONL line
+                                     per entry; text:
+                                     \texttt{ts<TAB>tool<TAB>file\_path}).
+                                     Exit code 2 outside a repo. \\
+\cmd{audit migrate}                & One-time relocation of legacy
+                                     \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
+                                     entries into the per-repo
+                                     \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                                     layout; deletes the legacy
+                                     file once every entry has
+                                     landed and been fsynced.
+                                     \cmd{--dry-run},
+                                     \cmd{--verbose}.  Idempotent;
+                                     cross-repo safe (sessions whose
+                                     ID has no matching repo-tree
+                                     directory are left in place).
+                                     Exit code 2 outside a repo;
+                                     exit 1 on partial failure with
+                                     both sources still in place. \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \subsection{Admin Commands}
 
