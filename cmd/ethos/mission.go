@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -518,6 +519,54 @@ plain YAML — the same format as the store.`,
 	RunE: runMissionExport,
 }
 
+// --- mission migrate ---
+
+var (
+	missionMigrateToRepo  bool
+	missionMigrateDryRun  bool
+	missionMigrateVerbose bool
+)
+
+var missionMigrateCmd = &cobra.Command{
+	Use:   "migrate [mission-id]",
+	Short: "Migrate a mission from the legacy global tree into the repo tree",
+	Long: `Migrate one or every mission from the legacy global tree into the
+DES-054 per-repo tree.
+
+The legacy layout is ~/.punt-labs/ethos/missions/<id>.yaml plus sibling
+.jsonl / .results.yaml / .reflections.yaml files. The repo layout is
+<repo>/.ethos/missions/<id>/{contract.yaml,log.jsonl,results.yaml,
+reflections.yaml}.
+
+Without a mission-id argument, every legacy mission whose contract_id
+is referenced by an audit entry in <repo>/.ethos/sessions/ is moved.
+Missions belonging to other repos' work trees are left in place —
+cross-repo policy.
+
+Idempotent: a mission already migrated is a no-op. Atomic per-mission:
+the move stages artifacts in a sibling temp directory and renames into
+place; a failure before the rename leaves the legacy tree intact.
+
+Flags:
+  --to-repo   migrate into the per-repo .ethos/missions/ tree (default
+              and currently the only target)
+  --dry-run   show what would change without writing or deleting
+  --verbose   print one decision line per mission to stdout
+
+Exit codes:
+  0  migration completed (including the no-op "nothing to migrate" case)
+  1  one or more missions failed mid-migration; legacy files stayed in place
+  2  must run inside a repo (no <repo>/.ethos/missions/ destination)`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		var id string
+		if len(args) == 1 {
+			id = args[0]
+		}
+		return runMissionMigrate(id, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
 // --- mission advance ---
 
 var missionAdvanceCmd = &cobra.Command{
@@ -579,6 +628,13 @@ func init() {
 	missionDispatchCmd.Flags().StringVar(&dispatchType, "type", "implement", "Archetype type")
 	missionDispatchCmd.Flags().IntVar(&dispatchBudget, "budget", 2, "Round budget")
 
+	missionMigrateCmd.Flags().BoolVar(&missionMigrateToRepo, "to-repo", true,
+		"Migrate into the per-repo .ethos/missions/ tree (default and currently the only target)")
+	missionMigrateCmd.Flags().BoolVar(&missionMigrateDryRun, "dry-run", false,
+		"Enumerate what would migrate without making changes")
+	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,
+		"Print per-mission decisions to stdout")
+
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
@@ -593,8 +649,49 @@ func init() {
 		missionExportCmd,
 		missionLintCmd,
 		missionDispatchCmd,
+		missionMigrateCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
+}
+
+// runMissionMigrate handles `ethos mission migrate [mission-id]`.
+//
+// Resolves repoRoot via the standard ancestor walk and the global root
+// at ~/.punt-labs/ethos. Surfaces "must run inside a repo" with exit
+// code 2 when no repo root can be found. The default --to-repo flag is
+// the only migration target today; the flag is exposed so a future
+// reverse migration can land on the same surface without breaking
+// scripts.
+func runMissionMigrate(missionID string, out, errOut io.Writer) error {
+	if !missionMigrateToRepo {
+		return fmt.Errorf("mission migrate: only --to-repo is supported")
+	}
+	repoRoot := resolve.EnvRepoRoot()
+	if repoRoot == "" {
+		fmt.Fprintln(errOut, "ethos: mission migrate must run inside a repo")
+		return usageError{}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolving home directory: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	sink := out
+	if !missionMigrateVerbose {
+		sink = io.Discard
+	}
+	if err := mission.MigrateMission(globalRoot, repoRoot, missionID, missionMigrateDryRun, sink); err != nil {
+		return fmt.Errorf("mission migrate: %w", err)
+	}
+	if !missionMigrateVerbose {
+		if missionMigrateDryRun {
+			fmt.Fprintln(out, "mission migrate: dry-run complete")
+		} else {
+			fmt.Fprintln(out, "mission migrate: complete")
+		}
+	}
+	return nil
 }
 
 // runMissionCreate handles `ethos mission create --file <path>`.

@@ -74,6 +74,19 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		return dispatchAgent(w, sessionID)
 	}
 
+	// DES-054 phase 3b: Tier B preconditions admission gate. Fires
+	// before the verifier allowlist check so an unsatisfied
+	// must-read predicate produces an actionable, contract-supplied
+	// block reason rather than a generic "outside allowlist". Pure-
+	// read tools (Read, Grep, Glob) are skipped — they cannot
+	// violate a must-read-first contract.
+	if reason, blocked := evalContractPreconditions(toolName, toolInput, sessionID); blocked {
+		return json.NewEncoder(w).Encode(PreToolUseResult{
+			Decision: "block",
+			Reason:   reason,
+		})
+	}
+
 	allowlist := os.Getenv("ETHOS_VERIFIER_ALLOWLIST")
 	if allowlist == "" {
 		return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
@@ -120,6 +133,69 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		Decision: "block",
 		Reason:   reason,
 	})
+}
+
+// evalContractPreconditions runs the Tier B preconditions gate when
+// MISSION_ID is set in the environment. Returns (reason, true) when
+// the spawn must be blocked and ("", false) on every allow path —
+// the caller short-circuits the existing allowlist flow on the block
+// case. Pure-read tools (Read, Grep, Glob) and tools without an
+// active mission context are returned as ("", false) immediately.
+//
+// Fail policy (DES-054 v5 §"PreToolUse procedure preconditions"):
+//   - violated predicate                              -> block(reason)
+//   - unevaluable + strict (default)                  -> block(reason)
+//   - unevaluable + strict=false (escape hatch)       -> warn + allow
+//
+// Every error along the load path — missing mission store, malformed
+// MISSION_ID, contract Load failure — surfaces as fail-closed under
+// strict (block with reason naming the failure) and as warn-and-allow
+// under strict=false. Because StrictPreconditions can only be read
+// from the contract itself, a Load failure cannot consult the
+// pointer; the safer side is to block, so a missing contract under a
+// non-empty MISSION_ID is always treated as fail-closed.
+func evalContractPreconditions(toolName string, toolInput map[string]any, sessionID string) (string, bool) {
+	if toolName == "Read" || toolName == "Grep" || toolName == "Glob" {
+		return "", false
+	}
+	missionID := os.Getenv("MISSION_ID")
+	if missionID == "" {
+		// Tier A spawn — no contract, no preconditions.
+		return "", false
+	}
+	store, err := tierBMissionStore()
+	if err != nil {
+		// Persistence layer unreachable. The contract cannot be read
+		// so the strict pointer cannot be consulted; fail-closed.
+		return fmt.Sprintf("ethos pre-tool-use: resolving mission store: %v", err), true
+	}
+	contract, err := store.Load(missionID)
+	if err != nil {
+		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err), true
+	}
+	// envRepoRoot honors ETHOS_REPO_ROOT before falling back to cwd-
+	// derived tierBRepoRoot, so an operator running the hook from a
+	// subdirectory or with an explicit override sees consistent
+	// repo resolution between the dispatch path and the precondition
+	// evaluator (Copilot + Bugbot on PR #328).
+	repoRoot := envRepoRoot()
+	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot)
+	if !deny {
+		return "", false
+	}
+	if evalErr == nil {
+		// Cleanly violated predicate — always block.
+		return reason, true
+	}
+	// Unevaluable predicate. Strict (default) blocks; non-strict
+	// warns to stderr and allows the spawn through.
+	if contract.EffectiveStrictPreconditions() {
+		return reason, true
+	}
+	fmt.Fprintf(os.Stderr,
+		"ethos pre-tool-use: precondition %v; strict_preconditions=false, allowing\n",
+		evalErr)
+	return "", false
 }
 
 // targetExists reports whether target points at an existing

@@ -24,14 +24,19 @@ import (
 //     surfaces as a block decision with a named reason — never a
 //     silent fall-through to Tier A.
 //
-//  2. MISSION_ID env unset: Tier A. Round-3 advice path preserved
-//     unchanged (stderr line, suppression signals honoured). Allocate
-//     a delegation_id and emit DELEGATION_ID + PARENT_SESSION_ID in
-//     additional_env; MISSION_ID is NOT echoed (there isn't one).
+//  2. MISSION_ID env unset, PARENT_DELEGATION_ID set: try Tier B by
+//     inheritance. Walk the parent_delegation chain; if any ancestor
+//     contract carries a Delegations[] entry whose SpawnPattern
+//     matches CLAUDE_AGENT_TYPE with InheritsContract=true, the
+//     child inherits that ancestor's missionID. Every error along
+//     the walk falls through to Tier A — inheritance is non-blocking
+//     by design (DES-054 v5 §"PreToolUse-on-Agent" inheritance rule).
 //
-// Inheritance dispatch (parent contract walk + spawn_pattern match)
-// is out of scope for this round per the contract; that path lands in
-// a later mission.
+//  3. MISSION_ID env unset, no parent delegation (or no match in the
+//     walk): Tier A. Round-3 advice path preserved unchanged (stderr
+//     line, suppression signals honoured). Allocate a delegation_id
+//     and emit DELEGATION_ID + PARENT_SESSION_ID in additional_env;
+//     MISSION_ID is NOT echoed (there isn't one).
 //
 // sessionID comes from the hook input's `session_id` field — Claude
 // Code populates it on every tool call. An empty sessionID still gets
@@ -43,7 +48,7 @@ func dispatchAgent(w io.Writer, sessionID string) error {
 	if missionID != "" {
 		return dispatchTierB(w, sessionID, missionID)
 	}
-	return dispatchTierA(w, sessionID)
+	return dispatchTierBOrTierA(w, sessionID)
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
@@ -245,7 +250,7 @@ func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation 
 		ID:               delegationID,
 		ParentDelegation: parentDelegation,
 	}
-	loader := delegationLoader(repoRoot, missionID)
+	loader := delegationLoader(repoRoot)
 	parentDepth, err := mission.DelegationDepth(d, loader, limit)
 	if err != nil {
 		closeDelegationAborted(repoRoot, missionID, delegationID)
@@ -265,13 +270,25 @@ func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation 
 	return "", true
 }
 
-// delegationLoader returns a loader that reads ancestor records from
-// the per-mission delegations directory. Closures over (repoRoot,
-// missionID) so the depth walker can look up by delegation ID alone.
-func delegationLoader(repoRoot, missionID string) func(id string) (*mission.Delegation, error) {
+// delegationLoader returns a loader the depth walker uses to follow
+// the parent_delegation chain. The loader scans every mission tree
+// under <repo>/.ethos/missions/* for a matching record because Tier B
+// inheritance can promote a child under an ancestor's missionID while
+// the immediate parent_delegation lives under a different mission. A
+// single-mission loader keyed on the inherited missionID fails on the
+// parent link in that shape and aborts an otherwise valid spawn
+// (Bugbot MED on PR #328: depth gate single-mission loader).
+//
+// Errors propagate to the depth walker, which treats them as a refusal
+// — silently treating a missing ancestor as zero depth would let a
+// runaway recursive spawn pattern pass.
+func delegationLoader(repoRoot string) func(id string) (*mission.Delegation, error) {
 	return func(id string) (*mission.Delegation, error) {
-		dir := mission.DelegationDir(repoRoot, missionID, id)
-		return mission.LoadDelegation(filepath.Join(dir, "record.yaml"))
+		d, _, err := findDelegationByID(repoRoot, id)
+		if err != nil {
+			return nil, err
+		}
+		return d, nil
 	}
 }
 
@@ -308,11 +325,22 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 // tierBRepoRoot resolves the enclosing repo root for the Tier B
 // skeleton write. Mirrors the resolve used by tierBMissionStore so
 // the lock files, record.yaml, and the MISSION_ARTIFACTS_DIR env all
-// agree on the same .ethos tree. Returns the working directory when
-// no enclosing repo is found — every call site downstream is
-// defensive against an empty repoRoot.
+// agree on the same .ethos tree.
+//
+// Resolution order:
+//  1. ETHOS_REPO_ROOT env override
+//  2. resolve.FindRepoRoot (walk for .git)
+//  3. os.Getwd fallback (logs to stderr; downstream sites defend
+//     against an empty return)
+//
+// The env override means the precondition evaluator's loadSessionReads
+// and the dispatch + inheritance paths all resolve to the same tree
+// (Bugbot MED on PR #328: previously dispatch + inheritance used
+// FindRepoRoot only while audit + preconditions honored the env var,
+// allowing the dispatch path to write to a different tree than the
+// hook later read).
 func tierBRepoRoot() string {
-	if root := resolve.FindRepoRoot(); root != "" {
+	if root := resolve.EnvRepoRoot(); root != "" {
 		return root
 	}
 	cwd, err := os.Getwd()
@@ -363,7 +391,10 @@ func tierBMissionStore() (*mission.Store, error) {
 	// trace-only and would miss contracts that live in the repo tree
 	// (Copilot HIGH-equivalent on PR #327: Tier B dispatch would
 	// block "malformed MISSION_ID" on any in-repo contract).
-	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), globalRoot), nil
+	// Use tierBRepoRoot() (env-aware) so the mission Store walks the
+	// same tree as the dispatch + inheritance + audit + preconditions
+	// paths (Bugbot MED on PR #328: split repoRoot resolution).
+	return mission.NewStoreWithRoots(tierBRepoRoot(), globalRoot), nil
 }
 
 // writeAgentBlock emits a block decision with a named reason. Used on

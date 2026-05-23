@@ -244,6 +244,37 @@ else
   warn "Could not seed starter content — run 'ethos seed' manually"
 fi
 
+# --- Step 6c: Install commit-msg trailer hook (DES-054) ---
+
+# When run inside a git work tree, install hooks/commit-msg.sh into
+# .git/hooks/commit-msg so commits under a Tier B worker pick up the
+# Mission: and Delegation: git trailers automatically. Passthrough on
+# every other commit — the hook exits 0 unless MISSION_ID or
+# DELEGATION_ID is set in the environment.
+#
+# Skipped silently when not in a git work tree (curl|sh from $HOME)
+# and when an unrelated commit-msg hook already exists (no clobber).
+HOOK_SRC=""
+if [ -f "./hooks/commit-msg.sh" ]; then
+  HOOK_SRC="./hooks/commit-msg.sh"
+elif [ -n "${TMPDIR_BUILD:-}" ] && [ -f "$TMPDIR_BUILD/hooks/commit-msg.sh" ]; then
+  HOOK_SRC="$TMPDIR_BUILD/hooks/commit-msg.sh"
+fi
+if [ -n "$HOOK_SRC" ] && command -v git >/dev/null 2>&1; then
+  if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null); then
+    info "Installing commit-msg trailer hook..."
+    HOOK_DEST="$GIT_DIR/hooks/commit-msg"
+    mkdir -p "$GIT_DIR/hooks"
+    if [ -e "$HOOK_DEST" ] && ! grep -q "DES-054" "$HOOK_DEST" 2>/dev/null; then
+      warn "$HOOK_DEST exists and is not ours — not overwriting"
+    else
+      cp "$HOOK_SRC" "$HOOK_DEST"
+      chmod +x "$HOOK_DEST"
+      ok "$HOOK_DEST installed"
+    fi
+  fi
+fi
+
 # --- Step 7: Health check ---
 
 info "Verifying installation..."

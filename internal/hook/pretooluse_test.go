@@ -1241,6 +1241,431 @@ func TestHandlePreToolUse_NonAgentPassthroughUnchanged(t *testing.T) {
 		"non-Agent passthrough must not set continue=true")
 }
 
+// stageContractCustomWriteSet stages a contract with a caller-
+// supplied write_set so two contracts in the same test do not
+// conflict on the WriteSet-overlap admission rule.
+func stageContractCustomWriteSet(t *testing.T, home, missionID string, writeSet []string) {
+	t.Helper()
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	store := mission.NewStore(root)
+	c := &mission.Contract{
+		MissionID: missionID,
+		Status:    mission.StatusOpen,
+		CreatedAt: "2026-05-22T21:30:00Z",
+		UpdatedAt: "2026-05-22T21:30:00Z",
+		Leader:    "claude",
+		Worker:    "bwk",
+		Evaluator: mission.Evaluator{
+			Handle:   "djb",
+			PinnedAt: "2026-05-22T21:30:00Z",
+		},
+		Inputs: mission.Inputs{
+			Ticket: "ethos-7i29",
+			Files:  []string{"internal/hook/pretooluse.go"},
+		},
+		WriteSet:        writeSet,
+		Tools:           []string{"Read", "Write", "Edit"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget: mission.Budget{
+			Rounds:              3,
+			ReflectionAfterEach: true,
+		},
+		CurrentRound: 1,
+	}
+	require.NoError(t, store.Create(c))
+}
+
+// stageContractWithDelegations stages a contract whose Delegations[]
+// list pins a single template. Used by the inheritance-dispatch tests
+// to model a parent contract that authorizes a child spawn via
+// SpawnPattern + InheritsContract=true.
+func stageContractWithDelegations(
+	t *testing.T,
+	home, missionID string,
+	templates []mission.DelegationTemplate,
+) {
+	t.Helper()
+	stageContract(t, home, missionID)
+
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	store := mission.NewStore(root)
+	c, err := store.Load(missionID)
+	require.NoError(t, err)
+	c.Delegations = templates
+	require.NoError(t, store.Update(c))
+}
+
+// stageParentDelegationSkeleton writes a Tier B parent delegation
+// record on disk under repo/.ethos/missions/<m>/delegations/<d>/.
+// The skeleton lets the inheritance resolver Load the parent record
+// and read its Mission field — the resolver needs the missionID to
+// fetch the ancestor's contract.
+func stageParentDelegationSkeleton(
+	t *testing.T,
+	repo, missionID, delegationID string,
+	parentDelegation string,
+) {
+	t.Helper()
+	_, err := mission.WriteDelegationSkeleton(repo, missionID, delegationID, mission.DelegationSkeleton{
+		Tier:             mission.TierB,
+		ParentDelegation: parentDelegation,
+		AgentType:        "bwk",
+	})
+	require.NoError(t, err)
+}
+
+// TestDispatchAgent_InheritanceHit pins the happy path: parent
+// contract has a Delegations[] entry with SpawnPattern matching
+// CLAUDE_AGENT_TYPE and InheritsContract=true. The child spawn
+// inherits the parent missionID — the response carries MISSION_ID
+// in additional_env and the record.yaml lands under the parent
+// missions tree.
+func TestDispatchAgent_InheritanceHit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	parentMission := "m-2026-05-22-200"
+	parentDelegation := "d-2026-05-22-200"
+	stageContractWithDelegations(t, home, parentMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: true},
+	})
+	stageParentDelegationSkeleton(t, repo, parentMission, parentDelegation, "")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", parentDelegation)
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-child"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.Equal(t, parentMission, r.AdditionalEnv["MISSION_ID"],
+		"inheritance match must promote the child to Tier B with the parent missionID")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
+	assert.True(t, strings.HasPrefix(r.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
+		filepath.Join(repo, ".ethos", "missions", parentMission)),
+		"artifacts dir must nest under the inherited mission")
+}
+
+// TestDispatchAgent_InheritanceNoMatch pins the fall-through: the
+// parent contract has a Delegations[] entry but the child's
+// CLAUDE_AGENT_TYPE does not match any SpawnPattern. The dispatch
+// falls through to Tier A — no MISSION_ID echoed, advice on stderr.
+func TestDispatchAgent_InheritanceNoMatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	parentMission := "m-2026-05-22-201"
+	parentDelegation := "d-2026-05-22-201"
+	stageContractWithDelegations(t, home, parentMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: true},
+	})
+	stageParentDelegationSkeleton(t, repo, parentMission, parentDelegation, "")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", parentDelegation)
+	t.Setenv("CLAUDE_AGENT_TYPE", "mdm") // does not match "djb"
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-child"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID,
+		"no spawn_pattern match must fall through to Tier A — MISSION_ID must NOT be echoed")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+		"Tier A still allocates a DELEGATION_ID for audit binding")
+}
+
+// TestDispatchAgent_InheritanceNotInheritsContract pins the
+// InheritsContract=false branch. A matching SpawnPattern with
+// InheritsContract unset (default false) must NOT promote the
+// child — the dispatch falls through to Tier A.
+func TestDispatchAgent_InheritanceNotInheritsContract(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	parentMission := "m-2026-05-22-202"
+	parentDelegation := "d-2026-05-22-202"
+	stageContractWithDelegations(t, home, parentMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: false},
+	})
+	stageParentDelegationSkeleton(t, repo, parentMission, parentDelegation, "")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", parentDelegation)
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-child"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID,
+		"InheritsContract=false must NOT promote — Tier A fall-through")
+}
+
+// TestDispatchAgent_InheritanceMalformedRegex pins the non-blocking
+// runtime behavior on a bad pattern. Admission-time validation
+// (Contract.Validate, DES-054 phase 3) rejects a malformed regex
+// before persistence, so reaching this code path requires a
+// hand-edited contract on disk. The runtime fallback is defense
+// in depth: a malformed regex surfaces as a stderr warning + Tier A
+// fall-through — never a block. djb's rule: no silent admit, but
+// also no refusal.
+//
+// To exercise the defense, stage a contract with a well-formed
+// pattern, then overwrite the on-disk YAML with the malformed form.
+func TestDispatchAgent_InheritanceMalformedRegex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	parentMission := "m-2026-05-22-203"
+	parentDelegation := "d-2026-05-22-203"
+	stageContractWithDelegations(t, home, parentMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: true},
+	})
+	// Bypass Contract.Validate by editing the on-disk YAML directly.
+	// This models a contract that was hand-edited after persistence —
+	// the only path by which a malformed pattern can reach the runtime
+	// matcher now that admission-time validation rejects it.
+	contractPath := filepath.Join(home, ".punt-labs", "ethos", "missions", parentMission+".yaml")
+	contractBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+	patched := strings.Replace(string(contractBytes),
+		"spawn_pattern: djb", "spawn_pattern: djb(", 1)
+	require.NotEqual(t, string(contractBytes), patched, "patch must change the YAML")
+	require.NoError(t, os.WriteFile(contractPath, []byte(patched), 0o600))
+	stageParentDelegationSkeleton(t, repo, parentMission, parentDelegation, "")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", parentDelegation)
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	oldStderr := os.Stderr
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = pw
+	t.Cleanup(func() { os.Stderr = oldStderr })
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-child"}`
+	var out bytes.Buffer
+	hookErr := HandlePreToolUse(strings.NewReader(payload), &out)
+	require.NoError(t, pw.Close())
+	os.Stderr = oldStderr
+	require.NoError(t, hookErr)
+
+	stderrBytes, err := io.ReadAll(pr)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision,
+		"a malformed regex must NOT block — non-blocking inheritance is the design")
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID,
+		"malformed regex falls through to Tier A — MISSION_ID must not echo")
+	// Admission-time validation (DES-054 phase 3) rejects the patched
+	// contract at Store.Load, so the runtime stderr now reports the
+	// load failure rather than the legacy "bad spawn_pattern" warning.
+	// Either form is acceptable — the requirement is that the operator
+	// sees the malformed pattern in stderr before the spawn proceeds.
+	assert.Contains(t, stderrText, "spawn_pattern",
+		"the malformed pattern must land in stderr so the operator sees it")
+}
+
+// TestDispatchAgent_InheritanceChainTooDeep pins the depth bound.
+// A chain longer than ResolveMaxDelegationDepth must surface as a
+// stderr warning and fall through to Tier A — never spin, never
+// block.
+func TestDispatchAgent_InheritanceChainTooDeep(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	// Pin max_delegation_depth=2 so a chain of three parents trips
+	// the bound. The walker starts at depth 0 on the immediate
+	// parent and increments per ancestor — depth>limit fires after
+	// the third hop.
+	cfgDir := filepath.Join(repo, ".punt-labs")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(cfgDir, "ethos.yaml"),
+		[]byte("max_delegation_depth: 2\n"),
+		0o600,
+	))
+
+	// Build a chain: root <- A <- B <- C, all under one mission, no
+	// matching template. The walker should give up after the bound.
+	parentMission := "m-2026-05-22-204"
+	stageContractWithDelegations(t, home, parentMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "never-matches", InheritsContract: true},
+	})
+	stageParentDelegationSkeleton(t, repo, parentMission, "d-A", "")
+	stageParentDelegationSkeleton(t, repo, parentMission, "d-B", "d-A")
+	stageParentDelegationSkeleton(t, repo, parentMission, "d-C", "d-B")
+	stageParentDelegationSkeleton(t, repo, parentMission, "d-D", "d-C")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "d-D")
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	oldStderr := os.Stderr
+	pr, pw, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = pw
+	t.Cleanup(func() { os.Stderr = oldStderr })
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-child"}`
+	var out bytes.Buffer
+	hookErr := HandlePreToolUse(strings.NewReader(payload), &out)
+	require.NoError(t, pw.Close())
+	os.Stderr = oldStderr
+	require.NoError(t, hookErr)
+
+	stderrBytes, err := io.ReadAll(pr)
+	require.NoError(t, err)
+	stderrText := string(stderrBytes)
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision,
+		"chain-too-deep falls through to Tier A — never block")
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID)
+	assert.Contains(t, stderrText, "chain exceeds max_delegation_depth",
+		"depth bound must land in stderr so the operator sees the runaway-chain warning")
+}
+
+// TestDispatchAgent_InheritanceEmptyParent confirms the existing
+// Tier A path is unchanged: with PARENT_DELEGATION_ID unset, the
+// hook never enters the inheritance walk and the response shape
+// matches the bare Tier A contract (DELEGATION_ID + PARENT_SESSION_ID,
+// no MISSION_ID).
+func TestDispatchAgent_InheritanceEmptyParent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-bare"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID,
+		"empty PARENT_DELEGATION_ID must skip inheritance walk entirely")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
+	assert.Equal(t, "sess-bare", r.AdditionalEnv["PARENT_SESSION_ID"])
+}
+
+// TestDispatchAgent_InheritanceMissionIDTakesPrecedence pins that
+// the inheritance walk is SKIPPED when MISSION_ID is explicitly
+// set. Explicit dispatch always wins — even if a parent contract
+// would have inherited a different mission.
+func TestDispatchAgent_InheritanceMissionIDTakesPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	parentMission := "m-2026-05-22-205"
+	explicitMission := "m-2026-05-22-206"
+	parentDelegation := "d-2026-05-22-205"
+	stageContractWithDelegations(t, home, parentMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: true},
+	})
+	stageContractCustomWriteSet(t, home, explicitMission, []string{"cmd/ethos/"})
+	// Stage the parent skeleton under BOTH missions' trees: the
+	// inheritance walk would resolve it under parentMission and
+	// match the SpawnPattern, but with MISSION_ID set the dispatch
+	// must skip the walk entirely and run under explicitMission.
+	// The depth gate (which always runs under explicitMission)
+	// needs to find the parent record in explicitMission's tree to
+	// compute the chain depth, so the skeleton must exist there too.
+	stageParentDelegationSkeleton(t, repo, parentMission, parentDelegation, "")
+	stageParentDelegationSkeleton(t, repo, explicitMission, parentDelegation, "")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", explicitMission)
+	t.Setenv("PARENT_DELEGATION_ID", parentDelegation)
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-explicit"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision, "reason: %s", r.Reason)
+	assert.Equal(t, explicitMission, r.AdditionalEnv["MISSION_ID"],
+		"explicit MISSION_ID must beat inheritance — the child runs under the explicit contract")
+}
+
+// TestDispatchAgent_InheritanceUnknownParent pins the fall-through
+// when PARENT_DELEGATION_ID refers to a delegation that doesn't
+// exist on disk. No record → no walk → Tier A; no block.
+func TestDispatchAgent_InheritanceUnknownParent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "d-does-not-exist")
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-ghost"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision,
+		"a parent delegation that is not on disk must fall through to Tier A — never block")
+	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.False(t, hasMissionID)
+}
+
 // Confirm that os.Getenv is the actual mechanism (not a mock).
 func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	key := "ETHOS_VERIFIER_ALLOWLIST"
@@ -1262,4 +1687,71 @@ func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
 	assert.Equal(t, "block", r.Decision)
+}
+
+// TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees pins the
+// fix for Bugbot MED on PR #328 ("Depth gate single-mission loader").
+//
+// Tier B inheritance can promote a child under an ancestor's missionID
+// (M_anc) while the child's immediate PARENT_DELEGATION_ID points to a
+// delegation that lives under a DIFFERENT mission tree (M_other) —
+// the inheritance walker climbed from M_other up to M_anc to find a
+// matching SpawnPattern. Before the fix, the depth walker's loader was
+// keyed on M_anc only, so loading the parent delegation under M_other
+// failed and the depth gate aborted an otherwise-valid spawn.
+//
+// Scenario:
+//   - M_anc has Delegations[] = [{SpawnPattern: "djb", InheritsContract: true}]
+//   - D_anc lives under M_anc with parent_delegation=""
+//   - M_other contract is unrelated; D_p lives under M_other with
+//     parent_delegation=D_anc (i.e., D_p's parent is in another tree)
+//   - Child spawn: MISSION_ID="", PARENT_DELEGATION_ID=D_p,
+//     CLAUDE_AGENT_TYPE="djb"
+//
+// Expected: inheritance walks D_p → D_anc, finds the matching template
+// under M_anc, promotes the child to Tier B under M_anc. The depth
+// gate then walks D_p (under M_other) → D_anc (under M_anc) → done at
+// depth 2; proposed = 3, within the default limit; spawn allowed.
+func TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	ancMission := "m-2026-05-23-300"
+	ancDelegation := "d-2026-05-23-300"
+	stageContractWithDelegations(t, home, ancMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: true},
+	})
+	stageParentDelegationSkeleton(t, repo, ancMission, ancDelegation, "")
+
+	// Intermediate parent in a DIFFERENT mission tree. M_other's
+	// contract is not stageContractWithDelegations'd — it carries no
+	// matching template, so the inheritance walker climbs past it to
+	// reach M_anc.
+	otherMission := "m-2026-05-23-301"
+	stageContractCustomWriteSet(t, home, otherMission, []string{"docs/"})
+	parentDelegation := "d-2026-05-23-301"
+	stageParentDelegationSkeleton(t, repo, otherMission, parentDelegation, ancDelegation)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", parentDelegation)
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-cross"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision,
+		"depth walk must follow parent_delegation across mission trees — single-mission loader would refuse here")
+	assert.Equal(t, ancMission, r.AdditionalEnv["MISSION_ID"],
+		"inheritance must promote the child to the ancestor missionID")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
+	assert.True(t, strings.HasPrefix(r.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
+		filepath.Join(repo, ".ethos", "missions", ancMission)),
+		"artifacts dir must nest under the inherited mission")
 }

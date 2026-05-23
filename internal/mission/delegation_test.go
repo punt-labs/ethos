@@ -771,6 +771,83 @@ func TestDelegationDepth_ParameterizedBound(t *testing.T) {
 		"error must label the overrun as the runaway-spawn diagnostic")
 }
 
+// TestMatchSpawnPattern pins the primitive's three outcome shape:
+// (false, nil) for empty pattern, (true, nil) / (false, nil) for a
+// well-formed pattern, (false, err) for a malformed pattern. The
+// anchors are explicit on both ends — "bw." matches "bwk" but not
+// the substring inside "abwkz".
+func TestMatchSpawnPattern(t *testing.T) {
+	tests := []struct {
+		name      string
+		pattern   string
+		agentType string
+		want      bool
+		wantErr   bool
+	}{
+		{"empty pattern never matches", "", "bwk", false, false},
+		{"empty pattern, empty agent", "", "", false, false},
+		{"anchored exact match", "bwk", "bwk", true, false},
+		{"anchored no-match (prefix)", "bw", "bwk", false, false},
+		{"anchored no-match (suffix)", "wk", "bwk", false, false},
+		{"anchored no-match (substring)", "bw.", "abwkz", false, false},
+		{"dot matches", "bw.", "bwk", true, false},
+		{"alternation matches", "bwk|kpz", "kpz", true, false},
+		{"alternation no-match", "bwk|kpz", "mdm", false, false},
+		{"char class matches", "[a-z]+", "bwk", true, false},
+		{"escaped dot literal", `bw\.k`, "bw.k", true, false},
+		{"escaped dot rejects regex dot", `bw\.k`, "bwxk", false, false},
+		{"malformed regex unbalanced paren", "bw(", "bwk", false, true},
+		{"malformed regex unclosed class", "bw[", "bwk", false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := MatchSpawnPattern(tt.pattern, tt.agentType)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.False(t, got, "malformed pattern must report no-match alongside the error")
+				assert.Contains(t, err.Error(), "spawn_pattern",
+					"error must label the operation so the caller can route the diagnostic")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestMatchTemplate pins the slice-walker around MatchSpawnPattern.
+// The walker skips empty agentType, returns the first hit, treats
+// a malformed entry as no-match for that entry (and continues to
+// the next), and returns (nil, false) when nothing matches.
+func TestMatchTemplate(t *testing.T) {
+	templates := []DelegationTemplate{
+		{Role: "first", SpawnPattern: "bw("},  // malformed — skipped
+		{Role: "second", SpawnPattern: "bwk"}, // exact match
+		{Role: "third", SpawnPattern: "kpz"},  // never reached
+	}
+
+	// Malformed entry is skipped, second entry hits.
+	hit, ok := MatchTemplate(templates, "bwk")
+	require.True(t, ok)
+	require.NotNil(t, hit)
+	assert.Equal(t, "second", hit.Role)
+
+	// agentType empty → no match.
+	hit, ok = MatchTemplate(templates, "")
+	assert.False(t, ok)
+	assert.Nil(t, hit)
+
+	// No entry matches.
+	hit, ok = MatchTemplate(templates, "mdm")
+	assert.False(t, ok)
+	assert.Nil(t, hit)
+
+	// Empty template list.
+	hit, ok = MatchTemplate(nil, "bwk")
+	assert.False(t, ok)
+	assert.Nil(t, hit)
+}
+
 // TestDelegationDepth_NonPositiveMaxFallsBackToDefault pins the
 // safe-default behavior for a caller that forgets to thread the
 // configured limit through. max<=0 collapses to the package default

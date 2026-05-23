@@ -9,6 +9,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DES-054 phase 3 — preconditions, migration, queries, commit-msg trailers.**
+  Final phase of the audited delegation initiative. Closes the
+  observability + governance loop that phases 1 and 2 set up.
+  - **Tier B inheritance dispatch** (`internal/hook/pretooluse_inherit.go`)
+    — when MISSION_ID is unset but PARENT_DELEGATION_ID is set,
+    walks the parent_delegation chain. The first ancestor whose
+    `Contract.Delegations[i].SpawnPattern` matches the new spawn's
+    agent_type AND `InheritsContract=true` lends its missionID to
+    the child. Walk bounded by `ResolveMaxDelegationDepth`.
+    Inheritance is non-blocking — every walk error falls through
+    to Tier A with a stderr warning.
+  - **Precondition evaluator** (`internal/hook/preconditions.go`)
+    — `EvaluatePreconditions` runs against the effective Tier B
+    contract before non-Read tool calls. Two predicate forms:
+    implicit (target file_path must have been Read in this
+    session) and explicit (`RequireRead` entries with
+    `${inputs.X}` substitution). `Contract.StrictPreconditions`
+    (default true) controls fail-mode on unevaluable predicates.
+  - **`ethos audit migrate`** (`cmd/ethos/audit.go`) — one-time
+    relocation of legacy global audit logs into the DES-054 v5
+    repo-tree layout. Five named edge cases: no-op,
+    idempotent, partial-failure-safe, read-only fallback,
+    cross-repo-safe.
+  - **`ethos mission migrate --to-repo`** (`cmd/ethos/mission.go`)
+    — atomic per-mission relocation from `~/.punt-labs/ethos/missions/`
+    to `<repo>/.ethos/missions/<id>/`. Cross-repo policy mirrors
+    audit migrate.
+  - **`ethos audit show --delegation <id>`** (`cmd/ethos/audit.go`)
+    — cross-session forensic view. Walks the repo-tree session
+    audit logs (with legacy fallback) and filters by
+    delegation_id. `--format=json|text`.
+  - **`hooks/commit-msg.sh`** — appends `Mission: <id>` and
+    `Delegation: <id>` git trailers when MISSION_ID +
+    DELEGATION_ID env are set. Idempotent. `install.sh`
+    installs it as the repo's commit-msg hook.
+  - **`spawn_pattern` admission-time validation** — `Contract.Validate`
+    now compiles each `DelegationTemplate.SpawnPattern` as an
+    anchored regex via `MatchSpawnPattern`. Malformed patterns
+    are rejected at create time rather than match time. Closes
+    the doc/reality gap that Bugbot/Copilot kept flagging.
+
+  **Cross-tool verification.** The new `Mission:` / `Delegation:`
+  git trailers and the per-delegation audit query do not break
+  any existing consumer:
+
+  | Tool | Integration today | Status |
+  |------|------------------|--------|
+  | vox (audio) | None | no-op |
+  | beadle (email) | None | no-op |
+  | biff (messaging) | None | no-op |
+  | prfaq-dev | None | no-op |
+  | feature-dev | None | no-op |
+  | beads | None | no-op |
+
+  Each tool will gain trailer-consumer support in its own PR;
+  this changelog entry only records that the phase 3 changes
+  introduce no regression against them.
+
 - **DES-054 phase 1 — audited delegation foundations.** Three
   storage-layer changes that the phase 2 hook dispatch and phase 3
   migration commands will build on. No behaviour change for existing
