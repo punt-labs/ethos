@@ -40,7 +40,7 @@
 
 \title{Ethos: Technical Architecture Specification}
 \author{Identity, Workflow, and Integration for Humans and AI Agents}
-\date{April 2026 --- Phase 3 complete}
+\date{May 2026 --- Phase 4 + DES-054 (audited delegation) complete}
 \hypersetup{
   pdftitle={Ethos: Technical Architecture Specification},
   pdfauthor={Punt Labs},
@@ -198,6 +198,20 @@ are runtime-enforced for the first time in the project's history:
 roles are interfaces, understanding centralizes while execution
 decentralizes, hooks and policies enforce what documentation only
 suggests, and subagents do not inherit ambient context.
+
+\textbf{Phase 4 + DES-054 (audited delegation) complete.}
+PreToolUse-on-Agent dispatch (Tier A advice, Tier B contract
+binding, Tier B inheritance), per-delegation record skeletons
+under the per-mission lock, precondition-gated tool admission,
+enriched per-line audit entries with \field{delegation\_id} and
+\field{tool\_input\_hash}, repo-tree storage at
+\fpath{<repo>/.ethos/}, sibling per-namespace counter files, and
+the migration commands that move legacy global state into the
+repo tree.  Every \texttt{Agent} call now produces an audit
+record; every Tier B call binds that record to a typed contract;
+every non-Read tool call under a Tier B contract can be gated on
+prior reads.  Three PRs (\#326, \#327, \#328) and the invariants
+list grew by six entries (\S\textit{Design Invariants}).
 
 % ===================================================================
 \section{Design Principles}
