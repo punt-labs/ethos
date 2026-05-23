@@ -73,7 +73,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	}
 
 	now := time.Now().UTC()
-	entry := buildAuditEntry(input, sessionID, now)
+	entry := buildAuditEntry(input, sessionID, repoRoot, now)
 
 	path, err := resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID, now)
 	if err != nil {
@@ -112,15 +112,34 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 // payload. Split from HandleAuditLog so the construction can be
 // exercised under test without staging a writable directory and so
 // the orchestrator stays focused on the I/O concerns.
-func buildAuditEntry(input map[string]any, sessionID string, now time.Time) auditEntry {
+//
+// Redaction order is load-bearing: extract the raw tool_input, redact
+// $HOME/X and repoRoot/X to portable tokens, THEN compute the hash
+// and the preview off the redacted form. The hash must be over the
+// redacted bytes so the same logical call from two machines produces
+// the same hash — that is the cross-machine collision-detection
+// invariant from DES-052. Redaction applies to new writes only;
+// existing audit.jsonl lines on disk are unchanged.
+func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.Time) auditEntry {
 	toolName, _ := input["tool_name"].(string)
+	home, _ := os.UserHomeDir()
+	redacted := redactAbsolutePaths(extractToolInput(input), home, repoRoot)
+	// Feed the redacted map through the existing hash and preview
+	// helpers under the same "tool_input" envelope they expect. When
+	// the tool call carried no tool_input (a rare scalar-input hook),
+	// pass an envelope without the key so the helpers see "absent",
+	// not "present but null".
+	redactedEnv := map[string]any{}
+	if redacted != nil {
+		redactedEnv["tool_input"] = redacted
+	}
 	entry := auditEntry{
 		Ts:               now.Format(time.RFC3339),
 		Session:          sessionID,
 		Tool:             toolName,
-		ToolInput:        extractToolInput(input),
-		ToolInputHash:    hashToolInput(input),
-		ToolInputPreview: toolInputPreview(input),
+		ToolInput:        redacted,
+		ToolInputHash:    hashToolInput(redactedEnv),
+		ToolInputPreview: toolInputPreview(redactedEnv),
 	}
 	// Optional enrichment fields. Each is `omitempty` on the struct
 	// so the absent value drops out of the JSONL line, preserving
