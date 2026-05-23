@@ -2930,6 +2930,60 @@ all operations:
   \item \textbf{Close gate totality} (DES-036).  No mission
     transitions to a terminal status without a valid result
     artifact for the current round.  No override flag.
+
+  \item \textbf{Per-namespace counter isolation}
+    (DES-054, I9-counter).  Each ID namespace owns a sibling file
+    at
+    \fpath{\~{}/.punt-labs/ethos/counters/<namespace>-YYYY-MM-DD}
+    with its own \texttt{.lock}.  Adding a new namespace adds a
+    sibling file; the existing namespaces' files do not change
+    shape.  \texttt{mission.NewID(ns, now)} returns
+    \texttt{(id, release, error)}; \texttt{release(true)} commits,
+    \texttt{release(false)} decrements and is idempotent if a
+    concurrent allocator already advanced past the rolled-back
+    value.
+
+  \item \textbf{Audit log per-line atomicity}
+    (DES-054, I10-audit-atomic).  Every audit append calls
+    \texttt{f.Sync()} before the next write; a writer crash
+    mid-line loses at most that line.  The reader is
+    partial-line-tolerant and decodes the rest of the file.
+
+  \item \textbf{Delegation skeleton atomicity} (DES-054).  Every
+    Tier B \texttt{Agent} dispatch writes \texttt{record.yaml}
+    via temp file + \texttt{Chmod(0o600)} + \texttt{Sync} +
+    \texttt{Close} + \texttt{os.Rename} in the destination
+    directory.  Readers branch on \texttt{record.yaml}'s presence;
+    a half-built skeleton (writer crash before the rename) is
+    invisible.  \texttt{prompt.md} writes precede
+    \texttt{record.yaml} so a crash between the two never leaves
+    a record without a prompt that points at it.
+
+  \item \textbf{Bounded delegation depth} (DES-054).  Every
+    \texttt{Agent} dispatch walks the \field{parent\_delegation}
+    chain and refuses when the proposed depth would exceed
+    \texttt{max\_delegation\_depth} (default
+    \texttt{MaxDelegationDepthDefault = 16}).  The dispatch-path
+    gate fails closed on a missing or unparseable ancestor; the
+    inheritance resolver falls through to Tier A with a stderr
+    warning.
+
+  \item \textbf{Inheritance is opt-in and non-binding}
+    (DES-054).  A child Tier B spawn inherits a parent contract
+    only when an ancestor's \field{Delegations[i].SpawnPattern}
+    matches the child's \field{agent\_type} AND
+    \field{InheritsContract=true}.  Every error along the walk
+    falls through to Tier A; the spawn proceeds without an
+    inherited contract.  The operator-visible stderr warning
+    satisfies the ``no silent admit under a malformed env'' rule.
+
+  \item \textbf{Precondition fail-mode default} (DES-054).
+    \field{Contract.StrictPreconditions} is a \texttt{*bool}; a
+    nil value resolves to \texttt{true} (fail closed) via
+    \texttt{EffectiveStrictPreconditions}.  An unevaluable
+    predicate (malformed substitution, missing input, unreadable
+    audit log) blocks under strict and warns + allows under lax.
+    A violated predicate always blocks.
 \end{enumerate}
 
 % ===================================================================
