@@ -614,13 +614,18 @@ it belongs to another checkout.
 
 ## Audited Delegation
 
-Every `Agent` tool call now produces a delegation record and tags
-subsequent audit entries with its `delegation_id`. Two tiers:
+Every `Agent` tool call is allocated a `delegation_id` and the spawn's
+subsequent audit entries are tagged with it. Two tiers differ in what
+they write:
 
-| Tier | When | Enforcement |
-|------|------|-------------|
-| A | `Agent(...)` with no `MISSION_ID` | Advisory stderr line; spawn always allowed |
-| B | `MISSION_ID` set, OR inherited from a parent contract | Preconditions, depth limit, write-set, hash gate |
+| Tier | When | Persistence | Enforcement |
+|------|------|-------------|-------------|
+| A | `Agent(...)` with no `MISSION_ID` | `delegation_id` only; tool calls land in the per-session `audit.jsonl` tagged with it | Advisory stderr line; spawn always allowed |
+| B | `MISSION_ID` set, OR inherited from a parent contract | Same audit tagging plus a per-delegation `record.yaml` (and optional `prompt.md`) under the mission tree | Preconditions, depth limit, write-set, hash gate |
+
+The forensic answer to "what did this spawn do" comes from
+`ethos audit show --delegation <id>` for either tier; the Tier B
+`record.yaml` adds the contract, verdict, and prompt-hash binding.
 
 The `PreToolUse` hook routes on `Agent` calls:
 
@@ -639,12 +644,16 @@ writes results into).
 
 Refusal reasons (Tier B only — Tier A is always allow):
 
+- `resolving mission store: <err>` — global root unreachable
 - `resolving MISSION_ID "<id>": <err>` — malformed or missing contract
 - `allocating delegation id: <err>` — counter file unwriteable
-- `acquiring mission lock` / `acquiring delegation lock` — flock failure
-- `writing delegation skeleton`: atomic record write failed
-- `max_delegation_depth <limit> exceeded by depth <proposed>` — chain too deep
-- `walking parent_delegation chain`: corrupt or missing ancestor
+- `acquiring mission lock for "<id>": <err>` — per-mission flock failure
+- `resolving global root for delegation lock: <err>` — UserHomeDir failed
+- `acquiring delegation lock for "<id>": <err>` — per-delegation flock failure
+- `writing delegation skeleton for "<id>": <err>` — atomic record write failed
+- `resolving max_delegation_depth: <err>` — repo config error
+- `walking parent_delegation chain for "<id>": <err>` — corrupt or missing ancestor
+- `max_delegation_depth <limit> exceeded by depth <proposed> for "<id>"` — chain too deep
 
 Every refusal closes the skeleton (if already written) with
 `verdict=aborted` so depth refusals are queryable via
@@ -1046,7 +1055,6 @@ session started that day.
 | Per-mission shared flock | `<repo>/.ethos/missions/<mission-id>/.lock` | No |
 | Mission contract (legacy global, read-only fallback) | `~/.punt-labs/ethos/missions/<mission-id>.yaml` | No |
 | Session audit log (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | Yes |
-| Tier A delegation record (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/record.yaml` | Yes |
 | Session audit log (legacy global, read-only fallback) | `~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl` | No |
 | Mission ID counter | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | No |
 | Delegation ID counter | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | No |

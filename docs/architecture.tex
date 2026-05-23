@@ -1937,21 +1937,21 @@ through its environment.
 \texttt{PARENT\_SESSION\_ID}.  Tier B adds \texttt{MISSION\_ID}
 and \texttt{MISSION\_ARTIFACTS\_DIR} (the per-delegation directory
 the worker writes results into:
-\fpath{<repo>/.ethos/missions/<id>/delegations/<NN>/}).  The
+\fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/}).  The
 spawned subagent inherits these via the hook protocol and the
 \fpath{hooks/commit-msg.sh} hook appends \texttt{Mission:} and
 \texttt{Delegation:} git trailers when both are set.
 
 \paragraph{Lock order.}
-\texttt{global \(\to\) repo \(\to\) per-mission(shared)
-\(\to\) per-delegation(exclusive)}.  Released LIFO via
+\texttt{per-mission(shared, repo tree)
+\(\to\) per-delegation(exclusive, global tree)}.  Released LIFO via
 \texttt{defer}.  The shared mission lock lets two Tier B spawns
 under one mission proceed concurrently; their per-delegation
 exclusive locks do not contend.  Lock files live at
-\fpath{<globalRoot>/delegations/<id>.lock} (per-delegation,
-exclusive) and \fpath{<repoRoot>/.ethos/missions/<id>/.lock}
-(per-mission, shared) so two checkouts of the same repo lock
-the same inode.
+\fpath{<repoRoot>/.ethos/missions/<mission-id>/.lock} (per-mission,
+shared) and \fpath{<globalRoot>/delegations/<delegation-id>.lock}
+(per-delegation, exclusive) so two checkouts of the same repo lock
+the same inode for delegation allocation.
 
 \paragraph{Atomic skeleton write.}
 \texttt{WriteDelegationSkeleton} writes \texttt{prompt.md} first
@@ -2300,11 +2300,11 @@ Mission results    & \fpath{<repo>/.ethos/missions/<id>/results.yaml}
                    & Yes \\
 Mission lock       & \fpath{<repo>/.ethos/missions/<id>/.lock}
                    & No \\
-Delegation record  & \fpath{<repo>/.ethos/missions/<id>/delegations/<NN>/record.yaml}
+Delegation record  & \fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml}
                    & Yes \\
-Delegation prompt  & \fpath{<repo>/.ethos/missions/<id>/delegations/<NN>/prompt.md}
+Delegation prompt  & \fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md}
                    & Yes \\
-Delegation lock    & \fpath{\~{}/.punt-labs/ethos/delegations/<id>.lock}
+Delegation lock    & \fpath{\~{}/.punt-labs/ethos/delegations/<delegation-id>.lock}
                    & No \\
 Mission trace      & \fpath{<repo>/.ethos/missions.jsonl}
                    & Yes \\

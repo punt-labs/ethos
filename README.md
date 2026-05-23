@@ -28,8 +28,9 @@ that other tools compose with:
   frozen evaluators, bounded rounds, and an append-only audit log.
   Pipeline templates chain missions into multi-stage workflows.
 - **Audited delegation** — every `Agent(...)` call (whether contract-
-  bound or ad-hoc) gets a delegation ID, a per-delegation record on
-  disk, and a tool-call audit trail. Contracts can gate tool calls on
+  bound or ad-hoc) gets a delegation ID and a tool-call audit trail
+  tagged with that ID. Contract-bound spawns also get a
+  per-delegation `record.yaml` on disk. Contracts can gate tool calls on
   process invariants ("a verdict requires PNG inspection") rather than
   just paths. Commits made under a contract carry `Mission:` and
   `Delegation:` git trailers so `git log` answers "what authorized this
@@ -144,7 +145,7 @@ Each layer works alone. Add the next when you want more structure.
 | Identity | Consistent agent persona across sessions. Hooks fire automatically. | This page |
 | Team | Roles with tool restrictions, team graph with `reports_to` edges, auto-generated `.claude/agents/` files with anti-responsibilities | [Team setup](docs/team-setup.md) |
 | Missions | Typed delegation contracts with write-sets, bounded rounds, frozen evaluators, audit logs. Closing a mission auto-appends a summary to `.ethos/missions.jsonl` for commit-ready traceability. | [Archetypes and pipelines](docs/archetypes-and-pipelines.md) |
-| Audit | Every `Agent(...)` call is recorded with full prompt body, parent linkage, and per-delegation tool-call log. Contracts can gate tool calls on prior reads. Commits carry `Mission:`/`Delegation:` git trailers. | [Audited delegation](docs/audited-delegation.md) |
+| Audit | Every `Agent(...)` call is recorded with full prompt body and parent linkage; every tool call the spawn makes is tagged with its delegation id in the session audit log. Contract-bound spawns also get a per-delegation `record.yaml`. Contracts can gate tool calls on prior reads. Commits carry `Mission:`/`Delegation:` git trailers. | [Audited delegation](docs/audited-delegation.md) |
 
 ## How it integrates
 

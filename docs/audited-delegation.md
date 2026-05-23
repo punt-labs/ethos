@@ -44,10 +44,13 @@ In the audit log, every entry under a Tier B spawn carries
 `contract_id`. Tier A entries carry `delegation_id` but no
 `contract_id`. On disk:
 
-| Path | Tier |
-|------|------|
-| `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml` | B |
-| `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/record.yaml` | A |
+| Tier | What persists | Where |
+|------|---------------|-------|
+| A | `delegation_id` only; audit log entries are tagged with it | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` |
+| B | Per-delegation `record.yaml` (and optional `prompt.md`) under the mission tree, plus the same audit tagging | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/` |
+
+Tier A does **not** write a `record.yaml`. Its forensic trail is
+exclusively the audit log filtered by `delegation_id`.
 
 Tier A's advisory line (suppress with `ETHOS_QUIET_ADVICE=1`):
 
@@ -75,7 +78,7 @@ the spawned worker:
 | `PARENT_DELEGATION_ID` | set (= `DELEGATION_ID`) | set (= `DELEGATION_ID`) |
 | `PARENT_SESSION_ID` | set | set |
 | `MISSION_ID` | unset | set |
-| `MISSION_ARTIFACTS_DIR` | unset | `<repo>/.ethos/missions/<id>/delegations/<id>/` |
+| `MISSION_ARTIFACTS_DIR` | unset | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/` |
 
 The worker inherits these. Any `Agent` call the worker subsequently
 makes carries `PARENT_DELEGATION_ID` and `PARENT_SESSION_ID` into the
@@ -371,7 +374,7 @@ git log --grep="Delegation: d-2026-05-23-007" --format=%H
 ## Tier B Refusals
 
 Tier B dispatch can return `decision=block` to the Claude Code hook
-runtime. Nine named refusal reasons, each surfaced to the operator:
+runtime. Ten named refusal reasons, each surfaced to the operator:
 
 | Trigger | Reason format |
 |---------|---------------|
@@ -379,11 +382,12 @@ runtime. Nine named refusal reasons, each surfaced to the operator:
 | Malformed / missing `MISSION_ID` | `ethos pre-tool-use: resolving MISSION_ID "<id>": <err>` |
 | Delegation ID allocation failure | `ethos pre-tool-use: allocating delegation id: <err>` |
 | Mission lock acquire | `ethos pre-tool-use: acquiring mission lock for "<id>": <err>` |
+| Global root unreachable (for delegation lock) | `ethos pre-tool-use: resolving global root for delegation lock: <err>` |
 | Delegation lock acquire | `ethos pre-tool-use: acquiring delegation lock for "<id>": <err>` |
 | Skeleton write failure | `ethos pre-tool-use: writing delegation skeleton for "<id>": <err>` |
-| `max_delegation_depth` exceeded | `ethos pre-tool-use: max_delegation_depth <limit> exceeded by depth <proposed> for "<id>"` |
-| Depth-walk error | `ethos pre-tool-use: walking parent_delegation chain for "<id>": <err>` |
 | Config resolution error | `ethos pre-tool-use: resolving max_delegation_depth: <err>` |
+| Depth-walk error | `ethos pre-tool-use: walking parent_delegation chain for "<id>": <err>` |
+| `max_delegation_depth` exceeded | `ethos pre-tool-use: max_delegation_depth <limit> exceeded by depth <proposed> for "<id>"` |
 
 The SubagentStart hash gate (DES-033 evaluator-hash verification) can
 also refuse a Tier B verifier spawn. When that refusal fires AFTER
@@ -417,8 +421,10 @@ configured limit fails closed rather than spinning.
 ## Audit Log Shape
 
 Every tool call appends one JSONL line. The DES-054 enrichment added
-six fields to the v3.11 line (existing parsers tolerate the addition
-because every new field is `omitempty`):
+eight optional fields (`parent_session`, `agent_id`, `agent_type`,
+`delegation_id`, `parent_delegation`, `contract_id`, `tool_input`,
+`tool_input_hash`) to the v3.11 line shape (existing parsers tolerate
+the addition because every new field is `omitempty`):
 
 | Field | Meaning |
 |-------|---------|
@@ -458,15 +464,16 @@ truncated final line from a crashed writer is skipped, not fatal.
         └── prompt.md                  # optional prompt body
 ```
 
-### Per-session (Tier A + audit)
+### Per-session (audit log)
 
 ```text
 <repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/
-├── audit.jsonl                        # one line per tool call
-└── adhoc/
-    └── <NNN>/
-        └── record.yaml                # Tier A delegation
+└── audit.jsonl                        # one line per tool call;
+                                       # entries tagged with delegation_id
+                                       # (both Tier A and Tier B)
 ```
+
+Tier A spawns have no on-disk record beyond their audit-log entries.
 
 ### Global (counters + flocks)
 
@@ -479,9 +486,12 @@ truncated final line from a crashed writer is skipped, not fatal.
     └── <delegation-id>.lock           # per-delegation exclusive flock
 ```
 
-Locks live in the global tree, not the repo tree. Two checkouts of
-the same repo must lock the same inode — a per-checkout lock under
-`.ethos/` would let two clones write the same delegation_id.
+Per-delegation locks live in the global tree; the per-mission shared
+lock lives in the repo tree at
+`<repo>/.ethos/missions/<mission-id>/.lock`. Two checkouts of the
+same repo must lock the same inode for delegation allocation — a
+per-checkout lock under `.ethos/` would let two clones write the same
+delegation_id.
 
 ### Legacy fallback
 
