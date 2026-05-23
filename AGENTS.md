@@ -77,7 +77,7 @@ ethos show mal --json                 # JSON output
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (named `ethos`, plugin key `self` -- tool names follow the pattern `mcp__plugin_ethos_self__<tool>`) with 10 tools using method-dispatch.
+When running as a Claude Code plugin, ethos registers an MCP server (named `ethos`, plugin key `self` -- tool names follow the pattern `mcp__plugin_ethos_self__<tool>`) with 11 tools using method-dispatch.
 
 **All tools use a consolidated `method` parameter:**
 
@@ -92,6 +92,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (named `etho
 | `team` | list, show, create, delete, add_member, remove_member, add_collab, for_repo | `name`, `identity`, `role`, `from`, `to`, `collab_type`, `repo` |
 | `role` | list, show, create, delete | `name`, `responsibilities`, `permissions` |
 | `mission` | create, show, list, close, reflect, reflections, advance, result, results, log | `mission_id`, `contract`, `reflection`, `result`, `status` |
+| `adr` | create, list, show | `id`, `title`, `status`, `body` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
 **Example — read identity from MCP:**
@@ -1061,14 +1062,17 @@ Each Tier B `record.yaml` carries the on-disk
 Lock acquisition order (LIFO release via `defer`):
 
 ```text
-global → repo → per-mission (LOCK_SH) → per-delegation (LOCK_EX)
+per-mission (LOCK_SH, repo tree) → per-delegation (LOCK_EX, global tree)
 ```
 
-The per-mission lock is **shared** so two Tier B spawns under one
-mission do not serialize. The per-delegation lock is **exclusive**
-so the skeleton write is the sole writer for its ID. Per-delegation
-locks live under the global tree (not under `.ethos/`) so two
-checkouts of the same repo lock the same inode.
+The per-mission flock lives in the repo tree at
+`<repo>/.ethos/missions/<mission-id>/.lock`; the per-delegation flock
+lives in the global tree at
+`~/.punt-labs/ethos/delegations/<delegation-id>.lock` so two checkouts
+of the same repo lock the same inode. The per-mission lock is
+**shared** so two Tier B spawns under one mission do not serialize.
+The per-delegation lock is **exclusive** so the skeleton write is the
+sole writer for its ID.
 
 Counters use the sibling per-namespace per-date pattern: each file
 is a single integer, flock-guarded, and adding a new namespace adds

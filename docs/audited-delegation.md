@@ -371,7 +371,7 @@ git log --grep="Delegation: d-2026-05-23-007" --format=%H
 ## Tier B Refusals
 
 Tier B dispatch can return `decision=block` to the Claude Code hook
-runtime. Five named refusal reasons, each surfaced to the operator:
+runtime. Nine named refusal reasons, each surfaced to the operator:
 
 | Trigger | Reason format |
 |---------|---------------|
@@ -563,8 +563,14 @@ yq '.parent_delegation' \
 Lock acquisition order (LIFO release via `defer`):
 
 ```text
-global → repo → per-mission (LOCK_SH) → per-delegation (LOCK_EX)
+per-mission (LOCK_SH, repo tree) → per-delegation (LOCK_EX, global tree)
 ```
+
+The per-mission flock lives in the repo tree at
+`<repo>/.ethos/missions/<mission-id>/.lock`; the per-delegation flock
+lives in the global tree at
+`~/.punt-labs/ethos/delegations/<delegation-id>.lock` so two checkouts
+of the same repo lock the same inode.
 
 The per-mission lock is **shared** so two Tier B spawns under one
 mission do not serialize. The per-delegation lock is **exclusive**

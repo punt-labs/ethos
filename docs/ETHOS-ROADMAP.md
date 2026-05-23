@@ -38,7 +38,7 @@ remaining open as the rollup; child beads `ethos-wnw3`, `ethos-7i29`,
 
 | Phase | What | PR |
 |---|---|---|
-| 1 | Date-keyed two-tree mission storage. Audit entry enrichment (`parent_session`, `agent_id`, full `tool_input`, sha256 hash). Per-namespace counters. | #326 |
+| 1 | Date-keyed two-tree mission storage. Audit entry enrichment (`parent_session`, `agent_id`, `agent_type`, `delegation_id`, `parent_delegation`, `contract_id`, full `tool_input` map, `tool_input_hash` sha256). Per-namespace counters. | #326 |
 | 2 | `PreToolUse`-on-`Agent` dispatch: Tier A advisory + audit record for ad-hoc spawns; Tier B atomic skeleton + per-mission/per-delegation flocks + depth refusal for contract-bound spawns. | #327 |
 | 3 | Tier B inheritance walk (`SpawnPattern` + `InheritsContract`). Precondition evaluator. `ethos audit migrate`, `ethos audit show --delegation`, `ethos mission migrate --to-repo`. `commit-msg` trailer hook. | #328 |
 
