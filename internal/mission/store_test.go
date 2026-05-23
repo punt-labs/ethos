@@ -228,6 +228,196 @@ func TestStore_RejectsSymlink_LoadResults(t *testing.T) {
 	assert.Contains(t, err.Error(), "refusing to follow symlink")
 }
 
+// TestStore_RejectsSymlink_AllLoaderPaths is the focused, table-driven
+// pin for the uniform symlink policy (see paths.go). Every mission-
+// contract loader path (contract.yaml, log.jsonl, reflections.yaml,
+// results.yaml) plus the per-mission and create flock paths must
+// refuse to follow a symlink staged at the resolved location.
+//
+// The test:
+//  1. Stages a real, completed mission with a result on disk so every
+//     sibling artifact exists at the layer the resolvers see.
+//  2. For each artifact path, replaces it with a symlink pointing at
+//     a benign target outside the missions tree.
+//  3. Calls the user-facing method that opens that artifact and
+//     asserts the error names the symlink refusal.
+//
+// The lock-file cases (per-mission .lock, create .lock) are exercised
+// via Update — Update calls withLock, which calls rejectSymlink
+// before opening — and Create — Create calls withCreateLock, which
+// does the same.
+func TestStore_RejectsSymlink_AllLoaderPaths(t *testing.T) {
+	type setup struct {
+		// resolvePath returns the on-disk artifact path the test will
+		// replace with a symlink. The Store is fresh per case; setup
+		// must Create the mission and (where needed) submit a result
+		// so the artifact's resolver finds it on disk.
+		resolvePath func(t *testing.T, s *Store, missionID string) string
+		// fire is the user-facing call whose error string is asserted.
+		// The test stages the symlink, then runs fire — every fire
+		// must return a "refusing to follow symlink" error.
+		fire func(t *testing.T, s *Store, missionID string) error
+		// preCreateResult, when true, submits a result for the
+		// mission's current round so LoadResult/LoadResults have a
+		// file on disk to find.
+		preCreateResult bool
+		// preCreateReflection, when true, submits a reflection.
+		preCreateReflection bool
+	}
+
+	cases := map[string]setup{
+		"contract.yaml refuses symlink via Load": {
+			resolvePath: func(t *testing.T, s *Store, id string) string {
+				p, err := s.ContractPath(id)
+				require.NoError(t, err)
+				return p
+			},
+			fire: func(t *testing.T, s *Store, id string) error {
+				_, err := s.Load(id)
+				return err
+			},
+		},
+		"log.jsonl refuses symlink via LoadEvents": {
+			resolvePath: func(t *testing.T, s *Store, id string) string {
+				return filepath.Join(s.Root(), "missions", id+".jsonl")
+			},
+			fire: func(t *testing.T, s *Store, id string) error {
+				_, _, err := s.LoadEvents(id)
+				return err
+			},
+		},
+		"reflections.yaml refuses symlink via LoadReflections": {
+			resolvePath: func(t *testing.T, s *Store, id string) string {
+				return filepath.Join(s.Root(), "missions", id+".reflections.yaml")
+			},
+			fire: func(t *testing.T, s *Store, id string) error {
+				_, err := s.LoadReflections(id)
+				return err
+			},
+			preCreateReflection: true,
+		},
+		"results.yaml refuses symlink via LoadResults": {
+			resolvePath: func(t *testing.T, s *Store, id string) string {
+				return filepath.Join(s.Root(), "missions", id+".results.yaml")
+			},
+			fire: func(t *testing.T, s *Store, id string) error {
+				_, err := s.LoadResults(id)
+				return err
+			},
+			preCreateResult: true,
+		},
+		"contract.yaml refuses symlink via Update": {
+			resolvePath: func(t *testing.T, s *Store, id string) string {
+				p, err := s.ContractPath(id)
+				require.NoError(t, err)
+				return p
+			},
+			fire: func(t *testing.T, s *Store, id string) error {
+				// Update bumps UpdatedAt and rewrites the contract.
+				// We don't reload — the in-memory Contract from
+				// Create + a manual timestamp bump is enough to drive
+				// Update to its first resolver call.
+				return s.Update(newContract(id))
+			},
+		},
+		"per-mission .lock refuses symlink via Update": {
+			resolvePath: func(t *testing.T, s *Store, id string) string {
+				return filepath.Join(s.Root(), "missions", id+".lock")
+			},
+			fire: func(t *testing.T, s *Store, id string) error {
+				return s.Update(newContract(id))
+			},
+		},
+		"create .lock refuses symlink via Create": {
+			resolvePath: func(t *testing.T, s *Store, id string) string {
+				return filepath.Join(s.Root(), "missions", ".create.lock")
+			},
+			fire: func(t *testing.T, s *Store, _ string) error {
+				return s.Create(newContract("m-2026-04-07-002"))
+			},
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			s := testStore(t)
+			missionID := "m-2026-04-07-001"
+			c := disjointContract(missionID)
+			require.NoError(t, s.Create(c))
+
+			if tc.preCreateReflection {
+				r := &Reflection{
+					Round:          c.CurrentRound,
+					Author:         c.Leader,
+					Recommendation: "continue",
+					Signals:        []string{"first pass clean"},
+				}
+				require.NoError(t, s.AppendReflection(missionID, r))
+			}
+			if tc.preCreateResult {
+				submitRoundResult(t, s, c, VerdictPass)
+			}
+
+			path := tc.resolvePath(t, s, missionID)
+			// If the artifact does not yet exist (because the case
+			// targets a path that is only written on demand — e.g.
+			// reflections.yaml or results.yaml without preCreate
+			// flags), drop a benign placeholder so os.Rename below
+			// succeeds. The symlink must REPLACE the artifact at the
+			// resolved location to pin the policy in the same shape
+			// every consumer sees.
+			if _, statErr := os.Lstat(path); errors.Is(statErr, os.ErrNotExist) {
+				require.NoError(t, os.WriteFile(path, []byte("placeholder"), 0o600))
+			}
+			target := path + ".target"
+			require.NoError(t, os.Rename(path, target))
+			require.NoError(t, os.Symlink(target, path))
+
+			err := tc.fire(t, s, missionID)
+			require.Error(t, err, "policy must refuse to follow symlink at %s", path)
+			assert.Contains(t, err.Error(), "refusing to follow symlink",
+				"error must name the policy so operators can locate it")
+		})
+	}
+}
+
+// TestStore_RejectsSymlink_WriteContract is the symmetric pin for the
+// write path. Update would otherwise write through a symlink at the
+// contract destination via WriteFile + Rename; the policy refuses at
+// the resolver, so Update returns the symlink error before any byte
+// hits the link target.
+//
+// The case stages a symlink at the contract path of an existing
+// mission, then asks Update to mutate the in-memory contract. The
+// load step inside Update calls the resolver, which fires the
+// refusal — no byte ever reaches the link target.
+func TestStore_RejectsSymlink_WriteContract(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-07-005")
+	require.NoError(t, s.Create(c))
+
+	path, err := s.ContractPath(c.MissionID)
+	require.NoError(t, err)
+	target := path + ".target"
+	// Plant a benign target file so the symlink resolves (Lstat sees
+	// the link itself, but a dangling link would also fire — both
+	// shapes pin the same policy).
+	require.NoError(t, os.Rename(path, target))
+	require.NoError(t, os.Symlink(target, path))
+
+	c.UpdatedAt = "2026-04-08T00:00:00Z"
+	err = s.Update(c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to follow symlink")
+
+	// The target must be byte-for-byte unchanged: Update must not
+	// have written through the link.
+	data, readErr := os.ReadFile(target)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(data), c.MissionID,
+		"the original contract must be intact — Update must not have followed the link")
+}
+
 func TestStore_CreateRejectsNil(t *testing.T) {
 	s := testStore(t)
 	require.Error(t, s.Create(nil))

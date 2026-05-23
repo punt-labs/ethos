@@ -290,14 +290,23 @@ func (s *Store) missionsDir() string {
 // from a stale writeLayer path.
 func (s *Store) contractPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.contract, nil
+		path = ps.contract
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).contract, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).contract
 	default:
 		return "", fmt.Errorf("resolving contract path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go): every
+	// downstream open — read, write, or stat — sees a refusal here
+	// before the syscall would follow the link. The check is cheap
+	// (one Lstat) and uniform across every consumer.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // lockPath returns the per-mission flock path. Always under the
@@ -338,14 +347,22 @@ func (s *Store) repoCreateLockPath() string {
 // (mission m-2026-05-22-027 fix 3).
 func (s *Store) logPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.log, nil
+		path = ps.log
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).log, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).log
 	default:
 		return "", fmt.Errorf("resolving log path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go) — see
+	// contractPath. Covers the writer (appendEventLocked) in log.go
+	// without making it call rejectSymlink explicitly.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // reflectionsPath returns the sibling YAML file that holds the
@@ -362,14 +379,21 @@ func (s *Store) logPath(missionID string) (string, error) {
 // writeLayer (mission m-2026-05-22-027 fix 3).
 func (s *Store) reflectionsPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.reflections, nil
+		path = ps.reflections
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).reflections, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).reflections
 	default:
 		return "", fmt.Errorf("resolving reflections path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go) — see
+	// contractPath.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // resultsPath returns the sibling YAML file that holds the
@@ -390,14 +414,21 @@ func (s *Store) reflectionsPath(missionID string) (string, error) {
 // m-2026-05-22-027 fix 3).
 func (s *Store) resultsPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.results, nil
+		path = ps.results
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).results, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).results
 	default:
 		return "", fmt.Errorf("resolving results path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go) — see
+	// contractPath.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // ensureMissionDir creates the per-mission directory in the repo
@@ -519,6 +550,15 @@ func (s *Store) Create(c *Contract) error {
 		return s.withLock(staged.MissionID, func() error {
 			dest, err := s.contractPath(staged.MissionID)
 			if err != nil {
+				return err
+			}
+			// Refuse to follow a symlink planted at the destination —
+			// uniform symlink policy (see paths.go). The follow-on
+			// os.Stat below would otherwise dereference the link and
+			// either report "exists" (refusing the create against an
+			// attacker-controlled inode) or "not exists" (and a later
+			// writeContract would write through the link).
+			if err := rejectSymlink(dest); err != nil {
 				return err
 			}
 			// Refuse to overwrite an existing contract via Create — Update
@@ -1057,6 +1097,18 @@ func (s *Store) writeContract(c *Contract) error {
 		return err
 	}
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
+	// at the temp path. os.WriteFile would follow a symlink at tmp,
+	// writing through to the link target (write-set bypass); a symlink
+	// at dest would be replaced by Rename via inode, but reject it too
+	// so an attacker cannot redirect any read between this write and
+	// the next loadLocked under the same flock.
+	if err := rejectSymlink(dest); err != nil {
+		return err
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp contract: %w", err)
 	}
@@ -1069,6 +1121,15 @@ func (s *Store) writeContract(c *Contract) error {
 // on-disk state consistent with the operation's success/failure.
 func (s *Store) restoreContract(dest string, oldData []byte) error {
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): the rollback path runs after
+	// a failed event-log append, when an attacker may have raced to
+	// plant a symlink at the temp path. Refuse before WriteFile.
+	if err := rejectSymlink(dest); err != nil {
+		return fmt.Errorf("writing rollback temp: %w", err)
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return fmt.Errorf("writing rollback temp: %w", err)
+	}
 	if err := os.WriteFile(tmp, oldData, 0o600); err != nil {
 		return fmt.Errorf("writing rollback temp: %w", err)
 	}
@@ -1088,6 +1149,13 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 		return fmt.Errorf("creating missions directory: %w", err)
 	}
 	lockFile := s.lockPath(missionID)
+	// Uniform symlink policy (paths.go): a symlink at the lock path
+	// would redirect the flock onto an unrelated inode, defeating the
+	// per-mission serialization invariant. Reject before OpenFile,
+	// which would otherwise create-and-follow the link.
+	if err := rejectSymlink(lockFile); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(lockFile, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening lock file: %w", err)
@@ -1117,7 +1185,15 @@ func (s *Store) withCreateLock(fn func() error) error {
 	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating missions directory: %w", err)
 	}
-	f, err := os.OpenFile(s.createLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	createLock := s.createLockPath()
+	// Uniform symlink policy (paths.go): a symlink at the directory-
+	// level create lock would let an attacker redirect every Create's
+	// flock onto an attacker-chosen inode, collapsing the cross-
+	// mission write_set conflict scan's atomicity.
+	if err := rejectSymlink(createLock); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(createLock, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening create lock file: %w", err)
 	}
@@ -1150,6 +1226,12 @@ func (s *Store) withCreateLock(fn func() error) error {
 		}
 		if err := os.MkdirAll(filepath.Dir(repoLockPath), 0o700); err != nil {
 			return fmt.Errorf("creating repo missions directory: %w", err)
+		}
+		// Uniform symlink policy (paths.go): the per-repo create lock
+		// is the same trust boundary as the global one — refuse a
+		// symlink here too.
+		if err := rejectSymlink(repoLockPath); err != nil {
+			return err
 		}
 		rf, rerr := os.OpenFile(repoLockPath, os.O_CREATE|os.O_RDWR, 0o600)
 		if rerr != nil {
@@ -1401,6 +1483,14 @@ func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error 
 		return err
 	}
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): refuse symlinks at dest and
+	// tmp before WriteFile would follow them.
+	if err := rejectSymlink(dest); err != nil {
+		return err
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp reflections: %w", err)
 	}
@@ -2028,6 +2118,14 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 		return err
 	}
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): refuse symlinks at dest and
+	// tmp before WriteFile would follow them.
+	if err := rejectSymlink(dest); err != nil {
+		return err
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp results: %w", err)
 	}
