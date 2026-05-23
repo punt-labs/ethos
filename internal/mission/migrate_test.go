@@ -255,6 +255,44 @@ func TestMigrateMission_EmptyGlobalRoot(t *testing.T) {
 	assert.True(t, strings.Contains(err.Error(), "globalRoot"))
 }
 
+// TestRepoMissionIDs_SkipsMalformedLines pins the CRITICAL fix: the
+// scanner must skip a malformed JSONL line and continue, rather than
+// hang forever as json.NewDecoder.Decode does on a SyntaxError. The
+// audit.jsonl is hand-built with three poison shapes (raw syntax
+// error, type mismatch on contract_id, truncated trailing fragment)
+// and one well-formed line. The well-formed contract_id must land in
+// the result; the test must return within the default deadline.
+func TestRepoMissionIDs_SkipsMalformedLines(t *testing.T) {
+	repoRoot := t.TempDir()
+	sessionDir := filepath.Join(repoRoot, ".ethos", "sessions", "2026-05-22-sess-bad")
+	require.NoError(t, os.MkdirAll(sessionDir, 0o700))
+
+	// Order matters only for diagnostics. The scanner is line-oriented
+	// so each line is independent.
+	body := strings.Join([]string{
+		`{not json at all`,                                 // SyntaxError on a token
+		`{"contract_id": 12345}`,                           // UnmarshalTypeError (number for string)
+		`{"ts":"2026-05-22T10:00:00Z","contract_id":"m-OK"}`, // well-formed
+		`{"contract_id":"m-trunc"`,                         // truncated trailing fragment
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sessionDir, "audit.jsonl"),
+		[]byte(body),
+		0o600,
+	))
+
+	// repoMissionIDs is unexported; reach it through MigrateMission
+	// with a missionID that forces enumerateMigrateCandidates to a
+	// single ID. The function exercises collectContractIDs by
+	// invoking repoMissionIDs internally.
+	got, err := repoMissionIDs(repoRoot)
+	require.NoError(t, err, "malformed lines must not surface as an error")
+
+	_, hasOK := got["m-OK"]
+	assert.True(t, hasOK, "well-formed contract_id must survive the scan")
+	assert.Len(t, got, 1, "only the well-formed line contributes a contract_id")
+}
+
 func TestMigrateMission_PartialFailureLeavesLegacyIntact(t *testing.T) {
 	// If the repo-tree mission directory parent is unwritable, the
 	// rename fails and both sources stay intact. Skip on root since

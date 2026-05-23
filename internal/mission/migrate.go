@@ -1,6 +1,8 @@
 package mission
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,12 @@ import (
 	"sort"
 	"strings"
 )
+
+// maxAuditLineBytes is the per-line ceiling for collectContractIDs.
+// Audit lines are short JSONL objects; 16 MiB matches the buffer that
+// decodeAuditEntries uses for the same file shape and tolerates
+// pathological lines without rejecting them outright.
+const maxAuditLineBytes = 16 * 1024 * 1024
 
 // MigrateMission relocates a mission from the legacy global tree
 // (<globalRoot>/missions/<id>.yaml + sibling .jsonl / .results.yaml /
@@ -147,8 +155,13 @@ func repoMissionIDs(repoRoot string) (map[string]struct{}, error) {
 
 // collectContractIDs adds every distinct contract_id from a JSONL
 // audit file to dst. Missing file is a no-op. A malformed line is
-// skipped — the audit log reader contract is permissive so a single
-// bad line does not poison the whole scan.
+// skipped with a stderr warning — the audit log reader contract is
+// permissive so a single bad line does not poison the whole scan.
+//
+// Uses bufio.Scanner per-line because json.NewDecoder.Decode does NOT
+// advance the underlying reader past a SyntaxError: a single bad
+// token would make the loop spin forever. The pattern mirrors
+// decodeAuditEntries in audit_reader.go.
 func collectContractIDs(path string, dst map[string]struct{}) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -158,25 +171,33 @@ func collectContractIDs(path string, dst map[string]struct{}) error {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
 	defer f.Close()
-	dec := json.NewDecoder(f)
-	for {
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), maxAuditLineBytes)
+	lineNo := 0
+	for sc.Scan() {
+		lineNo++
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 {
+			continue
+		}
 		var rec struct {
 			ContractID string `json:"contract_id"`
 		}
-		if err := dec.Decode(&rec); err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			// Skip the malformed value and keep going.
-			if _, ok := err.(*json.SyntaxError); ok {
-				continue
-			}
-			return fmt.Errorf("decoding %s: %w", path, err)
+		if err := json.Unmarshal(line, &rec); err != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: mission migrate: %s: line %d: skipping malformed line: %v\n",
+				path, lineNo, err)
+			continue
 		}
 		if rec.ContractID != "" {
 			dst[rec.ContractID] = struct{}{}
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return fmt.Errorf("scanning %s: %w", path, err)
+	}
+	return nil
 }
 
 // migrateArtifact pairs a legacy filename suffix with the repo-tree
