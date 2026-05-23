@@ -155,9 +155,6 @@ func buildAuditEntry(input map[string]any, sessionID string, now time.Time) audi
 	if entry.DelegationID == "" {
 		entry.DelegationID = os.Getenv("DELEGATION_ID")
 	}
-	if entry.ParentDelegation == "" {
-		entry.ParentDelegation = os.Getenv("PARENT_DELEGATION_ID")
-	}
 	if entry.ParentSession == "" {
 		entry.ParentSession = os.Getenv("PARENT_SESSION_ID")
 	}
@@ -167,5 +164,14 @@ func buildAuditEntry(input map[string]any, sessionID string, now time.Time) audi
 	if entry.ContractID == "" {
 		entry.ContractID = os.Getenv("MISSION_ID")
 	}
+	// NOTE: PARENT_DELEGATION_ID env var is NOT a fallback source for
+	// entry.ParentDelegation. The dispatch hook sets that env to the
+	// worker's OWN delegation_id (so the worker's children pick it
+	// up as their parent), not to the worker's own parent. Using it
+	// here would record self-referential parent_delegation on every
+	// worker audit entry (Bugbot MED on PR #328 b5a0da2). The
+	// authoritative value lives on the delegation skeleton's
+	// parent_delegation field; readers needing the chain walk should
+	// join on delegation_id.
 	return entry
 }
