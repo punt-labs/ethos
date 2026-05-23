@@ -277,6 +277,27 @@ func FindRepoRoot() string {
 	}
 }
 
+// EnvRepoRoot is the canonical "what repo are we operating against?"
+// resolver used by every DES-054 hook, CLI command, and library that
+// needs to address an .ethos tree. Resolution order:
+//  1. ETHOS_REPO_ROOT env override (whitespace-trimmed)
+//  2. FindRepoRoot (walk for .git)
+//
+// Callers that want a Getwd fallback when both are empty must apply
+// it themselves — most hook paths take the empty return and route to
+// the legacy global tree; most CLI paths exit 2 with "must run inside
+// a repo." Centralizing the env+FindRepoRoot pair ensures every
+// caller sees the same repo when the operator sets the override
+// (Bugbot HIGH/MED across PR #328: previous split resolution let
+// audit-write and precondition-read disagree on which repo is
+// "this one").
+func EnvRepoRoot() string {
+	if v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT")); v != "" {
+		return v
+	}
+	return FindRepoRoot()
+}
+
 // RepoName returns the repository name (e.g. "punt-labs/ethos") for the
 // current working directory. Parses the "origin" remote URL.
 // Returns empty string if not in a git repo or no origin remote is set.

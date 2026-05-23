@@ -666,7 +666,7 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 	if !missionMigrateToRepo {
 		return fmt.Errorf("mission migrate: only --to-repo is supported")
 	}
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.EnvRepoRoot()
 	if repoRoot == "" {
 		fmt.Fprintln(errOut, "ethos: mission migrate must run inside a repo")
 		return usageError{}

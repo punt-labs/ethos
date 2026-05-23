@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
@@ -329,10 +328,7 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 // allowing the dispatch path to write to a different tree than the
 // hook later read).
 func tierBRepoRoot() string {
-	if v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT")); v != "" {
-		return v
-	}
-	if root := resolve.FindRepoRoot(); root != "" {
+	if root := resolve.EnvRepoRoot(); root != "" {
 		return root
 	}
 	cwd, err := os.Getwd()

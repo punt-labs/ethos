@@ -216,16 +216,11 @@ func runHookAuditLog() error {
 	// here.
 	data := drainAuditStdin()
 	sessionID := peekSessionID(data)
-	// Honor ETHOS_REPO_ROOT (via env first, then FindRepoRoot
-	// fallback) so the audit-write path picks the same repo as
-	// the precondition evaluator's loadSessionReads. Without
-	// this, a Tier B Write could be denied right after a
-	// successful Read because the two hooks resolved different
-	// repos (Bugbot MED on PR #328).
-	repoRoot := os.Getenv("ETHOS_REPO_ROOT")
-	if repoRoot == "" {
-		repoRoot = resolve.FindRepoRoot()
-	}
+	// resolve.EnvRepoRoot is the canonical resolver — ETHOS_REPO_ROOT
+	// first, then FindRepoRoot. Centralized so the audit-write path
+	// picks the same repo as preconditions, dispatch, inheritance,
+	// and the migrate/show CLI commands.
+	repoRoot := resolve.EnvRepoRoot()
 	if sessionID == "" {
 		_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
 		return nil

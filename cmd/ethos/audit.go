@@ -110,7 +110,7 @@ func init() {
 // "must run inside a repo" with exit code 2 when no repo root can be
 // found.
 func runAuditMigrate(out, errOut io.Writer) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.EnvRepoRoot()
 	if repoRoot == "" {
 		fmt.Fprintln(errOut, "ethos: audit migrate must run inside a repo")
 		return usageError{}
@@ -154,7 +154,7 @@ func runAuditMigrate(out, errOut io.Writer) error {
 // for matching entries, then renders them as JSONL or as a one-line
 // text summary per entry.
 func runAuditShow(out, errOut io.Writer) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.EnvRepoRoot()
 	if repoRoot == "" {
 		fmt.Fprintln(errOut, "ethos: audit show must run inside a repo")
 		return usageError{}
