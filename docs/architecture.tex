@@ -1973,6 +1973,81 @@ refusal does NOT roll back, because rolling back at that point
 would let the next \texttt{NewID} return the same
 \field{delegation\_id} and collide with the just-written record.
 
+\subsection{Tier B Inheritance (DES-054)}
+\label{sec:delegation-inheritance}
+
+A Tier B contract may carry a \field{delegations} list of
+\texttt{DelegationTemplate} entries.  When a worker running under
+that contract spawns an \texttt{Agent} call without setting
+\texttt{MISSION\_ID} (the common case --- workers do not know the
+mission ID), the hook walks the parent\_delegation chain looking
+for an ancestor whose contract carries a matching template.  A
+hit lends the ancestor's \field{mission\_id} to the child; the
+child runs as Tier B under the same contract.
+
+\paragraph{Template match.}
+\texttt{DelegationTemplate} in \fpath{internal/mission/delegation.go}:
+
+\begin{itemize}
+  \item \field{role} --- the role the spawned worker is expected
+    to fill (advisory, not enforced).
+  \item \field{spawn\_pattern} --- a regular expression matched
+    against \texttt{CLAUDE\_AGENT\_TYPE}, anchored at both ends.
+    \texttt{MatchSpawnPattern} compiles
+    \texttt{\^(?:<pattern>)\$} so a pattern of \texttt{bw.}
+    matches the three-character agent types beginning with
+    \texttt{bw}, never a substring of a longer agent\_type.
+  \item \field{inherits\_contract} --- only entries with this set
+    to \texttt{true} are eligible.  The walker filters first,
+    then asks \texttt{MatchTemplate} for the first matching
+    pattern.
+\end{itemize}
+
+\paragraph{Parent chain walk.}
+\texttt{tryTierBByInheritance} in
+\fpath{internal/hook/pretooluse\_inherit.go} starts from
+\texttt{PARENT\_DELEGATION\_ID}.  Each ancestor's
+\fpath{record.yaml} is located by scanning
+\fpath{<repo>/.ethos/missions/*/delegations/<id>/record.yaml}
+(\texttt{findDelegationByID}) --- \texttt{PARENT\_DELEGATION\_ID}
+alone does not encode which mission the parent belongs to, so the
+resolver checks every mission tree.  First match wins; the
+ancestor's enclosing mission ID is returned alongside the record.
+
+The walker keeps a \texttt{seen} set as a cheap cycle guard.  A
+corrupt record that points back at itself surfaces as a stderr
+warning and falls through to Tier A rather than spinning; the
+depth backstop would catch it eventually, but cycles are
+corruption and should not be silently absorbed.
+
+\paragraph{Depth backstop.}  The walk is bounded by
+\texttt{resolve.ResolveMaxDelegationDepth} (the same ceiling the
+dispatch-path depth gate uses; default
+\texttt{MaxDelegationDepthDefault = 16}).  An overflow writes a
+stderr line naming the limit and the current ancestor and falls
+through to Tier A.  Hard-coding the backstop to the default
+would shadow a configured limit above the default --- a repo with
+\texttt{max\_delegation\_depth: 32} must be able to walk 32
+ancestors without the walker tripping at 17.
+
+\paragraph{Fail closed on error, non-blocking on miss.}  Two
+invariants point in opposite directions and both apply.  The
+\emph{dispatch-path} depth gate fails closed: a missing or
+corrupt ancestor refuses the spawn, because the gate exists
+precisely to defeat runaway recursive spawn patterns and
+silently treating a missing link as zero depth would let one
+through.  The \emph{inheritance resolver} is non-blocking on
+every error path: a missing ancestor, a malformed regex, a walk
+overflow, or a contract load failure writes a stderr warning and
+returns ``no match,'' and the spawn falls through to Tier A.
+The hook proceeds because inheritance is an opt-in convenience
+--- the alternative would be to refuse every Agent spawn whose
+parent's repo got corrupted, which is the wrong trade-off for
+an informational dispatch surface.  djb's ``no silent admit
+under a malformed env'' rule is satisfied because the warning
+is operator-visible and the spawn proceeds without an inherited
+contract.
+
 \subsection{Precondition Evaluation (DES-054 Phase 3)}
 
 A Tier B contract may carry a \field{preconditions} list.  Each
