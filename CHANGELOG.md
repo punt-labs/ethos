@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-05-23
+
 ### Added
 
 - **DES-054 phase 3 — preconditions, migration, queries, commit-msg trailers.**
