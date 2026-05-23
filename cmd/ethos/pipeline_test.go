@@ -281,7 +281,7 @@ func TestPipelineHandler_InstantiateReal(t *testing.T) {
 	// repo tree, one contract.yaml per <id> directory.
 	repoRoot, err := os.Getwd()
 	require.NoError(t, err)
-	missionsDir := filepath.Join(repoRoot, ".ethos", "missions")
+	missionsDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions")
 	entries, err := os.ReadDir(missionsDir)
 	require.NoError(t, err)
 
@@ -658,7 +658,7 @@ func TestPipelineCLI_InstantiateReal(t *testing.T) {
 
 	// Verify mission files on disk. DES-054 two-tree storage lands
 	// contracts under <repoRoot>/.ethos/missions/<id>/contract.yaml.
-	missionsDir := filepath.Join(home, ".ethos", "missions")
+	missionsDir := filepath.Join(home, ".punt-labs", "ethos", "missions")
 	entries, err := os.ReadDir(missionsDir)
 	require.NoError(t, err)
 

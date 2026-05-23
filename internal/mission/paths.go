@@ -9,11 +9,33 @@ import (
 	"path/filepath"
 )
 
+// EthosRepoStateRoot is the path, relative to a repository root,
+// under which every per-repo file ethos writes lives. The .punt-labs/
+// prefix is the shared Punt Labs cross-tool namespace — sibling tools
+// (biff, vox, beadle, lux, quarry) read and write alongside ethos at
+// <repo>/.punt-labs/<tool>/. Exported so external integrations
+// (sibling tools, audit consumers) can construct paths without
+// hardcoding the literal.
+//
+// Callers compose paths via RepoStatePath. A future relocation
+// changes one constant instead of every filepath.Join site.
+const EthosRepoStateRoot = ".punt-labs/ethos"
+
+// RepoStatePath joins repoRoot with the ethos per-repo state root and
+// any trailing path segments. Returns just the state root when no
+// trailing parts are given. Exported so external consumers can locate
+// ethos state without depending on the internal layout constants.
+func RepoStatePath(repoRoot string, parts ...string) string {
+	all := append([]string{repoRoot, ".punt-labs", "ethos"}, parts...)
+	return filepath.Join(all...)
+}
+
 // missionLayer identifies which storage tree a mission lives in.
-// DES-054 phase 1 introduces a per-repo tree under <repoRoot>/.ethos/
-// alongside the legacy global tree under <globalRoot>/missions/. A
-// given mission lives in exactly one layer at a time; the migration
-// command (phase 3) is the only path that copies between layers.
+// DES-054 phase 1 introduces a per-repo tree under
+// <repoRoot>/.punt-labs/ethos/ alongside the legacy global tree under
+// <globalRoot>/missions/. A given mission lives in exactly one layer
+// at a time; the migration command (phase 3) is the only path that
+// copies between layers.
 type missionLayer int
 
 const (
@@ -24,8 +46,8 @@ const (
 	layerUnset missionLayer = iota
 
 	// layerRepo means the mission lives at
-	// <repoRoot>/.ethos/missions/<missionID>/. Create writes here
-	// when repoRoot is set; Load reads here first.
+	// <repoRoot>/.punt-labs/ethos/missions/<missionID>/. Create
+	// writes here when repoRoot is set; Load reads here first.
 	layerRepo
 
 	// layerGlobal means the mission lives at the legacy global
@@ -49,14 +71,15 @@ type pathSet struct {
 }
 
 // repoMissionsDir returns the per-repo missions root —
-// <repoRoot>/.ethos/missions. Empty when the two-tree storage mode
-// is not active (legacy WithRepoRoot trace-only setups stay empty
-// here so List and resolveLayer do not pick up a partial layout).
+// <repoRoot>/.punt-labs/ethos/missions. Empty when the two-tree
+// storage mode is not active (legacy WithRepoRoot trace-only setups
+// stay empty here so List and resolveLayer do not pick up a partial
+// layout).
 func (s *Store) repoMissionsDir() string {
 	if !s.twoTreeStorage || s.repoRoot == "" {
 		return ""
 	}
-	return filepath.Join(s.repoRoot, ".ethos", "missions")
+	return RepoStatePath(s.repoRoot, "missions")
 }
 
 // globalMissionsDir returns the legacy single-root path —

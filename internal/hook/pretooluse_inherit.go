@@ -66,7 +66,7 @@ func tryTierBByInheritance(repoRoot, parentDelegation, childAgentType string) (s
 // bounded by limit; an overflow surfaces as a stderr warning and a
 // Tier A fall-through.
 //
-// Ancestor records are loaded from <repo>/.ethos/missions/<m>/
+// Ancestor records are loaded from <repo>/.punt-labs/ethos/missions/<m>/
 // delegations/<d>/record.yaml. The walker keeps a `seen` set as a
 // cheap cycle guard so a corrupt record that points back at itself
 // does not spin (the depth limit would catch it eventually, but a
@@ -163,7 +163,7 @@ func matchAncestorContract(
 // findDelegationByID is the neutral cross-mission lookup that both the
 // inheritance resolver (loadParentDelegation) and the depth gate
 // (delegationLoader in pretooluse_dispatch.go) share. Scans
-// <repo>/.ethos/missions/*/delegations/<id>/record.yaml and returns the
+// <repo>/.punt-labs/ethos/missions/*/delegations/<id>/record.yaml and returns the
 // first match (filesystem-ordered). No side effects — callers add their
 // own stderr lines and decide what to do with the error.
 //
@@ -183,7 +183,7 @@ func matchAncestorContract(
 // migration." Follow-up hardening (scan all, fail-closed on multiplicity)
 // tracked as a separate bead.
 func findDelegationByID(repoRoot, delegationID string) (*mission.Delegation, string, error) {
-	missionsDir := filepath.Join(repoRoot, ".ethos", "missions")
+	missionsDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions")
 	entries, err := os.ReadDir(missionsDir)
 	if err != nil {
 		// errors.Is over os.IsNotExist so wrapped sentinels in any
@@ -226,7 +226,7 @@ func findDelegationByID(repoRoot, delegationID string) (*mission.Delegation, str
 // loadParentDelegation finds and loads a delegation record by ID for
 // the inheritance walk. PARENT_DELEGATION_ID alone does not encode
 // which mission the parent belongs to, so the resolver scans
-// <repo>/.ethos/missions/*/delegations/<id>/record.yaml for the
+// <repo>/.punt-labs/ethos/missions/*/delegations/<id>/record.yaml for the
 // matching record (via findDelegationByID). Returns (record, missionID,
 // true) on a hit, (nil, "", false) otherwise. Every miss writes a
 // stderr line so operators tracing a missing inheritance walk see the

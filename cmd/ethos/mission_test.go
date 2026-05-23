@@ -1053,7 +1053,7 @@ budget:
 	// storage active, the per-mission dir lives under the repo
 	// tree — chdirToFakeRepo points the subprocess at <home> so the
 	// repoRoot resolves to home.
-	resultsFile := filepath.Join(home, ".ethos", "missions", id, "results.yaml")
+	resultsFile := filepath.Join(home, ".punt-labs", "ethos", "missions", id, "results.yaml")
 	require.NoError(t, os.WriteFile(resultsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
 
 	showCmd := exec.Command(ethosBinary, "mission", "show", id)
@@ -1132,7 +1132,7 @@ budget:
 	// Corrupt the sibling reflections file. With DES-054 two-tree
 	// storage active, the per-mission dir lives under the repo
 	// tree at <repoRoot>/.ethos/missions/<id>/reflections.yaml.
-	reflectionsFile := filepath.Join(home, ".ethos", "missions", id, "reflections.yaml")
+	reflectionsFile := filepath.Join(home, ".punt-labs", "ethos", "missions", id, "reflections.yaml")
 	require.NoError(t, os.WriteFile(reflectionsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
 
 	showCmd := exec.Command(ethosBinary, "mission", "show", id)
@@ -2237,7 +2237,7 @@ func TestMissionLog_CorruptLineSurfacesAsWarning(t *testing.T) {
 	// chdirs into the fake repo, so cwd is the repo root.
 	repoRoot, err := os.Getwd()
 	require.NoError(t, err)
-	logPath := filepath.Join(repoRoot, ".ethos", "missions", id, "log.jsonl")
+	logPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "log.jsonl")
 	raw, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
@@ -2315,7 +2315,7 @@ func TestMissionLog_HumanMode_WarningsFooterOnStdout(t *testing.T) {
 
 	repoRoot, err := os.Getwd()
 	require.NoError(t, err)
-	logPath := filepath.Join(repoRoot, ".ethos", "missions", id, "log.jsonl")
+	logPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "log.jsonl")
 	raw, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
@@ -3295,7 +3295,7 @@ evidence:
 	require.NoError(t, submitCmd.Run())
 
 	// Export to a custom directory.
-	exportDir := filepath.Join(tmp, ".ethos", "missions")
+	exportDir := filepath.Join(tmp, ".punt-labs", "ethos", "missions")
 	exportCmd := exec.Command(ethosBinary, "mission", "export", id, "--dir", exportDir)
 	exportCmd.Env = env
 	var exportOut bytes.Buffer
@@ -3373,7 +3373,7 @@ budget:
 	id, _ := entries[0]["mission_id"].(string)
 	require.NotEmpty(t, id)
 
-	exportDir := filepath.Join(tmp, ".ethos", "missions")
+	exportDir := filepath.Join(tmp, ".punt-labs", "ethos", "missions")
 	exportCmd := exec.Command(ethosBinary, "mission", "export", id, "--dir", exportDir)
 	exportCmd.Env = env
 	var exportOut, exportErr bytes.Buffer

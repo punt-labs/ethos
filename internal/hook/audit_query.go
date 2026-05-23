@@ -54,7 +54,7 @@ func toView(e auditEntry) AuditView {
 }
 
 // QueryAuditByDelegation returns every audit entry whose DelegationID
-// equals delegationID. It walks <repoRoot>/.ethos/sessions/<date>-<id>/
+// equals delegationID. It walks <repoRoot>/.punt-labs/ethos/sessions/<date>-<id>/
 // audit.jsonl first, then falls back to the legacy
 // <globalSessionsDir>/<id>.audit.jsonl shape for sessions that have no
 // repo-tree counterpart (DES-052 reader fallback).
@@ -78,7 +78,7 @@ func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([
 	seenSessions := make(map[string]struct{})
 
 	if repoRoot != "" {
-		base := filepath.Join(repoRoot, ".ethos", "sessions")
+		base := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions")
 		repoEntries, sessions, err := queryRepoTreeAudit(base, delegationID)
 		if err != nil {
 			return nil, fmt.Errorf("querying repo audit %s: %w", base, err)

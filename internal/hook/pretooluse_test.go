@@ -927,7 +927,7 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 
 	// Stage the per-mission dir + .lock so we can hold LOCK_EX on the
 	// same path the dispatch will try to share-lock.
-	dir := filepath.Join(repo, ".ethos", "missions", missionID)
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "missions", missionID)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	lockPath := filepath.Join(dir, ".lock")
 	excl, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
@@ -1041,7 +1041,7 @@ func TestDispatchTierB_LockAcquireFailureRollsBackCounter(t *testing.T) {
 	// os.OpenFile call fails with EISDIR. The mission directory itself
 	// must exist; the .lock entry must be a directory rather than a
 	// regular file.
-	missionDir := filepath.Join(repo, ".ethos", "missions", missionID)
+	missionDir := filepath.Join(repo, ".punt-labs", "ethos", "missions", missionID)
 	require.NoError(t, os.MkdirAll(filepath.Join(missionDir, ".lock"), 0o700))
 
 	// Snapshot the counter before dispatch. The counter file lives at
@@ -1127,7 +1127,7 @@ func TestEnforceDelegationDepth_ConfigErrorClosesSkeleton(t *testing.T) {
 	// Walk the per-mission delegations directory to find the single
 	// record.yaml the dispatch produced and assert its verdict.
 	delegationsDir := filepath.Join(
-		repo, ".ethos", "missions", missionID, "delegations",
+		repo, ".punt-labs", "ethos", "missions", missionID, "delegations",
 	)
 	entries, err := os.ReadDir(delegationsDir)
 	require.NoError(t, err, "delegations dir must exist — the skeleton write came before the refusal")
@@ -1350,7 +1350,7 @@ func TestDispatchAgent_InheritanceHit(t *testing.T) {
 		"inheritance match must promote the child to Tier B with the parent missionID")
 	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
 	assert.True(t, strings.HasPrefix(r.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
-		filepath.Join(repo, ".ethos", "missions", parentMission)),
+		filepath.Join(repo, ".punt-labs", "ethos", "missions", parentMission)),
 		"artifacts dir must nest under the inherited mission")
 }
 
@@ -1752,6 +1752,6 @@ func TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees(t *testing.T) {
 		"inheritance must promote the child to the ancestor missionID")
 	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
 	assert.True(t, strings.HasPrefix(r.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
-		filepath.Join(repo, ".ethos", "missions", ancMission)),
+		filepath.Join(repo, ".punt-labs", "ethos", "missions", ancMission)),
 		"artifacts dir must nest under the inherited mission")
 }

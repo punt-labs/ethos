@@ -40,7 +40,7 @@ import (
 // DES-054 phase 1 storage layout:
 //
 //   - When repoRoot is set, the write lands in
-//     <repoRoot>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
+//     <repoRoot>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
 //     The per-session directory is created on first write; subsequent
 //     writes in the same session reuse the existing date directory
 //     even if the wall clock has rolled over a day boundary.
@@ -52,7 +52,7 @@ import (
 // The function never silently drops a write: an mkdir or open
 // failure writes a warning to stderr but allows the tool call to
 // proceed. Migration: in phase 1, repo-tree writes use the new
-// <repoRoot>/.ethos/sessions/<date>-<id>/audit.jsonl layout; only
+// <repoRoot>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl layout; only
 // sessions launched outside a repo still write to the legacy
 // <globalSessionsDir>/<id>.audit.jsonl path. A v3.11.0 reader sees
 // only the legacy path, so repo-tree sessions written under v3.12

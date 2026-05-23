@@ -520,7 +520,7 @@ var missionExportCmd = &cobra.Command{
 
 Copies the mission's contract and final result (the last result on file)
 to <dir>/<id>.contract.yaml and <dir>/<id>.result.yaml. The directory
-is created if it doesn't exist. Default --dir is .ethos/missions/ in
+is created if it doesn't exist. Default --dir is .punt-labs/ethos/missions/ in
 the current working directory.
 
 If the mission has no result yet (still open), only the contract is
@@ -546,11 +546,11 @@ DES-054 per-repo tree.
 
 The legacy layout is ~/.punt-labs/ethos/missions/<id>.yaml plus sibling
 .jsonl / .results.yaml / .reflections.yaml files. The repo layout is
-<repo>/.ethos/missions/<id>/{contract.yaml,log.jsonl,results.yaml,
+<repo>/.punt-labs/ethos/missions/<id>/{contract.yaml,log.jsonl,results.yaml,
 reflections.yaml}.
 
 Without a mission-id argument, every legacy mission whose contract_id
-is referenced by an audit entry in <repo>/.ethos/sessions/ is moved.
+is referenced by an audit entry in <repo>/.punt-labs/ethos/sessions/ is moved.
 Missions belonging to other repos' work trees are left in place —
 cross-repo policy.
 
@@ -559,7 +559,7 @@ the move stages artifacts in a sibling temp directory and renames into
 place; a failure before the rename leaves the legacy tree intact.
 
 Flags:
-  --to-repo   migrate into the per-repo .ethos/missions/ tree (default
+  --to-repo   migrate into the per-repo .punt-labs/ethos/missions/ tree (default
               and currently the only target)
   --dry-run   show what would change without writing or deleting
   --verbose   print one decision line per mission to stdout
@@ -567,7 +567,7 @@ Flags:
 Exit codes:
   0  migration completed (including the no-op "nothing to migrate" case)
   1  one or more missions failed mid-migration; legacy files stayed in place
-  2  must run inside a repo (no <repo>/.ethos/missions/ destination)`,
+  2  must run inside a repo (no <repo>/.punt-labs/ethos/missions/ destination)`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var id string
@@ -626,7 +626,7 @@ func init() {
 	missionLogCmd.Flags().StringVar(&missionLogSinceFilter, "since", "",
 		"Filter by RFC3339 timestamp (events on or after)")
 
-	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".ethos/missions",
+	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".punt-labs/ethos/missions",
 		"Directory to export artifacts into")
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
@@ -640,7 +640,7 @@ func init() {
 	missionDispatchCmd.Flags().IntVar(&dispatchBudget, "budget", 2, "Round budget")
 
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateToRepo, "to-repo", true,
-		"Migrate into the per-repo .ethos/missions/ tree (default and currently the only target)")
+		"Migrate into the per-repo .punt-labs/ethos/missions/ tree (default and currently the only target)")
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateDryRun, "dry-run", false,
 		"Enumerate what would migrate without making changes")
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,

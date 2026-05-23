@@ -11,16 +11,16 @@ import (
 )
 
 // sessionDateFormat is the YYYY-MM-DD prefix on a per-session
-// directory under <repoRoot>/.ethos/sessions/. UTC by convention so
-// two operators in different timezones see the same directory name
-// for the same session.
+// directory under <repoRoot>/.punt-labs/ethos/sessions/. UTC by
+// convention so two operators in different timezones see the same
+// directory name for the same session.
 const sessionDateFormat = "2006-01-02"
 
 // resolveAuditWritePath returns the absolute path to a session's
 // audit JSONL file in the layer that should receive new appends.
 //
 // When repoRoot is non-empty, the path lives under
-// <repoRoot>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
+// <repoRoot>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
 // The per-session directory is created if needed. If a directory
 // with a different date prefix already exists for the same
 // session-id (the wall clock has rolled over since the session
@@ -53,13 +53,13 @@ func resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID string, now ti
 }
 
 // resolveRepoSessionDir returns the per-session directory under the
-// repo's .ethos/sessions/ tree. Reuses an existing
+// repo's .punt-labs/ethos/sessions/ tree. Reuses an existing
 // <date>-<session-id> directory when one exists (any date prefix);
 // otherwise builds a fresh path with today's UTC date. Splitting the
 // directory resolution from the path build lets the reader walk the
 // same logic without an mkdir side effect.
 func resolveRepoSessionDir(repoRoot, sessionID string, now time.Time) (string, error) {
-	base := filepath.Join(repoRoot, ".ethos", "sessions")
+	base := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions")
 	existing, err := findSessionDir(base, sessionID)
 	if err != nil {
 		return "", err
@@ -71,7 +71,7 @@ func resolveRepoSessionDir(repoRoot, sessionID string, now time.Time) (string, e
 	return filepath.Join(base, date+"-"+filepath.Base(sessionID)), nil
 }
 
-// findSessionDir walks <repoRoot>/.ethos/sessions and returns the
+// findSessionDir walks <repoRoot>/.punt-labs/ethos/sessions and returns the
 // path of the first directory whose name ends in "-<sessionID>"
 // (any date prefix). Returns the empty string and nil error when
 // no such directory exists. A non-existent base directory is

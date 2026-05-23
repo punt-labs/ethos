@@ -282,7 +282,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		b.WriteString("      hooks:\n")
 		b.WriteString("        - type: command\n")
 		// Path-filtered make check. Reviewer-style agents emit 20KB+
-		// markdown over many Write calls into .tmp/ and .ethos/ to
+		// markdown over many Write calls into .tmp/ and .punt-labs/ethos/ to
 		// stage results and traces; running `make check` after each
 		// of those writes serializes lint+test across the agent's
 		// stream and trips the 600s Claude Code watchdog (bug
@@ -297,7 +297,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		//      a path is "unknown", which must trigger the gate, not
 		//      skip it (Copilot reviews on PR #326).
 		//
-		//   2. Paths under .tmp/ or .ethos/ — bypass (exit 0). These
+		//   2. Paths under .tmp/ or .punt-labs/ethos/ — bypass (exit 0). These
 		//      are scratch and trace dirs; nothing under them is
 		//      production source. Patterns cover both leading and
 		//      embedded segments so worktree layouts (`*/.tmp/*`) and
@@ -335,7 +335,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// command stays POSIX-sh compatible (it runs under /bin/sh,
 		// which is dash on Debian/Ubuntu): no `set -o pipefail`, no
 		// process substitution, no bash-isms in the case patterns.
-		b.WriteString("          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.ethos/*|.tmp/*|.ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
+		b.WriteString("          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
 	}
 	b.WriteString("---\n")
 

@@ -42,13 +42,13 @@ type Store struct {
 	archetypes *ArchetypeStore // optional; validates Type on Create
 
 	// repoRoot, when set, names the repository directory under which
-	// trace summaries are written (<repoRoot>/.ethos/missions.jsonl).
+	// trace summaries are written (<repoRoot>/.punt-labs/ethos/missions.jsonl).
 	// Set via WithRepoRoot (legacy single-tree mode) or
 	// NewStoreWithRoots (two-tree mode).
 	repoRoot string
 
 	// twoTreeStorage, when true, activates the DES-054 phase 1
-	// per-mission directory layout under <repoRoot>/.ethos/missions/.
+	// per-mission directory layout under <repoRoot>/.punt-labs/ethos/missions/.
 	// Set only by NewStoreWithRoots; WithRepoRoot leaves it false so
 	// existing callers that wired a trace destination keep the legacy
 	// flat <root>/missions/<id>.yaml shape.
@@ -60,7 +60,7 @@ type Store struct {
 // Preserved as a thin wrapper over NewStoreWithRoots for backward
 // compatibility — existing callers that only know about the legacy
 // global tree compile unchanged. New callers that want the DES-054
-// two-tree storage layout (per-repo missions under .ethos/, fallback
+// two-tree storage layout (per-repo missions under .punt-labs/ethos/, fallback
 // reads from global) should use NewStoreWithRoots.
 func NewStore(root string) *Store {
 	return NewStoreWithRoots("", root)
@@ -70,7 +70,7 @@ func NewStore(root string) *Store {
 // across two roots — per-repo and global — per DES-054 phase 1.
 //
 // When repoRoot is non-empty, Create writes new missions under
-// <repoRoot>/.ethos/missions/<mission-id>/; Load, Update, Close, and
+// <repoRoot>/.punt-labs/ethos/missions/<mission-id>/; Load, Update, Close, and
 // the sibling artifact paths (results, reflections, log) read the
 // repo tree first and fall back to the legacy <globalRoot>/missions/
 // shape for backward compatibility. List unions both trees with
@@ -128,7 +128,7 @@ func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 
 // WithRepoRoot sets the repository root for the post-close trace
 // summary. When set, Store.Close appends a JSONL summary line to
-// <repoRoot>/.ethos/missions.jsonl so every closed mission is
+// <repoRoot>/.punt-labs/ethos/missions.jsonl so every closed mission is
 // visible in the repo's git history. An empty root disables the
 // trace.
 //
@@ -933,7 +933,7 @@ func DecodeContractStrict(data []byte, label string) (*Contract, error) {
 // mode (NewStore), only the flat global directory is walked.
 //
 // The two trees have different file shapes: the repo tree carries
-// per-mission directories (<repoRoot>/.ethos/missions/<id>/contract.yaml),
+// per-mission directories (<repoRoot>/.punt-labs/ethos/missions/<id>/contract.yaml),
 // the global tree carries flat files (<globalRoot>/missions/<id>.yaml).
 // Both shapes are normalized to a bare mission ID before merging.
 func (s *Store) List() ([]string, error) {
@@ -1061,7 +1061,7 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 // file plus rename. The caller must hold the contract's flock.
 //
 // In the two-root layout, ensureMissionDir creates the per-mission
-// directory under <repoRoot>/.ethos/missions/<id>/ before the temp
+// directory under <repoRoot>/.punt-labs/ethos/missions/<id>/ before the temp
 // file is opened; the legacy single-root layout has no per-mission
 // directory and skips the mkdir.
 func (s *Store) writeContract(c *Contract) error {
@@ -1155,7 +1155,19 @@ func (s *Store) withCreateLock(fn func() error) error {
 	// serialize on Create. Acquisition order is global → repo;
 	// release is reverse via defer LIFO. v3.13.0 drops the global
 	// acquisition once the field is fully on v3.12+.
+	//
+	// When repoRoot resolves to the same tree as globalRoot (test
+	// fixtures and single-tree deployments after the .ethos →
+	// .punt-labs/ethos relocation), the two lock paths point at the
+	// same inode and a second Flock(LOCK_EX) on the same FD-table
+	// entry blocks forever. Compare absolute paths first and skip
+	// the second acquire when they collide.
 	if repoLockPath := s.repoCreateLockPath(); repoLockPath != "" {
+		absRepo, _ := filepath.Abs(repoLockPath)
+		absGlobal, _ := filepath.Abs(s.createLockPath())
+		if absRepo == absGlobal {
+			return fn()
+		}
 		if err := os.MkdirAll(filepath.Dir(repoLockPath), 0o700); err != nil {
 			return fmt.Errorf("creating repo missions directory: %w", err)
 		}

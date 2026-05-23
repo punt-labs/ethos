@@ -272,7 +272,7 @@ func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation 
 
 // delegationLoader returns a loader the depth walker uses to follow
 // the parent_delegation chain. The loader scans every mission tree
-// under <repo>/.ethos/missions/* for a matching record because Tier B
+// under <repo>/.punt-labs/ethos/missions/* for a matching record because Tier B
 // inheritance can promote a child under an ancestor's missionID while
 // the immediate parent_delegation lives under a different mission. A
 // single-mission loader keyed on the inherited missionID fails on the
@@ -386,7 +386,7 @@ func tierBMissionStore() (*mission.Store, error) {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	// NewStoreWithRoots activates the DES-054 two-tree dispatch:
-	// reads check the repo tree first (<repoRoot>/.ethos/missions/),
+	// reads check the repo tree first (<repoRoot>/.punt-labs/ethos/missions/),
 	// then fall back to the global tree. WithRepoRoot alone is
 	// trace-only and would miss contracts that live in the repo tree
 	// (Copilot HIGH-equivalent on PR #327: Tier B dispatch would

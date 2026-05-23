@@ -3101,7 +3101,7 @@ func TestStore_Close_WritesTraceSummary(t *testing.T) {
 	_, err := s.Close(c.MissionID, StatusClosed)
 	require.NoError(t, err)
 
-	path := filepath.Join(repoDir, ".ethos", "missions.jsonl")
+	path := filepath.Join(repoDir, ".punt-labs", "ethos", "missions.jsonl")
 	f, err := os.Open(path)
 	require.NoError(t, err, "trace file should exist after Close")
 	defer f.Close()
@@ -3703,7 +3703,7 @@ func TestStore_TwoRoot_CreateWritesToRepoTree(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	// The per-mission directory must exist under the repo tree.
-	repoContract := filepath.Join(repoRoot, ".ethos", "missions",
+	repoContract := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
 		"m-2026-05-22-001", "contract.yaml")
 	_, err := os.Stat(repoContract)
 	require.NoError(t, err, "contract must land under repo tree")
@@ -3780,7 +3780,7 @@ func TestStore_TwoRoot_UpdateStaysInItsLayer(t *testing.T) {
 	require.NoError(t, s.Update(loaded))
 
 	// The repo tree must be empty — no silent copy.
-	repoContract := filepath.Join(repoRoot, ".ethos", "missions",
+	repoContract := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
 		"m-2026-05-22-020", "contract.yaml")
 	_, err = os.Stat(repoContract)
 	assert.True(t, os.IsNotExist(err),
@@ -3817,7 +3817,7 @@ func TestStore_TwoRoot_CloseStaysInItsLayer(t *testing.T) {
 	// No repo-tree per-mission directory should have been created
 	// for this mission's data (the missions.jsonl trace lives at
 	// .ethos/missions.jsonl, not under .ethos/missions/<id>/).
-	repoMissionDir := filepath.Join(repoRoot, ".ethos", "missions",
+	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
 		"m-2026-05-22-021")
 	_, err = os.Stat(repoMissionDir)
 	assert.True(t, os.IsNotExist(err),
@@ -3838,13 +3838,13 @@ func TestStore_TwoRoot_ResultsAndReflectionsInRepoTree(t *testing.T) {
 	submitRoundResult(t, s, c, VerdictPass)
 
 	// results.yaml must live under the per-mission directory.
-	repoResults := filepath.Join(repoRoot, ".ethos", "missions",
+	repoResults := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
 		"m-2026-05-22-030", "results.yaml")
 	_, err := os.Stat(repoResults)
 	require.NoError(t, err, "results.yaml must land in the per-mission dir")
 
 	// log.jsonl must also live under the per-mission directory.
-	repoLog := filepath.Join(repoRoot, ".ethos", "missions",
+	repoLog := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
 		"m-2026-05-22-030", "log.jsonl")
 	_, err = os.Stat(repoLog)
 	require.NoError(t, err, "log.jsonl must land in the per-mission dir")
@@ -3886,7 +3886,7 @@ func TestStore_TwoRoot_LegacyTraceRepoRootStaysFlat(t *testing.T) {
 	_, err := os.Stat(flatContract)
 	require.NoError(t, err, "legacy WithRepoRoot must keep the flat shape")
 
-	repoMissionDir := filepath.Join(repoRoot, ".ethos", "missions",
+	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
 		"m-2026-05-22-040")
 	_, err = os.Stat(repoMissionDir)
 	assert.True(t, os.IsNotExist(err),
