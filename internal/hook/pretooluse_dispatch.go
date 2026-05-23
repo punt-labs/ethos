@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
@@ -313,10 +314,24 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 // tierBRepoRoot resolves the enclosing repo root for the Tier B
 // skeleton write. Mirrors the resolve used by tierBMissionStore so
 // the lock files, record.yaml, and the MISSION_ARTIFACTS_DIR env all
-// agree on the same .ethos tree. Returns the working directory when
-// no enclosing repo is found — every call site downstream is
-// defensive against an empty repoRoot.
+// agree on the same .ethos tree.
+//
+// Resolution order:
+//  1. ETHOS_REPO_ROOT env override
+//  2. resolve.FindRepoRoot (walk for .git)
+//  3. os.Getwd fallback (logs to stderr; downstream sites defend
+//     against an empty return)
+//
+// The env override means the precondition evaluator's loadSessionReads
+// and the dispatch + inheritance paths all resolve to the same tree
+// (Bugbot MED on PR #328: previously dispatch + inheritance used
+// FindRepoRoot only while audit + preconditions honored the env var,
+// allowing the dispatch path to write to a different tree than the
+// hook later read).
 func tierBRepoRoot() string {
+	if v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT")); v != "" {
+		return v
+	}
 	if root := resolve.FindRepoRoot(); root != "" {
 		return root
 	}
@@ -368,7 +383,10 @@ func tierBMissionStore() (*mission.Store, error) {
 	// trace-only and would miss contracts that live in the repo tree
 	// (Copilot HIGH-equivalent on PR #327: Tier B dispatch would
 	// block "malformed MISSION_ID" on any in-repo contract).
-	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), globalRoot), nil
+	// Use tierBRepoRoot() (env-aware) so the mission Store walks the
+	// same tree as the dispatch + inheritance + audit + preconditions
+	// paths (Bugbot MED on PR #328: split repoRoot resolution).
+	return mission.NewStoreWithRoots(tierBRepoRoot(), globalRoot), nil
 }
 
 // writeAgentBlock emits a block decision with a named reason. Used on

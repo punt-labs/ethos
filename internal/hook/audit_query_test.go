@@ -104,23 +104,31 @@ func TestQueryAuditByDelegation_LegacyFallback(t *testing.T) {
 	assert.Equal(t, "sess-legacy", got[0].Session)
 }
 
-func TestQueryAuditByDelegation_LegacySkippedWhenRepoSessionExists(t *testing.T) {
+// TestQueryAuditByDelegation_LegacyAlsoScannedWhenRepoSessionExists
+// asserts that the query walker reads BOTH repo-tree AND legacy for
+// the same session ID. During a migration window, partial entries
+// can live in either place; the operator runs `ethos audit migrate`
+// to consolidate. Skipping legacy by session-id presence would hide
+// matching entries that hadn't yet been merged (Bugbot MED on PR
+// #328: prior behavior skipped legacy as soon as a repo dir existed,
+// which masked entries the migration hadn't yet copied over).
+func TestQueryAuditByDelegation_LegacyAlsoScannedWhenRepoSessionExists(t *testing.T) {
 	repo := t.TempDir()
 	globalDir := filepath.Join(t.TempDir(), "sessions")
 
-	// Same session id has both a repo-tree dir and a legacy file. The
-	// repo-tree entries are authoritative; the legacy file is ignored
-	// to avoid double-counting (post-migrate residual).
+	// Same session id has both a repo-tree dir and a legacy file with
+	// different entries (mid-migration state). Both must surface.
 	writeRepoTreeSession(t, repo, "2026-05-22", "sess-dup", []auditEntry{
-		queryEntry("sess-dup", "2026-05-22T10:00:00Z", "Bash", "h1", "d-007"),
+		queryEntry("sess-dup", "2026-05-22T10:00:00Z", "Bash", "h-repo", "d-007"),
 	})
 	writeLegacySession(t, globalDir, "sess-dup", []auditEntry{
-		queryEntry("sess-dup", "2026-05-22T10:00:00Z", "Bash", "h1", "d-007"),
+		queryEntry("sess-dup", "2026-05-22T09:00:00Z", "Bash", "h-legacy", "d-007"),
 	})
 
 	got, err := QueryAuditByDelegation(repo, globalDir, "d-007")
 	require.NoError(t, err)
-	require.Len(t, got, 1, "legacy file must not double-count when repo-tree session exists")
+	require.Len(t, got, 2,
+		"both repo-tree and legacy entries must surface during a migration window")
 }
 
 func TestQueryAuditByDelegation_NoMatches(t *testing.T) {

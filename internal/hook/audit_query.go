@@ -138,10 +138,16 @@ func queryRepoTreeAudit(base, delegationID string) ([]auditEntry, []string, erro
 	return out, sessions, nil
 }
 
-// queryLegacyAudit walks <globalSessionsDir>/<id>.audit.jsonl files,
-// skipping any session id already seen in the repo tree. A missing
-// directory is not an error.
-func queryLegacyAudit(globalSessionsDir, delegationID string, seen map[string]struct{}) ([]auditEntry, error) {
+// queryLegacyAudit walks <globalSessionsDir>/<id>.audit.jsonl files
+// for matching delegation entries. The `seen` argument is no longer
+// used to skip sessions — during a migration window, a session can
+// have a repo-tree dir AND legacy entries that have not yet been
+// merged, so skipping legacy by session-id presence would hide
+// matching entries (Bugbot MED on PR #328). Callers that want
+// dedup should run `ethos audit migrate` first, which is the
+// authoritative consolidation tool. A missing directory is not an
+// error.
+func queryLegacyAudit(globalSessionsDir, delegationID string, _ map[string]struct{}) ([]auditEntry, error) {
 	if globalSessionsDir == "" {
 		return nil, nil
 	}
@@ -164,9 +170,6 @@ func queryLegacyAudit(globalSessionsDir, delegationID string, seen map[string]st
 		}
 		sessionID := strings.TrimSuffix(name, ".audit.jsonl")
 		if sessionID == "" {
-			continue
-		}
-		if _, ok := seen[sessionID]; ok {
 			continue
 		}
 		path := filepath.Join(globalSessionsDir, name)
