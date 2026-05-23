@@ -27,6 +27,13 @@ that other tools compose with:
 - **Delegation** — typed mission contracts with file-level write-sets,
   frozen evaluators, bounded rounds, and an append-only audit log.
   Pipeline templates chain missions into multi-stage workflows.
+- **Audited delegation** — every `Agent(...)` call (whether contract-
+  bound or ad-hoc) gets a delegation ID, a per-delegation record on
+  disk, and a tool-call audit trail. Contracts can gate tool calls on
+  process invariants ("a verdict requires PNG inspection") rather than
+  just paths. Commits made under a contract carry `Mission:` and
+  `Delegation:` git trailers so `git log` answers "what authorized this
+  change" years later. See [Audited delegation](docs/audited-delegation.md).
 - **Composable integrations** — every tool in the stack gains richer
   context when ethos is present and works without it when it is not.
   This is the core design principle, not a feature.
@@ -137,6 +144,7 @@ Each layer works alone. Add the next when you want more structure.
 | Identity | Consistent agent persona across sessions. Hooks fire automatically. | This page |
 | Team | Roles with tool restrictions, team graph with `reports_to` edges, auto-generated `.claude/agents/` files with anti-responsibilities | [Team setup](docs/team-setup.md) |
 | Missions | Typed delegation contracts with write-sets, bounded rounds, frozen evaluators, audit logs. Closing a mission auto-appends a summary to `.ethos/missions.jsonl` for commit-ready traceability. | [Archetypes and pipelines](docs/archetypes-and-pipelines.md) |
+| Audit | Every `Agent(...)` call is recorded with full prompt body, parent linkage, and per-delegation tool-call log. Contracts can gate tool calls on prior reads. Commits carry `Mission:`/`Delegation:` git trailers. | [Audited delegation](docs/audited-delegation.md) |
 
 ## How it integrates
 
@@ -175,6 +183,9 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos mission pipeline list` / `show <name>` | Query pipeline templates |
 | `ethos mission pipeline instantiate <name> --var key=value` | Create N missions from a pipeline |
 | `ethos mission lint <contract.yaml>` | Advisory pre-delegation linter |
+| `ethos mission migrate --to-repo` | One-time relocation of legacy global missions into the repo-tree layout |
+| `ethos audit show --delegation <id>` | Print every tool call made under a delegation (across sessions) |
+| `ethos audit migrate` | One-time relocation of legacy global audit logs into the repo-tree layout |
 
 ## How this is different
 
@@ -192,12 +203,19 @@ rather than competition.
 
 ## Status
 
-v3.9.0 — all five planned phases shipped plus onboarding. 24 KLOC
-production Go, 38 KLOC tests, A+ Go Report Card. Identity, teams,
-mission contracts, write-set admission, frozen evaluators, bounded
-rounds, audit logs, archetypes, pipelines, automatic mission
-traceability, and mission dispatch one-liner are in daily use by
-Punt Labs.
+v3.11.0 released. Unreleased branch carries DES-054 — the audited
+delegation initiative — across three phases on `main`:
+
+| Phase | What shipped |
+|-------|--------------|
+| 1 | Date-keyed two-tree mission storage. Audit entry enrichment (`parent_session`, `agent_id`, `delegation_id`, full `tool_input`, sha256 hash). Per-namespace counters. |
+| 2 | `PreToolUse`-on-`Agent` dispatch. Tier A (ad-hoc) advisory + audit record; Tier B (contract-bound) atomic skeleton + per-mission/per-delegation flocks + depth refusal. |
+| 3 | Tier B inheritance walk (`SpawnPattern` + `InheritsContract`). Precondition evaluator. `ethos audit migrate`, `ethos audit show --delegation`, `ethos mission migrate --to-repo`. `commit-msg` trailer hook installed by `install.sh`. |
+
+Identity, teams, mission contracts, write-set admission, frozen
+evaluators, bounded rounds, archetypes, pipelines, automatic mission
+traceability, mission dispatch one-liner, and audited delegation are
+in daily use by Punt Labs.
 
 New users run `ethos setup` to get a working team in under 60
 seconds. Two embedded bundles ship: **foundation** (4-agent
@@ -214,6 +232,7 @@ cross-tool integration. See the [roadmap](docs/ETHOS-ROADMAP.md).
 [Onboarding design](docs/onboarding.md) ·
 [Team setup](docs/team-setup.md) ·
 [Archetypes and pipelines](docs/archetypes-and-pipelines.md) ·
+[Audited delegation](docs/audited-delegation.md) ·
 [Gstack starter team](docs/gstack-getting-started.md) ·
 [Persona animation](docs/persona-animation.md) ·
 [Agent definitions](docs/agent-definitions.md) ·
