@@ -565,15 +565,6 @@ func TestHandlePreToolUse_StatAmbiguous_LogsAndBlocks(t *testing.T) {
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", parent+"/declared.go")
 	t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", locked)
 
-	// Redirect stderr to a pipe so the test can read the audit line.
-	oldStderr := os.Stderr
-	r, w, err := os.Pipe()
-	require.NoError(t, err)
-	os.Stderr = w
-	t.Cleanup(func() {
-		os.Stderr = oldStderr
-	})
-
 	payload := map[string]any{
 		"tool_name":  "Write",
 		"tool_input": map[string]any{"file_path": target},
@@ -582,14 +573,11 @@ func TestHandlePreToolUse_StatAmbiguous_LogsAndBlocks(t *testing.T) {
 	require.NoError(t, err)
 
 	var out bytes.Buffer
-	hookErr := HandlePreToolUse(strings.NewReader(string(data)), &out)
-	require.NoError(t, w.Close())
-	os.Stderr = oldStderr
+	var hookErr error
+	stderrText := captureStderr(t, func() {
+		hookErr = HandlePreToolUse(strings.NewReader(string(data)), &out)
+	})
 	require.NoError(t, hookErr)
-
-	stderrBytes, err := io.ReadAll(r)
-	require.NoError(t, err)
-	stderrText := string(stderrBytes)
 
 	var result PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
