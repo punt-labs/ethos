@@ -41,7 +41,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (17 total — must match the numbered list below
+// Validation rules (19 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated}
@@ -77,6 +77,19 @@ const (
 //     .js, .md, .yaml, .yml, .json, .toml, .rs, .java, .cpp, .h, .c)
 //     is rejected. List specific known new files in write_set
 //     instead. DES-052.
+//  18. preconditions entries: Form is one of {implicit, explicit};
+//     Message is non-empty (a failed gate is never silently named);
+//     when Form == explicit, RequireRead is non-empty and every entry
+//     is a well-formed relative path (same per-entry rules as
+//     write_set, with ${inputs.X} placeholders permitted in the path).
+//     DES-054.
+//  19. delegations entries: each SpawnPattern must compile as an
+//     anchored regular expression (the same `^(?:...)$` form
+//     MatchSpawnPattern uses at match time). Empty SpawnPattern is
+//     allowed (the runtime path treats it as never-matches). A
+//     malformed regex surfaces with the pattern and the Go regexp
+//     parser error — admission-time so the operator sees the
+//     diagnostic before any spawn fires. DES-054 phase 3.
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
@@ -241,7 +254,109 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		}
 	}
 
+	// preconditions: per-entry shape check. Empty list is the
+	// backward-compatible default (contract has no read-set admission
+	// requirements). DES-054 v5 §"PreToolUse procedure preconditions"
+	// defines two forms; Validate rejects any other value at the trust
+	// boundary so the evaluator never sees an unknown form.
+	for i, p := range c.Preconditions {
+		if err := validatePrecondition(p); err != nil {
+			return fmt.Errorf("preconditions[%d]: %w", i, err)
+		}
+	}
+
+	// delegations: compile each SpawnPattern under the same anchored
+	// form MatchSpawnPattern uses at match time. A malformed regex
+	// surfaces here — admission time — so the operator never deploys
+	// a contract whose inheritance dispatch path silently no-matches
+	// at runtime. Empty pattern is allowed (matches nothing); the
+	// runtime path short-circuits before regex compile in that case.
+	// DES-054 phase 3.
+	for i, t := range c.Delegations {
+		if t.SpawnPattern == "" {
+			continue
+		}
+		if _, err := regexp.Compile("^(?:" + t.SpawnPattern + ")$"); err != nil {
+			return fmt.Errorf("delegations[%d]: invalid spawn_pattern %q: %w",
+				i, t.SpawnPattern, err)
+		}
+	}
+
 	return nil
+}
+
+// validatePrecondition runs rule 18 over a single Precondition. Form
+// must be one of {implicit, explicit}; Message must be non-empty so a
+// failed gate is never silently named; explicit form requires a
+// non-empty RequireRead with every entry passing the same per-entry
+// path checks as write_set. Placeholders of the form ${inputs.X} are
+// permitted in the path — they are stripped before the per-entry
+// helper sees the string so the dollar/brace/dot characters don't
+// trip the control-char or zero-width gates.
+func validatePrecondition(p Precondition) error {
+	switch p.Form {
+	case PreconditionFormImplicit, PreconditionFormExplicit:
+		// ok
+	default:
+		return fmt.Errorf("invalid form %q: must be one of %q, %q",
+			p.Form, PreconditionFormImplicit, PreconditionFormExplicit)
+	}
+	if strings.TrimSpace(p.Message) == "" {
+		return fmt.Errorf("message is required")
+	}
+	if containsControlChar(p.Message) {
+		return fmt.Errorf("message contains control character")
+	}
+	if p.Form == PreconditionFormExplicit {
+		if len(p.RequireRead) == 0 {
+			return fmt.Errorf("explicit form requires non-empty require_read")
+		}
+		for i, entry := range p.RequireRead {
+			// Reject malformed substitution markers BEFORE stripping
+			// the well-formed ones. ${inputs.} (empty key),
+			// ${env.HOME}, ${badkey}, and any other shape that does
+			// not match the well-formed pattern would otherwise pass
+			// validation here only to surface as an "unevaluable
+			// predicate" at every PreToolUse fire (Copilot on PR
+			// #328: validation must distinguish "user typed a
+			// supported placeholder" from "user typed something
+			// that won't ever resolve").
+			stripped := stripInputsPlaceholders(entry)
+			if strings.Contains(stripped, "${") {
+				return fmt.Errorf(
+					"require_read[%d]: unsupported substitution marker in %q; "+
+						"only ${inputs.<key>} is recognized",
+					i, entry)
+			}
+			if err := validateWriteSetEntry(stripped); err != nil {
+				return fmt.Errorf("require_read[%d]: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
+// inputsPlaceholderPattern matches ${inputs.X} substitution markers in
+// a precondition require_read entry. The substitution is resolved by
+// the evaluator at PreToolUse time against the contract's Inputs map;
+// the validator only needs to strip the marker before running the
+// per-entry path checks so the dollar/brace/dot characters don't fail
+// the control-char or zero-width gates.
+// Character class matches the runtime inputsRefPattern in
+// internal/hook/preconditions.go — dotted keys like ${inputs.files.0}
+// must be stripped here so the per-entry validator sees the same
+// shape the evaluator will resolve. Without the dot, validation
+// would treat the unmatched marker as a literal path component
+// and fail the control-char gate (Bugbot LOW on PR #328).
+var inputsPlaceholderPattern = regexp.MustCompile(`\$\{inputs\.[a-zA-Z0-9_.]+\}`)
+
+// stripInputsPlaceholders returns s with every ${inputs.X} substring
+// replaced by a single 'x' character. The replacement preserves the
+// general shape of the path so the per-entry validator still sees a
+// non-empty, control-char-free relative path. The choice of 'x' is
+// arbitrary; any single ASCII letter would do.
+func stripInputsPlaceholders(s string) string {
+	return inputsPlaceholderPattern.ReplaceAllString(s, "x")
 }
 
 // codeFileExtensions lists the file extensions a directory-shaped

@@ -96,6 +96,40 @@ type Contract struct {
 	// daemon enforces ordering.
 	DependsOn []string `yaml:"depends_on,omitempty" json:"depends_on,omitempty"`
 
+	// Preconditions are admission gates evaluated by the PreToolUse
+	// hook before any non-Read tool call under a Tier B contract.
+	// DES-054 v5 §"PreToolUse procedure preconditions" defines two
+	// predicate forms:
+	//
+	//   - implicit: the tool input's target file_path(s) must each
+	//     have been Read in this session.
+	//   - explicit: each entry in RequireRead (with `${inputs.X}`
+	//     substitution against the contract's Inputs) must have been
+	//     Read in this session.
+	//
+	// A violated predicate blocks with the contract-supplied Message.
+	// An unevaluable predicate (malformed substitution, missing input,
+	// unreadable audit log) blocks under StrictPreconditions=true
+	// (default) and warns + allows under StrictPreconditions=false.
+	//
+	// Empty list disables the gate — the contract has no read-set
+	// admission requirements. See internal/hook/preconditions.go for
+	// the evaluator.
+	Preconditions []Precondition `yaml:"preconditions,omitempty" json:"preconditions,omitempty"`
+
+	// StrictPreconditions controls the fail-open vs fail-closed
+	// behavior of the precondition evaluator on unevaluable predicates
+	// (malformed substitution, missing input, unreadable audit log). A
+	// nil pointer is the default — see EffectiveStrictPreconditions —
+	// and resolves to true (fail closed). An explicit `false` is the
+	// documented escape hatch for migration from contracts written
+	// before DES-054 v5.
+	//
+	// `*bool` keeps the YAML omitempty distinguishable from an
+	// explicit `false`: the on-disk shape is "unset = default strict;
+	// strict_preconditions: false = explicit opt-out".
+	StrictPreconditions *bool `yaml:"strict_preconditions,omitempty" json:"strict_preconditions,omitempty"`
+
 	// Delegations is the per-spawn template list for Tier B inheritance.
 	// DES-054 v5 §"PreToolUse-on-Agent" dispatch rule (a): when a worker
 	// running under this contract invokes the Agent tool, the hook walks
@@ -112,6 +146,42 @@ type Contract struct {
 	// dispatch or Tier A. See DelegationTemplate in delegation.go for
 	// the per-entry shape.
 	Delegations []DelegationTemplate `yaml:"delegations,omitempty" json:"delegations,omitempty"`
+}
+
+// Precondition is one admission gate evaluated by the PreToolUse hook
+// before a non-Read tool call under a Tier B contract. Two Forms:
+//
+//   - "implicit": the tool's target file_path(s) must each have been
+//     Read in this session. RequireRead is ignored.
+//   - "explicit": each entry in RequireRead — after `${inputs.X}`
+//     substitution against the contract's Inputs — must have been
+//     Read in this session.
+//
+// Message is the block reason surfaced to Claude Code when the
+// predicate fails. Empty Message is rejected at Validate time so a
+// failed gate is never silently named.
+type Precondition struct {
+	Form        string   `yaml:"form" json:"form"`
+	RequireRead []string `yaml:"require_read,omitempty" json:"require_read,omitempty"`
+	Message     string   `yaml:"message,omitempty" json:"message,omitempty"`
+}
+
+// PreconditionForm values accepted by Precondition.Form.
+const (
+	PreconditionFormImplicit = "implicit"
+	PreconditionFormExplicit = "explicit"
+)
+
+// EffectiveStrictPreconditions returns the effective fail-mode for
+// unevaluable precondition predicates. A nil StrictPreconditions
+// pointer (the field was omitted from the YAML) resolves to true —
+// fail closed by default. An explicit `*c.StrictPreconditions =
+// false` is the documented escape hatch.
+func (c *Contract) EffectiveStrictPreconditions() bool {
+	if c == nil || c.StrictPreconditions == nil {
+		return true
+	}
+	return *c.StrictPreconditions
 }
 
 // Evaluator is the frozen reviewer pinned at mission launch.
