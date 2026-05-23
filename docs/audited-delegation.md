@@ -63,11 +63,13 @@ ethos: ad-hoc Agent spawn (no mission contract). Consider 'ethos mission dispatc
 `Agent` tool calls route through the `PreToolUse` hook. Routing rule:
 
 1. `MISSION_ID` env set → Tier B by explicit dispatch.
-2. `MISSION_ID` unset, `PARENT_DELEGATION_ID` set → try Tier B by
-   inheritance (walks the parent contract's `delegations[]` for a
-   matching `spawn_pattern`; falls through to Tier A on any miss or
-   error).
-3. Neither set → Tier A.
+2. `MISSION_ID` unset, active-mission sidecar present → Tier B via
+   the sidecar (see [Claiming a mission](#claiming-a-mission) below).
+3. `MISSION_ID` unset, sidecar absent, `PARENT_DELEGATION_ID` set →
+   try Tier B by inheritance (walks the parent contract's
+   `delegations[]` for a matching `spawn_pattern`; falls through to
+   Tier A on any miss or error).
+4. None of the above → Tier A.
 
 On every path the hook emits an `additional_env` block consumed by
 the spawned worker:
@@ -83,6 +85,39 @@ the spawned worker:
 The worker inherits these. Any `Agent` call the worker subsequently
 makes carries `PARENT_DELEGATION_ID` and `PARENT_SESSION_ID` into the
 child spawn — that's how the chain reconstructs.
+
+### Claiming a mission
+
+The leader's Claude Code session cannot export `MISSION_ID` into its
+own process env from within an active session, so an explicit
+`Agent()` call would otherwise dispatch as Tier A. The active-mission
+sidecar bridges the gap:
+
+```bash
+ethos mission claim m-2026-05-23-016
+# now every Agent() call from this session dispatches as Tier B
+# under m-2026-05-23-016 until `ethos mission release` clears it
+ethos mission release
+```
+
+`claim` writes `<globalRoot>/sessions/<session-id>/active-mission`
+with the mission ID. The PreToolUse dispatch reads the sidecar when
+`MISSION_ID` env is unset (step 2 in the routing rule above) and
+treats it as if the env had been set. The Tier B path then writes
+the delegation skeleton at
+`<repo>/.punt-labs/ethos/missions/<id>/delegations/<dID>/record.yaml`
+and emits `MISSION_ID + DELEGATION_ID + MISSION_ARTIFACTS_DIR` in
+`additional_env` so the spawned worker inherits the contract binding.
+
+`mission create` does **not** auto-claim — claim is explicit so the
+operator names the binding. A typo in the mission ID is refused at
+`claim` time, not silently staged.
+
+`release` clears the sidecar. Missing-file is not an error;
+`release` is safe to call unconditionally before claiming a new
+mission. The sidecar is session-scoped — a session that ends without
+calling `release` leaves a stale file under that session's
+directory, harmless because no future session will read it.
 
 ## Tier B Inheritance
 
@@ -446,6 +481,32 @@ the same target — the DES-052 Stat-Write race detector relies on it.
 
 Each line is `f.Sync()`'d. The reader is partial-line-tolerant: a
 truncated final line from a crashed writer is skipped, not fatal.
+
+### Path redaction
+
+The audit log is git-tracked, so absolute paths in `tool_input` and
+`tool_input_preview` would leak the original operator's username and
+machine layout into shared history forever. Two substitutions fire
+before any line lands on disk:
+
+| Source | Becomes |
+|--------|---------|
+| `$HOME/X` | `~/X` |
+| `<repoRoot>/X` | `<repo>/X` |
+
+Redaction walks every string value in `tool_input` recursively
+(nested maps, nested slices). Bash `command` strings get rewritten
+the same way — no special case, the recursion handles them.
+
+Order: build raw `tool_input` map → redact → compute
+`tool_input_hash` → truncate to `tool_input_preview`. The hash is
+computed over the redacted form so two machines making the same
+logical call produce the same `tool_input_hash`. This preserves
+the cross-machine collision-detection invariant the hash exists for.
+
+Redaction applies to new writes only. Audit lines already on disk
+keep whatever they had — operators who want fully clean history can
+use `git filter-repo` or accept the pre-fix lines as historical.
 
 ## Storage Layout
 
