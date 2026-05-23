@@ -207,6 +207,14 @@ func loadParentDelegation(repoRoot, delegationID string) (*mission.Delegation, s
 				recordPath, err)
 			return nil, "", false
 		}
+		// First record.yaml wins. Filesystem-order-dependent on a
+		// delegation-id collision across missions (Bugbot MED on
+		// PR #328). In practice delegation IDs are date-keyed +
+		// counter-allocated and globally unique within a repo, so
+		// the collision case is "stale data from a botched
+		// migration." The follow-up hardening is to scan every
+		// match, fail-closed on multiplicity, and let the operator
+		// disambiguate — tracked as a separate bead.
 		return d, e.Name(), true
 	}
 	fmt.Fprintf(os.Stderr,

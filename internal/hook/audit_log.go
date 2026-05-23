@@ -143,5 +143,29 @@ func buildAuditEntry(input map[string]any, sessionID string, now time.Time) audi
 	if v, ok := input["contract_id"].(string); ok {
 		entry.ContractID = v
 	}
+	// Fill enrichment fields from the worker's env when the hook
+	// payload doesn't carry them. The Claude Code PostToolUse
+	// payload only includes session_id + tool details, so without
+	// this step Tier B audit entries lose their delegation/mission
+	// linkage even though the worker process knows them
+	// (Bugbot HIGH on PR #328: ethos mission migrate could not
+	// identify Tier B missions because contract_id was never set).
+	// Env values are authoritative — they were stamped by the
+	// PreToolUse-on-Agent dispatch at worker spawn.
+	if entry.DelegationID == "" {
+		entry.DelegationID = os.Getenv("DELEGATION_ID")
+	}
+	if entry.ParentDelegation == "" {
+		entry.ParentDelegation = os.Getenv("PARENT_DELEGATION_ID")
+	}
+	if entry.ParentSession == "" {
+		entry.ParentSession = os.Getenv("PARENT_SESSION_ID")
+	}
+	// MISSION_ID is the contract identifier in DES-054 v5 — mission
+	// and contract are 1:1, so the env var maps directly to
+	// ContractID on the audit entry.
+	if entry.ContractID == "" {
+		entry.ContractID = os.Getenv("MISSION_ID")
+	}
 	return entry
 }
