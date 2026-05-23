@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Per-repo state relocated from `<repo>/.ethos/` to
+  `<repo>/.punt-labs/ethos/`.** Breaking change. Every file ethos
+  writes inside a repo now lives under the shared Punt Labs
+  cross-tool namespace. Sibling tools (biff, vox, beadle, lux,
+  quarry, plus future projects) read ethos state at known paths
+  inside `<repo>/.punt-labs/ethos/<artifact>`; the prior split that
+  put runtime mission/session/audit state at `<repo>/.ethos/` while
+  identity content lived at `<repo>/.punt-labs/ethos/` broke the
+  cross-tool contract.
+  - Mission contracts, logs, results, reflections, per-mission
+    flock, and the mission trace move from `<repo>/.ethos/missions/`
+    and `<repo>/.ethos/missions.jsonl` to
+    `<repo>/.punt-labs/ethos/missions/` and
+    `<repo>/.punt-labs/ethos/missions.jsonl`.
+  - Session audit logs move from
+    `<repo>/.ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl` to
+    `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl`.
+  - Identity content (`identities/`, `roles/`, `teams/`, `talents/`,
+    `personalities/`, `writing-styles/`, `agents/`) already lived
+    under `<repo>/.punt-labs/ethos/` and is unchanged; it now sits
+    alongside the runtime subtrees in one namespace.
+  - Hard cutover. No legacy fallback in code.
+- **Two-tree storage activation fixed.** `cmd/ethos/mission.go`
+  used `NewStore(root).WithRepoRoot(...)` which set `s.repoRoot`
+  but did not flip `s.twoTreeStorage`. As a result every CLI
+  `ethos mission create` wrote contracts to
+  `~/.punt-labs/ethos/missions/<id>.yaml` (the legacy global tree)
+  even when the user was inside a repo. Switched to
+  `NewStoreWithRoots(repoRoot, globalRoot)`. Verified end-to-end:
+  contract.yaml + log.jsonl land at
+  `<repo>/.punt-labs/ethos/missions/<id>/` on a fresh create.
+- **Submodule mount at `.punt-labs/ethos/` dismantled (Punt Labs
+  internal).** The `punt-labs/team` submodule was vendored into
+  this repo as regular tracked files. Other ethos users have never
+  used this submodule pattern; for them the move is a no-op (their
+  `<repo>/.punt-labs/ethos/` was already a regular directory).
+  Edits to identities/roles/talents/teams in this repo become
+  per-repo from this release onward; the prior shared-registry
+  sync via submodule is gone.
+
+### Fixed
+
+- **`withCreateLock` flock collision when repoRoot resolves to the
+  same tree as globalRoot.** The DES-054 v5 rolling-upgrade fence
+  acquires the per-global create lock and then the per-repo create
+  lock; previously the two paths were under `.ethos/` and
+  `.punt-labs/ethos/missions/` respectively. After the relocation
+  they can resolve to the same inode (test fixtures and any
+  single-tree deployment), and a second `Flock(LOCK_EX)` on the
+  same inode via a distinct FD blocks forever. Added a path-
+  equality check that skips the second acquire when the absolute
+  lock paths match.
+
 ## [3.12.0] - 2026-05-23
 
 ### Added

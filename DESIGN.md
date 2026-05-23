@@ -4204,7 +4204,7 @@ is manual and unused. The prfaq claims "git-tracked mission export" --
 technically true, but a manual tool nobody runs is no tool.
 
 **Decision**: On every successful `Store.Close`, append a compact JSON
-summary line to `<repoRoot>/.ethos/missions.jsonl`. One line per closed
+summary line to `<repoRoot>/.punt-labs/ethos/missions.jsonl`. One line per closed
 mission (~300 bytes). The trace write runs AFTER the close event commits
 and is non-fatal: a failure prints a stderr warning but does not roll
 back the close. The full contract + result YAMLs remain in the global
@@ -4228,7 +4228,7 @@ pipeline.
 
 **Implications**:
 
-- Every repo that uses ethos missions gains a `.ethos/missions.jsonl`
+- Every repo that uses ethos missions gains a `.punt-labs/ethos/missions.jsonl`
   file in its git history.
 - The `Store` gains a `repoRoot` field, wired via `WithRepoRoot`.
 - The JSONL file is append-only by convention; concurrent appends are
@@ -4842,7 +4842,7 @@ Revision history:
 - v3 (after CEO direction): policy pivot — contracts are opt-in. Bare `Agent(...)` calls audited but not synthesized. Synthesizer, meta-evaluator, `synthetic` flag, v2 invariants I8/I9/I10 dropped.
 - v4 (after round-2 peer review): 14 REQ + 13 IMPL findings applied.
 - **v5 (after round-3 + CEO clean-slate direction)**: round-3 verdicts were rop APPROVE / jra APPROVE / rsc APPROVE WITH ONE NEW REQ (counter.yaml is a file-format break, not a permissive append). CEO named this as broader over-engineering and asked for clean-slate framing. v5 restructures storage:
-  - **Two-tree top-level layout**: `<repo>/.ethos/missions/<mission-id>/` for per-mission cohesion (date encoded in ID); `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/` for per-session cohesion **1:1 with Claude Code conversation history**. One date level in the session directory name (not nested).
+  - **Two-tree top-level layout**: `<repo>/.punt-labs/ethos/missions/<mission-id>/` for per-mission cohesion (date encoded in ID); `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/` for per-session cohesion **1:1 with Claude Code conversation history**. One date level in the session directory name (not nested).
   - **Single audit log per session** — `audit.jsonl` lives only under each session directory. Mission and delegation directories hold metadata only (contract, record, prompt, result). Per-delegation `audit.jsonl` dropped. Cross-delegation queries filter the session log by `delegation_id`.
   - **Sibling-file per-namespace per-date counters** — `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` and `delegations-YYYY-MM-DD`, each a single-int file. No `counter.yaml`. No `schema_version` to pin. Preserves the existing `.counter-YYYY-MM-DD` shape verbatim; adds a namespace dimension to the filename.
   - **Tier A delegations live under their spawning session's directory** — `sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/`. Not in a separate global tree. Their metadata (record, prompt, result) is in-repo, in the session that produced them.
@@ -4884,7 +4884,7 @@ Both tiers share the audit enrichment. The contract layer is additive — presen
 ### Storage layout
 
 ```text
-<repo>/.ethos/
+<repo>/.punt-labs/ethos/
 ├── index/
 │   └── missions.jsonl                                   # DES-050 cross-date summary index
 ├── missions/                                            # per-mission canonical home; date in ID
@@ -4919,7 +4919,7 @@ Both tiers share the audit enrichment. The contract layer is additive — presen
 
 Two top-level trees: `missions/` and `sessions/`. Each artifact lives in exactly one place.
 
-**Mission cohesion** — `missions/<mission-id>/` holds everything about that mission across every session that touched it. `git log -- .ethos/missions/<mission-id>/` shows the full per-mission history.
+**Mission cohesion** — `missions/<mission-id>/` holds everything about that mission across every session that touched it. `git log -- .punt-labs/ethos/missions/<mission-id>/` shows the full per-mission history.
 
 **Session cohesion** — `sessions/<YYYY-MM-DD>-<session-id>/` holds everything specific to that session: its audit log, and any Tier A delegations spawned in it. The dirname is **`<date>-<session-id>`** — date prefix sorts; session-id makes the directory 1:1 with the Claude Code conversation history file at `~/.claude/projects/<...>/<session-id>.jsonl`. A forensic operator can cross-reference by the shared session-id.
 
@@ -4927,7 +4927,7 @@ Two top-level trees: `missions/` and `sessions/`. Each artifact lives in exactly
 
 **Counters as sibling per-namespace per-date files** — same shape as today's `.counter-YYYY-MM-DD` (single int, flock-guarded read/inc/write), just adds a namespace dimension to the filename. A new namespace = a new sibling file. No `counter.yaml`, no `schema_version`, no nested map. Permissive append happens at the file-set level.
 
-**Date browsing** — `ls .ethos/sessions/2026-05-22-*/` lists all sessions started that date. `ls .ethos/missions/m-2026-05-22-*/` lists all missions started that date. The date IS in the canonical key (mission ID, session directory name); the filesystem exposes it directly.
+**Date browsing** — `ls .punt-labs/ethos/sessions/2026-05-22-*/` lists all sessions started that date. `ls .punt-labs/ethos/missions/m-2026-05-22-*/` lists all missions started that date. The date IS in the canonical key (mission ID, session directory name); the filesystem exposes it directly.
 
 **Cross-date queries** — `ethos find` (DES-056-or-later, bead `ethos-pcra`) provides the structured query surface. For DES-054, `index/missions.jsonl` (DES-050 unchanged) is the cross-date acceleration path.
 
@@ -5054,13 +5054,13 @@ The advice is information, not refusal. Tier A operators see the suggestion and 
 **Session rosters vs session audit files**. The two are explicitly different artifacts with different storage policies:
 
 - Session **roster** files (`<session-id>.yaml`, `<session-id>.lock`, `current/<pid>`) reference live PIDs and TTYs and stay at `~/.punt-labs/ethos/sessions/`. They never move into the repo.
-- Session **audit** files move into `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl`. Legacy reader fallback applies for the transition window.
+- Session **audit** files move into `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl`. Legacy reader fallback applies for the transition window.
 
 **`Store` gains two roots**:
 
 | Operation | RepoRoot set | Else |
 |---|---|---|
-| Create | write to `<repoRoot>/.ethos/missions/<id>/contract.yaml`; acquire `<repoRoot>/.ethos/missions/.create.lock` AND `~/.punt-labs/ethos/missions/.create.lock` (rolling-upgrade fence) | global only |
+| Create | write to `<repoRoot>/.punt-labs/ethos/missions/<id>/contract.yaml`; acquire `<repoRoot>/.punt-labs/ethos/missions/.create.lock` AND `~/.punt-labs/ethos/missions/.create.lock` (rolling-upgrade fence) | global only |
 | Load | repo first, global fallback | global only |
 | List | union, dedup by id (repo wins) | global |
 | Update/Close | layer where Load found it; never copy across | global |
@@ -5070,7 +5070,7 @@ The advice is information, not refusal. Tier A operators see the suggestion and 
 
 ```text
 on read_audit(session_id, start_date):
-    p_repo   = <repoRoot>/.ethos/sessions/<start_date>-<session_id>/audit.jsonl
+    p_repo   = <repoRoot>/.punt-labs/ethos/sessions/<start_date>-<session_id>/audit.jsonl
     p_legacy = ~/.punt-labs/ethos/sessions/<session_id>.audit.jsonl
     if exists(p_repo):
         return read(p_repo)
@@ -5097,7 +5097,7 @@ The Tier B precondition evaluator follows the same dispatch.
 - **Idempotent (already-migrated)**: each migrated session leaves a `.migrated` tombstone in the legacy directory; subsequent runs see the tombstone (or repo-local twin), exit 0.
 - **Partial failure recovery**: each session migrates atomically via temp+rename. Failure on session N leaves earlier sessions migrated and N in its pre-migration state; next run resumes from N.
 - **Read-only legacy filesystem**: copies to repo; legacy file becomes implicit tombstone iff a repo-local twin exists.
-- **Unconfigured repo**: creates `<repo>/.ethos/sessions/` with `0o700` if absent. Refuses migration if `<repo>/.ethos/` exists but is not writable.
+- **Unconfigured repo**: creates `<repo>/.punt-labs/ethos/sessions/` with `0o700` if absent. Refuses migration if `<repo>/.punt-labs/ethos/` exists but is not writable.
 - **Cross-repo policy**: migrates only sessions whose roster's `repo` field matches the current repo. Sessions with no repo binding stay in legacy and are not migrated.
 
 **`ethos mission migrate --to-repo`** is symmetric: copies historical mission state from global into the active repo, refusing if a repo-local twin already exists.
@@ -5110,12 +5110,12 @@ The Tier B precondition evaluator follows the same dispatch.
 |---|---|---|---|
 | Per-mission flock | 5 | `~/.punt-labs/ethos/missions/` | flock-held |
 | Per-delegation flock (Tier B) | N per mission | `~/.punt-labs/ethos/delegations/` | flock-held |
-| Per-repo `.create.lock` | 5 | `<repo>/.ethos/missions/.create.lock` | flock-held |
+| Per-repo `.create.lock` | 5 | `<repo>/.punt-labs/ethos/missions/.create.lock` | flock-held |
 | Global `.create.lock` (transition) | 1 | `~/.punt-labs/ethos/missions/.create.lock` | flock-held |
 | Session roster YAML | 5 | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | session lifetime |
 | Session flock (roster + audit) | 5 | `~/.punt-labs/ethos/sessions/<session-id>.lock` | flock-held |
 | PID pointer | 5 | `~/.punt-labs/ethos/sessions/current/<pid>` | session lifetime |
-| Session audit JSONL | 5 | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | persistent |
+| Session audit JSONL | 5 | `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | persistent |
 | Mission ID counter (per date) | per date | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | persistent |
 | Delegation ID counter (per date) | per date | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | persistent |
 

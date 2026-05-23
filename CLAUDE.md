@@ -140,7 +140,7 @@ Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `she
 | ADRs | `~/.punt-labs/ethos/adrs/<id>.yaml` | No |
 | Repo bundles | `.punt-labs/ethos-bundles/<name>/` | Yes |
 | Missions | `~/.punt-labs/ethos/missions/<id>.yaml` | No |
-| Mission traces | `<repo>/.ethos/missions.jsonl` | Yes |
+| Mission traces | `<repo>/.punt-labs/ethos/missions.jsonl` | Yes |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 
 ### Identity Schema

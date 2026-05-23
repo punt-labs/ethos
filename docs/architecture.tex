@@ -205,7 +205,7 @@ binding, Tier B inheritance), per-delegation record skeletons
 under the per-mission lock, precondition-gated tool admission,
 enriched per-line audit entries with \field{delegation\_id} and
 \field{tool\_input\_hash}, repo-tree storage at
-\fpath{<repo>/.ethos/}, sibling per-namespace counter files, and
+\fpath{<repo>/.punt-labs/ethos/}, sibling per-namespace counter files, and
 the migration commands that move legacy global state into the
 repo tree.  Every \texttt{Agent} call now produces an audit
 record; every Tier B call binds that record to a typed contract;
@@ -1180,7 +1180,7 @@ global tree remains as a read-only fallback for pre-migration
 missions.
 
 \begin{verbatim}
-<repo>/.ethos/missions/
+<repo>/.punt-labs/ethos/missions/
   m-2026-04-08-005/
     contract.yaml              # contract (Phase 3.1 + DES-054)
     log.jsonl                  # append-only event log (3.1)
@@ -1210,7 +1210,7 @@ missions.
 
 The mission contract, JSONL event log, reflection file, and result
 file all live under one shared per-mission flock at
-\fpath{<repo>/.ethos/missions/<id>/.lock} (\texttt{LOCK\_SH} for
+\fpath{<repo>/.punt-labs/ethos/missions/<id>/.lock} (\texttt{LOCK\_SH} for
 Tier B dispatch, \texttt{LOCK\_EX} for store mutations).  Per-spawn
 delegation records are gated by the exclusive per-delegation flock
 in the global tree --- two checkouts of the same repo lock the same
@@ -1937,7 +1937,7 @@ through its environment.
 \texttt{PARENT\_SESSION\_ID}.  Tier B adds \texttt{MISSION\_ID}
 and \texttt{MISSION\_ARTIFACTS\_DIR} (the per-delegation directory
 the worker writes results into:
-\fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/}).  The
+\fpath{<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/}).  The
 spawned subagent inherits these via the hook protocol and the
 \fpath{hooks/commit-msg.sh} hook appends \texttt{Mission:} and
 \texttt{Delegation:} git trailers when both are set.
@@ -1948,7 +1948,7 @@ spawned subagent inherits these via the hook protocol and the
 \texttt{defer}.  The shared mission lock lets two Tier B spawns
 under one mission proceed concurrently; their per-delegation
 exclusive locks do not contend.  Lock files live at
-\fpath{<repoRoot>/.ethos/missions/<mission-id>/.lock} (per-mission,
+\fpath{<repoRoot>/.punt-labs/ethos/missions/<mission-id>/.lock} (per-mission,
 shared) and \fpath{<globalRoot>/delegations/<delegation-id>.lock}
 (per-delegation, exclusive) so two checkouts of the same repo lock
 the same inode for delegation allocation.
@@ -2022,7 +2022,7 @@ child runs as Tier B under the same contract.
 \fpath{internal/hook/pretooluse\_inherit.go} starts from
 \texttt{PARENT\_DELEGATION\_ID}.  Each ancestor's
 \fpath{record.yaml} is located by scanning
-\fpath{<repo>/.ethos/missions/*/delegations/<id>/record.yaml}
+\fpath{<repo>/.punt-labs/ethos/missions/*/delegations/<id>/record.yaml}
 (\texttt{findDelegationByID}) --- \texttt{PARENT\_DELEGATION\_ID}
 alone does not encode which mission the parent belongs to, so the
 resolver checks every mission tree.  First match wins; the
@@ -2122,7 +2122,7 @@ field is \texttt{omitempty}.
 
 \paragraph{Storage layout.}  Writes go to the repo tree when a
 repo root resolves:
-\fpath{<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl}
+\fpath{<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl}
 where the date prefix is the session-start date in UTC.  When no
 repo root resolves (test fixture, ad-hoc invocation outside any
 repo), the writer falls back to the legacy global location at
@@ -2288,25 +2288,25 @@ Session lock       & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
                    & No \\
 Current session    & \fpath{\~{}/.punt-labs/ethos/sessions/current/<pid>}
                    & No \\
-Session audit log  & \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+Session audit log  & \fpath{<repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl}
                    & Yes \\
-Mission contract   & \fpath{<repo>/.ethos/missions/<id>/contract.yaml}
+Mission contract   & \fpath{<repo>/.punt-labs/ethos/missions/<id>/contract.yaml}
                    & Yes \\
-Mission event log  & \fpath{<repo>/.ethos/missions/<id>/log.jsonl}
+Mission event log  & \fpath{<repo>/.punt-labs/ethos/missions/<id>/log.jsonl}
                    & Yes \\
-Mission reflections & \fpath{<repo>/.ethos/missions/<id>/reflections.yaml}
+Mission reflections & \fpath{<repo>/.punt-labs/ethos/missions/<id>/reflections.yaml}
                    & Yes \\
-Mission results    & \fpath{<repo>/.ethos/missions/<id>/results.yaml}
+Mission results    & \fpath{<repo>/.punt-labs/ethos/missions/<id>/results.yaml}
                    & Yes \\
-Mission lock       & \fpath{<repo>/.ethos/missions/<id>/.lock}
+Mission lock       & \fpath{<repo>/.punt-labs/ethos/missions/<id>/.lock}
                    & No \\
-Delegation record  & \fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml}
+Delegation record  & \fpath{<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml}
                    & Yes \\
-Delegation prompt  & \fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md}
+Delegation prompt  & \fpath{<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md}
                    & Yes \\
 Delegation lock    & \fpath{\~{}/.punt-labs/ethos/delegations/<delegation-id>.lock}
                    & No \\
-Mission trace      & \fpath{<repo>/.ethos/missions.jsonl}
+Mission trace      & \fpath{<repo>/.punt-labs/ethos/missions.jsonl}
                    & Yes \\
 Counter (missions) & \fpath{\~{}/.punt-labs/ethos/counters/missions-<date>}
                    & No \\
@@ -2340,7 +2340,7 @@ Legacy counter     & \fpath{\~{}/.punt-labs/ethos/missions/.counter-<date>}
 
 \paragraph{Two-tree layout.}  DES-054 v5 moved operational
 mission and audit state from \fpath{\~{}/.punt-labs/ethos/}
-(per-user) to \fpath{<repo>/.ethos/} (per-repo, git-tracked).
+(per-user) to \fpath{<repo>/.punt-labs/ethos/} (per-repo, git-tracked).
 The repo tree is the new source of truth: writes go there, reads
 check there first.  The global tree remains as a read-only
 fallback for sessions and missions that pre-date the migration.
@@ -2351,7 +2351,7 @@ mission in place when its ID has no matching repo-tree
 counterpart, so a wrong-repo migration cannot lose data.
 
 \paragraph{Locks live in the global tree.}  Per-mission shared
-flocks (\fpath{<repo>/.ethos/missions/<id>/.lock}) are
+flocks (\fpath{<repo>/.punt-labs/ethos/missions/<id>/.lock}) are
 repo-scoped because the protected resource is the per-mission
 directory tree; per-delegation exclusive flocks
 (\fpath{\~{}/.punt-labs/ethos/delegations/<id>.lock}) live in
@@ -2359,7 +2359,7 @@ the global tree because two checkouts of the same repo must
 lock the same inode (DES-054 v5 §``Storage Layout'').  Storing
 delegation locks under the repo tree would let two checkouts
 cross-write delegations because each would have its own
-\fpath{.ethos/delegations/} directory.
+\fpath{.punt-labs/ethos/delegations/} directory.
 
 \paragraph{Sibling counters.}  Each ID namespace has its own
 counter file at
@@ -2539,11 +2539,11 @@ Three parallel command groups: \cmd{talent}, \cmd{personality},
                                        same gates as \cmd{create}. \\
 \cmd{mission export <id>}          & Export contract + sibling files
                                        to \cmd{--dir} (default
-                                       \fpath{.ethos/missions}). \\
+                                       \fpath{.punt-labs/ethos/missions}). \\
 \cmd{mission migrate [id]}         & DES-054: move a mission from
                                        the legacy global tree to the
                                        per-repo
-                                       \fpath{<repo>/.ethos/missions/<id>/}
+                                       \fpath{<repo>/.punt-labs/ethos/missions/<id>/}
                                        tree.  \cmd{--to-repo} (default
                                        and only target),
                                        \cmd{--dry-run},
@@ -2643,7 +2643,7 @@ invoked by Claude Code hook configuration, not by users.
 \midrule
 \cmd{audit show --delegation <id>} & Cross-session forensic view.
                                      Walks
-                                     \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                                     \fpath{<repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl}
                                      (with legacy global-tree
                                      fallback) and filters by
                                      \field{delegation\_id}.
@@ -2655,7 +2655,7 @@ invoked by Claude Code hook configuration, not by users.
 \cmd{audit migrate}                & One-time relocation of legacy
                                      \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
                                      entries into the per-repo
-                                     \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                                     \fpath{<repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl}
                                      layout; deletes the legacy
                                      file once every entry has
                                      landed and been fsynced.

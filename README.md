@@ -144,7 +144,7 @@ Each layer works alone. Add the next when you want more structure.
 |-------|--------------|-------|
 | Identity | Consistent agent persona across sessions. Hooks fire automatically. | This page |
 | Team | Roles with tool restrictions, team graph with `reports_to` edges, auto-generated `.claude/agents/` files with anti-responsibilities | [Team setup](docs/team-setup.md) |
-| Missions | Typed delegation contracts with write-sets, bounded rounds, frozen evaluators, audit logs. Closing a mission auto-appends a summary to `.ethos/missions.jsonl` for commit-ready traceability. | [Archetypes and pipelines](docs/archetypes-and-pipelines.md) |
+| Missions | Typed delegation contracts with write-sets, bounded rounds, frozen evaluators, audit logs. Closing a mission auto-appends a summary to `.punt-labs/ethos/missions.jsonl` for commit-ready traceability. | [Archetypes and pipelines](docs/archetypes-and-pipelines.md) |
 | Audit | Every `Agent(...)` call is recorded with full prompt body and parent linkage; every tool call the spawn makes is tagged with its delegation id in the session audit log. Contract-bound spawns also get a per-delegation `record.yaml`. Contracts can gate tool calls on prior reads. Commits carry `Mission:`/`Delegation:` git trailers. | [Audited delegation](docs/audited-delegation.md) |
 
 ## How it integrates

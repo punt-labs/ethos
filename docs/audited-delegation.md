@@ -46,8 +46,8 @@ In the audit log, every entry under a Tier B spawn carries
 
 | Tier | What persists | Where |
 |------|---------------|-------|
-| A | `delegation_id` only; audit log entries are tagged with it | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` |
-| B | Per-delegation `record.yaml` (and optional `prompt.md`) under the mission tree, plus the same audit tagging | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/` |
+| A | `delegation_id` only; audit log entries are tagged with it | `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` |
+| B | Per-delegation `record.yaml` (and optional `prompt.md`) under the mission tree, plus the same audit tagging | `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/` |
 
 Tier A does **not** write a `record.yaml`. Its forensic trail is
 exclusively the audit log filtered by `delegation_id`.
@@ -78,7 +78,7 @@ the spawned worker:
 | `PARENT_DELEGATION_ID` | set (= `DELEGATION_ID`) | set (= `DELEGATION_ID`) |
 | `PARENT_SESSION_ID` | set | set |
 | `MISSION_ID` | unset | set |
-| `MISSION_ARTIFACTS_DIR` | unset | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/` |
+| `MISSION_ARTIFACTS_DIR` | unset | `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/` |
 
 The worker inherits these. Any `Agent` call the worker subsequently
 makes carries `PARENT_DELEGATION_ID` and `PARENT_SESSION_ID` into the
@@ -263,7 +263,7 @@ Usage: ethos audit migrate [--dry-run] [--verbose]
 
 Scans ~/.punt-labs/ethos/sessions/*.audit.jsonl (the v3.11 layout)
 and copies each file's entries into the v3.12+ repo-tree layout
-under <repo>/.ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl, then
+under <repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl, then
 deletes the legacy file once every entry has landed and been
 fsynced.
 
@@ -278,12 +278,12 @@ Flags:
 Exit codes:
   0  migration completed (including the no-op "nothing to migrate" case)
   1  one or more sessions failed mid-copy; both sources stayed in place
-  2  must run inside a repo (no <repo>/.ethos/sessions/ destination)
+  2  must run inside a repo (no <repo>/.punt-labs/ethos/sessions/ destination)
 ```
 
 ```bash
 $ ethos audit migrate --verbose
-sess-abc123: migrated 47 entries to .ethos/sessions/2026-05-22-sess-abc123/audit.jsonl
+sess-abc123: migrated 47 entries to .punt-labs/ethos/sessions/2026-05-22-sess-abc123/audit.jsonl
 sess-def456: skipped (no matching repo-tree session)
 sess-ghi789: already migrated (no-op)
 audit migrate: complete
@@ -292,14 +292,14 @@ audit migrate: complete
 ### `ethos mission migrate --to-repo`
 
 Atomic per-mission relocation from `~/.punt-labs/ethos/missions/<id>.yaml`
-(legacy global) to `<repo>/.ethos/missions/<id>/contract.yaml` (DES-054
+(legacy global) to `<repo>/.punt-labs/ethos/missions/<id>/contract.yaml` (DES-054
 repo tree).
 
 ```text
 Usage: ethos mission migrate [mission-id] [--to-repo] [--dry-run] [--verbose]
 
 Without a mission-id argument, every legacy mission whose contract_id
-is referenced by an audit entry in <repo>/.ethos/sessions/ is moved.
+is referenced by an audit entry in <repo>/.punt-labs/ethos/sessions/ is moved.
 Missions belonging to other repos' work trees are left in place —
 cross-repo policy.
 
@@ -308,7 +308,7 @@ the move stages artifacts in a sibling temp directory and renames into
 place; a failure before the rename leaves the legacy tree intact.
 
 Flags:
-  --to-repo   migrate into the per-repo .ethos/missions/ tree (default
+  --to-repo   migrate into the per-repo .punt-labs/ethos/missions/ tree (default
               and currently the only target)
   --dry-run   show what would change without writing or deleting
   --verbose   print one decision line per mission to stdout
@@ -452,7 +452,7 @@ truncated final line from a crashed writer is skipped, not fatal.
 ### Per-mission (Tier B)
 
 ```text
-<repo>/.ethos/missions/<mission-id>/
+<repo>/.punt-labs/ethos/missions/<mission-id>/
 ├── contract.yaml
 ├── log.jsonl
 ├── results.yaml
@@ -467,7 +467,7 @@ truncated final line from a crashed writer is skipped, not fatal.
 ### Per-session (audit log)
 
 ```text
-<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/
+<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/
 └── audit.jsonl                        # one line per tool call;
                                        # entries tagged with delegation_id
                                        # (both Tier A and Tier B)
@@ -488,9 +488,9 @@ Tier A spawns have no on-disk record beyond their audit-log entries.
 
 Per-delegation locks live in the global tree; the per-mission shared
 lock lives in the repo tree at
-`<repo>/.ethos/missions/<mission-id>/.lock`. Two checkouts of the
+`<repo>/.punt-labs/ethos/missions/<mission-id>/.lock`. Two checkouts of the
 same repo must lock the same inode for delegation allocation — a
-per-checkout lock under `.ethos/` would let two clones write the same
+per-checkout lock under `.punt-labs/ethos/` would let two clones write the same
 delegation_id.
 
 ### Legacy fallback
@@ -529,7 +529,7 @@ Both commands are safe to run on a repo that has nothing to migrate
 honour `--dry-run`.
 
 Cross-repo policy: a session or mission whose id is not referenced
-by any audit entry in the current repo's `.ethos/sessions/` tree is
+by any audit entry in the current repo's `.punt-labs/ethos/sessions/` tree is
 treated as "belongs to another checkout" and left alone.
 
 ## Cross-Session Forensics
@@ -565,7 +565,7 @@ upward. There is no canned command yet — read records in sequence:
 
 ```bash
 yq '.parent_delegation' \
-    "$repo/.ethos/missions/$mid/delegations/d-2026-05-23-007/record.yaml"
+    "$repo/.punt-labs/ethos/missions/$mid/delegations/d-2026-05-23-007/record.yaml"
 ```
 
 ## Concurrency Model
@@ -577,7 +577,7 @@ per-mission (LOCK_SH, repo tree) → per-delegation (LOCK_EX, global tree)
 ```
 
 The per-mission flock lives in the repo tree at
-`<repo>/.ethos/missions/<mission-id>/.lock`; the per-delegation flock
+`<repo>/.punt-labs/ethos/missions/<mission-id>/.lock`; the per-delegation flock
 lives in the global tree at
 `~/.punt-labs/ethos/delegations/<delegation-id>.lock` so two checkouts
 of the same repo lock the same inode.
