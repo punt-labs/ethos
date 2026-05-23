@@ -700,8 +700,16 @@ to \field{parent:~empty}), initiator (my \field{parent}), delegates
 \texttt{PreCompact}     & Re-emit full persona block, team context,
                           extension context
                         & \field{session\_id} \\
-\texttt{PostToolUse}    & Format MCP tool output; audit log (Phase
-                          4.3)
+\texttt{PreToolUse}     & Verifier write-set enforcement
+                          (\texttt{ETHOS\_VERIFIER\_ALLOWLIST});
+                          DES-054 Agent dispatch (Tier A advice or
+                          Tier B contract-binding); precondition
+                          gate on non-Read tools under a Tier B
+                          contract
+                        & tool name, tool input, env \\
+\texttt{PostToolUse}    & Format MCP tool output; audit log
+                          (one JSONL line per tool call, enriched
+                          with DES-054 fields)
                         & tool name, output \\
 \texttt{SessionEnd}     & Delete roster + PID-keyed session file
                         & \field{session\_id} \\
@@ -1811,24 +1819,218 @@ hook enforces it mechanically.  Non-verifier tool invocations (no
 \texttt{ETHOS\_VERIFIER\_ALLOWLIST} in the environment) pass through
 unconditionally.
 
-\subsection{PostToolUse Audit Logging (Phase 4.3)}
+\subsection{PreToolUse-on-Agent Dispatch (DES-054)}
+
+Every \texttt{Agent} tool call passes through
+\texttt{HandlePreToolUse} before the spawn proceeds.  The hook
+classifies the call as Tier A (ad-hoc) or Tier B
+(contract-bound), allocates a \field{delegation\_id} from the
+\texttt{delegations} namespace counter, writes a per-delegation
+record skeleton when applicable, and emits an
+\field{additional\_env} block that the spawned subagent reads
+through its environment.
+
+\paragraph{Routing.}  Three branches in \texttt{dispatchAgent}
+(\fpath{internal/hook/pretooluse\_dispatch.go}):
+
+\begin{enumerate}
+  \item \texttt{MISSION\_ID} set --- Tier B by explicit dispatch.
+    Resolve the contract via \texttt{mission.Store.Load}, allocate
+    \field{delegation\_id}, acquire the per-mission shared
+    flock (\texttt{AcquireMissionLock}, \texttt{LOCK\_SH}) and
+    the per-delegation exclusive flock
+    (\texttt{AcquireDelegationLock}, \texttt{LOCK\_EX}), write
+    the record skeleton atomically, run the depth gate, emit
+    the env block.  A malformed \texttt{MISSION\_ID} (Load fails)
+    surfaces as \texttt{decision=block} with a named reason ---
+    no silent fall-through to Tier A.
+  \item \texttt{MISSION\_ID} unset, \texttt{PARENT\_DELEGATION\_ID}
+    set --- Tier B by inheritance.  Walk the parent\_delegation
+    chain; the first ancestor whose contract carries a
+    \field{Delegations[i].SpawnPattern} matching the new spawn's
+    \field{CLAUDE\_AGENT\_TYPE} with \field{InheritsContract=true}
+    lends its \field{mission\_id} to the child.  Every error along
+    the walk falls through to Tier A with a stderr warning ---
+    inheritance is non-blocking by design.  See
+    \S\ref{sec:delegation-inheritance}.
+  \item Neither set --- Tier A.  Emit the round-3 advisory line to
+    stderr (suppressed by \texttt{ETHOS\_QUIET\_ADVICE=1} or a
+    non-empty \texttt{PARENT\_SESSION\_ID}), allocate a
+    \field{delegation\_id}, emit the env block without
+    \texttt{MISSION\_ID}.  Tier A is informational and MUST NOT
+    block the spawn.
+\end{enumerate}
+
+\paragraph{The \field{additional\_env} block.}  Tier A emits
+\texttt{DELEGATION\_ID}, \texttt{PARENT\_DELEGATION\_ID}
+(echoed so a nested ad-hoc spawn sees its own ancestor), and
+\texttt{PARENT\_SESSION\_ID}.  Tier B adds \texttt{MISSION\_ID}
+and \texttt{MISSION\_ARTIFACTS\_DIR} (the per-delegation directory
+the worker writes results into:
+\fpath{<repo>/.ethos/missions/<id>/delegations/<NN>/}).  The
+spawned subagent inherits these via the hook protocol and the
+\fpath{hooks/commit-msg.sh} hook appends \texttt{Mission:} and
+\texttt{Delegation:} git trailers when both are set.
+
+\paragraph{Lock order.}
+\texttt{global \(\to\) repo \(\to\) per-mission(shared)
+\(\to\) per-delegation(exclusive)}.  Released LIFO via
+\texttt{defer}.  The shared mission lock lets two Tier B spawns
+under one mission proceed concurrently; their per-delegation
+exclusive locks do not contend.  Lock files live at
+\fpath{<globalRoot>/delegations/<id>.lock} (per-delegation,
+exclusive) and \fpath{<repoRoot>/.ethos/missions/<id>/.lock}
+(per-mission, shared) so two checkouts of the same repo lock
+the same inode.
+
+\paragraph{Atomic skeleton write.}
+\texttt{WriteDelegationSkeleton} writes \texttt{prompt.md} first
+(if a prompt body is supplied) then \texttt{record.yaml} via
+\texttt{os.CreateTemp} + \texttt{Chmod(0o600)} + \texttt{Sync}
++ \texttt{Close} + \texttt{os.Rename} in the destination
+directory.  A reader branches on \texttt{record.yaml}'s presence,
+so its absence after a writer crash signals ``skeleton not yet
+committed'' and the half-built tree is invisible.
+
+\paragraph{Depth gate.}
+\texttt{enforceDelegationDepth} resolves
+\texttt{max\_delegation\_depth} (repo config, default
+\texttt{MaxDelegationDepthDefault = 16}), walks the
+\field{parent\_delegation} chain via
+\texttt{mission.DelegationDepth}, and refuses when
+\texttt{parentDepth + 1 > limit}.  Refusal closes the
+just-written skeleton with \field{verdict=aborted} so a
+post-mortem distinguishes a depth refusal (terminated before the
+worker started) from a spawn that ran and failed downstream.
+The walker fails closed on a missing or unparseable ancestor:
+silently treating a missing ancestor as zero depth would let a
+runaway recursive spawn pattern pass.
+
+\paragraph{Counter rollback.}  Every \field{delegation\_id}
+allocation returns a \texttt{release(success bool)} closure.
+\texttt{success} flips to \texttt{true} only after the skeleton
+write returns nil; every earlier failure path runs
+\texttt{release(false)} via \texttt{defer} and the counter
+returns to its pre-call value.  After the skeleton is on disk
+the counter commits and stays committed --- a follow-on depth
+refusal does NOT roll back, because rolling back at that point
+would let the next \texttt{NewID} return the same
+\field{delegation\_id} and collide with the just-written record.
+
+\subsection{Precondition Evaluation (DES-054 Phase 3)}
+
+A Tier B contract may carry a \field{preconditions} list.  Each
+entry is a \texttt{Precondition} with a \field{form}, an optional
+\field{require\_read} list, and a \field{message} string.
+\texttt{EvaluatePreconditions} in
+\fpath{internal/hook/preconditions.go} runs against the session
+audit log before every non-Read tool call under a Tier B
+contract.
+
+Two predicate forms:
+
+\begin{itemize}
+  \item \textbf{implicit} --- the tool input's target
+    \field{file\_path} (and \field{notebook\_path}, and entries
+    in \field{files}/\field{paths} arrays) must each have been
+    Read in this session.  A path-free tool produces zero
+    targets and the predicate is a no-op.
+  \item \textbf{explicit} --- each entry in \field{require\_read},
+    after \texttt{\$\{inputs.X\}} substitution against the
+    contract's \field{Inputs}, must have been Read in this
+    session.  Substitution keys are \texttt{ticket},
+    \texttt{files.N}, and \texttt{references.N}; any other shape
+    (\texttt{\$\{env.X\}}, malformed marker) returns an
+    unevaluable-predicate error.
+\end{itemize}
+
+Path comparison is on the cleaned form
+(\texttt{filepath.Clean}); a relative candidate against an
+absolute recorded read and the repo-anchored absolute form are
+both checked so the audit log's recorded shape and the tool
+call's shape are symmetric.
+
+\paragraph{Strict vs lax.}  \field{Contract.StrictPreconditions}
+is a \texttt{*bool} so \texttt{omitempty} distinguishes ``unset''
+from ``explicit \texttt{false}''.  Unset resolves to true via
+\texttt{EffectiveStrictPreconditions} --- fail closed.  An
+unevaluable predicate (malformed substitution, missing input,
+unreadable audit log) blocks under strict and warns + allows
+under lax.  A violated predicate always blocks regardless of
+the strict flag.
+
+\paragraph{Block reason.}  The contract's
+\field{Precondition.Message} surfaces verbatim as the
+\texttt{decision=block} reason --- the operator sees the contract
+author's prose, not a generic ``preconditions[i] failed''
+fallback.  Empty \field{Message} is rejected at
+\texttt{Validate} time so a failed gate is never silently named.
+
+\subsection{PostToolUse Audit Logging (Phase 4.3, DES-054)}
 
 \texttt{HandleFormatOutput} (the existing \texttt{PostToolUse} hook
-that produces DES-020 two-channel formatted output) gains an
-optional audit log writer.  Every tool invocation appends a JSON
-line to \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}:
+that produces DES-020 two-channel formatted output) writes one
+enriched JSON line per tool call to the per-session audit log.
+DES-054 phase 1 changed both the on-disk location and the entry
+shape; v3.11 lines decode cleanly under v3.12+ because every new
+field is \texttt{omitempty}.
 
-\begin{verbatim}
-{"ts":"2026-04-08T15:23:00Z","tool":"Write","persona":"bwk",
- "mission":"m-2026-04-08-005","args_summary":"path=internal/foo.go"}
-\end{verbatim}
+\paragraph{Storage layout.}  Writes go to the repo tree when a
+repo root resolves:
+\fpath{<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl}
+where the date prefix is the session-start date in UTC.  When no
+repo root resolves (test fixture, ad-hoc invocation outside any
+repo), the writer falls back to the legacy global location at
+\fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}.  Readers
+(\cmd{ethos audit show}, \texttt{loadSessionReads} in the
+precondition evaluator) check the repo tree first, then the
+legacy path, so a session that started before \cmd{ethos audit
+migrate} ran is still queryable.
 
-The audit log is per-session, append-only, and uses the same
-\texttt{flock}-protected write pattern as the mission event log.
-Mission attribution comes from the active session participant's
-ext map.  Like the mission event log, sanitization runs at the
-write site so no attacker-controlled byte reaches a downstream
-consumer.
+\paragraph{Enriched entry shape.}
+\texttt{auditEntry} in \fpath{internal/hook/audit\_entry.go} carries:
+
+\begin{itemize}
+  \item \field{ts} --- RFC3339 timestamp
+  \item \field{session} --- session ID
+  \item \field{parent\_session} --- session that spawned this
+    subagent (DES-054)
+  \item \field{agent\_id}, \field{agent\_type} --- the spawned
+    subagent's identity (DES-054)
+  \item \field{delegation\_id}, \field{parent\_delegation} ---
+    the per-spawn unit of operator intent and its predecessor
+    in the chain (DES-054)
+  \item \field{contract\_id} --- mission ID for a Tier B tool
+    call; absent for Tier A (DES-054)
+  \item \field{tool} --- the tool name (\texttt{Write},
+    \texttt{Edit}, \texttt{Read}, etc.)
+  \item \field{tool\_input} --- the full input map, not just a
+    preview (DES-054)
+  \item \field{tool\_input\_hash} --- hex SHA-256 of the
+    canonical-JSON encoding of \field{tool\_input}; an O(1)
+    collision check for DES-052's Stat--Write race without
+    re-reading the full input (DES-054)
+  \item \field{tool\_input\_preview} --- 200-char human snippet
+    retained for grep convenience
+\end{itemize}
+
+\paragraph{Atomicity.}  Per-line \texttt{f.Sync()} after every
+append and a partial-line-tolerant reader together implement
+DES-054 invariant I10-audit-atomic: a writer crash mid-line
+loses at most one line, and the reader degrades line-by-line
+rather than failing whole-file.  The audit-log writer shares
+the per-session \texttt{flock} with the roster writer (one lock
+per session, DES-054 phase 2 session-flock unification) so the
+prior two-lock acquisition order is gone.
+
+\paragraph{Trust boundary.}  The audit JSONL stays
+\emph{permissive} on decode --- operator tools must keep reading
+older logs indefinitely, and rejecting an unknown field would
+break the post-mortem path.  This is asymmetric with the
+contract YAML, which decodes with \texttt{KnownFields(true)}
+because silent feature loss on a downgrade is unacceptable for
+typed configuration.  See \fpath{internal/hook/audit\_entry.go}
+for the asymmetry note.
 
 % ===================================================================
 \section{Cross-Tool Integration}
