@@ -4,10 +4,54 @@ package mission
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
+
+// Symlink policy: every mission and delegation loader, lock acquirer,
+// and writer in this package REFUSES to follow a symlink at any
+// resolved per-mission, per-delegation, or per-artifact path. The
+// "resolve and validate" alternative (follow then check enclosing
+// layer root) would have to track the layer root for every loader
+// path and re-validate after every Readlink — more surface area, more
+// branches, larger blast radius for a future bug. The refuse policy is
+// a single Lstat per open: smaller, simpler, and uniform.
+//
+// The check is mechanical (Lstat + ModeSymlink) and fires before any
+// follow-on open or stat that would dereference the link. Callers see
+// a single error string ("refusing to follow symlink: <path>") so the
+// operator can locate the offending path immediately.
+//
+// A missing path is NOT a symlink and is allowed through — the
+// follow-on open is responsible for distinguishing "does not exist"
+// from a real I/O error.
+
+// rejectSymlink returns an error if path is a symbolic link. Symlinks
+// inside the missions or delegations trees are a local-attacker
+// vector: a symlink pointing outside the store can redirect a read
+// (to an arbitrary file the ethos process can open) or a write (via
+// temp+rename or O_APPEND on the link target) past the write_set
+// boundary. Lstat + ModeSymlink is the standard non-following check.
+//
+// Returns nil for a missing path so the caller's follow-on open can
+// produce the natural fs.ErrNotExist diagnostic — distinguishing
+// "missing" from "is a symlink" is the caller's responsibility, not
+// this helper's.
+func rejectSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("lstat %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to follow symlink: %s", path)
+	}
+	return nil
+}
 
 // EthosRepoStateRoot is the path, relative to a repository root,
 // under which every per-repo file ethos writes lives. The .punt-labs/

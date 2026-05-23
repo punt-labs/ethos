@@ -583,26 +583,6 @@ func (s *Store) Create(c *Contract) error {
 	return nil
 }
 
-// rejectSymlink returns an error if path is a symbolic link. Symlinks
-// in the missions directory are a local-attacker vector: a symlink
-// pointing outside the store can trick the mission package into
-// reading (or writing via temp+rename) files the caller never
-// intended. Lstat + ModeSymlink is the standard check; it does not
-// follow the link.
-func rejectSymlink(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("lstat %s: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to follow symlink: %s", path)
-	}
-	return nil
-}
-
 // Load reads a mission contract by ID.
 //
 // Decodes with KnownFields(true) so an attacker who has local write
