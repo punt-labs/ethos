@@ -130,8 +130,15 @@ func matchAncestorContract(
 	}
 	c, err := store.Load(missionID)
 	if err != nil {
+		// Returning (false, "", false) tells walkInheritanceChain to
+		// keep walking the parent chain — a higher ancestor may still
+		// carry a matching template. The stderr line names "skipping
+		// ancestor" (not "falling through to Tier A") because the
+		// walker has not given up yet (Bugbot MED on PR #328: prior
+		// message implied an immediate Tier A bail that wasn't
+		// happening).
 		fmt.Fprintf(os.Stderr,
-			"ethos: pre-tool-use: inheritance: loading contract %q for ancestor %q: %v; falling through to Tier A\n",
+			"ethos: pre-tool-use: inheritance: loading contract %q for ancestor %q: %v; skipping this ancestor\n",
 			missionID, ancestor.ID, err)
 		return false, "", false
 	}
