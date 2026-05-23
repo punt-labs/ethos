@@ -47,6 +47,7 @@ func MigrateAudit(globalSessionsDir, repoRoot string, dryRun bool, out io.Writer
 	}
 
 	sessionsBase := filepath.Join(repoRoot, ".ethos", "sessions")
+	var failures []string
 	for _, lf := range legacyFiles {
 		sessionID := strings.TrimSuffix(filepath.Base(lf), ".audit.jsonl")
 		if sessionID == "" {
@@ -54,9 +55,16 @@ func MigrateAudit(globalSessionsDir, repoRoot string, dryRun bool, out io.Writer
 		}
 		decision, err := migrateOneSession(lf, sessionsBase, sessionID, dryRun)
 		if err != nil {
-			return fmt.Errorf("migrating session %s: %w", sessionID, err)
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit migrate: %s: %v\n", sessionID, err)
+			failures = append(failures, sessionID)
+			continue
 		}
 		fmt.Fprintln(out, decision)
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("audit migrate: %d session(s) failed: %s",
+			len(failures), strings.Join(failures, ", "))
 	}
 	return nil
 }
