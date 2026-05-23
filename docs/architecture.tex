@@ -1124,31 +1124,87 @@ A mission contract is a YAML file at
                                           \cmd{mission advance}
                                           gate (DES-034). \\
 \field{context}        & string         & Optional prose context. \\
+\field{delegations}    & []DelegationTemplate & Per-spawn template
+                                          list for Tier B
+                                          inheritance dispatch
+                                          (DES-054).  Each entry
+                                          carries \field{role},
+                                          \field{spawn\_pattern}
+                                          (anchored regex), and
+                                          \field{inherits\_contract}
+                                          (bool).  Empty list
+                                          disables inheritance. \\
+\field{preconditions}  & []Precondition & Admission gates evaluated
+                                          by the PreToolUse hook
+                                          before any non-Read tool
+                                          call (DES-054).  Each
+                                          entry: \field{form}
+                                          (\texttt{implicit} $|$
+                                          \texttt{explicit}),
+                                          \field{require\_read}
+                                          (list of paths supporting
+                                          \texttt{\$\{inputs.X\}}
+                                          substitution),
+                                          \field{message} (block
+                                          reason). \\
+\field{strict\_preconditions} & *bool   & Fail-mode for
+                                          unevaluable predicates
+                                          (DES-054).  Nil $\equiv$
+                                          \texttt{true} (fail
+                                          closed).  Explicit
+                                          \texttt{false} is the
+                                          documented escape hatch. \\
 \bottomrule
 \end{longtable}
 \end{center}
 
 \subsection{Storage Layout}
 
+DES-054 v5 moved mission state from the per-user global tree to a
+per-repo tree.  The repo tree is the new source of truth; the
+global tree remains as a read-only fallback for pre-migration
+missions.
+
 \begin{verbatim}
-~/.punt-labs/ethos/missions/
-  m-2026-04-08-005.yaml          # contract (Phase 3.1)
-  m-2026-04-08-005.jsonl         # append-only event log (3.1)
-  m-2026-04-08-005.lock          # per-mission flock target (3.1)
-  m-2026-04-08-005.reflections.yaml  # round-by-round reflections (3.4)
-  m-2026-04-08-005.results.yaml      # round-by-round results (3.6)
-  .counter-2026-04-08            # daily ID counter, flock-protected
-  .create.lock                   # directory create-lock (3.2)
+<repo>/.ethos/missions/
+  m-2026-04-08-005/
+    contract.yaml              # contract (Phase 3.1 + DES-054)
+    log.jsonl                  # append-only event log (3.1)
+    reflections.yaml           # round-by-round reflections (3.4)
+    results.yaml               # round-by-round results (3.6)
+    .lock                      # per-mission flock (shared)
+    delegations/
+      d-2026-04-08-001/
+        record.yaml            # Tier B delegation skeleton
+        prompt.md              # optional prompt body
+      d-2026-04-08-002/
+        record.yaml
+  missions.jsonl               # trace of dispatches across this repo
+
+~/.punt-labs/ethos/
+  counters/
+    missions-2026-04-08        # daily ID counter (mission ns)
+    missions-2026-04-08.lock   # flock-protected
+    delegations-2026-04-08     # daily ID counter (delegation ns)
+    delegations-2026-04-08.lock
+  delegations/
+    d-2026-04-08-001.lock      # per-delegation exclusive flock
+  missions/                    # legacy read-only fallback
+    m-2026-04-07-003.yaml
+    ...
 \end{verbatim}
 
-The contract, the JSONL event log, and the two sibling YAML files
-all live under the same per-mission flock at \fpath{<id>.lock}.
-Contract+reflection and contract+result operations are atomic with
-respect to concurrent readers.  The directory-level
+The mission contract, JSONL event log, reflection file, and result
+file all live under one shared per-mission flock at
+\fpath{<repo>/.ethos/missions/<id>/.lock} (\texttt{LOCK\_SH} for
+Tier B dispatch, \texttt{LOCK\_EX} for store mutations).  Per-spawn
+delegation records are gated by the exclusive per-delegation flock
+in the global tree --- two checkouts of the same repo lock the same
+inode (DES-054 v5 §``Storage Layout'').  The directory-level
 \fpath{.create.lock} is a separate stable inode acquired by
-\texttt{Store.Create} for the duration of the conflict scan and the
-new mission's write --- two concurrent creates with disjoint mission
-IDs cannot race past the conflict scan (DES-032).
+\texttt{Store.Create} for the duration of the conflict scan and
+the new mission's write --- two concurrent creates with disjoint
+mission IDs cannot race past the conflict scan (DES-032).
 
 \subsection{Lifecycle}
 
