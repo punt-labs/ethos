@@ -122,9 +122,12 @@ func runAuditMigrate(out, errOut io.Writer) error {
 	globalDir := filepath.Join(home, ".punt-labs", "ethos", "sessions")
 
 	// In verbose mode the library writes per-session decisions to
-	// the same writer we print to. In non-verbose mode we discard
-	// the routine "skip"/"noop" lines but still let "nothing to
-	// migrate" through so the operator sees something on stdout.
+	// the same writer we print to. In non-verbose mode every library
+	// line is discarded; the operator sees only the final
+	// "dry-run complete" or "complete" summary printed by this
+	// command (Copilot on PR #328 — comment previously promised
+	// "still let nothing-to-migrate through" but sink=io.Discard
+	// drops that too; the summary line below covers the empty case).
 	sink := out
 	if !auditMigrateVerbose {
 		sink = io.Discard

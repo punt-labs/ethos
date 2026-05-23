@@ -31,10 +31,14 @@ const maxAuditLineBytes = 16 * 1024 * 1024
 // <repoRoot>/.ethos/sessions/*/audit.jsonl is migrated; missions with
 // no matching session are left alone (cross-repo policy).
 //
-// When missionID is non-empty, only that one mission is considered. A
-// mission already migrated (contract.yaml present in the repo tree) is
-// a no-op. A mission whose legacy contract is missing is reported as
-// such and not an error.
+// When missionID is non-empty, only that one mission is considered.
+// The cross-repo policy still applies — an explicit mission-id with
+// no repo session referencing it is reported as "skip <id>: no repo
+// session" so an operator cannot accidentally relocate another
+// repo's mission by naming the ID. A mission already migrated
+// (contract.yaml present in the repo tree) is a no-op. A mission
+// whose legacy contract is missing is reported as such and not an
+// error.
 //
 // dryRun=true enumerates what would change without writing or
 // deleting. The move is atomic at the per-mission directory level:
@@ -307,12 +311,17 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 	// Remove the legacy files now that the repo-tree copy is the
 	// authoritative version. A removal failure is non-fatal: the
 	// migration has committed; a leftover legacy file is benign
-	// because resolveLayer reads repo-first. Surface as part of the
-	// status line in a future revision if it becomes a problem.
+	// because resolveLayer reads repo-first. Log the failure to
+	// stderr so the operator can clean up manually if desired,
+	// but continue past it — the migration as a whole succeeded
+	// (Bugbot MED on PR #328: previously returned a hard error
+	// here, contradicting the "non-fatal" intent).
 	for _, a := range missionArtifacts {
 		legacy := filepath.Join(legacyDir, id+a.legacySuffix)
 		if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("removing legacy %s: %w", legacy, err)
+			fmt.Fprintf(os.Stderr,
+				"ethos: mission migrate: removing legacy %s: %v (leftover is benign; repo-tree copy is authoritative)\n",
+				legacy, err)
 		}
 	}
 

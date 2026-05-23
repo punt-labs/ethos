@@ -552,7 +552,7 @@ func TestReadsContain(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := readsContain(tt.reads, tt.path)
+			got := readsContain(tt.reads, tt.path, "")
 			assert.Equal(t, tt.want, got)
 		})
 	}

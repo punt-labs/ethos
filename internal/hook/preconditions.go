@@ -81,7 +81,7 @@ func EvaluatePreconditions(
 				fmt.Errorf("preconditions[%d]: reading session audit: %w", i, readErr)
 		}
 		for _, path := range paths {
-			if !readsContain(reads, path) {
+			if !readsContain(reads, path, repoRoot) {
 				return preconditionMessage(p, i), true, nil
 			}
 		}
@@ -305,11 +305,12 @@ func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
 
 // readsContain reports whether the audit-log set carries a Read for
 // the named path. Comparison is on the cleaned form so "./a/b" and
-// "a/b" match. The candidate is also checked against its absolute
-// form when reads carry absolute paths and against its trimmed
-// relative form when reads carry repo-relative paths — the audit
-// log records whatever the tool input was, not a canonicalized form.
-func readsContain(reads map[string]struct{}, path string) bool {
+// "a/b" match. The candidate is also checked in both directions
+// against the repoRoot — a relative candidate against an absolute
+// recorded read, and an absolute candidate against the repo-relative
+// recorded read. The audit log records whatever the tool input was,
+// not a canonicalized form, so symmetry matters (Copilot on PR #328).
+func readsContain(reads map[string]struct{}, path, repoRoot string) bool {
 	if len(reads) == 0 {
 		return false
 	}
@@ -317,12 +318,28 @@ func readsContain(reads map[string]struct{}, path string) bool {
 	if _, ok := reads[clean]; ok {
 		return true
 	}
-	// Try the absolute / relative pair: if the input is relative and
-	// the audit log carries an absolute match (or vice versa), accept.
+	// Relative candidate → look for an absolute match.
 	if !filepath.IsAbs(clean) {
 		if abs, err := filepath.Abs(clean); err == nil {
 			if _, ok := reads[filepath.Clean(abs)]; ok {
 				return true
+			}
+		}
+		// Also try the repo-root-anchored absolute form so a
+		// candidate evaluated outside the repo's cwd still matches
+		// a read recorded by a tool that resolved against repoRoot.
+		if repoRoot != "" {
+			if _, ok := reads[filepath.Clean(filepath.Join(repoRoot, clean))]; ok {
+				return true
+			}
+		}
+	} else {
+		// Absolute candidate → look for a repo-relative match.
+		if repoRoot != "" {
+			if rel, err := filepath.Rel(repoRoot, clean); err == nil && !strings.HasPrefix(rel, "..") {
+				if _, ok := reads[filepath.Clean(rel)]; ok {
+					return true
+				}
 			}
 		}
 	}
