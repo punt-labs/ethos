@@ -3467,3 +3467,131 @@ func TestMissionDispatch_ExtractInto(t *testing.T) {
 		assert.Contains(t, msg, "extension")
 	})
 }
+
+// --- Phase 4: active-mission sidecar (ethos-620t) ---
+//
+// `ethos mission claim <id>` writes the sidecar at
+// <globalRoot>/sessions/<id>/active-mission. `ethos mission release`
+// clears it. The PreToolUse dispatch reads the sidecar to bind
+// in-session Agent() calls to a contract. Tests below pin: round
+// trip, refuses outside a session, refuses on an unknown missionID,
+// release is idempotent.
+
+// seedMissionForClaim creates a single mission via the CLI create
+// path inside the missionTestEnv HOME and returns the missionID.
+// Mirrors seedMissionWithEvents but stops at create — claim tests do
+// not need a result+close history.
+func seedMissionForClaim(t *testing.T) string {
+	t.Helper()
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.NotEmpty(t, ids)
+	return ids[0]
+}
+
+func TestMissionClaim_WritesSidecar(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+
+	t.Setenv("ETHOS_SESSION", "sess-claim-1")
+	require.NoError(t, runMissionClaim(id))
+
+	// Read the sidecar directly to assert layout.
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-claim-1", "active-mission")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err, "claim must write the sidecar at the expected path")
+	assert.Equal(t, id+"\n", string(data))
+
+	info, err := os.Stat(sidecar)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestMissionClaim_RefusesUnknownMission(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-claim-2")
+
+	err := runMissionClaim("m-2026-05-23-999")
+	require.Error(t, err, "claim on an unknown mission must refuse")
+
+	// Sidecar must NOT have been written.
+	home, _ := os.UserHomeDir()
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-claim-2", "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr),
+		"unknown mission claim must NOT create the sidecar: %v", statErr)
+}
+
+func TestMissionClaim_PrefixMatch(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	prefix := id[:10]
+
+	t.Setenv("ETHOS_SESSION", "sess-prefix")
+	require.NoError(t, runMissionClaim(prefix))
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-prefix", "active-mission")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err)
+	assert.Equal(t, id+"\n", string(data),
+		"prefix match must resolve to the full ID before staging the sidecar")
+}
+
+func TestMissionRelease_RemovesSidecar(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	t.Setenv("ETHOS_SESSION", "sess-release")
+
+	require.NoError(t, runMissionClaim(id))
+	require.NoError(t, runMissionRelease())
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-release", "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr),
+		"release must remove the sidecar; got %v", statErr)
+}
+
+func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-never-claimed")
+
+	// No prior claim — release is still a no-op.
+	require.NoError(t, runMissionRelease())
+}
+
+func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
+	// resolveSessionContext walks the process tree when ETHOS_SESSION
+	// is unset; a unit test running as part of go test sees the real
+	// shell PID and can find a "claude" ancestor on a developer's
+	// machine. The subprocess shape isolates the failure path: when
+	// neither --session nor ETHOS_SESSION is set AND there is no
+	// Claude PID in the test's process tree, claim must refuse.
+	if ethosBinary == "" {
+		t.Skip("ethos binary not available; TestMain build failed")
+	}
+
+	home := t.TempDir()
+	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
+
+	cmd := exec.Command(ethosBinary, "mission", "claim", "m-2026-05-23-001")
+	// Scrub the env: HOME, PATH, and a TMPDIR for go runtime, nothing
+	// else. ETHOS_SESSION absent + no claude ancestor → refusal.
+	cmd.Env = []string{
+		"HOME=" + home,
+		"PATH=" + os.Getenv("PATH"),
+		"TMPDIR=" + t.TempDir(),
+	}
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+	err := cmd.Run()
+	require.Error(t, err, "claim without a session must refuse")
+	assert.Contains(t, stderrBuf.String(), "no session found")
+}

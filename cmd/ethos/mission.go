@@ -578,6 +578,56 @@ Exit codes:
 	},
 }
 
+// --- mission claim / release (active-mission sidecar) ---
+//
+// `claim` writes the active-mission sidecar for the caller's session;
+// `release` clears it. The sidecar lives at
+// <globalRoot>/sessions/<session-id>/active-mission and is read by the
+// PreToolUse dispatch when MISSION_ID is unset — so a leader who runs
+// `ethos mission claim m-...` before calling Agent() gets Tier B
+// dispatch on the spawn. `mission create` does NOT auto-claim by
+// design: claim is explicit so the operator names the binding.
+
+var missionClaimCmd = &cobra.Command{
+	Use:   "claim <mission-id>",
+	Short: "Bind the current session to a mission for in-session Agent() dispatch",
+	Long: `Bind the current session to a mission.
+
+Writes <globalRoot>/sessions/<session-id>/active-mission with the
+given mission ID. The PreToolUse hook reads this file when
+MISSION_ID is unset, so the next Agent() call from this session
+dispatches as Tier B under the claimed mission and produces a
+delegation skeleton on disk for audit reconstruction.
+
+Refuses when there is no resolvable session in the environment
+(set ETHOS_SESSION or run inside an active Claude Code session).
+Refuses when the mission ID does not resolve to a contract — claim
+fails closed so a typo cannot stage a phantom binding.
+
+Released by ` + "`ethos mission release`" + ` or naturally when the
+session ends.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionClaim(args[0])
+	},
+}
+
+var missionReleaseCmd = &cobra.Command{
+	Use:   "release",
+	Short: "Clear the active-mission sidecar for the current session",
+	Long: `Clear the active-mission sidecar for the current session.
+
+Removes <globalRoot>/sessions/<session-id>/active-mission if present.
+Missing is not an error — release is safe to call unconditionally
+before claiming a new mission.
+
+Refuses when there is no resolvable session in the environment.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runMissionRelease()
+	},
+}
+
 // --- mission advance ---
 
 var missionAdvanceCmd = &cobra.Command{
@@ -661,6 +711,8 @@ func init() {
 		missionLintCmd,
 		missionDispatchCmd,
 		missionMigrateCmd,
+		missionClaimCmd,
+		missionReleaseCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -1445,6 +1497,70 @@ func runMissionDispatch() error {
 	fmt.Printf("dispatched: %s worker=%s evaluator=%s write_set=%d criteria=%d budget=%d\n",
 		c.MissionID, c.Worker, c.Evaluator.Handle,
 		len(c.WriteSet), len(c.SuccessCriteria), c.Budget.Rounds)
+	return nil
+}
+
+// runMissionClaim writes the active-mission sidecar for the caller's
+// session. Resolves the session from --session, ETHOS_SESSION, or the
+// process tree (the same chain `ethos iam` uses); refuses when none
+// resolve. Validates the mission resolves via MatchByPrefix so a typo
+// cannot stage a phantom binding.
+func runMissionClaim(idOrPrefix string) error {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil {
+		return fmt.Errorf("mission claim: %w", err)
+	}
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		return fmt.Errorf("mission claim: %w", err)
+	}
+	if _, err := ms.Load(id); err != nil {
+		return fmt.Errorf("mission claim: loading %q: %w", id, err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("mission claim: user home dir: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := mission.WriteActiveMission(globalRoot, sessionID, id); err != nil {
+		return fmt.Errorf("mission claim: %w", err)
+	}
+
+	if jsonOutput {
+		printJSON(map[string]string{
+			"session": sessionID,
+			"mission": id,
+		})
+		return nil
+	}
+	fmt.Printf("claimed %s for session %s\n", id, sessionID)
+	return nil
+}
+
+// runMissionRelease removes the active-mission sidecar for the
+// caller's session. Missing is not an error — release is idempotent
+// so an operator can call it unconditionally before a new claim.
+func runMissionRelease() error {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil {
+		return fmt.Errorf("mission release: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("mission release: user home dir: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
+		return fmt.Errorf("mission release: %w", err)
+	}
+
+	if jsonOutput {
+		printJSON(map[string]string{"session": sessionID})
+		return nil
+	}
+	fmt.Printf("released session %s\n", sessionID)
 	return nil
 }
 
