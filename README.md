@@ -204,19 +204,19 @@ rather than competition.
 
 ## Status
 
-v3.12.0 released. DES-054 — the audited delegation initiative —
-shipped in this version across three phases:
+Identity, teams, mission contracts, write-set admission, frozen
+evaluators, bounded rounds, archetypes, pipelines, automatic mission
+traceability, mission dispatch one-liner, and audited delegation are
+in daily use by Punt Labs.
+
+DES-054 — the audited delegation initiative — shipped across three
+phases:
 
 | Phase | What shipped |
 |-------|--------------|
 | 1 | Date-keyed two-tree mission storage. Audit entry enrichment (`parent_session`, `agent_id`, `agent_type`, `delegation_id`, `parent_delegation`, `contract_id`, full `tool_input` map, `tool_input_hash`). Per-namespace counters. |
 | 2 | `PreToolUse`-on-`Agent` dispatch. Tier A (ad-hoc) advisory stderr line + audit-log tagging by `delegation_id`; Tier B (contract-bound) atomic record skeleton + per-mission/per-delegation flocks + depth refusal. |
 | 3 | Tier B inheritance walk (`SpawnPattern` + `InheritsContract`). Precondition evaluator. `ethos audit migrate`, `ethos audit show --delegation`, `ethos mission migrate --to-repo`. `commit-msg` trailer hook installed by `install.sh`. |
-
-Identity, teams, mission contracts, write-set admission, frozen
-evaluators, bounded rounds, archetypes, pipelines, automatic mission
-traceability, mission dispatch one-liner, and audited delegation are
-in daily use by Punt Labs.
 
 New users run `ethos setup` to get a working team in under 60
 seconds. Two embedded bundles ship: **foundation** (4-agent
