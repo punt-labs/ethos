@@ -82,7 +82,7 @@ func walkInheritanceChain(
 	seen := map[string]struct{}{cur.ID: {}}
 
 	for cur != nil {
-		if depth > limit {
+		if depth >= limit {
 			fmt.Fprintf(os.Stderr,
 				"ethos: pre-tool-use: inheritance: chain exceeds max_delegation_depth %d at %q; falling through to Tier A\n",
 				limit, cur.ID)
@@ -191,6 +191,9 @@ func loadParentDelegation(repoRoot, delegationID string) (*mission.Delegation, s
 		}
 		return d, e.Name(), true
 	}
+	fmt.Fprintf(os.Stderr,
+		"ethos: pre-tool-use: inheritance: parent delegation %q not found under %q; falling through to Tier A\n",
+		delegationID, missionsDir)
 	return nil, "", false
 }
 
