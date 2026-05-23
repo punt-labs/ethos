@@ -591,6 +591,151 @@ ethos mission lint contract.yaml
 ethos mission lint contract.yaml --json
 ```
 
+### Migration from v3.11
+
+Two one-time relocation commands move legacy global artifacts into
+the DES-054 per-repo tree. Both are idempotent, both honour
+`--dry-run`, and both refuse to touch artifacts that belong to a
+different repo's work tree.
+
+```bash
+ethos audit migrate                    # legacy global session audit logs
+ethos audit migrate --dry-run --verbose
+ethos mission migrate                  # all migratable missions
+ethos mission migrate <mission-id>     # a single mission
+ethos mission migrate --to-repo --dry-run
+```
+
+Cross-repo policy: a session whose id has no matching repo-tree
+session directory, or a mission whose `contract_id` is not referenced
+by any audit entry in `<repo>/.ethos/sessions/`, stays where it is —
+it belongs to another checkout.
+
+## Audited Delegation
+
+Every `Agent` tool call now produces a delegation record and tags
+subsequent audit entries with its `delegation_id`. Two tiers:
+
+| Tier | When | Enforcement |
+|------|------|-------------|
+| A | `Agent(...)` with no `MISSION_ID` | Advisory stderr line; spawn always allowed |
+| B | `MISSION_ID` set, OR inherited from a parent contract | Preconditions, depth limit, write-set, hash gate |
+
+The `PreToolUse` hook routes on `Agent` calls:
+
+1. `MISSION_ID` env set → Tier B by explicit dispatch.
+2. `MISSION_ID` unset, `PARENT_DELEGATION_ID` set → try Tier B by
+   inheritance; walk the parent contract's `delegations[]` for a
+   matching `spawn_pattern`. Falls through to Tier A on any miss or
+   error (inheritance is non-blocking).
+3. Neither set → Tier A.
+
+On every path the hook emits an `additional_env` block consumed by
+the spawned worker: `DELEGATION_ID`, `PARENT_DELEGATION_ID`,
+`PARENT_SESSION_ID`. Tier B also emits `MISSION_ID` and
+`MISSION_ARTIFACTS_DIR` (the per-delegation directory the worker
+writes results into).
+
+Refusal reasons (Tier B only — Tier A is always allow):
+
+- `resolving MISSION_ID "<id>": <err>` — malformed or missing contract
+- `allocating delegation id: <err>` — counter file unwriteable
+- `acquiring mission lock` / `acquiring delegation lock` — flock failure
+- `writing delegation skeleton`: atomic record write failed
+- `max_delegation_depth <limit> exceeded by depth <proposed>` — chain too deep
+- `walking parent_delegation chain`: corrupt or missing ancestor
+
+Every refusal closes the skeleton (if already written) with
+`verdict=aborted` so depth refusals are queryable via
+`ethos audit show --delegation <id>`.
+
+### Contract Fields
+
+DES-054 phase 3 adds three optional fields to the mission Contract:
+
+```yaml
+preconditions:                          # admission gates
+  - form: implicit                      # target file_path must have been Read
+    message: "Read the target file before editing it"
+  - form: explicit
+    require_read:
+      - DESIGN.md
+      - ${inputs.references.0}          # ${inputs.X} substitution
+    message: "Read DESIGN.md and the first reference before writing"
+
+strict_preconditions: true              # default; *bool — explicit false opts into warn-mode
+
+delegations:                            # per-spawn templates
+  - role: implementation
+    spawn_pattern: "bwk|rsc"            # anchored regex against agent_type
+    inherits_contract: true             # child runs Tier B under this contract
+    extract_into:                       # new-file-creation allowlist for the child
+      - internal/session/
+  - role: review
+    spawn_pattern: "djb"
+    inherits_contract: true
+```
+
+**Preconditions** are evaluated by the `PreToolUse` hook before
+every non-Read tool call under a Tier B contract. *Implicit* form
+requires the tool input's target paths to have been Read in this
+session. *Explicit* form requires every `require_read` entry — after
+`${inputs.X}` substitution — to have been Read. Supported keys:
+`${inputs.ticket}`, `${inputs.files.N}`, `${inputs.references.N}`.
+
+A *violated* predicate always blocks with the contract's `message`.
+An *unevaluable* predicate (malformed substitution, missing input,
+unreadable audit log) blocks under `strict_preconditions: true`
+(default) and warns + allows under `strict_preconditions: false`.
+
+**Delegations** authorize child `Agent` spawns to inherit this
+contract. `spawn_pattern` is admission-time-validated as an anchored
+regex (`^(?:<pattern>)$`); a malformed pattern is rejected at
+`mission create`, not at runtime match time.
+
+### Commands
+
+```bash
+ethos audit show --delegation <id>             # forensic query across sessions
+ethos audit show --delegation <id> --format text
+ethos audit migrate                            # legacy → repo-tree audit logs
+ethos audit migrate --dry-run --verbose
+ethos mission migrate --to-repo                # legacy → repo-tree missions
+ethos mission migrate <mission-id> --to-repo
+```
+
+`ethos audit show` walks `<repo>/.ethos/sessions/<date>-<id>/audit.jsonl`
+(with legacy global fallback) and prints every entry whose
+`delegation_id` matches. JSON output is one entry per line and is
+itself a valid audit-log fragment — pipes cleanly into `jq`.
+
+### Commit-Msg Trailer Hook
+
+`hooks/commit-msg.sh` appends `Mission: <id>` and `Delegation: <id>`
+git trailers when `MISSION_ID` and `DELEGATION_ID` are set in the
+environment. Idempotent. `install.sh` installs it as the repo's
+`.git/hooks/commit-msg` automatically (no clobber if an unrelated
+hook is already present). Queryable with
+`git log --grep="Mission: m-2026-05-23-001"`.
+
+### max_delegation_depth
+
+Default ceiling 16. Walks `parent_delegation` on every Tier B
+dispatch and refuses when adding the new spawn would exceed the
+limit. Override per repo:
+
+```yaml
+# .punt-labs/ethos.yaml
+max_delegation_depth: 32
+```
+
+Value `0` means default; negative surfaces as a refusal (no silent
+clamp).
+
+Full feature reference, including audit-log shape, the lock model,
+forensic query recipes, and the migration runbook:
+[docs/audited-delegation.md](docs/audited-delegation.md).
+
 ## Pipelines
 
 Pipeline templates are multi-stage workflows composed from archetypes.
@@ -881,7 +1026,7 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 | Session locks | `~/.punt-labs/ethos/sessions/<id>.lock` | No |
 | Current session | `~/.punt-labs/ethos/sessions/current/<pid>` | No |
 
-### DES-054 phase 1 — date-keyed two-tree mission storage
+### DES-054 — date-keyed two-tree mission storage
 
 Mission and session artifacts move into a per-mission and per-session
 directory layout. The mission ID encodes the date, so date browsing
@@ -895,15 +1040,35 @@ session started that day.
 | Mission event log (repo) | `<repo>/.ethos/missions/<mission-id>/log.jsonl` | Yes |
 | Mission results (repo) | `<repo>/.ethos/missions/<mission-id>/results.yaml` | Yes |
 | Mission reflections (repo) | `<repo>/.ethos/missions/<mission-id>/reflections.yaml` | Yes |
-| Mission delegations (repo) | `<repo>/.ethos/missions/<mission-id>/delegations/<NN>/` | Yes |
+| Tier B delegation record (repo) | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml` | Yes |
+| Tier B delegation prompt (repo) | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md` | Yes |
+| Per-mission shared flock | `<repo>/.ethos/missions/<mission-id>/.lock` | No |
 | Mission contract (legacy global, read-only fallback) | `~/.punt-labs/ethos/missions/<mission-id>.yaml` | No |
 | Session audit log (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | Yes |
-| Session ad-hoc delegations (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/` | Yes |
+| Tier A delegation record (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/record.yaml` | Yes |
 | Session audit log (legacy global, read-only fallback) | `~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl` | No |
 | Mission ID counter | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | No |
 | Delegation ID counter | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | No |
-| Per-mission flock | `~/.punt-labs/ethos/missions/<mission-id>.lock` | No |
-| Per-delegation flock (Tier B) | `~/.punt-labs/ethos/delegations/<delegation-id>.lock` | No |
+| Per-delegation exclusive flock | `~/.punt-labs/ethos/delegations/<delegation-id>.lock` | No |
+
+Each Tier B `record.yaml` carries the on-disk
+[`Delegation`](docs/audited-delegation.md) shape: `id`, `tier`,
+`mission`, `parent_delegation`, `parent_session`, `agent_type`,
+`spawn_pattern`, `created_at`, `closed_at`, `verdict`, `prompt_hash`,
+`reason`. Atomic write via `os.CreateTemp` + `Chmod(0o600)` + `Sync` +
+`Rename` in the record's own directory.
+
+Lock acquisition order (LIFO release via `defer`):
+
+```text
+global → repo → per-mission (LOCK_SH) → per-delegation (LOCK_EX)
+```
+
+The per-mission lock is **shared** so two Tier B spawns under one
+mission do not serialize. The per-delegation lock is **exclusive**
+so the skeleton write is the sole writer for its ID. Per-delegation
+locks live under the global tree (not under `.ethos/`) so two
+checkouts of the same repo lock the same inode.
 
 Counters use the sibling per-namespace per-date pattern: each file
 is a single integer, flock-guarded, and adding a new namespace adds
@@ -911,3 +1076,6 @@ a new sibling file without changing any existing one (DES-054
 invariant I9-counter). Session rosters and PID pointers stay under
 `~/.punt-labs/ethos/sessions/` because they reference live process
 state; only audit logs move into the repo.
+
+Full audited-delegation reference:
+[docs/audited-delegation.md](docs/audited-delegation.md).
