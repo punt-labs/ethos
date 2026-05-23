@@ -172,6 +172,16 @@ func loadParentDelegation(repoRoot, delegationID string) (*mission.Delegation, s
 	entries, err := os.ReadDir(missionsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			// PARENT_DELEGATION_ID was set but this repo has no
+			// missions tree at all. Emit a stderr line for parity
+			// with the "tree exists but no matching record" case —
+			// operators tracing a missing inheritance walk should
+			// see the same signal in both shapes (Bugbot MED on
+			// PR #328: previously silent, inconsistent with the
+			// other not-found paths in this function).
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: inheritance: missions dir %q not present; falling through to Tier A\n",
+				missionsDir)
 			return nil, "", false
 		}
 		fmt.Fprintf(os.Stderr,
