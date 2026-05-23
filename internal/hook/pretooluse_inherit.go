@@ -142,27 +142,20 @@ func matchAncestorContract(
 			missionID, ancestor.ID, err)
 		return false, "", false
 	}
-	for i := range c.Delegations {
-		entry := &c.Delegations[i]
-		if !entry.InheritsContract {
-			continue
+	// Filter to entries that explicitly opt into inheritance, then
+	// delegate the pattern matching to MatchTemplate. The helper
+	// already handles bad-regex tolerance + the agentType-empty
+	// guard; consolidating here removes the duplicate loop in this
+	// file (Bugbot LOW on PR #328: MatchTemplate had no production
+	// callers — it does now).
+	inheriting := make([]mission.DelegationTemplate, 0, len(c.Delegations))
+	for _, t := range c.Delegations {
+		if t.InheritsContract {
+			inheriting = append(inheriting, t)
 		}
-		matched, err := mission.MatchSpawnPattern(entry.SpawnPattern, childAgentType)
-		if err != nil {
-			// Skip past a single malformed entry rather than
-			// abandoning every later well-formed template in the
-			// same contract. Mirrors MatchTemplate's tolerance
-			// (Bugbot MED on PR #328: previously returned
-			// (false, "", false) on first bad regex, hiding any
-			// matching downstream entry).
-			fmt.Fprintf(os.Stderr,
-				"ethos: pre-tool-use: inheritance: bad spawn_pattern %q in contract %q: %v; skipping entry\n",
-				entry.SpawnPattern, missionID, err)
-			continue
-		}
-		if matched {
-			return true, missionID, true
-		}
+	}
+	if _, ok := mission.MatchTemplate(inheriting, childAgentType); ok {
+		return true, missionID, true
 	}
 	return false, "", false
 }

@@ -20,11 +20,20 @@ add_trailer() {
   if command -v git >/dev/null 2>&1; then
     tmp=$(mktemp "${msg_file}.XXXXXX") || return 1
     if git interpret-trailers --trailer "${key}: ${val}" "$msg_file" > "$tmp"; then
-      mv "$tmp" "$msg_file"
-      return 0
+      # mv can fail on permissions, cross-filesystem, or
+      # disk-full. If it does, the temp file is stale and the
+      # commit message is untouched — fall through to the plain
+      # append path so the trailer still lands (Copilot on PR
+      # #328: previously returned 0 after a silent mv failure).
+      if mv "$tmp" "$msg_file"; then
+        return 0
+      fi
+      rm -f "$tmp"
+      printf 'ethos: commit-msg: mv onto %s failed; using plain append\n' "$msg_file" >&2
+    else
+      rm -f "$tmp"
+      printf 'ethos: commit-msg: git interpret-trailers failed; using plain append\n' >&2
     fi
-    rm -f "$tmp"
-    printf 'ethos: commit-msg: git interpret-trailers failed; using plain append\n' >&2
   fi
   printf '\n%s: %s\n' "$key" "$val" >> "$msg_file"
 }

@@ -312,7 +312,22 @@ func validatePrecondition(p Precondition) error {
 			return fmt.Errorf("explicit form requires non-empty require_read")
 		}
 		for i, entry := range p.RequireRead {
+			// Reject malformed substitution markers BEFORE stripping
+			// the well-formed ones. ${inputs.} (empty key),
+			// ${env.HOME}, ${badkey}, and any other shape that does
+			// not match the well-formed pattern would otherwise pass
+			// validation here only to surface as an "unevaluable
+			// predicate" at every PreToolUse fire (Copilot on PR
+			// #328: validation must distinguish "user typed a
+			// supported placeholder" from "user typed something
+			// that won't ever resolve").
 			stripped := stripInputsPlaceholders(entry)
+			if strings.Contains(stripped, "${") {
+				return fmt.Errorf(
+					"require_read[%d]: unsupported substitution marker in %q; "+
+						"only ${inputs.<key>} is recognized",
+					i, entry)
+			}
 			if err := validateWriteSetEntry(stripped); err != nil {
 				return fmt.Errorf("require_read[%d]: %w", i, err)
 			}
