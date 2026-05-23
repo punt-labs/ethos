@@ -273,6 +273,19 @@ func migrateOneMission(legacyDir, repoDir, missionID string, repoMissions map[st
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("stat %s: %w", repoContract, err)
 	}
+	// Destination directory might already exist (e.g. from a prior
+	// partial migration that wrote sibling artifacts but never
+	// landed contract.yaml). os.Rename onto an existing dir fails
+	// with a generic "file exists" — surface a clearer skip line
+	// instead so the operator knows to either remove the stray
+	// dir or move it aside manually (Copilot on PR #328).
+	if info, err := os.Stat(repoMissionDir); err == nil && info.IsDir() {
+		return fmt.Sprintf(
+			"skip %s: repo-tree dir already present at %s (no contract.yaml; manual cleanup required)",
+			id, relRepoPath(repoMissionDir)), nil
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("stat %s: %w", repoMissionDir, err)
+	}
 
 	if dryRun {
 		return fmt.Sprintf("migrate %s -> %s (dry-run)", id, relRepoPath(repoMissionDir)), nil

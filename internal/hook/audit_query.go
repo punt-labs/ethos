@@ -13,8 +13,10 @@ import (
 // entry. The on-disk auditEntry struct stays package-private; AuditView
 // is the surface other packages — notably the CLI — consume.
 //
-// Field names mirror the on-disk JSONL shape so encoding/json reproduces
-// the original line verbatim when re-marshaling.
+// Field names + tags mirror the on-disk JSONL shape so re-marshaling
+// produces a schema-equivalent line — same keys, same values. Go's
+// json encoder does not preserve original key order or whitespace,
+// so the result is not byte-for-byte identical (Copilot on PR #328).
 type AuditView struct {
 	Ts               string         `json:"ts"`
 	Session          string         `json:"session"`

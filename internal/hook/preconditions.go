@@ -107,8 +107,9 @@ func preconditionMessage(p mission.Precondition, i int) string {
 //
 //   - implicit form: extract paths from toolInput.
 //   - explicit form: substitute ${inputs.X} against contract.Inputs
-//     for each entry in p.RequireRead; return the cleaned absolute
-//     forms.
+//     for each entry in p.RequireRead. The substituted strings are
+//     returned as-is (path normalization and abs/rel symmetry happen
+//     downstream in readsContain).
 //
 // Substitution errors (unknown input key, malformed ${...} sequence)
 // surface as the second return so the caller can mark the predicate
@@ -138,15 +139,22 @@ func preconditionTargets(
 }
 
 // extractToolInputPaths pulls candidate file paths from a tool call's
-// input map. Common keys: file_path (Read, Write, Edit), notebook_path
-// (NotebookRead/Edit), and the entries in files / paths arrays. Glob
-// and Grep are pure-read tools and are skipped upstream by
-// HandlePreToolUse; this helper is the reverse-lookup table for the
-// remaining tools.
+// input map. The key set is the same across every non-Read tool:
+// file_path (Write, Edit), notebook_path (NotebookEdit), and entries
+// in files / paths arrays. Glob and Grep are pure-read tools and are
+// skipped upstream by HandlePreToolUse; this helper is the reverse-
+// lookup table for the remaining tools.
+//
+// The toolName is intentionally not consulted — keying on it would
+// require this helper to track every supported tool's input schema,
+// which the Claude Code hook payload renders unnecessary. The key
+// set is the union across tools (Bugbot LOW on PR #328 noted the
+// unused parameter; left in for caller-side readability + future
+// tool-specific carve-outs).
 //
 // Returns the empty slice when no path-shaped value is present —
 // implicit on a path-free tool is a no-op precondition.
-func extractToolInputPaths(toolName string, toolInput map[string]any) []string {
+func extractToolInputPaths(_ string, toolInput map[string]any) []string {
 	if toolInput == nil {
 		return nil
 	}
