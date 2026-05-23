@@ -76,12 +76,19 @@ func MigrateMission(globalRoot, repoRoot, missionID string, dryRun bool, out io.
 		return fmt.Errorf("scanning repo sessions for mission references: %w", repoErr)
 	}
 
+	var failures []string
 	for _, id := range candidates {
 		decision, err := migrateOneMission(legacyDir, repoDir, id, repoMissions, dryRun)
 		if err != nil {
-			return fmt.Errorf("migrating mission %s: %w", id, err)
+			fmt.Fprintf(os.Stderr, "ethos: mission migrate: %s: %v\n", id, err)
+			failures = append(failures, id)
+			continue
 		}
 		fmt.Fprintln(out, decision)
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("mission migrate: %d mission(s) failed: %s",
+			len(failures), strings.Join(failures, ", "))
 	}
 	return nil
 }
@@ -331,13 +338,20 @@ func copyIfExists(src, dst string) error {
 	if err != nil {
 		return fmt.Errorf("creating %s: %w", dst, err)
 	}
-	defer out.Close()
-
 	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
 		return fmt.Errorf("copying %s -> %s: %w", src, dst, err)
 	}
 	if err := out.Sync(); err != nil {
+		_ = out.Close()
 		return fmt.Errorf("syncing %s: %w", dst, err)
+	}
+	// Check Close() explicitly: a failed close after a successful
+	// Sync would otherwise be silently dropped by the deferred
+	// pattern, and the migration would report success on a file
+	// that's not fully committed to disk (Copilot on PR #328).
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", dst, err)
 	}
 	return nil
 }

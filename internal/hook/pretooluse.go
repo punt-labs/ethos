@@ -173,7 +173,12 @@ func evalContractPreconditions(toolName string, toolInput map[string]any, sessio
 	if err != nil {
 		return fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err), true
 	}
-	repoRoot := tierBRepoRoot()
+	// envRepoRoot honors ETHOS_REPO_ROOT before falling back to cwd-
+	// derived tierBRepoRoot, so an operator running the hook from a
+	// subdirectory or with an explicit override sees consistent
+	// repo resolution between the dispatch path and the precondition
+	// evaluator (Copilot + Bugbot on PR #328).
+	repoRoot := envRepoRoot()
 	reason, deny, evalErr := EvaluatePreconditions(contract, toolName, toolInput, sessionID, repoRoot)
 	if !deny {
 		return "", false

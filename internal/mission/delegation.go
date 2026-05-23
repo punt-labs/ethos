@@ -132,9 +132,13 @@ func MatchSpawnPattern(pattern, agentType string) (bool, error) {
 // sees the bad regex.
 //
 // The walker continues past a malformed entry rather than failing
-// the whole match because admission-time pattern validation lands
-// in a later phase; until then, one bad entry should not block a
-// well-formed downstream entry from matching.
+// the whole match. Admission-time pattern validation runs in
+// Contract.Validate (phase 3e), so contracts written through the
+// normal mission create path cannot carry malformed patterns by
+// the time the runtime walker sees them. The runtime tolerance
+// here covers the edge case of a contract loaded from disk that
+// predates the validation rule, plus a defense-in-depth backstop
+// against on-disk corruption.
 func MatchTemplate(templates []DelegationTemplate, agentType string) (*DelegationTemplate, bool) {
 	if agentType == "" {
 		return nil, false

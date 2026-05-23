@@ -1,8 +1,10 @@
 package hook
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -180,6 +182,16 @@ func loadParentDelegation(repoRoot, delegationID string) (*mission.Delegation, s
 			missionsDir, e.Name(), "delegations", target, "record.yaml",
 		)
 		if _, statErr := os.Stat(recordPath); statErr != nil {
+			// fs.ErrNotExist is the expected "this isn't the right
+			// mission tree" case — silent skip. Anything else
+			// (EACCES, EIO) is a real fault the operator should see;
+			// surface it but still fall through so inheritance
+			// remains non-blocking (Copilot on PR #328).
+			if !errors.Is(statErr, fs.ErrNotExist) {
+				fmt.Fprintf(os.Stderr,
+					"ethos: pre-tool-use: inheritance: stat %s: %v\n",
+					recordPath, statErr)
+			}
 			continue
 		}
 		d, err := mission.LoadDelegation(recordPath)

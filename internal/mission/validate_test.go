@@ -753,7 +753,7 @@ func TestValidate_Preconditions(t *testing.T) {
 			precs: []Precondition{
 				{
 					Form:        PreconditionFormExplicit,
-					RequireRead: []string{"internal/mission/store.go", "${inputs.target}"},
+					RequireRead: []string{"internal/mission/store.go", "${inputs.files.0}"},
 					Message:     "read the listed files",
 				},
 			},
@@ -861,7 +861,7 @@ func TestValidate_Preconditions_RoundTrip(t *testing.T) {
 		},
 		{
 			Form:        PreconditionFormExplicit,
-			RequireRead: []string{"${inputs.target}", "internal/hook/audit_reader.go"},
+			RequireRead: []string{"${inputs.files.0}", "internal/hook/audit_reader.go"},
 			Message:     "explicit gate",
 		},
 	}
