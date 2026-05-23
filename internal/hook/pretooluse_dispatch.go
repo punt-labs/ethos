@@ -250,7 +250,7 @@ func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation 
 		ID:               delegationID,
 		ParentDelegation: parentDelegation,
 	}
-	loader := delegationLoader(repoRoot, missionID)
+	loader := delegationLoader(repoRoot)
 	parentDepth, err := mission.DelegationDepth(d, loader, limit)
 	if err != nil {
 		closeDelegationAborted(repoRoot, missionID, delegationID)
@@ -270,13 +270,25 @@ func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation 
 	return "", true
 }
 
-// delegationLoader returns a loader that reads ancestor records from
-// the per-mission delegations directory. Closures over (repoRoot,
-// missionID) so the depth walker can look up by delegation ID alone.
-func delegationLoader(repoRoot, missionID string) func(id string) (*mission.Delegation, error) {
+// delegationLoader returns a loader the depth walker uses to follow
+// the parent_delegation chain. The loader scans every mission tree
+// under <repo>/.ethos/missions/* for a matching record because Tier B
+// inheritance can promote a child under an ancestor's missionID while
+// the immediate parent_delegation lives under a different mission. A
+// single-mission loader keyed on the inherited missionID fails on the
+// parent link in that shape and aborts an otherwise valid spawn
+// (Bugbot MED on PR #328: depth gate single-mission loader).
+//
+// Errors propagate to the depth walker, which treats them as a refusal
+// — silently treating a missing ancestor as zero depth would let a
+// runaway recursive spawn pattern pass.
+func delegationLoader(repoRoot string) func(id string) (*mission.Delegation, error) {
 	return func(id string) (*mission.Delegation, error) {
-		dir := mission.DelegationDir(repoRoot, missionID, id)
-		return mission.LoadDelegation(filepath.Join(dir, "record.yaml"))
+		d, _, err := findDelegationByID(repoRoot, id)
+		if err != nil {
+			return nil, err
+		}
+		return d, nil
 	}
 }
 

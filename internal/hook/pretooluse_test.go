@@ -1688,3 +1688,70 @@ func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
 	assert.Equal(t, "block", r.Decision)
 }
+
+// TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees pins the
+// fix for Bugbot MED on PR #328 ("Depth gate single-mission loader").
+//
+// Tier B inheritance can promote a child under an ancestor's missionID
+// (M_anc) while the child's immediate PARENT_DELEGATION_ID points to a
+// delegation that lives under a DIFFERENT mission tree (M_other) —
+// the inheritance walker climbed from M_other up to M_anc to find a
+// matching SpawnPattern. Before the fix, the depth walker's loader was
+// keyed on M_anc only, so loading the parent delegation under M_other
+// failed and the depth gate aborted an otherwise-valid spawn.
+//
+// Scenario:
+//   - M_anc has Delegations[] = [{SpawnPattern: "djb", InheritsContract: true}]
+//   - D_anc lives under M_anc with parent_delegation=""
+//   - M_other contract is unrelated; D_p lives under M_other with
+//     parent_delegation=D_anc (i.e., D_p's parent is in another tree)
+//   - Child spawn: MISSION_ID="", PARENT_DELEGATION_ID=D_p,
+//     CLAUDE_AGENT_TYPE="djb"
+//
+// Expected: inheritance walks D_p → D_anc, finds the matching template
+// under M_anc, promotes the child to Tier B under M_anc. The depth
+// gate then walks D_p (under M_other) → D_anc (under M_anc) → done at
+// depth 2; proposed = 3, within the default limit; spawn allowed.
+func TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	ancMission := "m-2026-05-23-300"
+	ancDelegation := "d-2026-05-23-300"
+	stageContractWithDelegations(t, home, ancMission, []mission.DelegationTemplate{
+		{Role: "verifier", SpawnPattern: "djb", InheritsContract: true},
+	})
+	stageParentDelegationSkeleton(t, repo, ancMission, ancDelegation, "")
+
+	// Intermediate parent in a DIFFERENT mission tree. M_other's
+	// contract is not stageContractWithDelegations'd — it carries no
+	// matching template, so the inheritance walker climbs past it to
+	// reach M_anc.
+	otherMission := "m-2026-05-23-301"
+	stageContractCustomWriteSet(t, home, otherMission, []string{"docs/"})
+	parentDelegation := "d-2026-05-23-301"
+	stageParentDelegationSkeleton(t, repo, otherMission, parentDelegation, ancDelegation)
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", parentDelegation)
+	t.Setenv("CLAUDE_AGENT_TYPE", "djb")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-cross"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision,
+		"depth walk must follow parent_delegation across mission trees — single-mission loader would refuse here")
+	assert.Equal(t, ancMission, r.AdditionalEnv["MISSION_ID"],
+		"inheritance must promote the child to the ancestor missionID")
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
+	assert.True(t, strings.HasPrefix(r.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
+		filepath.Join(repo, ".ethos", "missions", ancMission)),
+		"artifacts dir must nest under the inherited mission")
+}

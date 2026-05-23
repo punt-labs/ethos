@@ -160,34 +160,41 @@ func matchAncestorContract(
 	return false, "", false
 }
 
-// loadParentDelegation finds and loads a delegation record by ID.
-// PARENT_DELEGATION_ID alone does not encode which mission the
-// parent belongs to, so the resolver scans
-// <repo>/.ethos/missions/*/delegations/<id>/record.yaml for the
-// matching record. Returns (record, missionID, true) on a hit,
-// (nil, "", false) otherwise (with a stderr warning on any I/O
-// error past the initial "not found").
-func loadParentDelegation(repoRoot, delegationID string) (*mission.Delegation, string, bool) {
+// findDelegationByID is the neutral cross-mission lookup that both the
+// inheritance resolver (loadParentDelegation) and the depth gate
+// (delegationLoader in pretooluse_dispatch.go) share. Scans
+// <repo>/.ethos/missions/*/delegations/<id>/record.yaml and returns the
+// first match (filesystem-ordered). No side effects — callers add their
+// own stderr lines and decide what to do with the error.
+//
+// Return shapes:
+//   - (d, missionID, nil) on a hit.
+//   - (nil, "", err wrapping fs.ErrNotExist) when the missions dir is
+//     absent or no record.yaml matches in any tree. Callers that need
+//     to distinguish "no tree" from "tree-but-no-match" can read the
+//     wrapped error.
+//   - (nil, "", err) on a real I/O fault (EACCES, EIO, malformed
+//     YAML) — never wraps fs.ErrNotExist in this case.
+//
+// First record.yaml wins. Filesystem-order-dependent on a delegation-id
+// collision across missions (Bugbot MED on PR #328). In practice
+// delegation IDs are date-keyed + counter-allocated and globally unique
+// within a repo, so the collision case is "stale data from a botched
+// migration." Follow-up hardening (scan all, fail-closed on multiplicity)
+// tracked as a separate bead.
+func findDelegationByID(repoRoot, delegationID string) (*mission.Delegation, string, error) {
 	missionsDir := filepath.Join(repoRoot, ".ethos", "missions")
 	entries, err := os.ReadDir(missionsDir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// PARENT_DELEGATION_ID was set but this repo has no
-			// missions tree at all. Emit a stderr line for parity
-			// with the "tree exists but no matching record" case —
-			// operators tracing a missing inheritance walk should
-			// see the same signal in both shapes (Bugbot MED on
-			// PR #328: previously silent, inconsistent with the
-			// other not-found paths in this function).
-			fmt.Fprintf(os.Stderr,
-				"ethos: pre-tool-use: inheritance: missions dir %q not present; falling through to Tier A\n",
-				missionsDir)
-			return nil, "", false
+		// errors.Is over os.IsNotExist so wrapped sentinels in any
+		// future middleware still match. The doc comment promises
+		// callers can errors.Is-test the returned error to distinguish
+		// "no tree" from a real I/O fault; that contract depends on the
+		// predicate here using the same unwrap semantics.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, "", fmt.Errorf("missions dir %q not present: %w", missionsDir, fs.ErrNotExist)
 		}
-		fmt.Fprintf(os.Stderr,
-			"ethos: pre-tool-use: inheritance: reading missions dir %q: %v; falling through to Tier A\n",
-			missionsDir, err)
-		return nil, "", false
+		return nil, "", fmt.Errorf("reading missions dir %q: %w", missionsDir, err)
 	}
 	target := filepath.Base(delegationID)
 	for _, e := range entries {
@@ -200,36 +207,38 @@ func loadParentDelegation(repoRoot, delegationID string) (*mission.Delegation, s
 		if _, statErr := os.Stat(recordPath); statErr != nil {
 			// fs.ErrNotExist is the expected "this isn't the right
 			// mission tree" case — silent skip. Anything else
-			// (EACCES, EIO) is a real fault the operator should see;
-			// surface it but still fall through so inheritance
-			// remains non-blocking (Copilot on PR #328).
-			if !errors.Is(statErr, fs.ErrNotExist) {
-				fmt.Fprintf(os.Stderr,
-					"ethos: pre-tool-use: inheritance: stat %s: %v\n",
-					recordPath, statErr)
+			// (EACCES, EIO) is a real fault that must surface.
+			if errors.Is(statErr, fs.ErrNotExist) {
+				continue
 			}
-			continue
+			return nil, "", fmt.Errorf("stat %s: %w", recordPath, statErr)
 		}
 		d, err := mission.LoadDelegation(recordPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: pre-tool-use: inheritance: loading parent delegation %q: %v; falling through to Tier A\n",
-				recordPath, err)
-			return nil, "", false
+			return nil, "", fmt.Errorf("loading parent delegation %q: %w", recordPath, err)
 		}
-		// First record.yaml wins. Filesystem-order-dependent on a
-		// delegation-id collision across missions (Bugbot MED on
-		// PR #328). In practice delegation IDs are date-keyed +
-		// counter-allocated and globally unique within a repo, so
-		// the collision case is "stale data from a botched
-		// migration." The follow-up hardening is to scan every
-		// match, fail-closed on multiplicity, and let the operator
-		// disambiguate — tracked as a separate bead.
-		return d, e.Name(), true
+		return d, e.Name(), nil
+	}
+	return nil, "", fmt.Errorf("parent delegation %q not found under %q: %w",
+		delegationID, missionsDir, fs.ErrNotExist)
+}
+
+// loadParentDelegation finds and loads a delegation record by ID for
+// the inheritance walk. PARENT_DELEGATION_ID alone does not encode
+// which mission the parent belongs to, so the resolver scans
+// <repo>/.ethos/missions/*/delegations/<id>/record.yaml for the
+// matching record (via findDelegationByID). Returns (record, missionID,
+// true) on a hit, (nil, "", false) otherwise. Every miss writes a
+// stderr line so operators tracing a missing inheritance walk see the
+// same signal across all not-found shapes (Bugbot MED on PR #328:
+// previously the "missions dir absent" path was silent).
+func loadParentDelegation(repoRoot, delegationID string) (*mission.Delegation, string, bool) {
+	d, mID, err := findDelegationByID(repoRoot, delegationID)
+	if err == nil {
+		return d, mID, true
 	}
 	fmt.Fprintf(os.Stderr,
-		"ethos: pre-tool-use: inheritance: parent delegation %q not found under %q; falling through to Tier A\n",
-		delegationID, missionsDir)
+		"ethos: pre-tool-use: inheritance: %v; falling through to Tier A\n", err)
 	return nil, "", false
 }
 
