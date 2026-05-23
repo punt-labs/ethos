@@ -1743,3 +1743,135 @@ func TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees(t *testing.T) {
 		filepath.Join(repo, ".punt-labs", "ethos", "missions", ancMission)),
 		"artifacts dir must nest under the inherited mission")
 }
+
+// TestDispatchAgent_ActiveMissionSidecar pins the end-to-end binding
+// the active-mission sidecar exists for: a leader-in-Claude-Code call
+// to Agent() cannot set MISSION_ID in its own env, but a prior
+// `ethos mission claim` has staged the sidecar at
+// <globalRoot>/sessions/<id>/active-mission. The PreToolUse hook
+// reads the sidecar, dispatches Tier B with that missionID, and
+// writes the per-delegation skeleton on disk so audit-show can
+// reconstruct the binding.
+//
+// MISSION_ID is empty; PARENT_DELEGATION_ID is empty. The only thing
+// pointing the dispatch at Tier B is the sidecar.
+func TestDispatchAgent_ActiveMissionSidecar(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-05-23-620"
+	stageContract(t, home, missionID)
+
+	// Stage the sidecar at the path the dispatch will read.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-sidecar"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, missionID))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.Decision)
+	assert.Equal(t, missionID, r.AdditionalEnv["MISSION_ID"],
+		"sidecar must promote the spawn to Tier B with the claimed missionID")
+	assert.Equal(t, sessionID, r.AdditionalEnv["PARENT_SESSION_ID"])
+	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
+
+	artifactsDir := r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
+	require.NotEmpty(t, artifactsDir,
+		"Tier B response must include MISSION_ARTIFACTS_DIR")
+	want := mission.DelegationDir(repo, missionID, r.AdditionalEnv["DELEGATION_ID"])
+	assert.Equal(t, want, artifactsDir)
+
+	recordPath := filepath.Join(artifactsDir, "record.yaml")
+	info, err := os.Stat(recordPath)
+	require.NoError(t, err,
+		"sidecar dispatch must write the per-delegation skeleton — this is the audit-show binding")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	d, err := mission.LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, mission.TierB, d.Tier,
+		"sidecar dispatch must record Tier B, not Tier A")
+	assert.Equal(t, missionID, d.Mission)
+	assert.Equal(t, sessionID, d.ParentSession)
+}
+
+// TestDispatchAgent_ActiveMissionSidecarPrefersEnv asserts the
+// dispatch ordering: a MISSION_ID env override beats the sidecar.
+// Operator-set env wins so a worker that explicitly overrides keeps
+// its precedence — the sidecar is a fallback for the leader, not a
+// usurper of intentional env state.
+func TestDispatchAgent_ActiveMissionSidecarPrefersEnv(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	envMission := "m-2026-05-23-621"
+	sidecarMission := "m-2026-05-23-622"
+	stageContractCustomWriteSet(t, home, envMission, []string{"cmd/ethos/"})
+	stageContractCustomWriteSet(t, home, sidecarMission, []string{"docs/"})
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-precedence"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, sidecarMission))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", envMission)
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, envMission, r.AdditionalEnv["MISSION_ID"],
+		"MISSION_ID env must win over the sidecar — the sidecar is a fallback, not an override")
+}
+
+// TestDispatchAgent_ActiveMissionSidecarMalformedFallsThrough asserts
+// the non-blocking contract: a sidecar pointing at a missionID the
+// store cannot Load surfaces the Tier B refusal (named MISSION_ID),
+// not a silent fall-through. djb's rule: malformed env never silently
+// admits. The sidecar takes the same path as MISSION_ID env once a
+// non-empty value is read.
+func TestDispatchAgent_ActiveMissionSidecarMalformedRefuses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-bad-sidecar"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, "m-2026-05-23-999"))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "block", r.Decision,
+		"a sidecar pointing at an unresolvable mission must block (same contract as MISSION_ID env)")
+	assert.Contains(t, r.Reason, "MISSION_ID")
+}

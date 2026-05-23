@@ -43,12 +43,52 @@ import (
 // echoed as PARENT_SESSION_ID="" so consumers can tell the difference
 // between "unset" (Tier A pre-DES-054) and "set to empty" (test
 // fixtures); the env block is still emitted.
+//
+// Sidecar (DES-054 extension, ethos-620t): when MISSION_ID is unset
+// the dispatch consults <globalRoot>/sessions/<id>/active-mission. A
+// leader-in-Claude-Code session cannot inject MISSION_ID into its own
+// env from inside an active session, so the sidecar is the bridge
+// from `ethos mission claim` to the next Agent() spawn. The read is
+// best-effort: any error logs to stderr and falls through to the
+// inheritance / Tier A path, matching the pattern in
+// loadParentDelegation.
 func dispatchAgent(w io.Writer, sessionID string) error {
 	missionID := os.Getenv("MISSION_ID")
 	if missionID != "" {
 		return dispatchTierB(w, sessionID, missionID)
 	}
+	if missionID := readActiveMissionForDispatch(sessionID); missionID != "" {
+		return dispatchTierB(w, sessionID, missionID)
+	}
 	return dispatchTierBOrTierA(w, sessionID)
+}
+
+// readActiveMissionForDispatch consults the active-mission sidecar
+// for sessionID. Returns "" on any non-found shape: empty sessionID,
+// missing global root, missing sidecar, read error. Errors that are
+// not "file not present" log to stderr so the operator can trace why
+// a claimed mission did not bind — the dispatch then proceeds along
+// the no-sidecar path (inheritance or Tier A) so the spawn still
+// runs (Bugbot precedent: dispatch helpers must be non-blocking).
+func readActiveMissionForDispatch(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: resolving global root: %v; falling through\n",
+			err)
+		return ""
+	}
+	missionID, err := mission.ReadActiveMission(globalRoot, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: reading sidecar for %q: %v; falling through\n",
+			sessionID, err)
+		return ""
+	}
+	return missionID
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
