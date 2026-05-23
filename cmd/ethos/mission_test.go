@@ -154,6 +154,24 @@ func seedEvaluator(t *testing.T, root string) {
 	seedArchetype(t, root, "implement")
 }
 
+// chdirToFakeRepo creates a fake .git directory inside dir so
+// resolve.FindRepoRoot() stops at dir rather than walking up to the
+// surrounding ethos checkout, then chdirs the test process there.
+// Subprocesses launched via exec.Command inherit the cwd and so
+// FindRepoRoot resolves to dir. Used by CLI subprocess tests that
+// exercise mission create — without this they would land contracts
+// in the real ethos repo's per-mission tree and collide with existing
+// missions.
+//
+// TMPDIR in this project points at <repo>/.tmp, which means
+// t.TempDir() returns a path under the real repo. A bare t.Chdir(dir)
+// is not enough.
+func chdirToFakeRepo(t *testing.T, dir string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o755))
+	t.Chdir(dir)
+}
+
 // seedArchetype drops a minimal archetype YAML into root/archetypes/
 // so the ArchetypeStore wired by missionStoreForCreate recognizes the
 // given name. Without this, any Create call would reject the default
@@ -653,6 +671,7 @@ func TestMissionAdvance_RequiresReflection(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
 	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
@@ -923,9 +942,12 @@ func TestMissionShow_JSONSurfacesCorruptResultsAsWarnings(t *testing.T) {
 	require.Len(t, ids, 1)
 	id := ids[0]
 
-	// Corrupt the sibling results file. The file path mirrors the
-	// store's resultsPath layout — <root>/missions/<id>.results.yaml.
-	resultsFile := filepath.Join(ms.Root(), "missions", id+".results.yaml")
+	// Corrupt the sibling results file. With DES-054 two-tree
+	// storage active, the per-mission dir lives under the repo tree
+	// (<repoRoot>/.ethos/missions/<id>/results.yaml).
+	contractPath, err := ms.ContractPath(id)
+	require.NoError(t, err)
+	resultsFile := filepath.Join(filepath.Dir(contractPath), "results.yaml")
 	require.NoError(t, os.WriteFile(resultsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
 
 	jsonOutput = true
@@ -992,6 +1014,7 @@ func TestMissionShow_CorruptResultsStillPrintsSection(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
@@ -1026,9 +1049,11 @@ budget:
 	id, _ := entries[0]["mission_id"].(string)
 	require.NotEmpty(t, id)
 
-	// Corrupt the sibling results file. The file path mirrors the
-	// store's resultsPath layout — <root>/missions/<id>.results.yaml.
-	resultsFile := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".results.yaml")
+	// Corrupt the sibling results file. With DES-054 two-tree
+	// storage active, the per-mission dir lives under the repo
+	// tree — chdirToFakeRepo points the subprocess at <home> so the
+	// repoRoot resolves to home.
+	resultsFile := filepath.Join(home, ".ethos", "missions", id, "results.yaml")
 	require.NoError(t, os.WriteFile(resultsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
 
 	showCmd := exec.Command(ethosBinary, "mission", "show", id)
@@ -1069,6 +1094,7 @@ func TestMissionShow_CorruptReflectionsStillPrintsSection(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
@@ -1103,10 +1129,10 @@ budget:
 	id, _ := entries[0]["mission_id"].(string)
 	require.NotEmpty(t, id)
 
-	// Corrupt the sibling reflections file. The file path mirrors
-	// the store's reflectionsPath layout —
-	// <root>/missions/<id>.reflections.yaml.
-	reflectionsFile := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".reflections.yaml")
+	// Corrupt the sibling reflections file. With DES-054 two-tree
+	// storage active, the per-mission dir lives under the repo
+	// tree at <repoRoot>/.ethos/missions/<id>/reflections.yaml.
+	reflectionsFile := filepath.Join(home, ".ethos", "missions", id, "reflections.yaml")
 	require.NoError(t, os.WriteFile(reflectionsFile, []byte("this: is: not: valid: yaml: {[\n"), 0o600))
 
 	showCmd := exec.Command(ethosBinary, "mission", "show", id)
@@ -1296,6 +1322,7 @@ func TestMissionResult_RefusesInvalidShapeNamesFilePath(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
 	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
@@ -1448,6 +1475,7 @@ func TestMissionClose_GateRefusesWithoutResult(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
 	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
@@ -1534,6 +1562,7 @@ func TestMissionResult_AppendOnlyViaCLI(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
 	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
@@ -1617,6 +1646,7 @@ func TestMissionCreate_ConflictRejectedSubprocess(t *testing.T) {
 	// time, so seed the canonical djb identity into the subprocess
 	// HOME exactly the way the in-process tests do via missionTestEnv.
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 
 	contractA := filepath.Join(tmp, "a.yaml")
@@ -2087,6 +2117,7 @@ func TestMissionLog_UnknownID_Errors(t *testing.T) {
 	}
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	cmd := exec.Command(ethosBinary, "mission", "log", "m-unknown-999")
 	cmd.Env = append(os.Environ(), "HOME="+home)
 	var stderrBuf bytes.Buffer
@@ -2151,6 +2182,7 @@ func TestMissionLog_InvalidSinceFlag_SubprocessExits(t *testing.T) {
 	}
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
 	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
@@ -2200,10 +2232,12 @@ func TestMissionLog_CorruptLineSurfacesAsWarning(t *testing.T) {
 	missionTestEnv(t)
 	id := seedMissionWithEvents(t)
 
-	// The CLI uses the bare missionStore() path which reads HOME,
-	// so the sandbox HOME is the one missionTestEnv set.
-	home := os.Getenv("HOME")
-	logPath := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".jsonl")
+	// With DES-054 two-tree storage active, the log lives under
+	// <repoRoot>/.ethos/missions/<id>/log.jsonl. missionTestEnv
+	// chdirs into the fake repo, so cwd is the repo root.
+	repoRoot, err := os.Getwd()
+	require.NoError(t, err)
+	logPath := filepath.Join(repoRoot, ".ethos", "missions", id, "log.jsonl")
 	raw, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
@@ -2279,8 +2313,9 @@ func TestMissionLog_HumanMode_WarningsFooterOnStdout(t *testing.T) {
 	missionTestEnv(t)
 	id := seedMissionWithEvents(t)
 
-	home := os.Getenv("HOME")
-	logPath := filepath.Join(home, ".punt-labs", "ethos", "missions", id+".jsonl")
+	repoRoot, err := os.Getwd()
+	require.NoError(t, err)
+	logPath := filepath.Join(repoRoot, ".ethos", "missions", id, "log.jsonl")
 	raw, err := os.ReadFile(logPath)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
@@ -2313,6 +2348,7 @@ func TestMissionLog_InvalidSinceFlag_HumanReadableError(t *testing.T) {
 	}
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 	contract := filepath.Join(tmp, "contract.yaml")
 	require.NoError(t, os.WriteFile(contract, []byte(`leader: claude
@@ -2677,6 +2713,7 @@ func TestMissionResult_VerifyOn_RejectsUnknownPath(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 
 	repo := t.TempDir()
 	env := testGitEnv(home)
@@ -3101,6 +3138,7 @@ func TestMissionResult_VerifyOn_HandlesRenames(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 
 	repo := t.TempDir()
 	env := testGitEnv(home)
@@ -3199,6 +3237,7 @@ func TestMissionExport_HappyPath(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 
 	contract := filepath.Join(tmp, "contract.yaml")
@@ -3299,6 +3338,7 @@ func TestMissionExport_NoResult(t *testing.T) {
 
 	home := t.TempDir()
 	seedEvaluator(t, filepath.Join(home, ".punt-labs", "ethos"))
+	chdirToFakeRepo(t, home)
 	tmp := t.TempDir()
 
 	contract := filepath.Join(tmp, "contract.yaml")

@@ -33,6 +33,12 @@ import (
 // Create paths (CLI `mission create` and MCP `mission create`) go
 // through missionStoreForCreate instead, which wires the lister
 // and fails loudly on a misconfigured role store.
+//
+// Uses NewStoreWithRoots so the DES-054 two-tree storage layout is
+// active for the CLI: reads check the repo tree first, then fall
+// back to the legacy global tree. NewStore + WithRepoRoot would
+// only wire the trace summary and leave per-mission storage on the
+// global tree (m-2026-05-23-004 escalation).
 func missionStore() *mission.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -40,7 +46,7 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	return mission.NewStore(root).WithRepoRoot(resolve.FindRepoRoot())
+	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), root)
 }
 
 // missionStoreForCreate returns a mission store with the Phase 3.5
@@ -63,7 +69,12 @@ func missionStoreForCreate() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	ms := mission.NewStore(root)
+	// NewStoreWithRoots activates the DES-054 two-tree storage layout:
+	// Create writes to the repo tree, Load reads repo-first with global
+	// fallback. NewStore + WithRepoRoot would only wire the trace
+	// summary and leave per-mission storage on the global tree
+	// (m-2026-05-23-004 escalation).
+	ms := mission.NewStoreWithRoots(resolve.FindRepoRoot(), root)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
 	if err != nil {
@@ -73,7 +84,7 @@ func missionStoreForCreate() *mission.Store {
 	}
 	repoRoot := resolve.FindRepoEthosRoot()
 	as := mission.NewArchetypeStore(repoRoot, root)
-	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as).WithRepoRoot(resolve.FindRepoRoot())
+	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as)
 }
 
 // --- mission (bare command) ---
