@@ -40,7 +40,7 @@
 
 \title{Ethos: Technical Architecture Specification}
 \author{Identity, Workflow, and Integration for Humans and AI Agents}
-\date{April 2026 --- Phase 3 complete}
+\date{May 2026 --- Phase 4 + DES-054 (audited delegation) complete}
 \hypersetup{
   pdftitle={Ethos: Technical Architecture Specification},
   pdfauthor={Punt Labs},
@@ -171,7 +171,15 @@ Ext layered resolution fix     & Test & DES-044      & \texttt{ethos-q6q}   & SH
 \midrule
 SessionStart working context   & 4.1 & ---          & \texttt{ethos-gcq.1} & PLANNED \\
 Role-based pre-tool safety     & 4.2 & ---          & \texttt{ethos-gcq.2} & PLANNED \\
-PostToolUse audit logging      & 4.3 & ---          & \texttt{ethos-gcq.3} & PLANNED \\
+PostToolUse audit logging      & 4.3 & ---          & \texttt{ethos-gcq.3} & SHIPPED \\
+\midrule
+Audited delegation phase 1
+  (storage + enriched entries) & 4.4 & DES-054      & ---            & SHIPPED \\
+Audited delegation phase 2
+  (PreToolUse-on-Agent + flocks) & 4.5 & DES-054     & ---            & SHIPPED \\
+Audited delegation phase 3
+  (preconditions, inheritance,
+   migration, queries)         & 4.6 & DES-054      & ---            & SHIPPED \\
 \midrule
 Biff identity-aware messaging  & Integration & ---  & \texttt{ethos-wb4} & PLANNED \\
 Beadle identity-aware email    & Integration & ---  & \texttt{ethos-g2f} & PLANNED \\
@@ -190,6 +198,20 @@ are runtime-enforced for the first time in the project's history:
 roles are interfaces, understanding centralizes while execution
 decentralizes, hooks and policies enforce what documentation only
 suggests, and subagents do not inherit ambient context.
+
+\textbf{Phase 4 + DES-054 (audited delegation) complete.}
+PreToolUse-on-Agent dispatch (Tier A advice, Tier B contract
+binding, Tier B inheritance), per-delegation record skeletons
+under the per-mission lock, precondition-gated tool admission,
+enriched per-line audit entries with \field{delegation\_id} and
+\field{tool\_input\_hash}, repo-tree storage at
+\fpath{<repo>/.ethos/}, sibling per-namespace counter files, and
+the migration commands that move legacy global state into the
+repo tree.  Every \texttt{Agent} call now produces an audit
+record; every Tier B call binds that record to a typed contract;
+every non-Read tool call under a Tier B contract can be gated on
+prior reads.  Three PRs (\#326, \#327, \#328) and the invariants
+list grew by six entries (\S\textit{Design Invariants}).
 
 % ===================================================================
 \section{Design Principles}
@@ -692,8 +714,16 @@ to \field{parent:~empty}), initiator (my \field{parent}), delegates
 \texttt{PreCompact}     & Re-emit full persona block, team context,
                           extension context
                         & \field{session\_id} \\
-\texttt{PostToolUse}    & Format MCP tool output; audit log (Phase
-                          4.3)
+\texttt{PreToolUse}     & Verifier write-set enforcement
+                          (\texttt{ETHOS\_VERIFIER\_ALLOWLIST});
+                          DES-054 Agent dispatch (Tier A advice or
+                          Tier B contract-binding); precondition
+                          gate on non-Read tools under a Tier B
+                          contract
+                        & tool name, tool input, env \\
+\texttt{PostToolUse}    & Format MCP tool output; audit log
+                          (one JSONL line per tool call, enriched
+                          with DES-054 fields)
                         & tool name, output \\
 \texttt{SessionEnd}     & Delete roster + PID-keyed session file
                         & \field{session\_id} \\
@@ -1108,31 +1138,87 @@ A mission contract is a YAML file at
                                           \cmd{mission advance}
                                           gate (DES-034). \\
 \field{context}        & string         & Optional prose context. \\
+\field{delegations}    & []DelegationTemplate & Per-spawn template
+                                          list for Tier B
+                                          inheritance dispatch
+                                          (DES-054).  Each entry
+                                          carries \field{role},
+                                          \field{spawn\_pattern}
+                                          (anchored regex), and
+                                          \field{inherits\_contract}
+                                          (bool).  Empty list
+                                          disables inheritance. \\
+\field{preconditions}  & []Precondition & Admission gates evaluated
+                                          by the PreToolUse hook
+                                          before any non-Read tool
+                                          call (DES-054).  Each
+                                          entry: \field{form}
+                                          (\texttt{implicit} $|$
+                                          \texttt{explicit}),
+                                          \field{require\_read}
+                                          (list of paths supporting
+                                          \texttt{\$\{inputs.X\}}
+                                          substitution),
+                                          \field{message} (block
+                                          reason). \\
+\field{strict\_preconditions} & *bool   & Fail-mode for
+                                          unevaluable predicates
+                                          (DES-054).  Nil $\equiv$
+                                          \texttt{true} (fail
+                                          closed).  Explicit
+                                          \texttt{false} is the
+                                          documented escape hatch. \\
 \bottomrule
 \end{longtable}
 \end{center}
 
 \subsection{Storage Layout}
 
+DES-054 v5 moved mission state from the per-user global tree to a
+per-repo tree.  The repo tree is the new source of truth; the
+global tree remains as a read-only fallback for pre-migration
+missions.
+
 \begin{verbatim}
-~/.punt-labs/ethos/missions/
-  m-2026-04-08-005.yaml          # contract (Phase 3.1)
-  m-2026-04-08-005.jsonl         # append-only event log (3.1)
-  m-2026-04-08-005.lock          # per-mission flock target (3.1)
-  m-2026-04-08-005.reflections.yaml  # round-by-round reflections (3.4)
-  m-2026-04-08-005.results.yaml      # round-by-round results (3.6)
-  .counter-2026-04-08            # daily ID counter, flock-protected
-  .create.lock                   # directory create-lock (3.2)
+<repo>/.ethos/missions/
+  m-2026-04-08-005/
+    contract.yaml              # contract (Phase 3.1 + DES-054)
+    log.jsonl                  # append-only event log (3.1)
+    reflections.yaml           # round-by-round reflections (3.4)
+    results.yaml               # round-by-round results (3.6)
+    .lock                      # per-mission flock (shared)
+    delegations/
+      d-2026-04-08-001/
+        record.yaml            # Tier B delegation skeleton
+        prompt.md              # optional prompt body
+      d-2026-04-08-002/
+        record.yaml
+  missions.jsonl               # trace of dispatches across this repo
+
+~/.punt-labs/ethos/
+  counters/
+    missions-2026-04-08        # daily ID counter (mission ns)
+    missions-2026-04-08.lock   # flock-protected
+    delegations-2026-04-08     # daily ID counter (delegation ns)
+    delegations-2026-04-08.lock
+  delegations/
+    d-2026-04-08-001.lock      # per-delegation exclusive flock
+  missions/                    # legacy read-only fallback
+    m-2026-04-07-003.yaml
+    ...
 \end{verbatim}
 
-The contract, the JSONL event log, and the two sibling YAML files
-all live under the same per-mission flock at \fpath{<id>.lock}.
-Contract+reflection and contract+result operations are atomic with
-respect to concurrent readers.  The directory-level
+The mission contract, JSONL event log, reflection file, and result
+file all live under one shared per-mission flock at
+\fpath{<repo>/.ethos/missions/<id>/.lock} (\texttt{LOCK\_SH} for
+Tier B dispatch, \texttt{LOCK\_EX} for store mutations).  Per-spawn
+delegation records are gated by the exclusive per-delegation flock
+in the global tree --- two checkouts of the same repo lock the same
+inode (DES-054 v5 §``Storage Layout'').  The directory-level
 \fpath{.create.lock} is a separate stable inode acquired by
-\texttt{Store.Create} for the duration of the conflict scan and the
-new mission's write --- two concurrent creates with disjoint mission
-IDs cannot race past the conflict scan (DES-032).
+\texttt{Store.Create} for the duration of the conflict scan and
+the new mission's write --- two concurrent creates with disjoint
+mission IDs cannot race past the conflict scan (DES-032).
 
 \subsection{Lifecycle}
 
@@ -1803,24 +1889,293 @@ hook enforces it mechanically.  Non-verifier tool invocations (no
 \texttt{ETHOS\_VERIFIER\_ALLOWLIST} in the environment) pass through
 unconditionally.
 
-\subsection{PostToolUse Audit Logging (Phase 4.3)}
+\subsection{PreToolUse-on-Agent Dispatch (DES-054)}
+
+Every \texttt{Agent} tool call passes through
+\texttt{HandlePreToolUse} before the spawn proceeds.  The hook
+classifies the call as Tier A (ad-hoc) or Tier B
+(contract-bound), allocates a \field{delegation\_id} from the
+\texttt{delegations} namespace counter, writes a per-delegation
+record skeleton when applicable, and emits an
+\field{additional\_env} block that the spawned subagent reads
+through its environment.
+
+\paragraph{Routing.}  Three branches in \texttt{dispatchAgent}
+(\fpath{internal/hook/pretooluse\_dispatch.go}):
+
+\begin{enumerate}
+  \item \texttt{MISSION\_ID} set --- Tier B by explicit dispatch.
+    Resolve the contract via \texttt{mission.Store.Load}, allocate
+    \field{delegation\_id}, acquire the per-mission shared
+    flock (\texttt{AcquireMissionLock}, \texttt{LOCK\_SH}) and
+    the per-delegation exclusive flock
+    (\texttt{AcquireDelegationLock}, \texttt{LOCK\_EX}), write
+    the record skeleton atomically, run the depth gate, emit
+    the env block.  A malformed \texttt{MISSION\_ID} (Load fails)
+    surfaces as \texttt{decision=block} with a named reason ---
+    no silent fall-through to Tier A.
+  \item \texttt{MISSION\_ID} unset, \texttt{PARENT\_DELEGATION\_ID}
+    set --- Tier B by inheritance.  Walk the parent\_delegation
+    chain; the first ancestor whose contract carries a
+    \field{Delegations[i].SpawnPattern} matching the new spawn's
+    \field{CLAUDE\_AGENT\_TYPE} with \field{InheritsContract=true}
+    lends its \field{mission\_id} to the child.  Every error along
+    the walk falls through to Tier A with a stderr warning ---
+    inheritance is non-blocking by design.  See
+    \S\ref{sec:delegation-inheritance}.
+  \item Neither set --- Tier A.  Emit the round-3 advisory line to
+    stderr (suppressed by \texttt{ETHOS\_QUIET\_ADVICE=1} or a
+    non-empty \texttt{PARENT\_SESSION\_ID}), allocate a
+    \field{delegation\_id}, emit the env block without
+    \texttt{MISSION\_ID}.  Tier A is informational and MUST NOT
+    block the spawn.
+\end{enumerate}
+
+\paragraph{The \field{additional\_env} block.}  Tier A emits
+\texttt{DELEGATION\_ID}, \texttt{PARENT\_DELEGATION\_ID}
+(echoed so a nested ad-hoc spawn sees its own ancestor), and
+\texttt{PARENT\_SESSION\_ID}.  Tier B adds \texttt{MISSION\_ID}
+and \texttt{MISSION\_ARTIFACTS\_DIR} (the per-delegation directory
+the worker writes results into:
+\fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/}).  The
+spawned subagent inherits these via the hook protocol and the
+\fpath{hooks/commit-msg.sh} hook appends \texttt{Mission:} and
+\texttt{Delegation:} git trailers when both are set.
+
+\paragraph{Lock order.}
+\texttt{per-mission(shared, repo tree)
+\(\to\) per-delegation(exclusive, global tree)}.  Released LIFO via
+\texttt{defer}.  The shared mission lock lets two Tier B spawns
+under one mission proceed concurrently; their per-delegation
+exclusive locks do not contend.  Lock files live at
+\fpath{<repoRoot>/.ethos/missions/<mission-id>/.lock} (per-mission,
+shared) and \fpath{<globalRoot>/delegations/<delegation-id>.lock}
+(per-delegation, exclusive) so two checkouts of the same repo lock
+the same inode for delegation allocation.
+
+\paragraph{Atomic skeleton write.}
+\texttt{WriteDelegationSkeleton} writes \texttt{prompt.md} first
+(if a prompt body is supplied) then \texttt{record.yaml} via
+\texttt{os.CreateTemp} + \texttt{Chmod(0o600)} + \texttt{Sync}
++ \texttt{Close} + \texttt{os.Rename} in the destination
+directory.  A reader branches on \texttt{record.yaml}'s presence,
+so its absence after a writer crash signals ``skeleton not yet
+committed'' and the half-built tree is invisible.
+
+\paragraph{Depth gate.}
+\texttt{enforceDelegationDepth} resolves
+\texttt{max\_delegation\_depth} (repo config, default
+\texttt{MaxDelegationDepthDefault = 16}), walks the
+\field{parent\_delegation} chain via
+\texttt{mission.DelegationDepth}, and refuses when
+\texttt{parentDepth + 1 > limit}.  Refusal closes the
+just-written skeleton with \field{verdict=aborted} so a
+post-mortem distinguishes a depth refusal (terminated before the
+worker started) from a spawn that ran and failed downstream.
+The walker fails closed on a missing or unparseable ancestor:
+silently treating a missing ancestor as zero depth would let a
+runaway recursive spawn pattern pass.
+
+\paragraph{Counter rollback.}  Every \field{delegation\_id}
+allocation returns a \texttt{release(success bool)} closure.
+\texttt{success} flips to \texttt{true} only after the skeleton
+write returns nil; every earlier failure path runs
+\texttt{release(false)} via \texttt{defer} and the counter
+returns to its pre-call value.  After the skeleton is on disk
+the counter commits and stays committed --- a follow-on depth
+refusal does NOT roll back, because rolling back at that point
+would let the next \texttt{NewID} return the same
+\field{delegation\_id} and collide with the just-written record.
+
+\subsection{Tier B Inheritance (DES-054)}
+\label{sec:delegation-inheritance}
+
+A Tier B contract may carry a \field{delegations} list of
+\texttt{DelegationTemplate} entries.  When a worker running under
+that contract spawns an \texttt{Agent} call without setting
+\texttt{MISSION\_ID} (the common case --- workers do not know the
+mission ID), the hook walks the parent\_delegation chain looking
+for an ancestor whose contract carries a matching template.  A
+hit lends the ancestor's \field{mission\_id} to the child; the
+child runs as Tier B under the same contract.
+
+\paragraph{Template match.}
+\texttt{DelegationTemplate} in \fpath{internal/mission/delegation.go}:
+
+\begin{itemize}
+  \item \field{role} --- the role the spawned worker is expected
+    to fill (advisory, not enforced).
+  \item \field{spawn\_pattern} --- a regular expression matched
+    against \texttt{CLAUDE\_AGENT\_TYPE}, anchored at both ends.
+    \texttt{MatchSpawnPattern} compiles
+    \texttt{\^(?:<pattern>)\$} so a pattern of \texttt{bw.}
+    matches the three-character agent types beginning with
+    \texttt{bw}, never a substring of a longer agent\_type.
+  \item \field{inherits\_contract} --- only entries with this set
+    to \texttt{true} are eligible.  The walker filters first,
+    then asks \texttt{MatchTemplate} for the first matching
+    pattern.
+\end{itemize}
+
+\paragraph{Parent chain walk.}
+\texttt{tryTierBByInheritance} in
+\fpath{internal/hook/pretooluse\_inherit.go} starts from
+\texttt{PARENT\_DELEGATION\_ID}.  Each ancestor's
+\fpath{record.yaml} is located by scanning
+\fpath{<repo>/.ethos/missions/*/delegations/<id>/record.yaml}
+(\texttt{findDelegationByID}) --- \texttt{PARENT\_DELEGATION\_ID}
+alone does not encode which mission the parent belongs to, so the
+resolver checks every mission tree.  First match wins; the
+ancestor's enclosing mission ID is returned alongside the record.
+
+The walker keeps a \texttt{seen} set as a cheap cycle guard.  A
+corrupt record that points back at itself surfaces as a stderr
+warning and falls through to Tier A rather than spinning; the
+depth backstop would catch it eventually, but cycles are
+corruption and should not be silently absorbed.
+
+\paragraph{Depth backstop.}  The walk is bounded by
+\texttt{resolve.ResolveMaxDelegationDepth} (the same ceiling the
+dispatch-path depth gate uses; default
+\texttt{MaxDelegationDepthDefault = 16}).  An overflow writes a
+stderr line naming the limit and the current ancestor and falls
+through to Tier A.  Hard-coding the backstop to the default
+would shadow a configured limit above the default --- a repo with
+\texttt{max\_delegation\_depth: 32} must be able to walk 32
+ancestors without the walker tripping at 17.
+
+\paragraph{Fail closed on error, non-blocking on miss.}  Two
+invariants point in opposite directions and both apply.  The
+\emph{dispatch-path} depth gate fails closed: a missing or
+corrupt ancestor refuses the spawn, because the gate exists
+precisely to defeat runaway recursive spawn patterns and
+silently treating a missing link as zero depth would let one
+through.  The \emph{inheritance resolver} is non-blocking on
+every error path: a missing ancestor, a malformed regex, a walk
+overflow, or a contract load failure writes a stderr warning and
+returns ``no match,'' and the spawn falls through to Tier A.
+The hook proceeds because inheritance is an opt-in convenience
+--- the alternative would be to refuse every Agent spawn whose
+parent's repo got corrupted, which is the wrong trade-off for
+an informational dispatch surface.  djb's ``no silent admit
+under a malformed env'' rule is satisfied because the warning
+is operator-visible and the spawn proceeds without an inherited
+contract.
+
+\subsection{Precondition Evaluation (DES-054 Phase 3)}
+
+A Tier B contract may carry a \field{preconditions} list.  Each
+entry is a \texttt{Precondition} with a \field{form}, an optional
+\field{require\_read} list, and a \field{message} string.
+\texttt{EvaluatePreconditions} in
+\fpath{internal/hook/preconditions.go} runs against the session
+audit log before every non-Read tool call under a Tier B
+contract.
+
+Two predicate forms:
+
+\begin{itemize}
+  \item \textbf{implicit} --- the tool input's target
+    \field{file\_path} (and \field{notebook\_path}, and entries
+    in \field{files}/\field{paths} arrays) must each have been
+    Read in this session.  A path-free tool produces zero
+    targets and the predicate is a no-op.
+  \item \textbf{explicit} --- each entry in \field{require\_read},
+    after \texttt{\$\{inputs.X\}} substitution against the
+    contract's \field{Inputs}, must have been Read in this
+    session.  Substitution keys are \texttt{ticket},
+    \texttt{files.N}, and \texttt{references.N}; any other shape
+    (\texttt{\$\{env.X\}}, malformed marker) returns an
+    unevaluable-predicate error.
+\end{itemize}
+
+Path comparison is on the cleaned form
+(\texttt{filepath.Clean}); a relative candidate against an
+absolute recorded read and the repo-anchored absolute form are
+both checked so the audit log's recorded shape and the tool
+call's shape are symmetric.
+
+\paragraph{Strict vs lax.}  \field{Contract.StrictPreconditions}
+is a \texttt{*bool} so \texttt{omitempty} distinguishes ``unset''
+from ``explicit \texttt{false}''.  Unset resolves to true via
+\texttt{EffectiveStrictPreconditions} --- fail closed.  An
+unevaluable predicate (malformed substitution, missing input,
+unreadable audit log) blocks under strict and warns + allows
+under lax.  A violated predicate always blocks regardless of
+the strict flag.
+
+\paragraph{Block reason.}  The contract's
+\field{Precondition.Message} surfaces verbatim as the
+\texttt{decision=block} reason --- the operator sees the contract
+author's prose, not a generic ``preconditions[i] failed''
+fallback.  Empty \field{Message} is rejected at
+\texttt{Validate} time so a failed gate is never silently named.
+
+\subsection{PostToolUse Audit Logging (Phase 4.3, DES-054)}
 
 \texttt{HandleFormatOutput} (the existing \texttt{PostToolUse} hook
-that produces DES-020 two-channel formatted output) gains an
-optional audit log writer.  Every tool invocation appends a JSON
-line to \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}:
+that produces DES-020 two-channel formatted output) writes one
+enriched JSON line per tool call to the per-session audit log.
+DES-054 phase 1 changed both the on-disk location and the entry
+shape; v3.11 lines decode cleanly under v3.12+ because every new
+field is \texttt{omitempty}.
 
-\begin{verbatim}
-{"ts":"2026-04-08T15:23:00Z","tool":"Write","persona":"bwk",
- "mission":"m-2026-04-08-005","args_summary":"path=internal/foo.go"}
-\end{verbatim}
+\paragraph{Storage layout.}  Writes go to the repo tree when a
+repo root resolves:
+\fpath{<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl}
+where the date prefix is the session-start date in UTC.  When no
+repo root resolves (test fixture, ad-hoc invocation outside any
+repo), the writer falls back to the legacy global location at
+\fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}.  Readers
+(\cmd{ethos audit show}, \texttt{loadSessionReads} in the
+precondition evaluator) check the repo tree first, then the
+legacy path, so a session that started before \cmd{ethos audit
+migrate} ran is still queryable.
 
-The audit log is per-session, append-only, and uses the same
-\texttt{flock}-protected write pattern as the mission event log.
-Mission attribution comes from the active session participant's
-ext map.  Like the mission event log, sanitization runs at the
-write site so no attacker-controlled byte reaches a downstream
-consumer.
+\paragraph{Enriched entry shape.}
+\texttt{auditEntry} in \fpath{internal/hook/audit\_entry.go} carries:
+
+\begin{itemize}
+  \item \field{ts} --- RFC3339 timestamp
+  \item \field{session} --- session ID
+  \item \field{parent\_session} --- session that spawned this
+    subagent (DES-054)
+  \item \field{agent\_id}, \field{agent\_type} --- the spawned
+    subagent's identity (DES-054)
+  \item \field{delegation\_id}, \field{parent\_delegation} ---
+    the per-spawn unit of operator intent and its predecessor
+    in the chain (DES-054)
+  \item \field{contract\_id} --- mission ID for a Tier B tool
+    call; absent for Tier A (DES-054)
+  \item \field{tool} --- the tool name (\texttt{Write},
+    \texttt{Edit}, \texttt{Read}, etc.)
+  \item \field{tool\_input} --- the full input map, not just a
+    preview (DES-054)
+  \item \field{tool\_input\_hash} --- hex SHA-256 of the
+    canonical-JSON encoding of \field{tool\_input}; an O(1)
+    collision check for DES-052's Stat--Write race without
+    re-reading the full input (DES-054)
+  \item \field{tool\_input\_preview} --- 200-char human snippet
+    retained for grep convenience
+\end{itemize}
+
+\paragraph{Atomicity.}  Per-line \texttt{f.Sync()} after every
+append and a partial-line-tolerant reader together implement
+DES-054 invariant I10-audit-atomic: a writer crash mid-line
+loses at most one line, and the reader degrades line-by-line
+rather than failing whole-file.  The audit-log writer shares
+the per-session \texttt{flock} with the roster writer (one lock
+per session, DES-054 phase 2 session-flock unification) so the
+prior two-lock acquisition order is gone.
+
+\paragraph{Trust boundary.}  The audit JSONL stays
+\emph{permissive} on decode --- operator tools must keep reading
+older logs indefinitely, and rejecting an unknown field would
+break the post-mortem path.  This is asymmetric with the
+contract YAML, which decodes with \texttt{KnownFields(true)}
+because silent feature loss on a downgrade is unacceptable for
+typed configuration.  See \fpath{internal/hook/audit\_entry.go}
+for the asymmetry note.
 
 % ===================================================================
 \section{Cross-Tool Integration}
@@ -1925,41 +2280,99 @@ Global teams       & \fpath{\~{}/.punt-labs/ethos/teams/<slug>.yaml}
                    & No \\
 \midrule
 \multicolumn{3}{@{}l}{\emph{Sessions and missions
-  (operational state):}} \\
+  (operational state, DES-054 v5 repo-tree layout):}} \\
 \midrule
-Sessions           & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
+Session rosters    & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.yaml}
                    & No \\
-Session locks      & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
+Session lock       & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.lock}
                    & No \\
 Current session    & \fpath{\~{}/.punt-labs/ethos/sessions/current/<pid>}
                    & No \\
-Session audit log  & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
+Session audit log  & \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                   & Yes \\
+Mission contract   & \fpath{<repo>/.ethos/missions/<id>/contract.yaml}
+                   & Yes \\
+Mission event log  & \fpath{<repo>/.ethos/missions/<id>/log.jsonl}
+                   & Yes \\
+Mission reflections & \fpath{<repo>/.ethos/missions/<id>/reflections.yaml}
+                   & Yes \\
+Mission results    & \fpath{<repo>/.ethos/missions/<id>/results.yaml}
+                   & Yes \\
+Mission lock       & \fpath{<repo>/.ethos/missions/<id>/.lock}
                    & No \\
-Mission contracts  & \fpath{\~{}/.punt-labs/ethos/missions/<id>.yaml}
+Delegation record  & \fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml}
+                   & Yes \\
+Delegation prompt  & \fpath{<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md}
+                   & Yes \\
+Delegation lock    & \fpath{\~{}/.punt-labs/ethos/delegations/<delegation-id>.lock}
                    & No \\
-Mission event logs & \fpath{\~{}/.punt-labs/ethos/missions/<id>.jsonl}
+Mission trace      & \fpath{<repo>/.ethos/missions.jsonl}
+                   & Yes \\
+Counter (missions) & \fpath{\~{}/.punt-labs/ethos/counters/missions-<date>}
                    & No \\
-Mission reflections & \fpath{\~{}/.punt-labs/ethos/missions/<id>.reflections.yaml}
+Counter (delegations) & \fpath{\~{}/.punt-labs/ethos/counters/delegations-<date>}
                    & No \\
-Mission results    & \fpath{\~{}/.punt-labs/ethos/missions/<id>.results.yaml}
-                   & No \\
-Mission locks      & \fpath{\~{}/.punt-labs/ethos/missions/<id>.lock}
-                   & No \\
-Mission counter    & \fpath{\~{}/.punt-labs/ethos/missions/.counter-<date>}
-                   & No \\
-Mission create lock & \fpath{\~{}/.punt-labs/ethos/missions/.create.lock}
+Counter locks      & \fpath{\~{}/.punt-labs/ethos/counters/<ns>-<date>.lock}
                    & No \\
 Generated agents   & \fpath{.claude/agents/<handle>.md}
+                   & No \\
+\midrule
+\multicolumn{3}{@{}l}{\emph{Legacy paths, read-only fallback
+  (DES-054 v5):}} \\
+\midrule
+Legacy audit log   & \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
+                   & No \\
+Legacy contract    & \fpath{\~{}/.punt-labs/ethos/missions/<id>.yaml}
+                   & No \\
+Legacy event log   & \fpath{\~{}/.punt-labs/ethos/missions/<id>.jsonl}
+                   & No \\
+Legacy reflections & \fpath{\~{}/.punt-labs/ethos/missions/<id>.reflections.yaml}
+                   & No \\
+Legacy results     & \fpath{\~{}/.punt-labs/ethos/missions/<id>.results.yaml}
+                   & No \\
+Legacy mission lock & \fpath{\~{}/.punt-labs/ethos/missions/<id>.lock}
+                   & No \\
+Legacy counter     & \fpath{\~{}/.punt-labs/ethos/missions/.counter-<date>}
                    & No \\
 \bottomrule
 \end{longtable}
 \end{center}
 
-All user-global state lives under \fpath{\~{}/.punt-labs/ethos/}.
-Repo-scoped state lives under \fpath{.punt-labs/ethos/} in the
-repository root (typically a git submodule of the team registry).
-Mission state is operational (per-machine, short-lived, not
-configuration) and lives under the global root.
+\paragraph{Two-tree layout.}  DES-054 v5 moved operational
+mission and audit state from \fpath{\~{}/.punt-labs/ethos/}
+(per-user) to \fpath{<repo>/.ethos/} (per-repo, git-tracked).
+The repo tree is the new source of truth: writes go there, reads
+check there first.  The global tree remains as a read-only
+fallback for sessions and missions that pre-date the migration.
+\cmd{ethos mission migrate --to-repo} and
+\cmd{ethos audit migrate} move legacy artifacts into the repo
+tree one at a time; cross-repo policy leaves a legacy session or
+mission in place when its ID has no matching repo-tree
+counterpart, so a wrong-repo migration cannot lose data.
+
+\paragraph{Locks live in the global tree.}  Per-mission shared
+flocks (\fpath{<repo>/.ethos/missions/<id>/.lock}) are
+repo-scoped because the protected resource is the per-mission
+directory tree; per-delegation exclusive flocks
+(\fpath{\~{}/.punt-labs/ethos/delegations/<id>.lock}) live in
+the global tree because two checkouts of the same repo must
+lock the same inode (DES-054 v5 §``Storage Layout'').  Storing
+delegation locks under the repo tree would let two checkouts
+cross-write delegations because each would have its own
+\fpath{.ethos/delegations/} directory.
+
+\paragraph{Sibling counters.}  Each ID namespace has its own
+counter file at
+\fpath{\~{}/.punt-labs/ethos/counters/<namespace>-YYYY-MM-DD},
+each a single integer guarded by a sibling \texttt{.lock} file
+(DES-054 invariant I9-counter).  Today's namespaces are
+\texttt{missions} and \texttt{delegations}; new namespaces add
+sibling files without touching the existing ones.  The
+\texttt{mission.NewID(namespace, now)} API returns
+\texttt{(id, release, error)} where \texttt{release(true)}
+commits the allocation and \texttt{release(false)} decrements
+the counter on a rollback path --- idempotent if a concurrent
+allocator has already advanced past the rolled-back value.
 
 % ===================================================================
 \section{CLI Surface}
@@ -2114,6 +2527,34 @@ Three parallel command groups: \cmd{talent}, \cmd{personality},
 \cmd{mission pipeline show <name>} & Show pipeline stages and
                                        defaults.  \cmd{--json}
                                        supported. \\
+\cmd{mission dispatch}             & One-liner contract creation:
+                                       \cmd{--worker}, \cmd{--evaluator},
+                                       \cmd{--write-set},
+                                       \cmd{--extract-into} (DES-052),
+                                       \cmd{--criteria},
+                                       \cmd{--ticket}, \cmd{--type},
+                                       \cmd{--budget},
+                                       \cmd{--context}.  Writes the
+                                       contract YAML and runs the
+                                       same gates as \cmd{create}. \\
+\cmd{mission export <id>}          & Export contract + sibling files
+                                       to \cmd{--dir} (default
+                                       \fpath{.ethos/missions}). \\
+\cmd{mission migrate [id]}         & DES-054: move a mission from
+                                       the legacy global tree to the
+                                       per-repo
+                                       \fpath{<repo>/.ethos/missions/<id>/}
+                                       tree.  \cmd{--to-repo} (default
+                                       and only target),
+                                       \cmd{--dry-run},
+                                       \cmd{--verbose}.
+                                       Without an ID argument, every
+                                       legacy mission referenced by an
+                                       audit entry in this repo's
+                                       sessions is moved; cross-repo
+                                       missions stay in place.
+                                       Idempotent; atomic per-mission.
+                                       Exit code 2 outside a repo. \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -2192,6 +2633,43 @@ the production path.
 
 The \cmd{hook} group is hidden from help output.  These commands are
 invoked by Claude Code hook configuration, not by users.
+
+\subsection{Audit Commands (DES-054)}
+
+\begin{center}
+\begin{tabular}{@{}lp{6.5cm}@{}}
+\toprule
+\textbf{Command} & \textbf{Description} \\
+\midrule
+\cmd{audit show --delegation <id>} & Cross-session forensic view.
+                                     Walks
+                                     \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                                     (with legacy global-tree
+                                     fallback) and filters by
+                                     \field{delegation\_id}.
+                                     \cmd{--format json|text}
+                                     (default json: one JSONL line
+                                     per entry; text:
+                                     \texttt{ts<TAB>tool<TAB>file\_path}).
+                                     Exit code 2 outside a repo. \\
+\cmd{audit migrate}                & One-time relocation of legacy
+                                     \fpath{\~{}/.punt-labs/ethos/sessions/<id>.audit.jsonl}
+                                     entries into the per-repo
+                                     \fpath{<repo>/.ethos/sessions/<date>-<id>/audit.jsonl}
+                                     layout; deletes the legacy
+                                     file once every entry has
+                                     landed and been fsynced.
+                                     \cmd{--dry-run},
+                                     \cmd{--verbose}.  Idempotent;
+                                     cross-repo safe (sessions whose
+                                     ID has no matching repo-tree
+                                     directory are left in place).
+                                     Exit code 2 outside a repo;
+                                     exit 1 on partial failure with
+                                     both sources still in place. \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \subsection{Admin Commands}
 
@@ -2466,6 +2944,60 @@ all operations:
   \item \textbf{Close gate totality} (DES-036).  No mission
     transitions to a terminal status without a valid result
     artifact for the current round.  No override flag.
+
+  \item \textbf{Per-namespace counter isolation}
+    (DES-054, I9-counter).  Each ID namespace owns a sibling file
+    at
+    \fpath{\~{}/.punt-labs/ethos/counters/<namespace>-YYYY-MM-DD}
+    with its own \texttt{.lock}.  Adding a new namespace adds a
+    sibling file; the existing namespaces' files do not change
+    shape.  \texttt{mission.NewID(ns, now)} returns
+    \texttt{(id, release, error)}; \texttt{release(true)} commits,
+    \texttt{release(false)} decrements and is idempotent if a
+    concurrent allocator already advanced past the rolled-back
+    value.
+
+  \item \textbf{Audit log per-line atomicity}
+    (DES-054, I10-audit-atomic).  Every audit append calls
+    \texttt{f.Sync()} before the next write; a writer crash
+    mid-line loses at most that line.  The reader is
+    partial-line-tolerant and decodes the rest of the file.
+
+  \item \textbf{Delegation skeleton atomicity} (DES-054).  Every
+    Tier B \texttt{Agent} dispatch writes \texttt{record.yaml}
+    via temp file + \texttt{Chmod(0o600)} + \texttt{Sync} +
+    \texttt{Close} + \texttt{os.Rename} in the destination
+    directory.  Readers branch on \texttt{record.yaml}'s presence;
+    a half-built skeleton (writer crash before the rename) is
+    invisible.  \texttt{prompt.md} writes precede
+    \texttt{record.yaml} so a crash between the two never leaves
+    a record without a prompt that points at it.
+
+  \item \textbf{Bounded delegation depth} (DES-054).  Every
+    \texttt{Agent} dispatch walks the \field{parent\_delegation}
+    chain and refuses when the proposed depth would exceed
+    \texttt{max\_delegation\_depth} (default
+    \texttt{MaxDelegationDepthDefault = 16}).  The dispatch-path
+    gate fails closed on a missing or unparseable ancestor; the
+    inheritance resolver falls through to Tier A with a stderr
+    warning.
+
+  \item \textbf{Inheritance is opt-in and non-binding}
+    (DES-054).  A child Tier B spawn inherits a parent contract
+    only when an ancestor's \field{Delegations[i].SpawnPattern}
+    matches the child's \field{agent\_type} AND
+    \field{InheritsContract=true}.  Every error along the walk
+    falls through to Tier A; the spawn proceeds without an
+    inherited contract.  The operator-visible stderr warning
+    satisfies the ``no silent admit under a malformed env'' rule.
+
+  \item \textbf{Precondition fail-mode default} (DES-054).
+    \field{Contract.StrictPreconditions} is a \texttt{*bool}; a
+    nil value resolves to \texttt{true} (fail closed) via
+    \texttt{EffectiveStrictPreconditions}.  An unevaluable
+    predicate (malformed substitution, missing input, unreadable
+    audit log) blocks under strict and warns + allows under lax.
+    A violated predicate always blocks.
 \end{enumerate}
 
 % ===================================================================

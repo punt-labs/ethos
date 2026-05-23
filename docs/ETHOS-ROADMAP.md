@@ -2,11 +2,11 @@
 
 Where ethos is going. Organized into phases that build on each other.
 
-## Current Status (2026-05-11)
+## Current Status (2026-05-23)
 
-Ethos is on `main` at v3.9.0 with all six original phases complete
-(Phases 1–5 + 6.1). 24.4 KLOC production Go, 38.2 KLOC tests, 16
-packages. Go Report Card: A+. 13 pipeline templates (8 core + 5 in
+Ethos is on `main` at v3.11.0 with all six original phases complete
+plus the DES-054 audited-delegation initiative (three phases) merged
+to the unreleased branch. 13 pipeline templates (8 core + 5 in
 gstack bundle), 10 archetypes, 2 embedded bundles (gstack, foundation).
 Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run)
 remains planned.
@@ -20,13 +20,34 @@ remains planned.
 | **Post-Phase 4** | **SHIPPED** | Archetypes, pipelines, pipeline instantiate, automatic traceability (v3.2.0–v3.5.0). See details below. |
 | **Phase 5 — Reliability & Friction** | **SHIPPED** | Mission dispatch one-liner, agent regen diff logging, doctor orphan check, inputs.trigger schema, deprecation migration tooling |
 | **Phase 6.1 — Team Bundle Activation** | **SHIPPED** | Switchable starter teams; embedded gstack bundle; `team available/activate/deactivate/add-bundle/migrate`; three-layer resolution (repo -> active bundle -> global). DES-051, epic `ethos-2hh`. |
+| **DES-054 — Audited Delegation** | **SHIPPED** | Three-phase rollout: storage foundations (PR #326), PreToolUse-on-Agent dispatch (PR #327), preconditions + migration + queries + commit-msg trailers (PR #328). Epic `ethos-98u9`. |
 | **Phase 6 — Ecosystem (remaining)** | FUTURE | Agent marketplace (6.2), cross-tool integration (6.3) |
 
 Phase 3 shipped 2026-04-08 on PR #184, merge `c16715f`. Phase 4
 shipped 2026-04-10 across PRs #205 and #207. v3.2.0–v3.5.0
 (2026-04-12 through 2026-04-14) shipped archetypes, pipelines,
 pipeline instantiate, archetype constraint enforcement, automatic
-mission traceability, and 89.8% mission package coverage.
+mission traceability, and 89.8% mission package coverage. DES-054
+shipped 2026-05-22 through 2026-05-23 across PRs #326–#328.
+
+## DES-054 — Audited Delegation (SHIPPED 2026-05-23)
+
+**Status**: Complete. Three phases merged. Epic `ethos-98u9`
+remaining open as the rollup; child beads `ethos-wnw3`, `ethos-7i29`,
+`ethos-i51k` closed.
+
+| Phase | What | PR |
+|---|---|---|
+| 1 | Date-keyed two-tree mission storage. Audit entry enrichment (`parent_session`, `agent_id`, `agent_type`, `delegation_id`, `parent_delegation`, `contract_id`, full `tool_input` map, `tool_input_hash` sha256). Per-namespace counters. | #326 |
+| 2 | `PreToolUse`-on-`Agent` dispatch: Tier A advisory + audit record for ad-hoc spawns; Tier B atomic skeleton + per-mission/per-delegation flocks + depth refusal for contract-bound spawns. | #327 |
+| 3 | Tier B inheritance walk (`SpawnPattern` + `InheritsContract`). Precondition evaluator. `ethos audit migrate`, `ethos audit show --delegation`, `ethos mission migrate --to-repo`. `commit-msg` trailer hook. | #328 |
+
+**Product outcome:** every `Agent(...)` call is now recorded with full
+prompt body, parent linkage, and per-delegation tool-call log. Contracts
+can gate tool calls on process invariants (not just paths). Commits
+made under a contract carry `Mission:` and `Delegation:` git trailers
+so `git log` answers "what authorized this change" years later. See
+[Audited delegation](audited-delegation.md) for the user-facing reference.
 
 ## Phase 4 — Operational Excellence (SHIPPED 2026-04-10)
 
