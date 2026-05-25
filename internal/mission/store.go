@@ -912,6 +912,7 @@ func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
 		recordPath := filepath.Join(delegationsDir, e.Name(), "record.yaml")
 		d, loadErr := LoadDelegation(recordPath)
 		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: loading delegation %s for close: %v\n", missionID, e.Name(), loadErr)
 			continue
 		}
 		if d.Verdict != "open" {

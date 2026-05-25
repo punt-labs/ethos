@@ -17,7 +17,17 @@ msg_file="$1"
 # binding across all sessions — correct for single-user single-
 # session, the common case.
 if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
-  binding_file=$(find "$HOME/.punt-labs/ethos/sessions" -name delegation-binding -type f -print 2>/dev/null | head -1)
+  # Session dirs are <date>-<session-id>, so reverse-sorted they
+  # give most-recent first. Pick the first binding file found in
+  # that order so a stale sidecar from an older session can't
+  # silently tag the wrong delegation.
+  binding_file=""
+  for d in $(find "$HOME/.punt-labs/ethos/sessions" -maxdepth 1 -type d 2>/dev/null | sort -r); do
+    if [ -f "$d/delegation-binding" ]; then
+      binding_file="$d/delegation-binding"
+      break
+    fi
+  done
   if [ -n "$binding_file" ] && [ -f "$binding_file" ]; then
     DELEGATION_ID=$(sed -n '1p' "$binding_file")
     MISSION_ID=$(sed -n '2p' "$binding_file")

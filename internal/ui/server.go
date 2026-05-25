@@ -25,6 +25,12 @@ type Server struct {
 
 // NewServer creates a UI server reading data from repoRoot.
 func NewServer(repoRoot string) (*Server, error) {
+	absRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolving repo root: %w", err)
+	}
+	repoRoot = absRoot
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("determining home directory: %w", err)

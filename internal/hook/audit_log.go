@@ -205,9 +205,15 @@ func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.
 	// parent.
 	if entry.DelegationID == "" || entry.ContractID == "" {
 		globalRoot, gErr := tierBGlobalRoot()
-		if gErr == nil {
+		if gErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit-log: delegation-binding fallback: resolving global root: %v\n", gErr)
+		} else {
 			b, bErr := mission.ReadDelegationBinding(globalRoot, sessionID)
-			if bErr == nil && b.DelegationID != "" {
+			if bErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: audit-log: delegation-binding fallback: reading sidecar: %v\n", bErr)
+			} else if b.DelegationID != "" {
 				if entry.DelegationID == "" {
 					entry.DelegationID = b.DelegationID
 				}

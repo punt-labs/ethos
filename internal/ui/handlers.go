@@ -124,8 +124,8 @@ type missionData struct {
 }
 
 func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/missions/")
-	if id == "" {
+	id := filepath.Base(strings.TrimPrefix(r.URL.Path, "/missions/"))
+	if id == "" || id == "." || id == ".." {
 		http.NotFound(w, r)
 		return
 	}
@@ -217,7 +217,11 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	missionID, delegationID := parts[0], parts[1]
+	missionID, delegationID := filepath.Base(parts[0]), filepath.Base(parts[1])
+	if missionID == "." || missionID == ".." || delegationID == "." || delegationID == ".." {
+		http.NotFound(w, r)
+		return
+	}
 
 	dir := mission.RepoStatePath(s.repoRoot, "missions", missionID, "delegations", delegationID)
 	d, err := mission.LoadDelegation(filepath.Join(dir, "record.yaml"))

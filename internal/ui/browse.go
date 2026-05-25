@@ -44,9 +44,11 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 
 	absPath := filepath.Join(s.repoRoot, relPath)
 
-	// Safety: don't escape the repo root.
+	// Safety: don't escape the repo root. Require exact prefix match
+	// with trailing separator so /code/ethos doesn't match
+	// /code/ethos-private. repoRoot is abs-normalized in NewServer.
 	abs, err := filepath.Abs(absPath)
-	if err != nil || !strings.HasPrefix(abs, s.repoRoot) {
+	if err != nil || (abs != s.repoRoot && !strings.HasPrefix(abs, s.repoRoot+string(filepath.Separator))) {
 		http.Error(w, "path outside repo", 403)
 		return
 	}
