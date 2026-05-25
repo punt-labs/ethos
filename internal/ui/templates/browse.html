@@ -23,7 +23,7 @@
 <tr class="border-b border-neutral-900 group" id="L{{.Num}}">
   <td class="px-2 py-0.5 text-neutral-700 text-right select-none w-10 align-top">{{.Num}}</td>
   <td class="px-2 py-0.5 w-28 align-top whitespace-nowrap">
-    {{if .Delegation}}<a href="/delegations/{{.Mission}}/{{.Delegation}}" class="text-cyan-600 hover:text-cyan-400 group-hover:text-cyan-400" title="{{.Agent}} — {{.Delegation}}">{{.Agent}}</a>{{else}}{{if .Commit}}<a href="https://github.com/punt-labs/ethos/commit/{{.Commit}}" class="text-neutral-600 hover:text-neutral-400 group-hover:text-neutral-400" title="{{.Author}} — {{.Commit}}">{{truncate .Author 12}}</a>{{end}}{{end}}
+    {{if .Delegation}}<a href="/delegations/{{.Mission}}/{{.Delegation}}" class="text-cyan-600 hover:text-cyan-400 group-hover:text-cyan-400" title="{{.Agent}} — {{.Delegation}}">{{.Agent}}</a>{{if .Commit}} <a href="https://github.com/punt-labs/ethos/commit/{{.Commit}}" class="text-neutral-700 hover:text-neutral-400 text-[0.6rem]" title="{{.Commit}}">↗</a>{{end}}{{else}}{{if .Commit}}<a href="https://github.com/punt-labs/ethos/commit/{{.Commit}}" class="text-neutral-600 hover:text-neutral-400 group-hover:text-neutral-400" title="{{.Author}} — {{.Commit}}">{{truncate .Author 12}}</a>{{end}}{{end}}
   </td>
   <td class="px-2 py-0.5 text-neutral-400 whitespace-pre font-mono"><code>{{.Text}}</code></td>
 </tr>
