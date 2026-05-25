@@ -97,7 +97,7 @@ automatic traceability.
 
 ### v3.5.0 (April 14, 2026)
 
-- Automatic mission traceability — `Store.Close` auto-appends a summary JSONL line to `<repo>/.ethos/missions.jsonl` (DES-050). Commit-ready without manual bookkeeping.
+- Automatic mission traceability — `Store.Close` auto-appends a summary JSONL line to `<repo>/.punt-labs/ethos/missions.jsonl` (DES-050). Commit-ready without manual bookkeeping.
 - Suppress duplicate `inputs.bead` deprecation warnings via `sync.Once`
 
 ### v3.6.0 (April 15, 2026)

@@ -127,7 +127,7 @@ func TestAppendTraceSummary(t *testing.T) {
 	}
 
 	// Verify two lines of valid JSON.
-	path := filepath.Join(dir, ".ethos", "missions.jsonl")
+	path := filepath.Join(dir, ".punt-labs", "ethos", "missions.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -169,11 +169,11 @@ func TestAppendTraceSummary_NoRepoRoot(t *testing.T) {
 
 func TestAppendTraceSummary_CreatesDir(t *testing.T) {
 	dir := t.TempDir()
-	ethosDir := filepath.Join(dir, ".ethos")
+	ethosDir := filepath.Join(dir, ".punt-labs", "ethos")
 
-	// Confirm .ethos does not exist yet.
+	// Confirm .punt-labs/ethos does not exist yet.
 	if _, err := os.Stat(ethosDir); !os.IsNotExist(err) {
-		t.Fatalf(".ethos should not exist yet")
+		t.Fatalf(".punt-labs/ethos should not exist yet")
 	}
 
 	s := &Store{repoRoot: dir}

@@ -13,18 +13,40 @@ import (
 )
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.
-// Claude Code reads the decision field to allow or block the tool call.
-//
-// Continue and AdditionalEnv carry DES-054 v5 dispatch state on Agent
-// tool calls. Continue defaults to true on allow paths; AdditionalEnv
-// is a snake_case map per the Claude Code hook protocol. Both fields
-// are omitempty so the legacy allowlist-only response shape is
-// unchanged for non-Agent tool calls.
+// Claude Code requires the response wrapped in hookSpecificOutput
+// with hookEventName set to "PreToolUse".
 type PreToolUseResult struct {
-	Decision      string            `json:"decision"`
-	Reason        string            `json:"reason,omitempty"`
-	Continue      bool              `json:"continue,omitempty"`
-	AdditionalEnv map[string]string `json:"additional_env,omitempty"`
+	HookSpecificOutput preToolUseOutput `json:"hookSpecificOutput"`
+}
+
+type preToolUseOutput struct {
+	HookEventName            string            `json:"hookEventName"`
+	PermissionDecision       string            `json:"permissionDecision"`
+	PermissionDecisionReason string            `json:"permissionDecisionReason,omitempty"`
+	AdditionalEnv            map[string]string `json:"additionalEnv,omitempty"`
+}
+
+func preToolUseAllow() PreToolUseResult {
+	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
+		HookEventName:      "PreToolUse",
+		PermissionDecision: "allow",
+	}}
+}
+
+func preToolUseAllowWithEnv(env map[string]string) PreToolUseResult {
+	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
+		HookEventName:      "PreToolUse",
+		PermissionDecision: "allow",
+		AdditionalEnv:      env,
+	}}
+}
+
+func preToolUseDeny(reason string) PreToolUseResult {
+	return PreToolUseResult{HookSpecificOutput: preToolUseOutput{
+		HookEventName:            "PreToolUse",
+		PermissionDecision:       "deny",
+		PermissionDecisionReason: reason,
+	}}
 }
 
 // HandlePreToolUse handles Claude Code's PreToolUse hook. It serves
@@ -71,7 +93,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	sessionID, _ := input["session_id"].(string)
 
 	if toolName == "Agent" {
-		return dispatchAgent(w, sessionID)
+		return dispatchAgent(w, sessionID, toolInput)
 	}
 
 	// DES-054 phase 3b: Tier B preconditions admission gate. Fires
@@ -81,26 +103,23 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	// read tools (Read, Grep, Glob) are skipped — they cannot
 	// violate a must-read-first contract.
 	if reason, blocked := evalContractPreconditions(toolName, toolInput, sessionID); blocked {
-		return json.NewEncoder(w).Encode(PreToolUseResult{
-			Decision: "block",
-			Reason:   reason,
-		})
+		return json.NewEncoder(w).Encode(preToolUseDeny(reason))
 	}
 
 	allowlist := os.Getenv("ETHOS_VERIFIER_ALLOWLIST")
 	if allowlist == "" {
-		return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
+		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
 	target := extractTargetPath(toolName, toolInput)
 	if target == "" {
 		// Tool does not target a file path — allow unconditionally.
-		return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
+		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
 	entries := splitAllowlist(allowlist)
 	if pathAllowed(target, entries) {
-		return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
+		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
 	// DES-052 stat-then-allow: a path outside the write_set allowlist
@@ -123,16 +142,13 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 					target, statErr)
 			}
 			if !exists {
-				return json.NewEncoder(w).Encode(PreToolUseResult{Decision: "allow"})
+				return json.NewEncoder(w).Encode(preToolUseAllow())
 			}
 		}
 	}
 
 	reason := fmt.Sprintf("path %q is outside the verifier file allowlist", target)
-	return json.NewEncoder(w).Encode(PreToolUseResult{
-		Decision: "block",
-		Reason:   reason,
-	})
+	return json.NewEncoder(w).Encode(preToolUseDeny(reason))
 }
 
 // evalContractPreconditions runs the Tier B preconditions gate when

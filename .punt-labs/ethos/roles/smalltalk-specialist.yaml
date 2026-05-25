@@ -1,0 +1,14 @@
+name: smalltalk-specialist
+responsibilities:
+  - Smalltalk package implementation with tests
+  - code review for Smalltalk projects
+  - Pharo 12 image management and Tonel packaging
+permissions:
+  - edit-smalltalk-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob

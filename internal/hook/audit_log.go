@@ -29,6 +29,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/mission"
 )
 
 // HandleAuditLog appends one JSONL line to the session audit log.
@@ -40,7 +42,7 @@ import (
 // DES-054 phase 1 storage layout:
 //
 //   - When repoRoot is set, the write lands in
-//     <repoRoot>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
+//     <repoRoot>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
 //     The per-session directory is created on first write; subsequent
 //     writes in the same session reuse the existing date directory
 //     even if the wall clock has rolled over a day boundary.
@@ -52,7 +54,7 @@ import (
 // The function never silently drops a write: an mkdir or open
 // failure writes a warning to stderr but allows the tool call to
 // proceed. Migration: in phase 1, repo-tree writes use the new
-// <repoRoot>/.ethos/sessions/<date>-<id>/audit.jsonl layout; only
+// <repoRoot>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl layout; only
 // sessions launched outside a repo still write to the legacy
 // <globalSessionsDir>/<id>.audit.jsonl path. A v3.11.0 reader sees
 // only the legacy path, so repo-tree sessions written under v3.12
@@ -73,7 +75,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	}
 
 	now := time.Now().UTC()
-	entry := buildAuditEntry(input, sessionID, now)
+	entry := buildAuditEntry(input, sessionID, repoRoot, now)
 
 	path, err := resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID, now)
 	if err != nil {
@@ -112,15 +114,34 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 // payload. Split from HandleAuditLog so the construction can be
 // exercised under test without staging a writable directory and so
 // the orchestrator stays focused on the I/O concerns.
-func buildAuditEntry(input map[string]any, sessionID string, now time.Time) auditEntry {
+//
+// Redaction order is load-bearing: extract the raw tool_input, redact
+// $HOME/X and repoRoot/X to portable tokens, THEN compute the hash
+// and the preview off the redacted form. The hash must be over the
+// redacted bytes so the same logical call from two machines produces
+// the same hash — that is the cross-machine collision-detection
+// invariant from DES-052. Redaction applies to new writes only;
+// existing audit.jsonl lines on disk are unchanged.
+func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.Time) auditEntry {
 	toolName, _ := input["tool_name"].(string)
+	home, _ := os.UserHomeDir()
+	redacted := redactAbsolutePaths(extractToolInput(input), home, repoRoot)
+	// Feed the redacted map through the existing hash and preview
+	// helpers under the same "tool_input" envelope they expect. When
+	// the tool call carried no tool_input (a rare scalar-input hook),
+	// pass an envelope without the key so the helpers see "absent",
+	// not "present but null".
+	redactedEnv := map[string]any{}
+	if redacted != nil {
+		redactedEnv["tool_input"] = redacted
+	}
 	entry := auditEntry{
 		Ts:               now.Format(time.RFC3339),
 		Session:          sessionID,
 		Tool:             toolName,
-		ToolInput:        extractToolInput(input),
-		ToolInputHash:    hashToolInput(input),
-		ToolInputPreview: toolInputPreview(input),
+		ToolInput:        redacted,
+		ToolInputHash:    hashToolInput(redactedEnv),
+		ToolInputPreview: toolInputPreview(redactedEnv),
 	}
 	// Optional enrichment fields. Each is `omitempty` on the struct
 	// so the absent value drops out of the JSONL line, preserving
@@ -173,5 +194,38 @@ func buildAuditEntry(input map[string]any, sessionID string, now time.Time) audi
 	// authoritative value lives on the delegation skeleton's
 	// parent_delegation field; readers needing the chain walk should
 	// join on delegation_id.
+
+	// Final fallback: delegation-binding sidecar. additional_env from
+	// PreToolUse does NOT persist into hook script processes, so
+	// os.Getenv above returns "" for subagent tool calls even when
+	// the PreToolUse dispatch set DELEGATION_ID in additional_env.
+	// The sidecar (written by PreToolUse at Tier B dispatch time)
+	// carries the binding for the most recent dispatch under this
+	// session — the same session_id the subagent shares with the
+	// parent.
+	if entry.DelegationID == "" || entry.ContractID == "" {
+		globalRoot, gErr := tierBGlobalRoot()
+		if gErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit-log: delegation-binding fallback: resolving global root: %v\n", gErr)
+		} else {
+			b, bErr := mission.ReadDelegationBinding(globalRoot, sessionID)
+			if bErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: audit-log: delegation-binding fallback: reading sidecar: %v\n", bErr)
+			} else if b.DelegationID != "" {
+				if entry.DelegationID == "" {
+					entry.DelegationID = b.DelegationID
+				}
+				if entry.ContractID == "" {
+					entry.ContractID = b.MissionID
+				}
+				if entry.ParentSession == "" {
+					entry.ParentSession = b.ParentSession
+				}
+			}
+		}
+	}
+
 	return entry
 }

@@ -30,7 +30,7 @@ func writeLegacyAudit(t *testing.T, globalDir, sessionID string, entries []audit
 // repo-tree session directory to exist before migrate runs.
 func repoSessionDir(t *testing.T, repoRoot, date, sessionID string) string {
 	t.Helper()
-	dir := filepath.Join(repoRoot, ".ethos", "sessions", date+"-"+sessionID)
+	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", date+"-"+sessionID)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	return dir
 }

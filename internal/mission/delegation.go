@@ -73,9 +73,9 @@ type DelegationTemplate struct {
 
 // Delegation is the on-disk record for one Agent spawn. Tier B
 // delegations live at
-// `<repo>/.ethos/missions/<mission-id>/delegations/<NN>/record.yaml`;
+// `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<NN>/record.yaml`;
 // Tier A delegations live at
-// `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/record.yaml`.
+// `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/adhoc/<NNN>/record.yaml`.
 // One Delegation per spawn — the unit of operator intent. tool calls
 // produced inside the spawn join the session audit log under this
 // delegation_id.
@@ -178,7 +178,7 @@ func (s *Store) DelegationLockPath(delegationID string) string {
 // tree per DES-054 v5 §"Storage Layout" so two checkouts of the same
 // repo lock the same inode. Storing the lock under the repo tree
 // would mean two checkouts cross-write delegations because each has
-// its own .ethos/delegations/ directory. The path matches the
+// its own .punt-labs/ethos/delegations/ directory. The path matches the
 // (*Store).DelegationLockPath method on the same global root.
 //
 // Used by the PreToolUse-on-Agent dispatch path (DES-054 v5): the
@@ -261,7 +261,7 @@ type DelegationSkeleton struct {
 // DelegationDir returns the on-disk per-delegation directory under a
 // mission. delegationID is run through filepath.Base for defense in
 // depth — a tainted ID with path separators can only ever resolve to
-// a leaf under <repo>/.ethos/missions/<mission-id>/delegations/.
+// a leaf under <repo>/.punt-labs/ethos/missions/<mission-id>/delegations/.
 //
 // The full delegation ID (after filepath.Base) is the directory leaf.
 // The DES-054 v5 design diagram uses <NN> for compactness, but using
@@ -271,15 +271,16 @@ type DelegationSkeleton struct {
 // both share the leaf "001" → directory collision (Bugbot HIGH on
 // PR #327). The full ID is unambiguous and still nests cleanly.
 func DelegationDir(repoRoot, missionID, delegationID string) string {
-	return filepath.Join(
-		repoRoot, ".ethos", "missions",
+	return RepoStatePath(
+		repoRoot, "missions",
 		filepath.Base(missionID), "delegations",
 		filepath.Base(delegationID),
 	)
 }
 
 // WriteDelegationSkeleton writes a freshly-constructed Delegation
-// record to <repoRoot>/.ethos/missions/<missionID>/delegations/<NN>/
+// record to
+// <repoRoot>/.punt-labs/ethos/missions/<missionID>/delegations/<delegationID>/
 // record.yaml, plus an optional prompt.md sibling. The caller must
 // already hold AcquireDelegationLock for the delegation ID, and
 // should hold the mission shared lock from AcquireMissionLock so
@@ -387,7 +388,7 @@ func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 }
 
 // AcquireMissionLock opens (and creates if needed) the per-mission
-// lock file at <repoRoot>/.ethos/missions/<missionID>/.lock and
+// lock file at <repoRoot>/.punt-labs/ethos/missions/<missionID>/.lock and
 // acquires a SHARED flock on it. The returned release closure runs
 // LOCK_UN + Close exactly once; subsequent calls are no-ops.
 //
@@ -416,7 +417,7 @@ func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required for mission lock")
 	}
-	dir := filepath.Join(repoRoot, ".ethos", "missions", filepath.Base(missionID))
+	dir := RepoStatePath(repoRoot, "missions", filepath.Base(missionID))
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("creating mission lock directory %s: %w", dir, err)
 	}

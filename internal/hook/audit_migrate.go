@@ -13,7 +13,7 @@ import (
 // MigrateAudit copies legacy global audit JSONL files (the
 // <globalSessionsDir>/<id>.audit.jsonl shape used by v3.11) into the
 // DES-054 v5 repo-tree layout
-// (<repoRoot>/.ethos/sessions/<date>-<id>/audit.jsonl). Each legacy
+// (<repoRoot>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl). Each legacy
 // file whose session id matches a repo-tree session directory is
 // merged in; entries already present (matched on tool_use_id + ts +
 // tool_name) are not re-written. Legacy files with no matching
@@ -27,7 +27,7 @@ import (
 //
 // out receives one human-readable line per session decision:
 //
-//	migrate sess-abc -> .ethos/sessions/2026-05-23-sess-abc (N new entries)
+//	migrate sess-abc -> .punt-labs/ethos/sessions/2026-05-23-sess-abc (N new entries)
 //	skip sess-xyz: no repo-tree session
 //	skip sess-ro: read-only
 //	noop sess-dup: already migrated
@@ -46,7 +46,7 @@ func MigrateAudit(globalSessionsDir, repoRoot string, dryRun bool, out io.Writer
 		return nil
 	}
 
-	sessionsBase := filepath.Join(repoRoot, ".ethos", "sessions")
+	sessionsBase := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions")
 	var failures []string
 	for _, lf := range legacyFiles {
 		sessionID := strings.TrimSuffix(filepath.Base(lf), ".audit.jsonl")

@@ -1,0 +1,43 @@
+{{template "head" .}}
+
+<h1 class="text-2xl font-bold text-white mb-8">Missions</h1>
+
+<div class="flex gap-8 mb-10">
+  {{range .Counts}}
+  <div>
+    <div class="text-3xl font-bold text-white">{{.N}}</div>
+    <div class="text-xs text-neutral-500 uppercase tracking-wider mt-1">{{.Label}}</div>
+  </div>
+  {{end}}
+</div>
+
+<div class="border border-neutral-800">
+<table class="w-full text-sm">
+<thead>
+  <tr class="border-b border-neutral-800 text-neutral-500 text-xs uppercase tracking-wider">
+    <th class="text-left px-4 py-3">Mission</th>
+    <th class="text-left px-4 py-3">Status</th>
+    <th class="text-left px-4 py-3">Worker</th>
+    <th class="text-left px-4 py-3">Evaluator</th>
+    <th class="text-left px-4 py-3">Created</th>
+    <th class="text-left px-4 py-3">Verdict</th>
+  </tr>
+</thead>
+<tbody>
+  {{range .Missions}}
+  <tr class="border-b border-neutral-900">
+    <td class="px-4 py-3"><a href="/missions/{{.ID}}">{{.ID}}</a></td>
+    <td class="px-4 py-3"><span class="pill pill-{{.Status}}">{{.Status}}</span></td>
+    <td class="px-4 py-3 text-neutral-400">{{.Worker}}</td>
+    <td class="px-4 py-3 text-neutral-400">{{.Evaluator}}</td>
+    <td class="px-4 py-3 text-neutral-500 text-xs">{{.CreatedAt}}</td>
+    <td class="px-4 py-3">{{if .Verdict}}<span class="pill pill-{{.Verdict}}">{{.Verdict}}</span>{{else}}<span class="text-neutral-600">—</span>{{end}}</td>
+  </tr>
+  {{else}}
+  <tr><td colspan="6" class="px-4 py-12 text-center text-neutral-600">No missions found.</td></tr>
+  {{end}}
+</tbody>
+</table>
+</div>
+
+{{template "foot" .}}

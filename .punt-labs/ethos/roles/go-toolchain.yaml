@@ -1,0 +1,14 @@
+name: go-toolchain
+responsibilities:
+  - Go modules, build tooling, and supply-chain integrity
+  - dependency review, vendoring discipline, vulnerability triage
+  - cross-platform build matrix and binary release hygiene
+permissions:
+  - edit-go-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob

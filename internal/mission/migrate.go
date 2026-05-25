@@ -23,12 +23,12 @@ const maxAuditLineBytes = 16 * 1024 * 1024
 // MigrateMission relocates a mission from the legacy global tree
 // (<globalRoot>/missions/<id>.yaml + sibling .jsonl / .results.yaml /
 // .reflections.yaml files) into the DES-054 per-repo tree
-// (<repoRoot>/.ethos/missions/<id>/contract.yaml + log.jsonl /
+// (<repoRoot>/.punt-labs/ethos/missions/<id>/contract.yaml + log.jsonl /
 // results.yaml / reflections.yaml).
 //
 // When missionID is empty, every legacy mission whose contract_id is
 // referenced by an audit entry in this repo's
-// <repoRoot>/.ethos/sessions/*/audit.jsonl is migrated; missions with
+// <repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl is migrated; missions with
 // no matching session are left alone (cross-repo policy).
 //
 // When missionID is non-empty, only that one mission is considered.
@@ -43,13 +43,13 @@ const maxAuditLineBytes = 16 * 1024 * 1024
 // dryRun=true enumerates what would change without writing or
 // deleting. The move is atomic at the per-mission directory level:
 // sibling artifacts are staged under a sibling temp directory in
-// <repoRoot>/.ethos/missions/ and renamed into place, then the legacy
+// <repoRoot>/.punt-labs/ethos/missions/ and renamed into place, then the legacy
 // files are removed. On any error before the temp→final rename, the
 // legacy tree is untouched and the staging directory is cleaned up.
 //
 // out receives one human-readable line per mission decision:
 //
-//	migrate <mission-id> -> .ethos/missions/<id>
+//	migrate <mission-id> -> .punt-labs/ethos/missions/<id>
 //	skip <mission-id>: no repo session
 //	skip <mission-id>: legacy contract missing
 //	noop <mission-id>: already migrated
@@ -64,7 +64,7 @@ func MigrateMission(globalRoot, repoRoot, missionID string, dryRun bool, out io.
 	}
 
 	legacyDir := filepath.Join(globalRoot, "missions")
-	repoDir := filepath.Join(repoRoot, ".ethos", "missions")
+	repoDir := RepoStatePath(repoRoot, "missions")
 
 	candidates, err := enumerateMigrateCandidates(legacyDir, missionID)
 	if err != nil {
@@ -136,7 +136,7 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 }
 
 // repoMissionIDs returns the set of mission IDs referenced as
-// contract_id in any <repoRoot>/.ethos/sessions/*/audit.jsonl file.
+// contract_id in any <repoRoot>/.punt-labs/ethos/sessions/*/audit.jsonl file.
 // Missing sessions tree is treated as empty — a fresh repo has no
 // audit history and therefore no migration candidates.
 //
@@ -144,7 +144,7 @@ func enumerateMigrateCandidates(legacyDir, missionID string) ([]string, error) {
 // permissive reader contract in audit_reader.go), not an error.
 func repoMissionIDs(repoRoot string) (map[string]struct{}, error) {
 	out := make(map[string]struct{})
-	sessionsBase := filepath.Join(repoRoot, ".ethos", "sessions")
+	sessionsBase := RepoStatePath(repoRoot, "sessions")
 	dirs, err := os.ReadDir(sessionsBase)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -380,10 +380,11 @@ func copyIfExists(src, dst string) error {
 
 // relRepoPath formats the repo-tree mission directory as a relative
 // path suitable for the migrate status line ("e.g.
-// .ethos/missions/<id>"). Falls back to the absolute path on a
-// filepath.Rel failure.
+// .punt-labs/ethos/missions/<id>"). Falls back to the absolute path
+// on a filepath.Rel failure.
 func relRepoPath(absPath string) string {
-	idx := strings.Index(absPath, string(filepath.Separator)+".ethos"+string(filepath.Separator))
+	needle := string(filepath.Separator) + ".punt-labs" + string(filepath.Separator) + "ethos" + string(filepath.Separator)
+	idx := strings.Index(absPath, needle)
 	if idx < 0 {
 		return absPath
 	}

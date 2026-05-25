@@ -1,0 +1,12 @@
+name: reviewer
+responsibilities:
+  - code review for correctness and completeness
+  - convention adherence checks
+  - AI-generated code quality assessment
+permissions:
+  - block-merge-on-review
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash

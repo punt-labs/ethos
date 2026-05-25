@@ -184,7 +184,7 @@ func TestWriteDelegationSkeleton_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	want := filepath.Join(
-		repoRoot, ".ethos", "missions", missionID, "delegations", delegationID, "record.yaml",
+		repoRoot, ".punt-labs", "ethos", "missions", missionID, "delegations", delegationID, "record.yaml",
 	)
 	assert.Equal(t, want, recordPath,
 		"record.yaml must land under .ethos/missions/<mission>/delegations/<delegation-id>/")
@@ -292,7 +292,7 @@ func TestAcquireMissionLock_AcquireAndRelease(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, release)
 
-	lockPath := filepath.Join(repoRoot, ".ethos", "missions", missionID, ".lock")
+	lockPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", missionID, ".lock")
 	info, statErr := os.Stat(lockPath)
 	require.NoError(t, statErr, "lock file must exist on disk after acquire")
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm(),
@@ -345,7 +345,7 @@ func TestAcquireMissionLock_ExclusiveBlocks(t *testing.T) {
 	repoRoot := t.TempDir()
 	missionID := "m-2026-05-22-031"
 
-	dir := filepath.Join(repoRoot, ".ethos", "missions", missionID)
+	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", missionID)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	lockPath := filepath.Join(dir, ".lock")
 
@@ -707,7 +707,7 @@ func TestDelegationDir_CrossDayUnique(t *testing.T) {
 	// Defense in depth: a tainted ID with path separators still
 	// resolves under <missions>/<mission>/delegations/.
 	tainted := DelegationDir(repoRoot, missionID, "../etc/d-2026-05-22-001")
-	wantBase := filepath.Join(repoRoot, ".ethos", "missions", missionID, "delegations")
+	wantBase := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", missionID, "delegations")
 	assert.Equal(t, filepath.Join(wantBase, "d-2026-05-22-001"), tainted,
 		"filepath.Base must strip path separators from a tainted delegation ID")
 }

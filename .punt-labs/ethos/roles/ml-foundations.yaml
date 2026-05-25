@@ -1,0 +1,12 @@
+name: ml-foundations
+responsibilities:
+  - foundational review of model architectures and training paradigms
+  - representation learning, self-supervised methods, and evaluation design
+  - long-horizon ML direction across the org's inference and embedding work
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob

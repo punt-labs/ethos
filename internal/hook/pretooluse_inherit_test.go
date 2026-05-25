@@ -46,7 +46,7 @@ func TestFindDelegationByID_HitInSecondMissionTree(t *testing.T) {
 	// short-circuit on the first dir entry.
 	firstMission := "m-2026-05-23-311"
 	require.NoError(t, os.MkdirAll(
-		filepath.Join(repo, ".ethos", "missions", firstMission, "delegations"),
+		filepath.Join(repo, ".punt-labs", "ethos", "missions", firstMission, "delegations"),
 		0o700,
 	))
 
@@ -121,7 +121,7 @@ func TestFindDelegationByID_RealIOFaultNotWrappedAsNotExist(t *testing.T) {
 		t.Skip("permission-bit enforcement is bypassed when running as root")
 	}
 	repo := t.TempDir()
-	missionsDir := filepath.Join(repo, ".ethos", "missions")
+	missionsDir := filepath.Join(repo, ".punt-labs", "ethos", "missions")
 	require.NoError(t, os.MkdirAll(missionsDir, 0o700))
 	require.NoError(t, os.Chmod(missionsDir, 0o000))
 	t.Cleanup(func() { _ = os.Chmod(missionsDir, 0o700) })

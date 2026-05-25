@@ -27,12 +27,12 @@ func legacyMissionFiles(t *testing.T, globalRoot, missionID string, files map[st
 }
 
 // repoAuditWithMission stages an audit.jsonl line under
-// <repoRoot>/.ethos/sessions/<date>-<id>/audit.jsonl referencing
+// <repoRoot>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl referencing
 // missionID as its contract_id. The presence of this file is what
 // makes the mission a candidate for migration in this repo.
 func repoAuditWithMission(t *testing.T, repoRoot, sessionID, missionID string) {
 	t.Helper()
-	dir := filepath.Join(repoRoot, ".ethos", "sessions", "2026-05-22-"+sessionID)
+	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", "2026-05-22-"+sessionID)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	line := `{"ts":"2026-05-22T10:00:00Z","session":"` + sessionID +
 		`","tool":"Agent","contract_id":"` + missionID + `"}` + "\n"
@@ -76,7 +76,7 @@ func TestMigrateMission_CopiesAllArtifacts(t *testing.T) {
 	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", false, &out))
 
 	// Repo tree has all four files.
-	repoMissionDir := filepath.Join(repoRoot, ".ethos", "missions", id)
+	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id)
 	for _, name := range []string{"contract.yaml", "log.jsonl", "results.yaml", "reflections.yaml"} {
 		_, err := os.Stat(filepath.Join(repoMissionDir, name))
 		require.NoErrorf(t, err, "expected %s in repo tree", name)
@@ -90,7 +90,7 @@ func TestMigrateMission_CopiesAllArtifacts(t *testing.T) {
 	}
 
 	assert.Contains(t, out.String(), "migrate "+id)
-	assert.Contains(t, out.String(), ".ethos/missions/"+id)
+	assert.Contains(t, out.String(), ".punt-labs/ethos/missions/"+id)
 }
 
 func TestMigrateMission_OptionalSiblingsAbsent(t *testing.T) {
@@ -109,7 +109,7 @@ func TestMigrateMission_OptionalSiblingsAbsent(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, MigrateMission(globalRoot, repoRoot, "", false, &out))
 
-	repoMissionDir := filepath.Join(repoRoot, ".ethos", "missions", id)
+	repoMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id)
 	_, err := os.Stat(filepath.Join(repoMissionDir, "contract.yaml"))
 	require.NoError(t, err)
 	for _, name := range []string{"log.jsonl", "results.yaml", "reflections.yaml"} {
@@ -188,7 +188,7 @@ func TestMigrateMission_DryRunLeavesBothSidesIntact(t *testing.T) {
 	_, err := os.Stat(legacyContract)
 	require.NoError(t, err)
 	// Repo-tree contract not created.
-	_, err = os.Stat(filepath.Join(repoRoot, ".ethos", "missions", id, "contract.yaml"))
+	_, err = os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "contract.yaml"))
 	require.True(t, os.IsNotExist(err), "dry-run must not write repo contract")
 
 	assert.Contains(t, out.String(), "dry-run")
@@ -229,12 +229,12 @@ func TestMigrateMission_ExplicitMissionIDIgnoresSiblings(t *testing.T) {
 	require.NoError(t, MigrateMission(globalRoot, repoRoot, want, false, &out))
 
 	// Named mission migrated.
-	_, err := os.Stat(filepath.Join(repoRoot, ".ethos", "missions", want, "contract.yaml"))
+	_, err := os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", want, "contract.yaml"))
 	require.NoError(t, err)
 	// Other mission untouched in both trees.
 	_, err = os.Stat(filepath.Join(globalRoot, "missions", other+".yaml"))
 	require.NoError(t, err)
-	_, err = os.Stat(filepath.Join(repoRoot, ".ethos", "missions", other, "contract.yaml"))
+	_, err = os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", other, "contract.yaml"))
 	require.True(t, os.IsNotExist(err))
 
 	assert.Contains(t, out.String(), "migrate "+want)
@@ -264,7 +264,7 @@ func TestMigrateMission_EmptyGlobalRoot(t *testing.T) {
 // the result; the test must return within the default deadline.
 func TestRepoMissionIDs_SkipsMalformedLines(t *testing.T) {
 	repoRoot := t.TempDir()
-	sessionDir := filepath.Join(repoRoot, ".ethos", "sessions", "2026-05-22-sess-bad")
+	sessionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", "2026-05-22-sess-bad")
 	require.NoError(t, os.MkdirAll(sessionDir, 0o700))
 
 	// Order matters only for diagnostics. The scanner is line-oriented
@@ -310,7 +310,7 @@ func TestMigrateMission_PartialFailureLeavesLegacyIntact(t *testing.T) {
 	repoAuditWithMission(t, repoRoot, "sess-8", id)
 
 	// Lock the parent directory so MkdirTemp inside repoDir fails.
-	missionsDir := filepath.Join(repoRoot, ".ethos", "missions")
+	missionsDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions")
 	require.NoError(t, os.MkdirAll(missionsDir, 0o500))
 	t.Cleanup(func() { _ = os.Chmod(missionsDir, 0o700) })
 

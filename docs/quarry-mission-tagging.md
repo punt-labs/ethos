@@ -7,7 +7,7 @@ missions. This is the third layer of the audit trail model.
 
 | Layer | What | Where | Answers |
 |-------|------|-------|---------|
-| **Git** | Contracts, results, ADRs | `.ethos/` in repo | What was decided |
+| **Git** | Contracts, results, ADRs | `.punt-labs/ethos/` in repo | What was decided |
 | **Local** | Event logs, session audit | `~/.punt-labs/ethos/` | What happened in detail |
 | **Quarry** | Conversation transcripts | LanceDB (local) | Why was it decided |
 

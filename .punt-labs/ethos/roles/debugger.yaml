@@ -1,0 +1,15 @@
+name: debugger
+responsibilities:
+  - reproduce bugs reliably
+  - trace root cause with evidence
+  - fix with regression test
+  - check for sibling bugs across codebase
+permissions:
+  - edit-code
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+  - Write
+  - Edit

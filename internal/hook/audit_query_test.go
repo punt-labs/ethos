@@ -14,7 +14,7 @@ import (
 // entries, in order.
 func writeRepoTreeSession(t *testing.T, repoRoot, date, sessionID string, entries []auditEntry) string {
 	t.Helper()
-	dir := filepath.Join(repoRoot, ".ethos", "sessions", date+"-"+sessionID)
+	dir := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions", date+"-"+sessionID)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	path := filepath.Join(dir, "audit.jsonl")
 	for _, e := range entries {
@@ -91,7 +91,7 @@ func TestQueryAuditByDelegation_LegacyFallback(t *testing.T) {
 	globalDir := filepath.Join(t.TempDir(), "sessions")
 
 	// Repo tree exists but has no matching session.
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".ethos", "sessions"), 0o700))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".punt-labs", "ethos", "sessions"), 0o700))
 	writeLegacySession(t, globalDir, "sess-legacy", []auditEntry{
 		queryEntry("sess-legacy", "2026-05-20T08:00:00Z", "Bash", "h1", "d-legacy"),
 		queryEntry("sess-legacy", "2026-05-20T08:00:01Z", "Read", "h2", "d-other"),

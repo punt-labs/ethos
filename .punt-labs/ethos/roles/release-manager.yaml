@@ -1,0 +1,13 @@
+name: release-manager
+responsibilities:
+  - coordinate review, test, security, ship sequence
+  - version management and changelog
+  - deploy verification and canary monitoring
+  - post-release documentation
+permissions:
+  - manage-releases
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash

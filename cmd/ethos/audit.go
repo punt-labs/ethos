@@ -35,7 +35,7 @@ var auditMigrateCmd = &cobra.Command{
 
 Scans ~/.punt-labs/ethos/sessions/*.audit.jsonl (the v3.11 layout) and
 copies each file's entries into the v3.12+ repo-tree layout under
-<repo>/.ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl, then deletes the
+<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<id>/audit.jsonl, then deletes the
 legacy file once every entry has landed and been fsynced.
 
 Idempotent: a second run on the same machine is a no-op. Cross-repo
@@ -49,7 +49,7 @@ Flags:
 Exit codes:
   0  migration completed (including the no-op "nothing to migrate" case)
   1  one or more sessions failed mid-copy; both sources stayed in place
-  2  must run inside a repo (no <repo>/.ethos/sessions/ destination)`,
+  2  must run inside a repo (no <repo>/.punt-labs/ethos/sessions/ destination)`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runAuditMigrate(cmd.OutOrStdout(), cmd.ErrOrStderr())
@@ -68,7 +68,7 @@ var auditShowCmd = &cobra.Command{
 	Short: "Show audit entries that belong to one delegation",
 	Long: `Show audit entries that belong to one delegation.
 
-Walks <repo>/.ethos/sessions/<date>-<id>/audit.jsonl and falls back
+Walks <repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl and falls back
 to ~/.punt-labs/ethos/sessions/<id>.audit.jsonl for sessions with no
 repo-tree counterpart. Prints every entry whose delegation_id field
 matches --delegation.

@@ -1,0 +1,14 @@
+name: implementer
+responsibilities:
+  - feature implementation with tests
+  - complete builds over shortcuts
+  - bisected commits and CI-green PRs
+permissions:
+  - edit-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob

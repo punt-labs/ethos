@@ -33,6 +33,12 @@ import (
 // Create paths (CLI `mission create` and MCP `mission create`) go
 // through missionStoreForCreate instead, which wires the lister
 // and fails loudly on a misconfigured role store.
+//
+// Uses NewStoreWithRoots so the DES-054 two-tree storage layout is
+// active for the CLI: reads check the repo tree first, then fall
+// back to the legacy global tree. NewStore + WithRepoRoot would
+// only wire the trace summary and leave per-mission storage on the
+// global tree (m-2026-05-23-004 escalation).
 func missionStore() *mission.Store {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -40,7 +46,7 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	return mission.NewStore(root).WithRepoRoot(resolve.FindRepoRoot())
+	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), root)
 }
 
 // missionStoreForCreate returns a mission store with the Phase 3.5
@@ -63,7 +69,12 @@ func missionStoreForCreate() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	ms := mission.NewStore(root)
+	// NewStoreWithRoots activates the DES-054 two-tree storage layout:
+	// Create writes to the repo tree, Load reads repo-first with global
+	// fallback. NewStore + WithRepoRoot would only wire the trace
+	// summary and leave per-mission storage on the global tree
+	// (m-2026-05-23-004 escalation).
+	ms := mission.NewStoreWithRoots(resolve.FindRepoRoot(), root)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
 	if err != nil {
@@ -73,7 +84,7 @@ func missionStoreForCreate() *mission.Store {
 	}
 	repoRoot := resolve.FindRepoEthosRoot()
 	as := mission.NewArchetypeStore(repoRoot, root)
-	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as).WithRepoRoot(resolve.FindRepoRoot())
+	return ms.WithRoleLister(sources.Roles).WithArchetypeStore(as)
 }
 
 // --- mission (bare command) ---
@@ -509,7 +520,7 @@ var missionExportCmd = &cobra.Command{
 
 Copies the mission's contract and final result (the last result on file)
 to <dir>/<id>.contract.yaml and <dir>/<id>.result.yaml. The directory
-is created if it doesn't exist. Default --dir is .ethos/missions/ in
+is created if it doesn't exist. Default --dir is .punt-labs/ethos/missions/ in
 the current working directory.
 
 If the mission has no result yet (still open), only the contract is
@@ -535,11 +546,11 @@ DES-054 per-repo tree.
 
 The legacy layout is ~/.punt-labs/ethos/missions/<id>.yaml plus sibling
 .jsonl / .results.yaml / .reflections.yaml files. The repo layout is
-<repo>/.ethos/missions/<id>/{contract.yaml,log.jsonl,results.yaml,
+<repo>/.punt-labs/ethos/missions/<id>/{contract.yaml,log.jsonl,results.yaml,
 reflections.yaml}.
 
 Without a mission-id argument, every legacy mission whose contract_id
-is referenced by an audit entry in <repo>/.ethos/sessions/ is moved.
+is referenced by an audit entry in <repo>/.punt-labs/ethos/sessions/ is moved.
 Missions belonging to other repos' work trees are left in place —
 cross-repo policy.
 
@@ -548,7 +559,7 @@ the move stages artifacts in a sibling temp directory and renames into
 place; a failure before the rename leaves the legacy tree intact.
 
 Flags:
-  --to-repo   migrate into the per-repo .ethos/missions/ tree (default
+  --to-repo   migrate into the per-repo .punt-labs/ethos/missions/ tree (default
               and currently the only target)
   --dry-run   show what would change without writing or deleting
   --verbose   print one decision line per mission to stdout
@@ -556,7 +567,7 @@ Flags:
 Exit codes:
   0  migration completed (including the no-op "nothing to migrate" case)
   1  one or more missions failed mid-migration; legacy files stayed in place
-  2  must run inside a repo (no <repo>/.ethos/missions/ destination)`,
+  2  must run inside a repo (no <repo>/.punt-labs/ethos/missions/ destination)`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var id string
@@ -564,6 +575,56 @@ Exit codes:
 			id = args[0]
 		}
 		return runMissionMigrate(id, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
+// --- mission claim / release (active-mission sidecar) ---
+//
+// `claim` writes the active-mission sidecar for the caller's session;
+// `release` clears it. The sidecar lives at
+// <globalRoot>/sessions/<session-id>/active-mission and is read by the
+// PreToolUse dispatch when MISSION_ID is unset — so a leader who runs
+// `ethos mission claim m-...` before calling Agent() gets Tier B
+// dispatch on the spawn. `mission create` does NOT auto-claim by
+// design: claim is explicit so the operator names the binding.
+
+var missionClaimCmd = &cobra.Command{
+	Use:   "claim <mission-id>",
+	Short: "Bind the current session to a mission for in-session Agent() dispatch",
+	Long: `Bind the current session to a mission.
+
+Writes <globalRoot>/sessions/<session-id>/active-mission with the
+given mission ID. The PreToolUse hook reads this file when
+MISSION_ID is unset, so the next Agent() call from this session
+dispatches as Tier B under the claimed mission and produces a
+delegation skeleton on disk for audit reconstruction.
+
+Refuses when there is no resolvable session in the environment
+(set ETHOS_SESSION or run inside an active Claude Code session).
+Refuses when the mission ID does not resolve to a contract — claim
+fails closed so a typo cannot stage a phantom binding.
+
+Released by ` + "`ethos mission release`" + ` or naturally when the
+session ends.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionClaim(args[0])
+	},
+}
+
+var missionReleaseCmd = &cobra.Command{
+	Use:   "release",
+	Short: "Clear the active-mission sidecar for the current session",
+	Long: `Clear the active-mission sidecar for the current session.
+
+Removes <globalRoot>/sessions/<session-id>/active-mission if present.
+Missing is not an error — release is safe to call unconditionally
+before claiming a new mission.
+
+Refuses when there is no resolvable session in the environment.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		return runMissionRelease()
 	},
 }
 
@@ -615,7 +676,7 @@ func init() {
 	missionLogCmd.Flags().StringVar(&missionLogSinceFilter, "since", "",
 		"Filter by RFC3339 timestamp (events on or after)")
 
-	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".ethos/missions",
+	missionExportCmd.Flags().StringVar(&missionExportDir, "dir", ".punt-labs/ethos/missions",
 		"Directory to export artifacts into")
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
@@ -629,7 +690,7 @@ func init() {
 	missionDispatchCmd.Flags().IntVar(&dispatchBudget, "budget", 2, "Round budget")
 
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateToRepo, "to-repo", true,
-		"Migrate into the per-repo .ethos/missions/ tree (default and currently the only target)")
+		"Migrate into the per-repo .punt-labs/ethos/missions/ tree (default and currently the only target)")
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateDryRun, "dry-run", false,
 		"Enumerate what would migrate without making changes")
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,
@@ -650,6 +711,8 @@ func init() {
 		missionLintCmd,
 		missionDispatchCmd,
 		missionMigrateCmd,
+		missionClaimCmd,
+		missionReleaseCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -1434,6 +1497,70 @@ func runMissionDispatch() error {
 	fmt.Printf("dispatched: %s worker=%s evaluator=%s write_set=%d criteria=%d budget=%d\n",
 		c.MissionID, c.Worker, c.Evaluator.Handle,
 		len(c.WriteSet), len(c.SuccessCriteria), c.Budget.Rounds)
+	return nil
+}
+
+// runMissionClaim writes the active-mission sidecar for the caller's
+// session. Resolves the session from --session, ETHOS_SESSION, or the
+// process tree (the same chain `ethos iam` uses); refuses when none
+// resolve. Validates the mission resolves via MatchByPrefix so a typo
+// cannot stage a phantom binding.
+func runMissionClaim(idOrPrefix string) error {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil {
+		return fmt.Errorf("mission claim: %w", err)
+	}
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		return fmt.Errorf("mission claim: %w", err)
+	}
+	if _, err := ms.Load(id); err != nil {
+		return fmt.Errorf("mission claim: loading %q: %w", id, err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("mission claim: user home dir: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := mission.WriteActiveMission(globalRoot, sessionID, id); err != nil {
+		return fmt.Errorf("mission claim: %w", err)
+	}
+
+	if jsonOutput {
+		printJSON(map[string]string{
+			"session": sessionID,
+			"mission": id,
+		})
+		return nil
+	}
+	fmt.Printf("claimed %s for session %s\n", id, sessionID)
+	return nil
+}
+
+// runMissionRelease removes the active-mission sidecar for the
+// caller's session. Missing is not an error — release is idempotent
+// so an operator can call it unconditionally before a new claim.
+func runMissionRelease() error {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil {
+		return fmt.Errorf("mission release: %w", err)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("mission release: user home dir: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
+		return fmt.Errorf("mission release: %w", err)
+	}
+
+	if jsonOutput {
+		printJSON(map[string]string{"session": sessionID})
+		return nil
+	}
+	fmt.Printf("released session %s\n", sessionID)
 	return nil
 }
 

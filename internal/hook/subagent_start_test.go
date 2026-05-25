@@ -1471,3 +1471,51 @@ func TestSubagentStart_VerifierIsolationBlockExtractInto_Empty(t *testing.T) {
 	assert.NotContains(t, ctx, "### Extract into (new files only)",
 		"empty extract_into must omit the section header")
 }
+
+// TestRenderVerifierBlock_WalkErrorMarker pins bead ethos-jiqn item 4:
+// when WalkWriteSet returns an error (e.g. an EACCES under a write_set
+// directory), the verifier isolation block must surface the
+// degradation in-place — not just on stderr — so the verifier knows
+// their concrete-files section is missing rather than silently
+// truncated. Calls renderVerifierBlock directly (the
+// HandleSubagentStartWithDeps wrapper does not plumb repoRoot through
+// runHookForVerifier).
+func TestRenderVerifierBlock_WalkErrorMarker(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses unix permission checks")
+	}
+	dir, _, missions, _, hash := setupVerifierTest(t, "djb")
+
+	// Stage a write_set directory under repoRoot, then chmod it 0o000
+	// so WalkWriteSet's filepath.WalkDir surfaces EACCES on descent.
+	locked := filepath.Join(dir, "locked-area")
+	require.NoError(t, os.MkdirAll(locked, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(locked, "file.go"), []byte("package locked\n"), 0o600))
+	require.NoError(t, os.Chmod(locked, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
+
+	c := validVerifierContract("djb")
+	c.WriteSet = []string{"locked-area/"}
+	c.ExtractInto = nil
+	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
+	require.NoError(t, missions.Create(&c))
+
+	// renderVerifierBlock requires RawYAML; the real call path
+	// (checkVerifierHash) reads it from disk. Mirror that here.
+	rawPath := filepath.Join(dir, "missions", c.MissionID+".yaml")
+	raw, err := os.ReadFile(rawPath)
+	require.NoError(t, err)
+
+	block, err := renderVerifierBlock(
+		verifierMission{Contract: &c, RawYAML: raw},
+		missions,
+		dir, // repoRoot
+	)
+	require.NoError(t, err)
+
+	assert.Contains(t, block, "### Concrete files on disk",
+		"walk error path must still emit the section header so the verifier sees its concrete-files area")
+	assert.Contains(t, block, "(walk error: see stderr — listing static entries only)",
+		"walk error path must surface the degradation marker in the injection block")
+}

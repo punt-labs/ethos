@@ -662,8 +662,8 @@ func TestSubprocess_AuditLog(t *testing.T) {
 	// DES-054 phase 1: the subprocess runs inside a git-init'd
 	// temp repo, so FindRepoRoot lands on se.repo and the audit log
 	// writes to the date-keyed per-session directory under
-	// <repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
-	sessionsBase := filepath.Join(se.repo, ".ethos", "sessions")
+	// <repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl.
+	sessionsBase := filepath.Join(se.repo, ".punt-labs", "ethos", "sessions")
 	dirEntries, readErr := os.ReadDir(sessionsBase)
 	require.NoError(t, readErr,
 		"repo sessions directory must exist at %s", sessionsBase)

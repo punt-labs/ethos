@@ -182,7 +182,7 @@ Added `-coverprofile=coverage.out` to `make test` and CI summary reporting. Cove
 
 **v3.4.0** (April 14, 2026) shipped pipeline instantiate, archetype constraint enforcement (allow_empty_write_set, write_set_constraints, required_fields), inputs.bead to inputs.ticket rename with back-compat, 8 built-in pipeline templates with {feature}/{target} defaults, PostToolUse exit code propagation, and 24 pipeline CLI tests. Coverage went from 75.6% to 77.1%.
 
-**v3.5.0** (April 14, 2026) shipped automatic mission traceability (`Store.Close` auto-appends summary JSONL to `<repo>/.ethos/missions.jsonl`, DES-050), deprecation warning deduplication via `sync.Once`, and an integration test for the Close-to-JSONL path.
+**v3.5.0** (April 14, 2026) shipped automatic mission traceability (`Store.Close` auto-appends summary JSONL to `<repo>/.punt-labs/ethos/missions.jsonl`, DES-050), deprecation warning deduplication via `sync.Once`, and an integration test for the Close-to-JSONL path.
 
 **v3.6.0** (April 15, 2026) shipped mission dispatch one-liner, resilient conflict scan, `inputs.trigger` schema, and doctor orphan check (Phase 5 items).
 

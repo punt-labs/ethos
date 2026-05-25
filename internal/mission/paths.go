@@ -4,16 +4,82 @@ package mission
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
 
+// Symlink policy: every mission and delegation loader, lock acquirer,
+// and writer in this package REFUSES to follow a symlink at any
+// resolved per-mission, per-delegation, or per-artifact path. The
+// "resolve and validate" alternative (follow then check enclosing
+// layer root) would have to track the layer root for every loader
+// path and re-validate after every Readlink — more surface area, more
+// branches, larger blast radius for a future bug. The refuse policy is
+// a single Lstat per open: smaller, simpler, and uniform.
+//
+// The check is mechanical (Lstat + ModeSymlink) and fires before any
+// follow-on open or stat that would dereference the link. Callers see
+// a single error string ("refusing to follow symlink: <path>") so the
+// operator can locate the offending path immediately.
+//
+// A missing path is NOT a symlink and is allowed through — the
+// follow-on open is responsible for distinguishing "does not exist"
+// from a real I/O error.
+
+// rejectSymlink returns an error if path is a symbolic link. Symlinks
+// inside the missions or delegations trees are a local-attacker
+// vector: a symlink pointing outside the store can redirect a read
+// (to an arbitrary file the ethos process can open) or a write (via
+// temp+rename or O_APPEND on the link target) past the write_set
+// boundary. Lstat + ModeSymlink is the standard non-following check.
+//
+// Returns nil for a missing path so the caller's follow-on open can
+// produce the natural fs.ErrNotExist diagnostic — distinguishing
+// "missing" from "is a symlink" is the caller's responsibility, not
+// this helper's.
+func rejectSymlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("lstat %s: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to follow symlink: %s", path)
+	}
+	return nil
+}
+
+// EthosRepoStateRoot is the path, relative to a repository root,
+// under which every per-repo file ethos writes lives. The .punt-labs/
+// prefix is the shared Punt Labs cross-tool namespace — sibling tools
+// (biff, vox, beadle, lux, quarry) read and write alongside ethos at
+// <repo>/.punt-labs/<tool>/. Exported so external integrations
+// (sibling tools, audit consumers) can construct paths without
+// hardcoding the literal.
+//
+// Callers compose paths via RepoStatePath. A future relocation
+// changes one constant instead of every filepath.Join site.
+const EthosRepoStateRoot = ".punt-labs/ethos"
+
+// RepoStatePath joins repoRoot with the ethos per-repo state root and
+// any trailing path segments. Returns just the state root when no
+// trailing parts are given. Exported so external consumers can locate
+// ethos state without depending on the internal layout constants.
+func RepoStatePath(repoRoot string, parts ...string) string {
+	all := append([]string{repoRoot, ".punt-labs", "ethos"}, parts...)
+	return filepath.Join(all...)
+}
+
 // missionLayer identifies which storage tree a mission lives in.
-// DES-054 phase 1 introduces a per-repo tree under <repoRoot>/.ethos/
-// alongside the legacy global tree under <globalRoot>/missions/. A
-// given mission lives in exactly one layer at a time; the migration
-// command (phase 3) is the only path that copies between layers.
+// DES-054 phase 1 introduces a per-repo tree under
+// <repoRoot>/.punt-labs/ethos/ alongside the legacy global tree under
+// <globalRoot>/missions/. A given mission lives in exactly one layer
+// at a time; the migration command (phase 3) is the only path that
+// copies between layers.
 type missionLayer int
 
 const (
@@ -24,8 +90,8 @@ const (
 	layerUnset missionLayer = iota
 
 	// layerRepo means the mission lives at
-	// <repoRoot>/.ethos/missions/<missionID>/. Create writes here
-	// when repoRoot is set; Load reads here first.
+	// <repoRoot>/.punt-labs/ethos/missions/<missionID>/. Create
+	// writes here when repoRoot is set; Load reads here first.
 	layerRepo
 
 	// layerGlobal means the mission lives at the legacy global
@@ -49,14 +115,15 @@ type pathSet struct {
 }
 
 // repoMissionsDir returns the per-repo missions root —
-// <repoRoot>/.ethos/missions. Empty when the two-tree storage mode
-// is not active (legacy WithRepoRoot trace-only setups stay empty
-// here so List and resolveLayer do not pick up a partial layout).
+// <repoRoot>/.punt-labs/ethos/missions. Empty when the two-tree
+// storage mode is not active (legacy WithRepoRoot trace-only setups
+// stay empty here so List and resolveLayer do not pick up a partial
+// layout).
 func (s *Store) repoMissionsDir() string {
 	if !s.twoTreeStorage || s.repoRoot == "" {
 		return ""
 	}
-	return filepath.Join(s.repoRoot, ".ethos", "missions")
+	return RepoStatePath(s.repoRoot, "missions")
 }
 
 // globalMissionsDir returns the legacy single-root path —

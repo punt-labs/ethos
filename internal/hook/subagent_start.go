@@ -386,7 +386,13 @@ func renderVerifierBlock(vm verifierMission, store *mission.Store, repoRoot stri
 		if walkErr != nil {
 			// Log the walk error but do not fail the spawn; the
 			// static allowlist above is sufficient for verification.
+			// Surface the degradation in the injection block too so
+			// the verifier knows the concrete-files section is
+			// missing (silent-failure-hunter NOTED on DES-052; bead
+			// ethos-jiqn item 4).
 			fmt.Fprintf(os.Stderr, "ethos: subagent-start: walk write_set for %s: %v\n", m.MissionID, walkErr)
+			b.WriteString("\n### Concrete files on disk\n\n")
+			b.WriteString("(walk error: see stderr — listing static entries only)\n")
 		} else if len(walked) > 0 {
 			b.WriteString("\n### Concrete files on disk\n\n")
 			b.WriteString("The write_set entries resolve to these files:\n\n")
@@ -499,6 +505,13 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 		"ETHOS_VERIFIER_ALLOWLIST": strings.Join(entries, ":"),
 	}
 
+	// Contract.Validate rejects empty extract_into entries at the
+	// admission trust boundary, so this loop trusts every entry it
+	// sees here. No defensive empty-string skip — if such an entry
+	// ever appears it means validation regressed, and we want the
+	// resulting malformed env value to surface that regression
+	// rather than silently swallow it (silent-failure-hunter NOTED
+	// on DES-052; bead ethos-jiqn item 3).
 	eiSeen := make(map[string]struct{})
 	var eiEntries []string
 	for _, vm := range missions {
@@ -506,9 +519,6 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 			continue
 		}
 		for _, dir := range vm.Contract.ExtractInto {
-			if dir == "" {
-				continue
-			}
 			if _, ok := eiSeen[dir]; ok {
 				continue
 			}
