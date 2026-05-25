@@ -49,7 +49,7 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 	// /code/ethos-private. repoRoot is abs-normalized in NewServer.
 	abs, err := filepath.Abs(absPath)
 	if err != nil || (abs != s.repoRoot && !strings.HasPrefix(abs, s.repoRoot+string(filepath.Separator))) {
-		http.Error(w, "path outside repo", 403)
+		http.Error(w, "path outside repo", http.StatusForbidden)
 		return
 	}
 
