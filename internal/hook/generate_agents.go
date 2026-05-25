@@ -12,6 +12,29 @@ import (
 	"github.com/punt-labs/ethos/internal/team"
 )
 
+// projectFilePatterns returns the shell case-statement glob pattern for
+// file extensions that should trigger make check. Detection is by marker
+// file at the repo root: go.mod → Go, pyproject.toml or setup.py →
+// Python, neither → generic (Makefile, shell, YAML only).
+// When both Go and Python markers exist, Go wins — a polyglot repo with
+// go.mod is more likely Go-primary.
+func projectFilePatterns(repoRoot string) string {
+	goPatterns := "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml"
+	pyPatterns := "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml"
+	genericPatterns := "*Makefile|*.sh|*.yaml|*.yml"
+
+	if _, err := os.Stat(filepath.Join(repoRoot, "go.mod")); err == nil {
+		return goPatterns
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "pyproject.toml")); err == nil {
+		return pyPatterns
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "setup.py")); err == nil {
+		return pyPatterns
+	}
+	return genericPatterns
+}
+
 // GenerateAgentFiles creates .claude/agents/<handle>.md files from ethos
 // identity, personality, writing-style, and role data. Skips the main
 // agent (from repo config) and human identities. Writes are idempotent:
@@ -84,7 +107,8 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 		expected++
 
 		antiResps := deriveAntiResponsibilities(m.Role, t.Collaborations, roles)
-		content := buildAgentFile(id, r, antiResps)
+		filePatterns := projectFilePatterns(repoRoot)
+		content := buildAgentFile(id, r, antiResps, filePatterns)
 
 		destPath := filepath.Join(destDir, id.Handle+".md")
 
@@ -256,7 +280,7 @@ func hasWriteTool(tools []string) bool {
 // of responsibilities belonging to roles this agent reports to; when
 // non-empty, it is rendered as a "## What You Don't Do" section between
 // Responsibilities and Talents.
-func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiResponsibility) string {
+func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiResponsibility, filePatterns string) string {
 	var b strings.Builder
 
 	// Extract description: first non-heading content line from personality.
@@ -303,11 +327,11 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		//      embedded segments so worktree layouts (`*/.tmp/*`) and
 		//      cwd-relative writes (`.tmp/*`) both match.
 		//
-		//   3. *.go, go.mod, go.sum, go.work, Makefile, *.sh, *.yaml,
-		//      *.yml — run make check with output-capture + head -n
-		//      60 + exit-code propagation. go.mod / go.sum / go.work
-		//      are dependency-graph files whose content gates live in
-		//      `make check` (Bugbot review on PR #326).
+		//   3. Project-type file extensions (from filePatterns) — run
+		//      make check with output-capture + head -n 60 + exit-code
+		//      propagation. Patterns are detected at generation time
+		//      by projectFilePatterns: go.mod → Go patterns, pyproject.toml
+		//      or setup.py → Python patterns, neither → generic fallback.
 		//
 		//   4. Anything else (markdown, JSON, text) — exit 0. Doc
 		//      writes do not trigger compile or lint failures.
@@ -335,7 +359,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// command stays POSIX-sh compatible (it runs under /bin/sh,
 		// which is dash on Debian/Ubuntu): no `set -o pipefail`, no
 		// process substitution, no bash-isms in the case patterns.
-		b.WriteString("          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
+		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n", filePatterns)
 	}
 	b.WriteString("---\n")
 

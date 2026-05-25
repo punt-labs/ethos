@@ -79,6 +79,9 @@ func setupTestRepo(t *testing.T) (string, identity.IdentityStore, *team.LayeredS
 		"team":  "engineering",
 	})
 
+	// Project marker — go.mod makes projectFilePatterns return Go patterns.
+	writeFile(t, filepath.Join(root, "go.mod"), "module example.com/test\n")
+
 	// Team.
 	writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
 		"name":         "engineering",
@@ -1736,4 +1739,174 @@ func TestGenerateAgentFiles_UpdateDiffSummary(t *testing.T) {
 	assert.Contains(t, stderr2, "bwk.md")
 	assert.Contains(t, stderr2, "lines")
 	assert.NotContains(t, stderr2, "wrote", "update path must not log 'wrote'")
+}
+
+// TestProjectFilePatterns exercises the project-type detection helper
+// directly. Each case creates a temp dir with zero or more marker files
+// and asserts the returned glob pattern.
+func TestProjectFilePatterns(t *testing.T) {
+	tests := []struct {
+		name    string
+		markers []string // files to create in the temp dir
+		want    string
+	}{
+		{
+			name:    "go project",
+			markers: []string{"go.mod"},
+			want:    "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
+		},
+		{
+			name:    "python project with pyproject.toml",
+			markers: []string{"pyproject.toml"},
+			want:    "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml",
+		},
+		{
+			name:    "python project with setup.py",
+			markers: []string{"setup.py"},
+			want:    "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml",
+		},
+		{
+			name:    "generic fallback",
+			markers: nil,
+			want:    "*Makefile|*.sh|*.yaml|*.yml",
+		},
+		{
+			name:    "both go.mod and pyproject.toml — go wins",
+			markers: []string{"go.mod", "pyproject.toml"},
+			want:    "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			for _, m := range tt.markers {
+				writeFile(t, filepath.Join(root, m), "")
+			}
+			got := projectFilePatterns(root)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestGenerateAgentFiles_ProjectPatterns verifies that generated agent
+// files embed the correct file-extension patterns for each project type.
+// The assertion checks a substring of the generated hook command that
+// includes the project-specific glob and excludes patterns from other
+// project types.
+func TestGenerateAgentFiles_ProjectPatterns(t *testing.T) {
+	tests := []struct {
+		name        string
+		markers     []string // files to create at repo root
+		wantGlob    string   // pattern that must appear in the hook command
+		rejectGlobs []string // patterns that must NOT appear
+	}{
+		{
+			name:     "go project embeds go patterns",
+			markers:  []string{"go.mod"},
+			wantGlob: "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
+			rejectGlobs: []string{
+				"*.py|*.pyi",
+			},
+		},
+		{
+			name:     "python project embeds python patterns",
+			markers:  []string{"pyproject.toml"},
+			wantGlob: "*.py|*.pyi|*.toml|*uv.lock|*Makefile|*.sh|*.yaml|*.yml",
+			rejectGlobs: []string{
+				"*.go|*go.mod",
+			},
+		},
+		{
+			name:     "generic project embeds generic patterns",
+			markers:  nil,
+			wantGlob: "*Makefile|*.sh|*.yaml|*.yml",
+			rejectGlobs: []string{
+				"*.go|*go.mod",
+				"*.py|*.pyi",
+			},
+		},
+		{
+			name:     "both markers — go wins",
+			markers:  []string{"go.mod", "pyproject.toml"},
+			wantGlob: "*.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml",
+			rejectGlobs: []string{
+				"*.py|*.pyi",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+
+			// Repo config.
+			writeYAML(t, filepath.Join(root, ".punt-labs", "ethos.yaml"), map[string]string{
+				"agent": "claude",
+				"team":  "engineering",
+			})
+
+			// Project markers.
+			for _, m := range tt.markers {
+				writeFile(t, filepath.Join(root, m), "")
+			}
+
+			// Minimal team with one write-enabled agent.
+			writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+				"name":         "engineering",
+				"repositories": []string{"test/repo"},
+				"members": []map[string]string{
+					{"identity": "claude", "role": "coo"},
+					{"identity": "bot", "role": "worker"},
+				},
+			})
+			writeYAML(t, filepath.Join(ethosDir, "identities", "claude.yaml"), map[string]interface{}{
+				"name":   "Claude",
+				"handle": "claude",
+				"kind":   "agent",
+			})
+			writeYAML(t, filepath.Join(ethosDir, "identities", "bot.yaml"), map[string]interface{}{
+				"name":          "Bot",
+				"handle":        "bot",
+				"kind":          "agent",
+				"personality":   "test-p",
+				"writing_style": "test-ws",
+				"talents":       []string{"testing"},
+			})
+			writeFile(t, filepath.Join(ethosDir, "personalities", "test-p.md"),
+				"# Test\n\nTest agent.\n")
+			writeFile(t, filepath.Join(ethosDir, "writing-styles", "test-ws.md"),
+				"# Test WS\n\nClear.\n")
+			writeYAML(t, filepath.Join(ethosDir, "roles", "coo.yaml"), map[string]interface{}{
+				"name":             "coo",
+				"responsibilities": []string{"lead"},
+			})
+			writeYAML(t, filepath.Join(ethosDir, "roles", "worker.yaml"), map[string]interface{}{
+				"name":             "worker",
+				"responsibilities": []string{"implement"},
+				"tools":            []string{"Read", "Write", "Bash"},
+			})
+
+			ids := identity.NewLayeredStore(
+				identity.NewStore(ethosDir),
+				identity.NewStore(ethosDir),
+			)
+			teams := team.NewLayeredStore(ethosDir, ethosDir)
+			roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+			err := GenerateAgentFiles(root, ids, teams, roles)
+			require.NoError(t, err)
+
+			data, readErr := os.ReadFile(filepath.Join(root, ".claude", "agents", "bot.md"))
+			require.NoError(t, readErr)
+			content := string(data)
+
+			assert.Contains(t, content, tt.wantGlob,
+				"hook command must contain the project-type pattern")
+			for _, reject := range tt.rejectGlobs {
+				assert.NotContains(t, content, reject,
+					"hook command must not contain patterns from other project types")
+			}
+		})
+	}
 }
