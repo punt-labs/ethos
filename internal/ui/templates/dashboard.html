@@ -1,40 +1,40 @@
 {{template "head" .}}
 
-<h1 class="text-2xl font-bold mb-4">Missions</h1>
+<h1 class="text-2xl font-bold text-white mb-8">Missions</h1>
 
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+<div class="flex gap-8 mb-10">
   {{range .Counts}}
-  <div class="bg-white rounded-lg shadow p-4">
-    <div class="text-3xl font-bold">{{.N}}</div>
-    <div class="text-sm text-gray-500">{{.Label}}</div>
+  <div>
+    <div class="text-3xl font-bold text-white">{{.N}}</div>
+    <div class="text-xs text-neutral-500 uppercase tracking-wider mt-1">{{.Label}}</div>
   </div>
   {{end}}
 </div>
 
-<div class="bg-white rounded-lg shadow overflow-hidden">
+<div class="border border-neutral-800">
 <table class="w-full text-sm">
-<thead class="bg-gray-100 text-left">
-  <tr>
-    <th class="px-4 py-2">ID</th>
-    <th class="px-4 py-2">Status</th>
-    <th class="px-4 py-2">Worker</th>
-    <th class="px-4 py-2">Evaluator</th>
-    <th class="px-4 py-2">Created</th>
-    <th class="px-4 py-2">Verdict</th>
+<thead>
+  <tr class="border-b border-neutral-800 text-neutral-500 text-xs uppercase tracking-wider">
+    <th class="text-left px-4 py-3">Mission</th>
+    <th class="text-left px-4 py-3">Status</th>
+    <th class="text-left px-4 py-3">Worker</th>
+    <th class="text-left px-4 py-3">Evaluator</th>
+    <th class="text-left px-4 py-3">Created</th>
+    <th class="text-left px-4 py-3">Verdict</th>
   </tr>
 </thead>
 <tbody>
   {{range .Missions}}
-  <tr class="border-t hover:bg-gray-50">
-    <td class="px-4 py-2"><a href="/missions/{{.ID}}" class="text-blue-600 hover:underline">{{.ID}}</a></td>
-    <td class="px-4 py-2"><span class="badge badge-{{.Status}}">{{.Status}}</span></td>
-    <td class="px-4 py-2">{{.Worker}}</td>
-    <td class="px-4 py-2">{{.Evaluator}}</td>
-    <td class="px-4 py-2">{{.CreatedAt}}</td>
-    <td class="px-4 py-2">{{if .Verdict}}<span class="badge badge-{{.Verdict}}">{{.Verdict}}</span>{{else}}-{{end}}</td>
+  <tr class="border-b border-neutral-900">
+    <td class="px-4 py-3"><a href="/missions/{{.ID}}">{{.ID}}</a></td>
+    <td class="px-4 py-3"><span class="pill pill-{{.Status}}">{{.Status}}</span></td>
+    <td class="px-4 py-3 text-neutral-400">{{.Worker}}</td>
+    <td class="px-4 py-3 text-neutral-400">{{.Evaluator}}</td>
+    <td class="px-4 py-3 text-neutral-500 text-xs">{{.CreatedAt}}</td>
+    <td class="px-4 py-3">{{if .Verdict}}<span class="pill pill-{{.Verdict}}">{{.Verdict}}</span>{{else}}<span class="text-neutral-600">—</span>{{end}}</td>
   </tr>
   {{else}}
-  <tr><td colspan="6" class="px-4 py-8 text-center text-gray-400">No missions found.</td></tr>
+  <tr><td colspan="6" class="px-4 py-12 text-center text-neutral-600">No missions found.</td></tr>
   {{end}}
 </tbody>
 </table>

@@ -3,31 +3,45 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} - ethos</title>
-<link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.1/dist/tailwind.min.css" rel="stylesheet" crossorigin="anonymous">
+<title>{{.Title}} — ethos</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        mono: ['JetBrains Mono', 'SF Mono', 'Fira Code', 'ui-monospace', 'monospace'],
+      }
+    }
+  }
+}
+</script>
 <style>
-  body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
-  .badge-closed { background: #dcfce7; color: #166534; }
-  .badge-open { background: #dbeafe; color: #1e40af; }
-  .badge-failed { background: #fee2e2; color: #991b1b; }
-  .badge-escalated { background: #fef3c7; color: #92400e; }
-  .badge-pass { background: #dcfce7; color: #166534; }
-  .badge-fail { background: #fee2e2; color: #991b1b; }
-  .badge-error { background: #fee2e2; color: #991b1b; }
-  .badge-aborted { background: #f3f4f6; color: #374151; }
-  .badge-A { background: #f3f4f6; color: #374151; }
-  .badge-B { background: #dbeafe; color: #1e40af; }
+  body { font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace; }
+  .pill { display: inline-block; padding: 1px 8px; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; }
+  .pill-closed { background: #064e3b; color: #6ee7b7; }
+  .pill-open { background: #1e3a5f; color: #7dd3fc; }
+  .pill-failed { background: #450a0a; color: #fca5a5; }
+  .pill-escalated { background: #451a03; color: #fcd34d; }
+  .pill-pass { background: #064e3b; color: #6ee7b7; }
+  .pill-fail { background: #450a0a; color: #fca5a5; }
+  .pill-error { background: #450a0a; color: #fca5a5; }
+  .pill-aborted { background: #1f2937; color: #9ca3af; }
+  .pill-A { background: #1f2937; color: #9ca3af; }
+  .pill-B { background: #1e3a5f; color: #7dd3fc; }
+  a { color: #67e8f9; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
 </style>
 </head>
-<body class="bg-gray-50 text-gray-900">
-<nav class="bg-gray-900 text-white px-6 py-3 flex items-center gap-4">
-  <a href="/" class="font-bold text-lg">ethos</a>
-  <span class="text-gray-400 text-sm">traceability</span>
+<body class="bg-neutral-950 text-neutral-300 min-h-screen">
+<nav class="border-b border-neutral-800 px-6 py-4 flex items-center gap-6">
+  <a href="/" class="text-white font-bold text-lg tracking-tight" style="color:#67e8f9">ethos</a>
+  <span class="text-neutral-600 text-xs tracking-widest uppercase">traceability</span>
 </nav>
-<main class="max-w-6xl mx-auto px-4 py-6">{{end}}
+<main class="max-w-5xl mx-auto px-6 py-8">{{end}}
 
 {{define "foot"}}</main>
-<footer class="text-center text-gray-400 text-xs py-4">ethos traceability UI</footer>
+<footer class="text-center text-neutral-700 text-xs py-6 border-t border-neutral-900 mt-12">ethos — absolute traceability for agent delegation</footer>
 </body>
 </html>{{end}}

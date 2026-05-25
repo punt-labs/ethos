@@ -1,59 +1,66 @@
 {{template "head" .}}
 
-<div class="mb-4"><a href="/missions/{{.MissionID}}" class="text-blue-600 hover:underline text-sm">&larr; {{.MissionID}}</a></div>
+<div class="mb-6"><a href="/missions/{{.MissionID}}" class="text-xs text-neutral-500 hover:text-cyan-400">&larr; {{.MissionID}}</a></div>
 
-<h1 class="text-2xl font-bold mb-1">{{.Delegation.ID}}</h1>
-<p class="text-gray-500 text-sm mb-6">
-  <span class="badge badge-{{.Delegation.Tier}}">Tier {{.Delegation.Tier}}</span>
-  <span class="badge badge-{{.Delegation.Verdict}}">{{.Delegation.Verdict}}</span>
-</p>
+<div class="flex items-center gap-4 mb-8">
+  <h1 class="text-2xl font-bold text-white">{{.Delegation.ID}}</h1>
+  <span class="pill pill-{{.Delegation.Tier}}">Tier {{.Delegation.Tier}}</span>
+  <span class="pill pill-{{.Delegation.Verdict}}">{{.Delegation.Verdict}}</span>
+</div>
 
-<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-  <div class="bg-white rounded-lg shadow p-4">
-    <h2 class="font-bold mb-2">Record</h2>
-    <dl class="text-sm space-y-1">
-      <div class="flex"><dt class="w-32 text-gray-500">Agent Type</dt><dd>{{if .Delegation.AgentType}}{{.Delegation.AgentType}}{{else}}<span class="text-gray-400">—</span>{{end}}</dd></div>
-      <div class="flex"><dt class="w-32 text-gray-500">Mission</dt><dd><a href="/missions/{{.Delegation.Mission}}" class="text-blue-600 hover:underline">{{.Delegation.Mission}}</a></dd></div>
-      <div class="flex"><dt class="w-32 text-gray-500">Parent Session</dt><dd class="font-mono text-xs">{{.Delegation.ParentSession}}</dd></div>
-      {{if .Delegation.ParentDelegation}}<div class="flex"><dt class="w-32 text-gray-500">Parent Delegation</dt><dd>{{.Delegation.ParentDelegation}}</dd></div>{{end}}
-      <div class="flex"><dt class="w-32 text-gray-500">Created</dt><dd>{{.Delegation.CreatedAt}}</dd></div>
-      {{if .Delegation.ClosedAt}}<div class="flex"><dt class="w-32 text-gray-500">Closed</dt><dd>{{.Delegation.ClosedAt}}</dd></div>{{end}}
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+  <div class="border border-neutral-800 p-5">
+    <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Record</h2>
+    <dl class="text-sm space-y-2">
+      <div><dt class="text-neutral-500 text-xs">Agent</dt><dd class="text-white">{{if .Delegation.AgentType}}{{.Delegation.AgentType}}{{else}}—{{end}}</dd></div>
+      <div><dt class="text-neutral-500 text-xs">Mission</dt><dd><a href="/missions/{{.Delegation.Mission}}">{{.Delegation.Mission}}</a></dd></div>
+      <div><dt class="text-neutral-500 text-xs">Created</dt><dd class="text-xs">{{.Delegation.CreatedAt}}</dd></div>
+      {{if .Delegation.ClosedAt}}<div><dt class="text-neutral-500 text-xs">Closed</dt><dd class="text-xs">{{.Delegation.ClosedAt}}</dd></div>{{end}}
     </dl>
   </div>
 
-  <div class="bg-white rounded-lg shadow p-4">
-    <h2 class="font-bold mb-2">Stats</h2>
-    <dl class="text-sm space-y-1">
-      <div class="flex"><dt class="w-32 text-gray-500">Audit Entries</dt><dd class="font-bold">{{.AuditCount}}</dd></div>
+  <div class="border border-neutral-800 p-5">
+    <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Session</h2>
+    <dl class="text-sm space-y-2">
+      <div><dt class="text-neutral-500 text-xs">Parent Session</dt><dd class="text-xs text-neutral-400">{{.Delegation.ParentSession}}</dd></div>
+      {{if .Delegation.ParentDelegation}}<div><dt class="text-neutral-500 text-xs">Parent Delegation</dt><dd class="text-xs">{{.Delegation.ParentDelegation}}</dd></div>{{end}}
     </dl>
+  </div>
+
+  <div class="border border-neutral-800 p-5">
+    <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Audit</h2>
+    <div class="text-3xl font-bold text-white">{{.AuditCount}}</div>
+    <div class="text-xs text-neutral-500 mt-1">tool calls traced</div>
   </div>
 </div>
 
 {{if .Prompt}}
-<div class="bg-white rounded-lg shadow p-4 mb-6">
-  <h2 class="font-bold mb-2">Dispatch Prompt</h2>
-  <pre class="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 p-3 rounded overflow-x-auto">{{.Prompt}}</pre>
-</div>
+<details class="border border-neutral-800 mb-6" open>
+  <summary class="px-5 py-3 text-xs text-neutral-500 uppercase tracking-wider cursor-pointer hover:text-neutral-300">Dispatch Prompt</summary>
+  <pre class="px-5 py-4 text-xs text-neutral-400 whitespace-pre-wrap border-t border-neutral-800 leading-relaxed">{{.Prompt}}</pre>
+</details>
 {{end}}
 
 {{if .AuditEntries}}
-<div class="bg-white rounded-lg shadow p-4 mb-6">
-  <h2 class="font-bold mb-2">Audit Trail</h2>
+<div class="border border-neutral-800 mb-6">
+  <div class="px-5 py-3 border-b border-neutral-800">
+    <h2 class="text-xs text-neutral-500 uppercase tracking-wider">Audit Trail</h2>
+  </div>
   <div class="overflow-x-auto">
-  <table class="w-full text-sm">
-  <thead class="bg-gray-50 text-left">
-    <tr>
-      <th class="px-3 py-1">Time</th>
-      <th class="px-3 py-1">Tool</th>
-      <th class="px-3 py-1">Target</th>
+  <table class="w-full text-xs">
+  <thead>
+    <tr class="border-b border-neutral-800 text-neutral-600 uppercase tracking-wider">
+      <th class="text-left px-4 py-2 w-44">Time</th>
+      <th class="text-left px-4 py-2 w-20">Tool</th>
+      <th class="text-left px-4 py-2">Target</th>
     </tr>
   </thead>
   <tbody>
     {{range .AuditEntries}}
-    <tr class="border-t hover:bg-gray-50">
-      <td class="px-3 py-1 text-xs text-gray-500 whitespace-nowrap">{{.Ts}}</td>
-      <td class="px-3 py-1 font-medium">{{.Tool}}</td>
-      <td class="px-3 py-1 font-mono text-xs">{{truncate (.Summary) 120}}</td>
+    <tr class="border-b border-neutral-900">
+      <td class="px-4 py-2 text-neutral-600 whitespace-nowrap">{{.Ts}}</td>
+      <td class="px-4 py-2 text-cyan-400 font-medium">{{.Tool}}</td>
+      <td class="px-4 py-2 text-neutral-400">{{truncate (.Summary) 140}}</td>
     </tr>
     {{end}}
   </tbody>
