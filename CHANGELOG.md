@@ -60,7 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the spawned worker's env, full contract binding.
 - **`ethos find missions`** — query the closed-mission index with
   `--since DATE`, `--worker HANDLE`, `--status STATUS`, `--format
-  json|table|paths`. Reads `missions.jsonl` via bufio.Scanner.
+  json|table|paths`. Reads `missions.jsonl` via `bufio.Scanner`.
 - **`ethos ui`** — localhost web viewer for traceability data.
   Dashboard (mission list with counts), mission detail (contract +
   delegations + results + event log + aggregated audit trail),
@@ -79,7 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open skeletons with the mission's verdict + `closed_at`.
 - **Delegation-binding sidecar.** PreToolUse Tier B dispatch writes
   `<globalRoot>/sessions/<session-id>/delegation-binding` with
-  `delegation_id`, `mission_id`, `parent_session`. The PostToolUse
+  `delegation_id`, `mission_id`, `parent_session` (three newline-
+  separated values in a plain-text file). The PostToolUse
   audit writer reads it as a fallback when `DELEGATION_ID` env is
   empty (Claude Code's `additional_env` doesn't persist into hook
   script subprocesses). Every subagent audit entry now carries
@@ -94,8 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailer → mission → delegation → prompt → audit trail.
 - **Symlink rejection** across all mission contract loaders,
   delegation skeleton writers, lock paths, and write targets.
-  `rejectSymlink` centralized in `paths.go`; uniform Lstat +
-  ModeSymlink check before every open.
+  `rejectSymlink` centralized in `paths.go`; uniform `Lstat` +
+  `ModeSymlink` check before every open.
 - **Agent file-extension matcher detects project type.**
   `projectFilePatterns(repoRoot)` checks for `go.mod` (Go patterns),
   `pyproject.toml`/`setup.py` (Python patterns), or neither (generic
