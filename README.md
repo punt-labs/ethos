@@ -1,61 +1,53 @@
 # ethos
 
-> An agent harness where humans and AI agents work together like a remote-first team.
+> A responsible agent harness — control, auditability, and
+> performance for AI agent delegation.
 
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
 [![Release](https://img.shields.io/github/v/release/punt-labs/ethos)](https://github.com/punt-labs/ethos/releases/latest)
 [![Go Report Card](https://goreportcard.com/badge/github.com/punt-labs/ethos)](https://goreportcard.com/report/github.com/punt-labs/ethos)
-[![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-## What ethos is
+## The problem
 
-Agents work best when animated as specialists in a human team
-pattern. A Go specialist with Kernighan's principles writes better
-Go than an anonymous agent — not because of magic, but because
-personality constrains and focuses the model's output the same way
-a real colleague's expertise would. Models were trained on human
-collaboration; ethos gives that collaboration structure and
-persistence.
+Agents write code you're responsible for, and you can't see what
+they did or why.
 
-Ethos is an agent harness — the shared identity and workflow layer
-that other tools compose with:
+A developer delegates a task to an AI agent. The agent reads files,
+edits code, runs tests, commits. Six months later someone asks: who
+authorized this change? What were the instructions? Did the agent
+stay within the files it was supposed to touch? Why this approach?
 
-- **Identity** — one schema for humans and agents. Personality, writing
-  style, domain expertise, role, email, voice config. Loads automatically
-  at session start and survives context compaction.
-- **Delegation** — typed mission contracts with file-level write-sets,
-  frozen evaluators, bounded rounds, and an append-only audit log.
-  Pipeline templates chain missions into multi-stage workflows.
-- **Audited delegation** — every `Agent(...)` call (whether contract-
-  bound or ad-hoc) gets a delegation ID and a tool-call audit trail
-  tagged with that ID. Contract-bound spawns also get a
-  per-delegation `record.yaml` on disk. Contracts can gate tool calls on
-  process invariants ("a verdict requires PNG inspection") rather than
-  just paths. Commits made under a contract carry `Mission:` and
-  `Delegation:` git trailers so `git log` answers "what authorized this
-  change" years later. See [Audited delegation](docs/audited-delegation.md).
-- **Composable integrations** — every tool in the stack gains richer
-  context when ethos is present and works without it when it is not.
-  This is the core design principle, not a feature.
+Today the answer is: check the chat history, if you still have it.
+There is no durable record connecting a line of code to the contract
+that authorized it, the prompt that drove it, and the tool calls
+that produced it.
 
-| Tool | Without ethos | With ethos |
-|------|--------------|------------|
-| Biff (messaging) | Team chat | + identity, presence, team graph |
-| Vox (voice) | Text-to-speech | + voice persona per agent |
-| Beadle (email) | Send/receive | + email identity binding |
-| Quarry (search) | Semantic search | + per-agent mission memory |
+## What ethos does
 
-Identity and team state is stored in local files (YAML + Markdown)
-and resolved through three layers
-(first match wins): repo-local `.punt-labs/ethos/`, active bundle,
-global `~/.punt-labs/ethos/`. Orgs with a shared team repo mount it
-as a submodule at `.punt-labs/ethos/`; new users activate a starter
-**bundle** to get a production-ready team in one command. See
-[Team Setup](docs/team-setup.md) for the full configuration guide.
-No server, no cloud, no telemetry.
+Ethos makes agent delegation responsible rather than reckless. Three
+axes:
 
-**Platforms:** macOS, Linux (amd64, arm64).
+**Control.** Typed mission contracts with file-level write-sets
+enforced at runtime, frozen evaluators (hash-pinned so nobody swaps
+the reviewer mid-mission), bounded review rounds, preconditions
+that gate tool calls on prior reads, and delegation depth limits.
+The agent can only do what the contract authorizes.
+
+**Auditability.** Every delegation produces artifacts on disk —
+contract, delegation record, the exact dispatch prompt, a
+per-tool-call audit trail tagged with the delegation ID, and
+`Mission:`/`Delegation:` git trailers on commits. `git blame` any
+line → commit → trailer → contract → prompt → audit trail. Months
+later, you can reconstruct exactly what happened and why.
+
+**Performance.** Named specialist agents with encapsulated domain
+expertise — not generic assistants, but a Go specialist grounded in
+Kernighan's principles, a security reviewer with Bernstein's
+methodology. Personalities, writing styles, and talents shape the
+model's output the way a real colleague's expertise would. Roles
+restrict tool access. Teams define delegation topology. The
+configuration is reusable, measurable, and improvable.
 
 ## Quick start
 
@@ -64,107 +56,98 @@ curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/b379a79/install.sh 
 ethos setup
 ```
 
-The installer places the `ethos` binary in `~/.local/bin`, seeds
-starter content (roles, talents, archetypes, pipelines, skills, bundles),
-and registers
-the Claude Code plugin when `claude` and `git` are available.
-`ethos setup` is an interactive wizard that
-asks 3 questions (name, handle, working style), then creates:
+The installer places the `ethos` binary in `~/.local/bin` and
+registers the Claude Code plugin. `ethos setup` asks 3 questions
+(name, handle, working style), then creates your identity, a paired
+agent, repo config, a 4-agent team, and agent definition files.
+Start Claude Code — the agent knows who it is, who you are, and how
+to delegate. See [Getting Started](docs/GETTING-STARTED.md) for the
+full walkthrough.
 
-- Your human identity
-- A paired agent identity (`claude`)
-- Repo config (`.punt-labs/ethos.yaml`)
-- An active team bundle with 4 agents
-- Agent definition files (`.claude/agents/*.md`)
-
-Start Claude Code. The agent knows who it is, who you are, and how
-to delegate. Sub-agents each get their own persona and tool
-restrictions.
-
-### Team bundles
-
-`ethos setup` activates the **foundation** bundle by default — a
-4-agent general-purpose team (architect, implementer, reviewer,
-security) that works on any codebase. For the opinionated 6-agent
-startup builder team, use `ethos setup --bundle gstack`. Switch at
-any time with `ethos team activate <bundle>`.
-
-### Options
-
-```bash
-ethos setup                           # interactive wizard
-ethos setup --solo                    # identity only, no team
-ethos setup --bundle gstack           # use gstack instead of foundation
-ethos setup --file config.yaml        # non-interactive, from file
-```
-
-<details>
-<summary>Manual install (Go required)</summary>
-
-```bash
-go install github.com/punt-labs/ethos/cmd/ethos@latest
-mkdir -p ~/.punt-labs/ethos/identities
-ethos doctor
-```
-
-</details>
+**Platforms:** macOS, Linux (amd64, arm64).
 
 ## What it looks like
 
-At session start, ethos injects identity from the resolved YAML:
+### Traceability: line of code → full history
 
 ```text
-[ethos] Identity: claude (agent)
-[ethos] Personality: principal-engineer
-[ethos] Writing style: concise-quantified
-[ethos] Talents: engineering, security
-[ethos] Working context: branch feat/rewrite, 2 dirty files
+$ git blame -L 21,21 internal/hook/generate_agents.go
+2b851cc (bwk  2026-05-25  21) func projectFilePatterns(repoRoot string) string {
+
+$ git log --format='%(trailers)' 2b851cc
+Mission: m-2026-05-25-002
+Delegation: d-2026-05-25-011
+
+$ cat .punt-labs/ethos/missions/m-2026-05-25-002/delegations/d-2026-05-25-011/prompt.md
+"Fix the hardcoded Go file-extension patterns. Detect project type
+at generation time (go.mod → Go, pyproject.toml → Python)..."
+
+$ ethos audit show --delegation d-2026-05-25-011 --format text
+2026-05-25T12:49:23Z  Read   <repo>/internal/hook/generate_agents.go
+2026-05-25T12:49:55Z  Edit   <repo>/internal/hook/generate_agents.go
+2026-05-25T12:50:08Z  Edit   <repo>/internal/hook/generate_agents.go
+2026-05-25T12:51:06Z  Bash   go test -run TestGenerateAgentFiles ...
+2026-05-25T12:53:25Z  Bash   make check
+2026-05-25T12:53:37Z  Bash   git commit ...
 ```
 
-When you delegate to a sub-agent, it loads a matched persona with tool
-restrictions from its role:
+Or visually: `ethos ui` opens a localhost dashboard where you browse
+the repo, click a line, and see the agent who wrote it, the prompt
+they received, and every tool call they made.
+
+### Contract-bound delegation
+
+```yaml
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+write_set:
+  - internal/hook/generate_agents.go
+  - internal/hook/generate_agents_test.go
+success_criteria:
+  - detect project type at generation time
+  - tests cover Go, Python, and generic fallback
+budget:
+  rounds: 2
+  reflection_after_each: true
+```
+
+The PreToolUse hook enforces the write-set — an Edit to a file
+outside the contract is blocked before it executes.
+
+### Specialist agents
 
 ```text
 [ethos] Subagent bwk spawned: go-specialist
-[ethos] Tools allowed: Read, Write, Edit, Bash, Grep, Glob
-[ethos] Safety: Bash must not run destructive commands (rm -rf, git push --force)
+[ethos] Personality: kernighan (simplicity, clarity, generality)
+[ethos] Tools: Read, Write, Edit, Bash, Grep, Glob
+[ethos] Anti-responsibilities: strategic direction (that's the COO's job)
 ```
 
-For a real mission — issue ticket claim to merged PR in 12m55s, with
-every command and output — see [docs/example/](docs/example/). The
-walkthrough uses [beads](https://github.com/punt-labs/beads) as the
-issue tracker, but ethos accepts any tracker ID (Linear, Jira, GitHub
-issues, etc.) via the `inputs.ticket` contract field.
+Each specialist has a personality that constrains and focuses the
+model's output, a writing style, domain talents, and a role that
+determines which tools they can use. Generated from identity +
+role + team data as `.claude/agents/*.md`.
 
-## Scale up as you need
+## Features
 
-Each layer works alone. Add the next when you want more structure.
-
-| Layer | What you get | Guide |
-|-------|--------------|-------|
-| Identity | Consistent agent persona across sessions. Hooks fire automatically. | This page |
-| Team | Roles with tool restrictions, team graph with `reports_to` edges, auto-generated `.claude/agents/` files with anti-responsibilities | [Team setup](docs/team-setup.md) |
-| Missions | Typed delegation contracts with write-sets, bounded rounds, frozen evaluators, audit logs. Closing a mission auto-appends a summary to `.punt-labs/ethos/missions.jsonl` for commit-ready traceability. | [Archetypes and pipelines](docs/archetypes-and-pipelines.md) |
-| Audit | Every `Agent(...)` call is recorded with full prompt body and parent linkage; every tool call the spawn makes is tagged with its delegation id in the session audit log. Contract-bound spawns also get a per-delegation `record.yaml`. Contracts can gate tool calls on prior reads. Commits carry `Mission:`/`Delegation:` git trailers. | [Audited delegation](docs/audited-delegation.md) |
-
-## How it integrates
-
-Any tool reads ethos at the coupling level that fits:
-
-| Pattern | How | Dependency |
-|---------|-----|------------|
-| Filesystem | Read YAML at `~/.punt-labs/ethos/` | None |
-| CLI | `ethos whoami --json`, `ethos identity show <handle> --json` | Binary |
-| MCP | `ethos serve` exposes 11 tools | Binary |
-
-Three Punt Labs tools integrate today: Biff (team messaging), Vox
-(voice), and Beadle (email). Each works without ethos and gains
-identity context when present. Extensions let any tool attach per-tool
-config under `~/.punt-labs/ethos/identities/<handle>.ext/<tool>.yaml`
-without schema changes.
-
-Integration guides: [filesystem](docs/integration/filesystem.md),
-[CLI](docs/integration/cli.md), [MCP](docs/integration/mcp.md).
+| Feature | What it does |
+|---------|-------------|
+| Mission contracts | Typed delegation with write-sets, frozen evaluators, bounded rounds, success criteria |
+| Audit trail | Per-tool-call log tagged with delegation ID + contract ID; PII-redacted paths |
+| Git trailers | `Mission:`/`Delegation:` on every commit; blame chain from line to prompt |
+| Traceability UI | Browse code with ethos blame; mission + delegation detail views |
+| Preconditions | Gate tool calls on prior reads ("must read DESIGN.md before editing") |
+| Expert identities | Personalities, writing styles, talents bound to named agents |
+| Team structure | Roles with tool restrictions, reports-to graph, anti-responsibilities |
+| Pipeline templates | Multi-stage mission workflows from 13 built-in templates |
+| Session hooks | 7 lifecycle events: identity injection, contract enforcement, audit capture |
+| Write-set enforcement | PreToolUse blocks unauthorized file modifications at runtime |
+| Symlink rejection | Uniform policy across all mission loaders and lock paths |
+| Depth limits | Configurable ceiling on nested delegation chains |
+| Query surface | `ethos find missions` with date/worker/status filters |
+| Composable integration | CLI, MCP (11 tools), filesystem reads; works with biff, vox, beadle, quarry |
 
 ## Commands
 
@@ -173,80 +156,43 @@ Essentials below. Every command accepts `--json`. Full reference in
 
 | Command | What it does |
 |---------|--------------|
-| `ethos setup` | Set up identities and team for the current repo |
+| `ethos setup` | Set up identities and team (60-second wizard) |
 | `ethos whoami` | Show your resolved identity |
-| `ethos identity create` | Create a new identity (interactive) |
 | `ethos doctor` | Check installation health |
-| `ethos identity list` / `get <handle>` | Query identities |
-| `ethos mission create --file <path>` | Create a mission contract |
-| `ethos mission dispatch` | Create a mission from CLI flags (no YAML needed) |
+| `ethos mission create` / `dispatch` | Create a mission contract |
+| `ethos mission claim` / `release` | Bind session to mission for Tier B dispatch |
 | `ethos mission show <id>` | Show contract, results, reflections |
-| `ethos mission pipeline list` / `show <name>` | Query pipeline templates |
-| `ethos mission pipeline instantiate <name> --var key=value` | Create N missions from a pipeline |
-| `ethos mission lint <contract.yaml>` | Advisory pre-delegation linter |
-| `ethos mission claim <id>` / `release` | Bind/unbind the current session to a mission for Tier B dispatch |
-| `ethos find missions [--since DATE] [--worker HANDLE]` | Query closed missions from the JSONL index |
-| `ethos audit show --delegation <id>` | Print every tool call made under a delegation (across sessions) |
-| `ethos audit migrate` | One-time relocation of legacy global audit logs into the repo-tree layout |
-| `ethos ui [--port N]` | Open the traceability dashboard in a browser |
-| `ethos mission migrate --to-repo` | One-time relocation of legacy global missions into the repo-tree layout |
-| `ethos audit show --delegation <id>` | Print every tool call made under a delegation (across sessions) |
-| `ethos audit migrate` | One-time relocation of legacy global audit logs into the repo-tree layout |
+| `ethos audit show --delegation <id>` | Full tool-call trace for a delegation |
+| `ethos find missions` | Query closed missions by date, worker, status |
+| `ethos ui` | Open traceability dashboard in browser |
 
 ## How this is different
 
 | Tool | What it does | Where ethos differs |
 |------|--------------|---------------------|
-| [SoulSpec](https://soulmd.dev) | Structured agent personas in `.md` files | Agent-only; no human identity, no teams, no delegation contracts, no CLI/MCP integration surface |
-| [Mastra](https://mastra.ai) | Typed Zod schemas and pre-delegation hooks | No persistent identity, no write-set boundaries, no frozen evaluator |
-| [CrewAI](https://www.crewai.com) | Role-based agent orchestration | Prose delegation, no typed contracts, no persistent identity, no reflection gates |
-| [Claude Managed Agents](https://docs.anthropic.com/en/docs/claude-code/managed-agents) | Hosted stateful agent sessions | Vendor-specific; "persona" means deployment config, not rich identity; no human developer identity |
+| [SoulSpec](https://soulmd.dev) | Structured agent personas | Agent-only; no contracts, no audit trail, no team structure |
+| [CrewAI](https://www.crewai.com) | Role-based agent orchestration | Prose delegation; no typed contracts, no write-set enforcement, no traceability |
+| [Claude Managed Agents](https://docs.anthropic.com/en/docs/claude-code/managed-agents) | Hosted stateful sessions | Vendor-specific; no forensic audit trail, no contract binding |
 
-Ethos ingests SoulSpec on the way in (`ethos import --from soulspec`),
-exports to SoulSpec and CLAUDE.md on the way out (lossy — structural
-enforcement drops because markdown cannot represent it). Coexistence
-rather than competition.
-
-## Status
-
-Identity, teams, mission contracts, write-set admission, frozen
-evaluators, bounded rounds, archetypes, pipelines, automatic mission
-traceability, mission dispatch one-liner, and audited delegation are
-in daily use by Punt Labs.
-
-DES-054 — the audited delegation initiative — shipped across three
-phases:
-
-| Phase | What shipped |
-|-------|--------------|
-| 1 | Date-keyed two-tree mission storage. Audit entry enrichment (`parent_session`, `agent_id`, `agent_type`, `delegation_id`, `parent_delegation`, `contract_id`, full `tool_input` map, `tool_input_hash`). Per-namespace counters. |
-| 2 | `PreToolUse`-on-`Agent` dispatch. Tier A (ad-hoc) advisory stderr line + audit-log tagging by `delegation_id`; Tier B (contract-bound) atomic record skeleton + per-mission/per-delegation flocks + depth refusal. |
-| 3 | Tier B inheritance walk (`SpawnPattern` + `InheritsContract`). Precondition evaluator. `ethos audit migrate`, `ethos audit show --delegation`, `ethos mission migrate --to-repo`. `commit-msg` trailer hook installed by `install.sh`. |
-
-New users run `ethos setup` to get a working team in under 60
-seconds. Two embedded bundles ship: **foundation** (4-agent
-general-purpose team) and **gstack** (6-agent startup builder
-team). Existing users on the legacy `punt-labs/team` submodule can
-move to the bundles layout with `ethos team migrate`.
-
-Remaining work is adoption-driven: customer validation interviews,
-cross-tool integration. See the [roadmap](docs/ETHOS-ROADMAP.md).
+Ethos ingests SoulSpec on the way in (`ethos import --from soulspec`)
+and exports on the way out (lossy — enforcement drops because
+markdown cannot represent it).
 
 ## Documentation
 
-[Live example](docs/example/) ·
-[Onboarding design](docs/onboarding.md) ·
-[Team setup](docs/team-setup.md) ·
-[Archetypes and pipelines](docs/archetypes-and-pipelines.md) ·
-[Audited delegation](docs/audited-delegation.md) ·
-[Gstack starter team](docs/gstack-getting-started.md) ·
-[Persona animation](docs/persona-animation.md) ·
-[Agent definitions](docs/agent-definitions.md) ·
-[Architecture](docs/architecture.tex) ·
-[Agent guide (CLI, MCP, hooks)](AGENTS.md) ·
-[Design decisions](DESIGN.md) ·
-[Changelog](CHANGELOG.md) ·
-[Roadmap](docs/ETHOS-ROADMAP.md)
+| Guide | Audience |
+|-------|----------|
+| [Getting Started](docs/GETTING-STARTED.md) | New users: install, setup, first delegation |
+| [Team Setup](docs/team-setup.md) | Configuring roles, teams, bundles |
+| [Audited Delegation](docs/audited-delegation.md) | Tier A/B dispatch, claim/release, audit trail, git trailers |
+| [Traceability Data Assets](docs/traceability-data-assets.md) | Every artifact ethos produces, organized by scope |
+| [Traceability Use Cases](docs/traceability-use-cases.md) | 10 forensic/compliance scenarios with query paths |
+| [Archetypes and Pipelines](docs/archetypes-and-pipelines.md) | Mission templates and multi-stage workflows |
+| [Architecture](docs/architecture.tex) | System design (LaTeX) |
+| [Agent Guide](AGENTS.md) | CLI, MCP, hooks, storage layout |
+| [Design Decisions](DESIGN.md) | ADRs with rationale and rejected alternatives |
+| [Changelog](CHANGELOG.md) | Release history |
+| [Roadmap](docs/ETHOS-ROADMAP.md) | What's shipped and what's next |
 
 ## Development
 
@@ -257,7 +203,8 @@ make install  # Install to ~/.local/bin
 make help     # List all targets
 ```
 
-Contributors: see [CLAUDE.md](CLAUDE.md) for the development lifecycle.
+Contributors: see [CLAUDE.md](CLAUDE.md) for the development
+lifecycle.
 
 ## License
 
