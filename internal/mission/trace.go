@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-// TraceSummary is one JSONL line appended to <repoRoot>/.ethos/missions.jsonl
+// TraceSummary is one JSONL line appended to <repoRoot>/.punt-labs/ethos/missions.jsonl
 // when a mission closes. It captures the contract metadata and the
 // closing result so every closed mission is visible in the repo's git
 // history without reading the global missions directory.
@@ -74,14 +74,14 @@ func buildTraceSummary(c *Contract, result *Result) TraceSummary {
 }
 
 // appendTraceSummary writes a single JSONL line to
-// <repoRoot>/.ethos/missions.jsonl. Returns nil when repoRoot is
-// empty (not in a repo context). Errors are non-fatal: the caller
-// logs them to stderr but does not fail the Close.
+// <repoRoot>/.punt-labs/ethos/missions.jsonl. Returns nil when
+// repoRoot is empty (not in a repo context). Errors are non-fatal:
+// the caller logs them to stderr but does not fail the Close.
 func (s *Store) appendTraceSummary(c *Contract, result *Result) error {
 	if s.repoRoot == "" {
 		return nil
 	}
-	dir := filepath.Join(s.repoRoot, ".ethos")
+	dir := RepoStatePath(s.repoRoot)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

@@ -36,6 +36,11 @@ make check                              # All quality gates (vet, staticcheck, s
 ./ethos import --from soulspec <file>   # Import identity from SoulSpec
 ./ethos export --to soulspec <handle>   # Export identity to SoulSpec or claude-md
 ./ethos mission lint <contract.yaml>    # Advisory pre-delegation linter
+./ethos mission claim <id>              # Bind session to mission for Tier B dispatch
+./ethos mission release                 # Clear active-mission binding
+./ethos find missions                   # Query closed missions (--since, --worker, --status, --format)
+./ethos audit show --delegation <id>    # Tool-call trace for a delegation
+./ethos ui                              # Open traceability dashboard in browser
 ./ethos mission dispatch --worker bwk --evaluator djb --write-set "..." --criteria "..."
 ./ethos mission pipeline list           # List available pipeline templates
 ./ethos mission pipeline show <name>    # Show pipeline stages and defaults
@@ -115,6 +120,7 @@ Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `she
 | `internal/bundle/` | Team bundle discovery, resolution, validation (three-layer: repo → bundle → global) |
 | `internal/seed/` | Embedded starter content (roles, talents, archetypes, pipelines, bundles) deployed by `ethos seed` |
 | `internal/adr/` | ADR model and storage backing the `adr` MCP tool |
+| `internal/ui/` | Localhost web UI for traceability data (`ethos ui`). Embedded Go HTTP server + html/template + Tailwind CDN. Reads missions, delegations, audit trails from `.punt-labs/ethos/`. |
 | `internal/mcp/` | MCP tool definitions and handlers (11 tools) |
 
 ### Storage Layout
@@ -140,7 +146,7 @@ Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `she
 | ADRs | `~/.punt-labs/ethos/adrs/<id>.yaml` | No |
 | Repo bundles | `.punt-labs/ethos-bundles/<name>/` | Yes |
 | Missions | `~/.punt-labs/ethos/missions/<id>.yaml` | No |
-| Mission traces | `<repo>/.ethos/missions.jsonl` | Yes |
+| Mission traces | `<repo>/.punt-labs/ethos/missions.jsonl` | Yes |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 
 ### Identity Schema

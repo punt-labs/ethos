@@ -43,12 +43,52 @@ import (
 // echoed as PARENT_SESSION_ID="" so consumers can tell the difference
 // between "unset" (Tier A pre-DES-054) and "set to empty" (test
 // fixtures); the env block is still emitted.
-func dispatchAgent(w io.Writer, sessionID string) error {
+//
+// Sidecar (DES-054 extension, ethos-620t): when MISSION_ID is unset
+// the dispatch consults <globalRoot>/sessions/<id>/active-mission. A
+// leader-in-Claude-Code session cannot inject MISSION_ID into its own
+// env from inside an active session, so the sidecar is the bridge
+// from `ethos mission claim` to the next Agent() spawn. The read is
+// best-effort: any error logs to stderr and falls through to the
+// inheritance / Tier A path, matching the pattern in
+// loadParentDelegation.
+func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
 	missionID := os.Getenv("MISSION_ID")
 	if missionID != "" {
-		return dispatchTierB(w, sessionID, missionID)
+		return dispatchTierB(w, sessionID, missionID, toolInput)
 	}
-	return dispatchTierBOrTierA(w, sessionID)
+	if missionID := readActiveMissionForDispatch(sessionID); missionID != "" {
+		return dispatchTierB(w, sessionID, missionID, toolInput)
+	}
+	return dispatchTierBOrTierA(w, sessionID, toolInput)
+}
+
+// readActiveMissionForDispatch consults the active-mission sidecar
+// for sessionID. Returns "" on any non-found shape: empty sessionID,
+// missing global root, missing sidecar, read error. Errors that are
+// not "file not present" log to stderr so the operator can trace why
+// a claimed mission did not bind — the dispatch then proceeds along
+// the no-sidecar path (inheritance or Tier A) so the spawn still
+// runs (Bugbot precedent: dispatch helpers must be non-blocking).
+func readActiveMissionForDispatch(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	globalRoot, err := tierBGlobalRoot()
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: resolving global root: %v; falling through\n",
+			err)
+		return ""
+	}
+	missionID, err := mission.ReadActiveMission(globalRoot, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: reading sidecar for %q: %v; falling through\n",
+			sessionID, err)
+		return ""
+	}
+	return missionID
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
@@ -74,11 +114,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 			"ethos pre-tool-use: tier-A allocating delegation id: %v; allowing spawn without DELEGATION_ID\n",
 			err)
 		env := map[string]string{"PARENT_SESSION_ID": sessionID}
-		return json.NewEncoder(w).Encode(PreToolUseResult{
-			Decision:      "allow",
-			Continue:      true,
-			AdditionalEnv: env,
-		})
+		return json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env))
 	}
 	defer func() { release(success) }()
 
@@ -87,11 +123,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 		"PARENT_DELEGATION_ID": delegationID,
 		"PARENT_SESSION_ID":    sessionID,
 	}
-	if err := json.NewEncoder(w).Encode(PreToolUseResult{
-		Decision:      "allow",
-		Continue:      true,
-		AdditionalEnv: env,
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env)); err != nil {
 		// Response write failed — counter rolls back via the deferred
 		// release(false). Surface so the operator can correlate the
 		// missing audit entry.
@@ -123,7 +155,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 // repoRoot resolution uses resolve.FindRepoRoot — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
-func dispatchTierB(w io.Writer, sessionID, missionID string) error {
+func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any) error {
 	store, err := tierBMissionStore()
 	if err != nil {
 		return writeAgentBlock(w,
@@ -169,11 +201,17 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 	defer releaseDelegation()
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
+	agentType, _ := toolInput["subagent_type"].(string)
+	if agentType == "" {
+		agentType = os.Getenv("CLAUDE_AGENT_TYPE")
+	}
+	promptBody, _ := toolInput["prompt"].(string)
 	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
 		Tier:             mission.TierB,
 		ParentDelegation: parentDelegation,
 		ParentSession:    sessionID,
-		AgentType:        os.Getenv("CLAUDE_AGENT_TYPE"),
+		AgentType:        agentType,
+		Prompt:           []byte(promptBody),
 	}); err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))
@@ -199,6 +237,23 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 		return writeAgentBlock(w, reason)
 	}
 
+	// Write the delegation-binding sidecar so the PostToolUse audit
+	// writer can tag subagent tool calls with delegation_id +
+	// mission_id. additional_env from PreToolUse does NOT persist into
+	// hook script processes, so this sidecar is the bridge. Non-fatal:
+	// a write failure is a traceability degradation, not a spawn
+	// refusal.
+	if globalRoot, gErr := tierBGlobalRoot(); gErr == nil {
+		if wErr := mission.WriteDelegationBinding(globalRoot, sessionID, mission.DelegationBinding{
+			DelegationID:  delegationID,
+			MissionID:     missionID,
+			ParentSession: sessionID,
+		}); wErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: writing delegation binding: %v\n", wErr)
+		}
+	}
+
 	env := map[string]string{
 		"DELEGATION_ID":         delegationID,
 		"PARENT_DELEGATION_ID":  delegationID,
@@ -206,11 +261,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 		"PARENT_SESSION_ID":     sessionID,
 		"MISSION_ARTIFACTS_DIR": mission.DelegationDir(repoRoot, missionID, delegationID),
 	}
-	if err := json.NewEncoder(w).Encode(PreToolUseResult{
-		Decision:      "allow",
-		Continue:      true,
-		AdditionalEnv: env,
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env)); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos pre-tool-use: tier-B response write: %v\n", err)
 		return err
@@ -272,7 +323,7 @@ func enforceDelegationDepth(repoRoot, missionID, delegationID, parentDelegation 
 
 // delegationLoader returns a loader the depth walker uses to follow
 // the parent_delegation chain. The loader scans every mission tree
-// under <repo>/.ethos/missions/* for a matching record because Tier B
+// under <repo>/.punt-labs/ethos/missions/* for a matching record because Tier B
 // inheritance can promote a child under an ancestor's missionID while
 // the immediate parent_delegation lives under a different mission. A
 // single-mission loader keyed on the inherited missionID fails on the
@@ -386,7 +437,7 @@ func tierBMissionStore() (*mission.Store, error) {
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 	// NewStoreWithRoots activates the DES-054 two-tree dispatch:
-	// reads check the repo tree first (<repoRoot>/.ethos/missions/),
+	// reads check the repo tree first (<repoRoot>/.punt-labs/ethos/missions/),
 	// then fall back to the global tree. WithRepoRoot alone is
 	// trace-only and would miss contracts that live in the repo tree
 	// (Copilot HIGH-equivalent on PR #327: Tier B dispatch would
@@ -401,8 +452,5 @@ func tierBMissionStore() (*mission.Store, error) {
 // every dispatch-path error so a hook failure is operator-visible
 // (the spawn is refused) rather than silently degrading to Tier A.
 func writeAgentBlock(w io.Writer, msg string) error {
-	return json.NewEncoder(w).Encode(PreToolUseResult{
-		Decision: "block",
-		Reason:   msg,
-	})
+	return json.NewEncoder(w).Encode(preToolUseDeny(msg))
 }

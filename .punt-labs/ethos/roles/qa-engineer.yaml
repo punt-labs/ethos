@@ -1,0 +1,13 @@
+name: qa-engineer
+responsibilities:
+  - user-flow testing and verification
+  - bug reproduction with evidence
+  - performance benchmarking
+  - canary deploy monitoring
+permissions:
+  - block-merge-on-qa
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash

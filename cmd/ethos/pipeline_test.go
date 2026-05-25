@@ -276,18 +276,28 @@ func TestPipelineHandler_InstantiateReal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "Created pipeline")
 
-	// Verify mission files on disk.
-	missionsDir := filepath.Join(home, ".punt-labs", "ethos", "missions")
+	// Verify mission files on disk. With DES-054 two-tree storage
+	// active, missions land in the per-mission directories under the
+	// repo tree, one contract.yaml per <id> directory.
+	repoRoot, err := os.Getwd()
+	require.NoError(t, err)
+	missionsDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions")
 	entries, err := os.ReadDir(missionsDir)
 	require.NoError(t, err)
 
-	var yamls []string
+	var contractDirs []string
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".yaml" {
-			yamls = append(yamls, e.Name())
+		if e.IsDir() {
+			contractDirs = append(contractDirs, e.Name())
 		}
 	}
-	require.Len(t, yamls, 2, "instantiate should create 2 mission YAML files")
+	require.Len(t, contractDirs, 2, "instantiate should create 2 mission directories")
+	// Each must hold a contract.yaml.
+	for _, d := range contractDirs {
+		_, statErr := os.Stat(filepath.Join(missionsDir, d, "contract.yaml"))
+		require.NoError(t, statErr, "expected contract.yaml in %s", d)
+	}
+	_ = home
 }
 
 func TestPipelineHandler_InstantiateMissingVar(t *testing.T) {
@@ -628,9 +638,12 @@ func TestPipelineCLI_InstantiateReal(t *testing.T) {
 	}
 	home := pipelineTestEnv(t)
 	seedPipelineYAML(t, home, "quick-test", quickPipeline)
+	// Fake repo so FindRepoRoot stops here rather than walking up
+	// to the real ethos repo (TMPDIR points at <repo>/.tmp).
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".git"), 0o755))
 
 	env := append(os.Environ(), "HOME="+home)
-	stdout, stderr, exitCode := runCLI(t, &cliSubprocessEnv{home: home, env: env},
+	stdout, stderr, exitCode := runCLI(t, &cliSubprocessEnv{home: home, repo: home, env: env},
 		"mission", "pipeline", "instantiate", "quick-test",
 		"--leader", "claude",
 		"--worker", "bwk",
@@ -643,24 +656,25 @@ func TestPipelineCLI_InstantiateReal(t *testing.T) {
 	assert.Equal(t, 0, exitCode)
 	assert.Contains(t, stdout, "Created pipeline")
 
-	// Verify mission files on disk.
+	// Verify mission files on disk. DES-054 two-tree storage lands
+	// contracts under <repoRoot>/.ethos/missions/<id>/contract.yaml.
 	missionsDir := filepath.Join(home, ".punt-labs", "ethos", "missions")
 	entries, err := os.ReadDir(missionsDir)
 	require.NoError(t, err)
 
-	var yamls []string
+	var contractDirs []string
 	for _, e := range entries {
-		if filepath.Ext(e.Name()) == ".yaml" {
-			yamls = append(yamls, e.Name())
+		if e.IsDir() {
+			contractDirs = append(contractDirs, e.Name())
 		}
 	}
-	require.Len(t, yamls, 2, "instantiate should create 2 mission YAML files")
+	require.Len(t, contractDirs, 2, "instantiate should create 2 mission directories")
 
-	// Parse each and verify Pipeline field and DependsOn wiring.
+	// Parse each contract and verify Pipeline field and DependsOn wiring.
 	var pipelineIDs []string
 	var dependsOns [][]string
-	for _, f := range yamls {
-		data, readErr := os.ReadFile(filepath.Join(missionsDir, f))
+	for _, f := range contractDirs {
+		data, readErr := os.ReadFile(filepath.Join(missionsDir, f, "contract.yaml"))
 		require.NoError(t, readErr)
 		var c map[string]interface{}
 		require.NoError(t, yaml.Unmarshal(data, &c))
@@ -792,11 +806,14 @@ func TestPipelineCLI_ListByPipeline(t *testing.T) {
 	}
 	home := pipelineTestEnv(t)
 	seedPipelineYAML(t, home, "quick-test", quickPipeline)
+	// Fake repo so FindRepoRoot stops here, not the surrounding repo.
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".git"), 0o755))
 
 	env := append(os.Environ(), "HOME="+home)
+	se := &cliSubprocessEnv{home: home, repo: home, env: env}
 
 	// Instantiate a pipeline to create 2 missions with the same pipeline ID.
-	stdout, stderr, exitCode := runCLI(t, &cliSubprocessEnv{home: home, env: env},
+	stdout, stderr, exitCode := runCLI(t, se,
 		"mission", "pipeline", "instantiate", "quick-test",
 		"--leader", "claude",
 		"--worker", "bwk",
@@ -820,7 +837,7 @@ func TestPipelineCLI_ListByPipeline(t *testing.T) {
 	pipelineID := instOut.Pipeline
 
 	// List all missions (no filter) — should have 2.
-	allOut, _, allCode := runCLI(t, &cliSubprocessEnv{home: home, env: env},
+	allOut, _, allCode := runCLI(t, se,
 		"mission", "list", "--json",
 	)
 	require.Equal(t, 0, allCode)
@@ -829,7 +846,7 @@ func TestPipelineCLI_ListByPipeline(t *testing.T) {
 	assert.Len(t, allEntries, 2)
 
 	// List with --pipeline filter — should have exactly 2.
-	filteredOut, _, filteredCode := runCLI(t, &cliSubprocessEnv{home: home, env: env},
+	filteredOut, _, filteredCode := runCLI(t, se,
 		"mission", "list", "--json", "--pipeline", pipelineID,
 	)
 	require.Equal(t, 0, filteredCode)
@@ -838,7 +855,7 @@ func TestPipelineCLI_ListByPipeline(t *testing.T) {
 	assert.Len(t, filteredEntries, 2)
 
 	// List with a non-matching pipeline — should have 0.
-	emptyOut, _, emptyCode := runCLI(t, &cliSubprocessEnv{home: home, env: env},
+	emptyOut, _, emptyCode := runCLI(t, se,
 		"mission", "list", "--json", "--pipeline", "nonexistent-pipeline",
 	)
 	require.Equal(t, 0, emptyCode)

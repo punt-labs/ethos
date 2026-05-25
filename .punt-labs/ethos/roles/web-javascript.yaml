@@ -1,0 +1,14 @@
+name: web-javascript
+responsibilities:
+  - JavaScript implementation, browser APIs, web standards
+  - module systems, runtime semantics, performance characteristics
+  - review of frontend code for portability and standards compliance
+permissions:
+  - edit-web-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob

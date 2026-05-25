@@ -1,0 +1,12 @@
+name: security-architect
+responsibilities:
+  - threat modeling at the system and protocol layer
+  - cryptographic primitive selection and policy review
+  - security architecture review across multi-component systems
+permissions:
+  - block-merge-on-security
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash

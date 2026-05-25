@@ -42,13 +42,13 @@ type Store struct {
 	archetypes *ArchetypeStore // optional; validates Type on Create
 
 	// repoRoot, when set, names the repository directory under which
-	// trace summaries are written (<repoRoot>/.ethos/missions.jsonl).
+	// trace summaries are written (<repoRoot>/.punt-labs/ethos/missions.jsonl).
 	// Set via WithRepoRoot (legacy single-tree mode) or
 	// NewStoreWithRoots (two-tree mode).
 	repoRoot string
 
 	// twoTreeStorage, when true, activates the DES-054 phase 1
-	// per-mission directory layout under <repoRoot>/.ethos/missions/.
+	// per-mission directory layout under <repoRoot>/.punt-labs/ethos/missions/.
 	// Set only by NewStoreWithRoots; WithRepoRoot leaves it false so
 	// existing callers that wired a trace destination keep the legacy
 	// flat <root>/missions/<id>.yaml shape.
@@ -60,7 +60,7 @@ type Store struct {
 // Preserved as a thin wrapper over NewStoreWithRoots for backward
 // compatibility — existing callers that only know about the legacy
 // global tree compile unchanged. New callers that want the DES-054
-// two-tree storage layout (per-repo missions under .ethos/, fallback
+// two-tree storage layout (per-repo missions under .punt-labs/ethos/, fallback
 // reads from global) should use NewStoreWithRoots.
 func NewStore(root string) *Store {
 	return NewStoreWithRoots("", root)
@@ -70,7 +70,7 @@ func NewStore(root string) *Store {
 // across two roots — per-repo and global — per DES-054 phase 1.
 //
 // When repoRoot is non-empty, Create writes new missions under
-// <repoRoot>/.ethos/missions/<mission-id>/; Load, Update, Close, and
+// <repoRoot>/.punt-labs/ethos/missions/<mission-id>/; Load, Update, Close, and
 // the sibling artifact paths (results, reflections, log) read the
 // repo tree first and fall back to the legacy <globalRoot>/missions/
 // shape for backward compatibility. List unions both trees with
@@ -128,7 +128,7 @@ func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 
 // WithRepoRoot sets the repository root for the post-close trace
 // summary. When set, Store.Close appends a JSONL summary line to
-// <repoRoot>/.ethos/missions.jsonl so every closed mission is
+// <repoRoot>/.punt-labs/ethos/missions.jsonl so every closed mission is
 // visible in the repo's git history. An empty root disables the
 // trace.
 //
@@ -290,14 +290,23 @@ func (s *Store) missionsDir() string {
 // from a stale writeLayer path.
 func (s *Store) contractPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.contract, nil
+		path = ps.contract
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).contract, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).contract
 	default:
 		return "", fmt.Errorf("resolving contract path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go): every
+	// downstream open — read, write, or stat — sees a refusal here
+	// before the syscall would follow the link. The check is cheap
+	// (one Lstat) and uniform across every consumer.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // lockPath returns the per-mission flock path. Always under the
@@ -338,14 +347,22 @@ func (s *Store) repoCreateLockPath() string {
 // (mission m-2026-05-22-027 fix 3).
 func (s *Store) logPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.log, nil
+		path = ps.log
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).log, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).log
 	default:
 		return "", fmt.Errorf("resolving log path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go) — see
+	// contractPath. Covers the writer (appendEventLocked) in log.go
+	// without making it call rejectSymlink explicitly.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // reflectionsPath returns the sibling YAML file that holds the
@@ -362,14 +379,21 @@ func (s *Store) logPath(missionID string) (string, error) {
 // writeLayer (mission m-2026-05-22-027 fix 3).
 func (s *Store) reflectionsPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.reflections, nil
+		path = ps.reflections
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).reflections, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).reflections
 	default:
 		return "", fmt.Errorf("resolving reflections path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go) — see
+	// contractPath.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // resultsPath returns the sibling YAML file that holds the
@@ -390,14 +414,21 @@ func (s *Store) reflectionsPath(missionID string) (string, error) {
 // m-2026-05-22-027 fix 3).
 func (s *Store) resultsPath(missionID string) (string, error) {
 	ps, err := s.pathSetForExisting(missionID)
+	var path string
 	switch {
 	case err == nil:
-		return ps.results, nil
+		path = ps.results
 	case errors.Is(err, fs.ErrNotExist):
-		return s.pathSetFor(missionID, s.writeLayer()).results, nil
+		path = s.pathSetFor(missionID, s.writeLayer()).results
 	default:
 		return "", fmt.Errorf("resolving results path for %q: %w", missionID, err)
 	}
+	// Uniform symlink policy at the resolver (paths.go) — see
+	// contractPath.
+	if err := rejectSymlink(path); err != nil {
+		return "", err
+	}
+	return path, nil
 }
 
 // ensureMissionDir creates the per-mission directory in the repo
@@ -521,6 +552,15 @@ func (s *Store) Create(c *Contract) error {
 			if err != nil {
 				return err
 			}
+			// Refuse to follow a symlink planted at the destination —
+			// uniform symlink policy (see paths.go). The follow-on
+			// os.Stat below would otherwise dereference the link and
+			// either report "exists" (refusing the create against an
+			// attacker-controlled inode) or "not exists" (and a later
+			// writeContract would write through the link).
+			if err := rejectSymlink(dest); err != nil {
+				return err
+			}
 			// Refuse to overwrite an existing contract via Create — Update
 			// is the explicit mutation path.
 			if _, statErr := os.Stat(dest); statErr == nil {
@@ -580,26 +620,6 @@ func (s *Store) Create(c *Contract) error {
 	c.UpdatedAt = staged.UpdatedAt
 	c.CurrentRound = staged.CurrentRound
 	c.Type = staged.Type
-	return nil
-}
-
-// rejectSymlink returns an error if path is a symbolic link. Symlinks
-// in the missions directory are a local-attacker vector: a symlink
-// pointing outside the store can trick the mission package into
-// reading (or writing via temp+rename) files the caller never
-// intended. Lstat + ModeSymlink is the standard check; it does not
-// follow the link.
-func rejectSymlink(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("lstat %s: %w", path, err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to follow symlink: %s", path)
-	}
 	return nil
 }
 
@@ -848,6 +868,20 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Close open delegation skeletons. Non-fatal — the mission is
+	// already closed; a delegation-close failure writes stderr but
+	// does not roll back the mission close. The verdict maps from the
+	// mission's result verdict (pass/fail) to the delegation-level
+	// vocabulary (pass/fail/error/aborted).
+	if s.repoRoot != "" {
+		delegationVerdict := DelegationVerdictPass
+		if satisfying != nil && satisfying.Verdict == VerdictFail {
+			delegationVerdict = DelegationVerdictFail
+		}
+		closedAt := time.Now().UTC().Format(time.RFC3339)
+		closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
+	}
+
 	// Trace: append a summary line to the repo-local JSONL log.
 	// Non-fatal — the mission is already closed; a trace failure
 	// must not roll back the close.
@@ -855,6 +889,39 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
 	}
 	return satisfying, nil
+}
+
+// closeDelegationSkeletons walks delegations/ under the per-mission
+// directory and closes any skeleton whose verdict is still "open".
+func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
+	delegationsDir := filepath.Join(
+		RepoStatePath(repoRoot, "missions"),
+		filepath.Base(missionID), "delegations",
+	)
+	entries, err := os.ReadDir(delegationsDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: reading delegations dir: %v\n", missionID, err)
+		}
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		recordPath := filepath.Join(delegationsDir, e.Name(), "record.yaml")
+		d, loadErr := LoadDelegation(recordPath)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: loading delegation %s for close: %v\n", missionID, e.Name(), loadErr)
+			continue
+		}
+		if d.Verdict != "open" {
+			continue
+		}
+		if closeErr := CloseDelegationSkeleton(repoRoot, missionID, e.Name(), verdict, closedAt); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: closing delegation %s: %v\n", missionID, e.Name(), closeErr)
+		}
+	}
 }
 
 // loadLocked reads a contract without acquiring the flock. Callers must
@@ -933,7 +1000,7 @@ func DecodeContractStrict(data []byte, label string) (*Contract, error) {
 // mode (NewStore), only the flat global directory is walked.
 //
 // The two trees have different file shapes: the repo tree carries
-// per-mission directories (<repoRoot>/.ethos/missions/<id>/contract.yaml),
+// per-mission directories (<repoRoot>/.punt-labs/ethos/missions/<id>/contract.yaml),
 // the global tree carries flat files (<globalRoot>/missions/<id>.yaml).
 // Both shapes are normalized to a bare mission ID before merging.
 func (s *Store) List() ([]string, error) {
@@ -1061,7 +1128,7 @@ func (s *Store) MatchByPrefix(prefix string) (string, error) {
 // file plus rename. The caller must hold the contract's flock.
 //
 // In the two-root layout, ensureMissionDir creates the per-mission
-// directory under <repoRoot>/.ethos/missions/<id>/ before the temp
+// directory under <repoRoot>/.punt-labs/ethos/missions/<id>/ before the temp
 // file is opened; the legacy single-root layout has no per-mission
 // directory and skips the mkdir.
 func (s *Store) writeContract(c *Contract) error {
@@ -1077,6 +1144,18 @@ func (s *Store) writeContract(c *Contract) error {
 		return err
 	}
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): refuse a symlink at dest OR
+	// at the temp path. os.WriteFile would follow a symlink at tmp,
+	// writing through to the link target (write-set bypass); a symlink
+	// at dest would be replaced by Rename via inode, but reject it too
+	// so an attacker cannot redirect any read between this write and
+	// the next loadLocked under the same flock.
+	if err := rejectSymlink(dest); err != nil {
+		return err
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp contract: %w", err)
 	}
@@ -1089,6 +1168,15 @@ func (s *Store) writeContract(c *Contract) error {
 // on-disk state consistent with the operation's success/failure.
 func (s *Store) restoreContract(dest string, oldData []byte) error {
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): the rollback path runs after
+	// a failed event-log append, when an attacker may have raced to
+	// plant a symlink at the temp path. Refuse before WriteFile.
+	if err := rejectSymlink(dest); err != nil {
+		return fmt.Errorf("writing rollback temp: %w", err)
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return fmt.Errorf("writing rollback temp: %w", err)
+	}
 	if err := os.WriteFile(tmp, oldData, 0o600); err != nil {
 		return fmt.Errorf("writing rollback temp: %w", err)
 	}
@@ -1108,6 +1196,13 @@ func (s *Store) withLock(missionID string, fn func() error) error {
 		return fmt.Errorf("creating missions directory: %w", err)
 	}
 	lockFile := s.lockPath(missionID)
+	// Uniform symlink policy (paths.go): a symlink at the lock path
+	// would redirect the flock onto an unrelated inode, defeating the
+	// per-mission serialization invariant. Reject before OpenFile,
+	// which would otherwise create-and-follow the link.
+	if err := rejectSymlink(lockFile); err != nil {
+		return err
+	}
 	f, err := os.OpenFile(lockFile, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening lock file: %w", err)
@@ -1137,7 +1232,15 @@ func (s *Store) withCreateLock(fn func() error) error {
 	if err := os.MkdirAll(s.missionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating missions directory: %w", err)
 	}
-	f, err := os.OpenFile(s.createLockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	createLock := s.createLockPath()
+	// Uniform symlink policy (paths.go): a symlink at the directory-
+	// level create lock would let an attacker redirect every Create's
+	// flock onto an attacker-chosen inode, collapsing the cross-
+	// mission write_set conflict scan's atomicity.
+	if err := rejectSymlink(createLock); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(createLock, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening create lock file: %w", err)
 	}
@@ -1155,9 +1258,36 @@ func (s *Store) withCreateLock(fn func() error) error {
 	// serialize on Create. Acquisition order is global → repo;
 	// release is reverse via defer LIFO. v3.13.0 drops the global
 	// acquisition once the field is fully on v3.12+.
+	//
+	// When repoRoot resolves to the same tree as globalRoot (test
+	// fixtures and single-tree deployments after the .ethos →
+	// .punt-labs/ethos relocation), the two lock paths point at the
+	// same inode and a second Flock(LOCK_EX) on the same FD-table
+	// entry blocks forever. Compare absolute paths first and skip
+	// the second acquire when they collide.
 	if repoLockPath := s.repoCreateLockPath(); repoLockPath != "" {
+		absRepo, absRepoErr := filepath.Abs(repoLockPath)
+		absGlobal, absGlobalErr := filepath.Abs(s.createLockPath())
+		if absRepoErr != nil || absGlobalErr != nil {
+			// Abs failed (deleted cwd or unresolvable path). Log and
+			// proceed to acquire the second lock unconditionally —
+			// double-locking the same inode with LOCK_EX from the
+			// same goroutine is a no-op on macOS/Linux, so this is
+			// safe even if the paths actually collide.
+			fmt.Fprintf(os.Stderr,
+				"ethos: withCreateLock: filepath.Abs failed (repo=%v global=%v); acquiring second lock unconditionally\n",
+				absRepoErr, absGlobalErr)
+		} else if absRepo == absGlobal {
+			return fn()
+		}
 		if err := os.MkdirAll(filepath.Dir(repoLockPath), 0o700); err != nil {
 			return fmt.Errorf("creating repo missions directory: %w", err)
+		}
+		// Uniform symlink policy (paths.go): the per-repo create lock
+		// is the same trust boundary as the global one — refuse a
+		// symlink here too.
+		if err := rejectSymlink(repoLockPath); err != nil {
+			return err
 		}
 		rf, rerr := os.OpenFile(repoLockPath, os.O_CREATE|os.O_RDWR, 0o600)
 		if rerr != nil {
@@ -1409,6 +1539,14 @@ func (s *Store) writeReflectionsLocked(missionID string, rs []Reflection) error 
 		return err
 	}
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): refuse symlinks at dest and
+	// tmp before WriteFile would follow them.
+	if err := rejectSymlink(dest); err != nil {
+		return err
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp reflections: %w", err)
 	}
@@ -2036,6 +2174,14 @@ func (s *Store) writeResultsLocked(missionID string, rs []Result) error {
 		return err
 	}
 	tmp := dest + ".tmp"
+	// Uniform symlink policy (paths.go): refuse symlinks at dest and
+	// tmp before WriteFile would follow them.
+	if err := rejectSymlink(dest); err != nil {
+		return err
+	}
+	if err := rejectSymlink(tmp); err != nil {
+		return err
+	}
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("writing temp results: %w", err)
 	}

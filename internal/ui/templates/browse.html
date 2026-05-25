@@ -1,0 +1,36 @@
+{{template "head" .}}
+
+<div class="mb-6"><a href="/" class="text-xs text-neutral-500 hover:text-cyan-400">&larr; dashboard</a></div>
+
+<h1 class="text-2xl font-bold text-white mb-6">Browse</h1>
+
+<div class="text-sm mb-4 text-neutral-500">{{.Path}}</div>
+
+{{if .IsDir}}
+<div class="border border-neutral-800">
+  {{if .Parent}}<a href="/browse/{{.Parent}}" class="block px-4 py-2 border-b border-neutral-900 text-neutral-500 hover:text-cyan-400">..</a>{{end}}
+  {{range .Entries}}
+  <a href="/browse/{{.Path}}" class="block px-4 py-2 border-b border-neutral-900 hover:bg-neutral-900">
+    {{if .IsDir}}<span class="text-cyan-400">{{.Name}}/</span>{{else}}<span class="text-neutral-300">{{.Name}}</span>{{end}}
+  </a>
+  {{end}}
+</div>
+{{else}}
+<div class="border border-neutral-800 overflow-x-auto">
+<table class="w-full text-xs">
+<tbody>
+{{range .Lines}}
+<tr class="border-b border-neutral-900 group" id="L{{.Num}}">
+  <td class="px-2 py-0.5 text-neutral-700 text-right select-none w-10 align-top">{{.Num}}</td>
+  <td class="px-2 py-0.5 w-28 align-top whitespace-nowrap">
+    {{if .Delegation}}<a href="/delegations/{{.Mission}}/{{.Delegation}}" class="text-cyan-600 hover:text-cyan-400" title="{{.Delegation}}">{{.Agent}}</a>{{if .Commit}} <a href="https://github.com/punt-labs/ethos/commit/{{.Commit}}" class="text-neutral-500 hover:text-neutral-300 text-[0.65rem]" title="{{.Author}}">{{truncate .Commit 7}}</a>{{end}}{{else}}{{if .Commit}}<a href="https://github.com/punt-labs/ethos/commit/{{.Commit}}" class="text-neutral-600 hover:text-neutral-400 group-hover:text-neutral-400" title="{{.Author}} — {{.Commit}}">{{truncate .Author 12}}</a>{{end}}{{end}}
+  </td>
+  <td class="px-2 py-0.5 text-neutral-400 whitespace-pre font-mono"><code>{{.Text}}</code></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</div>
+{{end}}
+
+{{template "foot" .}}

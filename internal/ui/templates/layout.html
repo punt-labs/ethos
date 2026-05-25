@@ -1,0 +1,48 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} — ethos</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: {
+        mono: ['JetBrains Mono', 'SF Mono', 'Fira Code', 'ui-monospace', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  body { font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace; }
+  .pill { display: inline-block; padding: 1px 8px; font-size: 0.7rem; font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; }
+  .pill-closed { background: #064e3b; color: #6ee7b7; }
+  .pill-open { background: #1e3a5f; color: #7dd3fc; }
+  .pill-failed { background: #450a0a; color: #fca5a5; }
+  .pill-escalated { background: #451a03; color: #fcd34d; }
+  .pill-pass { background: #064e3b; color: #6ee7b7; }
+  .pill-fail { background: #450a0a; color: #fca5a5; }
+  .pill-error { background: #450a0a; color: #fca5a5; }
+  .pill-aborted { background: #1f2937; color: #9ca3af; }
+  .pill-A { background: #1f2937; color: #9ca3af; }
+  .pill-B { background: #1e3a5f; color: #7dd3fc; }
+  a { color: #67e8f9; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+</style>
+</head>
+<body class="bg-neutral-950 text-neutral-300 min-h-screen">
+<nav class="border-b border-neutral-800 px-6 py-4 flex items-center gap-6">
+  <a href="/" class="text-white font-bold text-lg tracking-tight" style="color:#67e8f9">ethos</a>
+  <a href="/browse/" class="text-neutral-500 text-xs hover:text-cyan-400">browse</a>
+  <span class="text-neutral-600 text-xs tracking-widest uppercase">traceability</span>
+</nav>
+<main class="max-w-5xl mx-auto px-6 py-8">{{end}}
+
+{{define "foot"}}</main>
+<footer class="text-center text-neutral-700 text-xs py-6 border-t border-neutral-900 mt-12">ethos — absolute traceability for agent delegation</footer>
+</body>
+</html>{{end}}

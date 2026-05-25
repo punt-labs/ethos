@@ -556,7 +556,7 @@ ethos mission close <id> --status failed
 ethos mission close <id> --status escalated
 ```
 
-Closing auto-appends a summary line to `.ethos/missions.jsonl` for
+Closing auto-appends a summary line to `.punt-labs/ethos/missions.jsonl` for
 commit-ready traceability. The JSONL file is append-only and intended
 to be committed.
 
@@ -592,6 +592,19 @@ ethos mission lint contract.yaml
 ethos mission lint contract.yaml --json
 ```
 
+### Traceability UI
+
+```bash
+ethos ui              # start localhost server, open browser
+ethos ui --port 9876  # explicit port
+```
+
+Three views: dashboard (mission list with counts), mission detail
+(contract + delegations + results + event log), delegation detail
+(record + dispatch prompt + full audit trail table). Pure Go —
+`html/template` with `go:embed`, Tailwind via CDN. No npm, no build
+step. Ctrl-C stops the server.
+
 ### Migration from v3.11
 
 Two one-time relocation commands move legacy global artifacts into
@@ -609,7 +622,7 @@ ethos mission migrate --to-repo --dry-run
 
 Cross-repo policy: a session whose id has no matching repo-tree
 session directory, or a mission whose `contract_id` is not referenced
-by any audit entry in `<repo>/.ethos/sessions/`, stays where it is —
+by any audit entry in `<repo>/.punt-labs/ethos/sessions/`, stays where it is —
 it belongs to another checkout.
 
 ## Audited Delegation
@@ -714,7 +727,7 @@ ethos mission migrate --to-repo                # legacy → repo-tree missions
 ethos mission migrate <mission-id> --to-repo
 ```
 
-`ethos audit show` walks `<repo>/.ethos/sessions/<date>-<id>/audit.jsonl`
+`ethos audit show` walks `<repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl`
 (with legacy global fallback) and prints every entry whose
 `delegation_id` matches. JSON output is one entry per line and is
 itself a valid audit-log fragment — pipes cleanly into `jq`.
@@ -1040,21 +1053,21 @@ The `agent` field is a channel binding — like email or GitHub. Ethos defines *
 
 Mission and session artifacts move into a per-mission and per-session
 directory layout. The mission ID encodes the date, so date browsing
-is `ls .ethos/missions/m-2026-05-22-*/`. Sessions get the date as a
-directory prefix so `ls .ethos/sessions/2026-05-22-*/` lists every
+is `ls .punt-labs/ethos/missions/m-2026-05-22-*/`. Sessions get the date as a
+directory prefix so `ls .punt-labs/ethos/sessions/2026-05-22-*/` lists every
 session started that day.
 
 | Scope | Path | Git-tracked? |
 |-------|------|-------------|
-| Mission contract (repo) | `<repo>/.ethos/missions/<mission-id>/contract.yaml` | Yes |
-| Mission event log (repo) | `<repo>/.ethos/missions/<mission-id>/log.jsonl` | Yes |
-| Mission results (repo) | `<repo>/.ethos/missions/<mission-id>/results.yaml` | Yes |
-| Mission reflections (repo) | `<repo>/.ethos/missions/<mission-id>/reflections.yaml` | Yes |
-| Tier B delegation record (repo) | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml` | Yes |
-| Tier B delegation prompt (repo) | `<repo>/.ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md` | Yes |
-| Per-mission shared flock | `<repo>/.ethos/missions/<mission-id>/.lock` | No |
+| Mission contract (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/contract.yaml` | Yes |
+| Mission event log (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/log.jsonl` | Yes |
+| Mission results (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/results.yaml` | Yes |
+| Mission reflections (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/reflections.yaml` | Yes |
+| Tier B delegation record (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/record.yaml` | Yes |
+| Tier B delegation prompt (repo) | `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/prompt.md` | Yes |
+| Per-mission shared flock | `<repo>/.punt-labs/ethos/missions/<mission-id>/.lock` | No |
 | Mission contract (legacy global, read-only fallback) | `~/.punt-labs/ethos/missions/<mission-id>.yaml` | No |
-| Session audit log (repo) | `<repo>/.ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | Yes |
+| Session audit log (repo) | `<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl` | Yes |
 | Session audit log (legacy global, read-only fallback) | `~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl` | No |
 | Mission ID counter | `~/.punt-labs/ethos/counters/missions-YYYY-MM-DD` | No |
 | Delegation ID counter | `~/.punt-labs/ethos/counters/delegations-YYYY-MM-DD` | No |
@@ -1074,7 +1087,7 @@ per-mission (LOCK_SH, repo tree) → per-delegation (LOCK_EX, global tree)
 ```
 
 The per-mission flock lives in the repo tree at
-`<repo>/.ethos/missions/<mission-id>/.lock`; the per-delegation flock
+`<repo>/.punt-labs/ethos/missions/<mission-id>/.lock`; the per-delegation flock
 lives in the global tree at
 `~/.punt-labs/ethos/delegations/<delegation-id>.lock` so two checkouts
 of the same repo lock the same inode. The per-mission lock is

@@ -87,7 +87,7 @@ func TestAuditMigrate_CopiesAndDeletesLegacy(t *testing.T) {
 	sessID := "sess-mig"
 	legacyPath := writeLegacyLine(t, globalDir, sessID, "2026-05-22T10:00:00Z", "Bash")
 	writeLegacyLine(t, globalDir, sessID, "2026-05-22T10:00:01Z", "Read")
-	repoSessDir := filepath.Join(repo, ".ethos", "sessions", "2026-05-22-"+sessID)
+	repoSessDir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-05-22-"+sessID)
 	require.NoError(t, os.MkdirAll(repoSessDir, 0o700))
 
 	stdout, _, err := execHandler(t, "audit", "migrate", "--verbose")
@@ -111,7 +111,7 @@ func TestAuditMigrate_DryRunMakesNoChanges(t *testing.T) {
 
 	sessID := "sess-dry"
 	legacyPath := writeLegacyLine(t, globalDir, sessID, "2026-05-22T10:00:00Z", "Bash")
-	repoSessDir := filepath.Join(repo, ".ethos", "sessions", "2026-05-22-"+sessID)
+	repoSessDir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-05-22-"+sessID)
 	require.NoError(t, os.MkdirAll(repoSessDir, 0o700))
 
 	stdout, _, err := execHandler(t, "audit", "migrate", "--dry-run")
@@ -149,7 +149,7 @@ func TestAuditMigrate_IdempotentSecondRun(t *testing.T) {
 
 	sessID := "sess-idem"
 	writeLegacyLine(t, globalDir, sessID, "2026-05-22T10:00:00Z", "Bash")
-	repoSessDir := filepath.Join(repo, ".ethos", "sessions", "2026-05-22-"+sessID)
+	repoSessDir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-05-22-"+sessID)
 	require.NoError(t, os.MkdirAll(repoSessDir, 0o700))
 
 	// First migrate.
@@ -255,7 +255,7 @@ func resetAuditShowFlagState() {
 // show command renders.
 func writeRepoTreeAudit(t *testing.T, repo, date, sessionID string, entry map[string]any) {
 	t.Helper()
-	dir := filepath.Join(repo, ".ethos", "sessions", date+"-"+sessionID)
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", date+"-"+sessionID)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	path := filepath.Join(dir, "audit.jsonl")
 	data, err := json.Marshal(entry)

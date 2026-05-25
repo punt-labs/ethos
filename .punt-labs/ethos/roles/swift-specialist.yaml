@@ -1,0 +1,14 @@
+name: swift-specialist
+responsibilities:
+  - "Swift implementation: types, protocols, generics, concurrency"
+  - SwiftUI and Combine review on Apple platforms
+  - SwiftFormat / SwiftLint configuration and code review
+permissions:
+  - edit-swift-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob

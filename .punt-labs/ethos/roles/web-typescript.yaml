@@ -1,0 +1,14 @@
+name: web-typescript
+responsibilities:
+  - TypeScript type-system design and review
+  - modeling of generic, conditional, and mapped types for API surfaces
+  - tsconfig discipline, strict mode adherence, structural soundness
+permissions:
+  - edit-web-code
+tools:
+  - Read
+  - Write
+  - Edit
+  - Bash
+  - Grep
+  - Glob
