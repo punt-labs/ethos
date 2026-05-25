@@ -32,6 +32,7 @@ type missionRow struct {
 	Evaluator string
 	CreatedAt string
 	Verdict   string
+	Ticket    string
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -94,6 +95,7 @@ func (s *Server) readMissionsJSONL() []missionRow {
 			Evaluator string `json:"evaluator"`
 			CreatedAt string `json:"created_at"`
 			Verdict   string `json:"verdict"`
+			Ticket    string `json:"ticket"`
 		}
 		if err := json.Unmarshal(sc.Bytes(), &entry); err != nil {
 			continue
@@ -105,6 +107,7 @@ func (s *Server) readMissionsJSONL() []missionRow {
 			Evaluator: entry.Evaluator,
 			CreatedAt: entry.CreatedAt,
 			Verdict:   entry.Verdict,
+			Ticket:    entry.Ticket,
 		})
 	}
 	return rows

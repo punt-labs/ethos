@@ -185,32 +185,72 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 		}
 	}
 
-	// Cache trailer lookups per commit.
-	type trailerInfo struct {
+	// Cache commit lookups.
+	type commitInfo struct {
 		mission    string
 		delegation string
 	}
-	trailerCache := map[string]*trailerInfo{}
+	commitCache := map[string]*commitInfo{}
 
-	lookupTrailers := func(sha string) *trailerInfo {
-		if t, ok := trailerCache[sha]; ok {
-			return t
+	// ticketToMission maps bead/ticket IDs (e.g., "ethos-ozrb") to
+	// mission IDs by scanning missions.jsonl. Built lazily on first
+	// fallback hit.
+	var ticketMap map[string]string
+
+	buildTicketMap := func() {
+		if ticketMap != nil {
+			return
 		}
-		t := &trailerInfo{}
+		ticketMap = map[string]string{}
+		for _, row := range s.readMissionsJSONL() {
+			if row.Ticket != "" {
+				ticketMap[row.Ticket] = row.ID
+			}
+		}
+	}
+
+	lookupCommit := func(sha string) *commitInfo {
+		if c, ok := commitCache[sha]; ok {
+			return c
+		}
+		c := &commitInfo{}
+
+		// Try trailers first.
 		cmd := exec.Command("git", "log", "--format=%(trailers:key=Mission,valueonly)%n%(trailers:key=Delegation,valueonly)", "-1", sha)
 		cmd.Dir = s.repoRoot
 		out, err := cmd.Output()
 		if err == nil {
 			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 			if len(lines) >= 1 {
-				t.mission = strings.TrimSpace(lines[0])
+				c.mission = strings.TrimSpace(lines[0])
 			}
 			if len(lines) >= 2 {
-				t.delegation = strings.TrimSpace(lines[1])
+				c.delegation = strings.TrimSpace(lines[1])
 			}
 		}
-		trailerCache[sha] = t
-		return t
+
+		// Fallback: parse bead/ticket ID from commit subject, look
+		// up the mission in missions.jsonl.
+		if c.mission == "" {
+			cmd2 := exec.Command("git", "log", "--format=%s", "-1", sha)
+			cmd2.Dir = s.repoRoot
+			if subj, err := cmd2.Output(); err == nil {
+				subject := string(subj)
+				// Match ethos-XXXX or punt-labs-XXXX in parens at end of subject.
+				for _, candidate := range extractTicketIDs(subject) {
+					buildTicketMap()
+					if mid, ok := ticketMap[candidate]; ok {
+						c.mission = mid
+						// Find the first delegation under this mission.
+						c.delegation = s.firstDelegation(mid)
+						break
+					}
+				}
+			}
+		}
+
+		commitCache[sha] = c
+		return c
 	}
 
 	// Build blame lines with delegation info.
@@ -222,12 +262,14 @@ func (s *Server) gitBlameWithTrailers(relPath string) []blameLine {
 			Author: h.author,
 			Commit: h.commit,
 		}
-		t := lookupTrailers(h.commit)
-		if t.delegation != "" {
-			bl.Mission = t.mission
-			bl.Delegation = t.delegation
-			// Derive agent name from the delegation record if possible.
-			bl.Agent = s.delegationAgent(t.mission, t.delegation)
+		ci := lookupCommit(h.commit)
+		if ci.delegation != "" {
+			bl.Mission = ci.mission
+			bl.Delegation = ci.delegation
+			bl.Agent = s.delegationAgent(ci.mission, ci.delegation)
+		} else if ci.mission != "" {
+			bl.Mission = ci.mission
+			bl.Agent = "mission"
 		}
 		result = append(result, bl)
 	}
@@ -248,6 +290,37 @@ func (s *Server) delegationAgent(missionID, delegationID string) string {
 		return ""
 	}
 	return d
+}
+
+// extractTicketIDs finds bead-shaped IDs in a commit subject.
+// Patterns: "ethos-ozrb", "punt-labs-tzi", "(ethos-ozrb)" at end.
+func extractTicketIDs(subject string) []string {
+	var ids []string
+	// Split on non-alphanumeric-dash chars and check each token.
+	for _, word := range strings.FieldsFunc(subject, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-')
+	}) {
+		// Match patterns like "ethos-XXXX" or "punt-labs-XXXX".
+		if strings.Contains(word, "-") && len(word) >= 6 {
+			ids = append(ids, word)
+		}
+	}
+	return ids
+}
+
+// firstDelegation returns the first delegation ID under a mission dir.
+func (s *Server) firstDelegation(missionID string) string {
+	dir := filepath.Join(s.repoRoot, ".punt-labs", "ethos", "missions", missionID, "delegations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			return e.Name()
+		}
+	}
+	return ""
 }
 
 // loadDelegationYAML reads just the agent_type from record.yaml
