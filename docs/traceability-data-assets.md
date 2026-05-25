@@ -26,6 +26,7 @@ under what authority" for every line of code an agent produces.
 **Question it answers:** What was authorized? Who was responsible?
 
 **Content:**
+
 - `mission_id` — the natural identifier (e.g., `m-2026-05-25-002`)
 - `leader` — who scoped the work
 - `worker` — who executed it
@@ -41,6 +42,7 @@ under what authority" for every line of code an agent produces.
 - `inputs.ticket` — the bead/issue tracker ID that initiated the work
 
 **Linkage:**
+
 - `mission_id` → delegation records (one-to-many: a mission can have multiple delegations)
 - `mission_id` → mission event log (`log.jsonl` sibling)
 - `mission_id` → results (`results.yaml` sibling)
@@ -54,6 +56,7 @@ under what authority" for every line of code an agent produces.
 **Question it answers:** What state transitions occurred, in what order?
 
 **Content:** One JSONL line per event:
+
 - `create` — mission opened, names worker + evaluator
 - `result` — worker submitted a structured result (verdict, confidence, evidence)
 - `close` — mission reached terminal state
@@ -63,6 +66,7 @@ under what authority" for every line of code an agent produces.
 Each line carries `ts`, `event`, `actor`, and a `details` map specific to the event type.
 
 **Linkage:**
+
 - Lives alongside `contract.yaml` — same `mission_id` directory
 - `actor` field → identity handles (leader or worker)
 
@@ -73,6 +77,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Question it answers:** What was the worker's structured output? What evidence did they provide?
 
 **Content:**
+
 - `round` — which review round this result covers
 - `author` — the worker who produced it
 - `verdict` — pass, fail, or escalate
@@ -82,6 +87,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 - `prose` — free-form summary from the worker
 
 **Linkage:**
+
 - `mission` field → contract
 - `files_changed` paths → git blame → back to this mission
 
@@ -96,6 +102,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Natural identifier:** `id` field = mission_id
 
 **Linkage:**
+
 - `id` → per-mission directory
 - `ticket` → bead/issue tracker
 - Used by `ethos find missions` and the UI dashboard
@@ -108,6 +115,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Question it answers:** Who was spawned, under what tier, and what was the outcome?
 
 **Content:**
+
 - `id` — the delegation identifier (e.g., `d-2026-05-25-011`)
 - `tier` — `B` (contract-bound) or `A` (ad-hoc, though Tier A doesn't produce a record today)
 - `mission` — the parent mission this delegation belongs to
@@ -119,6 +127,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 - `verdict` — pass, fail, error, or aborted
 
 **Linkage:**
+
 - `id` (delegation_id) → audit entries (`delegation_id` field on every tool call)
 - `mission` → parent contract
 - `parent_session` → session audit log AND quarry conversation capture
@@ -136,6 +145,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Natural identifier:** Same directory as `record.yaml` — identified by delegation-id.
 
 **Linkage:**
+
 - Lives alongside `record.yaml`
 - The prompt text is also captured in the audit log (the `Agent` tool call's `tool_input.prompt` field) — the file is the authoritative copy
 
@@ -146,6 +156,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Question it answers:** What did every agent do, tool call by tool call?
 
 **Content:** One JSONL line per tool invocation. Fields:
+
 - `ts` — RFC3339 timestamp
 - `session` — the Claude Code session ID (shared between parent and all subagents)
 - `agent_id` — unique per-subagent invocation (absent for the main session thread)
@@ -161,6 +172,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Natural identifier:** `session` + `ts` + `tool` (composite). The `delegation_id` field is the join key to the delegation store.
 
 **Linkage:**
+
 - `delegation_id` → delegation record + prompt
 - `contract_id` → mission contract
 - `session` → session directory name → quarry capture filename
@@ -174,12 +186,14 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Question they answer:** Under what contract and delegation was this commit made?
 
 **Content:**
+
 - `Mission: <mission-id>` — the governing contract
 - `Delegation: <delegation-id>` — the specific agent dispatch
 
 **Natural identifier:** The commit SHA.
 
 **Linkage:**
+
 - `Mission` trailer → mission contract directory
 - `Delegation` trailer → delegation record + prompt + audit trail
 - Commit SHA → `git blame` (per-line attribution)
@@ -198,6 +212,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Natural identifier:** The session ID (same as the audit log's `session` field and the delegation record's `parent_session` field).
 
 **Linkage:**
+
 - Session ID = audit log session directory name = delegation `parent_session`
 - Searchable by mission ID, delegation ID, bead ID, agent name, or any keyword
 - Quarry indexes captures for semantic search (`quarry find`)
@@ -210,6 +225,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 **Question it answers:** What delegation is currently active for this session? (Runtime bridge, not a forensic artifact.)
 
 **Content:** Three newline-separated values:
+
 - Line 1: delegation_id
 - Line 2: mission_id
 - Line 3: parent_session
@@ -249,7 +265,7 @@ at least one key with its neighbors:
 
 Starting from a line of code and tracing back to the full reasoning:
 
-```
+```text
 git blame file.go:42
   → commit 2b851cc (Claude Agento, 2026-05-25)
 
@@ -292,6 +308,7 @@ quarry find "extension matcher generate_agents"
 **Natural identifier:** File path (for code), DES-NNN identifiers (for design decisions).
 
 **Linkage:**
+
 - `git blame <file>` → commit → trailer → mission → delegation (the blame chain)
 - `contract.write_set` names the files the mission was authorized to touch
 - `audit.tool_input.file_path` names the files the agent actually read/edited

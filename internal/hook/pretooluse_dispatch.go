@@ -114,11 +114,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 			"ethos pre-tool-use: tier-A allocating delegation id: %v; allowing spawn without DELEGATION_ID\n",
 			err)
 		env := map[string]string{"PARENT_SESSION_ID": sessionID}
-		return json.NewEncoder(w).Encode(PreToolUseResult{
-			Decision:      "allow",
-			Continue:      true,
-			AdditionalEnv: env,
-		})
+		return json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env))
 	}
 	defer func() { release(success) }()
 
@@ -127,11 +123,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 		"PARENT_DELEGATION_ID": delegationID,
 		"PARENT_SESSION_ID":    sessionID,
 	}
-	if err := json.NewEncoder(w).Encode(PreToolUseResult{
-		Decision:      "allow",
-		Continue:      true,
-		AdditionalEnv: env,
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env)); err != nil {
 		// Response write failed — counter rolls back via the deferred
 		// release(false). Surface so the operator can correlate the
 		// missing audit entry.
@@ -269,11 +261,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		"PARENT_SESSION_ID":     sessionID,
 		"MISSION_ARTIFACTS_DIR": mission.DelegationDir(repoRoot, missionID, delegationID),
 	}
-	if err := json.NewEncoder(w).Encode(PreToolUseResult{
-		Decision:      "allow",
-		Continue:      true,
-		AdditionalEnv: env,
-	}); err != nil {
+	if err := json.NewEncoder(w).Encode(preToolUseAllowWithEnv(env)); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"ethos pre-tool-use: tier-B response write: %v\n", err)
 		return err
@@ -464,8 +452,5 @@ func tierBMissionStore() (*mission.Store, error) {
 // every dispatch-path error so a hook failure is operator-visible
 // (the spawn is refused) rather than silently degrading to Tier A.
 func writeAgentBlock(w io.Writer, msg string) error {
-	return json.NewEncoder(w).Encode(PreToolUseResult{
-		Decision: "block",
-		Reason:   msg,
-	})
+	return json.NewEncoder(w).Encode(preToolUseDeny(msg))
 }

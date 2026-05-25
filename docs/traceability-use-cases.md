@@ -17,6 +17,7 @@ the design intent — not just what it does but why this approach was
 chosen over alternatives.
 
 **Artifacts used:**
+
 - Git blame → commit SHA → git trailer (`Mission:`, `Delegation:`)
 - Delegation prompt (`prompt.md`) — the instructions that drove the implementation
 - Mission contract (`contract.yaml`) — the success criteria the code had to satisfy
@@ -24,6 +25,7 @@ chosen over alternatives.
 - Quarry transcript — the conversation where the approach was discussed
 
 **Query path:**
+
 ```bash
 git blame -L 21,21 internal/hook/generate_agents.go
 # → commit 2b851cc, trailer Delegation: d-2026-05-25-011
@@ -55,6 +57,7 @@ The team needs to know: who changed it, when, under what contract,
 what testing was done, and whether the change was reviewed.
 
 **Artifacts used:**
+
 - Git blame → commit → trailer → mission + delegation
 - Delegation audit trail — every tool call the agent made, including test runs
 - Mission results (`results.yaml`) — the worker's structured verdict + evidence checks
@@ -62,6 +65,7 @@ what testing was done, and whether the change was reviewed.
 - Contract evaluator field — who was supposed to review, and their frozen hash
 
 **Query path:**
+
 ```bash
 # 1. Find the commit that introduced the bug
 git blame -L 42,42 internal/mission/store.go
@@ -108,11 +112,13 @@ only modified files it was authorized to touch and didn't access
 sensitive areas outside its contract.
 
 **Artifacts used:**
+
 - Mission contract `write_set` — the authorized file paths
 - Delegation audit trail — every Read, Edit, Write, Bash call
 - Audit entry `tool_input.file_path` — the actual paths touched
 
 **Query path:**
+
 ```bash
 # 1. What was authorized?
 grep write_set .punt-labs/ethos/missions/m-2026-05-25-002/contract.yaml
@@ -156,12 +162,14 @@ work goes through the mission system, has success criteria, uses a
 frozen evaluator, and doesn't skip review rounds.
 
 **Artifacts used:**
+
 - Missions index (`missions.jsonl`) — all closed missions with metadata
 - Mission contracts — success criteria, evaluator, budget
 - Mission event logs — whether reflection/advancement events occurred
 - Audit log — presence of Tier A (ungoverned) vs Tier B (governed) dispatches
 
 **Query path:**
+
 ```bash
 # 1. How many missions used the full review cycle?
 ethos find missions --format json \
@@ -208,11 +216,13 @@ across all missions in the past week — what was delegated, what was
 delivered, how many tool calls, which files were touched.
 
 **Artifacts used:**
+
 - Missions index — filter by worker + date range
 - Delegation records — agent_type, verdict, timestamps
 - Audit log — tool call counts, file paths
 
 **Query path:**
+
 ```bash
 # 1. Which missions had bwk as worker this week?
 ethos find missions --worker bwk --since 2026-05-19 --format table
@@ -255,10 +265,12 @@ auditor needs to verify that an agent actually ran these tools during
 a specific mission.
 
 **Artifacts used:**
+
 - Delegation audit trail — Bash commands with full command strings
 - Tool input preview — searchable for tool names
 
 **Query path:**
+
 ```bash
 # 1. Did the agent run staticcheck?
 ethos audit show --delegation d-2026-05-25-011 --format json \
@@ -305,11 +317,13 @@ sub-agent (e.g., a worker dispatching an evaluator). The team
 needs to trace the full delegation tree.
 
 **Artifacts used:**
+
 - Delegation records — `parent_delegation` field links child to parent
 - Audit log — the Agent tool call from the parent shows the child dispatch
 - Session ID — shared across the chain
 
 **Query path:**
+
 ```bash
 # 1. Find the root delegation
 cat .punt-labs/ethos/missions/m-XXX/delegations/d-001/record.yaml
@@ -343,10 +357,12 @@ logs don't contain personally identifiable information (usernames,
 home directory paths, machine-specific layout).
 
 **Artifacts used:**
+
 - Session audit log — every tool input with path redaction applied
 - Redaction policy (documented in `audit_entry.go`) — `$HOME` → `~`, `repoRoot` → `<repo>`
 
 **Query path:**
+
 ```bash
 # 1. Check for any remaining absolute paths (post-redaction)
 grep -c '/Users/' .punt-labs/ethos/sessions/*/audit.jsonl
@@ -382,11 +398,13 @@ went into a feature — how many missions, how many rounds, how many
 tool calls, and how long it took from first dispatch to final close.
 
 **Artifacts used:**
+
 - Missions index — filter by ticket/bead ID
 - Mission contracts — created_at, closed_at, rounds budgeted/used
 - Audit log — tool call counts per delegation
 
 **Query path:**
+
 ```bash
 # 1. All missions for a feature (by bead ID)
 ethos find missions --format json \
@@ -420,9 +438,11 @@ specific sensitive file was NOT read or modified by any agent during
 a time window.
 
 **Artifacts used:**
+
 - Session audit log — complete record of all tool calls with file paths
 
 **Query path:**
+
 ```bash
 # 1. Was secrets.yaml ever accessed?
 grep 'secrets.yaml' .punt-labs/ethos/sessions/*/audit.jsonl

@@ -29,8 +29,8 @@ func TestHandlePreToolUse_NoAllowlist(t *testing.T) {
 
 	var result PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
-	assert.Equal(t, "allow", result.Decision)
-	assert.Empty(t, result.Reason)
+	assert.Equal(t, "allow", result.HookSpecificOutput.PermissionDecision)
+	assert.Empty(t, result.HookSpecificOutput.PermissionDecisionReason)
 }
 
 // TestHandlePreToolUse_NoAllowlistWithExtractInto pins the worker
@@ -72,7 +72,7 @@ func TestHandlePreToolUse_NoAllowlistWithExtractInto(t *testing.T) {
 			require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
 			var r PreToolUseResult
 			require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-			assert.Equal(t, "allow", r.Decision,
+			assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
 				"worker spawn (no ALLOWLIST) must pass through regardless of EXTRACT_INTO")
 		})
 	}
@@ -121,13 +121,13 @@ func TestHandlePreToolUse_AllowAndBlock(t *testing.T) {
 			name:     "Write file outside allowlist",
 			tool:     "Write",
 			input:    map[string]any{"file_path": "/etc/passwd"},
-			decision: "block",
+			decision: "deny",
 		},
 		{
 			name:     "Edit file outside allowlist",
 			tool:     "Edit",
 			input:    map[string]any{"file_path": "go.mod"},
-			decision: "block",
+			decision: "deny",
 		},
 		{
 			name:     "Bash tool is always allowed",
@@ -166,9 +166,9 @@ func TestHandlePreToolUse_AllowAndBlock(t *testing.T) {
 
 			var result PreToolUseResult
 			require.NoError(t, json.Unmarshal(out.Bytes(), &result))
-			assert.Equal(t, tt.decision, result.Decision, "tool=%s path=%v", tt.tool, tt.input)
-			if tt.decision == "block" {
-				assert.NotEmpty(t, result.Reason)
+			assert.Equal(t, tt.decision, result.HookSpecificOutput.PermissionDecision, "tool=%s path=%v", tt.tool, tt.input)
+			if tt.decision == "deny" {
+				assert.NotEmpty(t, result.HookSpecificOutput.PermissionDecisionReason)
 			}
 		})
 	}
@@ -187,8 +187,8 @@ func TestHandlePreToolUse_DirectoryEntryAllowsChildren(t *testing.T) {
 		{"write file under allowed dir", "internal/hook/pretooluse.go", "allow"},
 		{"write nested file under allowed dir", "internal/hook/deep/nested.go", "allow"},
 		{"write dir entry itself", "internal/hook", "allow"},
-		{"write sibling dir blocked", "internal/mission/store.go", "block"},
-		{"write partial prefix not matched", "internal/hookextra/file.go", "block"},
+		{"write sibling dir blocked", "internal/mission/store.go", "deny"},
+		{"write partial prefix not matched", "internal/hookextra/file.go", "deny"},
 	}
 
 	for _, tt := range tests {
@@ -206,7 +206,7 @@ func TestHandlePreToolUse_DirectoryEntryAllowsChildren(t *testing.T) {
 
 			var result PreToolUseResult
 			require.NoError(t, json.Unmarshal(out.Bytes(), &result))
-			assert.Equal(t, tt.decision, result.Decision, "path=%s", tt.path)
+			assert.Equal(t, tt.decision, result.HookSpecificOutput.PermissionDecision, "path=%s", tt.path)
 		})
 	}
 }
@@ -247,7 +247,7 @@ func TestHandlePreToolUse_GlobAndGrep(t *testing.T) {
 
 			var result PreToolUseResult
 			require.NoError(t, json.Unmarshal(out.Bytes(), &result))
-			assert.Equal(t, tt.decision, result.Decision, "tool=%s path=%s", tt.tool, tt.path)
+			assert.Equal(t, tt.decision, result.HookSpecificOutput.PermissionDecision, "tool=%s path=%s", tt.tool, tt.path)
 		})
 	}
 }
@@ -339,22 +339,22 @@ func TestHandlePreToolUse_EnvVarFromSubagentStart(t *testing.T) {
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
 
 	// Blocked: Write to a file not in the allowlist.
 	out.Reset()
 	payload = `{"tool_name":"Write","tool_input":{"file_path":"internal/session/store.go"}}`
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "block", r.Decision)
-	assert.Contains(t, r.Reason, "outside the verifier file allowlist")
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision)
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "outside the verifier file allowlist")
 
 	// Read is always allowed, even outside the allowlist.
 	out.Reset()
 	payload = `{"tool_name":"Read","tool_input":{"file_path":"internal/session/store.go"}}`
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
 }
 
 // TestHandlePreToolUse_EmptyInput gracefully handles empty or
@@ -369,7 +369,7 @@ func TestHandlePreToolUse_EmptyInput(t *testing.T) {
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
 	// Empty input means no tool info — allow passthrough.
-	assert.Equal(t, "allow", r.Decision)
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
 }
 
 // TestHandlePreToolUse_ExtractInto covers the DES-052 stat-then-allow
@@ -402,7 +402,7 @@ func TestHandlePreToolUse_ExtractInto(t *testing.T) {
 		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
 		var r PreToolUseResult
 		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-		assert.Equal(t, "allow", r.Decision)
+		assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
 	})
 
 	t.Run("existing file under write_set -> allow", func(t *testing.T) {
@@ -420,7 +420,7 @@ func TestHandlePreToolUse_ExtractInto(t *testing.T) {
 		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
 		var r PreToolUseResult
 		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-		assert.Equal(t, "allow", r.Decision)
+		assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
 	})
 
 	t.Run("non-existing file under extract_into -> allow", func(t *testing.T) {
@@ -438,7 +438,7 @@ func TestHandlePreToolUse_ExtractInto(t *testing.T) {
 		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
 		var r PreToolUseResult
 		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-		assert.Equal(t, "allow", r.Decision)
+		assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
 	})
 
 	t.Run("existing file under extract_into but not write_set -> block", func(t *testing.T) {
@@ -457,9 +457,9 @@ func TestHandlePreToolUse_ExtractInto(t *testing.T) {
 		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
 		var r PreToolUseResult
 		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-		assert.Equal(t, "block", r.Decision,
+		assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
 			"existing file under extract_into must require write_set match")
-		assert.Contains(t, r.Reason, "outside the verifier file allowlist")
+		assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "outside the verifier file allowlist")
 	})
 
 	t.Run("Edit existing under extract_into -> block", func(t *testing.T) {
@@ -477,7 +477,7 @@ func TestHandlePreToolUse_ExtractInto(t *testing.T) {
 		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
 		var r PreToolUseResult
 		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-		assert.Equal(t, "block", r.Decision)
+		assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision)
 	})
 
 	t.Run("missing file outside extract_into -> block", func(t *testing.T) {
@@ -495,7 +495,7 @@ func TestHandlePreToolUse_ExtractInto(t *testing.T) {
 		require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
 		var r PreToolUseResult
 		require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-		assert.Equal(t, "block", r.Decision)
+		assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision)
 	})
 }
 
@@ -581,7 +581,7 @@ func TestHandlePreToolUse_StatAmbiguous_LogsAndBlocks(t *testing.T) {
 
 	var result PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &result))
-	assert.Equal(t, "block", result.Decision,
+	assert.Equal(t, "deny", result.HookSpecificOutput.PermissionDecision,
 		"ambiguous stat must fall through to block")
 	assert.Contains(t, stderrText, "pre-tool-use: stat",
 		"stderr audit line must fire on the non-IsNotExist branch")
@@ -652,7 +652,7 @@ func TestHandlePreToolUse_TierAAdvice(t *testing.T) {
 
 			var result PreToolUseResult
 			require.NoError(t, json.Unmarshal(out.Bytes(), &result))
-			assert.Equal(t, "allow", result.Decision,
+			assert.Equal(t, "allow", result.HookSpecificOutput.PermissionDecision,
 				"PreToolUse must allow regardless of advice state")
 
 			if tt.wantAdvice {
@@ -795,25 +795,25 @@ func TestHandlePreToolUse_TierBDispatch(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	assert.True(t, r.Continue, "Tier B response must set continue=true")
-	require.NotNil(t, r.AdditionalEnv,
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	// Continue field removed in PreToolUse schema fix.
+	require.NotNil(t, r.HookSpecificOutput.AdditionalEnv,
 		"Tier B response must include additional_env block")
-	assert.Equal(t, missionID, r.AdditionalEnv["MISSION_ID"],
+	assert.Equal(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"Tier B must echo MISSION_ID from the input env")
-	assert.Equal(t, "sess-outer-42", r.AdditionalEnv["PARENT_SESSION_ID"],
+	assert.Equal(t, "sess-outer-42", r.HookSpecificOutput.AdditionalEnv["PARENT_SESSION_ID"],
 		"Tier B must echo session_id as PARENT_SESSION_ID")
-	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"],
 		"Tier B must allocate a fresh DELEGATION_ID")
-	assert.True(t, strings.HasPrefix(r.AdditionalEnv["DELEGATION_ID"], "d-"),
+	assert.True(t, strings.HasPrefix(r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"], "d-"),
 		"DELEGATION_ID must use the d-YYYY-MM-DD-NNN shape")
-	assert.Equal(t, r.AdditionalEnv["DELEGATION_ID"], r.AdditionalEnv["PARENT_DELEGATION_ID"],
+	assert.Equal(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"], r.HookSpecificOutput.AdditionalEnv["PARENT_DELEGATION_ID"],
 		"PARENT_DELEGATION_ID must mirror this spawn's DELEGATION_ID so the child sees a parent in its chain (Bugbot HIGH on PR #327)")
 
-	artifactsDir := r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
+	artifactsDir := r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
 	require.NotEmpty(t, artifactsDir,
 		"Tier B response must include MISSION_ARTIFACTS_DIR")
-	want := mission.DelegationDir(repo, missionID, r.AdditionalEnv["DELEGATION_ID"])
+	want := mission.DelegationDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
 	assert.Equal(t, want, artifactsDir,
 		"MISSION_ARTIFACTS_DIR must point at the per-delegation dir")
 
@@ -871,11 +871,11 @@ func TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock(t *testing.T) {
 				results <- result{err: err}
 				return
 			}
-			if r.Decision != "allow" {
-				results <- result{err: errors.New("decision was not allow: " + r.Reason)}
+			if r.HookSpecificOutput.PermissionDecision != "allow" {
+				results <- result{err: errors.New("decision was not allow: " + r.HookSpecificOutput.PermissionDecisionReason)}
 				return
 			}
-			results <- result{dir: r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]}
+			results <- result{dir: r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"]}
 		}()
 	}
 
@@ -942,7 +942,7 @@ func TestHandlePreToolUse_TierBDispatch_ExclusiveBlocks(t *testing.T) {
 			done <- result{err: err}
 			return
 		}
-		done <- result{decision: r.Decision, waited: waited}
+		done <- result{decision: r.HookSpecificOutput.PermissionDecision, waited: waited}
 	}()
 
 	hold := 80 * time.Millisecond
@@ -1054,9 +1054,9 @@ func TestDispatchTierB_LockAcquireFailureRollsBackCounter(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "block", r.Decision,
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
 		"a lock-acquire failure must surface as a named block, not an allow")
-	assert.Contains(t, r.Reason, "acquiring mission lock")
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "acquiring mission lock")
 
 	postValue, err := os.ReadFile(counterPath)
 	require.NoError(t, err)
@@ -1105,9 +1105,9 @@ func TestEnforceDelegationDepth_ConfigErrorClosesSkeleton(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "block", r.Decision,
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
 		"a config-error must surface as a named block, not an allow")
-	assert.Contains(t, r.Reason, "max_delegation_depth",
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "max_delegation_depth",
 		"refusal reason must name the config error")
 
 	// The skeleton was written before the depth gate fired; the depth
@@ -1151,10 +1151,10 @@ func TestHandlePreToolUse_TierBMalformedMissionID(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "block", r.Decision,
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
 		"malformed MISSION_ID must block, not fall through to Tier A")
-	assert.Contains(t, r.Reason, "MISSION_ID")
-	assert.Contains(t, r.Reason, "m-2026-05-22-999")
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "MISSION_ID")
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "m-2026-05-22-999")
 }
 
 // TestHandlePreToolUse_TierADispatch covers the MISSION_ID-unset
@@ -1189,17 +1189,17 @@ func TestHandlePreToolUse_TierADispatch(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	assert.True(t, r.Continue, "Tier A response must set continue=true")
-	require.NotNil(t, r.AdditionalEnv,
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	// Continue field removed in PreToolUse schema fix.
+	require.NotNil(t, r.HookSpecificOutput.AdditionalEnv,
 		"Tier A response must include additional_env block")
-	assert.Equal(t, "sess-outer-7", r.AdditionalEnv["PARENT_SESSION_ID"],
+	assert.Equal(t, "sess-outer-7", r.HookSpecificOutput.AdditionalEnv["PARENT_SESSION_ID"],
 		"Tier A must echo session_id as PARENT_SESSION_ID")
-	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"],
 		"Tier A must still allocate a DELEGATION_ID for audit binding")
-	assert.Equal(t, r.AdditionalEnv["DELEGATION_ID"], r.AdditionalEnv["PARENT_DELEGATION_ID"],
+	assert.Equal(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"], r.HookSpecificOutput.AdditionalEnv["PARENT_DELEGATION_ID"],
 		"PARENT_DELEGATION_ID must mirror DELEGATION_ID so a Tier A child spawn sees its parent in the chain")
-	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	_, hasMissionID := r.HookSpecificOutput.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID,
 		"Tier A response must NOT carry MISSION_ID — there isn't one")
 
@@ -1222,11 +1222,13 @@ func TestHandlePreToolUse_NonAgentPassthroughUnchanged(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	assert.Empty(t, r.AdditionalEnv,
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv,
 		"non-Agent passthrough must not emit additional_env")
-	assert.False(t, r.Continue,
-		"non-Agent passthrough must not set continue=true")
+	// Continue field removed in PreToolUse schema fix — no longer
+	// part of the hook protocol. The assertion that non-Agent calls
+	// don't set continue was valid under the old schema; under the
+	// new schema the field doesn't exist at all.
 }
 
 // stageContractCustomWriteSet stages a contract with a caller-
@@ -1333,11 +1335,11 @@ func TestDispatchAgent_InheritanceHit(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	assert.Equal(t, parentMission, r.AdditionalEnv["MISSION_ID"],
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	assert.Equal(t, parentMission, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"inheritance match must promote the child to Tier B with the parent missionID")
-	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
-	assert.True(t, strings.HasPrefix(r.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
+	assert.True(t, strings.HasPrefix(r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
 		filepath.Join(repo, ".punt-labs", "ethos", "missions", parentMission)),
 		"artifacts dir must nest under the inherited mission")
 }
@@ -1371,11 +1373,11 @@ func TestDispatchAgent_InheritanceNoMatch(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	_, hasMissionID := r.HookSpecificOutput.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID,
 		"no spawn_pattern match must fall through to Tier A — MISSION_ID must NOT be echoed")
-	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"],
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"],
 		"Tier A still allocates a DELEGATION_ID for audit binding")
 }
 
@@ -1408,8 +1410,8 @@ func TestDispatchAgent_InheritanceNotInheritsContract(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	_, hasMissionID := r.HookSpecificOutput.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID,
 		"InheritsContract=false must NOT promote — Tier A fall-through")
 }
@@ -1474,9 +1476,9 @@ func TestDispatchAgent_InheritanceMalformedRegex(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision,
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
 		"a malformed regex must NOT block — non-blocking inheritance is the design")
-	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	_, hasMissionID := r.HookSpecificOutput.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID,
 		"malformed regex falls through to Tier A — MISSION_ID must not echo")
 	// Admission-time validation (DES-054 phase 3) rejects the patched
@@ -1546,9 +1548,9 @@ func TestDispatchAgent_InheritanceChainTooDeep(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision,
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
 		"chain-too-deep falls through to Tier A — never block")
-	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	_, hasMissionID := r.HookSpecificOutput.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID)
 	assert.Contains(t, stderrText, "chain exceeds max_delegation_depth",
 		"depth bound must land in stderr so the operator sees the runaway-chain warning")
@@ -1575,12 +1577,12 @@ func TestDispatchAgent_InheritanceEmptyParent(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	_, hasMissionID := r.HookSpecificOutput.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID,
 		"empty PARENT_DELEGATION_ID must skip inheritance walk entirely")
-	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
-	assert.Equal(t, "sess-bare", r.AdditionalEnv["PARENT_SESSION_ID"])
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
+	assert.Equal(t, "sess-bare", r.HookSpecificOutput.AdditionalEnv["PARENT_SESSION_ID"])
 }
 
 // TestDispatchAgent_InheritanceMissionIDTakesPrecedence pins that
@@ -1622,8 +1624,8 @@ func TestDispatchAgent_InheritanceMissionIDTakesPrecedence(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision, "reason: %s", r.Reason)
-	assert.Equal(t, explicitMission, r.AdditionalEnv["MISSION_ID"],
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision, "reason: %s", r.HookSpecificOutput.PermissionDecisionReason)
+	assert.Equal(t, explicitMission, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"explicit MISSION_ID must beat inheritance — the child runs under the explicit contract")
 }
 
@@ -1648,9 +1650,9 @@ func TestDispatchAgent_InheritanceUnknownParent(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision,
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
 		"a parent delegation that is not on disk must fall through to Tier A — never block")
-	_, hasMissionID := r.AdditionalEnv["MISSION_ID"]
+	_, hasMissionID := r.HookSpecificOutput.AdditionalEnv["MISSION_ID"]
 	assert.False(t, hasMissionID)
 }
 
@@ -1665,7 +1667,7 @@ func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
 
 	// Set: Write enforced against the allowlist.
 	os.Setenv(key, "only/this.go")
@@ -1674,7 +1676,7 @@ func TestHandlePreToolUse_ReadsRealEnvVar(t *testing.T) {
 	out.Reset()
 	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "block", r.Decision)
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision)
 }
 
 // TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees pins the
@@ -1734,12 +1736,12 @@ func TestDispatchAgent_InheritanceDepthWalkCrossesMissionTrees(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision,
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
 		"depth walk must follow parent_delegation across mission trees — single-mission loader would refuse here")
-	assert.Equal(t, ancMission, r.AdditionalEnv["MISSION_ID"],
+	assert.Equal(t, ancMission, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"inheritance must promote the child to the ancestor missionID")
-	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
-	assert.True(t, strings.HasPrefix(r.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
+	assert.True(t, strings.HasPrefix(r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"],
 		filepath.Join(repo, ".punt-labs", "ethos", "missions", ancMission)),
 		"artifacts dir must nest under the inherited mission")
 }
@@ -1781,16 +1783,16 @@ func TestDispatchAgent_ActiveMissionSidecar(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "allow", r.Decision)
-	assert.Equal(t, missionID, r.AdditionalEnv["MISSION_ID"],
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision)
+	assert.Equal(t, missionID, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"sidecar must promote the spawn to Tier B with the claimed missionID")
-	assert.Equal(t, sessionID, r.AdditionalEnv["PARENT_SESSION_ID"])
-	assert.NotEmpty(t, r.AdditionalEnv["DELEGATION_ID"])
+	assert.Equal(t, sessionID, r.HookSpecificOutput.AdditionalEnv["PARENT_SESSION_ID"])
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
 
-	artifactsDir := r.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
+	artifactsDir := r.HookSpecificOutput.AdditionalEnv["MISSION_ARTIFACTS_DIR"]
 	require.NotEmpty(t, artifactsDir,
 		"Tier B response must include MISSION_ARTIFACTS_DIR")
-	want := mission.DelegationDir(repo, missionID, r.AdditionalEnv["DELEGATION_ID"])
+	want := mission.DelegationDir(repo, missionID, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"])
 	assert.Equal(t, want, artifactsDir)
 
 	recordPath := filepath.Join(artifactsDir, "record.yaml")
@@ -1839,7 +1841,7 @@ func TestDispatchAgent_ActiveMissionSidecarPrefersEnv(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, envMission, r.AdditionalEnv["MISSION_ID"],
+	assert.Equal(t, envMission, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
 		"MISSION_ID env must win over the sidecar — the sidecar is a fallback, not an override")
 }
 
@@ -1871,7 +1873,7 @@ func TestDispatchAgent_ActiveMissionSidecarMalformedRefuses(t *testing.T) {
 
 	var r PreToolUseResult
 	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
-	assert.Equal(t, "block", r.Decision,
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
 		"a sidecar pointing at an unresolvable mission must block (same contract as MISSION_ID env)")
-	assert.Contains(t, r.Reason, "MISSION_ID")
+	assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, "MISSION_ID")
 }
