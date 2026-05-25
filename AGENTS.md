@@ -592,6 +592,19 @@ ethos mission lint contract.yaml
 ethos mission lint contract.yaml --json
 ```
 
+### Traceability UI
+
+```bash
+ethos ui              # start localhost server, open browser
+ethos ui --port 9876  # explicit port
+```
+
+Three views: dashboard (mission list with counts), mission detail
+(contract + delegations + results + event log), delegation detail
+(record + dispatch prompt + full audit trail table). Pure Go —
+`html/template` with `go:embed`, Tailwind via CDN. No npm, no build
+step. Ctrl-C stops the server.
+
 ### Migration from v3.11
 
 Two one-time relocation commands move legacy global artifacts into

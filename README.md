@@ -184,6 +184,11 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos mission pipeline list` / `show <name>` | Query pipeline templates |
 | `ethos mission pipeline instantiate <name> --var key=value` | Create N missions from a pipeline |
 | `ethos mission lint <contract.yaml>` | Advisory pre-delegation linter |
+| `ethos mission claim <id>` / `release` | Bind/unbind the current session to a mission for Tier B dispatch |
+| `ethos find missions [--since DATE] [--worker HANDLE]` | Query closed missions from the JSONL index |
+| `ethos audit show --delegation <id>` | Print every tool call made under a delegation (across sessions) |
+| `ethos audit migrate` | One-time relocation of legacy global audit logs into the repo-tree layout |
+| `ethos ui [--port N]` | Open the traceability dashboard in a browser |
 | `ethos mission migrate --to-repo` | One-time relocation of legacy global missions into the repo-tree layout |
 | `ethos audit show --delegation <id>` | Print every tool call made under a delegation (across sessions) |
 | `ethos audit migrate` | One-time relocation of legacy global audit logs into the repo-tree layout |
