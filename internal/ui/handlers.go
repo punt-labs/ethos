@@ -114,11 +114,13 @@ func (s *Server) readMissionsJSONL() []missionRow {
 }
 
 type missionData struct {
-	Title       string
-	Contract    *mission.Contract
-	Delegations []*mission.Delegation
-	Results     []mission.Result
-	Events      []mission.Event
+	Title        string
+	Contract     *mission.Contract
+	Delegations  []*mission.Delegation
+	Results      []mission.Result
+	Events       []mission.Event
+	AuditEntries []hook.AuditView
+	AuditCount   int
 }
 
 func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
@@ -139,12 +141,22 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	results := s.loadResults(store, id)
 	events := s.loadEvents(store, id)
 
+	// Aggregate audit entries across all delegations under this mission.
+	var allAudit []hook.AuditView
+	for _, d := range delegations {
+		entries, _ := hook.QueryAuditByDelegation(s.repoRoot, s.globalSessionsDir, d.ID)
+		allAudit = append(allAudit, entries...)
+	}
+	sort.Slice(allAudit, func(i, j int) bool { return allAudit[i].Ts < allAudit[j].Ts })
+
 	data := missionData{
-		Title:       id,
-		Contract:    c,
-		Delegations: delegations,
-		Results:     results,
-		Events:      events,
+		Title:        id,
+		Contract:     c,
+		Delegations:  delegations,
+		Results:      results,
+		Events:       events,
+		AuditEntries: allAudit,
+		AuditCount:   len(allAudit),
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "mission.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
