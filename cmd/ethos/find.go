@@ -110,6 +110,7 @@ func runFindMissions(out, errOut io.Writer) error {
 
 	var traces []mission.TraceSummary
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, bufio.MaxScanTokenSize), 1024*1024)
 	lineNo := 0
 	for scanner.Scan() {
 		lineNo++
