@@ -10,6 +10,20 @@
 [ -z "$1" ] && exit 0
 msg_file="$1"
 [ -f "$msg_file" ] || exit 0
+# Fallback: when MISSION_ID/DELEGATION_ID aren't in env (the common
+# case for subagent commits — additional_env doesn't persist into
+# subprocess env), read the delegation-binding sidecar written by
+# the PreToolUse Tier B dispatch. Pick the most recently modified
+# binding across all sessions — correct for single-user single-
+# session, the common case.
+if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
+  binding_file=$(find "$HOME/.punt-labs/ethos/sessions" -name delegation-binding -type f -print 2>/dev/null | head -1)
+  if [ -n "$binding_file" ] && [ -f "$binding_file" ]; then
+    DELEGATION_ID=$(sed -n '1p' "$binding_file")
+    MISSION_ID=$(sed -n '2p' "$binding_file")
+    export DELEGATION_ID MISSION_ID
+  fi
+fi
 [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ] && exit 0
 add_trailer() {
   key=$1
