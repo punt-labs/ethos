@@ -51,6 +51,7 @@ func NewServer(repoRoot string) (*Server, error) {
 	s.mux.HandleFunc("/", s.handleDashboard)
 	s.mux.HandleFunc("/missions/", s.handleMission)
 	s.mux.HandleFunc("/delegations/", s.handleDelegation)
+	s.mux.HandleFunc("/browse/", s.handleBrowse)
 	return s, nil
 }
 
