@@ -49,18 +49,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-repo from this release onward; the prior shared-registry
   sync via submodule is gone.
 
+### Added
+
+- **`ethos mission claim <id>` / `ethos mission release`** — bind
+  the current Claude Code session to a mission for Tier B dispatch.
+  Writes a session-scoped active-mission sidecar that the PreToolUse
+  hook reads when `MISSION_ID` env is unset. Every subsequent
+  `Agent()` call dispatches as Tier B under the claimed mission:
+  delegation skeleton on disk, `MISSION_ID` + `DELEGATION_ID` in
+  the spawned worker's env, full contract binding.
+- **`ethos find missions`** — query the closed-mission index with
+  `--since DATE`, `--worker HANDLE`, `--status STATUS`, `--format
+  json|table|paths`. Reads `missions.jsonl` via `bufio.Scanner`.
+- **`ethos ui`** — localhost web viewer for traceability data.
+  Dashboard (mission list with counts), mission detail (contract +
+  delegations + results + event log + aggregated audit trail),
+  delegation detail (record + prompt + per-delegation audit trail),
+  code browse with ethos blame (agent links on lines with
+  `Mission:`/`Delegation:` trailers, GitHub commit links on all
+  others, bead-ID fallback for pre-trailer commits). Dark theme,
+  Go templates via `go:embed`, Tailwind CDN. `ethos ui [--port N]`.
+- **Delegation skeleton populated from tool input.** `agent_type`
+  read from `tool_input.subagent_type` (was empty because
+  `os.Getenv("CLAUDE_AGENT_TYPE")` is unset in the leader session).
+  `prompt.md` written from `tool_input.prompt` as a sibling to
+  `record.yaml`.
+- **Delegation verdict close.** `Store.Close` walks
+  `delegations/<id>/record.yaml` under the mission and stamps
+  open skeletons with the mission's verdict + `closed_at`.
+- **Delegation-binding sidecar.** PreToolUse Tier B dispatch writes
+  `<globalRoot>/sessions/<session-id>/delegation-binding` with
+  `delegation_id`, `mission_id`, `parent_session` (three newline-
+  separated values in a plain-text file). The PostToolUse
+  audit writer reads it as a fallback when `DELEGATION_ID` env is
+  empty (Claude Code's `additional_env` doesn't persist into hook
+  script subprocesses). Every subagent audit entry now carries
+  `delegation_id` + `contract_id`.
+- **Audit PII path redaction.** `redactAbsolutePaths` rewrites
+  `$HOME/X` → `~/X` and `<repoRoot>/X` → `<repo>/X` in
+  `tool_input`, `tool_input_preview`, and the canonical-JSON input
+  used to compute `tool_input_hash`. Hash is now machine-independent.
+- **`Mission:` / `Delegation:` git trailers.** `commit-msg.sh`
+  reads the delegation-binding sidecar to append trailers on
+  subagent commits. Closes the blame chain: `git blame` → commit →
+  trailer → mission → delegation → prompt → audit trail.
+- **Symlink rejection** across all mission contract loaders,
+  delegation skeleton writers, lock paths, and write targets.
+  `rejectSymlink` centralized in `paths.go`; uniform `Lstat` +
+  `ModeSymlink` check before every open.
+- **Agent file-extension matcher detects project type.**
+  `projectFilePatterns(repoRoot)` checks for `go.mod` (Go patterns),
+  `pyproject.toml`/`setup.py` (Python patterns), or neither (generic
+  fallback). Fixes the bug where SessionStart regenerated Python
+  agent files with Go-specific globs.
+- **PreToolUse hook wired into plugin.** `hooks/pre-tool-use.sh` +
+  `PreToolUse` entry in `hooks/hooks.json`. The entire Tier A/B
+  dispatch surface was unreachable from Claude Code before this.
+- **Traceability documentation.** `docs/traceability-data-assets.md`
+  (14 artifacts across 6 scope tiers) and
+  `docs/traceability-use-cases.md` (10 forensic/compliance scenarios
+  with query paths and gap analysis).
+
 ### Fixed
 
 - **`withCreateLock` flock collision when repoRoot resolves to the
-  same tree as globalRoot.** The DES-054 v5 rolling-upgrade fence
-  acquires the per-global create lock and then the per-repo create
-  lock; previously the two paths were under `.ethos/` and
-  `.punt-labs/ethos/missions/` respectively. After the relocation
-  they can resolve to the same inode (test fixtures and any
-  single-tree deployment), and a second `Flock(LOCK_EX)` on the
-  same inode via a distinct FD blocks forever. Added a path-
-  equality check that skips the second acquire when the absolute
-  lock paths match.
+  same tree as globalRoot.** Added a path-equality check that skips
+  the second acquire when the absolute lock paths match. Also checks
+  `filepath.Abs` errors instead of discarding them.
+- **PreToolUse JSON schema.** Was emitting `{"decision":"allow"}`;
+  Claude Code requires `{"hookSpecificOutput":{"hookEventName":
+  "PreToolUse","permissionDecision":"allow"}}`. Every tool call
+  produced a visible "Hook JSON output validation failed" error.
+  Rewrote to use `hookSpecificOutput` wrapper with
+  `permissionDecision` (allow/deny) and `additionalEnv` (camelCase).
+- **Browse handler path traversal.** `strings.HasPrefix` without
+  trailing separator allowed `/browse/../ethos-private/...` to
+  escape the repo boundary. Fixed: abs-normalize `repoRoot` in
+  `NewServer`, check with trailing separator. Mission/delegation
+  IDs from URLs sanitized via `filepath.Base()`.
+- **`commit-msg.sh` stale sidecar.** `find` returned arbitrary
+  file order; a stale delegation-binding from an old session could
+  silently tag commits with the wrong delegation. Fixed: reverse-
+  sort session dirs by date prefix.
+- **Silent error paths.** `buildAuditEntry` silently dropped
+  `tierBGlobalRoot` errors; `closeDelegationSkeletons` silently
+  skipped unloadable delegations. Both now log to stderr.
+- **`bufio.Scanner` 64KB limit** in `ethos find missions`. Bumped
+  to 1MB so mission JSONL lines with large prompts don't silently
+  truncate the result set.
 
 ## [3.12.0] - 2026-05-23
 
