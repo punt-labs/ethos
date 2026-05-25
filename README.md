@@ -61,8 +61,7 @@ registers the Claude Code plugin. `ethos setup` asks 3 questions
 (name, handle, working style), then creates your identity, a paired
 agent, repo config, a 4-agent team, and agent definition files.
 Start Claude Code — the agent knows who it is, who you are, and how
-to delegate. See [Getting Started](docs/GETTING-STARTED.md) for the
-full walkthrough.
+to delegate. See [Onboarding](docs/onboarding.md) for the full walkthrough.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 
@@ -70,11 +69,15 @@ full walkthrough.
 
 ### Traceability: line of code → full history
 
-```text
-$ git blame -L 21,21 internal/hook/generate_agents.go
-2b851cc (bwk  2026-05-25  21) func projectFilePatterns(repoRoot string) string {
+When commits carry `Mission:`/`Delegation:` git trailers (appended
+automatically by the commit-msg hook), the blame chain works like
+this:
 
-$ git log --format='%(trailers)' 2b851cc
+```text
+$ git blame -L 42,42 internal/hook/generate_agents.go
+abc1234 (bwk  2026-05-25  42) func projectFilePatterns(repoRoot string) string {
+
+$ git log --format='%(trailers)' abc1234
 Mission: m-2026-05-25-002
 Delegation: d-2026-05-25-011
 
@@ -85,11 +88,12 @@ at generation time (go.mod → Go, pyproject.toml → Python)..."
 $ ethos audit show --delegation d-2026-05-25-011 --format text
 2026-05-25T12:49:23Z  Read   <repo>/internal/hook/generate_agents.go
 2026-05-25T12:49:55Z  Edit   <repo>/internal/hook/generate_agents.go
-2026-05-25T12:50:08Z  Edit   <repo>/internal/hook/generate_agents.go
 2026-05-25T12:51:06Z  Bash   go test -run TestGenerateAgentFiles ...
 2026-05-25T12:53:25Z  Bash   make check
 2026-05-25T12:53:37Z  Bash   git commit ...
 ```
+
+Illustrative — actual SHAs and IDs vary per repo.
 
 Or visually: `ethos ui` opens a localhost dashboard where you browse
 the repo, click a line, and see the agent who wrote it, the prompt
@@ -141,8 +145,8 @@ role + team data as `.claude/agents/*.md`.
 | Preconditions | Gate tool calls on prior reads ("must read DESIGN.md before editing") |
 | Expert identities | Personalities, writing styles, talents bound to named agents |
 | Team structure | Roles with tool restrictions, reports-to graph, anti-responsibilities |
-| Pipeline templates | Multi-stage mission workflows from 13 built-in templates |
-| Session hooks | 7 lifecycle events: identity injection, contract enforcement, audit capture |
+| Pipeline templates | Multi-stage mission workflows from 8 built-in templates (plus bundle-specific ones) |
+| Lifecycle hooks | 7 events (SessionStart, PreToolUse, PostToolUse, SubagentStart/Stop, PreCompact, SessionEnd): identity injection, contract enforcement, audit capture |
 | Write-set enforcement | PreToolUse blocks unauthorized file modifications at runtime |
 | Symlink rejection | Uniform policy across all mission loaders and lock paths |
 | Depth limits | Configurable ceiling on nested delegation chains |
@@ -171,6 +175,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | Tool | What it does | Where ethos differs |
 |------|--------------|---------------------|
 | [SoulSpec](https://soulmd.dev) | Structured agent personas | Agent-only; no contracts, no audit trail, no team structure |
+| [Mastra](https://mastra.ai) | Typed Zod schemas and pre-delegation hooks | No persistent identity, no write-set boundaries, no frozen evaluator |
 | [CrewAI](https://www.crewai.com) | Role-based agent orchestration | Prose delegation; no typed contracts, no write-set enforcement, no traceability |
 | [Claude Managed Agents](https://docs.anthropic.com/en/docs/claude-code/managed-agents) | Hosted stateful sessions | Vendor-specific; no forensic audit trail, no contract binding |
 
@@ -182,7 +187,7 @@ markdown cannot represent it).
 
 | Guide | Audience |
 |-------|----------|
-| [Getting Started](docs/GETTING-STARTED.md) | New users: install, setup, first delegation |
+| [Onboarding](docs/onboarding.md) | Install, setup, first delegation |
 | [Team Setup](docs/team-setup.md) | Configuring roles, teams, bundles |
 | [Audited Delegation](docs/audited-delegation.md) | Tier A/B dispatch, claim/release, audit trail, git trailers |
 | [Traceability Data Assets](docs/traceability-data-assets.md) | Every artifact ethos produces, organized by scope |
