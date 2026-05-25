@@ -1,0 +1,110 @@
+{{template "head" .}}
+
+<div class="mb-4"><a href="/" class="text-blue-600 hover:underline text-sm">&larr; Dashboard</a></div>
+
+<h1 class="text-2xl font-bold mb-1">{{.Contract.MissionID}}</h1>
+<p class="text-gray-500 text-sm mb-6"><span class="badge badge-{{.Contract.Status}}">{{.Contract.Status}}</span></p>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-lg shadow p-4">
+    <h2 class="font-bold mb-2">Contract</h2>
+    <dl class="text-sm space-y-1">
+      <div class="flex"><dt class="w-28 text-gray-500">Leader</dt><dd>{{.Contract.Leader}}</dd></div>
+      <div class="flex"><dt class="w-28 text-gray-500">Worker</dt><dd>{{.Contract.Worker}}</dd></div>
+      <div class="flex"><dt class="w-28 text-gray-500">Evaluator</dt><dd>{{.Contract.Evaluator.Handle}}</dd></div>
+      <div class="flex"><dt class="w-28 text-gray-500">Type</dt><dd>{{.Contract.Type}}</dd></div>
+      <div class="flex"><dt class="w-28 text-gray-500">Created</dt><dd>{{.Contract.CreatedAt}}</dd></div>
+      {{if .Contract.ClosedAt}}<div class="flex"><dt class="w-28 text-gray-500">Closed</dt><dd>{{.Contract.ClosedAt}}</dd></div>{{end}}
+      {{if .Contract.Pipeline}}<div class="flex"><dt class="w-28 text-gray-500">Pipeline</dt><dd>{{.Contract.Pipeline}}</dd></div>{{end}}
+      <div class="flex"><dt class="w-28 text-gray-500">Round</dt><dd>{{.Contract.CurrentRound}} of {{.Contract.Budget.Rounds}}</dd></div>
+    </dl>
+  </div>
+
+  <div class="bg-white rounded-lg shadow p-4">
+    <h2 class="font-bold mb-2">Write Set</h2>
+    <ul class="text-sm text-gray-700 space-y-0.5">
+      {{range .Contract.WriteSet}}<li class="font-mono text-xs">{{.}}</li>{{end}}
+    </ul>
+  </div>
+</div>
+
+{{if .Contract.SuccessCriteria}}
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+  <h2 class="font-bold mb-2">Success Criteria</h2>
+  <ol class="text-sm space-y-1 list-decimal list-inside">
+    {{range .Contract.SuccessCriteria}}<li>{{.}}</li>{{end}}
+  </ol>
+</div>
+{{end}}
+
+{{if .Contract.Context}}
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+  <h2 class="font-bold mb-2">Context</h2>
+  <pre class="text-sm text-gray-700 whitespace-pre-wrap">{{.Contract.Context}}</pre>
+</div>
+{{end}}
+
+{{if .Delegations}}
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+  <h2 class="font-bold mb-2">Delegations</h2>
+  <table class="w-full text-sm">
+  <thead class="bg-gray-50 text-left">
+    <tr>
+      <th class="px-3 py-1">ID</th>
+      <th class="px-3 py-1">Tier</th>
+      <th class="px-3 py-1">Agent</th>
+      <th class="px-3 py-1">Verdict</th>
+      <th class="px-3 py-1">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .Delegations}}
+    <tr class="border-t">
+      <td class="px-3 py-1"><a href="/delegations/{{.MissionID}}/{{.ID}}" class="text-blue-600 hover:underline">{{.ID}}</a></td>
+      <td class="px-3 py-1"><span class="badge badge-{{.Tier}}">{{.Tier}}</span></td>
+      <td class="px-3 py-1">{{.AgentType}}</td>
+      <td class="px-3 py-1"><span class="badge badge-{{.Verdict}}">{{.Verdict}}</span></td>
+      <td class="px-3 py-1">{{.CreatedAt}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+  </table>
+</div>
+{{end}}
+
+{{if .Results}}
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+  <h2 class="font-bold mb-2">Results</h2>
+  {{range .Results}}
+  <div class="border rounded p-3 mb-2">
+    <div class="flex items-center gap-2 mb-1">
+      <span class="font-bold text-sm">Round {{.Round}}</span>
+      <span class="badge badge-{{.Verdict}}">{{.Verdict}}</span>
+      <span class="text-xs text-gray-400">by {{.Author}}</span>
+    </div>
+    {{if .Evidence}}
+    <div class="text-xs text-gray-600 space-y-0.5 mt-1">
+      {{range .Evidence}}<div>{{.Name}}: <span class="badge badge-{{.Status}}">{{.Status}}</span></div>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{if .Events}}
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+  <h2 class="font-bold mb-2">Event Log</h2>
+  <div class="space-y-1">
+    {{range .Events}}
+    <div class="flex items-start gap-2 text-sm border-l-2 border-gray-200 pl-3 py-1">
+      <span class="text-xs text-gray-400 whitespace-nowrap">{{.TS}}</span>
+      <span class="font-medium">{{.Event}}</span>
+      <span class="text-gray-500">{{.Actor}}</span>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{template "foot" .}}

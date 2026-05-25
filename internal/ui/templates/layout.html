@@ -1,0 +1,33 @@
+{{define "head"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} - ethos</title>
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@3.4.1/dist/tailwind.min.css" rel="stylesheet" crossorigin="anonymous">
+<style>
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .badge-closed { background: #dcfce7; color: #166534; }
+  .badge-open { background: #dbeafe; color: #1e40af; }
+  .badge-failed { background: #fee2e2; color: #991b1b; }
+  .badge-escalated { background: #fef3c7; color: #92400e; }
+  .badge-pass { background: #dcfce7; color: #166534; }
+  .badge-fail { background: #fee2e2; color: #991b1b; }
+  .badge-error { background: #fee2e2; color: #991b1b; }
+  .badge-aborted { background: #f3f4f6; color: #374151; }
+  .badge-A { background: #f3f4f6; color: #374151; }
+  .badge-B { background: #dbeafe; color: #1e40af; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900">
+<nav class="bg-gray-900 text-white px-6 py-3 flex items-center gap-4">
+  <a href="/" class="font-bold text-lg">ethos</a>
+  <span class="text-gray-400 text-sm">traceability</span>
+</nav>
+<main class="max-w-6xl mx-auto px-4 py-6">{{end}}
+
+{{define "foot"}}</main>
+<footer class="text-center text-gray-400 text-xs py-4">ethos traceability UI</footer>
+</body>
+</html>{{end}}

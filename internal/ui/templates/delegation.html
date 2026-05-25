@@ -1,0 +1,65 @@
+{{template "head" .}}
+
+<div class="mb-4"><a href="/missions/{{.MissionID}}" class="text-blue-600 hover:underline text-sm">&larr; {{.MissionID}}</a></div>
+
+<h1 class="text-2xl font-bold mb-1">{{.Delegation.ID}}</h1>
+<p class="text-gray-500 text-sm mb-6">
+  <span class="badge badge-{{.Delegation.Tier}}">Tier {{.Delegation.Tier}}</span>
+  <span class="badge badge-{{.Delegation.Verdict}}">{{.Delegation.Verdict}}</span>
+</p>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+  <div class="bg-white rounded-lg shadow p-4">
+    <h2 class="font-bold mb-2">Record</h2>
+    <dl class="text-sm space-y-1">
+      <div class="flex"><dt class="w-32 text-gray-500">Agent Type</dt><dd>{{if .Delegation.AgentType}}{{.Delegation.AgentType}}{{else}}<span class="text-gray-400">—</span>{{end}}</dd></div>
+      <div class="flex"><dt class="w-32 text-gray-500">Mission</dt><dd><a href="/missions/{{.Delegation.Mission}}" class="text-blue-600 hover:underline">{{.Delegation.Mission}}</a></dd></div>
+      <div class="flex"><dt class="w-32 text-gray-500">Parent Session</dt><dd class="font-mono text-xs">{{.Delegation.ParentSession}}</dd></div>
+      {{if .Delegation.ParentDelegation}}<div class="flex"><dt class="w-32 text-gray-500">Parent Delegation</dt><dd>{{.Delegation.ParentDelegation}}</dd></div>{{end}}
+      <div class="flex"><dt class="w-32 text-gray-500">Created</dt><dd>{{.Delegation.CreatedAt}}</dd></div>
+      {{if .Delegation.ClosedAt}}<div class="flex"><dt class="w-32 text-gray-500">Closed</dt><dd>{{.Delegation.ClosedAt}}</dd></div>{{end}}
+    </dl>
+  </div>
+
+  <div class="bg-white rounded-lg shadow p-4">
+    <h2 class="font-bold mb-2">Stats</h2>
+    <dl class="text-sm space-y-1">
+      <div class="flex"><dt class="w-32 text-gray-500">Audit Entries</dt><dd class="font-bold">{{.AuditCount}}</dd></div>
+    </dl>
+  </div>
+</div>
+
+{{if .Prompt}}
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+  <h2 class="font-bold mb-2">Dispatch Prompt</h2>
+  <pre class="text-sm text-gray-700 whitespace-pre-wrap bg-gray-50 p-3 rounded overflow-x-auto">{{.Prompt}}</pre>
+</div>
+{{end}}
+
+{{if .AuditEntries}}
+<div class="bg-white rounded-lg shadow p-4 mb-6">
+  <h2 class="font-bold mb-2">Audit Trail</h2>
+  <div class="overflow-x-auto">
+  <table class="w-full text-sm">
+  <thead class="bg-gray-50 text-left">
+    <tr>
+      <th class="px-3 py-1">Time</th>
+      <th class="px-3 py-1">Tool</th>
+      <th class="px-3 py-1">Target</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{range .AuditEntries}}
+    <tr class="border-t hover:bg-gray-50">
+      <td class="px-3 py-1 text-xs text-gray-500 whitespace-nowrap">{{.Ts}}</td>
+      <td class="px-3 py-1 font-medium">{{.Tool}}</td>
+      <td class="px-3 py-1 font-mono text-xs">{{truncate (.Summary) 120}}</td>
+    </tr>
+    {{end}}
+  </tbody>
+  </table>
+  </div>
+</div>
+{{end}}
+
+{{template "foot" .}}
