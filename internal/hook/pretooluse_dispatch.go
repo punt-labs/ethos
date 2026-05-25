@@ -52,15 +52,15 @@ import (
 // best-effort: any error logs to stderr and falls through to the
 // inheritance / Tier A path, matching the pattern in
 // loadParentDelegation.
-func dispatchAgent(w io.Writer, sessionID string) error {
+func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) error {
 	missionID := os.Getenv("MISSION_ID")
 	if missionID != "" {
-		return dispatchTierB(w, sessionID, missionID)
+		return dispatchTierB(w, sessionID, missionID, toolInput)
 	}
 	if missionID := readActiveMissionForDispatch(sessionID); missionID != "" {
-		return dispatchTierB(w, sessionID, missionID)
+		return dispatchTierB(w, sessionID, missionID, toolInput)
 	}
-	return dispatchTierBOrTierA(w, sessionID)
+	return dispatchTierBOrTierA(w, sessionID, toolInput)
 }
 
 // readActiveMissionForDispatch consults the active-mission sidecar
@@ -163,7 +163,7 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 // repoRoot resolution uses resolve.FindRepoRoot — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
-func dispatchTierB(w io.Writer, sessionID, missionID string) error {
+func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any) error {
 	store, err := tierBMissionStore()
 	if err != nil {
 		return writeAgentBlock(w,
@@ -209,11 +209,17 @@ func dispatchTierB(w io.Writer, sessionID, missionID string) error {
 	defer releaseDelegation()
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
+	agentType, _ := toolInput["subagent_type"].(string)
+	if agentType == "" {
+		agentType = os.Getenv("CLAUDE_AGENT_TYPE")
+	}
+	promptBody, _ := toolInput["prompt"].(string)
 	if _, err := mission.WriteDelegationSkeleton(repoRoot, missionID, delegationID, mission.DelegationSkeleton{
 		Tier:             mission.TierB,
 		ParentDelegation: parentDelegation,
 		ParentSession:    sessionID,
-		AgentType:        os.Getenv("CLAUDE_AGENT_TYPE"),
+		AgentType:        agentType,
+		Prompt:           []byte(promptBody),
 	}); err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: writing delegation skeleton for %q: %v", delegationID, err))

@@ -251,15 +251,18 @@ var pretooluseInheritReader = tryTierBByInheritance
 // unset. If PARENT_DELEGATION_ID is present the resolver tries
 // inheritance; on a hit the spawn becomes Tier B with the inherited
 // missionID, otherwise it falls through to Tier A.
-func dispatchTierBOrTierA(w io.Writer, sessionID string) error {
+func dispatchTierBOrTierA(w io.Writer, sessionID string, toolInput map[string]any) error {
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
 	if parentDelegation == "" {
 		return dispatchTierA(w, sessionID)
 	}
-	childAgentType := os.Getenv("CLAUDE_AGENT_TYPE")
+	childAgentType, _ := toolInput["subagent_type"].(string)
+	if childAgentType == "" {
+		childAgentType = os.Getenv("CLAUDE_AGENT_TYPE")
+	}
 	repoRoot := tierBRepoRoot()
 	if missionID, ok := pretooluseInheritReader(repoRoot, parentDelegation, childAgentType); ok {
-		return dispatchTierB(w, sessionID, missionID)
+		return dispatchTierB(w, sessionID, missionID, toolInput)
 	}
 	return dispatchTierA(w, sessionID)
 }

@@ -71,7 +71,7 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	sessionID, _ := input["session_id"].(string)
 
 	if toolName == "Agent" {
-		return dispatchAgent(w, sessionID)
+		return dispatchAgent(w, sessionID, toolInput)
 	}
 
 	// DES-054 phase 3b: Tier B preconditions admission gate. Fires
