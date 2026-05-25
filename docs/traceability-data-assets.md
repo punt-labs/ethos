@@ -281,6 +281,24 @@ quarry find "extension matcher generate_agents"
   → (the reasoning context that preceded the instructions)
 ```
 
+### 12. Source Code and Design Documents
+
+**Location:** The repository itself — `internal/`, `cmd/`, `docs/`, `DESIGN.md`, `CHANGELOG.md`, etc.
+
+**Question they answer:** What does the system actually do? What design decisions were made and why?
+
+**Content:** The code is the ground truth for behavior. Design documents (`DESIGN.md`, `docs/architecture.tex`, ADRs) record architectural decisions, rejected alternatives, and the rationale that shaped the code. `CHANGELOG.md` records what shipped in each release and why.
+
+**Natural identifier:** File path (for code), DES-NNN identifiers (for design decisions).
+
+**Linkage:**
+- `git blame <file>` → commit → trailer → mission → delegation (the blame chain)
+- `contract.write_set` names the files the mission was authorized to touch
+- `audit.tool_input.file_path` names the files the agent actually read/edited
+- Quarry indexes all of these for semantic search — "why did we choose X over Y" resolves to the design doc section, the conversation where it was discussed, and the mission that implemented it
+
+**Quarry indexing:** The working directory is auto-indexed at session start. Design docs, code, and conversation captures are all searchable by meaning via `quarry find`. A query like "why does the delegation record use a sidecar instead of env vars" returns hits across code comments, design docs, and conversation transcripts — three perspectives on the same decision.
+
 ## What's Not Yet Captured
 
 | Gap | What's missing | Impact |
