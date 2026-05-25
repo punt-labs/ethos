@@ -1,23 +1,176 @@
 # Traceability Data Assets
 
-Every agent delegation in ethos produces artifacts across five
-stores. Each artifact answers a distinct forensic question, carries
-a natural identifier, and links to artifacts in other stores via
-shared keys. Together they form the traceability graph — the
-evidence chain that answers "what happened, who did it, why, and
-under what authority" for every line of code an agent produces.
+Agent-driven development produces artifacts at every level — from
+org-wide conventions to individual tool calls. Together they form
+a traceability graph that answers "what happened, who did it, why,
+under what authority, and what conventions governed the work" for
+every line of code an agent produces.
 
-## The Five Stores
+This document inventories every data source, ordered by scope from
+broadest (global conventions that shape all work) to narrowest
+(individual tool calls within a single delegation).
 
-| Store | Location | Lifecycle | Git-tracked |
-|-------|----------|-----------|-------------|
-| Mission store | `<repo>/.punt-labs/ethos/missions/<mission-id>/` | Created at `mission create`, closed at `mission close` | Yes |
-| Delegation store | `<repo>/.punt-labs/ethos/missions/<mission-id>/delegations/<delegation-id>/` | Created at PreToolUse Tier B dispatch, closed at mission close | Yes |
-| Audit store | `<repo>/.punt-labs/ethos/sessions/<date>-<session-id>/audit.jsonl` | Appended on every tool call (PostToolUse) | Yes |
-| Git store | `.git/` (commits, trailers) | Created at `git commit` | Yes |
-| Conversation store | `<repo>/.punt-labs/quarry/captures/session-<session-id>.md` | Captured at context compaction by quarry | Yes |
+## Scope Tiers
+
+| Tier | Scope | What it governs | Examples |
+|------|-------|----------------|----------|
+| 1 | **Global / User** | Conventions that apply to all projects for a user or all users on a machine | `~/.claude/CLAUDE.md`, managed policy, user settings |
+| 2 | **Project** | Conventions, identities, and config for one repository | `CLAUDE.md`, `.claude/rules/`, `.claude/settings.json`, ethos identities/roles/teams |
+| 3 | **Work item** | Why a piece of work exists and what it authorized | Beads (issues), mission contracts |
+| 4 | **Execution** | What an agent did under a specific delegation | Delegation records, prompts, audit logs, git commits + trailers |
+| 5 | **Knowledge** | What was discussed, what was learned, what the code says | Conversation transcripts, Claude memories, source code, design docs |
+| 6 | **Runtime** | Ephemeral bridges between hooks | Sidecars (active-mission, delegation-binding) |
+
+---
+
+## Tier 1: Global / User Conventions
+
+### 1a. Managed Policy CLAUDE.md
+
+**File:** `/Library/Application Support/ClaudeCode/CLAUDE.md` (macOS) or `/etc/claude-code/CLAUDE.md` (Linux)
+
+**Question it answers:** What org-wide rules apply to every agent session on this machine?
+
+**Scope:** All users, all projects. Cannot be excluded or overridden. Loads first in every session.
+
+**Content:** Org-level policies — security rules, compliance requirements, banned patterns, mandatory tooling. Set by IT/DevOps, not by individual developers.
+
+**Linkage:** Shapes every mission contract, every delegation prompt, every tool call. Not referenced by ID — it's ambient authority.
+
+### 1b. User CLAUDE.md
+
+**File:** `~/.claude/CLAUDE.md`
+
+**Question it answers:** What personal conventions does this developer apply to all their projects?
+
+**Scope:** One user, all projects. Loads after managed policy, before project CLAUDE.md.
+
+**Content:** Personal working style, communication preferences, tool preferences, banned patterns. At Punt Labs: delegation rules, team roster, mission workflow, PR procedure, session close protocol.
+
+**Linkage:** Shapes all work by this user. Project CLAUDE.md can narrow or override it. Not project-specific — the same file governs work across every repo.
+
+### 1c. User Settings
+
+**File:** `~/.claude/settings.json`
+
+**Question it answers:** What permissions, hooks, and configuration does this user apply globally?
+
+**Content:** Permission allowlists (`allow`, `deny`), MCP server configs, hook registrations, model preferences, output style. Merges with project settings (project wins on conflict).
+
+---
+
+## Tier 2: Project Conventions
+
+### 2a. Project CLAUDE.md
+
+**File:** `<repo>/CLAUDE.md` or `<repo>/.claude/CLAUDE.md`
+
+**Question it answers:** What are this project's development standards, workflow rules, and architectural decisions?
+
+**Scope:** Everyone working on this repo. Git-tracked, team-shared. Loads after user CLAUDE.md.
+
+**Content:** Build commands (`make check`), quality gates, coding standards, team delegation rules, mission workflow, definition of done, pre-PR checklist, tool usage rules, operational constraints. Also: `CLAUDE.local.md` (gitignored) for per-developer overrides at the same scope level.
+
+**Linkage:**
+
+- Referenced by mission contracts (success criteria often say "make check passes" which is defined here)
+- Standards in CLAUDE.md govern how agents write code, run tests, and handle reviews
+- The ancestor walk loads CLAUDE.md files from filesystem root down to cwd — parent directories above the repo contribute too
+
+### 2b. Project Rules
+
+**File:** `<repo>/.claude/rules/*.md`
+
+**Question it answers:** What conventions apply to specific file types or paths in this project?
+
+**Scope:** Per-path within the project. Git-tracked. Loads lazily when matching files are opened.
+
+**Content:** Markdown files with `paths:` YAML frontmatter (glob patterns). Rules without `paths:` load at startup like CLAUDE.md. Path-specific rules trigger when Claude reads matching files.
+
+**Example:** A `python-oo.md` rule with `paths: ["**/*.py"]` enforces OO patterns only when Python files are touched.
+
+**Linkage:** Rules shape code quality for specific file types — an agent editing `.py` files gets Python-specific instructions that don't load when editing `.go` files.
+
+### 2c. Project Settings and Hooks
+
+**File:** `<repo>/.claude/settings.json`, `<repo>/.claude/settings.local.json`
+
+**Question it answers:** What project-specific permissions, hooks, and configuration are in effect?
+
+**Content:** Project-scoped permission rules, hook registrations (SessionStart, PreToolUse, PostToolUse, etc.), MCP server config, plugin enablement. `.local.json` variant is gitignored for per-developer overrides.
+
+**Linkage:** Hooks registered here (e.g., ethos's PreToolUse and PostToolUse) are what produce the audit trail, enforce write_set contracts, and write delegation skeletons. Without these hooks, ethos has no runtime presence.
+
+### 2d. Agent Definitions
+
+**File:** `<repo>/.claude/agents/*.md`
+
+**Question it answers:** What specialist personas are available for delegation, and what tools/hooks does each carry?
+
+**Scope:** Project-scoped. Git-tracked. Generated by `ethos setup` or `GenerateAgentFiles`.
+
+**Content:** YAML frontmatter (name, description, tools, hooks) + markdown body (personality, writing style, talents, anti-responsibilities). Each file defines one specialist agent type (e.g., `bwk.md` = Go specialist).
+
+**Linkage:**
+
+- `subagent_type` in Agent() dispatch → agent definition filename
+- Delegation `record.yaml` `agent_type` field → this agent's handle
+- Agent's PostToolUse hook configuration determines which file changes trigger `make check`
+
+### 2e. Ethos Identity Registry
+
+**File:** `<repo>/.punt-labs/ethos/{identities,roles,teams,personalities,writing-styles,talents}/*.{yaml,md}`
+
+**Question it answers:** Who are the agents and humans on this project? What are their roles, expertise, and behavioral characteristics?
+
+**Scope:** Project-scoped. Git-tracked (vendored from `punt-labs/team` or maintained locally).
+
+**Content:** Identity YAML (name, handle, kind, personality slug, writing-style slug, talents), role YAML (responsibilities, tools), team YAML (membership, collaborations, reports_to edges), personality/writing-style/talent markdown (behavioral content).
+
+**Linkage:**
+
+- Identity handles appear on mission contracts (leader, worker, evaluator)
+- Roles determine tool access and anti-responsibilities in generated agent files
+- Team collaborations shape the delegation graph (who reports to whom)
+- Evaluator hash (frozen at mission create) links to the identity content at creation time
+
+### 2f. Repo Configuration
+
+**File:** `<repo>/.punt-labs/ethos.yaml`
+
+**Question it answers:** What is this project's ethos configuration?
+
+**Content:** `agent:` (default agent handle), `team:` (active team name), `active_bundle:` (which team bundle is in use), `max_delegation_depth:` (depth limit for nested spawns).
+
+---
+
+## Tier 3: Work Items
+
+### 3a. Issue Tracker (Beads)
+
+(Previously #13 in the flat inventory.)
+
+**File:** `<repo>/.beads/` (local Dolt database, synced to hosted DoltDB)
+
+**Question it answers:** Why does this work exist? What was the business or technical motivation? What's the acceptance criteria?
+
+**Content:** Each bead carries id, title, description (the full context: what's broken, why it matters), type (bug/feature/task), priority (P0–P4), status, acceptance criteria, design decisions, notes, labels, dependencies.
+
+**Natural identifier:** The bead ID (e.g., `ethos-ozrb`). Globally unique via per-repo prefix.
+
+**Linkage:**
+
+- `bead ID` → mission contract `inputs.ticket` (the mission that implements this bead)
+- `bead ID` → commit subject (by convention)
+- `bead ID` → missions.jsonl `ticket` field (blame fallback)
+- Dependencies between beads express sequencing constraints
+
+**Why it matters:** The bead is the ORIGIN — it answers "why did anyone start working on this?" before the mission contract exists.
 
 ## Artifact Inventory
+
+The remaining artifacts are the execution, knowledge, and runtime
+layers — numbered for cross-reference with the use cases document.
 
 ### 1. Mission Contract
 
@@ -280,9 +433,11 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 
 ### 14. Claude Code Project Memory
 
-**Location:** `~/.claude/projects/-Users-<user>-<path-to-repo>/memory/` (per-project, per-user)
+**Location:** `~/.claude/projects/<project-path-hash>/memory/` (per-project, per-user, per-machine)
 
 **Question it answers:** What operational knowledge has accumulated across sessions? What mistakes were made and corrected? What preferences does the operator have?
+
+**Scope limitation:** Memories are **per-user, per-machine** — not git-tracked, not shareable. Claude Code explicitly prevents project-local memory paths to avoid cloned repos redirecting memory writes to sensitive locations. An investigator on a different machine cannot see another developer's memories unless they are explicitly harvested (copied into the repo and committed).
 
 **Content:** Markdown files with YAML frontmatter, organized by type:
 
@@ -300,16 +455,18 @@ Each memory file has:
 
 **Natural identifier:** The `name` slug (e.g., `feedback-execute-dont-argue`).
 
-**Index:** `MEMORY.md` in the same directory — one line per memory with a link and a short hook.
+**Index:** `MEMORY.md` in the same directory — first 200 lines / 25KB loaded at session start.
 
 **Linkage:**
 
-- Memory files are per-project (scoped to the repo path) — they accumulate across sessions for the same repo
+- Memory files are scoped to the repo path (all sessions against the same repo share one memory directory for that user)
 - `feedback` memories often reference specific incidents by session date, bead ID, or PR number
 - `project` memories track what's in flight, what decisions were made, what to watch for
 - The agent loads `MEMORY.md` at session start and consults relevant memories before acting — so memories influence future mission contracts, dispatch decisions, and review criteria
 
-**Why it matters for traceability:** Memories capture the LESSONS — not what happened (that's the audit log) but what was LEARNED from what happened. A feedback memory like "smoke test storage changes — after any storage/layout change, ls the destination from the real entry point" exists because the storage-activation bug shipped three releases without anyone checking the actual file paths on disk. The memory links the lesson to the incident that produced it. Future investigators reading the memory can trace back to the PR, the bead, and the conversation where the mistake was caught.
+**Why it matters for traceability:** Memories capture LESSONS — not what happened (that's the audit log) but what was LEARNED from what happened. A feedback memory like "smoke test storage changes — after any storage/layout change, ls the destination from the real entry point" exists because the storage-activation bug shipped three releases without anyone checking the actual file paths on disk. The memory links the lesson to the incident.
+
+**Traceability limitation:** Because memories are per-user and not in the repo, they are an input to agent behavior (they shape future decisions) but not a shared audit artifact. Two developers working on the same repo have different memories. An investigator tracing a delegation can see the mission contract, the prompt, and the audit trail — but not the memories that influenced HOW the leader wrote the prompt. Harvesting memories into the repo (as a periodic export) would close this gap but requires explicit action.
 
 **Distinction from quarry:** Quarry captures are raw transcripts — everything that was said. Memories are curated distillations — the operator's corrections and the agent's takeaways, extracted from those transcripts and persisted as durable operational knowledge. Quarry is the record; memory is the learning.
 
