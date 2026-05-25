@@ -29,6 +29,13 @@
   </div>
 </div>
 
+{{if .Contract.Context}}
+<details class="border border-neutral-800 mb-6" open>
+  <summary class="px-5 py-3 text-xs text-neutral-500 uppercase tracking-wider cursor-pointer hover:text-neutral-300">Context</summary>
+  <pre class="px-5 py-4 text-xs text-neutral-400 whitespace-pre-wrap border-t border-neutral-800">{{.Contract.Context}}</pre>
+</details>
+{{end}}
+
 {{if .Contract.SuccessCriteria}}
 <div class="border border-neutral-800 p-5 mb-6">
   <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Success Criteria</h2>
@@ -101,13 +108,6 @@
     {{end}}
   </div>
 </div>
-{{end}}
-
-{{if .Contract.Context}}
-<details class="border border-neutral-800 mb-6" open>
-  <summary class="px-5 py-3 text-xs text-neutral-500 uppercase tracking-wider cursor-pointer hover:text-neutral-300">Context</summary>
-  <pre class="px-5 py-4 text-xs text-neutral-400 whitespace-pre-wrap border-t border-neutral-800">{{.Contract.Context}}</pre>
-</details>
 {{end}}
 
 {{if .AuditEntries}}
