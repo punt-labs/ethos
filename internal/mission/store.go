@@ -868,6 +868,20 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Close open delegation skeletons. Non-fatal — the mission is
+	// already closed; a delegation-close failure writes stderr but
+	// does not roll back the mission close. The verdict maps from the
+	// mission's result verdict (pass/fail) to the delegation-level
+	// vocabulary (pass/fail/error/aborted).
+	if s.repoRoot != "" {
+		delegationVerdict := DelegationVerdictPass
+		if satisfying != nil && satisfying.Verdict == VerdictFail {
+			delegationVerdict = DelegationVerdictFail
+		}
+		closedAt := time.Now().UTC().Format(time.RFC3339)
+		closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
+	}
+
 	// Trace: append a summary line to the repo-local JSONL log.
 	// Non-fatal — the mission is already closed; a trace failure
 	// must not roll back the close.
@@ -875,6 +889,38 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
 	}
 	return satisfying, nil
+}
+
+// closeDelegationSkeletons walks delegations/ under the per-mission
+// directory and closes any skeleton whose verdict is still "open".
+func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
+	delegationsDir := filepath.Join(
+		RepoStatePath(repoRoot, "missions"),
+		filepath.Base(missionID), "delegations",
+	)
+	entries, err := os.ReadDir(delegationsDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: reading delegations dir: %v\n", missionID, err)
+		}
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		recordPath := filepath.Join(delegationsDir, e.Name(), "record.yaml")
+		d, loadErr := LoadDelegation(recordPath)
+		if loadErr != nil {
+			continue
+		}
+		if d.Verdict != "open" {
+			continue
+		}
+		if closeErr := CloseDelegationSkeleton(repoRoot, missionID, e.Name(), verdict, closedAt); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: closing delegation %s: %v\n", missionID, e.Name(), closeErr)
+		}
+	}
 }
 
 // loadLocked reads a contract without acquiring the flock. Callers must
