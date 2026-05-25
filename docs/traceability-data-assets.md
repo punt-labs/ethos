@@ -246,6 +246,73 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 
 **Lifecycle:** Written by `ethos mission claim`, read by the PreToolUse dispatch, cleared by `ethos mission release` or naturally stale at session end.
 
+### 13. Issue Tracker (Beads)
+
+**Location:** `<repo>/.beads/` (local Dolt database, synced to hosted DoltDB)
+
+**Question it answers:** Why does this work exist? What was the business or technical motivation? What's the acceptance criteria?
+
+**Content:** Each bead (issue) carries:
+
+- `id` — the bead identifier (e.g., `ethos-ozrb`)
+- `title` — one-line summary of the problem or feature
+- `description` — the full context: what's broken, why it matters, what the fix looks like
+- `type` — bug, feature, task
+- `priority` — P0 (critical) through P4 (backlog)
+- `status` — open, in_progress, closed, deferred
+- `acceptance` — the criteria that define "done"
+- `design` — design decisions recorded at filing time
+- `notes` — supplementary context
+- `labels` — repo scoping (e.g., `repo:ethos`)
+- `dependencies` — which beads block this one
+
+**Natural identifier:** The bead ID (e.g., `ethos-ozrb`). Globally unique across all repos via per-repo prefix.
+
+**Linkage:**
+
+- `bead ID` → mission contract `inputs.ticket` field (the mission that implements this bead)
+- `bead ID` → commit subject (by convention, every commit names its bead in parentheses)
+- `bead ID` → missions.jsonl `ticket` field (the blame fallback uses this join)
+- `bead ID` → the UI blame view's fallback chain (commit subject → missions.jsonl → delegation)
+- Dependencies between beads express sequencing constraints across work items
+
+**Why it matters for traceability:** The bead is the ORIGIN of the work — it answers "why did anyone start working on this?" before the mission contract, before the delegation, before the first tool call. A blame chain that stops at the mission contract still doesn't explain why the mission was created. The bead does: "Bug report from CEO: in a Python project, spawning any sub-agent caused the SessionStart hook to regenerate agent files with Go-specific patterns."
+
+### 14. Claude Code Project Memory
+
+**Location:** `~/.claude/projects/-Users-<user>-<path-to-repo>/memory/` (per-project, per-user)
+
+**Question it answers:** What operational knowledge has accumulated across sessions? What mistakes were made and corrected? What preferences does the operator have?
+
+**Content:** Markdown files with YAML frontmatter, organized by type:
+
+- `user` memories — the operator's role, expertise, preferences
+- `feedback` memories — corrections the operator has given ("don't argue with my decisions", "always smoke test storage changes", "at PR convergence, merge without pausing")
+- `project` memories — ongoing work context, deadlines, decisions
+- `reference` memories — pointers to external systems (where bugs are tracked, which Grafana board to watch)
+
+Each memory file has:
+
+- `name` — kebab-case slug
+- `description` — one-line summary used for relevance matching
+- `metadata.type` — user, feedback, project, reference
+- Body content with the actual knowledge, often including `**Why:**` and `**How to apply:**` sections
+
+**Natural identifier:** The `name` slug (e.g., `feedback-execute-dont-argue`).
+
+**Index:** `MEMORY.md` in the same directory — one line per memory with a link and a short hook.
+
+**Linkage:**
+
+- Memory files are per-project (scoped to the repo path) — they accumulate across sessions for the same repo
+- `feedback` memories often reference specific incidents by session date, bead ID, or PR number
+- `project` memories track what's in flight, what decisions were made, what to watch for
+- The agent loads `MEMORY.md` at session start and consults relevant memories before acting — so memories influence future mission contracts, dispatch decisions, and review criteria
+
+**Why it matters for traceability:** Memories capture the LESSONS — not what happened (that's the audit log) but what was LEARNED from what happened. A feedback memory like "smoke test storage changes — after any storage/layout change, ls the destination from the real entry point" exists because the storage-activation bug shipped three releases without anyone checking the actual file paths on disk. The memory links the lesson to the incident that produced it. Future investigators reading the memory can trace back to the PR, the bead, and the conversation where the mistake was caught.
+
+**Distinction from quarry:** Quarry captures are raw transcripts — everything that was said. Memories are curated distillations — the operator's corrections and the agent's takeaways, extracted from those transcripts and persisted as durable operational knowledge. Quarry is the record; memory is the learning.
+
 ## Join Keys
 
 The traceability graph is navigable because every artifact shares
@@ -257,9 +324,11 @@ at least one key with its neighbors:
 | `delegation_id` | delegation record, audit entry, git trailer (`Delegation:`), delegation-binding sidecar | Every tool call and commit under one agent dispatch |
 | `session_id` | audit log directory name, delegation `parent_session`, quarry capture filename, sidecar directory names | All activity in one Claude Code session, plus the conversation transcript |
 | `agent_id` | audit entry | All tool calls from one subagent invocation within a session |
-| `ticket` / bead ID | contract `inputs.ticket`, missions.jsonl, commit subject (by convention) | External issue tracker, commit-to-mission fallback |
+| `ticket` / bead ID | contract `inputs.ticket`, missions.jsonl, commit subject (by convention), bead database | Origin of the work — why this mission exists |
 | `commit SHA` | git history, git trailer block, GitHub commit page | Per-line blame to delegation chain |
 | `file_path` | audit entry `tool_input`, git blame, contract `write_set` | Which files were touched under which contract |
+| `memory name` | memory file slug, MEMORY.md index, feedback/project body text referencing beads or PRs | Operational lessons linked to the incidents that produced them |
+| `repo path` | Claude Code project memory directory, beads `metadata.json` prefix, `.punt-labs/ethos/` state root | Scopes all per-project state to one repository |
 
 ## The Blame Chain (End-to-End)
 
