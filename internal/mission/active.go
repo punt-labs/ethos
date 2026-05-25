@@ -108,6 +108,95 @@ func WriteActiveMission(globalRoot, sessionID, missionID string) error {
 	return nil
 }
 
+// DelegationBinding is the per-dispatch binding info that bridges the
+// PreToolUse (where the delegation_id is allocated) to the PostToolUse
+// audit writer (where the delegation_id should tag each tool call).
+// additional_env from PreToolUse does NOT persist into hook script
+// processes, so the binding sidecar is the bridge.
+type DelegationBinding struct {
+	DelegationID string
+	MissionID    string
+	ParentSession string
+}
+
+// DelegationBindingPath returns the path to the delegation-binding
+// sidecar for sessionID.
+func DelegationBindingPath(globalRoot, sessionID string) string {
+	if globalRoot == "" || sessionID == "" {
+		return ""
+	}
+	return filepath.Join(globalRoot, "sessions", filepath.Base(sessionID), "delegation-binding")
+}
+
+// WriteDelegationBinding writes the binding info that the PostToolUse
+// audit writer reads. Called from the PreToolUse Tier B dispatch after
+// the delegation skeleton is written and the delegation_id is known.
+func WriteDelegationBinding(globalRoot, sessionID string, b DelegationBinding) error {
+	path := DelegationBindingPath(globalRoot, sessionID)
+	if path == "" {
+		return fmt.Errorf("writing delegation-binding: globalRoot and sessionID are required")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("creating session dir %q: %w", dir, err)
+	}
+	content := b.DelegationID + "\n" + b.MissionID + "\n" + b.ParentSession + "\n"
+	tmp, err := os.CreateTemp(dir, "delegation-binding.*.tmp")
+	if err != nil {
+		return fmt.Errorf("creating temp binding in %q: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}
+
+// ReadDelegationBinding reads the delegation-binding sidecar.
+// Returns a zero-value DelegationBinding and nil when the file is
+// absent — missing is the common "no active dispatch" state.
+func ReadDelegationBinding(globalRoot, sessionID string) (DelegationBinding, error) {
+	path := DelegationBindingPath(globalRoot, sessionID)
+	if path == "" {
+		return DelegationBinding{}, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return DelegationBinding{}, nil
+		}
+		return DelegationBinding{}, fmt.Errorf("reading delegation-binding %q: %w", path, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	var b DelegationBinding
+	if len(lines) > 0 {
+		b.DelegationID = lines[0]
+	}
+	if len(lines) > 1 {
+		b.MissionID = lines[1]
+	}
+	if len(lines) > 2 {
+		b.ParentSession = lines[2]
+	}
+	return b, nil
+}
+
 // ClearActiveMission removes the active-mission sidecar for sessionID.
 // Missing is not an error — clearing an already-clear slot is a no-op
 // so `ethos mission release` is safe to call unconditionally.

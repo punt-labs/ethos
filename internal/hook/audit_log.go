@@ -29,6 +29,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/mission"
 )
 
 // HandleAuditLog appends one JSONL line to the session audit log.
@@ -192,5 +194,32 @@ func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.
 	// authoritative value lives on the delegation skeleton's
 	// parent_delegation field; readers needing the chain walk should
 	// join on delegation_id.
+
+	// Final fallback: delegation-binding sidecar. additional_env from
+	// PreToolUse does NOT persist into hook script processes, so
+	// os.Getenv above returns "" for subagent tool calls even when
+	// the PreToolUse dispatch set DELEGATION_ID in additional_env.
+	// The sidecar (written by PreToolUse at Tier B dispatch time)
+	// carries the binding for the most recent dispatch under this
+	// session — the same session_id the subagent shares with the
+	// parent.
+	if entry.DelegationID == "" || entry.ContractID == "" {
+		globalRoot, gErr := tierBGlobalRoot()
+		if gErr == nil {
+			b, bErr := mission.ReadDelegationBinding(globalRoot, sessionID)
+			if bErr == nil && b.DelegationID != "" {
+				if entry.DelegationID == "" {
+					entry.DelegationID = b.DelegationID
+				}
+				if entry.ContractID == "" {
+					entry.ContractID = b.MissionID
+				}
+				if entry.ParentSession == "" {
+					entry.ParentSession = b.ParentSession
+				}
+			}
+		}
+	}
+
 	return entry
 }

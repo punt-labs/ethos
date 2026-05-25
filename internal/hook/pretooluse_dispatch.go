@@ -245,6 +245,23 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		return writeAgentBlock(w, reason)
 	}
 
+	// Write the delegation-binding sidecar so the PostToolUse audit
+	// writer can tag subagent tool calls with delegation_id +
+	// mission_id. additional_env from PreToolUse does NOT persist into
+	// hook script processes, so this sidecar is the bridge. Non-fatal:
+	// a write failure is a traceability degradation, not a spawn
+	// refusal.
+	if globalRoot, gErr := tierBGlobalRoot(); gErr == nil {
+		if wErr := mission.WriteDelegationBinding(globalRoot, sessionID, mission.DelegationBinding{
+			DelegationID:  delegationID,
+			MissionID:     missionID,
+			ParentSession: sessionID,
+		}); wErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: pre-tool-use: writing delegation binding: %v\n", wErr)
+		}
+	}
+
 	env := map[string]string{
 		"DELEGATION_ID":         delegationID,
 		"PARENT_DELEGATION_ID":  delegationID,
