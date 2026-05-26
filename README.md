@@ -56,8 +56,9 @@ curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/b379a79/install.sh 
 ethos setup
 ```
 
-The installer places the `ethos` binary in `~/.local/bin` and
-registers the Claude Code plugin. `ethos setup` asks 3 questions
+The installer places the `ethos` binary in `~/.local/bin` and,
+when `claude` and `git` are available, registers the Claude Code
+plugin. `ethos setup` asks 3 questions
 (name, handle, working style), then creates your identity, a paired
 agent, repo config, a 4-agent team, and agent definition files.
 Start Claude Code — the agent knows who it is, who you are, and how
@@ -117,8 +118,9 @@ budget:
   reflection_after_each: true
 ```
 
-The PreToolUse hook enforces the write-set — an Edit to a file
-outside the contract is blocked before it executes.
+When a verifier agent is spawned, the PreToolUse hook enforces the
+write-set — an Edit to a file outside the contract is blocked before
+it executes.
 
 ### Specialist agents
 
@@ -146,7 +148,7 @@ role + team data as `.claude/agents/*.md`.
 | Expert identities | Personalities, writing styles, talents bound to named agents |
 | Team structure | Roles with tool restrictions, reports-to graph, anti-responsibilities |
 | Pipeline templates | Multi-stage mission workflows from 8 built-in templates (plus bundle-specific ones) |
-| Lifecycle hooks | 7 events (SessionStart, PreToolUse, PostToolUse, SubagentStart/Stop, PreCompact, SessionEnd): identity injection, contract enforcement, audit capture |
+| Lifecycle hooks | 7 events (SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, PreCompact, SessionEnd) |
 | Write-set enforcement | PreToolUse blocks unauthorized file modifications at runtime |
 | Symlink rejection | Uniform policy across all mission loaders and lock paths |
 | Depth limits | Configurable ceiling on nested delegation chains |
