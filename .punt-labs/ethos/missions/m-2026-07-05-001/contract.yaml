@@ -1,0 +1,27 @@
+mission_id: m-2026-07-05-001
+status: open
+type: implement
+created_at: "2026-07-05T02:58:48Z"
+updated_at: "2026-07-05T03:17:48Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-05T02:58:48Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-bo84
+write_set:
+    - internal/hook/generate_agents.go
+    - internal/hook/generate_agents_test.go
+    - CHANGELOG.md
+success_criteria:
+    - In generate_agents.go the PostToolUse Write|Edit hook command (~L362) has 3 make-check branches each ending '| head -n 60; exit $_rc'; change each so that on FAILURE the make check output is routed to stderr (head -n 60 >&2) and the hook exits 2
+    - and on SUCCESS the hook is silent and exits 0; per-edit coverage and full 'make check' frequency must be unchanged (do NOT move to a Stop hook); the emitted command stays POSIX-sh compatible (runs under /bin/sh/dash) with no bashisms; update the expected-string assertions in generate_agents_test.go to match the new command exactly; add a CHANGELOG.md entry under [Unreleased] Fixed describing the hidden-failure fix; make check exits 0; commit incrementally one commit per logical step
+    - each commit passes make check
+    - no more than 30 minutes of uncommitted changes
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: Bug reported by vox COO. Claude Code only surfaces STDERR for a blocking PostToolUse hook and only exit 2 reliably feeds the block reason back to the model; the current branches emit to STDOUT and exit with make's raw code, so on failure the agent/user see 'hook returned blocking error … No stderr output' with no reason. This change only makes the failure visible+actionable; it does not change what triggers make check or how often it runs. Do NOT self-install the binary; use .tmp/ for scratch.
