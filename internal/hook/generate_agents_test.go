@@ -207,7 +207,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n"+
+						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n"+
 						"---\n")
 
 				// Body checks.
@@ -388,7 +388,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n")
+						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n")
 
 				// Log the generated file so binary verification is visible
 				// in -v test output (spec success criterion 5).
@@ -417,7 +417,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -727,17 +727,18 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; printf '%s\\\\n' \\\"$_out\\\" | head -n 60; exit $_rc ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
 		},
 		{
-			// PostToolUse command captures exit code from make check
-			// instead of masking it behind the pipe to head. The
-			// command saves the exit code in _rc before the pipe and
-			// exits with it at the end (POSIX-sh compatible).
-			name: "PostToolUse propagates make check exit code",
+			// PostToolUse command captures the make-check exit code in
+			// _rc, then surfaces failures where Claude Code can see them:
+			// on failure it routes the truncated output to stderr and
+			// exits 2 (the only code that hands the block reason back to
+			// the model); on success it is silent and exits 0.
+			name: "PostToolUse surfaces make check failures on stderr",
 			check: func(t *testing.T, root string, err error) {
 				require.NoError(t, err)
 
@@ -749,8 +750,13 @@ func TestGenerateAgentFiles(t *testing.T) {
 				// The exit-capture pattern must be present.
 				assert.Contains(t, content, "_rc=$?",
 					"command must capture exit code in _rc")
-				assert.Contains(t, content, "exit $_rc",
-					"command must exit with the captured exit code")
+				// On failure the truncated output goes to stderr...
+				assert.Contains(t, content, "head -n 60 >&2",
+					"command must route failure output to stderr")
+				// ...and the hook exits 2 so Claude Code feeds the reason
+				// back to the model.
+				assert.Contains(t, content, "exit 2",
+					"command must exit 2 on failure to block with a reason")
 
 				// No bare "| head" without the exit-capture wrapper.
 				// A regression would revert to the old form:
