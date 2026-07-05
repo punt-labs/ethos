@@ -5300,8 +5300,8 @@ model. So a make-check failure appeared to the agent and operator as:
 PostToolUse:Edit hook returned blocking error … No stderr output
 ```
 
-with no reason. The per-edit gate fired but was un-actionable — the agent was
-blocked and could not see what to fix.
+with no reason. The per-edit gate fired but the agent could not act on it — it
+was blocked and could not see what to fix.
 
 ### Decision
 
