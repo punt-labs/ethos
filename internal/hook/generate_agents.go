@@ -329,7 +329,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		//
 		//   3. Project-type file extensions (from filePatterns) — run
 		//      make check with output-capture; on failure emit the
-		//      head -n 60 truncation to stderr and exit 2, else exit 0.
+		//      tail -n 60 truncation to stderr and exit 2, else exit 0.
 		//      Patterns are detected at generation time
 		//      by projectFilePatterns: go.mod → Go patterns, pyproject.toml
 		//      or setup.py → Python patterns, neither → generic fallback.
@@ -355,8 +355,11 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// by Claude Code to hook commands) so `make check` resolves
 		// against the repo Makefile even if the sub-agent has cd'd
 		// into a subdirectory before the Write or Edit tool fires.
-		// Output is captured to a variable first. On failure the head
+		// Output is captured to a variable first. On failure the tail
 		// -n 60 truncation is written to stderr and the hook exits 2;
+		// tail (not head) keeps the LAST 60 lines, which hold the
+		// failing tool's diagnostic — make stops at the first failing
+		// target, so the error is at the end of the accumulated output.
 		// on success it is silent and exits 0. Claude Code surfaces
 		// only stderr for a blocking PostToolUse hook, and only exit 2
 		// hands the block reason back to the model — routing to stdout
@@ -365,7 +368,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// under /bin/sh, which is dash on Debian/Ubuntu): no `set -o
 		// pipefail`, no process substitution, no bash-isms in the case
 		// patterns.
-		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | head -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
+		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
 	}
 	b.WriteString("---\n")
 
