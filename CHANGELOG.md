@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generated PostToolUse make-check hook now surfaces failures.** The
+  agent-file hook that runs `make check` after each Write/Edit routed
+  failure output to stdout and exited with make's raw code. Claude Code
+  surfaces only stderr for a blocking PostToolUse hook and only exit 2
+  hands the block reason back to the model, so a failure appeared as
+  "hook returned blocking error … No stderr output" with no detail. All
+  three make-check branches now write the truncated output to stderr and
+  exit 2 on failure, and stay silent with exit 0 on success, so the
+  failure reason is visible and handed back to the agent. Per-edit
+  coverage and full make-check frequency are unchanged (ethos-bo84).
+
 ## [4.0.0] - 2026-05-25
 
 ### Changed
