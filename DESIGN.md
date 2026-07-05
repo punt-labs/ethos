@@ -5272,3 +5272,96 @@ Final integration test: leader runs a Tier A Agent call → audit enrichment cap
 ---
 
 **End of draft v5.** Round-3 verdicts (rop APPROVE / jra APPROVE / rsc APPROVE WITH ONE NEW REQ) plus CEO clean-slate direction applied. Three structural simplifications landed (date-keyed two-tree layout, single audit storage, sibling-file counters) plus three round-3 IMPL fixes (Tier A verdict semantics, `max_delegation_depth` cleanup, transition window stated). Round 4 dispatched to test stability — design converges when a review round adds zero new substantive findings.
+
+---
+
+## DES-055: Generated make-check hook surfaces failures on stderr with exit 2 (SETTLED)
+
+**Status**: Settled. Shipped in v4.0.1 (ethos-bo84).
+
+### Problem
+
+The PostToolUse `Write|Edit` hook that ethos generates into every specialist
+agent definition (emitted by `internal/hook/generate_agents.go`, consumed as
+`.claude/agents/<handle>.md` frontmatter) runs `make check` after each code
+edit. On failure it routed the output to **stdout** and exited with make's
+**raw** exit code:
+
+```sh
+_out=$(cd "$CLAUDE_PROJECT_DIR" && make check 2>&1); _rc=$?; \
+  printf '%s\n' "$_out" | head -n 60; exit $_rc
+```
+
+For a blocking PostToolUse hook, Claude Code surfaces only **stderr** and
+treats only **exit 2** as the signal that carries the block reason back to the
+model. So a make-check failure appeared to the agent and operator as:
+
+```text
+PostToolUse:Edit hook returned blocking error … No stderr output
+```
+
+with no reason. The per-edit gate fired but the agent could not act on it — it
+was blocked and could not see what to fix.
+
+### Decision
+
+The generated hook, in all three make-check branches (no-jq, empty-path,
+extension-match), behaves as:
+
+- **On failure** (`_rc ≠ 0`): write the truncated output to **stderr** and
+  **exit 2** — Claude Code shows it and hands it to the model as automated
+  feedback.
+- **On success** (`_rc = 0`): stay **silent** and **exit 0** (also removes
+  success-case noise).
+- **Truncate with `tail -n 60`, not `head`**: `make check` runs
+  go vet → staticcheck → shellcheck → markdownlint → go test → validate-content
+  and stops at the first failing target, so the diagnostic is at the *end* of
+  the accumulated output. `head` would keep leading passing-stage output and
+  truncate the actual error away.
+- **Per-edit coverage and full `make check` frequency are retained** — catching
+  breakage immediately per-edit (rather than letting it accumulate to surface
+  later) is deliberate.
+
+Resulting tail (per branch):
+
+```sh
+_out=$(cd "$CLAUDE_PROJECT_DIR" && make check 2>&1); _rc=$?; \
+  if [ $_rc -ne 0 ]; then printf '%s\n' "$_out" | tail -n 60 >&2; exit 2; fi; \
+  exit 0
+```
+
+The emitted command stays POSIX-sh (`/bin/sh`/dash) compatible — no `pipefail`,
+no process substitution, no bashisms.
+
+### Verification
+
+A behavioral test executes the emitted command under `/bin/sh` with a stub
+`make` (`internal/hook/generate_agents_exec_test.go`): a failing stub yields
+exit 2, the diagnostic on stderr (last line present, first line dropped —
+proving `tail`), and empty stdout; a passing stub yields exit 0 and silence.
+Confirmed live in the running v4.0.1 session — a specialist subagent edit that
+breaks `make check` surfaces the real Go error with exit 2; a passing edit is
+silent and non-blocking.
+
+### Rejected alternatives
+
+- **stdout + raw exit code** (the original form) — the bug. Blocking-hook
+  stdout is not surfaced by Claude Code, and a non-2 exit does not feed the
+  reason to the model. The failure reason was swallowed.
+- **`head -n 60`** — truncates to the *first* 60 lines. Because make stops at
+  the first failing target, the real diagnostic (at the end) is dropped,
+  half-recreating the invisible-failure bug.
+- **Move to a `Stop` hook / reduce frequency** — loses per-edit immediacy.
+  Catching breakage the moment it is introduced, not at session end, is the
+  whole point of the gate.
+- **Non-blocking `exit 1`** — surfaces to the operator's transcript but does
+  not hand the reason to the model as automated feedback; the agent cannot
+  self-correct.
+
+### References
+
+- Bead ethos-bo84; shipped v4.0.1. Agent files regenerated under ethos-ri7c.
+- Builds on DES-016 (hook business logic in Go) and DES-026 (generate agent
+  definitions from identity data). The hook string is emitted by
+  `GenerateAgentFiles` and regenerated on session start, so the fix propagates
+  to `.claude/agents/*.md` automatically after upgrade.
