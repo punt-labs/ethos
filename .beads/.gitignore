@@ -14,6 +14,11 @@ interactions.jsonl
 
 # Embedded Dolt store (unused in server mode; left for legacy/rollback)
 embeddeddolt/
+# Local Dolt working copy. In server mode the source of truth is the central
+# Hosted DoltDB (metadata.json + BEADS_DOLT_* env); the local dolt sql-server
+# rewrites this per-machine runtime state (sql-server.info, noms manifest/LOCK,
+# stats/) on every run, dirtying the tree. Never track it. (ethos-only cleanup)
+dolt/
 backup/
 *.corrupt.backup/
 export-state.json
