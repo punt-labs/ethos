@@ -42,14 +42,20 @@ func TestPostToolUseHook_Execution(t *testing.T) {
 	// branch runs make check unconditionally.
 	stdin := `{"tool_input":{"file_path":"internal/foo.go"}}`
 
-	t.Run("failure surfaces on stderr and exits 2", func(t *testing.T) {
-		const marker = "STATICCHECK_FAILURE_XYZZY"
-		binDir := stubMake(t, "echo "+marker+"\nexit 1\n")
+	t.Run("failure surfaces the tail on stderr and exits 2", func(t *testing.T) {
+		// A real make check failure buries its diagnostic at the END of
+		// output, after >60 lines of passing-stage noise. The stub emits
+		// 70 numbered lines then exits 1: with `tail -n 60` stderr holds
+		// LINE_011..LINE_070, so the last line survives and the first is
+		// truncated. A revert to `head -n 60` would invert this — keeping
+		// LINE_001 and dropping LINE_070 — and fail these assertions.
+		binDir := stubMake(t, "i=1\nwhile [ \"$i\" -le 70 ]; do\n  printf 'LINE_%03d\\n' \"$i\"\n  i=$((i + 1))\ndone\nexit 1\n")
 
 		code, stdout, stderr := runHook(t, command, binDir, stdin)
 
 		assert.Equal(t, 2, code, "blocking exit code must be 2")
-		assert.Contains(t, stderr, marker, "failing tool output must reach stderr")
+		assert.Contains(t, stderr, "LINE_070", "tail must keep the last line (the real diagnostic)")
+		assert.NotContains(t, stderr, "LINE_001", "tail must truncate the leading passing-stage noise")
 		assert.Empty(t, stdout, "nothing must go to stdout")
 	})
 
