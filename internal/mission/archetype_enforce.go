@@ -41,10 +41,12 @@ func enforceArchetypeConstraints(c *Contract, a *Archetype) error {
 // hands. This complements checkSelfVerification's worker != evaluator
 // rule. Create-only, like the sibling enforce* functions.
 func enforceRequireDelegatedWorker(c *Contract, a *Archetype) error {
-	if a.RequireDelegatedWorker && strings.TrimSpace(c.Leader) == strings.TrimSpace(c.Worker) {
+	leader := strings.TrimSpace(c.Leader)
+	worker := strings.TrimSpace(c.Worker)
+	if a.RequireDelegatedWorker && leader == worker {
 		return fmt.Errorf(
 			"requires a delegated worker: leader %q cannot also be the worker (assign a distinct specialist for code work)",
-			strings.TrimSpace(c.Leader),
+			leader,
 		)
 	}
 	return nil
