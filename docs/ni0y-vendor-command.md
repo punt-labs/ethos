@@ -406,5 +406,3 @@ safe. This is the contract bwk's mode consumes.
 - **Open questions:** ext read-side coupling (blocking), active-bundle
   interaction, ext-secret exposure, repo-config scope, non-identity
   content scope.
-</content>
-</invoke>

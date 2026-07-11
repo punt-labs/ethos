@@ -73,7 +73,7 @@ Allowed values: `layered` and `repo-only`. Empty (unset) maps to
 (`LoadRepoConfig`, `internal/resolve/resolve.go:148`) — fail loud, never
 silently default:
 
-```
+```text
 parsing .punt-labs/ethos.yaml: unknown resolution %q (want "layered" or "repo-only")
 ```
 
@@ -220,7 +220,7 @@ at all — the legacy `.punt-labs/ethos/` dir is the repo layer, and
 that resolves from global scope is contradictory and must fail at
 startup, not silently keep the global bundle:
 
-```
+```text
 resolution "repo-only" requires a repo-local or legacy bundle, but
 active_bundle "gstack" resolves from ~/.punt-labs/ethos/bundles/gstack
 ```
@@ -238,7 +238,7 @@ a silent empty, never a soft warning.
 
 When an identity is absent from the repo (and repo-local bundle):
 
-```
+```text
 identity "claudia" not found in repo-only resolution
   searched: .punt-labs/ethos/identities/claudia.yaml
   (global fallback is disabled by resolution: repo-only)
@@ -256,7 +256,7 @@ missing attribute file means the vendored set is incomplete — that is
 an error, not a warning. Aggregate every missing attribute for the
 identity into one message that lists the handle and each missing file:
 
-```
+```text
 identity "mal" is incomplete in repo-only resolution:
   personality "principal-engineer": missing personalities/principal-engineer.md
   writing_style "concise-quantified": missing writing-styles/concise-quantified.md
