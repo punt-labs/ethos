@@ -43,8 +43,8 @@ func enforceArchetypeConstraints(c *Contract, a *Archetype) error {
 func enforceRequireDelegatedWorker(c *Contract, a *Archetype) error {
 	if a.RequireDelegatedWorker && strings.TrimSpace(c.Leader) == strings.TrimSpace(c.Worker) {
 		return fmt.Errorf(
-			"archetype %q requires a delegated worker: leader %q cannot also be the worker (assign a distinct specialist for code work)",
-			a.Name, strings.TrimSpace(c.Leader),
+			"requires a delegated worker: leader %q cannot also be the worker (assign a distinct specialist for code work)",
+			strings.TrimSpace(c.Leader),
 		)
 	}
 	return nil
