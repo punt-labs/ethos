@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Code archetypes require a delegated worker.** A new
+  `require_delegated_worker` archetype field rejects mission contracts
+  where `leader == worker`, so shipped code is always written by a
+  distinct, delegated specialist rather than the leader acting as its
+  own hands. Enabled on the `implement` and `test` seed archetypes;
+  non-code archetypes (design, report, review, investigate) and
+  contracts created without a resolved archetype keep the prior
+  `leader == worker` allowance (backward compatible). Enforced at
+  mission create/dispatch time across the CLI, MCP, and pipeline
+  surfaces. **Upgrade note:** the invariant is data-driven from the
+  deployed archetype files — re-run `ethos seed --force` after upgrading
+  so the on-disk `implement.yaml`/`test.yaml` are overwritten with the
+  new field (`ethos seed` without `--force` skips existing files, leaving
+  the guard absent/`false` and inactive). The rule is enforced only at
+  mission create time, so existing open missions are not retroactively
+  invalidated when the field is deployed.
+
 ## [4.0.1] - 2026-07-04
 
 ### Fixed

@@ -92,6 +92,15 @@ required_fields:
 write_set_constraints:
   - "*.md"
   - "docs/**"
+
+# When true, mission creation rejects any contract whose leader is
+# also its own worker (leader == worker). The leader specifies and
+# reviews the work but does not execute it, so shipped code is
+# written by a distinct delegated specialist. Enabled on the
+# implement and test archetypes. Enforced at create time only;
+# existing open missions are never retroactively invalidated.
+# Archetypes that omit the field keep the leader == worker allowance.
+require_delegated_worker: false
 ```
 
 ## Contract Schema Change
@@ -333,6 +342,7 @@ This layering means:
 | `required_fields` | Each listed field path must be non-empty in the contract |
 | `allow_empty_write_set` | When true, skips base rule 10 (write_set non-empty) |
 | `write_set_constraints` | Every write_set entry must match at least one glob pattern |
+| `require_delegated_worker` | When true, rejects a contract whose `leader` equals its `worker` (enforced at create time only) |
 | `budget_default` | Applied when the contract omits budget or uses zero values |
 
 The Go code that interprets these fields is generic -- it does not

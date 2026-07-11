@@ -307,3 +307,70 @@ func TestValidateWithArchetype_AllowEmptyWriteSet(t *testing.T) {
 		})
 	}
 }
+
+// TestEnforce_RequireDelegatedWorker covers the leader != worker invariant
+// enforced for code archetypes (implement, test) at Create time via
+// enforceArchetypeConstraints. Non-code archetypes leave leader == worker
+// permitted. The archetypes carry only Name and RequireDelegatedWorker so
+// the sibling constraint families (write-set, extract-into, required-fields)
+// stay no-ops and this test isolates the delegated-worker rule.
+func TestEnforce_RequireDelegatedWorker(t *testing.T) {
+	code := &Archetype{Name: "implement", RequireDelegatedWorker: true}
+	nonCode := &Archetype{Name: "design", RequireDelegatedWorker: false}
+
+	tests := []struct {
+		name    string
+		arch    *Archetype
+		leader  string
+		worker  string
+		wantErr string // substring; "" means no error
+	}{
+		{
+			name:    "code archetype rejects leader as worker",
+			arch:    code,
+			leader:  "claude",
+			worker:  "claude",
+			wantErr: "requires a delegated worker",
+		},
+		{
+			name:   "code archetype allows a distinct worker",
+			arch:   code,
+			leader: "claude",
+			worker: "bwk",
+		},
+		{
+			name:   "non-code archetype allows leader as worker",
+			arch:   nonCode,
+			leader: "claude",
+			worker: "claude",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validContract()
+			c.Leader = tc.leader
+			c.Worker = tc.worker
+			err := enforceArchetypeConstraints(&c, tc.arch)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestValidateWithArchetype_DoesNotEnforceDelegatedWorker locks in that the
+// delegated-worker rule left the always-on validation path. ValidateWithArchetype
+// runs on every Load/Update/Close/Advance; a code archetype with leader == worker
+// must pass so an existing open mission is never permanently stuck. The rule is
+// Create-only, enforced by enforceArchetypeConstraints (see TestEnforce above).
+func TestValidateWithArchetype_DoesNotEnforceDelegatedWorker(t *testing.T) {
+	code := &Archetype{Name: "implement", RequireDelegatedWorker: true}
+	c := validContract()
+	c.Leader = "claude"
+	c.Worker = "claude"
+	require.NoError(t, c.ValidateWithArchetype(code))
+}

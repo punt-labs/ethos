@@ -4,6 +4,7 @@ budget_default:
   rounds: 2
   reflection_after_each: true
 allow_empty_write_set: false
+require_delegated_worker: true
 required_fields: []
 write_set_constraints:
   - "*_test.go"
