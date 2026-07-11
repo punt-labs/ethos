@@ -5365,3 +5365,209 @@ silent and non-blocking.
   definitions from identity data). The hook string is emitted by
   `GenerateAgentFiles` and regenerated on session start, so the fix propagates
   to `.claude/agents/*.md` automatically after upgrade.
+
+---
+
+## DES-057: Self-standing repos — repo-authoritative resolution, `ethos vendor`, and ext `.local` (SETTLED)
+
+**Status**: Settled. Design ratified 2026-07-11 (bead ethos-ni0y). Amends
+DES-008. v1 ships all three parts together. Consumer/first adopter: vox
+(de-submoduled ethos into a vendored `.punt-labs/ethos/`, PR #284).
+
+### Problem
+
+Ethos resolves identities and their attributes through the three-layer chain
+repo-local → active bundle → global (DES-051), where **the global fallback
+catches the tail**: a handle absent from the repo-local `.punt-labs/ethos/`
+still resolves from the global `~/.punt-labs/ethos/`. So a repo that vendors a
+partial identity set is not self-standing — verified in vox, whose trimmed
+15-identity copy still resolves `ylc` and `claudia` (global-only) via the
+fallback. A fresh checkout without the global home would silently differ, and
+the vendored set's incompleteness is invisible.
+
+Two capabilities are missing: a way to make the repo layer authoritative (so
+the fallback cannot mask gaps), and a way to produce a complete resolvable
+snapshot (`ethos export` is lossy — it drops `.ext/` dirs and roles/teams by
+contract, `export.go:20`).
+
+### Decision
+
+Three coordinated parts, shipped together in v1.
+
+#### Part A — Repo-authoritative resolution mode (opt-in)
+
+A string enum `resolution: layered | repo-only` in `.punt-labs/ethos.yaml`,
+sibling to `active_bundle`. Unset ⇒ `layered` ⇒ byte-identical to today.
+`repo-only` disables the **global read** across all four layered stores,
+keeping repo → bundle and dropping the global tail.
+
+- **One policy** (`repoAuthoritative bool`) threaded into every
+  `NewLayeredStoreWithBundle`, read once through `identityStore()`. It gates
+  **five read surfaces** (not four stores — the identity store has two global
+  reads): identity lookup (`loadRaw`/`FindBy`/`Exists`/`List`), the
+  identity-internal attribute chain (`attrChain`), the standalone attribute
+  store (gated by a construction change), role, and team.
+- **Writes route to the repo layer uniformly** in repo-only mode — all four
+  stores, not just attributes. Leaving identity/role/team writes on global
+  while reads are repo-only creates a write-then-invisible footgun (`ethos
+  identity create foo` → global → invisible to repo-only reads).
+- **Miss behavior**: aggregate all misses into one typed
+  `ErrIncompleteRepoSet` wrapping `[]MissingRef{Kind, Slug, Path}`, naming the
+  handle and each missing `{kind}/{slug}` file. Referenced-but-missing
+  attributes (soft warnings today) become hard errors in repo-only mode.
+  `whoami`'s terminal `resolve.Resolve` no-match error is wrapped with a
+  repo-only hint (otherwise it returns a generic "no identity matches" that
+  cannot name what's missing). Surfaces: `whoami` (non-zero exit), agent
+  generation (fail the affected agent), session-start (**degrade**: stderr +
+  skip injection, never brick a live session), MCP (typed error per DES-020),
+  and `ethos doctor` (the authoritative hard completeness gate).
+- **`resolution: repo-only` with no repo layer** (no `.punt-labs/ethos/`
+  directory and no repo-local/legacy bundle) is a **hard startup error**, not
+  a silent fall-through to global.
+- **active_bundle**: keep repo → bundle for `SourceRepo`/`SourceLegacy` (both
+  travel with the checkout); reject a `SourceGlobal` bundle under repo-only at
+  startup.
+
+#### Part B — `ethos vendor` command
+
+Top-level `ethos vendor [handle...]`, a peer of the (kept, lossy) `ethos
+export`. Snapshots a complete, resolvable identity set into
+`.punt-labs/ethos/`.
+
+- **Plan/`--dry-run` by default** (it writes into git-tracked space); `--apply`
+  executes. Flags: `[handle...] --team --all --to --prune --dry-run/--apply
+  --json` plus `--allow-ext-key` (below). `--no-teams` and `--from` are
+  **rejected** — they let a user produce an incomplete "complete" snapshot.
+- **Transitive-closure BFS to a fixed point.** Edges: identity →
+  personality/writing-style/talents/roles/teams; identity → its `.ext/` base
+  files; team → member identities + roles; and the **load-bearing reverse
+  edge** identity → teams-that-contain-it (this is what pulls in global-only
+  members like `claudia`, reachable only through team membership). Roles are
+  leaves; there is no team→team edge; termination is guaranteed (finite node
+  universe, monotone growth). Document the **blast radius**: the closure pulls
+  the connected component of the team graph, so vendoring one identity in a
+  dense org can vendor most of the roster — `--dry-run` first.
+- **Completeness postcondition**, verified before the command reports success:
+  a repo-only store rooted at the snapshot resolves every identity with zero
+  not-found and every team validates against that layer alone. This predicate
+  is exactly Part A's precondition — the two halves share it.
+- **ext handling**: includes base `<ns>.yaml` (ext is **on by default** —
+  discovery found ext is all useful config, e.g. quarry `memory_collection` +
+  `session_context` on all 30 identities, zero secrets), and **always skips
+  `<ns>.local.yaml`** (Part C). Copies **regular files only** (`lstat`; a
+  symlink `quarry.yaml → quarry.local.yaml` or `→ ~/.ssh/id_rsa` must not
+  smuggle content past the name-skip).
+- **Fail-closed credential guard**: vendor **blocks** (non-zero exit) if a base
+  ext key *name* matches the credential heuristic, naming `<handle> <ns>/<key>`
+  and suggesting `--local`. Override is **per-key only**
+  (`--allow-ext-key <ns>/<key>`, repeatable); no blanket `--force`. Matching is
+  **name-only** (never value inspection — keeps DES-008 intact) with
+  underscore-token membership: EXCLUDE public references first (`*_id`,
+  `fingerprint`, `keyid`, `pubkey`, …), then BLOCK (`password`, `token`,
+  `api_key`, `private_key`, `secret`, `credential`, …), then WARN (`key`,
+  `salt`, `seed`, `pin`, `dsn`, …). `gpg_key_id` → EXCLUDE → clean;
+  `memory_collection`/`session_context` → clean; `api_token` → BLOCK. The
+  identical lint runs advisory in `ethos doctor`. The curated pattern list is
+  djb-owned.
+- **MCP tool** + a `formatVendor` formatter in `internal/hook/format_output.go`
+  (per DES-020; the formatter lives in the hook package, not `internal/mcp`).
+
+#### Part C — ext `.local` split (amends DES-008)
+
+Each ext namespace file `<handle>.ext/<ns>.yaml` gains an optional companion
+`<handle>.ext/<ns>.local.yaml` for secret/machine-specific values, mirroring
+the org's `.envrc`/`.envrc.local` and `vox.md`/`vox.local.md` convention.
+
+- **Read/merge**: one `readNamespace(handle, ns)` helper reads base then
+  overlays `.local` per key (`.local` wins), `os.IsNotExist`-guarded.
+  `loadExtensions` and `ExtGet` route through it; `get_identity`/`whoami`
+  return one flat merged map. No `.local` present ⇒ byte-identical to today.
+  `readNamespace` is a **read-only merged view — its result is never marshalled
+  back to a file** (a tested invariant: prevents a base write from folding
+  `.local` secrets into the committable file). `ExtDel` targets one file
+  (base or, with `--local`, the companion), not the merged view.
+- **Write targeting**: `ethos ext set --local` writes the companion; default
+  writes base. `ExtList` strips `.local.yaml` **as a unit before** the `.yaml`
+  case (so no phantom `<ns>.local` namespace) and reports the union.
+- **Boundary**: vendor copies `<ns>.yaml`, **always** skips `<ns>.local.yaml` —
+  the file layout *is* the boundary, no value redaction. Gitignore
+  `.punt-labs/ethos/**/*.local.yaml`, emitted by `vendor`/`setup`; `doctor`
+  asserts the rule is present and **errors if any `*.local.yaml` under
+  `.punt-labs/ethos/` is already git-tracked** (gitignore does not untrack).
+- **Scope, stated explicitly**: `.local` is a **git-exclusion** mechanism, not
+  a secrets vault — the merged view still flows to the model and to quarry
+  transcript capture at runtime. And `.local` is visible only to
+  ethos-mediated reads; a tool exercising DES-008's direct-read blessing sees
+  **base only**. Never serialize the merged identity view into tracked space.
+
+### Reasoning
+
+- A **layout boundary** (`.local` file, name-based skip) beats value redaction:
+  it is deterministic, auditable, and preserves DES-008's rule that ethos never
+  interprets ext values. The credential name-lint reads *key names*, not
+  values, so it is DES-008-clean.
+- **Fail-closed on credentials**: a warning fires after vendor has already
+  written the file into the working tree — one `git add` away — and is
+  invisible in CI. The command that puts bytes into git must refuse when those
+  bytes are name-flagged. Per-key override keeps it from becoming a nuisance.
+- **ext on by default** is safe given (a) the verified zero-secret state across
+  30 identities, (b) the structural `.local` skip, and (c) the block-lint
+  shipping with it. ext is load-bearing config (agent memory wiring); a
+  vendored repo without it produces agents that silently lost their memory.
+- Vendor's completeness postcondition **is** repo-only's precondition — one
+  shared predicate, so the produce half and the verify half cannot drift.
+- **Opt-in** everywhere preserves back-compat: unset `resolution` and absent
+  `.local` are both byte-identical to today.
+
+### Rejected alternatives
+
+- **Default ext-off + value redaction** — discovery found ext is all useful,
+  secret-free config; the `.local` split is a cleaner, deterministic boundary.
+- **Warn-only credential lint** — fires after the write, missed in CI. Rejected
+  for fail-closed block at the git-writing boundary.
+- **Value/content inspection to find secrets** — violates DES-008's
+  no-interpretation invariant. Name-only + layout boundary chosen.
+- **`--no-teams` / `--from <layer>` vendor flags** — allow producing an
+  incomplete set the tool calls "complete." Cut.
+- **Boolean `vendored: true` / `global_fallback: false`** — conflate
+  provenance with policy / negative-boolean footgun. String enum chosen.
+- **Replace the repo layer with the vendored set** — breaks every repo using
+  `.punt-labs/ethos/` as a submodule (DES-051's rejected alternative still
+  holds).
+- **Deprecate `ethos export`** — export and vendor do different jobs
+  (foreign-format lossy handoff vs. native lossless closure). Keep both.
+
+### Verification (acceptance — vox's vendored 15-set is the test case)
+
+1. The vendored 15-identity set regains quarry `memory_collection` +
+   `session_context` (and vox voice config) via `<ns>.yaml`.
+2. `*.local.yaml` is hard-excluded from vendor output — structurally (name
+   skip + regular-files-only), not by heuristic scrub.
+3. Repo-authoritative mode resolves the complete set with **zero global
+   fallback** and hard-errors listing anything missing.
+4. A symlinked base ext file is refused by vendor; the base-write-base-only
+   invariant is tested; the block-lint fails closed on `api_token` and passes
+   `gpg_key_id`; `doctor` errors on an already-tracked `*.local.yaml`.
+
+### Implications
+
+- New package `internal/vendor/` owns the closure walk + the completeness check
+  (`ErrIncompleteRepoSet`), imported by the four stores (live miss), `ethos
+  doctor` (gate), and `ethos vendor` (pre-write validation) — one
+  implementation, no divergence.
+- `resolve.RepoConfig` gains `resolution`; the four `NewLayeredStoreWithBundle`
+  constructors gain the `repoAuthoritative` policy.
+- `internal/identity` gains `readNamespace` + `.local` write targeting;
+  `ethos ext set` gains `--local`.
+- `internal/mcp` gains the `vendor` tool; `internal/hook/format_output.go`
+  gains `formatVendor`.
+- DES-008 is amended by reference (this record), matching how DES-022 and
+  DES-044 extend it.
+
+### References
+
+Amends DES-008 (generic extension mechanism). Builds on DES-051 (three-layer
+resolution), DES-044 (extensions resolve through the chain), DES-011 (whoami
+resolution), DES-020 (MCP formatters). Bead ethos-ni0y; consumer vox (PR #284).
+Design drafts: `docs/ni0y-resolution-mode.md`, `docs/ni0y-vendor-command.md`,
+`docs/ni0y-ext-local.md`.
