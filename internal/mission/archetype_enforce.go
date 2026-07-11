@@ -9,13 +9,16 @@ import (
 // enforceArchetypeConstraints checks the contract against its archetype's
 // constraints. Called by Store.Create after Validate passes.
 //
-// Four constraint families:
+// Five constraint families:
 //   - AllowEmptyWriteSet: handled by ValidateWithArchetype (rule 11).
 //   - WriteSetConstraints: every non-directory write_set entry must match
 //     at least one glob pattern.
 //   - ExtractIntoConstraints (DES-052): every extract_into entry must
 //     match at least one glob pattern.
 //   - RequiredFields: named fields must be non-empty.
+//   - RequireDelegatedWorker: leader != worker for code archetypes
+//     (implement, test) — the leader specifies and reviews but does not
+//     execute as its own worker.
 func enforceArchetypeConstraints(c *Contract, a *Archetype) error {
 	if err := enforceWriteSetConstraints(c, a); err != nil {
 		return err
@@ -25,6 +28,24 @@ func enforceArchetypeConstraints(c *Contract, a *Archetype) error {
 	}
 	if err := enforceRequiredFields(c, a); err != nil {
 		return err
+	}
+	if err := enforceRequireDelegatedWorker(c, a); err != nil {
+		return err
+	}
+	return nil
+}
+
+// enforceRequireDelegatedWorker forbids leader == worker for code
+// archetypes (RequireDelegatedWorker), so shipped code is written by a
+// distinct, delegated worker rather than the leader acting as its own
+// hands. This complements checkSelfVerification's worker != evaluator
+// rule. Create-only, like the sibling enforce* functions.
+func enforceRequireDelegatedWorker(c *Contract, a *Archetype) error {
+	if a.RequireDelegatedWorker && strings.TrimSpace(c.Leader) == strings.TrimSpace(c.Worker) {
+		return fmt.Errorf(
+			"archetype %q requires a delegated worker: leader %q cannot also be the worker (assign a distinct specialist for code work)",
+			a.Name, strings.TrimSpace(c.Leader),
+		)
 	}
 	return nil
 }

@@ -308,10 +308,13 @@ func TestValidateWithArchetype_AllowEmptyWriteSet(t *testing.T) {
 	}
 }
 
-// TestValidate_RequireDelegatedWorker covers the leader != worker invariant
-// enforced for code archetypes (implement, test). Non-code archetypes and a
-// nil archetype leave leader == worker permitted (backward compatible).
-func TestValidate_RequireDelegatedWorker(t *testing.T) {
+// TestEnforce_RequireDelegatedWorker covers the leader != worker invariant
+// enforced for code archetypes (implement, test) at Create time via
+// enforceArchetypeConstraints. Non-code archetypes leave leader == worker
+// permitted. The archetypes carry only Name and RequireDelegatedWorker so
+// the sibling constraint families (write-set, extract-into, required-fields)
+// stay no-ops and this test isolates the delegated-worker rule.
+func TestEnforce_RequireDelegatedWorker(t *testing.T) {
 	code := &Archetype{Name: "implement", RequireDelegatedWorker: true}
 	nonCode := &Archetype{Name: "design", RequireDelegatedWorker: false}
 
@@ -341,12 +344,6 @@ func TestValidate_RequireDelegatedWorker(t *testing.T) {
 			leader: "claude",
 			worker: "claude",
 		},
-		{
-			name:   "nil archetype allows leader as worker (backward compatible)",
-			arch:   nil,
-			leader: "claude",
-			worker: "claude",
-		},
 	}
 
 	for _, tc := range tests {
@@ -354,7 +351,7 @@ func TestValidate_RequireDelegatedWorker(t *testing.T) {
 			c := validContract()
 			c.Leader = tc.leader
 			c.Worker = tc.worker
-			err := c.ValidateWithArchetype(tc.arch)
+			err := enforceArchetypeConstraints(&c, tc.arch)
 			if tc.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tc.wantErr)
@@ -363,4 +360,17 @@ func TestValidate_RequireDelegatedWorker(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestValidateWithArchetype_DoesNotEnforceDelegatedWorker locks in that the
+// delegated-worker rule left the always-on validation path. ValidateWithArchetype
+// runs on every Load/Update/Close/Advance; a code archetype with leader == worker
+// must pass so an existing open mission is never permanently stuck. The rule is
+// Create-only, enforced by enforceArchetypeConstraints (see TestEnforce above).
+func TestValidateWithArchetype_DoesNotEnforceDelegatedWorker(t *testing.T) {
+	code := &Archetype{Name: "implement", RequireDelegatedWorker: true}
+	c := validContract()
+	c.Leader = "claude"
+	c.Worker = "claude"
+	require.NoError(t, c.ValidateWithArchetype(code))
 }
