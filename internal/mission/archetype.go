@@ -30,6 +30,14 @@ type Archetype struct {
 	// backward-compatible default — archetypes that omit the field
 	// authorize any extract_into directory the leader names.
 	ExtractIntoConstraints []string `yaml:"extract_into_constraints,omitempty" json:"extract_into_constraints,omitempty"`
+	// RequireDelegatedWorker forbids leader == worker for this archetype:
+	// the leader specifies and reviews the work but does not execute it as
+	// its own worker. Set on code archetypes (implement, test) so shipped
+	// code is always written by a delegated specialist and stays traceable
+	// to a distinct worker. False is the backward-compatible default —
+	// non-code archetypes (e.g., design, report, review) may name the
+	// leader as worker.
+	RequireDelegatedWorker bool `yaml:"require_delegated_worker,omitempty" json:"require_delegated_worker,omitempty"`
 }
 
 // ArchetypeStore discovers archetype YAML files from two directories

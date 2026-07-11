@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -351,6 +352,58 @@ func TestArchetypeStore_EmptyRepoRoot(t *testing.T) {
 
 	if !s.Exists("design") {
 		t.Error("Exists(design) = false, want true")
+	}
+}
+
+// TestArchetype_RequireDelegatedWorkerYAML pins the require_delegated_worker
+// YAML tag to the struct field. The field is consumed only from archetype
+// YAML, so a struct-tag typo would silently unmarshal to false and disable
+// the delegated-worker guard. The test loads through the real Load path
+// (yaml.Unmarshal in loadArchetype), asserts the field, then confirms the
+// unmarshaled archetype drives enforceArchetypeConstraints — and that an
+// archetype omitting the field defaults to false (backward compatible).
+func TestArchetype_RequireDelegatedWorkerYAML(t *testing.T) {
+	const codeYAML = `name: implement
+description: "Implementation mission"
+budget_default:
+  rounds: 3
+  reflection_after_each: true
+require_delegated_worker: true
+`
+
+	global := t.TempDir()
+	writeArchetypeFile(t, global, "implement", codeYAML)
+	writeArchetypeFile(t, global, "design", designYAML)
+	s := NewArchetypeStore("", global)
+
+	code, err := s.Load("implement")
+	if err != nil {
+		t.Fatalf("Load implement: %v", err)
+	}
+	if !code.RequireDelegatedWorker {
+		t.Fatal("RequireDelegatedWorker = false, want true after YAML unmarshal")
+	}
+
+	// Enforcement wires through: leader == worker under this archetype
+	// is rejected.
+	c := validContract()
+	c.Leader = "claude"
+	c.Worker = "claude"
+	err = enforceArchetypeConstraints(&c, code)
+	if err == nil {
+		t.Fatal("enforceArchetypeConstraints = nil, want delegated-worker error")
+	}
+	if !strings.Contains(err.Error(), "requires a delegated worker") {
+		t.Errorf("error = %q, want it to contain %q", err, "requires a delegated worker")
+	}
+
+	// An archetype omitting the field defaults to false.
+	design, err := s.Load("design")
+	if err != nil {
+		t.Fatalf("Load design: %v", err)
+	}
+	if design.RequireDelegatedWorker {
+		t.Error("RequireDelegatedWorker = true, want false when field omitted")
 	}
 }
 

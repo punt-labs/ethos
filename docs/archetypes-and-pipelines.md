@@ -161,6 +161,7 @@ Field reference:
 | `allow_empty_write_set` | If true, contracts of this type may omit `write_set` |
 | `required_fields` | Fields that must be non-empty beyond base validation |
 | `write_set_constraints` | Glob patterns every write-set entry must match |
+| `require_delegated_worker` | If true, rejects contracts where `leader` equals `worker`; the leader must delegate to a distinct specialist. Enforced at create time only. Enabled on `implement` and `test` |
 
 Rules:
 
