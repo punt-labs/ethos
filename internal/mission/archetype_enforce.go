@@ -43,6 +43,10 @@ func enforceArchetypeConstraints(c *Contract, a *Archetype) error {
 func enforceRequireDelegatedWorker(c *Contract, a *Archetype) error {
 	leader := strings.TrimSpace(c.Leader)
 	worker := strings.TrimSpace(c.Worker)
+	if leader == "" || worker == "" {
+		// Empty fields are a Validate concern, not this constraint's.
+		return nil
+	}
 	if a.RequireDelegatedWorker && leader == worker {
 		return fmt.Errorf(
 			"requires a delegated worker: leader %q cannot also be the worker (assign a distinct specialist for code work)",

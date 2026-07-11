@@ -35,8 +35,8 @@ type Archetype struct {
 	// its own worker. Set on code archetypes (implement, test) so shipped
 	// code is always written by a delegated specialist and stays traceable
 	// to a distinct worker. False is the backward-compatible default —
-	// non-code archetypes (design, report, review, investigate) may name
-	// the leader as worker.
+	// non-code archetypes (e.g., design, report, review) may name the
+	// leader as worker.
 	RequireDelegatedWorker bool `yaml:"require_delegated_worker,omitempty" json:"require_delegated_worker,omitempty"`
 }
 
