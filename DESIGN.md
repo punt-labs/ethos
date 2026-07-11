@@ -5614,5 +5614,6 @@ the org's `.envrc`/`.envrc.local` and `vox.md`/`vox.local.md` convention.
 Amends DES-008 (generic extension mechanism). Builds on DES-051 (three-layer
 resolution), DES-044 (extensions resolve through the chain), DES-011 (whoami
 resolution), DES-020 (MCP formatters). Bead ethos-ni0y; consumer vox (PR #284).
-Design drafts: `docs/ni0y-resolution-mode.md`, `docs/ni0y-vendor-command.md`,
-`docs/ni0y-ext-local.md`, `docs/ni0y-ext-read-carveout.md`.
+Design missions (specialist drafts preserved in branch history):
+`m-2026-07-11-004` (resolution mode, bwk/rsc), `-005` (vendor, mdm/rop),
+`-008` (ext `.local`, bwk/rsc), `-010` (ext-read carve-out, bwk/rsc).
