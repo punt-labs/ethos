@@ -5427,6 +5427,25 @@ keeping repo → bundle and dropping the global tail.
 - **active_bundle**: keep repo → bundle for `SourceRepo`/`SourceLegacy` (both
   travel with the checkout); reject a `SourceGlobal` bundle under repo-only at
   startup.
+- **ext reads — DES-044 carve-out** (closes the consumer-found gap that vendor
+  copies ext but repo-only never read it). In `repo-only` mode, ext resolves
+  from the identity's **repo/bundle source layer** via the Part C
+  `readNamespace` base+`.local` merge — not global. A single `extStore(handle)`
+  selector gated on `repoAuthoritative` replaces the hardcoded global in every
+  ext read/write method (the `Load`-internal layer shortcut is likewise
+  `repoAuthoritative`-gated, so `layered` mode is byte-identical). Ext writes to
+  a bundle-sourced identity are refused, matching the read-only bundle rule. The
+  **required-ext set is the `.vendor.yaml` manifest** (ethos's own artifact): a
+  manifest-recorded ext base file absent from the source layer is a miss, folded
+  into the same `ErrIncompleteRepoSet` as attribute misses — so a global-less
+  checkout fails loud naming the missing ext instead of silently dropping agent
+  memory wiring. Live `Load` stays additive but records the verdict (never
+  bricks a running session on missing ext; the verdict surfaces via the Part A
+  table — `doctor`/agent-gen fail, session-start degrade). A repo-only set with
+  **no `.vendor.yaml`** cannot have its ext completeness verified; `ethos
+  doctor` emits an explicit advisory saying so, keeping the limit visible rather
+  than silent. This carve-out ships with or after Part C (it depends on
+  `readNamespace`); DES-044 is unchanged in `layered` mode.
 
 #### Part B — `ethos vendor` command
 
@@ -5447,10 +5466,20 @@ export`. Snapshots a complete, resolvable identity set into
   universe, monotone growth). Document the **blast radius**: the closure pulls
   the connected component of the team graph, so vendoring one identity in a
   dense org can vendor most of the roster — `--dry-run` first.
+- **`.vendor.yaml` manifest**: vendor writes a manifest recording the vendored
+  closure — the identities and each identity's ext base files it copied. This
+  manifest is the **required-ext set** that Part A's repo-only ext-miss rule
+  reads (ethos's own record of what was vendored; never a consumer value, so
+  DES-008-clean).
 - **Completeness postcondition**, verified before the command reports success:
   a repo-only store rooted at the snapshot resolves every identity with zero
-  not-found and every team validates against that layer alone. This predicate
-  is exactly Part A's precondition — the two halves share it.
+  not-found and every team validates against that layer alone. The ext dimension
+  is **manifest-parity** — every `.vendor.yaml`-recorded ext base file is
+  present in the snapshot (a subset check that ignores `.local` and extra
+  files), *not* exact-tree-verbatim — which is the same requirement Part A's
+  repo-only ext read enforces, so producer-verify and consumer-read cannot
+  diverge. This predicate is exactly Part A's precondition — the two halves
+  share it.
 - **ext handling**: includes base `<ns>.yaml` (ext is **on by default** —
   discovery found ext is all useful config, e.g. quarry `memory_collection` +
   `session_context` on all 30 identities, zero secrets), and **always skips
@@ -5536,11 +5565,27 @@ the org's `.envrc`/`.envrc.local` and `vox.md`/`vox.local.md` convention.
   holds).
 - **Deprecate `ethos export`** — export and vendor do different jobs
   (foreign-format lossy handoff vs. native lossless closure). Keep both.
+- **Directory-exists ext-miss rule** (a repo `<h>.ext/` present ⇒ complete) —
+  cannot distinguish "vendor omitted `quarry.yaml`" from "identity has no ext,"
+  so it fails to make an incomplete vendor loud. The `.vendor.yaml` manifest
+  records exactly what was vendored, which is the discriminator.
+- **ext continues to resolve from global in repo-only** (preserve DES-044
+  unconditionally) — the original DES-057 reconciliation did this and it was
+  wrong: vendor copies ext into the repo but resolution never reads it, so a
+  global-less checkout silently drops agent memory wiring (consumer-found on
+  PR #345). The carve-out is required for the feature to actually deliver
+  self-standing repos.
 
 ### Verification (acceptance — vox's vendored 15-set is the test case)
 
 1. The vendored 15-identity set regains quarry `memory_collection` +
-   `session_context` (and vox voice config) via `<ns>.yaml`.
+   `session_context` (and vox voice config): vendor records them in
+   `.vendor.yaml`, and **repo-only mode reads ext from the repo layer** (the
+   DES-044 carve-out), so on a global-less checkout the agents resolve their
+   memory wiring — and a manifest-recorded ext file gone missing fails loud
+   rather than silently dropping memory. (Fully met for vendored sets;
+   hand-authored manifest-less sets get a `doctor` advisory that ext
+   completeness is unverifiable.)
 2. `*.local.yaml` is hard-excluded from vendor output — structurally (name
    skip + regular-files-only), not by heuristic scrub.
 3. Repo-authoritative mode resolves the complete set with **zero global
@@ -5570,4 +5615,4 @@ Amends DES-008 (generic extension mechanism). Builds on DES-051 (three-layer
 resolution), DES-044 (extensions resolve through the chain), DES-011 (whoami
 resolution), DES-020 (MCP formatters). Bead ethos-ni0y; consumer vox (PR #284).
 Design drafts: `docs/ni0y-resolution-mode.md`, `docs/ni0y-vendor-command.md`,
-`docs/ni0y-ext-local.md`.
+`docs/ni0y-ext-local.md`, `docs/ni0y-ext-read-carveout.md`.
