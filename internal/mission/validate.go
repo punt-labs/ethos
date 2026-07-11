@@ -167,6 +167,19 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		return fmt.Errorf("worker contains control character")
 	}
 
+	// Delegated-worker invariant: code archetypes (RequireDelegatedWorker)
+	// forbid leader == worker, so shipped code is written by a distinct,
+	// delegated worker rather than the leader acting as its own hands. This
+	// complements checkSelfVerification's worker != evaluator rule. Skipped
+	// when a is nil (no archetype resolved) for backward compatibility.
+	if a != nil && a.RequireDelegatedWorker &&
+		strings.TrimSpace(c.Leader) == strings.TrimSpace(c.Worker) {
+		return fmt.Errorf(
+			"archetype %q requires a delegated worker: leader %q cannot also be the worker (assign a distinct specialist for code work)",
+			a.Name, strings.TrimSpace(c.Leader),
+		)
+	}
+
 	// evaluator.handle non-empty and clean
 	if strings.TrimSpace(c.Evaluator.Handle) == "" {
 		return fmt.Errorf("evaluator.handle is required")

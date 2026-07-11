@@ -307,3 +307,60 @@ func TestValidateWithArchetype_AllowEmptyWriteSet(t *testing.T) {
 		})
 	}
 }
+
+// TestValidate_RequireDelegatedWorker covers the leader != worker invariant
+// enforced for code archetypes (implement, test). Non-code archetypes and a
+// nil archetype leave leader == worker permitted (backward compatible).
+func TestValidate_RequireDelegatedWorker(t *testing.T) {
+	code := &Archetype{Name: "implement", RequireDelegatedWorker: true}
+	nonCode := &Archetype{Name: "design", RequireDelegatedWorker: false}
+
+	tests := []struct {
+		name    string
+		arch    *Archetype
+		leader  string
+		worker  string
+		wantErr string // substring; "" means no error
+	}{
+		{
+			name:    "code archetype rejects leader as worker",
+			arch:    code,
+			leader:  "claude",
+			worker:  "claude",
+			wantErr: "requires a delegated worker",
+		},
+		{
+			name:   "code archetype allows a distinct worker",
+			arch:   code,
+			leader: "claude",
+			worker: "bwk",
+		},
+		{
+			name:   "non-code archetype allows leader as worker",
+			arch:   nonCode,
+			leader: "claude",
+			worker: "claude",
+		},
+		{
+			name:   "nil archetype allows leader as worker (backward compatible)",
+			arch:   nil,
+			leader: "claude",
+			worker: "claude",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := validContract()
+			c.Leader = tc.leader
+			c.Worker = tc.worker
+			err := c.ValidateWithArchetype(tc.arch)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
