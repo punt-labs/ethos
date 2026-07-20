@@ -5617,3 +5617,352 @@ resolution), DES-020 (MCP formatters). Bead ethos-ni0y; consumer vox (PR #284).
 Design missions (specialist drafts preserved in branch history):
 `m-2026-07-11-004` (resolution mode, bwk/rsc), `-005` (vendor, mdm/rop),
 `-008` (ext `.local`, bwk/rsc), `-010` (ext-read carve-out, bwk/rsc).
+
+---
+
+## DES-058: Live audit write path and sealed committed record (amends DES-054) (DRAFT)
+
+**Status**: Draft. Bead `ethos-t5b6`. Amends DES-054 v5 storage.
+Cross-repo request from punt-kit (clean-tree gate on `punt release`
+preflight failing against siblings with live sessions). Full design:
+`docs/audit-seal.md`.
+
+### Problem
+
+DES-054 stores the session audit log at
+`<repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl`,
+git-tracked (shared history, path redaction, commit-trailer resolution)
+AND appended by the PreToolUse hook on every tool call. A file cannot be
+both git-tracked and continuously appended: any repo with an active
+session has a permanently dirty tree, observed blocking `punt release`
+preflight. `missions/<id>/log.jsonl` and the tracked `.create.lock` share
+the disease.
+
+### Design
+
+Split the append-heavy files across two zones in the same checkout: the
+gitignored `.punt-labs/local/` zone is the live write path; the tracked
+`.punt-labs/ethos/` tree holds the sealed record as immutable chunk files.
+
+- **Live location — `.punt-labs/local/` (machine-local zone).** The live
+  file is `<repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl`.
+  `local` is the org convention for machine-local-never-committed state
+  (`.envrc.local`, `vox.local.md`); its gitignore rule ships once, org-wide,
+  via the punt-kit `punt-labs-dir.md` standard (merged `e3ab9a3`) and
+  `punt:init`/`punt:audit` enforcement. Per-checkout isolation is automatic
+  (the file lives inside its checkout), which removes the checkout-path
+  roster-scoping machinery. Rejected: the home-dir global tree (operator
+  ruling for `local`), `TMPDIR`/`.tmp/` (deletable scratch), and
+  `.punt-labs/local/<branch>/` (sessions span branches).
+- **Redacted live lines.** The write path is unchanged (build → redact →
+  hash → preview → append); only the destination moves. The live file
+  holds redacted lines so the seal is a transformation-free byte copy,
+  redaction stays in one place, and nothing leaks at rest.
+  `tool_input_hash` is still computed over the redacted form (DES-052
+  unchanged).
+- **Strictly-monotonic per-session timestamp.** No `seq` field. Every
+  append allocates `ts = max(now, last_ts + 1ns)` under the session flock,
+  giving a per-session total order that is collision-free regardless of a
+  coarse or NTP-stepped clock. Line identity is `(session, ts)`. The
+  writer initializes `last_ts` from the max ts of existing sealed chunks so
+  new lines sort strictly after frozen history. On live-file reopen the
+  writer **truncates a non-newline-terminated tail** under the flock before
+  appending: that fragment is an un-synced partial write, unrecoverable
+  regardless, and truncating it prevents a new complete line from being
+  glued onto it into one unparseable line (the reader still skips a torn
+  tail in a file not yet reopened). A newline-terminated line that still
+  fails to parse (an out-of-order page writeback losing an earlier slice) is
+  **skipped with a stderr count** by every consumer — writer recovery, seal,
+  and read — never exit 2 and never silent, since its own `f.Sync()` never
+  completed. The writer's count rides PreToolUse-hook stderr, which Claude
+  Code does not surface on exit 0, so there it is best-effort; the
+  load-bearing channel is the seal's and read's re-emission of the same count
+  in visible contexts.
+- **Chunk sealing.** A seal never modifies a tracked file: it writes a
+  **new immutable chunk** `audit-<first>-<last>.jsonl` (Unix-nanosecond
+  first/last timestamps, zero-padded to 19 digits — sorts chronologically,
+  collision-free, filesystem-safe) holding the live lines with
+  `ts > watermark`. The watermark is the max `<last>` across the session's
+  existing chunk names (a frozen legacy `audit.jsonl` is scanned and
+  contributes the max ts over its lines; a `.quarantine` marker contributes
+  the **verified** `<last>` it records — the max ts the corrupt bytes reached
+  and of any lines quarantine re-sealed, never the filename `<last>` on
+  faith). The malformed-name exit 2 is **scoped to the chunk
+  namespace**: only an `audit-…` (or `log-…`) near-miss that fails to parse
+  as `audit-<19digits>-<19digits>.jsonl` fails the seal — a skipped chunk
+  would regress the watermark — while every non-chunk sibling (the frozen
+  `audit.jsonl`, a `.quarantine` marker or a `.corrupt`/`.corrupt-<hash>`
+  artifact under a covering marker whose named range contains the artifact's, a
+  mission's
+  `contract.yaml`/`results.yaml`, any unrelated file) is ignored and draws no
+  error. When it scans, the seal also **verifies each chunk's content** — a
+  chunk that does not parse whole or whose last line `ts` != its filename
+  `<last>` is corruption and fails the seal (exit 2), the same check the read
+  makes; the specified escape is `ethos audit quarantine`, never
+  `--no-verify`. The sealed directory is dated by the **session start date**
+  (from the roster; when `session purge` has removed the entry, from an
+  existing sealed dir's date prefix, a purge tombstone, or the live file's
+  first-line ts — never wall-clock, so one session never splits across two
+  dirs). Written via temp + rename for atomicity; temp names embed the chunk
+  range, so a widened tail after a crash yields a new temp name rather than an
+  overwrite — the seal deletes only **its own** stale `.audit-*.jsonl.tmp`
+  under the flock before writing its own, and leaves any foreign `*.tmp`
+  untouched (sibling rule). The seal's final act unconditionally `git add`s
+  **every** untracked
+  chunk in the session dir (not only the one it wrote), so a crash after
+  rename but before staging cannot leave an orphan dirtying the tree. Two
+  branches only ever add distinct chunk files, so merges are conflict-free
+  with stock git — no merge driver, no `.gitattributes`, no prefix
+  invariant, no divergence/reseal.
+- **Seal triggers.** Primary at **pre-commit**: `ethos audit seal` visits
+  **every** session directory in the repo — the union of the live zone
+  (lines to seal) and the tracked sealed tree (chunks to stage) — seals each
+  session's pending live lines and `git add`s **every** untracked chunk it
+  finds, so the record lands in the same commit/PR as the work and a crashed
+  seal's orphan chunk is recovered even when that session has no pending live
+  lines. Repo-wide, not committing-session-scoped: in a squash-merge world
+  per-commit attribution is a non-goal, so orphaned/crashed sessions' lines
+  simply land at the next commit — no liveness probe, no session-attribution
+  logic. Not commit-msg (runs after the index snapshot). Secondary at
+  **mission close** for Tier B. Session-end sealing is a courtesy flush for a
+  long-lived checkout, but the load-bearing mitigation for a worktree about
+  to be deleted: the live file lives inside the checkout, so worktree removal
+  or `git clean -fdx` destroys any unsealed lines, and the SessionEnd flush is
+  what preserves them. In a **gitlink-mounted** repo (a consuming repo before
+  bead `e29s`)
+  the sealed tree is unreachable, so the teardown flush defers like every
+  other seal there — one-line notice, nothing written — and deleting the
+  checkout (hook-driven or a hookless `rm -rf`) destroys its unsealed tail.
+  The design accepts this as a **bounded pre-`e29s` limitation**: there is no
+  in-repo target to seal to, a home-tree transit copy was rejected as a
+  write-only subsystem (§Rejected alternatives), and the org rule is to vendor
+  a repo
+  (`e29s`, the `punt-4yy` campaign) before relying on its audit trail.
+- **Merged read.** `ethos audit show` unions the session's sealed chunks
+  and the live lines with `ts` past the sealed watermark, orders by `ts`,
+  and dedups the two post-discipline pools while passing the legacy pool
+  through. Post-discipline lines (post-upgrade chunks + live) dedup on
+  `(session, ts)` — loss-free, since equal ts implies a byte-identical line
+  from the same append-only live file and distinct events get distinct ts —
+  collapsing the overlap a cross-branch re-seal leaves. Frozen legacy lines
+  are **not deduped at all**: nothing ever duplicates a legacy line (the seal
+  never copies one into a chunk), so the pool has no duplicate to collapse and
+  any collapse could only drop a distinct event the pre-discipline clock gave
+  a colliding ts; the two pools never mix because every legacy ts sits below
+  every post-upgrade ts. A monotonic chunk that does not parse whole, or whose
+  last ts != its filename `<last>`, is corruption and surfaces as an **error
+  naming the chunk** (exit 2, escape `ethos audit quarantine`), never a silent
+  drop; a quarantined chunk's unrecovered sub-range shows in the output as an
+  **explicit gap marker** (the lines quarantine re-sealed from the live file
+  reappear as an ordinary chunk),
+  and only a legacy file, whose name has no ts to contradict, keeps the
+  tolerant torn-tail drop. A newline-terminated but unparseable live line is
+  skipped with a stderr count, never exit 2. In a gitlink-mounted repo (seal
+  deferred, below) `audit show` **flags** a session whose live tail sits past
+  the sealed watermark (`N unsealed lines, sealing deferred until vendored`).
+  In the common single-branch case the dedup is a no-op and output is
+  identical to the pre-change single-file read; the DES-054 early-return read
+  path is **replaced** by this union.
+- **Cross-branch re-seal.** The live file is in `.punt-labs/local/` and
+  survives `git checkout`, but the watermark is derived from the tracked
+  chunk set, which a branch switch rewrites. A branch lacking an earlier
+  chunk therefore re-seals already-sealed lines into a wider chunk; after
+  merge both chunks coexist and overlap. Re-sealing is **desired** —
+  suppressing it would lose the record on whichever branch actually merges
+  — so the overlap is resolved at read by the `(session, ts)` dedup, not
+  prevented. The monotonic-ts subsystem is separately rewind-robust (the
+  writer recovers `last_ts` from the live file's own tail), so timestamps
+  never regress across a branch switch even though the seal watermark can.
+- **Mission tree.** `log.jsonl` gets the same live-write/chunk-seal
+  treatment (`log-<first>-<last>.jsonl` chunks), authoritative seal at
+  mission close, pre-commit as the clean-tree backstop. All `.lock` files
+  move to the global tree (`~/.punt-labs/ethos/missions/<id>.lock`,
+  `.create.lock`) — a lock file never belongs in shared history; migration
+  untracks the existing `.create.lock` **and removes it from disk** (a bare
+  `git rm --cached` leaves an untracked file that re-fails the clean-tree
+  gate), and the code stops writing any in-repo lock. Lock relocation is
+  unchanged by the chunk rulings.
+- **Seal failure — three classes.** The pre-commit hook exits 2 (fail
+  closed, DES-055 shape) on an I/O error (`EACCES`/`EIO`), a malformed chunk
+  filename, a **corrupt sealed chunk** (does not parse whole, or last ts !=
+  filename `<last>`), or a **`git add` failure** staging a new or orphan
+  chunk or a quarantine artifact — with a self-contained remedy message. The specified escape from a
+  corrupt-chunk exit 2 is **`ethos audit quarantine <chunk>`**, never
+  `--no-verify`. It **retires the corrupt chunk first** — renaming it out of
+  the namespace to `.corrupt` (committed as evidence; seal and read ignore the
+  name) frees the chunk's name so the **re-seal** can recreate a good chunk
+  under it, making the clobber of a still-named corrupt chunk impossible by
+  construction. It then re-seals any still-readable lines of the range from the
+  live file (an ordinary new chunk, `(session, ts)` dedup tolerates the
+  overlap), writes a tracked `.quarantine` marker with **deterministic content
+  only** (chunk name, verified content-derived `<last>`, unrecovered sub-range,
+  reason — **no wall-clock timestamp**, so two checkouts quarantining the same
+  chunk from the same state produce byte-identical artifacts that merge clean),
+  and **stages every quarantine artifact the marker covers** — the `.corrupt`,
+  the marker, the re-sealed chunk, and any `.corrupt-<hash>` — itself
+  (`git mv` + `git add`) so the tree is clean with no hand-staging. The marker contributes to the watermark its
+  **verified** `<last>`, never the filename `<last>` on faith, which would
+  silently suppress every later line's seal. `audit show` then shows only the
+  unrecovered sub-range as an explicit gap. Because the marker is the last
+  durable artifact and is itself written via temp + `f.Sync()` + rename (a torn
+  marker reads as **absent** everywhere), a crash mid-verb resumes
+  deterministically by artifact state: chunk present and no `.corrupt` → fresh
+  run; a `.corrupt` with no covering marker → **resume** (finish the re-seal,
+  marker, and stage — on resume a chunk already at the freed target that parses
+  whole and matches the recovery range **is** the completed re-seal, verified
+  and kept, since the refuse-if-target-exists guard is a fresh-run rule; a
+  chunk there that **fails** verification is fresh damage, retired under the
+  same `<name>.corrupt-<hash>` suffix before the resume proceeds), and
+  seal and read treat this state as an error prompting the resume, never
+  silence; a `.corrupt` with a covering marker → idempotent no-op that also
+  verifies every covered quarantine artifact (including any `.corrupt-<hash>`)
+  is staged, **requires a chunk to stand for the marker's recovered range**
+  (re-running the re-seal if none does while the live file still holds lines of
+  that range outside the recorded unrecovered sub-range — the
+  crash-between-retirement-and-re-seal window), **and content-verifies any
+  chunk now
+  at a covered name** — fresh corruption there is a **new** event, retired under
+  a deterministic `<name>.corrupt-<hash-of-corrupt-bytes>` suffix (the
+  never-overwrite is per exact filename, so it never collides with the first
+  `.corrupt`, and a byte-identical suffix already on disk is retired under the
+  first free name in a deterministic sequence, `-2`, `-3`, …, rather than
+  refusing — the sequence is the never-overwrite),
+  re-sealed, with the marker updated by the smaller-range/union rule. It never
+  overwrites an existing `.corrupt`; recovery is repo-wide
+  only once the quarantine commit merges, and until it propagates other
+  checkouts still exit 2 — bounded and loud. Two checkouts quarantining the
+  same chunk from divergent states can produce an ordinary marker conflict,
+  resolved by keeping the marker with the **smaller** unrecovered range plus
+  the union of the re-sealed chunks (the checkout that recovered more wins).
+  Fail-closed must never leave bypass as the only exit. A commit with no
+  sessions dir (`ENOENT`) or no pending live lines is a no-op exit 0, but the
+  vacuum cross-check is **per session** and iterates two sources: each
+  roster-active session bound to this repo (any checkout path) **and** each
+  purge tombstone whose recorded repo is the committing repo and that carries
+  an unsealed-lines flag (so the crash → purge → checkout-deleted → commit
+  sequence still warns). The tombstone records the repo and recorded checkout
+  path it was purged from, so the check scopes tombstones to the committing
+  repo and derives the live path from that path and the session id; the
+  warning repeats at each commit until the operator acknowledges it with
+  `ethos session purge --ack <session-id>`, which **renames** the tombstone to
+  `<session-id>.purged.acked` — a retained record, never warned on again, so
+  the loss survives the ack. Like the `.corrupt` rename this never overwrites
+  per exact filename: a second ack for a re-purged id retires under a
+  content-derived `<session-id>.purged.acked-<hash>` suffix — a stable,
+  collision-averse name — and acking onto an existing identical `.acked-<hash>`
+  retires under the first free name in a deterministic sequence (`-2`, `-3`, …)
+  rather than refusing, so two byte-identical tombstones stay two records and
+  the warning is always retirable. For
+  each the hook `stat`s
+  the recorded live file and **warns on stderr naming any session whose live
+  file is absent** (still exit 0 — it may mean a checkout was deleted, or one
+  session's live file removed, with unsealed lines). `session purge` itself
+  refuses (or with `--force` warns and sets the tombstone flag) when the live
+  file still holds lines above the watermark, and sets the flag in a distinct
+  "live file already gone" variant when the recorded live file is already
+  absent (so the crash → checkout-deleted → purge → commit order is caught
+  too). A
+  **gitlink-mounted** `.punt-labs/ethos/` (a consuming repo before bead
+  `e29s`) is also a no-op exit 0, but **not silent**: it prints a one-line
+  stderr notice and `audit show` flags the deferred session. The seal target
+  is the wrong tree, so sealing defers — the live lines stay in
+  `.punt-labs/local/`, the clean-tree goal is already met, and the record
+  seals once `e29s` lands. The SessionEnd teardown flush in a gitlink mount
+  defers the same way, but its notice rides exit-0 SessionEnd stderr (reaching
+  no one) and the checkout — with the live tail — is deleted moments later, so
+  the teardown deferral is unannounced and post-hoc undetectable: a bounded
+  pre-`e29s` limitation (§Seal triggers), not a recoverable case.
+  This deferral must not exit 2, or it would block every commit in every
+  consuming repo; the notice plus the flag keep the window from being
+  unbounded silence. A corrupt
+  sealed chunk *is* the divergence an earlier draft claimed impossible:
+  I11-chunk makes it unreachable normally, so if it appears the store is
+  damaged and the seal fails loudly rather than sealing past it.
+
+### Invariant changes
+
+`I10-audit-atomic` amended: appends target the live session log under the
+session flock, which also allocates the strictly-monotonic per-session
+`ts` (`> max sealed chunk ts`); sealed chunks are written only, whole, by
+the seal step. New `I11-chunk` (each chunk written once via temp+rename,
+never modified; chunks hold disjoint contiguous ts ranges *within one
+tree state* — a branch rewind can overlap, resolved at read), `I11-idem`
+(each complete live line sealed into at least one chunk after a following
+seal; duplicate copies share `(session, ts)` and are byte-identical),
+`I12-merge` (read = union of sealed chunks and live tail past the sealed
+watermark, ordered by ts; post-discipline lines dedup on `(session, ts)`,
+frozen legacy lines pass through undeduped since nothing duplicates a legacy
+line and a legacy dedup could only drop a distinct event, and a corrupt
+monotonic chunk surfaces as an error, not a drop).
+
+### Migration
+
+Existing tracked `audit.jsonl`/`log.jsonl` are frozen historical chunks
+and stay — each reads as its session's oldest chunk. Only the write path
+moves to `.punt-labs/local/`. New verb `ethos audit seal [--dry-run]`
+(idempotent, atomic per session via temp+rename, partial-failure resume;
+visits every session dir under both the live zone and the tracked sealed
+tree so orphan chunks are staged even when a session has no pending live
+lines; does not delete or truncate the live file, which is discardable
+**only once its lines are sealed** — an unsealed live file is the sole copy
+of those tool calls). Companion verb `ethos audit quarantine <chunk>` retires
+a corrupt sealed chunk — re-seals still-readable lines from the live file,
+renames the chunk to `.corrupt`, writes a tracked `.quarantine` marker
+holding the watermark at the verified loss point, and self-stages both
+(`git mv` + `git add`) — the sanctioned alternative to `--no-verify`.
+No live-file seeding — chunks are additive, so a continuing session starts its
+watermark at the max ts of its committed chunks and writes new lines strictly
+after. Lock relocation untracks **and disk-removes** the tracked
+`.create.lock`/per-mission `.lock` and stops writing in-repo locks.
+
+### Transition
+
+Two minor versions (DES-054 convention). vX.Y.0: live-write redirect to
+`.punt-labs/local/` + strictly-monotonic ts + pre-commit chunk-seal hook
+(via `install.sh`) + mission-close seal + `audit seal`. vX.(Y+1).0:
+relocate `.lock`/`.create.lock` to the global tree, untrack and disk-remove
+the repo copies. One ethos binary per machine, so the write path flips on
+upgrade. Three window properties: (1) a session alive across the flip has
+pre-upgrade lines in the frozen chunk and writes new lines to a fresh live
+file — no seeding, the writer initializes its monotonic ts from the
+chunks' max ts so new lines sort after; (2) the file dirty today is
+committed once as the frozen chunk's final state, then clean; (3) machines
+sharing a repo should cross the boundary together — no data loss and no
+conflict (new chunks, not appends), but the un-upgraded machine keeps
+dirtying its tree and its appends land in the frozen `audit.jsonl` as legacy
+lines, which the upgraded machine passes through **undeduped** (its
+pre-upgrade clock can still collide two distinct events on one ts, and
+nothing duplicates a legacy line, so a legacy dedup could only drop a real
+line).
+
+### Rejected alternatives
+
+Home-dir global live tree (operator ruling for `.punt-labs/local/`);
+gitignored in-repo sibling needing a per-repo rollout (the `local` ignore
+ships once via the standard); `TMPDIR`/`.tmp/` (deletable scratch);
+per-branch live path (sessions span branches); append-to-one-tracked-file
+sealing with a `merge=ethos-seal` driver, `.gitattributes`, byte-prefix
+invariant, divergence detection, and `audit reseal` (operator ruling —
+replaced by immutable chunks, structurally conflict-free); per-session
+`seq` field (operator ruling — replaced by strictly-monotonic ts);
+committing-session-only and committing-session-plus-orphan-sweep seals
+(operator ruling — repo-wide seal, orphans land at the next commit, no
+liveness probe); checkout-path roster scoping (filesystem separates
+per-checkout `local` files); live-file seeding on upgrade (chunks are
+additive); suppressing re-seal on a rewound branch via a `local`
+high-water mark (would lose the record on the branch that merges — the
+read tolerates the overlap instead); `size(sealed)` blind offset and
+verified prefix anchor (no prefix in an immutable-chunk model); seal at
+commit-msg (too late for the index); seal at session end as primary
+(sessions outlive PRs); raw live lines redacted at seal (second failure
+site, leaks at rest); keep the lock in-repo and gitignore it (a tree lock
+invites re-tracking); byte-equality dedup of the legacy pool (nothing
+duplicates a legacy line, so every collapse could only drop a distinct
+event — the legacy pool passes through undeduped); home-tree spool for the
+gitlink teardown flush (a write-only subsystem nothing drained, read, dated,
+keyed, or flagged, with an unsignaled copy failure — the gitlink teardown
+now defers like every other seal and the deleted-checkout tail loss is
+accepted as the bounded pre-`e29s` limitation); a durable home-tree deferral
+record to make the teardown notice loud (spool-lite creep — the same
+write-only subsystem under another name; the teardown deferral is accepted as
+unannounced and post-hoc undetectable).

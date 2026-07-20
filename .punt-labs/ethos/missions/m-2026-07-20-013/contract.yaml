@@ -1,0 +1,66 @@
+mission_id: m-2026-07-20-013
+status: closed
+type: design
+created_at: "2026-07-20T14:20:00Z"
+updated_at: "2026-07-20T14:53:48Z"
+closed_at: "2026-07-20T14:53:48Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-20T14:20:00Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-t5b6
+    files:
+        - DESIGN.md
+        - docs/audited-delegation.md
+write_set:
+    - docs/audit-seal.md
+success_criteria:
+    - 'Produce docs/audit-seal.md: a design amending DES-054 v5 storage that separates the live audit write path from the committed record, plus proposed DESIGN.md entry text (next DES number) with rejected alternatives'
+    - Live writes go to an untracked location; evaluate the two candidates from the punt-kit request — (a) global tree ~/.punt-labs/ethos (reuses v3.11 plumbing and the existing legacy-fallback read path; no gitignore rollout) vs (b) gitignored in-repo sibling file such as audit.live.jsonl (one root, but needs a gitignore entry shipped to every repo) — and pick one with justification
+    - 'Define the seal step: primary at pre-commit (seal + stage so the audit record lands in the same commit/PR as the work; ethos already installs a commit-msg hook via install.sh/DES-054 so the delivery mechanism exists) and secondary at ethos mission close for Tier B; state why session-end sealing is rejected as primary (sessions outlive PRs)'
+    - 'Preserve the stated invariants: every tool call logged with no gaps and no off switch; path redaction fires before any line reaches the sealed shared-history file (state whether the live file holds redacted or raw lines and why); tool_input_hash computed over the redacted form (DES-052 Stat-Write detection unchanged); per-line f.Sync() crash tolerance on the live file; reader partial-line tolerance for crashed writers'
+    - 'ethos audit show --delegation <id> must see both sealed and not-yet-sealed entries: sealed file + live file merge with repo-wins dedup, following the same dispatch pattern as the existing legacy-fallback read-path state machine in DES-054'
+    - 'Cover concurrency: how the seal step interacts with the session flock and with concurrent appends mid-seal; sealing must not drop or duplicate lines in the sealed file'
+    - 'Decide the mission-tree churn question: missions/<id>/log.jsonl and .lock have the same tracked-plus-live-writes character during an active mission — same seal treatment, or is mission close already the natural commit point; lock files must not be git-tracked'
+    - 'Migration section: existing tracked audit.jsonl files stay as-is (sealed history); only the write path moves; idempotent, supports --dry-run, same shape as ethos audit migrate (tombstones, partial-failure recovery)'
+    - 'Acceptance criteria restated and satisfied by the design: a repo with an active session and no uncommitted work shows clean git status; punt release preflight passes against siblings with live sessions with no punt-kit change and no exemptions; ethos audit show output identical before and after; sealed audit records land in the same PR as the work they document'
+    - State the rolling-upgrade/transition story (which minor versions ship which halves) consistent with DES-054's two-minor-version window convention
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: |
+    Cross-repo design request from the punt-kit agent (claude:tty16),
+    2026-07-20, tracked as bead ethos-t5b6 (P1). Problem: the session
+    audit log <repo>/.punt-labs/ethos/sessions/<YYYY-MM-DD>-<session-id>/audit.jsonl
+    is git-tracked by design (DES-054 v5, shared history, redaction,
+    commit trailers resolve against it) AND appended by the PreToolUse
+    audit hook on every tool call. A file cannot be both git-tracked and
+    continuously appended by a live process: any repo with an active
+    session has a permanently dirty tree — observed today blocking
+    `punt release` preflight (clean-tree gate on cross-repo siblings).
+    The first entry in the offending audit.jsonl was a `git status` call:
+    inspecting the repo dirties it.
+
+    Non-solutions already ruled out with the CEO: gitignoring the audit
+    files (defeats shared-history design), exempting .punt-labs/ from
+    clean-tree checks in consumers, GitHub-side relaxation (branch
+    protection is ref-scoped), and any audit-suppression sentinel (an
+    audit hook with an off switch is not an audit system).
+
+    Requested shape: (1) live writes to an untracked location; (2) a seal
+    step snapshots the live log into the tracked audit.jsonl at a
+    deliberate lifecycle point (pre-commit primary, mission close
+    secondary). Between seals the tracked file is untouched, so trees are
+    clean; a dirty sessions/ path then MEANS something — an unsealed
+    record that should have been committed.
+
+    Read DESIGN.md DES-054 v5 (storage layout, audit read-path state
+    machine, concurrency model, I10-audit-atomic) and
+    docs/audited-delegation.md (path redaction, commit trailers) before
+    writing. The design is a doc-only mission: no code changes. Design
+    only; implementation missions will be scoped after leader review and
+    CEO ratification.

@@ -1,0 +1,50 @@
+mission_id: m-2026-07-20-016
+status: closed
+type: design
+created_at: "2026-07-20T20:08:51Z"
+updated_at: "2026-07-20T20:28:39Z"
+closed_at: "2026-07-20T20:28:39Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-20T20:08:51Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-t5b6
+    files:
+        - docs/audit-seal.md
+        - DESIGN.md
+write_set:
+    - docs/audit-seal.md
+success_criteria:
+    - Amend docs/audit-seal.md per four operator rulings (2026-07-20), keeping the live/seal split, redact-at-write, pre-commit-primary structure intact
+    - 'RULING 1 — live-file location moves to <repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl. Rationale to state: fits the org *local* = machine-local-never-committed convention (.envrc.local, vox.local.md); the gitignore rule ships once via the punt-kit punt-labs-dir.md standard (merged e3ab9a3) and punt:init/audit enforcement; per-checkout isolation is automatic, which DELETES the checkout-path roster-scoping machinery entirely. Rejected: TMPDIR (.tmp/ is deletable scratch; unsealed audit is not scratch); .punt-labs/local/<branch>/ (sessions span branches — fragments one session''s log, orphans files on branch deletion, and chunk sealing removes the motivation); home-dir global tree (operator ruling supersedes the structural-vs-conventional argument; note the local zone also works in gitlink-mounted repos since .punt-labs/local is a sibling of the ethos subtree, though SEALED chunks remain gitlink-blocked until e29s)'
+    - 'RULING 2 — merge conflicts must be structurally impossible, not resolved. Replace append-to-tracked-file sealing with CHUNK sealing: each seal writes a NEW immutable tracked file under the session''s repo directory (name encodes session + first/last line timestamp, e.g. audit-<first-ts>.jsonl with a collision-free encoding you specify); tracked files are never modified after creation. Two branches only ever ADD distinct files, so git merges are conflict-free with stock merge machinery. DELETE from the design: the merge driver + .gitattributes section, the byte-prefix invariant and verification, divergence detection/reseal verb, and the seal-resume offset machinery. Seal watermark = max line timestamp across the session''s existing chunks (scan at seal time); read path = concatenate this session''s chunks sorted by first-timestamp, then live-tail lines with ts > watermark. State crash behavior: a seal that dies after writing a chunk but before git add leaves an untracked complete chunk — picked up by the next commit; never partial (write temp + rename)'
+    - 'RULING 3 — drop the committing-session-only sweep and all session-attribution logic: the pre-commit hook seals ALL pending live lines for the repo (every session directory under .punt-labs/local/ethos/). Squash-merge world: PR content attribution is a non-goal per operator. Move committing-session-only AND committing-plus-orphans into Rejected alternatives with the operator ruling; orphaned-session lines now land at the next commit automatically, which also deletes the orphan-detection (kill(pid,0)) machinery'
+    - 'RULING 4 — no seq field. Ordering and identity come from timestamps: the writer enforces strictly-monotonic per-session ts at append time under the existing flock (if now <= last ts, bump by 1ns — monotonic-clock discipline, addresses the NTP/coarse-clock collision concern without a schema field). Line identity where needed = (session, ts). Move seq into Rejected alternatives with the operator ruling. Chunk concatenation must not depend on cross-line dedup'
+    - 'Migration section simplifies accordingly: every existing committed audit.jsonl/log.jsonl is a frozen historical chunk, never rewritten; live location seeding is no longer needed (chunks are additive; the watermark starts at the max ts of existing committed chunks). Mission-tree log.jsonl gets the same chunk treatment. Lock relocation (untrack + disk-remove, global-tree locks) is UNCHANGED by these rulings — keep it'
+    - 'Update the invariant block (I10/I11/I12 successors) to the chunk model; re-sync the embedded DES-058 DESIGN.md entry verbatim; update the Acceptance-criteria and Rolling-upgrade sections (upgrade story is now: new binary writes to .punt-labs/local + seals chunks; old committed files frozen; no seeding, no reconciling commit)'
+    - npx markdownlint-cli2 docs/audit-seal.md clean
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: |
+    Operator review of the round-2 design (mission m-2026-07-20-013,
+    closed) overturned four decisions on 2026-07-20. Verbatim rulings:
+    (a) committing-session-only sealing: "Wrong, this is too complicated
+    and fancy and basically does not matter. Your intent to keep PRs pure
+    is a waste of time in a squash merge world. Useless complexity."
+    (b) merge driver: "This is a sign that you are storing the file in
+    the wrong place... I like .punt-labs/local quite a lot for location
+    ... Merge conflicts is going to be a headache and waste of time, come
+    up with a solution where this does not happen."
+    (c) seq numbers: "Would not put sequence numbers would put timestamp
+    - more useless conflicts come from sequence numbers."
+    The leader's assessment (accepted by dispatch): .punt-labs/local/
+    live zone, chunk-file sealing so tracked files are immutable after
+    creation, repo-wide pre-commit sweep, strictly-monotonic timestamps.
+    This amendment round makes the doc coherent under those rulings —
+    it is a simplification pass; the doc should get SHORTER. Design
+    only; no code. Do not run make install; use .tmp/ for scratch.
