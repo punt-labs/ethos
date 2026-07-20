@@ -5694,13 +5694,14 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   and of any lines quarantine re-sealed, never the filename `<last>` on
   faith); the live writer seeds its monotonic floor from this same set
   (§strictly-monotonic per-session timestamp), so no mintable ts sits below it.
-  The malformed-name exit 2 is **scoped to the chunk
-  namespace**: only an `audit-…` (or `log-…`) near-miss that fails to parse
-  as `audit-<19digits>-<19digits>.jsonl` fails the seal — a skipped chunk
-  would regress the watermark — while every non-chunk sibling (the frozen
-  `audit.jsonl`, a `.quarantine` marker or a `.corrupt`/`.corrupt-<hash>`
-  artifact under a covering marker whose named range contains the artifact's, a
-  mission's
+  The malformed-name exit 2 is **scoped to the chunk namespace, per
+  directory shape**: a near-miss carrying a chunk prefix that fails its
+  namespace's full parse — `audit-<19digits>-<19digits>.jsonl` in a session
+  dir, `log-<session-id>-<19digits>-<19digits>.jsonl` in a mission dir — fails
+  the seal (a skipped chunk would regress the watermark), while every
+  non-chunk sibling (the frozen `audit.jsonl` or `log.jsonl`, a `.quarantine`
+  marker or a `.corrupt`/`.corrupt-<hash>` artifact under a covering marker
+  whose named range contains the artifact's, in either namespace, a mission's
   `contract.yaml`/`results.yaml`, any unrelated file) is ignored and draws no
   error. When it scans, the seal also **verifies each chunk's content** — a
   chunk that does not parse whole or whose last line `ts` != its filename

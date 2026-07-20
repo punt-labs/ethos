@@ -316,28 +316,33 @@ copies the live lines with `ts > watermark` into a new chunk; if none exceed
 the watermark, it writes nothing (but still stages any orphan chunks, §Write
 atomicity) and exits 0.
 
-The malformed-name check is **scoped to the chunk namespace**. A file whose
-name begins with the chunk prefix `audit-` (or `log-`, §Mission-tree churn)
-is a candidate chunk, with three recognized exceptions — the quarantine
-artifacts `audit-<first>-<last>.jsonl.corrupt`, a second event's
-`audit-<first>-<last>.jsonl.corrupt-<hash>` (§Seal failure policy), and
-`audit-<first>-<last>.quarantine` (§Seal failure policy). Both `.corrupt`
+The malformed-name check is **scoped to the chunk namespace, per directory
+shape**. The chunk name is one grammar in two namespaces: a session
+directory holds `audit-<19digits>-<19digits>.jsonl`; a mission directory
+holds `log-<session-id>-<19digits>-<19digits>.jsonl` (§Mission-tree churn).
+A file whose name begins with its directory's chunk prefix — `audit-` in a
+session dir, `log-` in a mission dir — is a candidate chunk, with three
+recognized exceptions per shape — the quarantine artifacts
+`<chunk>.jsonl.corrupt`, a second event's `<chunk>.jsonl.corrupt-<hash>`
+(§Seal failure policy), and the `<chunk>.quarantine` marker (§Seal failure
+policy), where `<chunk>` is the namespace's stem (`audit-<first>-<last>` or
+`log-<session-id>-<first>-<last>`). Both `.corrupt`
 forms are recognized **only while a covering `.quarantine` marker exists** — a
 marker *covers* an artifact when the marker's named range contains the
-artifact's named range: a
+artifact's named range, the same range-containment rule in both namespaces: a
 `.corrupt` with no marker is a quarantine that crashed mid-verb (§Seal
 failure policy), so the seal treats it as an error (exit 2) prompting the
-resume rather than skipping it silently. Any other
-`audit-…` name that fails to parse as `audit-<19digits>-<19digits>.jsonl` is
-a *near-miss* and **fails the seal (exit 2)** rather than being silently
+resume rather than skipping it silently. Any other name carrying the
+directory's chunk prefix that fails to parse as that namespace's full shape
+is a *near-miss* and **fails the seal (exit 2)** rather than being silently
 skipped: a skipped chunk would drop its `<last>` from the watermark, regress
 it, and trigger a re-seal of already-sealed lines. Every sibling **outside**
-the chunk namespace — the frozen `audit.jsonl`, a mission's `contract.yaml`
-or `results.yaml`, any unrelated file — is ignored by the watermark and by
-staging and draws no error; a mission directory legitimately holds such
-files. This does not reopen the regression hole the exit 2 closes: only a
-near-miss `audit-…` name could ever have been a chunk, and those still fail
-loud.
+the chunk namespace — the frozen `audit.jsonl` or `log.jsonl`, a mission's
+`contract.yaml` or `results.yaml`, any unrelated file — is ignored by the
+watermark and by staging and draws no error; a mission directory legitimately
+holds such files. This does not reopen the regression hole the exit 2 closes:
+only a near-miss carrying a chunk prefix could ever have been a chunk, and
+those still fail loud.
 
 Beyond the name, the seal **verifies each chunk's content** when it scans:
 a chunk that does not parse to completion, or whose last line's `ts` does
@@ -388,7 +393,7 @@ seal(session):
         f.Sync(tmp)
         rename tmp -> sessions/<dir>/audit-<first>-<last>.jsonl
     release flock
-    git add every untracked audit-<..>-<..>.jsonl in sessions/<dir>/   # outside the lock
+    git add every untracked chunk in sessions/<dir>/   # outside the lock; audit-<..>-<..>.jsonl, or log-<sid>-<..>-<..>.jsonl in a mission dir
 ```
 
 The flock serializes the whole watermark-scan-and-write against live
@@ -535,9 +540,9 @@ post-discipline pools (sealed chunks and the live tail) dedup on
 
 ```text
 read_audit(session):
-    monotonic   = sealed chunks named audit-<first>-<last>.jsonl   # any order
-    legacy      = frozen audit.jsonl if present                    # no ts in its name
-    quarantined = ranges named by audit-<first>-<last>.quarantine markers
+    monotonic   = sealed chunks named audit-<first>-<last>.jsonl   # any order; mission dir: log-<session-id>-<first>-<last>.jsonl
+    legacy      = frozen audit.jsonl if present                    # no ts in its name; mission dir: frozen log.jsonl
+    quarantined = ranges named by <chunk>.quarantine markers       # <chunk> = the namespace's stem
     orphan      = .corrupt files with no covering parseable .quarantine marker   # torn marker reads absent; quarantine crashed mid-verb
     if orphan: error naming them (exit 2)     # resume the quarantine, never skip silently
     for c in monotonic:                       # I11-chunk writes chunks whole, so
@@ -1372,13 +1377,14 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   and of any lines quarantine re-sealed, never the filename `<last>` on
   faith); the live writer seeds its monotonic floor from this same set
   (§strictly-monotonic per-session timestamp), so no mintable ts sits below it.
-  The malformed-name exit 2 is **scoped to the chunk
-  namespace**: only an `audit-…` (or `log-…`) near-miss that fails to parse
-  as `audit-<19digits>-<19digits>.jsonl` fails the seal — a skipped chunk
-  would regress the watermark — while every non-chunk sibling (the frozen
-  `audit.jsonl`, a `.quarantine` marker or a `.corrupt`/`.corrupt-<hash>`
-  artifact under a covering marker whose named range contains the artifact's, a
-  mission's
+  The malformed-name exit 2 is **scoped to the chunk namespace, per
+  directory shape**: a near-miss carrying a chunk prefix that fails its
+  namespace's full parse — `audit-<19digits>-<19digits>.jsonl` in a session
+  dir, `log-<session-id>-<19digits>-<19digits>.jsonl` in a mission dir — fails
+  the seal (a skipped chunk would regress the watermark), while every
+  non-chunk sibling (the frozen `audit.jsonl` or `log.jsonl`, a `.quarantine`
+  marker or a `.corrupt`/`.corrupt-<hash>` artifact under a covering marker
+  whose named range contains the artifact's, in either namespace, a mission's
   `contract.yaml`/`results.yaml`, any unrelated file) is ignored and draws no
   error. When it scans, the seal also **verifies each chunk's content** — a
   chunk that does not parse whole or whose last line `ts` != its filename
