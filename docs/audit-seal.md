@@ -154,7 +154,7 @@ earlier draft made for the home tree.
 
 ### The live file holds redacted lines
 
-Path redaction (DES-052 / audited-delegation.md §Path redaction) rewrites
+Path redaction (DES-052 / docs/audited-delegation.md §Path redaction) rewrites
 `$HOME/X → ~/X` and `<repoRoot>/X → <repo>/X` in every string of
 `tool_input` before a line lands on disk, then computes
 `tool_input_hash` **over the redacted form** so two machines making the
@@ -624,11 +624,40 @@ dispatch, result, reflect, close), not per tool call. It takes the same
 treatment: the live writer appends to the `local` mission log
 (`<repo>/.punt-labs/local/ethos/missions/<id>.jsonl`), and each seal
 writes a new immutable chunk under
-`<repo>/.punt-labs/ethos/missions/<id>/log-<first>-<last>.jsonl`. The
-**mission close** is the authoritative seal, because it is the point at
-which the mission's record is complete; the repo-wide pre-commit seal is
-the clean-tree backstop that also drains pending mission-log lines. One
+`<repo>/.punt-labs/ethos/missions/<id>/log-<session-id>-<first>-<last>.jsonl`.
+The **mission close** is the authoritative seal, because it is the point
+at which the mission's record is complete; the repo-wide pre-commit seal
+is the clean-tree backstop that also drains pending mission-log lines. One
 mechanism (the chunk seal), two triggers.
+
+**Why the chunk name carries the sealing session id.** An audit chunk is
+collision-free across sessions for free: each session seals into its **own**
+dated `sessions/<dir>/`, so two sessions' chunks are never siblings and can
+never share a name (§Chunk sealing). A mission chunk has no such isolation —
+**every** session that touches mission `<id>` seals into the one shared
+`missions/<id>/` directory. The per-session monotonic-ts discipline
+(§timestamp) makes `<first>` unique only *within* a session; it does not span
+checkouts. Two checkouts running two sessions, each appending different
+mission events, could therefore mint identically named
+`log-<first>-<last>.jsonl` chunks holding **different content** — an add/add
+merge conflict, the exact disease chunk sealing exists to remove. The
+`<session-id>` segment restores the guarantee: two chunks can share a name
+only when they share a session, where strictly-monotonic `ts` makes `<first>`
+unique, so no collision is possible; chunks from different sessions have
+distinct names and merge additively. The session-id segment supplies what
+the shared mission directory does not and the audit chunk's dated directory
+does.
+
+**Read and watermark are per-session.** The mission-log read is the union
+across **all** sessions' chunks in `missions/<id>/`, stable-sorted by `ts`
+with line identity `(session, ts)` — the same rule the audit read applies
+(§`ethos audit show`). The seal watermark is **per-session**: a session's
+watermark is the max `<last>` over the chunk names carrying **its own**
+`<session-id>`, so one session's seal neither counts another session's chunks
+as already sealed nor skips its own lines for want of a watermark it cannot
+derive. This mirrors the audit read and watermark exactly; only the source
+directory is shared rather than per-session, which is precisely why the name
+must name the session.
 
 **`.lock` — never tracked; move to the global tree.** A lock file is not
 content and must not enter shared history. DES-054 placed the
@@ -1040,7 +1069,8 @@ migration is idempotent, supports `--dry-run`, and follows the shape of
   seal never deletes the live file either way.
 - **Mission-tree `log.jsonl`.** The existing tracked `log.jsonl` is a
   frozen chunk too; new mission-log lines go to the `local` mission log
-  and seal into `log-<first>-<last>.jsonl` chunks (§Mission-tree churn).
+  and seal into `log-<session-id>-<first>-<last>.jsonl` chunks
+  (§Mission-tree churn).
 - **Lock relocation — remove from disk, stop writing.** Unchanged by the
   chunk rulings. Two halves, both required. (1) The per-mission `.lock`
   and `.create.lock` are removed from the working tree **on disk**, not
@@ -1431,8 +1461,17 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   writer recovers `last_ts` from the live file's own tail), so timestamps
   never regress across a branch switch even though the seal watermark can.
 - **Mission tree.** `log.jsonl` gets the same live-write/chunk-seal
-  treatment (`log-<first>-<last>.jsonl` chunks), authoritative seal at
-  mission close, pre-commit as the clean-tree backstop. All `.lock` files
+  treatment, but the chunk name carries the sealing session id —
+  `log-<session-id>-<first>-<last>.jsonl` — because every session seals into
+  the one shared `missions/<id>/` directory (unlike an audit chunk's own
+  per-session dated dir), so the per-session monotonic-ts guarantee does not
+  span sessions: without the id segment two checkouts appending different
+  mission events could mint identically named chunks with different content,
+  an add/add conflict. The read unions **all** sessions' chunks in the
+  directory (stable-sorted by `ts`, identity `(session, ts)`) and the seal
+  watermark is **per-session** (max `<last>` over that session's own
+  `<session-id>` chunks). Authoritative seal at mission close, pre-commit as
+  the clean-tree backstop. All `.lock` files
   move to the global tree (`~/.punt-labs/ethos/missions/<id>.lock`,
   `.create.lock`) — a lock file never belongs in shared history; migration
   untracks the existing `.create.lock` **and removes it from disk** (a bare

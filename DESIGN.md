@@ -5783,8 +5783,17 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   writer recovers `last_ts` from the live file's own tail), so timestamps
   never regress across a branch switch even though the seal watermark can.
 - **Mission tree.** `log.jsonl` gets the same live-write/chunk-seal
-  treatment (`log-<first>-<last>.jsonl` chunks), authoritative seal at
-  mission close, pre-commit as the clean-tree backstop. All `.lock` files
+  treatment, but the chunk name carries the sealing session id —
+  `log-<session-id>-<first>-<last>.jsonl` — because every session seals into
+  the one shared `missions/<id>/` directory (unlike an audit chunk's own
+  per-session dated dir), so the per-session monotonic-ts guarantee does not
+  span sessions: without the id segment two checkouts appending different
+  mission events could mint identically named chunks with different content,
+  an add/add conflict. The read unions **all** sessions' chunks in the
+  directory (stable-sorted by `ts`, identity `(session, ts)`) and the seal
+  watermark is **per-session** (max `<last>` over that session's own
+  `<session-id>` chunks). Authoritative seal at mission close, pre-commit as
+  the clean-tree backstop. All `.lock` files
   move to the global tree (`~/.punt-labs/ethos/missions/<id>.lock`,
   `.create.lock`) — a lock file never belongs in shared history; migration
   untracks the existing `.create.lock` **and removes it from disk** (a bare
