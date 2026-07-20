@@ -1,4 +1,4 @@
-You are the worker on ethos mission m-2026-07-20-013 (design archetype, doc-only). Working directory: /Users/jfreeman/Coding/punt-labs/ethos.
+You are the worker on ethos mission m-2026-07-20-013 (design archetype, doc-only). Working directory: <repo>.
 
 First run: ethos mission show m-2026-07-20-013 — the contract is authoritative for scope, success criteria, and context. Your write set is exactly one file: docs/audit-seal.md.
 

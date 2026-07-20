@@ -1,4 +1,4 @@
-You are the worker on round 2 of ethos mission m-2026-07-20-013 (design archetype, doc-only). Working directory: /Users/jfreeman/Coding/punt-labs/ethos. Write set: exactly docs/audit-seal.md. You wrote round 1; this round applies the evaluator's named edits.
+You are the worker on round 2 of ethos mission m-2026-07-20-013 (design archetype, doc-only). Working directory: <repo>. Write set: exactly docs/audit-seal.md. You wrote round 1; this round applies the evaluator's named edits.
 
 First run: ethos mission show m-2026-07-20-013 (contract + round-1 reflection). Then read the evaluator's full review: .tmp/missions/results/m-2026-07-20-013-eval-rsc.md — verdict APPROVE WITH NAMED EDITS, 5 REQ + 5 OPT. Apply every REQ; adopt or explicitly reject each OPT (a rejection goes in Rejected Alternatives with the reason). Keep the doc's structure and the verbatim DES-058 DESIGN.md entry in sync with every change.
 

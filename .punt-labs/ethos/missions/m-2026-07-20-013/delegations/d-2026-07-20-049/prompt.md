@@ -1,4 +1,4 @@
-You are the pinned evaluator on ethos mission m-2026-07-20-013 (design archetype). Working directory: /Users/jfreeman/Coding/punt-labs/ethos. Your lens: compatibility, migration cost, rolling upgrades, supply-chain/toolchain discipline — the rsc review posture used in the DES-054 rounds.
+You are the pinned evaluator on ethos mission m-2026-07-20-013 (design archetype). Working directory: <repo>. Your lens: compatibility, migration cost, rolling upgrades, supply-chain/toolchain discipline — the rsc review posture used in the DES-054 rounds.
 
 Evaluate the round-1 deliverable: docs/audit-seal.md (a design separating the live audit write path from the committed record, amending DES-054 v5; proposes DES-058).
 
@@ -16,4 +16,4 @@ Scrutinize hardest:
 - Rolling-upgrade window consistency with DES-054's two-minor-version convention; behavior of a v4.0.x binary against a sealed-layout repo and vice versa.
 - Lock-file migration (git rm --cached .create.lock): stated idempotently, with --dry-run?
 
-Write your review to /Users/jfreeman/Coding/punt-labs/ethos/.tmp/missions/results/m-2026-07-20-013-eval-rsc.md with: verdict line first — APPROVE, APPROVE WITH NAMED EDITS, or ITERATE — then findings numbered, each with severity (REQ = must fix before implementation / OPT = advisory), file:line or section reference into docs/audit-seal.md, and a concrete recommended fix. Do not edit docs/audit-seal.md or any other file. Your final message: the verdict plus a one-line-per-finding summary.
+Write your review to <repo>/.tmp/missions/results/m-2026-07-20-013-eval-rsc.md with: verdict line first — APPROVE, APPROVE WITH NAMED EDITS, or ITERATE — then findings numbered, each with severity (REQ = must fix before implementation / OPT = advisory), file:line or section reference into docs/audit-seal.md, and a concrete recommended fix. Do not edit docs/audit-seal.md or any other file. Your final message: the verdict plus a one-line-per-finding summary.

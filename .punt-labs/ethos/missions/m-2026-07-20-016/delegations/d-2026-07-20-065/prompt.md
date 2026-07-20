@@ -1,4 +1,4 @@
-You are the worker on ethos mission m-2026-07-20-016 (design archetype, doc-only). Working directory: /Users/jfreeman/Coding/punt-labs/ethos. Write set: exactly docs/audit-seal.md — the doc you authored in mission m-2026-07-20-013.
+You are the worker on ethos mission m-2026-07-20-016 (design archetype, doc-only). Working directory: <repo>. Write set: exactly docs/audit-seal.md — the doc you authored in mission m-2026-07-20-013.
 
 Run `ethos mission show m-2026-07-20-016` first — the contract carries four operator rulings (verbatim in the context block) that overturn parts of your round-2 design, plus the leader's accepted assessment. This is a simplification pass: the operator killed the committing-session-only sweep, the merge driver, the seq field, and the home-dir live location. The replacements: live files under <repo>/.punt-labs/local/ethos/, CHUNK sealing (each seal writes a new immutable tracked file — tracked files are never modified after creation, so merge conflicts become structurally impossible), a repo-wide pre-commit sweep, and strictly-monotonic per-session timestamps enforced at write time.
 
