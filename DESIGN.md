@@ -5650,8 +5650,9 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   (`.envrc.local`, `vox.local.md`); its gitignore rule ships once, org-wide,
   via the punt-kit `punt-labs-dir.md` standard (merged `e3ab9a3`) and
   `punt:init`/`punt:audit` enforcement. Per-checkout isolation is automatic
-  (the file lives inside its checkout), which removes the checkout-path
-  roster-scoping machinery. Rejected: the home-dir global tree (operator
+  (the file lives inside its checkout), which removes the *seal-time*
+  checkout-path scoping — the path itself is retained in the purge tombstone
+  and vacuum cross-check (§Seal failure). Rejected: the home-dir global tree (operator
   ruling for `local`), `TMPDIR`/`.tmp/` (deletable scratch), and
   `.punt-labs/local/<branch>/` (sessions span branches).
 - **Redacted live lines.** The write path is unchanged (build → redact →
@@ -5664,8 +5665,12 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   append allocates `ts = max(now, last_ts + 1ns)` under the session flock,
   giving a per-session total order that is collision-free regardless of a
   coarse or NTP-stepped clock. Line identity is `(session, ts)`. The
-  writer initializes `last_ts` from the max ts of existing sealed chunks so
-  new lines sort strictly after frozen history. On live-file reopen the
+  writer initializes `last_ts` from the **seal watermark's own source set** —
+  the max over existing sealed chunk timestamps, every covering `.quarantine`
+  marker's verified `<last>`, and a frozen legacy file's max ts — so new lines
+  sort strictly after frozen history and no ts it mints under a clock regression
+  can sink into the gap a partial quarantine's marker opens above the max chunk
+  ts (below the watermark, never sealed, never shown). On live-file reopen the
   writer **truncates a non-newline-terminated tail** under the flock before
   appending: that fragment is an un-synced partial write, unrecoverable
   regardless, and truncating it prevents a new complete line from being
@@ -5687,7 +5692,9 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   contributes the max ts over its lines; a `.quarantine` marker contributes
   the **verified** `<last>` it records — the max ts the corrupt bytes reached
   and of any lines quarantine re-sealed, never the filename `<last>` on
-  faith). The malformed-name exit 2 is **scoped to the chunk
+  faith); the live writer seeds its monotonic floor from this same set
+  (§strictly-monotonic per-session timestamp), so no mintable ts sits below it.
+  The malformed-name exit 2 is **scoped to the chunk
   namespace**: only an `audit-…` (or `log-…`) near-miss that fails to parse
   as `audit-<19digits>-<19digits>.jsonl` fails the seal — a skipped chunk
   would regress the watermark — while every non-chunk sibling (the frozen
@@ -5739,7 +5746,9 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   a repo
   (`e29s`, the `punt-4yy` campaign) before relying on its audit trail.
 - **Merged read.** `ethos audit show` unions the session's sealed chunks
-  and the live lines with `ts` past the sealed watermark, orders by `ts`,
+  and the live lines with `ts` past the sealed watermark, orders by `ts`
+  (a **stable** sort, so two legacy lines sharing a pre-discipline `ts` keep
+  their file order and the "output identical" criterion holds),
   and dedups the two post-discipline pools while passing the legacy pool
   through. Post-discipline lines (post-upgrade chunks + live) dedup on
   `(session, ts)` — loss-free, since equal ts implies a byte-identical line
@@ -5790,11 +5799,14 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   corrupt-chunk exit 2 is **`ethos audit quarantine <chunk>`**, never
   `--no-verify`. It **retires the corrupt chunk first** — renaming it out of
   the namespace to `.corrupt` (committed as evidence; seal and read ignore the
-  name) frees the chunk's name so the **re-seal** can recreate a good chunk
-  under it, making the clobber of a still-named corrupt chunk impossible by
-  construction. It then re-seals any still-readable lines of the range from the
-  live file (an ordinary new chunk, `(session, ts)` dedup tolerates the
-  overlap), writes a tracked `.quarantine` marker with **deterministic content
+  name) frees the chunk's name so a re-sealed chunk that takes it cannot clobber
+  a still-named corrupt chunk. It then re-seals any still-readable lines of the
+  range from the live file into an **ordinary content-named chunk** (named
+  `audit-<first>-<last>` from the re-sealed lines' own first/last `ts`, so a
+  **partial** recovery yields `audit-<first>-<C>`, `C < last`, coinciding with
+  the retired name only on **full** recovery — which keeps the content-vs-name
+  check from ever firing on a re-sealed chunk; `(session, ts)` dedup tolerates
+  the overlap), writes a tracked `.quarantine` marker with **deterministic content
   only** (chunk name, verified content-derived `<last>`, unrecovered sub-range,
   reason — **no wall-clock timestamp**, so two checkouts quarantining the same
   chunk from the same state produce byte-identical artifacts that merge clean),
@@ -5890,7 +5902,8 @@ tree state* — a branch rewind can overlap, resolved at read), `I11-idem`
 (each complete live line sealed into at least one chunk after a following
 seal; duplicate copies share `(session, ts)` and are byte-identical),
 `I12-merge` (read = union of sealed chunks and live tail past the sealed
-watermark, ordered by ts; post-discipline lines dedup on `(session, ts)`,
+watermark, ordered by ts (a **stable** sort, so legacy equal-ts lines keep
+file order); post-discipline lines dedup on `(session, ts)`,
 frozen legacy lines pass through undeduped since nothing duplicates a legacy
 line and a legacy dedup could only drop a distinct event, and a corrupt
 monotonic chunk surfaces as an error, not a drop).
@@ -5922,11 +5935,16 @@ Two minor versions (DES-054 convention). vX.Y.0: live-write redirect to
 (via `install.sh`) + mission-close seal + `audit seal`. vX.(Y+1).0:
 relocate `.lock`/`.create.lock` to the global tree, untrack and disk-remove
 the repo copies. One ethos binary per machine, so the write path flips on
-upgrade. Three window properties: (1) a session alive across the flip has
+upgrade. vX.Y.0 reaches a consuming repo only **after** it carries the
+canonical `.punt-labs/local/` gitignore block (`punt-4yy`) — the live-zone
+sequencing gate mirroring the `e29s` gate for chunks; without it the live file
+lands untracked-and-unignored and dirties the repo, the disease relocated.
+Three window properties: (1) a session alive across the flip has
 pre-upgrade lines in the frozen chunk and writes new lines to a fresh live
 file — no seeding, the writer initializes its monotonic ts from the
-chunks' max ts so new lines sort after; (2) the file dirty today is
-committed once as the frozen chunk's final state, then clean; (3) machines
+chunks' max ts so new lines sort after; (2) the file dirty today is flushed by
+a **one-time operator reconciliation commit** of its final state (no verb
+rewrites a frozen file), then clean; (3) machines
 sharing a repo should cross the boundary together — no data loss and no
 conflict (new chunks, not appends), but the un-upgraded machine keeps
 dirtying its tree and its appends land in the frozen `audit.jsonl` as legacy
