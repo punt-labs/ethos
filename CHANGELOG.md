@@ -18,10 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and seals them at pre-commit into immutable, timestamp-named chunk
   files under the tracked tree — tracked files are never modified after
   creation, so branch merges are conflict-free with stock git outside
-  quarantine recovery. Line
-  identity is a strictly-monotonic per-session timestamp; reads union
-  sealed chunks with the live tail. Design only — implementation
-  follows in a subsequent release.
+  quarantine recovery.
+  Line identity is a strictly-monotonic per-session timestamp; reads
+  union sealed chunks with the live tail.
+  Design only — implementation follows in a subsequent release.
 
 - **Code archetypes require a delegated worker.** A new
   `require_delegated_worker` archetype field rejects mission contracts

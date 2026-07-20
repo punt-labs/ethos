@@ -1,6 +1,6 @@
 # Live audit write path and the sealed committed record
 
-**Status**: Design. Bead `ethos-t5b6` (P1). Amends DES-054 v5 storage.
+**Status**: Draft. Bead `ethos-t5b6` (P1). Amends DES-054 v5 storage.
 Cross-repo request from the punt-kit agent (claude:tty16), 2026-07-20.
 
 DES-054 made the session audit log both git-tracked and continuously
