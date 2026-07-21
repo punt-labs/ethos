@@ -5784,7 +5784,10 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   the sealed watermark (`N unsealed lines, sealing deferred until vendored`).
   In the common single-branch case the dedup is a no-op and output is
   identical to the pre-change single-file read; the DES-054 early-return read
-  path is **replaced** by this union.
+  path is **replaced** by this union. The "output identical to the old
+  single-file read" equivalence is strict for a ts-ordered legacy file; a
+  pre-discipline file whose lines are out of ts order is reordered to ts
+  order by the stable sort.
 - **Cross-branch re-seal.** The live file is in `.punt-labs/local/` and
   survives `git checkout`, but the watermark is derived from the tracked
   chunk set, which a branch switch rewrites. A branch lacking an earlier
