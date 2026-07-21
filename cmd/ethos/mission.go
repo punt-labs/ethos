@@ -13,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -46,7 +47,26 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), root)
+	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), root).
+		WithSessionResolver(currentSessionIDBestEffort)
+}
+
+// currentSessionIDBestEffort resolves the current session id from
+// ETHOS_SESSION or the Claude process tree, returning "" when neither is
+// available. DES-058 routes mission event appends to the per-(mission,
+// session) live log when a session is known; an empty result keeps the
+// legacy tracked-log append, which is the right behavior outside a session
+// (ad-hoc CLI, tests).
+func currentSessionIDBestEffort() string {
+	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
+		return sid
+	}
+	ss := sessionStore()
+	sid, err := ss.ReadCurrentSession(process.FindClaudePID())
+	if err != nil {
+		return ""
+	}
+	return sid
 }
 
 // missionStoreForCreate returns a mission store with the Phase 3.5
@@ -74,7 +94,8 @@ func missionStoreForCreate() *mission.Store {
 	// fallback. NewStore + WithRepoRoot would only wire the trace
 	// summary and leave per-mission storage on the global tree
 	// (m-2026-05-23-004 escalation).
-	ms := mission.NewStoreWithRoots(resolve.FindRepoRoot(), root)
+	ms := mission.NewStoreWithRoots(resolve.FindRepoRoot(), root).
+		WithSessionResolver(currentSessionIDBestEffort)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
 	if err != nil {
@@ -1045,6 +1066,17 @@ func runMissionClose(idOrPrefix, status string) error {
 	r, err := ms.Close(id, status)
 	if err != nil {
 		return fmt.Errorf("mission close: %w", err)
+	}
+	// DES-058: mission close is the authoritative seal for the closing
+	// checkout — it seals every session's mission-log tail under
+	// missions/<id>/ so the record is complete on disk even if no commit
+	// immediately follows. A seal failure must not lose the close (the
+	// contract is already closed on disk); surface it on stderr and carry
+	// on — the pre-commit seal is the clean-tree backstop.
+	if repoRoot := resolve.FindRepoRoot(); repoRoot != "" {
+		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
+		}
 	}
 	if jsonOutput {
 		printJSON(map[string]any{

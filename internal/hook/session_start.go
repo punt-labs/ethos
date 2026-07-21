@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -223,7 +224,7 @@ func resolveRepo() string {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: could not resolve repo from git remote: %v\n", err)
 		return ""
 	}
-	return ParseGitRemote(string(out))
+	return audit.ParseGitRemote(string(out))
 }
 
 // resolveHost returns the short hostname (no domain).

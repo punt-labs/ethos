@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,6 +33,28 @@ func appendEventForTest(t *testing.T, s *Store, missionID string, e Event) error
 	return s.withLock(missionID, func() error {
 		return s.appendEventLocked(missionID, e)
 	})
+}
+
+// TestDecodeEventLine_AcceptsFractionalSeconds pins that both event decoders
+// accept an RFC3339Nano timestamp — the shape audit.FormatLineTS mints for
+// every DES-058 live-log line. Copilot flagged time.RFC3339 as rejecting
+// fractional seconds; it does not. Go's time.Parse accepts an optional
+// fractional-second field after the seconds even when the layout omits it, so
+// this is a false positive. The test is the standing evidence.
+func TestDecodeEventLine_AcceptsFractionalSeconds(t *testing.T) {
+	nanoTS := audit.FormatLineTS(time.Now().UnixNano())
+	if !strings.Contains(nanoTS, ".") {
+		t.Fatalf("expected a fractional-second ts from FormatLineTS, got %q", nanoTS)
+	}
+	line := []byte(`{"ts":"` + nanoTS + `","event":"update","actor":"claude"}`)
+
+	got, err := decodeEventLine(line)
+	require.NoError(t, err, "strict decoder must accept an RFC3339Nano ts")
+	assert.Equal(t, nanoTS, got.TS)
+
+	got, err = decodeResidueEventLine(line)
+	require.NoError(t, err, "residue decoder must accept an RFC3339Nano ts")
+	assert.Equal(t, nanoTS, got.TS)
 }
 
 func TestAppendEvent_RoundTrip(t *testing.T) {
