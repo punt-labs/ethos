@@ -504,10 +504,12 @@ empty slot still gets the standalone hook; a prior ethos section is stripped
 and re-appended in place, so re-install is idempotent. Fresh installs write
 the marker form too (a shebang plus the section), so every state the installer
 creates is marker-managed. The installer overwrites a file only when it is
-positively identified as ours — the standalone hook's distinctive header line,
-which no foreign hook carries; a foreign hook that merely mentions the seal is
-chained into, not clobbered, so its content survives. A symlinked hook is
-updated through its target so a dotfile manager's link is not flattened.
+positively identified as our own standalone — our distinctive header comment
+on line 2, where every version of the standalone carries it. A hook that
+carries that text anywhere else (a foreign hook that pasted our whole script
+below its own, or one that merely mentions the seal) is chained into, not
+clobbered, so its content survives. A symlinked hook is updated through its
+target so a dotfile manager's link is not flattened.
 
 The chained section preserves the host's fall-through exit status: the seal
 scripts capture `$?` on entry and return it on every passthrough, so a host
