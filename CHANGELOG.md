@@ -23,7 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carried the identical no-clobber flaw and gets the same chaining. `ethos
   doctor` gains a check that the current repo's pre-commit hook carries an
   active seal invocation, reporting missing or stale with the remedy to
-  re-run `install.sh`.
+  re-run `install.sh`. Both the installer and the doctor check resolve the
+  hooks directory git actually runs from inside a worktree (via `git rev-parse
+  --git-path hooks` and the worktree `commondir`), so a seal installed from a
+  worktree lands on the common `.git/hooks` instead of a dead per-worktree
+  path that would silently never fire.
 
 ## [4.1.0] - 2026-07-21
 
