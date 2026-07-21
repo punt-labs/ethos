@@ -15,6 +15,26 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1" >&2; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1" >&2; exit 1; }
 
+# is_shell_hook FILE — succeed when FILE has a shell-family shebang, or none
+# (git runs a hook without a shebang via sh). Used to refuse chaining our
+# POSIX-sh section onto a Python/Node/binary host, which git would run under
+# the host's interpreter — breaking the host and never running the seal.
+is_shell_hook() {
+  IFS= read -r _sh < "$1" 2>/dev/null || _sh=""
+  case "$_sh" in
+    '#!'*) ;;
+    *) return 0 ;; # no shebang — git uses sh
+  esac
+  _i=${_sh#\#!}; _i=${_i# }; _i=${_i%% *}; _i=${_i##*/}
+  if [ "$_i" = "env" ]; then
+    _i=${_sh#*env }; _i=${_i%% *}; _i=${_i##*/}
+  fi
+  case "$_i" in
+    sh|bash|dash|ksh|zsh|mksh|ash) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # emit_section TAG SRC — print SRC (minus its shebang) fenced by our markers.
 emit_section() {
   printf '# --- BEGIN %s ---\n' "$1"
@@ -57,7 +77,8 @@ install_hook() {
   # link's target so mv does not flatten the link into a regular file and
   # sever the managing tool. One level of indirection covers the common case.
   if [ -L "$dest" ]; then
-    link=$(readlink "$dest")
+    link=$(readlink "$dest") || fail "cannot resolve symlink $dest — hook not installed"
+    [ -n "$link" ] || fail "empty symlink target for $dest — hook not installed"
     case "$link" in
       /*) ;;
       *) link="$(dirname "$dest")/$link" ;;
@@ -85,6 +106,23 @@ install_hook() {
     write_marker_form "$dest" "$src" "$tag"
     ok "$dest refreshed"
     return
+  fi
+
+  # Only chain into a shell host. git runs the mixed file with the host's
+  # interpreter, so appending our POSIX-sh section to a Python/Node/binary
+  # hook would break the host and never run the seal. Leaving a non-shell
+  # host untouched is better than breaking it — doctor then FAILs on the
+  # missing seal, the correct signal.
+  if ! is_shell_hook "$dest"; then
+    warn "$dest has a non-shell shebang — leaving it untouched; the ethos seal was not chained in"
+    return
+  fi
+
+  # Refuse to edit a hook with our BEGIN marker but no matching END: a
+  # hand-truncated section would make the strip-awk drop everything after
+  # BEGIN, destroying host content. Abort and let the operator fix it.
+  if grep -q "^# --- BEGIN $tag" "$dest" 2>/dev/null && ! grep -q "^# --- END $tag" "$dest" 2>/dev/null; then
+    fail "$dest has a '$tag' BEGIN marker with no matching END — refusing to edit a truncated hook; fix it by hand"
   fi
 
   tmp=$(mktemp "${dest}.XXXXXX") || fail "cannot create a temp file next to $dest — hook not installed"
