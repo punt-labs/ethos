@@ -824,10 +824,15 @@ the gap the audit system exists to prevent. But "cannot seal" and
 hard-block every unrelated commit on the machine. Three classes, three
 behaviors:
 
-**Nothing to seal — exit 0.** If the repo has no
-`.punt-labs/local/ethos/sessions/` directory (`ENOENT`), or it exists but
-holds no unsealed live lines, the hook touches nothing and exits 0. A repo
-with no ethos sessions and a commit outside any session are clean no-ops.
+**Nothing to seal — exit 0.** The no-op class is entered only when **both**
+live trees have nothing to seal **and** both tracked trees hold no unstaged
+orphan chunks: `.punt-labs/local/ethos/sessions/` and `local/ethos/missions/`
+each either absent (`ENOENT`) or holding no unsealed live lines, and neither
+tracked namespace carrying an unstaged chunk. `ENOENT` on one live tree does
+not short-circuit inspection of the other — the walk unions both namespaces
+exactly as the repo-wide trigger does. Only then does the hook touch nothing
+and exit 0. A repo with no ethos sessions and a commit outside any session are
+clean no-ops.
 One cross-check guards against a silent vacuum, and it is **per session**,
 not per zone. It iterates two sources: each session the roster records as
 active and bound to this repo — by its recorded checkout path, any path
@@ -838,13 +843,26 @@ the check scopes tombstones to the committing repo and derives the live-file
 path from that recorded path and the session id — without it the tombstone
 branch has nothing to `stat` and nothing to scope by, and would either revert
 to dead code or warn in every repo forever. For each source it `stat`s the
-session's recorded live file **and every mission live file the session left**
-(the glob `local/ethos/missions/*/<session-id>.log.jsonl`) and
+session's recorded live file **and every mission live file the session is
+expected to have left** — an enumerated expected set, not a glob. A glob over
+`local/ethos/missions/*/<session-id>.log.jsonl` sees only files that exist, so
+a *deleted* mission live file, the precise loss this check exists to catch,
+produces no entry and no warning. The expected mission live files are instead
+those for missions whose **tracked** `missions/<id>/` chunks carry this
+session's id (a session that sealed a chunk provably wrote the live file, and
+live files are never deleted by design), **unioned** with the missions bound to
+the session in mission records (the `ethos mission claim` binding and
+delegation records — covering the Tier B session that has claimed a mission but
+sealed no chunk yet). It `stat`s each expected file and
 **warns on stderr naming any session whose live file is absent** in either
 namespace (still exit
 0 — a missing live file must not block an unrelated commit, but it must not
 pass unremarked either, because it can mean a checkout was deleted, or a
-single session's live file removed, with unsealed lines, §Migration). A
+single session's live file removed, with unsealed lines, §Migration). One
+residual is bounded and stated plainly: a mission live file written by a
+session that never sealed a chunk and holds no mission binding cannot be
+enumerated, so its loss is undetectable — the same bounded class as the
+hookless `rm -rf`. A
 tombstone warning **repeats at every commit** in that repo until the operator
 acknowledges it with `ethos session purge --ack <session-id>`, which **renames**
 the tombstone to `<session-id>.purged.acked` — a retained record that is never
@@ -1677,8 +1695,12 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   same chunk from divergent states can produce an ordinary marker conflict,
   resolved by keeping the marker with the **smaller** unrecovered range plus
   the union of the re-sealed chunks (the checkout that recovered more wins).
-  Fail-closed must never leave bypass as the only exit. A commit with no
-  sessions dir (`ENOENT`) or no pending live lines is a no-op exit 0, but the
+  Fail-closed must never leave bypass as the only exit. The no-op exit 0 is
+  entered only when **both** live trees have nothing to seal and neither tracked
+  namespace holds an unstaged orphan chunk — the sessions dir and
+  `local/ethos/missions/` each absent (`ENOENT`) or holding no pending live
+  lines, `ENOENT` on one not short-circuiting the other, the walk unioning both
+  namespaces as the repo-wide trigger does; but the
   vacuum cross-check is **per session** and iterates two sources: each
   roster-active session bound to this repo (any checkout path) **and** each
   purge tombstone whose recorded repo is the committing repo and that carries
@@ -1697,12 +1719,23 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   rather than refusing, so two byte-identical tombstones stay two records and
   the warning is always retirable. For
   each the hook `stat`s
-  the recorded live file **and every mission live file the session left** (the
-  glob `local/ethos/missions/*/<session-id>.log.jsonl`) and **warns on stderr
+  the recorded live file **and every mission live file the session is expected
+  to have left** — an enumerated expected set, not a glob, since a glob over
+  `local/ethos/missions/*/<session-id>.log.jsonl` sees only extant files and a
+  deleted mission live file, the loss this check exists to catch, would draw no
+  warning. The expected mission live files are those for missions whose
+  **tracked** `missions/<id>/` chunks carry the session's id (a sealed chunk
+  proves the live file existed, and live files are never deleted by design)
+  **unioned** with the missions bound to the session in mission records (the
+  `ethos mission claim` binding and delegation records — the sealed-nothing-yet
+  Tier B case). It `stat`s each and **warns on stderr
   naming any session whose live
   file is absent** in either namespace (still exit 0 — it may mean a checkout
   was deleted, or one
-  session's live file removed, with unsealed lines). `session purge` itself
+  session's live file removed, with unsealed lines). The residual is bounded and
+  stated plainly: a mission live file written by a session that never sealed a
+  chunk and holds no mission binding cannot be enumerated, so its loss is
+  undetectable — the same bounded class as the hookless `rm -rf`. `session purge` itself
   refuses (or with `--force` warns and sets the tombstone flag) when a live
   file in either namespace still holds lines above its watermark, and sets the
   flag in a distinct
