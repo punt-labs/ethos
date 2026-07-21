@@ -1,0 +1,6 @@
+{"ts":"2026-07-20T14:20:00Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"ethos-t5b6","worker":"bwk"}}
+{"ts":"2026-07-20T14:28:20Z","event":"result","actor":"bwk","details":{"confidence":0.85,"evidence_entries":4,"files_changed":1,"round":1,"verdict":"pass"}}
+{"ts":"2026-07-20T14:35:25Z","event":"reflect","actor":"claude","details":{"converging":true,"recommendation":"continue","round":1,"signal_count":9}}
+{"ts":"2026-07-20T14:35:29Z","event":"round_advanced","actor":"claude","details":{"from_round":1,"recommendation":"continue","to_round":2}}
+{"ts":"2026-07-20T14:45:06Z","event":"result","actor":"bwk","details":{"confidence":0.88,"evidence_entries":12,"files_changed":1,"round":2,"verdict":"pass"}}
+{"ts":"2026-07-20T14:53:48Z","event":"close","actor":"claude","details":{"round":2,"status":"closed","verdict":"pass"}}

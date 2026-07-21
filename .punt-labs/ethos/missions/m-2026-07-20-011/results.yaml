@@ -1,0 +1,17 @@
+results:
+    - mission: m-2026-07-20-011
+      round: 1
+      created_at: "2026-07-20T14:18:47Z"
+      author: bwk
+      verdict: fail
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: pipeline instantiate error — stage "test" (m-2026-07-20-012) archetype constraint rejected write_set entry "internal/hook"
+          status: fail
+      prose: |
+        Orphaned partial instantiation (second attempt), implement stage.
+        Sibling of m-2026-07-20-010; see that record. No work was dispatched
+        under this mission. Implementation missions for audit-seal will be
+        created after the design closes and the operator ratifies, with
+        file-precise write sets.

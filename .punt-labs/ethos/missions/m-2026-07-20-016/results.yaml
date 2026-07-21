@@ -1,0 +1,120 @@
+results:
+    - mission: m-2026-07-20-016
+      round: 1
+      created_at: "2026-07-20T20:15:32Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/audit-seal.md
+          added: 246
+          removed: 404
+      evidence:
+        - name: 'markdownlint: npx markdownlint-cli2 docs/audit-seal.md — 0 issues, exit 0'
+          status: pass
+        - name: line count 962 -> 804 (net -158); simplification pass per operator ruling
+          status: pass
+        - name: 'ruling 1 (local location): live file at <repo>/.punt-labs/local/ethos/sessions/<id>.audit.jsonl; checkout-path scoping deleted; TMPDIR/per-branch/home-dir in Rejected'
+          status: pass
+        - name: 'ruling 2 (chunk sealing): immutable audit-<first>-<last>.jsonl chunks; merge driver, .gitattributes, byte-prefix, divergence, reseal, resume-offset deleted'
+          status: pass
+        - name: 'ruling 3 (repo-wide sweep): pre-commit seals all repo sessions; committing-session + orphan kill(pid,0) machinery deleted, both in Rejected'
+          status: pass
+        - name: 'ruling 4 (no seq): strictly-monotonic per-session ts under flock (max(now,last+1ns)); seq in Rejected; concat has no cross-line dedup'
+          status: pass
+        - name: 'invariants: I10 amended, I11-chunk/I11-idem/I12-merge rewritten to chunk model; embedded DES-058 DESIGN.md block re-synced verbatim'
+          status: pass
+      prose: |
+        Simplification pass honoring all four operator rulings; the doc shrank
+        from 962 to 804 lines (net -158). Every killed mechanism — merge driver,
+        .gitattributes, byte-prefix verification, divergence/reseal, resume
+        offset, seq allocation, committing-session scoping, orphan detection,
+        checkout-path scoping, and live-file seeding — is removed from the body
+        and recorded in Rejected alternatives with the operator ruling as the
+        reason. None is reintroduced as an option.
+
+        Three worker-owned design decisions, made and justified. Chunk filename:
+        audit-<first>-<last>.jsonl with 19-digit zero-padded Unix-nanosecond
+        first/last timestamps — sorts chronologically (fixed-width int),
+        collision-free (per-session ts strictly monotonic, distinct dirs across
+        sessions), filesystem-safe. Watermark: max <last> across chunk
+        filenames, so it is computed from the directory listing without opening
+        a chunk; a frozen legacy audit.jsonl has its last line read once.
+        Atomicity: temp + rename in the sealed dir — a crash before rename
+        leaves an ignored temp, a crash after rename before git add leaves a
+        complete untracked chunk the next commit stages, and a tracked chunk is
+        never partial.
+
+        One consequential co-location: the live-writer/seal session flock moves
+        with the live file into .punt-labs/local/ (per-checkout), since two
+        checkouts now have distinct live files and must not contend. Mission
+        locks are unchanged — global tree, keyed by mission ID. markdownlint
+        clean; embedded DES-058 DESIGN.md entry kept verbatim in sync with the
+        body.
+    - mission: m-2026-07-20-016
+      round: 2
+      created_at: "2026-07-20T20:27:39Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/audit-seal.md
+          added: 140
+          removed: 0
+      evidence:
+        - name: 'markdownlint: npx markdownlint-cli2 docs/audit-seal.md — 0 issues, exit 0'
+          status: pass
+        - name: line count 804 -> 944 (+140); hardening pass on rsc's 4 REQ + 3 OPT, no ruling reopened
+          status: pass
+        - name: 'R1 branch-rewind overlap: read now unions + dedups by (session, ts) sorted by ts; new Cross-branch re-seal section; I11-chunk disjointness scoped to one tree state; I11-idem >=1 chunk + byte-identical dupes; I12-merge dedup; re-seal kept as desired; acceptance ''output identical'' reworded'
+          status: pass
+        - name: 'R2 orphan chunk: seal''s final act unconditionally git-adds every untracked chunk in the session dir, moved out from the wrote-a-chunk branch; algorithm + crash prose agree'
+          status: pass
+        - name: 'R3 gitlink: third failure-policy branch added — gitlink-mounted .punt-labs/ethos/ -> no-op exit 0 until e29s, distinct from EACCES/EIO exit 2'
+          status: pass
+        - name: 'R4 dir date: sealed dir pinned to session START date (roster), one dir per session; mapping stated at the zone table and echoed in chunk sealing'
+          status: pass
+        - name: O1 malformed chunk name -> fail seal exit 2 (never silently skipped); O2 legacy watermark = max ts over all its lines, not last line; O3 ts subsystem rewind-robust vs seal/read subsystem stated in monotonic-ts section and Cross-branch re-seal
+          status: pass
+        - name: embedded DES-058 DESIGN.md block re-synced verbatim (Chunk sealing, Merged read + Cross-branch re-seal bullet, Seal failure three classes, Invariant changes, Rejected alternatives incl. suppress-reseal)
+          status: pass
+      prose: |
+        Round-2 hardening applies all four REQ and three OPT edits from rsc's
+        APPROVE-WITH-NAMED-EDITS review; no operator ruling is reopened and the
+        chunk model stands. The doc grew 804 -> 944 lines (+140) — expected,
+        since round 2 adds correctness machinery rather than removing it.
+
+        R1 (branch rewind overlap): the read path now unions all chunks plus
+        the live tail, dedups by (session, ts), and sorts by ts. A new
+        "Cross-branch re-seal" section walks the A/B/main scenario, keeps
+        re-sealing on the rewound branch as the DESIRED behavior (suppressing
+        it loses the record on the merging branch — added to Rejected), and
+        proves the dedup loss-free (equal ts => byte-identical line from the
+        same append-only live file). I11-chunk disjointness is scoped to a
+        single tree state; I11-idem allows >=1 chunk with byte-identical
+        duplicates; I12-merge and the "output identical" acceptance criterion
+        are reworded. The dedup keys on the ruled (session, ts) identity — not
+        a seq field, not a merge driver.
+
+        R2 (orphan chunk): the seal's final step now unconditionally git-adds
+        every untracked audit chunk in the session dir, including on the
+        empty-tail path, so a crash between rename and add cannot leave a
+        permanently untracked file. The algorithm and the crash narrative agree.
+
+        R3 (gitlink): a third seal-failure branch — gitlink-mounted
+        .punt-labs/ethos/ is a no-op exit 0 until e29s, live lines stay in
+        .punt-labs/local/ (clean tree already met), sealed later — explicitly
+        distinct from the EACCES/EIO exit-2 class so consuming repos are not
+        blocked.
+
+        R4 (dir date): the sealed directory's date is pinned to the session
+        start date from the roster, one directory per session for its whole
+        life, stated at the zone table and echoed in chunk sealing — a
+        midnight-spanning session no longer splits or regresses the watermark.
+
+        OPTs: a malformed chunk filename fails the seal (exit 2) rather than
+        silently regressing the watermark; the legacy-file watermark is the max
+        ts over all its lines, not the last line; and the timestamp subsystem
+        (rewind-robust via live-file recovery) is explicitly distinguished from
+        the seal/read subsystem (rewind handled by the read dedup). Embedded
+        DES-058 entry re-synced; markdownlint clean.

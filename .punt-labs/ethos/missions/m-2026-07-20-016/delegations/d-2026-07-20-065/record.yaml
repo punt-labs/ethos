@@ -1,0 +1,8 @@
+id: d-2026-07-20-065
+tier: B
+mission: m-2026-07-20-016
+parent_session: c7e50ab0-10d9-4b09-9402-db32cfe8f2da
+agent_type: bwk
+created_at: "2026-07-20T20:09:08Z"
+closed_at: "2026-07-20T20:28:39Z"
+verdict: pass

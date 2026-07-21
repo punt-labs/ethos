@@ -1,3 +1,5 @@
 {"ts":"2026-07-05T02:58:48Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"ethos-bo84","worker":"bwk"}}
 {"ts":"2026-07-05T03:17:48Z","event":"reflect","actor":"claude","details":{"converging":true,"recommendation":"continue","round":1,"signal_count":4}}
 {"ts":"2026-07-05T03:17:48Z","event":"round_advanced","actor":"claude","details":{"from_round":1,"recommendation":"continue","to_round":2}}
+{"ts":"2026-07-20T14:16:28Z","event":"result","actor":"bwk","details":{"confidence":1,"evidence_entries":3,"files_changed":0,"round":2,"verdict":"pass"}}
+{"ts":"2026-07-20T14:16:33Z","event":"close","actor":"claude","details":{"round":2,"status":"closed","verdict":"pass"}}

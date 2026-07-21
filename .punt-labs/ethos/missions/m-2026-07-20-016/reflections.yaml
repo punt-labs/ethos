@@ -1,0 +1,26 @@
+reflections:
+    - round: 1
+      created_at: "2026-07-20T20:22:26Z"
+      author: claude
+      converging: true
+      signals:
+        - 'worker round 1: all four operator rulings faithfully applied; doc shrank 962 -> 804 lines; markdownlint clean'
+        - 'evaluator (rsc): APPROVE WITH NAMED EDITS — chunk model ratified as the right answer to the merge-conflict ruling; prior R1/R3/R5 dissolved'
+        - 'REQ R1 (independently confirmed by leader read): branch rewind regresses the tree-derived watermark, re-seals live lines into overlapping chunks; read path must dedup by (session, ts) — byte-identical lines, safe; the no-dedup claim and I11-chunk cross-branch disjointness must be corrected'
+        - 'REQ R2: crash between rename and git add orphans a complete untracked chunk forever (empty-tail early return skips staging) — seal must git-add all untracked chunks even on empty tail'
+        - 'REQ R3: gitlink-mounted .punt-labs/ethos/ + fail-closed policy would block every commit in consuming repos — add gitlink no-op exit 0 branch until e29s'
+        - 'REQ R4: flat live filename vs dated sealed dir unmapped; midnight-spanning session splits dirs and regresses the watermark — pin the dir date to session START date'
+        - 'OPT: malformed chunk names fail closed; legacy watermark = max ts not last line; state ts subsystem is rewind-robust while seal/read needs the R1 dedup'
+        - no finding reopens an operator ruling — verified by evaluator and leader
+      recommendation: continue
+      reason: Round 2 applies four doc-only REQ edits and three OPTs inside the ruled model; no redesign, no ruling relitigated. On pass the mission closes and the doc PR opens.
+    - round: 2
+      created_at: "2026-07-20T20:28:35Z"
+      author: claude
+      converging: true
+      signals:
+        - round 2 applied all four rsc REQ findings (read-side (session, ts) dedup for branch-rewind overlap; unconditional staging of untracked chunks; gitlink no-op exit 0 branch; sealed dir pinned to session start date) and all three OPTs
+        - 'leader verification: markdownlint 0 issues at 944 lines; gitignore rationale cites merged punt-labs-dir.md e3ab9a3; embedded DES-058 entry re-synced'
+        - no operator ruling reopened across either round; punt-kit stakeholder confirmed the .punt-labs/local/<tool>/ layout and will amend the org standard with a named local zone against the settled text
+      recommendation: stop
+      reason: Design converged under the four operator rulings; evaluator APPROVE WITH NAMED EDITS satisfied; closing as pass and proceeding to the DESIGN.md/CHANGELOG doc PR.
