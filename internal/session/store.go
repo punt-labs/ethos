@@ -231,9 +231,25 @@ func (s *Store) PurgeTombstoned(force bool) (purged, refused []string, err error
 		if lockErr := s.withLock(id, func() error {
 			roster, lErr := s.Load(id)
 			if lErr != nil {
-				if s.deleteFiles(id) == nil {
-					didPurge = true
+				// An unparseable roster is a crash artifact — precisely the
+				// state most likely to hold unsealed lines — and its repo
+				// binding is unreadable, so the guard cannot run. Fail safe:
+				// refuse unless --force. Under --force delete it, but surface
+				// that no tombstone can be recorded (repo unknown).
+				if !force {
+					fmt.Fprintf(os.Stderr,
+						"ethos: purge: refusing to purge %s: roster unreadable (%v); re-run with --force\n", id, lErr)
+					didRefuse = true
+					return nil
 				}
+				if dErr := s.deleteFiles(id); dErr != nil {
+					fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", id, dErr)
+					didRefuse = true
+					return nil
+				}
+				fmt.Fprintf(os.Stderr,
+					"ethos: purge: force-purged %s with unreadable roster; loss not recorded (repo binding unknown)\n", id)
+				didPurge = true
 				return nil
 			}
 			if !isStale(roster) {
@@ -259,12 +275,23 @@ func (s *Store) PurgeTombstoned(force bool) (purged, refused []string, err error
 // purgeOneTombstoned applies the unsealed-lines guard to one stale roster
 // under the caller's lock, writing a flagged tombstone when it proceeds past
 // pending or already-gone lines. Returns (didPurge, didRefuse).
+//
+// Fail-safe: any probe error (a corrupt sealed dir failing the watermark scan,
+// an unreadable mission tree) means the session's unsealed state cannot be
+// proven clean, so purge refuses unless --force — mirroring VacuumCrossCheck,
+// which propagates the same errors. Reading a probe error as "nothing unsealed"
+// is the silent-loss path the tombstone exists to prevent. Under --force the
+// session is purged but a flagged tombstone records the unproven loss.
 func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
 	repo := roster.Repo
 	unsealed := 0
 	liveGone := false
+	probeFailed := false
 	if repo != "" {
-		if n, cErr := audit.SessionUnsealedCount(repo, roster.Session); cErr == nil {
+		if n, cErr := audit.SessionUnsealedCount(repo, roster.Session); cErr != nil {
+			probeFailed = true
+			fmt.Fprintf(os.Stderr, "ethos: purge: probing %s unsealed audit lines: %v\n", roster.Session, cErr)
+		} else {
 			unsealed = n
 		}
 		liveGone = !audit.SessionLiveFileExists(repo, roster.Session)
@@ -274,40 +301,58 @@ func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
 		// chunk yet, must not purge silently — enumerate the expected mission
 		// live files (chunk-derived union mission-record bindings) and fold
 		// their unsealed/gone state in.
-		bound, _ := mission.SessionBoundMissions(s.root, repo, roster.Session)
-		if expected, eErr := audit.ExpectedMissionLiveFiles(repo, roster.Session, bound); eErr == nil {
-			for _, ml := range expected {
-				if !ml.Present {
-					liveGone = true
-					continue
-				}
-				if n, cErr := audit.MissionUnsealedCount(repo, ml.MissionID, roster.Session); cErr == nil {
-					unsealed += n
-				}
+		bound, bErr := mission.SessionBoundMissions(s.root, repo, roster.Session)
+		if bErr != nil {
+			probeFailed = true
+			fmt.Fprintf(os.Stderr, "ethos: purge: resolving %s mission bindings: %v\n", roster.Session, bErr)
+		}
+		expected, eErr := audit.ExpectedMissionLiveFiles(repo, roster.Session, bound)
+		if eErr != nil {
+			probeFailed = true
+			fmt.Fprintf(os.Stderr, "ethos: purge: enumerating %s mission live files: %v\n", roster.Session, eErr)
+		}
+		for _, ml := range expected {
+			if !ml.Present {
+				liveGone = true
+				continue
+			}
+			if n, cErr := audit.MissionUnsealedCount(repo, ml.MissionID, roster.Session); cErr != nil {
+				probeFailed = true
+				fmt.Fprintf(os.Stderr, "ethos: purge: probing mission %s unsealed lines for %s: %v\n",
+					ml.MissionID, roster.Session, cErr)
+			} else {
+				unsealed += n
 			}
 		}
 	}
-	if unsealed > 0 && !force {
-		fmt.Fprintf(os.Stderr,
-			"ethos: purge: refusing to purge %s: %d unsealed audit line(s); commit to seal them or re-run with --force\n",
-			roster.Session, unsealed)
+	if !force && (unsealed > 0 || probeFailed) {
+		if probeFailed {
+			fmt.Fprintf(os.Stderr,
+				"ethos: purge: refusing to purge %s: could not verify unsealed state; re-run with --force to purge anyway\n",
+				roster.Session)
+		} else {
+			fmt.Fprintf(os.Stderr,
+				"ethos: purge: refusing to purge %s: %d unsealed audit line(s); commit to seal them or re-run with --force\n",
+				roster.Session, unsealed)
+		}
 		return false, true
 	}
-	if repo != "" && (unsealed > 0 || liveGone) {
+	if repo != "" && (unsealed > 0 || liveGone || probeFailed) {
 		t := audit.Tombstone{
 			Session:       roster.Session,
 			StartDate:     rosterStartDate(roster),
 			Repo:          repo,
 			Checkout:      repo,
-			UnsealedLines: unsealed > 0,
+			UnsealedLines: unsealed > 0 || probeFailed,
 			LiveFileGone:  liveGone,
 		}
 		if tErr := audit.WriteTombstone(s.sessionsDir(), t); tErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: purge: writing tombstone for %s: %v\n", roster.Session, tErr)
 		}
 	}
-	if s.deleteFiles(roster.Session) != nil {
-		return false, false
+	if dErr := s.deleteFiles(roster.Session); dErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: purge: deleting %s: %v\n", roster.Session, dErr)
+		return false, true
 	}
 	return true, false
 }

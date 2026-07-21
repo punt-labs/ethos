@@ -73,6 +73,86 @@ func TestPurgeTombstoned_ClaimedButUnsealedMissionFlagsTombstone(t *testing.T) {
 	assert.True(t, tb.LiveFileGone, "claimed-but-unsealed lost mission live log must set the tombstone flag")
 }
 
+// breakMissionTree makes the repo's mission tree unreadable by planting a
+// regular file where the missions directory must be, so the guard's mission
+// probes (SessionBoundMissions / ExpectedMissionLiveFiles) fail with ENOTDIR.
+func breakMissionTree(t *testing.T, repo string) {
+	t.Helper()
+	missions := filepath.Join(repo, ".punt-labs", "ethos", "missions")
+	require.NoError(t, os.MkdirAll(filepath.Dir(missions), 0o700))
+	require.NoError(t, os.WriteFile(missions, []byte("x"), 0o600))
+}
+
+func TestPurgeTombstoned_ProbeErrorRefuses(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.Create("sess-probe", root, primary, repo, ""))
+	breakMissionTree(t, repo)
+
+	// A probe error must not read as "nothing unsealed" — fail safe: refuse.
+	purged, refused, err := s.PurgeTombstoned(false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-probe")
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-probe", "a refused probe must not delete the session")
+}
+
+func TestPurgeTombstoned_ProbeErrorForceFlagsTombstone(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-probe-force", root, primary, repo, ""))
+	breakMissionTree(t, repo)
+
+	purged, refused, err := s.PurgeTombstoned(true)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-probe-force")
+	assert.Empty(t, refused)
+
+	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-probe-force.purged"))
+	require.NoError(t, err)
+	assert.True(t, tb.UnsealedLines, "an unprovable state must flag the tombstone under --force")
+}
+
+func TestPurgeTombstoned_CorruptRosterRefusesWithoutForce(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-corrupt", root, primary, repo, ""))
+	// Corrupt the roster so Load fails — a crash artifact.
+	require.NoError(t, os.WriteFile(s.rosterPath("sess-corrupt"), []byte("[unclosed"), 0o600))
+
+	purged, refused, err := s.PurgeTombstoned(false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-corrupt", "an unreadable roster must refuse without --force")
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-corrupt")
+}
+
+func TestPurgeTombstoned_CorruptRosterForcePurges(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-corrupt-force", root, primary, repo, ""))
+	require.NoError(t, os.WriteFile(s.rosterPath("sess-corrupt-force"), []byte("[unclosed"), 0o600))
+
+	purged, refused, err := s.PurgeTombstoned(true)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-corrupt-force")
+	assert.Empty(t, refused)
+}
+
 func TestPurgeTombstoned_RefusesUnsealed(t *testing.T) {
 	s := testStore(t)
 	repo := t.TempDir()

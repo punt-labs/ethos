@@ -563,7 +563,7 @@ func runSessionPurge(cmd *cobra.Command) error {
 		return nil
 	}
 	for _, id := range refused {
-		fmt.Fprintf(out, "Refused to purge %s (unsealed audit lines; use --force)\n", id)
+		fmt.Fprintf(out, "Refused to purge %s (see stderr for cause; --force overrides)\n", id)
 	}
 	for _, id := range purged {
 		fmt.Fprintf(out, "Purged session %s\n", id)
