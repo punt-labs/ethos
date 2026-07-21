@@ -501,12 +501,22 @@ does not overwrite it and, critically, does not skip: it appends a
 marker-delimited `ETHOS DES-058 SEAL` section (the beads-integration marker
 pattern) that runs the seal after the host hook's content falls through. An
 empty slot still gets the standalone hook; a prior ethos section is stripped
-and re-appended in place, so re-install is idempotent. The append-at-end
-contract has one limit: a host hook that exits unconditionally bypasses the
-section — the installer detects an unconditional `exit` on the host's last
-line and warns. `ethos doctor` reports whether the committed hook carries an
-active seal so the silent-absence failure this fix closes cannot recur
-undetected.
+and re-appended in place, so re-install is idempotent. A hybrid file (host
+hook plus a pasted seal body whose marker drifted) is never overwritten — the
+installer refreshes by copy only when the file is wholly ours, otherwise it
+strips-and-appends and preserves the host. A symlinked hook is updated through
+its target so a dotfile manager's link is not flattened.
+
+The chained section preserves the host's fall-through exit status: the seal
+scripts capture `$?` on entry and return it on every passthrough, so a host
+hook that signals failure by fall-through (a bare `golangci-lint run`, say)
+still blocks the commit after chaining; only a seal failure overrides, with
+its own blocking exit 2. The append-at-end contract has one limit: a host hook
+that unconditionally `exit`s or `exec`s bypasses the section — the installer
+detects that on the host's last effective line (past trailing comments) and
+warns. `ethos doctor` reports whether the committed hook carries an active
+seal — an uncommented `audit seal` call in an executable hook — so the
+silent-absence failure this fix closes cannot recur undetected.
 
 Worktrees are handled correctly: the installer resolves the hooks directory
 with `git rev-parse --git-path hooks` and doctor follows the worktree admin
