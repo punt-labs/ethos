@@ -54,10 +54,13 @@ func TestSealMissionWritesChunk(t *testing.T) {
 // TestSealMissionConcurrentSessions seals one mission from two sessions at
 // once, each under its own per-(mission, session) flock into the shared
 // mission directory. Neither seal may spuriously fail by sweeping the other's
-// in-flight temp: both chunks must land. Run under -race.
+// in-flight temp: both chunks must land. It drives the seal critical section
+// directly (where SweepStaleTemps + WriteChunkAtomic run) rather than the full
+// sealMissionSession, so the two goroutines do not contend on git's single
+// index.lock — a git-level concern orthogonal to the sweep race under test.
+// Run under -race.
 func TestSealMissionConcurrentSessions(t *testing.T) {
 	repo := t.TempDir()
-	initGitRepo(t, repo)
 	mid := "m-2026-07-21-010"
 	// Many lines per session widen each WriteChunkAtomic window, so the two
 	// sweeps and writes are more likely to interleave.
@@ -69,12 +72,25 @@ func TestSealMissionConcurrentSessions(t *testing.T) {
 	writeMissionLiveLines(t, repo, mid, "sessB", tss...)
 
 	now := time.Now().UTC()
+	sealedDir := sealedMissionDir(repo, mid)
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	seal := func(idx int, sessionID string) {
 		defer wg.Done()
-		var res SealResult
-		errs[idx] = sealMissionSession(repo, mid, sessionID, now, SealOptions{}, &res)
+		errs[idx] = WithLiveMissionLock(repo, mid, sessionID, func() error {
+			_, e := sealDirLocked(sealDirParams{
+				repoRoot:  repo,
+				ns:        audit.MissionNS,
+				session:   sessionID,
+				sealedDir: sealedDir,
+				livePath:  liveMissionLogPath(repo, mid, sessionID),
+				legacy:    audit.MissionLegacySources(repo, mid),
+				chunkName: func(f, l int64) string { return audit.MissionChunkFile(sessionID, f, l) },
+				tempName:  func(f, l int64) string { return audit.MissionTempFile(sessionID, f, l) },
+				label:     "mission " + mid + " session " + sessionID,
+			}, now, SealOptions{})
+			return e
+		})
 	}
 	wg.Add(2)
 	go seal(0, "sessA")
@@ -86,7 +102,6 @@ func TestSealMissionConcurrentSessions(t *testing.T) {
 			t.Fatalf("concurrent seal %d failed: %v", i, err)
 		}
 	}
-	sealedDir := sealedMissionDir(repo, mid)
 	if _, err := os.Stat(filepath.Join(sealedDir, audit.MissionChunkFile("sessA", 1, 200))); err != nil {
 		t.Errorf("sessA chunk missing after concurrent seal: %v", err)
 	}
