@@ -8,6 +8,37 @@ import (
 	"strings"
 )
 
+// relPathspec converts an absolute path to a repo-relative, slash-separated git
+// pathspec. Git matches a pathspec against the work-tree prefix; an absolute
+// path under a symlinked root (macOS /tmp and TMPDIR resolve through /private)
+// fails that prefix match, so a chunk that exists on disk reads as unmatched —
+// the seal then fails closed or silently skips staging. Relativizing against
+// repoRoot and running git with cmd.Dir=repoRoot sidesteps git's absolute-path
+// resolution entirely. A path already relative is only slash-normalized.
+func relPathspec(repoRoot, path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return filepath.ToSlash(path), nil
+	}
+	rel, err := filepath.Rel(repoRoot, path)
+	if err != nil {
+		return "", fmt.Errorf("relativizing %s against %s: %w", path, repoRoot, err)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+// relPathspecs relativizes each path against repoRoot.
+func relPathspecs(repoRoot string, paths []string) ([]string, error) {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		rel, err := relPathspec(repoRoot, p)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = rel
+	}
+	return out, nil
+}
+
 // GitAdd stages one or more paths from repoRoot. A git-add failure staging a
 // new or orphan chunk is fail-closed (exit 2) per §Seal failure policy, so
 // the error is returned, never swallowed.
@@ -15,7 +46,11 @@ func GitAdd(repoRoot string, paths ...string) error {
 	if len(paths) == 0 {
 		return nil
 	}
-	args := append([]string{"add", "--"}, paths...)
+	specs, err := relPathspecs(repoRoot, paths)
+	if err != nil {
+		return err
+	}
+	args := append([]string{"add", "--"}, specs...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repoRoot
 	var stderr bytes.Buffer
@@ -29,7 +64,15 @@ func GitAdd(repoRoot string, paths ...string) error {
 // GitMv renames src to dst via git so the move is staged. Used by quarantine
 // to retire a corrupt chunk to its .corrupt name.
 func GitMv(repoRoot, src, dst string) error {
-	cmd := exec.Command("git", "mv", "--", src, dst)
+	relSrc, err := relPathspec(repoRoot, src)
+	if err != nil {
+		return err
+	}
+	relDst, err := relPathspec(repoRoot, dst)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("git", "mv", "--", relSrc, relDst)
 	cmd.Dir = repoRoot
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -63,7 +106,11 @@ func IsGitlinkMount(repoRoot string) bool {
 // modified relative to the index, so a re-seal does not report an
 // already-committed chunk as newly staged.
 func UntrackedOrModified(repoRoot string, paths []string) ([]string, error) {
-	args := append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, paths...)
+	specs, err := relPathspecs(repoRoot, paths)
+	if err != nil {
+		return nil, err
+	}
+	args := append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, specs...)
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
