@@ -107,6 +107,34 @@ func TestMigrateAudit_CopiesEntriesAndDeletesLegacy(t *testing.T) {
 	assert.Contains(t, out.String(), "2 new entries")
 }
 
+// TestMigrateAudit_PreservesRawUnknownFields is SFH R2-4: migration must copy
+// raw lines, so an audit_error sentinel and any unknown future field survive
+// byte-intact. A decode-remarshal through auditEntry would strip both.
+func TestMigrateAudit_PreservesRawUnknownFields(t *testing.T) {
+	globalDir := filepath.Join(t.TempDir(), "global")
+	repoRoot := t.TempDir()
+	sessID := "sess-raw"
+
+	sentinel := `{"ts":"2026-05-22T10:00:00Z","session":"sess-raw","audit_error":"fsync failed"}`
+	future := `{"ts":"2026-05-22T10:00:01Z","session":"sess-raw","tool":"Bash","future_field":"keepme"}`
+	require.NoError(t, os.MkdirAll(globalDir, 0o700))
+	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
+	require.NoError(t, os.WriteFile(legacyPath, []byte(sentinel+"\n"+future+"\n"), 0o600))
+	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+
+	var out bytes.Buffer
+	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "audit.jsonl"))
+	require.NoError(t, err)
+	body := string(data)
+	assert.Contains(t, body, `"audit_error":"fsync failed"`, "sentinel must survive migration byte-intact")
+	assert.Contains(t, body, `"future_field":"keepme"`, "unknown field must survive migration byte-intact")
+
+	_, statErr := os.Stat(legacyPath)
+	assert.True(t, os.IsNotExist(statErr), "legacy file should be deleted after migration")
+}
+
 func TestMigrateAudit_IdempotentNoDoubleWrite(t *testing.T) {
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()
