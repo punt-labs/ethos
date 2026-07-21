@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"time"
@@ -9,12 +10,25 @@ import (
 )
 
 // AuditDiagnostics reports read-time conditions that are not audit entries but
-// that a reader must see: quarantine gap markers (lines lost to corruption)
-// and gitlink-deferred sessions (live lines past the watermark that no chunk
-// yet records because the sealed tree is unreachable).
+// that a reader must see: quarantine gap markers (lines lost to corruption),
+// gitlink-deferred sessions (live lines past the watermark that no chunk yet
+// records because the sealed tree is unreachable), and loss markers (sentinel
+// lines an audit write left behind when it could not persist a full entry).
 type AuditDiagnostics struct {
-	Gaps     []audit.Gap
-	Deferred []DeferredSession
+	Gaps        []audit.Gap
+	Deferred    []DeferredSession
+	LossMarkers []LossMarker
+}
+
+// LossMarker names an audit_error sentinel in a session's stream — a point
+// where the audit pipeline could not persist a full entry (docs/audit-seal.md
+// §Seal failure policy). `ethos audit show`'s entry rendering drops the
+// audit_error field (auditEntry has no such field), so this diagnostic is the
+// operator-facing surface for the loss.
+type LossMarker struct {
+	Session string
+	Ts      string
+	Error   string
 }
 
 // DeferredSession names a session whose live tail sits past the sealed
@@ -46,6 +60,12 @@ func CollectAuditDiagnostics(repoRoot string, now time.Time) (AuditDiagnostics, 
 		}
 		diag.Gaps = append(diag.Gaps, gaps...)
 
+		losses, err := sessionLossMarkers(repoRoot, sessionID, now)
+		if err != nil {
+			return diag, err
+		}
+		diag.LossMarkers = append(diag.LossMarkers, losses...)
+
 		if !gitlink {
 			continue
 		}
@@ -67,13 +87,38 @@ func CollectAuditDiagnostics(repoRoot string, now time.Time) (AuditDiagnostics, 
 	return diag, nil
 }
 
-// WriteDiagnostics renders the diagnostics to w (stderr in the CLI). Gaps and
-// gitlink-deferred sessions each get one line; an empty set writes nothing.
+// sessionLossMarkers scans a session's full union stream (sealed chunks + live
+// tail + legacy, kept raw) for audit_error sentinel lines and returns one
+// marker per sentinel found. Reusing sessionUnionLines keeps the scan on the
+// same partition the entry read walks, so a sentinel is surfaced exactly once
+// whether it is still in the live tail or already sealed into a chunk.
+func sessionLossMarkers(repoRoot, sessionID string, now time.Time) ([]LossMarker, error) {
+	lines, err := sessionUnionLines(repoRoot, sessionID, now)
+	if err != nil {
+		return nil, err
+	}
+	var out []LossMarker
+	for _, l := range lines {
+		var s auditSentinel
+		if json.Unmarshal(l.Raw, &s) != nil || s.AuditError == "" {
+			continue
+		}
+		out = append(out, LossMarker{Session: sessionID, Ts: s.Ts, Error: s.AuditError})
+	}
+	return out, nil
+}
+
+// WriteDiagnostics renders the diagnostics to w (stderr in the CLI). Gaps,
+// gitlink-deferred sessions, and loss markers each get one line; an empty set
+// writes nothing.
 func (d AuditDiagnostics) WriteDiagnostics(w io.Writer) {
 	for _, g := range d.Gaps {
 		fmt.Fprintf(w, "gap: %s lost lines [%d,%d] to corruption (quarantined)\n", g.Chunk, g.First, g.Last)
 	}
 	for _, ds := range d.Deferred {
 		fmt.Fprintf(w, "%s: %d unsealed lines, sealing deferred until vendored\n", ds.Session, ds.Unsealed)
+	}
+	for _, lm := range d.LossMarkers {
+		fmt.Fprintf(w, "loss: session %s ts %s: an audit entry was not persisted (%s)\n", lm.Session, lm.Ts, lm.Error)
 	}
 }

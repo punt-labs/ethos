@@ -51,8 +51,47 @@ func TestCollectAuditDiagnosticsCleanRepoNoDiag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Not a gitlink mount and no quarantine: no gaps, no deferred sessions.
-	if len(diag.Gaps) != 0 || len(diag.Deferred) != 0 {
+	// Not a gitlink mount and no quarantine: no gaps, no deferred, no losses.
+	if len(diag.Gaps) != 0 || len(diag.Deferred) != 0 || len(diag.LossMarkers) != 0 {
 		t.Errorf("clean repo diagnostics = %+v, want empty", diag)
+	}
+}
+
+// TestCollectAuditDiagnosticsLossMarkers is SFH R2-3: a sentinel line in a
+// session's live tail must surface in the diagnostics block, since the entry
+// rendering drops the audit_error field.
+func TestCollectAuditDiagnosticsLossMarkers(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-loss"
+	now := time.Now().UTC()
+	// A normal live line plus a sentinel line the audit writer left behind.
+	writeLiveLines(t, repo, sid, 100)
+	live := liveAuditPath(repo, sid)
+	sentinel := `{"ts":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","audit_error":"fsync failed"}` + "\n"
+	f, err := os.OpenFile(live, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(sentinel); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	diag, err := CollectAuditDiagnostics(repo, now)
+	if err != nil {
+		t.Fatalf("CollectAuditDiagnostics: %v", err)
+	}
+	if len(diag.LossMarkers) != 1 {
+		t.Fatalf("loss markers = %+v, want one", diag.LossMarkers)
+	}
+	if diag.LossMarkers[0].Error != "fsync failed" || diag.LossMarkers[0].Session != sid {
+		t.Errorf("loss marker = %+v, want session %s error 'fsync failed'", diag.LossMarkers[0], sid)
+	}
+	var buf bytes.Buffer
+	diag.WriteDiagnostics(&buf)
+	if !bytes.Contains(buf.Bytes(), []byte("loss: session "+sid)) ||
+		!bytes.Contains(buf.Bytes(), []byte("fsync failed")) {
+		t.Errorf("diagnostics output missing loss line: %q", buf.String())
 	}
 }

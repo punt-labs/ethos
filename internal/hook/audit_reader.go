@@ -43,8 +43,20 @@ func readAuditEntries(path string) ([]auditEntry, error) {
 // bytes.Reader, and so the io.Reader contract — not the file-open
 // contract — is what the decoder is bound to.
 func decodeAuditEntries(r io.Reader, source string) ([]auditEntry, error) {
-	br := bufio.NewReader(r)
 	var entries []auditEntry
+	err := walkAuditLines(r, source, func(_ []byte, e auditEntry) {
+		entries = append(entries, e)
+	})
+	return entries, err
+}
+
+// walkAuditLines is the shared JSONL line walker behind the decode and the
+// raw readers. For each well-formed, decodable line it calls fn with the raw
+// line bytes and the decoded entry. A partial trailing fragment (writer crash)
+// and an undecodable line are each skipped with a stderr warning, never an
+// error; only an underlying read failure returns an error.
+func walkAuditLines(r io.Reader, source string, fn func(raw []byte, e auditEntry)) error {
+	br := bufio.NewReader(r)
 	lineNo := 0
 	for {
 		line, readErr := br.ReadString('\n')
@@ -54,33 +66,57 @@ func decodeAuditEntries(r io.Reader, source string) ([]auditEntry, error) {
 			body := strings.TrimRight(line, "\n")
 			body = strings.TrimRight(body, "\r")
 			if !hadTerminator {
-				// Partial trailing fragment. The writer either
-				// crashed mid-line or the file was truncated. Emit
-				// a warning so an operator running -v sees the
-				// drift, then drop the fragment.
 				if strings.TrimSpace(body) != "" {
 					fmt.Fprintf(os.Stderr,
 						"ethos: audit-log: %s: line %d: partial trailing line, skipping\n",
 						source, lineNo)
 				}
 			} else if strings.TrimSpace(body) != "" {
-				e, err := decodeAuditLine([]byte(body))
+				raw := []byte(body)
+				e, err := decodeAuditLine(raw)
 				if err != nil {
 					fmt.Fprintf(os.Stderr,
 						"ethos: audit-log: %s: line %d: %v\n",
 						source, lineNo, err)
 				} else {
-					entries = append(entries, e)
+					fn(raw, e)
 				}
 			}
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return entries, nil
+				return nil
 			}
-			return entries, fmt.Errorf("reading %s: %w", source, readErr)
+			return fmt.Errorf("reading %s: %w", source, readErr)
 		}
 	}
+}
+
+// rawAuditLine is one JSONL line kept as its exact on-disk bytes plus its
+// dedupe key. Migration and the loss-marker scan use it so unknown fields the
+// auditEntry struct drops — notably the audit_error sentinel key — survive.
+type rawAuditLine struct {
+	key string
+	raw []byte
+}
+
+// readRawAuditLines walks an audit JSONL file returning each well-formed line's
+// raw bytes and dedupe key. Torn/undecodable lines are skipped with a warning,
+// matching readAuditEntries. Missing file → (nil, nil).
+func readRawAuditLines(path string) ([]rawAuditLine, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer f.Close()
+	var out []rawAuditLine
+	err = walkAuditLines(f, path, func(raw []byte, e auditEntry) {
+		out = append(out, rawAuditLine{key: auditEntryKey(e), raw: raw})
+	})
+	return out, err
 }
 
 // decodeAuditLine decodes one JSONL line into an auditEntry. The

@@ -13,10 +13,15 @@ import (
 // pipeline cannot persist a full entry. The shape is deliberately
 // narrow — three fields only — so a permission, ENOSPC, or fsync
 // failure that defeated the regular write has the best chance of
-// admitting the sentinel write. Readers (`ethos audit show`, vox)
-// see it through the same permissive decoder as a normal entry: the
-// audit_error key falls into auditEntry's Unmarshal as an unknown
-// field and is preserved at the JSONL line level.
+// admitting the sentinel write.
+//
+// Two surfaces reveal the loss to an operator. First, the line lands
+// in the live audit file and is sealed into a chunk like any other, so
+// it survives in the durable record. Second — because auditEntry has
+// no audit_error field and drops it on decode — `ethos audit show`'s
+// diagnostics block scans the raw union stream for audit_error lines
+// and prints a loss marker (CollectAuditDiagnostics). The entry
+// rendering itself does not show audit_error.
 //
 // The struct exists separately from auditEntry because the sentinel
 // is not a tool invocation. Carrying the auditEntry struct here would

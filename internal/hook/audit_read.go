@@ -24,6 +24,27 @@ import (
 // never deduped). A near-miss chunk name, an orphan .corrupt, or a corrupt
 // chunk returns an error naming the offender.
 func readSessionAudit(repoRoot, sessionID string, now time.Time) ([]auditEntry, error) {
+	post, err := sessionUnionLines(repoRoot, sessionID, now)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]auditEntry, 0, len(post))
+	for _, l := range post {
+		e, derr := decodeAuditLine(l.Raw)
+		if derr != nil {
+			return nil, fmt.Errorf("decoding union line: %w", derr)
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// sessionUnionLines returns a session's full audit stream as raw ts-tagged
+// lines — sealed chunks + live tail past the watermark + the frozen legacy
+// pool, stable-sorted by ts. Keeping the raw bytes (rather than decoded
+// auditEntry) lets a caller inspect fields the struct drops, e.g. the
+// audit_error sentinel key (see sessionLossMarkers).
+func sessionUnionLines(repoRoot, sessionID string, now time.Time) ([]audit.Line, error) {
 	sealedDir, err := resolveRepoSessionDir(repoRoot, sessionID, now)
 	if err != nil {
 		return nil, fmt.Errorf("resolving session dir: %w", err)
@@ -59,33 +80,28 @@ func readSessionAudit(repoRoot, sessionID string, now time.Time) ([]auditEntry, 
 
 	post := audit.DedupByIdentity(append(monotonic, tail...))
 
-	// Sl: frozen legacy pool, read once, kept undeduped.
-	legacy, err := readAuditEntries(legacyPath)
+	// Sl: frozen legacy pool, read once, kept undeduped and RAW so an
+	// audit_error sentinel in a migrated legacy line survives to the loss-marker
+	// scan (a decode-remarshal round-trip through auditEntry would strip it).
+	legacyRaw, err := readRawAuditLines(legacyPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading legacy %s: %w", legacyPath, err)
 	}
-	for _, e := range legacy {
-		ts, perr := audit.ParseLineTS(e.Ts)
+	for _, rl := range legacyRaw {
+		var h struct {
+			TS string `json:"ts"`
+		}
+		if json.Unmarshal(rl.raw, &h) != nil {
+			continue
+		}
+		ts, perr := audit.ParseLineTS(h.TS)
 		if perr != nil {
 			continue
 		}
-		raw, mErr := json.Marshal(e)
-		if mErr != nil {
-			return nil, fmt.Errorf("re-marshaling legacy line: %w", mErr)
-		}
-		post = append(post, audit.Line{TS: ts, Raw: raw})
+		post = append(post, audit.Line{TS: ts, Raw: rl.raw})
 	}
 	sort.SliceStable(post, func(i, j int) bool { return post[i].TS < post[j].TS })
-
-	out := make([]auditEntry, 0, len(post))
-	for _, l := range post {
-		e, derr := decodeAuditLine(l.Raw)
-		if derr != nil {
-			return nil, fmt.Errorf("decoding union line: %w", derr)
-		}
-		out = append(out, e)
-	}
-	return out, nil
+	return post, nil
 }
 
 // listRepoSessions returns the union of session ids present in the tracked
