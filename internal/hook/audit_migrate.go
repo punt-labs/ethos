@@ -211,10 +211,13 @@ func appendRawAuditLines(path string, lines [][]byte) error {
 		return fmt.Errorf("checking tail of %s: %w", path, err)
 	}
 	for _, l := range lines {
-		if _, err := f.Write(l); err != nil {
-			return fmt.Errorf("writing %s: %w", path, err)
-		}
-		if _, err := f.Write([]byte{'\n'}); err != nil {
+		// Write the line and its terminator in a single call so a crash cannot
+		// land a complete JSON object with no trailing newline. Such a tail
+		// reads as a torn fragment (skipped) and a re-run's newline boundary
+		// plus re-append would duplicate it. One Write keeps line-and-newline
+		// atomic against interruption (R3-1).
+		line := append(append([]byte(nil), l...), '\n')
+		if _, err := f.Write(line); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
 		}
 	}
