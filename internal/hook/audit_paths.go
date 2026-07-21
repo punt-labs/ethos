@@ -6,8 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/audit"
 )
 
 // sessionDateFormat is the YYYY-MM-DD prefix on a per-session
@@ -72,14 +73,17 @@ func resolveRepoSessionDir(repoRoot, sessionID string, now time.Time) (string, e
 }
 
 // findSessionDir walks <repoRoot>/.punt-labs/ethos/sessions and returns the
-// path of the first directory whose name ends in "-<sessionID>"
-// (any date prefix). Returns the empty string and nil error when
-// no such directory exists. A non-existent base directory is
-// likewise the empty string, not an error.
+// path of the directory named exactly "<YYYY-MM-DD>-<sessionID>" (any date
+// prefix). Returns the empty string and nil error when no such directory
+// exists. A non-existent base directory is likewise the empty string, not an
+// error.
 //
-// Used by both the writer (reuse-existing-or-create-new) and the
-// reader (find-where-this-session-lives) so a session whose start
-// date differs from the current day still resolves to one place.
+// Used by both the writer (reuse-existing-or-create-new) and the reader
+// (find-where-this-session-lives) so a session whose start date differs from
+// the current day still resolves to one place. Matching goes through
+// audit.SessionDirMatches — the same structural matcher the sealed-tree
+// resolver uses — so seal and read never resolve a colliding id (e.g. "abc"
+// vs "x-abc") to different directories.
 func findSessionDir(base, sessionID string) (string, error) {
 	id := filepath.Base(sessionID)
 	if id == "" {
@@ -92,14 +96,12 @@ func findSessionDir(base, sessionID string) (string, error) {
 		}
 		return "", fmt.Errorf("reading %s: %w", base, err)
 	}
-	suffix := "-" + id
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		if strings.HasSuffix(name, suffix) {
-			return filepath.Join(base, name), nil
+		if audit.SessionDirMatches(e.Name(), id) {
+			return filepath.Join(base, e.Name()), nil
 		}
 	}
 	return "", nil

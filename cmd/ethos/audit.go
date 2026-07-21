@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
@@ -87,6 +89,73 @@ Exit codes:
 	},
 }
 
+// --- audit seal ---
+
+var (
+	auditSealDryRun  bool
+	auditSealVerbose bool
+)
+
+var auditSealCmd = &cobra.Command{
+	Use:   "seal",
+	Short: "Seal pending live audit lines into immutable tracked chunks",
+	Long: `Seal pending live audit lines into immutable tracked chunks.
+
+Visits every session in the repo, copies each session's not-yet-sealed
+live lines (ts past the sealed watermark) into a new immutable chunk
+audit-<first>-<last>.jsonl under the session's dated sealed directory,
+and git-adds every untracked chunk it finds — recovering an orphan a
+prior crashed seal left behind. Between seals no tracked file changes, so
+the repo tree stays clean while a session is live.
+
+Called by the pre-commit hook so sealed records land in the same commit
+as the work they document, and by ethos mission close.
+
+Flags:
+  --dry-run   print the per-session line counts it would seal, writing nothing
+  --verbose   print one line per sealed session
+
+Exit codes:
+  0  sealed, nothing pending, or a gitlink-mounted no-op (deferral notice on stderr)
+  2  fail-closed: an I/O error, a malformed chunk name, a corrupt sealed
+     chunk, or a git-add failure — blocks the commit; the escape is
+     ethos audit quarantine, never git commit --no-verify`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runAuditSeal(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
+// --- audit quarantine ---
+
+var auditQuarantineReason string
+
+var auditQuarantineCmd = &cobra.Command{
+	Use:   "quarantine <chunk-path>",
+	Short: "Retire a corrupt sealed chunk and recover what the live file holds",
+	Long: `Retire a corrupt sealed chunk, the sanctioned alternative to
+git commit --no-verify when a seal or read fails on a corrupt chunk.
+
+Given the chunk path the seal/read error named, it retires the chunk to
+<name>.jsonl.corrupt (committed as evidence), re-seals every line of the
+chunk's range the live file still holds into a fresh content-named chunk,
+writes a deterministic .quarantine marker recording the verified loss
+point and any unrecovered sub-range, and stages all three — so the tree
+is committable without --no-verify and the loss becomes a visible audit
+event and a read-time gap marker, never a silent skip.
+
+Idempotent and crash-resumable: re-running after a mid-verb crash
+completes the quarantine from whichever artifacts exist.
+
+Exit codes:
+  0  quarantined (or already quarantined — idempotent no-op)
+  2  must run inside a repo, or the path is not a recognizable chunk`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runAuditQuarantine(cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0])
+	},
+}
+
 func init() {
 	auditMigrateCmd.Flags().BoolVar(&auditMigrateDryRun, "dry-run", false,
 		"Enumerate what would migrate without making changes")
@@ -99,9 +168,160 @@ func init() {
 		"Output format: json or text")
 	_ = auditShowCmd.MarkFlagRequired("delegation")
 
+	auditSealCmd.Flags().BoolVar(&auditSealDryRun, "dry-run", false,
+		"Print the line counts it would seal without writing")
+	auditSealCmd.Flags().BoolVar(&auditSealVerbose, "verbose", false,
+		"Print one line per sealed session")
+
+	auditQuarantineCmd.Flags().StringVar(&auditQuarantineReason, "reason", "corrupt sealed chunk",
+		"Corruption reason recorded in the quarantine marker")
+
 	auditCmd.AddCommand(auditMigrateCmd)
 	auditCmd.AddCommand(auditShowCmd)
+	auditCmd.AddCommand(auditSealCmd)
+	auditCmd.AddCommand(auditQuarantineCmd)
 	rootCmd.AddCommand(auditCmd)
+}
+
+// sessionStartDateResolver returns a StartDate function for the seal that
+// names a brand-new sealed directory by session start rather than wall clock
+// (carried refinement (a)). It reads the roster's Started date first, then a
+// purge tombstone's recorded StartDate; "" lets the seal fall back to the live
+// file's first-line date, then now. Best-effort — a read error yields "".
+func sessionStartDateResolver(repoRoot string) func(string) string {
+	ss := sessionStore()
+	// When home cannot resolve, skip the tombstone lookup entirely rather than
+	// let filepath.Join degrade to the relative ".punt-labs/ethos/sessions" —
+	// a relative path would consult the current working directory, reading a
+	// stray same-named tombstone from wherever the command happened to run.
+	home, homeErr := os.UserHomeDir()
+	return func(sessionID string) string {
+		if roster, err := ss.Load(sessionID); err == nil && len(roster.Started) >= 10 {
+			return roster.Started[:10]
+		}
+		if homeErr == nil {
+			globalSessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+			if tb, err := audit.ReadTombstone(filepath.Join(globalSessions, sessionID+".purged")); err == nil {
+				return tb.StartDate
+			}
+		}
+		return ""
+	}
+}
+
+// activeRepoSessions returns the ids of EVERY session whose roster is bound to
+// this checkout's repo, including stale and crashed rosters — the second source
+// the vacuum cross-check iterates. A roster's Repo is a git-remote identity
+// (org/name), not a checkout path, so it is matched against this checkout's
+// identity, not repoRoot. Stale sessions are returned deliberately: a dead
+// session with unsealed live lines is exactly the loss case the vacuum must
+// warn about, so filtering it out would blind the guard to the very condition
+// it exists to catch. A single unreadable roster skips that session
+// (best-effort, the doc-sanctioned case), but a List error empties the whole
+// half of the cross-check, so it warns on stderr rather than silently
+// returning nil.
+func activeRepoSessions(repoRoot string, errOut io.Writer) []string {
+	repoID := audit.RepoIdentity(repoRoot)
+	ss := sessionStore()
+	ids, err := ss.List()
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit seal: listing sessions for vacuum cross-check: %v\n", err)
+		return nil
+	}
+	var out []string
+	for _, id := range ids {
+		roster, err := ss.Load(id)
+		if err != nil {
+			continue
+		}
+		if roster.Repo == repoID {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// runAuditQuarantine is the audit-quarantine command implementation. It
+// retires a corrupt chunk named by chunkPath and recovers what the live file
+// holds, printing a one-line summary of the marker it wrote.
+func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
+	repoRoot := resolve.EnvRepoRoot()
+	if repoRoot == "" {
+		fmt.Fprintln(errOut, "ethos: audit quarantine must run inside a repo")
+		return usageError{}
+	}
+	// Resolve a relative path against the repo root so the operator can pass
+	// the path exactly as the seal/read error printed it.
+	if !filepath.IsAbs(chunkPath) {
+		chunkPath = filepath.Join(repoRoot, chunkPath)
+	}
+	marker, err := hook.QuarantineChunk(repoRoot, chunkPath, auditQuarantineReason)
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
+		return failClosed{}
+	}
+	if marker.HasGap() {
+		fmt.Fprintf(out,
+			"quarantined %s: recovered through ts %d, lost [%d,%d] — staged, commit to record\n",
+			marker.Chunk, marker.VerifiedLast, marker.UnrecoveredFirst, marker.UnrecoveredLast)
+	} else {
+		fmt.Fprintf(out,
+			"quarantined %s: fully recovered through ts %d — staged, commit to record\n",
+			marker.Chunk, marker.VerifiedLast)
+	}
+	return nil
+}
+
+// runAuditSeal is the audit-seal command implementation. It seals every
+// repo session's pending live lines and stages the chunks. Fail-closed
+// (DES-055 shape): on any seal error it prints a self-contained message to
+// stderr and returns failClosed so the process exits 2, blocking the
+// commit. A gitlink-mounted no-op and a nothing-to-seal run both exit 0.
+func runAuditSeal(out, errOut io.Writer) error {
+	repoRoot := resolve.EnvRepoRoot()
+	if repoRoot == "" {
+		fmt.Fprintln(errOut, "ethos: audit seal must run inside a repo")
+		return usageError{}
+	}
+	opts := hook.SealOptions{
+		DryRun:    auditSealDryRun,
+		Verbose:   auditSealVerbose,
+		Out:       out,
+		StartDate: sessionStartDateResolver(repoRoot),
+	}
+	res, err := hook.SealRepo(repoRoot, time.Now().UTC(), opts)
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit seal: %v\n", err)
+		return failClosed{}
+	}
+	if res.Deferred {
+		return nil
+	}
+	// Vacuum cross-check after EVERY non-dry-run seal, not only the no-op path.
+	// A flagged tombstone's warning must repeat at every commit until the
+	// operator acks it (DES-058 §Seal failure policy); gating on a total no-op
+	// skipped it whenever anything sealed — i.e. on nearly every real commit,
+	// precisely when the repo is busiest. Warn-only; never blocks the commit.
+	if !auditSealDryRun {
+		if home, hErr := os.UserHomeDir(); hErr == nil {
+			globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+			if vErr := hook.VacuumCrossCheck(repoRoot, globalRoot, activeRepoSessions(repoRoot, errOut), errOut); vErr != nil {
+				fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check: %v\n", vErr)
+			}
+		} else {
+			fmt.Fprintf(errOut, "ethos: audit seal: skipping vacuum cross-check: cannot resolve home dir: %v\n", hErr)
+		}
+	}
+	if auditSealDryRun {
+		fmt.Fprintf(out, "audit seal: dry-run complete (%d line(s) pending)\n", res.LinesSealed)
+		return nil
+	}
+	if auditSealVerbose {
+		fmt.Fprintf(out,
+			"audit seal: sealed %d line(s) across %d session(s), staged %d chunk(s)\n",
+			res.LinesSealed, res.SessionsSealed, res.ChunksStaged)
+	}
+	return nil
 }
 
 // runAuditMigrate is the audit-migrate command implementation.
@@ -175,6 +395,16 @@ func runAuditShow(out, errOut io.Writer) error {
 	entries, err := hook.QueryAuditByDelegation(repoRoot, globalDir, auditShowDelegation)
 	if err != nil {
 		return fmt.Errorf("audit show: %w", err)
+	}
+
+	// DES-058 read-time diagnostics: quarantine gaps (lines lost to
+	// corruption) and gitlink-deferred sessions (live lines past the
+	// watermark not yet sealed). Flagged on stderr so the delegation-filtered
+	// stream on stdout stays a valid audit-log fragment.
+	if diag, dErr := hook.CollectAuditDiagnostics(repoRoot, time.Now().UTC()); dErr == nil {
+		diag.WriteDiagnostics(errOut)
+	} else {
+		fmt.Fprintf(errOut, "ethos: audit show: diagnostics: %v\n", dErr)
 	}
 
 	if auditShowFormat == "json" {

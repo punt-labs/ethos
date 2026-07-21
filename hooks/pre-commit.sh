@@ -1,0 +1,30 @@
+#!/bin/sh
+# hooks/pre-commit.sh — Seal pending live audit lines into tracked chunks
+# (DES-058). Runs before git snapshots the index, so the freshly staged
+# chunks land in the SAME commit as the work they document.
+#
+# DES-055 shape: on a seal failure the underlying `ethos audit seal` prints
+# a self-contained remedy to stderr and exits 2; this hook propagates that
+# as a blocking exit 2. Silent exit 0 on success, nothing-to-seal, or a
+# gitlink-mounted deferral (the seal prints its own one-line notice there).
+#
+# Passthrough when ethos is not installed — a missing binary must never
+# block a commit in an unrelated repo.
+
+# Resolve the ethos binary: PATH first, then the default install dir.
+ethos_bin=""
+if command -v ethos >/dev/null 2>&1; then
+  ethos_bin="ethos"
+elif [ -x "$HOME/.local/bin/ethos" ]; then
+  ethos_bin="$HOME/.local/bin/ethos"
+else
+  exit 0
+fi
+
+# `ethos audit seal` is fail-closed: exit 2 on an I/O error, a malformed or
+# corrupt chunk, or a git-add failure. Propagate any nonzero as a blocking
+# exit 2 so a broken audit store cannot slip an unrecorded commit through.
+if ! "$ethos_bin" audit seal; then
+  exit 2
+fi
+exit 0

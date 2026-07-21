@@ -7,7 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DES-058 fail-loud hardening.** A quarantine marker whose name is valid
+  but whose content is garbage now reads as absent, so its `.corrupt`
+  stays an uncovered orphan and the seal fails closed (exit 2) instead of
+  silently dropping the marker's verified watermark and gap. The
+  unsealed-record guard (`ethos audit seal` vacuum cross-check and
+  `ethos session purge`) now spans the mission namespace too, so a session
+  that sealed a mission chunk and lost its mission live log no longer purges
+  or commits silently. `ethos audit quarantine` never overwrites an existing
+  `.corrupt`: fresh damage is retired under a content-hashed
+  `.corrupt-<hash>` name, and the idempotent no-op content-verifies chunks at
+  marker-covered names, retiring fresh corruption as recorded evidence. A
+  brand-new sealed session directory is dated by the session start (roster,
+  then purge tombstone, then the live file's first-line date) rather than the
+  wall clock. The `.gitignore` now carries the canonical
+  `.punt-labs/**/local/**` line so the machine-local live zone stops dirtying
+  the tree it exists to keep clean.
+
 ### Added
+
+- **DES-058 (phase 1): live audit write path and `ethos audit seal`.**
+  The PreToolUse audit append now targets the machine-local, gitignored
+  live file `<repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl`
+  instead of the tracked tree, so a repo with a live session keeps a clean
+  `git status`. Every appended line carries a strictly-monotonic
+  per-session timestamp (`ts = max(now, last_ts + 1ns)`) allocated under a
+  per-session flock that now lives beside the live file; a torn
+  (non-newline-terminated) tail is truncated on reopen. The new
+  `ethos audit seal [--dry-run] [--verbose]` verb copies each session's
+  live lines past the sealed watermark into a new immutable chunk
+  `audit-<first>-<last>.jsonl` (19-digit zero-padded Unix-nanosecond
+  names) under the session's dated sealed directory via temp + rename,
+  sweeps stale temps, and unconditionally `git add`s every untracked chunk
+  (orphan recovery). It fails closed (exit 2, DES-055 shape) on an I/O
+  error, a malformed chunk name, a corrupt sealed chunk (does not parse
+  whole, or last ts ≠ its filename `<last>`), or a git-add failure; it is a
+  no-op exit 0 with a one-line stderr notice in a gitlink-mounted repo, and
+  a silent exit 0 when nothing is pending. A `pre-commit` hook (installed by
+  `install.sh` beside the `commit-msg` hook) runs the seal before the index
+  snapshot, so sealed chunks land in the same commit as the work. Every
+  audit reader — `ethos audit show` and the Tier B precondition evaluator —
+  now returns the union of sealed chunks and the live tail past the
+  watermark, deduped on `(session, ts)` for post-discipline lines with the
+  frozen legacy `audit.jsonl` passed through undeduped and read as the
+  session's oldest chunk. Lock relocation is DES-058 phase 2.
+- **DES-058 (phase 1): mission event log joins the live/seal path.**
+  Mission event appends now target the per-(mission, session) live log
+  `<repo>/.punt-labs/local/ethos/missions/<id>/<session-id>.log.jsonl`
+  with a strictly-monotonic timestamp (routed when the CLI knows the
+  current session; sessionless callers keep the legacy tracked-log path).
+  Each session seals into `log-<session-id>-<first>-<last>.jsonl` chunks;
+  `ethos mission log` reads the union of every session's chunks and live
+  tails plus the frozen `log.jsonl`. `ethos mission close` seals the
+  mission tree (the pre-commit `ethos audit seal` is the repo-wide
+  backstop and now drains mission-log lines too).
+- **DES-058 (phase 1): `ethos audit quarantine <chunk>`.** The sanctioned
+  alternative to `git commit --no-verify` when a seal or read fails on a
+  corrupt chunk: it retires the chunk to `<name>.jsonl.corrupt`, re-seals
+  the recoverable lines from the live file into a content-named chunk,
+  writes a deterministic `.quarantine` marker (verified last + unrecovered
+  sub-range, no wall clock), and self-stages all three. Crash-resumable by
+  artifact state. `ethos audit show` flags each read-time quarantine gap
+  and each gitlink-deferred session on stderr.
+- **DES-058 (phase 1): purge tombstones + seal vacuum cross-check.**
+  `ethos session purge` refuses to strand a session's unsealed audit lines
+  unless `--force`, leaving a flagged tombstone; the seal's no-op path
+  warns (exit 0) on any flagged tombstone or roster-active session whose
+  live file was lost. `ethos session purge --ack <session-id>` retires a
+  tombstone under a never-overwrite content-hash sequence.
 
 - **DES-058 (design): live audit write path split from the sealed
   committed record.** The session audit log was both git-tracked and

@@ -31,12 +31,15 @@ func writeAuditEntry(path string, entry auditEntry) error {
 	}
 	line := append(data, '\n')
 
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
 	defer f.Close()
 
+	if err := ensureNewlineBoundary(f); err != nil {
+		return fmt.Errorf("checking tail of %s: %w", path, err)
+	}
 	if _, err := f.Write(line); err != nil {
 		return fmt.Errorf("writing %s: %w", path, err)
 	}
@@ -45,6 +48,35 @@ func writeAuditEntry(path string, entry auditEntry) error {
 	// caller decides whether to retry or surface to the operator.
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("syncing %s: %w", path, err)
+	}
+	return nil
+}
+
+// ensureNewlineBoundary writes a '\n' to f when its current tail byte is not a
+// newline — a torn fragment left by a crashed writer. Without it an O_APPEND
+// write glues the new line onto the fragment, fusing debris and a good line
+// into one undecodable line (and, if the good line is a sentinel, destroying
+// the loss marker). The separator instead leaves the fragment as its own line,
+// which the tolerant reader skips with a warning. The fd must be opened
+// O_RDWR so ReadAt can inspect the tail; O_APPEND still forces writes to the
+// end. A newly-created or empty file needs no separator.
+func ensureNewlineBoundary(f *os.File) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, info.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	if _, err := f.Write([]byte{'\n'}); err != nil {
+		return err
 	}
 	return nil
 }

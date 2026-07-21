@@ -288,14 +288,13 @@ func loadSessionReads(repoRoot, sessionID string) (map[string]struct{}, error) {
 	if sessionID == "" {
 		return map[string]struct{}{}, nil
 	}
-	dir, err := resolveRepoSessionDir(repoRoot, sessionID, time.Now())
+	// DES-058: the precondition evaluator reads the union of sealed
+	// chunks and the live tail, not a single tracked file — a Read
+	// recorded this session lives in the live zone until a seal moves it
+	// into a chunk.
+	entries, err := readSessionAudit(repoRoot, sessionID, time.Now())
 	if err != nil {
-		return map[string]struct{}{}, fmt.Errorf("resolving session dir: %w", err)
-	}
-	path := filepath.Join(dir, "audit.jsonl")
-	entries, err := readAuditEntries(path)
-	if err != nil {
-		return map[string]struct{}{}, fmt.Errorf("reading %s: %w", path, err)
+		return map[string]struct{}{}, fmt.Errorf("reading session audit: %w", err)
 	}
 	reads := make(map[string]struct{}, len(entries))
 	for _, e := range entries {

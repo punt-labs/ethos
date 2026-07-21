@@ -65,6 +65,18 @@ type Event struct {
 // corrupting the log. If the truncation-rollback itself fails, the
 // returned error notes both failures.
 func (s *Store) appendEventLocked(missionID string, e Event) error {
+	// DES-058: in the two-tree repo layout EVERY event append lands in the
+	// machine-local per-(mission, session) live log with a strictly-monotonic
+	// timestamp, so the tracked tree stays clean between seals. This includes a
+	// sessionless append (ad-hoc CLI with no resolvable session): it routes to a
+	// reserved-session live log rather than the tracked log.jsonl, which is
+	// immutable between seals — writing there would dirty the tracked tree and
+	// violate the sealed-record invariant. Outside a repo (legacy single-tree
+	// under the untracked global root) the tracked-log append below is unchanged.
+	if s.twoTreeStorage && s.repoRoot != "" {
+		return s.appendLiveEventLocked(missionID, e)
+	}
+
 	data, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("marshaling event: %w", err)
@@ -209,6 +221,18 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 			return nil, nil, fmt.Errorf("mission %q not found", missionID)
 		}
 		return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, err)
+	}
+	// DES-058: a mission in the per-repo tree reads as the union of every
+	// session's sealed chunks and live tails plus the frozen legacy log.jsonl.
+	// A global-layer (legacy) mission keeps the tracked-log walk below.
+	if s.twoTreeStorage && s.repoRoot != "" {
+		layer, lErr := s.resolveLayer(missionID)
+		if lErr != nil {
+			return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, lErr)
+		}
+		if layer == layerRepo {
+			return s.loadLiveUnionEvents(missionID)
+		}
 	}
 	// Reject symlinks before opening. A symlink pointing outside the
 	// missions directory could trick the log reader into parsing
@@ -455,6 +479,35 @@ func decodeEventLine(raw []byte) (Event, error) {
 	}
 	if strings.TrimSpace(e.Actor) == "" {
 		return Event{}, fmt.Errorf("event missing actor")
+	}
+	return e, nil
+}
+
+// decodeResidueEventLine decodes one surviving line of the superseded
+// shared-live missions/<id>.jsonl residue into an Event. That design tagged
+// each line with its session for the per-line drain filter; the field is
+// foreign to the current Event schema and is discarded here rather than
+// rejected. Unlike decodeEventLine, this does not DisallowUnknownFields — the
+// strict decoder guards our own post-discipline lines, not drained legacy
+// (the residue read is tolerant for the same reason). The ts, event-type, and actor
+// checks still apply, so a genuinely malformed residue line surfaces as a
+// warning at the call site rather than a silent drop.
+func decodeResidueEventLine(raw []byte) (Event, error) {
+	var e Event
+	if err := json.Unmarshal(raw, &e); err != nil {
+		return Event{}, fmt.Errorf("decoding residue event: %w", err)
+	}
+	if strings.TrimSpace(e.TS) == "" {
+		return Event{}, fmt.Errorf("residue event missing ts")
+	}
+	if _, err := time.Parse(time.RFC3339, e.TS); err != nil {
+		return Event{}, fmt.Errorf("residue event ts %q is not RFC3339: %w", e.TS, err)
+	}
+	if strings.TrimSpace(e.Event) == "" {
+		return Event{}, fmt.Errorf("residue event missing event type")
+	}
+	if strings.TrimSpace(e.Actor) == "" {
+		return Event{}, fmt.Errorf("residue event missing actor")
 	}
 	return e, nil
 }

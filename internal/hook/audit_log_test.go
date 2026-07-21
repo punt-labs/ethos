@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -433,14 +435,15 @@ func TestWriteAuditEntry_FsyncEnforced(t *testing.T) {
 		"three appends must produce three newline-terminated lines")
 }
 
-// TestEmitAuditSentinel_LandsInFile is the unit test for the
-// sentinel helper. With a writable directory, the sentinel writes
-// a single JSONL line carrying ts, session, and audit_error so that
-// `ethos audit show` reveals the loss to a later reader.
-func TestEmitAuditSentinel_LandsInFile(t *testing.T) {
+// TestEmitLegacySentinel_LandsInFile is the unit test for the outside-repo
+// sentinel helper. With a writable directory, the sentinel writes a single
+// JSONL line carrying ts, session, and audit_error so `ethos audit show`
+// reveals the loss. There is no seal outside a repo, so the entry's own ts is
+// used as-is.
+func TestEmitLegacySentinel_LandsInFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sent.audit.jsonl")
-	err := emitAuditSentinel(path, "sess-x", "2026-05-22T10:00:00Z", "fsync failed")
+	err := emitLegacySentinel(path, "sess-x", "2026-05-22T10:00:00Z", "fsync failed")
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
@@ -451,6 +454,32 @@ func TestEmitAuditSentinel_LandsInFile(t *testing.T) {
 	assert.Equal(t, "sess-x", got["session"])
 	assert.Equal(t, "2026-05-22T10:00:00Z", got["ts"])
 	assert.Equal(t, "fsync failed", got["audit_error"])
+}
+
+// TestEmitAuditSentinel_MonotonicAboveWatermark is SFH S6: the repo-path
+// sentinel must mint a ts strictly above the seal watermark, so it can never
+// sort at or below an already-advanced monotonic floor and be filtered out of
+// both the seal tail and the read. Here the watermark sits well ahead of the
+// wall clock; the sentinel must still land past it.
+func TestEmitAuditSentinel_MonotonicAboveWatermark(t *testing.T) {
+	repo := t.TempDir()
+	sessionID := "sess-mono"
+	sealedDir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-07-21-"+sessionID)
+	// A sealed chunk far in the future → the watermark is ahead of now.
+	future := int64(4000000000000000000)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(future-100, future), future-100, future)
+	legacyPath := filepath.Join(sealedDir, "audit.jsonl")
+	livePath := audit.LiveAuditPath(repo, sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(livePath), 0o700))
+
+	now := time.Unix(0, 1000).UTC() // wall clock far below the watermark
+	require.NoError(t, emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID, now, "boom"))
+
+	// The sentinel must sit strictly past the watermark, so the read surfaces it.
+	tail, err := audit.LiveLinesPastWatermark(livePath, "", future)
+	require.NoError(t, err)
+	require.Len(t, tail, 1, "sentinel must land above the watermark, not be filtered out")
+	assert.Greater(t, tail[0].TS, future)
 }
 
 // TestHandleAuditLog_WriteFailureSurfacesLoss covers Fix 1 of mission

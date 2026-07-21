@@ -5,12 +5,30 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// phase3RepoID is the identity given to a test repo's origin so the
+// identity-scoped purge and vacuum logic matches the rosters and tombstones
+// these tests create (a roster's Repo is an identity, never a checkout path).
+const phase3RepoID = "punt-labs/ethos"
+
+// addOriginRemote points repo's origin at an org/name so audit.RepoIdentity
+// derives id from the checkout.
+func addOriginRemote(t *testing.T, repo, id string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "remote", "add", "origin", "git@github.com:"+id+".git")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git remote add origin: %v: %s", err, out)
+	}
+}
 
 // resetPhase3Flags zeroes package-level flag vars used by session
 // commands so tests do not leak state.
@@ -392,6 +410,109 @@ func TestRunSessionPurge(t *testing.T) {
 	stdout, _, err := execHandler(t, "session", "purge")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "No stale sessions found")
+}
+
+// TestRunAuditSeal_VacuumRunsAfterSealing pins SFH S3: the vacuum cross-check
+// must warn about a lost session even on a commit that actually sealed a
+// chunk — not only on a total no-op. A flagged tombstone's warning has to
+// repeat at every commit until acked.
+func TestRunAuditSeal_VacuumRunsAfterSealing(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	addOriginRemote(t, se.repo, phase3RepoID)
+
+	// A live audit line for one session so this seal writes a chunk
+	// (SessionsSealed > 0) — the case the old no-op gate skipped the vacuum on.
+	live := audit.LiveAuditPath(se.repo, "sess-live")
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"sess-live","tool":"Read"}` + "\n"
+	require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+
+	// A flagged tombstone for a lost session bound to this repo's identity → the
+	// vacuum must warn regardless of whether anything sealed.
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, audit.WriteTombstone(sessionsDir, audit.Tombstone{
+		Session: "sess-lost", Repo: phase3RepoID, UnsealedLines: true,
+	}))
+
+	_, stderr, err := execHandler(t, "audit", "seal")
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "sess-lost", "vacuum warning must appear even when a chunk sealed")
+	assert.Contains(t, stderr, "live file is gone")
+}
+
+// setupRefusedSession creates a stale, repo-bound session with an unsealed
+// live audit line so `session purge` (no --force) refuses it.
+func setupRefusedSession(t *testing.T, se *cliSubprocessEnv, id string) {
+	t.Helper()
+	st := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos"))
+	root := session.Participant{AgentID: "user1"}
+	primary := session.Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, st.Create(id, root, primary, phase3RepoID, ""))
+	live := audit.LiveAuditPath(se.repo, id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + id + `","tool":"Read"}` + "\n"
+	require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+}
+
+func TestRunSessionPurge_JSONRefused(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	addOriginRemote(t, se.repo, phase3RepoID)
+	setupRefusedSession(t, se, "sess-refused")
+
+	stdout, _, err := execHandler(t, "session", "purge", "--json")
+	require.NoError(t, err)
+
+	// stdout must be valid JSON — no stray prose corrupting the payload.
+	assert.NotContains(t, stdout, "Refused to purge")
+	var got map[string][]string
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --json stdout must parse: %q", stdout)
+	assert.Equal(t, []string{"sess-refused"}, got["refused"])
+	assert.Empty(t, got["sessions"])
+}
+
+// TestRunSessionPurge_TextRefused is Bugbot R6-2: when the unsealed-lines
+// guard refuses every candidate and nothing is purged, the text path must
+// report the refusals, not print the contradictory "No stale sessions found."
+func TestRunSessionPurge_TextRefused(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	addOriginRemote(t, se.repo, phase3RepoID)
+	setupRefusedSession(t, se, "sess-refused")
+
+	stdout, _, err := execHandler(t, "session", "purge")
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "Refused to purge sess-refused")
+	assert.Contains(t, stdout, "Nothing purged; 1 session(s) refused")
+	assert.NotContains(t, stdout, "No stale sessions found")
+}
+
+func TestRunSessionPurge_JSONAck(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeAck = ""
+	t.Cleanup(func() { sessionPurgeAck = "" })
+
+	// A flagged tombstone to acknowledge.
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, audit.WriteTombstone(sessionsDir, audit.Tombstone{
+		Session: "sess-ack", Repo: se.repo, UnsealedLines: true,
+	}))
+
+	stdout, _, err := execHandler(t, "session", "purge", "--ack", "sess-ack", "--json")
+	require.NoError(t, err)
+
+	assert.NotContains(t, stdout, "Acknowledged tombstone")
+	var got map[string]string
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --ack --json stdout must parse: %q", stdout)
+	assert.Equal(t, "sess-ack", got["acked"])
+	assert.NotEmpty(t, got["retired"])
 }
 
 func TestRunSessionWriteDeleteCurrent(t *testing.T) {

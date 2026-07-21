@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,12 +22,12 @@ import (
 //
 // The lifecycle:
 //
-//  1. Create — contract.yaml + log.jsonl
+//  1. Create — contract.yaml (event to the local-zone live log)
 //  2. AppendReflection — reflections.yaml
 //  3. AppendResult — results.yaml
 //  4. WriteDelegationSkeleton — delegations/<id>/record.yaml +
 //     prompt.md
-//  5. Close — contract.yaml status updated + log.jsonl event +
+//  5. Close — contract.yaml status updated + live-log event +
 //     parent missions.jsonl trace line
 //
 // Negative assertions: <globalRoot>/missions/<id>.* (legacy flat
@@ -49,12 +50,18 @@ func TestStorageLayout_FullLifecycleAllFilesInRepoTree(t *testing.T) {
 	perMissionDir := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id)
 	legacyDir := filepath.Join(globalRoot, "missions")
 
-	// --- 1. Create produces contract.yaml + log.jsonl ---
+	// --- 1. Create produces contract.yaml in the repo tree; the event lands
+	// in the machine-local live zone, not the tracked log.jsonl ---
 
 	assertFileExists(t, filepath.Join(perMissionDir, "contract.yaml"),
 		"Create must write contract.yaml into the repo tree")
-	assertFileExists(t, filepath.Join(perMissionDir, "log.jsonl"),
-		"Create must write log.jsonl into the repo tree")
+	// DES-058: a sessionless store (no session wired) routes the create event
+	// to the reserved-session live log under the local zone, keeping the tracked
+	// tree clean between seals.
+	assertFileExists(t, audit.LiveMissionLogPath(repoRoot, id, sessionlessID),
+		"Create must write the event to the local-zone live log")
+	assertFileMissing(t, filepath.Join(perMissionDir, "log.jsonl"),
+		"Create must NOT write the tracked log.jsonl between seals (DES-058)")
 
 	// --- 2. Reflect produces reflections.yaml ---
 
@@ -110,7 +117,6 @@ func TestStorageLayout_FullLifecycleAllFilesInRepoTree(t *testing.T) {
 	// path drift becomes a test failure.
 	want := []string{
 		"contract.yaml",
-		"log.jsonl",
 		"reflections.yaml",
 		"results.yaml",
 		"delegations",

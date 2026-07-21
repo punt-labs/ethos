@@ -31,8 +31,13 @@ func main() {
 	if err := rootCmd.Execute(); err != nil {
 		if _, ok := err.(silentError); !ok {
 			if _, ok := err.(usageError); !ok {
-				fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+				if _, ok := err.(failClosed); !ok {
+					fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+				}
 			}
+		}
+		if _, ok := err.(failClosed); ok {
+			os.Exit(2)
 		}
 		if isUsageError(err) {
 			os.Exit(2)
@@ -40,6 +45,13 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// failClosed is returned when a fail-closed command (the audit seal, DES-055
+// shape) has already printed its self-contained remedy message to stderr and
+// wants exit 2 to block the commit. main() prints nothing extra for it.
+type failClosed struct{}
+
+func (failClosed) Error() string { return "" }
 
 // isUsageError reports whether err is a cobra usage error (bad flag,
 // unknown command, wrong arg count). Cobra does not export a typed

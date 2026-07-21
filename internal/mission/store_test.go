@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/team"
@@ -4033,11 +4034,17 @@ func TestStore_TwoRoot_ResultsAndReflectionsInRepoTree(t *testing.T) {
 	_, err := os.Stat(repoResults)
 	require.NoError(t, err, "results.yaml must land in the per-mission dir")
 
-	// log.jsonl must also live under the per-mission directory.
+	// DES-058: event appends land in the machine-local live zone, not the
+	// tracked per-mission log.jsonl. A sessionless store uses the reserved
+	// sessionlessID; the tracked log.jsonl must stay absent between seals.
+	liveLog := audit.LiveMissionLogPath(repoRoot, "m-2026-05-22-030", sessionlessID)
+	_, err = os.Stat(liveLog)
+	require.NoError(t, err, "events must land in the local-zone live log")
 	repoLog := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions",
 		"m-2026-05-22-030", "log.jsonl")
 	_, err = os.Stat(repoLog)
-	require.NoError(t, err, "log.jsonl must land in the per-mission dir")
+	require.True(t, os.IsNotExist(err),
+		"tracked log.jsonl must not be written between seals (DES-058)")
 }
 
 // TestStore_TwoRoot_LoadEventsFromRepoTree asserts that the public

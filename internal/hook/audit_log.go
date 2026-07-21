@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
@@ -77,6 +78,31 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 	now := time.Now().UTC()
 	entry := buildAuditEntry(input, sessionID, repoRoot, now)
 
+	// DES-058: inside a repo, appends target the machine-local live file
+	// and carry a strictly-monotonic per-session ts allocated under the
+	// live-zone flock. Outside a repo, the legacy single-tree fallback is
+	// kept — there is no local zone to seal from.
+	if repoRoot != "" {
+		livePath := liveAuditPath(repoRoot, sessionID)
+		sealedDir, dirErr := resolveRepoSessionDir(repoRoot, sessionID, now)
+		if dirErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
+				dirErr, sessionID, entry.Tool, entry.ToolInputPreview)
+			return nil
+		}
+		legacyPath := filepath.Join(sealedDir, "audit.jsonl")
+		if _, writeErr := appendLiveAudit(livePath, sealedDir, legacyPath, entry, now); writeErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
+				writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
+			if sentErr := emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID, now, writeErr.Error()); sentErr != nil {
+				fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
+			}
+		}
+		return nil
+	}
+
 	path, err := resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID, now)
 	if err != nil {
 		// Path resolution failed — no file is reachable, so the
@@ -96,14 +122,16 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 		fmt.Fprintf(os.Stderr,
 			"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
 			writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
-		// Attempt the in-band sentinel so `ethos audit show` reveals
-		// the loss without an operator having to scrape stderr. A
-		// fsync, ENOSPC, or partial-write failure that defeated the
-		// full entry does not necessarily defeat a 100-byte sentinel;
-		// when the file system has truly broken (the 0o000 directory
-		// case) the sentinel write returns its own error and stderr
-		// stays the only signal.
-		if sentErr := emitAuditSentinel(path, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
+		// Attempt the in-band sentinel so the loss is discoverable
+		// without an operator scraping stderr: the line is sealed like
+		// any other, and `ethos audit show`'s diagnostics block scans
+		// the raw union for audit_error lines (once this global legacy
+		// file is migrated into the repo tree). A fsync, ENOSPC, or
+		// partial-write failure that defeated the full entry does not
+		// necessarily defeat a 100-byte sentinel; when the file system
+		// has truly broken (the 0o000 directory case) the sentinel
+		// write returns its own error and stderr stays the only signal.
+		if sentErr := emitLegacySentinel(path, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
 		}
 	}

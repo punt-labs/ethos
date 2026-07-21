@@ -1,6 +1,8 @@
 package hook
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -114,7 +116,12 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 		return fmt.Sprintf("skip %s: no repo-tree session", sessionID), nil
 	}
 
-	legacyEntries, err := readAuditEntries(legacyPath)
+	// Migrate RAW lines, not decoded entries: re-marshaling through auditEntry
+	// strips any field the struct does not name — notably the audit_error
+	// sentinel key — silently destroying a loss marker. Copying the exact bytes
+	// preserves every unknown field for every line, matching the permissive-
+	// decode compatibility posture (docs/audit-seal.md §Migration).
+	legacyLines, err := readRawAuditLines(legacyPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrPermission) {
 			return fmt.Sprintf("skip %s: read-only", sessionID), nil
@@ -123,13 +130,36 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 	}
 
 	repoPath := filepath.Join(repoDir, "audit.jsonl")
-	repoEntries, err := readAuditEntries(repoPath)
+	repoLines, err := readRawAuditLines(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("reading repo %s: %w", repoPath, err)
 	}
 
-	newEntries := diffAuditEntries(legacyEntries, repoEntries)
-	if len(newEntries) == 0 {
+	// Dedupe as a MULTISET on rawAuditLineKey. Both sides read raw so the key
+	// scheme matches: a hashed entry keys on ts+tool+hash; a hashless line
+	// (e.g. a sentinel, which is ts+empty+empty and so degenerate on ts alone)
+	// keys on a hash of its raw bytes. Byte-identical legacy lines legitimately
+	// recur: an ENOSPC burst emits one same-second, same-text sentinel per
+	// failed write (emitLegacySentinel), so N identical loss markers must
+	// migrate as N, not collapse to one. Count each key on the repo side and
+	// decrement per legacy match — a key already present M times absorbs the
+	// first M legacy copies and appends the rest. This keeps crash-re-run
+	// idempotency: a run interrupted mid-append tops the repo up to exactly the
+	// legacy count; a completed run appends zero and deletes.
+	repoCounts := make(map[string]int, len(repoLines))
+	for _, rl := range repoLines {
+		repoCounts[rl.key]++
+	}
+	var newLines [][]byte
+	for _, rl := range legacyLines {
+		if repoCounts[rl.key] > 0 {
+			repoCounts[rl.key]--
+			continue
+		}
+		newLines = append(newLines, rl.raw)
+	}
+
+	if len(newLines) == 0 {
 		if dryRun {
 			return fmt.Sprintf("noop %s: already migrated (dry-run)", sessionID), nil
 		}
@@ -147,64 +177,67 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 	}
 
 	if dryRun {
-		return fmt.Sprintf("migrate %s -> %s (%d new entries, dry-run)", sessionID, rel, len(newEntries)), nil
+		return fmt.Sprintf("migrate %s -> %s (%d new entries, dry-run)", sessionID, rel, len(newLines)), nil
 	}
 
 	if err := os.MkdirAll(repoDir, 0o700); err != nil {
 		return "", fmt.Errorf("creating %s: %w", repoDir, err)
 	}
-	for _, e := range newEntries {
-		if writeErr := writeAuditEntry(repoPath, e); writeErr != nil {
-			return "", fmt.Errorf("appending to %s: %w", repoPath, writeErr)
-		}
+	if writeErr := appendRawAuditLines(repoPath, newLines); writeErr != nil {
+		return "", fmt.Errorf("appending to %s: %w", repoPath, writeErr)
 	}
-	// Only delete the legacy file after every entry has been
-	// successfully appended and fsynced. If we crashed during the
-	// loop above, a re-run finds the legacy file still in place and
-	// the dedupe in diffAuditEntries skips entries that already
+	// Only delete the legacy file after every line has been successfully
+	// appended and fsynced. If we crashed during the append, a re-run finds the
+	// legacy file still in place and the dedupe above skips lines that already
 	// landed.
 	if err := os.Remove(legacyPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return "", fmt.Errorf("removing legacy %s: %w", legacyPath, err)
 	}
-	return fmt.Sprintf("migrate %s -> %s (%d new entries)", sessionID, rel, len(newEntries)), nil
+	return fmt.Sprintf("migrate %s -> %s (%d new entries)", sessionID, rel, len(newLines)), nil
 }
 
-// diffAuditEntries returns the entries from src that are not already
-// present in dst. Two entries match when their ts, tool name, and
-// tool_input_hash are equal. The hash is the canonical-JSON sha256 of
-// tool_input (see hashToolInput) so logically identical inputs match
-// regardless of map iteration order.
-//
-// Entries with no hash (older v3.11.0 lines that pre-date the field)
-// fall back to ts + tool + tool_input_preview for the match key. This
-// is best-effort — two truly distinct entries with the same ts to the
-// second AND the same tool AND the same 200-char preview are treated
-// as duplicates. The fallback is acceptable because the practical
-// resolution of a sha256 hash is reached only on v3.12+ logs, and the
-// migration is one-shot per machine.
-func diffAuditEntries(src, dst []auditEntry) []auditEntry {
-	seen := make(map[string]struct{}, len(dst))
-	for _, e := range dst {
-		seen[auditEntryKey(e)] = struct{}{}
+// appendRawAuditLines appends each raw JSONL line (newline-terminated) to path
+// and fsyncs once. Used by migration to copy legacy lines byte-for-byte,
+// preserving unknown fields a decode-remarshal round-trip would drop.
+func appendRawAuditLines(path string, lines [][]byte) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", path, err)
 	}
-	var out []auditEntry
-	for _, e := range src {
-		k := auditEntryKey(e)
-		if _, ok := seen[k]; ok {
-			continue
+	defer f.Close()
+	// A torn fragment at the destination tail must not fuse onto the first
+	// migrated line (R3-2) — separate it with a newline first.
+	if err := ensureNewlineBoundary(f); err != nil {
+		return fmt.Errorf("checking tail of %s: %w", path, err)
+	}
+	for _, l := range lines {
+		// Write the line and its terminator in a single call so a crash cannot
+		// land a complete JSON object with no trailing newline. Such a tail
+		// reads as a torn fragment (skipped) and a re-run's newline boundary
+		// plus re-append would duplicate it. One Write keeps line-and-newline
+		// atomic against interruption (R3-1).
+		line := append(append([]byte(nil), l...), '\n')
+		if _, err := f.Write(line); err != nil {
+			return fmt.Errorf("writing %s: %w", path, err)
 		}
-		seen[k] = struct{}{}
-		out = append(out, e)
 	}
-	return out
+	if err := f.Sync(); err != nil {
+		return fmt.Errorf("syncing %s: %w", path, err)
+	}
+	return nil
 }
 
-// auditEntryKey returns the dedupe key for one audit entry. Prefers
-// the sha256 hash when present; falls back to the preview field for
-// older lines.
-func auditEntryKey(e auditEntry) string {
+// rawAuditLineKey returns the dedupe key for one audit line, computed from both
+// its decoded entry and its raw bytes. A hashed entry keys on ts + tool +
+// tool_input_hash, so two byte-different encodings of the same logical
+// tool_input dedupe. A hashless line (older v3.11.0 entries, and sentinels,
+// whose ts + empty tool + empty preview is degenerate — a burst of same-second
+// sentinels would collapse to one) keys on ts + tool + a sha256 of the RAW
+// bytes, so only byte-identical lines dedupe and distinct losses each survive.
+func rawAuditLineKey(e auditEntry, raw []byte) string {
 	if e.ToolInputHash != "" {
 		return e.Ts + "|" + e.Tool + "|" + e.ToolInputHash
 	}
-	return e.Ts + "|" + e.Tool + "|preview:" + e.ToolInputPreview
+	sum := sha256.Sum256(raw)
+	return e.Ts + "|" + e.Tool + "|raw:" + hex.EncodeToString(sum[:])
 }

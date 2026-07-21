@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
@@ -1958,6 +1959,34 @@ func seedMissionWithEvents(t *testing.T) string {
 	return id
 }
 
+// plantCorruptFrozenLog stages a mission as a pre-DES-058 frozen-legacy log: it
+// wipes the live zone and any sealed chunks the seed produced, then writes a
+// tracked log.jsonl of three good events with a garbage line planted as line 2.
+// Post-DES-058 a sessionless seed writes to the live zone (and close seals a
+// chunk), where an unparseable line is silently skipped or fails loud; the
+// corrupt-line WARNING is a property of the frozen-legacy read path, so a test
+// exercising it must stage the corruption there and there alone.
+func plantCorruptFrozenLog(t *testing.T, repoRoot, id string) {
+	t.Helper()
+	// Remove every other event source so the read sees only the frozen legacy.
+	require.NoError(t, os.RemoveAll(filepath.Join(audit.LiveMissionsDir(repoRoot), id)))
+	sealedDir := audit.SealedMissionDir(repoRoot, id)
+	chunks, err := filepath.Glob(filepath.Join(sealedDir, "log-*"))
+	require.NoError(t, err)
+	for _, c := range chunks {
+		require.NoError(t, os.Remove(c))
+	}
+
+	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+	frozen := strings.Join([]string{
+		`{"ts":"2026-07-21T00:00:00Z","event":"create","actor":"claude"}`,
+		`{garbage`,
+		`{"ts":"2026-07-21T00:00:01Z","event":"result","actor":"bwk"}`,
+		`{"ts":"2026-07-21T00:00:02Z","event":"close","actor":"claude"}`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(sealedDir, "log.jsonl"), []byte(frozen), 0o600))
+}
+
 func TestMissionLog_CleanLogRoundTrip(t *testing.T) {
 	missionTestEnv(t)
 	id := seedMissionWithEvents(t)
@@ -2232,19 +2261,10 @@ func TestMissionLog_CorruptLineSurfacesAsWarning(t *testing.T) {
 	missionTestEnv(t)
 	id := seedMissionWithEvents(t)
 
-	// With DES-054 two-tree storage active, the log lives under
-	// <repoRoot>/.ethos/missions/<id>/log.jsonl. missionTestEnv
-	// chdirs into the fake repo, so cwd is the repo root.
+	// missionTestEnv chdirs into the fake repo, so cwd is the repo root.
 	repoRoot, err := os.Getwd()
 	require.NoError(t, err)
-	logPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "log.jsonl")
-	raw, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	require.GreaterOrEqual(t, len(lines), 3, "expected at least create+result+close")
-	// Insert a garbage line between line 1 (create) and line 2.
-	corrupted := []string{lines[0], "{garbage", lines[1], lines[2]}
-	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
+	plantCorruptFrozenLog(t, repoRoot, id)
 
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
@@ -2315,13 +2335,7 @@ func TestMissionLog_HumanMode_WarningsFooterOnStdout(t *testing.T) {
 
 	repoRoot, err := os.Getwd()
 	require.NoError(t, err)
-	logPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", id, "log.jsonl")
-	raw, err := os.ReadFile(logPath)
-	require.NoError(t, err)
-	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	require.GreaterOrEqual(t, len(lines), 3)
-	corrupted := []string{lines[0], "{garbage", lines[1], lines[2]}
-	require.NoError(t, os.WriteFile(logPath, []byte(strings.Join(corrupted, "\n")+"\n"), 0o600))
+	plantCorruptFrozenLog(t, repoRoot, id)
 
 	jsonOutput = false
 	out := captureStdoutE(t, func() error {

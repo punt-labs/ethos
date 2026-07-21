@@ -12,6 +12,10 @@ coverage.out
 # would otherwise dirty the working tree until upgrade.
 .ethos/
 
+# Machine-local zone (DES-058): the live audit/mission write path lives
+# here and must never be committed. Canonical org-wide form.
+.punt-labs/**/local/**
+
 # Claude local settings
 .claude/settings.local.json
 .claude/*.local.md

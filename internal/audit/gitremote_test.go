@@ -1,9 +1,11 @@
-package hook
+package audit
 
 import (
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseGitRemote(t *testing.T) {
@@ -95,4 +97,29 @@ func TestParseGitRemote(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func gitInit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	require.NoError(t, cmd.Run(), "git %v", args)
+}
+
+func TestRepoIdentity(t *testing.T) {
+	t.Run("origin resolves to org/name", func(t *testing.T) {
+		dir := t.TempDir()
+		gitInit(t, dir, "init")
+		gitInit(t, dir, "remote", "add", "origin", "git@github.com:punt-labs/ethos.git")
+		assert.Equal(t, "punt-labs/ethos", RepoIdentity(dir))
+	})
+
+	t.Run("no origin yields empty", func(t *testing.T) {
+		dir := t.TempDir()
+		gitInit(t, dir, "init")
+		assert.Equal(t, "", RepoIdentity(dir))
+	})
+
+	t.Run("empty root yields empty", func(t *testing.T) {
+		assert.Equal(t, "", RepoIdentity(""))
+	})
 }
