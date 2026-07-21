@@ -186,10 +186,12 @@ func CheckSealHook(repoRoot string) Result {
 
 // sealInvocation matches an `audit seal` call in command position: the ethos
 // binary (bare `ethos` or the hook's "$ethos_bin" variable) followed by
-// `audit seal`, at a line/statement boundary. It deliberately rejects a
-// string-literal mention like `echo "audit seal"`, whose `audit seal` is not
-// preceded by the ethos command token.
-var sealInvocation = regexp.MustCompile(`(^|[\s;&|(!])("?\$\{?ethos_bin\}?"?|ethos)[\t ]+audit[\t ]+seal([\s;&|)]|$)`)
+// `audit seal`. Command position means the token begins the line (after only
+// indentation) or follows a statement separator (`;`, `&`, `|`, `(`, `!`) and
+// optional whitespace — not merely any whitespace, so the phrase passed as
+// ARGUMENTS to another command (`echo ethos audit seal`) does not match, and
+// neither does a string-literal mention (`echo "audit seal"`).
+var sealInvocation = regexp.MustCompile(`(^[\t ]*|[;&|(!][\t ]*)("?\$\{?ethos_bin\}?"?|ethos)[\t ]+audit[\t ]+seal([\s;&|)]|$)`)
 
 // hasActiveSealCall reports whether body invokes `ethos audit seal` on a
 // non-comment line. The check is lexical, not semantic: it drops full-line and
@@ -210,12 +212,21 @@ func hasActiveSealCall(body string) bool {
 }
 
 // stripInlineComment drops a shell comment from a line: everything from a '#'
-// that starts the line or follows whitespace. It does not track quoting, so a
-// '#' inside a string literal is also cut — acceptable for this lexical check,
+// that starts the line or follows a word-break character. Shell begins a
+// comment wherever a word could begin, so `;`, `&`, `|`, and `(` start one
+// just as whitespace does (`cmd;# note`). It does not track quoting, so a '#'
+// inside a string literal is also cut — acceptable for this lexical check,
 // which errs toward FAIL.
 func stripInlineComment(line string) string {
 	for i := 0; i < len(line); i++ {
-		if line[i] == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+		if line[i] != '#' {
+			continue
+		}
+		if i == 0 {
+			return line[:i]
+		}
+		switch line[i-1] {
+		case ' ', '\t', ';', '&', '|', '(':
 			return line[:i]
 		}
 	}

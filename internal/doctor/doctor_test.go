@@ -296,6 +296,36 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "missing")
 	})
 
+	t.Run("phrase as arguments to another command is not active", func(t *testing.T) {
+		// `ethos audit seal` passed as args to echo is not a call (C1).
+		body := "#!/bin/sh\necho ethos audit seal\nrun_lint\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("comment after a word-break char is not active", func(t *testing.T) {
+		// Shell starts a comment after ';' or '&', not just whitespace (C2).
+		for _, body := range []string{
+			"#!/bin/sh\ncmd;# ethos audit seal\nrun_lint\n",
+			"#!/bin/sh\ncmd &# ethos audit seal\nrun_lint\n",
+		} {
+			dir := writeHook(t, body)
+			r := CheckSealHook(dir)
+			assert.False(t, r.Passed(), "body: %q", body)
+			assert.Contains(t, r.Detail, "missing")
+		}
+	})
+
+	t.Run("call after a separator is active", func(t *testing.T) {
+		// A genuine command-position call (after '&&') must still PASS.
+		body := "#!/bin/sh\nprecheck && ethos audit seal\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
+
 	t.Run("string-literal mention is not an active call", func(t *testing.T) {
 		// echo/printf text containing the phrase must not read as a call.
 		dir := writeHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
