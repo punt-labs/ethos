@@ -474,6 +474,25 @@ func TestRunSessionPurge_JSONRefused(t *testing.T) {
 	assert.Empty(t, got["sessions"])
 }
 
+// TestRunSessionPurge_TextRefused is Bugbot R6-2: when the unsealed-lines
+// guard refuses every candidate and nothing is purged, the text path must
+// report the refusals, not print the contradictory "No stale sessions found."
+func TestRunSessionPurge_TextRefused(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	addOriginRemote(t, se.repo, phase3RepoID)
+	setupRefusedSession(t, se, "sess-refused")
+
+	stdout, _, err := execHandler(t, "session", "purge")
+	require.NoError(t, err)
+
+	assert.Contains(t, stdout, "Refused to purge sess-refused")
+	assert.Contains(t, stdout, "Nothing purged; 1 session(s) refused")
+	assert.NotContains(t, stdout, "No stale sessions found")
+}
+
 func TestRunSessionPurge_JSONAck(t *testing.T) {
 	se := setupPhase3Env(t)
 	resetPhase3Flags(t)

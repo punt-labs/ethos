@@ -581,8 +581,11 @@ func runSessionPurge(cmd *cobra.Command) error {
 	if pidErr != nil {
 		return pidErr
 	}
-	if len(purged) == 0 && len(pidPurged) == 0 {
+	switch {
+	case len(purged) == 0 && len(pidPurged) == 0 && len(refused) == 0:
 		fmt.Fprintln(out, "No stale sessions found.")
+	case len(purged) == 0 && len(pidPurged) == 0:
+		fmt.Fprintf(out, "Nothing purged; %d session(s) refused (see above).\n", len(refused))
 	}
 	return nil
 }
