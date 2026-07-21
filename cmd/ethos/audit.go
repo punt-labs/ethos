@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -87,6 +88,43 @@ Exit codes:
 	},
 }
 
+// --- audit seal ---
+
+var (
+	auditSealDryRun  bool
+	auditSealVerbose bool
+)
+
+var auditSealCmd = &cobra.Command{
+	Use:   "seal",
+	Short: "Seal pending live audit lines into immutable tracked chunks",
+	Long: `Seal pending live audit lines into immutable tracked chunks.
+
+Visits every session in the repo, copies each session's not-yet-sealed
+live lines (ts past the sealed watermark) into a new immutable chunk
+audit-<first>-<last>.jsonl under the session's dated sealed directory,
+and git-adds every untracked chunk it finds — recovering an orphan a
+prior crashed seal left behind. Between seals no tracked file changes, so
+the repo tree stays clean while a session is live.
+
+Called by the pre-commit hook so sealed records land in the same commit
+as the work they document, and by ethos mission close.
+
+Flags:
+  --dry-run   print the per-session line counts it would seal, writing nothing
+  --verbose   print one line per sealed session
+
+Exit codes:
+  0  sealed, nothing pending, or a gitlink-mounted no-op (deferral notice on stderr)
+  2  fail-closed: an I/O error, a malformed chunk name, a corrupt sealed
+     chunk, or a git-add failure — blocks the commit; the escape is
+     ethos audit quarantine, never git commit --no-verify`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runAuditSeal(cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
 func init() {
 	auditMigrateCmd.Flags().BoolVar(&auditMigrateDryRun, "dry-run", false,
 		"Enumerate what would migrate without making changes")
@@ -99,9 +137,47 @@ func init() {
 		"Output format: json or text")
 	_ = auditShowCmd.MarkFlagRequired("delegation")
 
+	auditSealCmd.Flags().BoolVar(&auditSealDryRun, "dry-run", false,
+		"Print the line counts it would seal without writing")
+	auditSealCmd.Flags().BoolVar(&auditSealVerbose, "verbose", false,
+		"Print one line per sealed session")
+
 	auditCmd.AddCommand(auditMigrateCmd)
 	auditCmd.AddCommand(auditShowCmd)
+	auditCmd.AddCommand(auditSealCmd)
 	rootCmd.AddCommand(auditCmd)
+}
+
+// runAuditSeal is the audit-seal command implementation. It seals every
+// repo session's pending live lines and stages the chunks. Fail-closed
+// (DES-055 shape): on any seal error it prints a self-contained message to
+// stderr and returns failClosed so the process exits 2, blocking the
+// commit. A gitlink-mounted no-op and a nothing-to-seal run both exit 0.
+func runAuditSeal(out, errOut io.Writer) error {
+	repoRoot := resolve.EnvRepoRoot()
+	if repoRoot == "" {
+		fmt.Fprintln(errOut, "ethos: audit seal must run inside a repo")
+		return usageError{}
+	}
+	opts := hook.SealOptions{DryRun: auditSealDryRun, Verbose: auditSealVerbose, Out: out}
+	res, err := hook.SealRepo(repoRoot, time.Now().UTC(), opts)
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit seal: %v\n", err)
+		return failClosed{}
+	}
+	if res.Deferred {
+		return nil
+	}
+	if auditSealDryRun {
+		fmt.Fprintf(out, "audit seal: dry-run complete (%d line(s) pending)\n", res.LinesSealed)
+		return nil
+	}
+	if auditSealVerbose {
+		fmt.Fprintf(out,
+			"audit seal: sealed %d line(s) across %d session(s), staged %d chunk(s)\n",
+			res.LinesSealed, res.SessionsSealed, res.ChunksStaged)
+	}
+	return nil
 }
 
 // runAuditMigrate is the audit-migrate command implementation.
