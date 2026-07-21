@@ -5,8 +5,14 @@
 #
 # DES-055 shape: on a seal failure the underlying `ethos audit seal` prints
 # a self-contained remedy to stderr and exits 2; this hook propagates that
-# as a blocking exit 2. Silent exit 0 on success, nothing-to-seal, or a
-# gitlink-mounted deferral (the seal prints its own one-line notice there).
+# as a blocking exit 2.
+#
+# Exit status on the non-failure paths (success, nothing-to-seal, gitlink
+# deferral, ethos not installed) is the captured host status $_host_status:
+# 0 when this runs standalone (git starts the hook with $? = 0), or the host
+# hook's fall-through status when this is chained after a foreign hook. So a
+# clean seal is transparent — it never turns a host's failing fall-through
+# into a passing commit, and never blocks a commit the host would have passed.
 #
 # Passthrough when ethos is not installed — a missing binary must never
 # block a commit in an unrelated repo.
