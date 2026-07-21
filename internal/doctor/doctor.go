@@ -192,19 +192,34 @@ func CheckSealHook(repoRoot string) Result {
 var sealInvocation = regexp.MustCompile(`(^|[\s;&|(!])("?\$\{?ethos_bin\}?"?|ethos)[\t ]+audit[\t ]+seal([\s;&|)]|$)`)
 
 // hasActiveSealCall reports whether body invokes `ethos audit seal` on a
-// non-comment line. The check is lexical, not semantic: it stops string
-// mentions and comments from passing, but cannot see through dynamic dispatch
-// (eval, an aliased wrapper) — such a hook FAILs the check, the safe direction.
+// non-comment line. The check is lexical, not semantic: it drops full-line and
+// inline comments so a call named in a comment cannot pass, but it cannot see
+// through dynamic dispatch (eval, an aliased wrapper) — such a hook FAILs the
+// check, the safe direction.
 func hasActiveSealCall(body string) bool {
 	for _, line := range strings.Split(body, "\n") {
-		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "#") {
+		code := stripInlineComment(line)
+		if strings.TrimSpace(code) == "" {
 			continue
 		}
-		if sealInvocation.MatchString(line) {
+		if sealInvocation.MatchString(code) {
 			return true
 		}
 	}
 	return false
+}
+
+// stripInlineComment drops a shell comment from a line: everything from a '#'
+// that starts the line or follows whitespace. It does not track quoting, so a
+// '#' inside a string literal is also cut — acceptable for this lexical check,
+// which errs toward FAIL.
+func stripInlineComment(line string) string {
+	for i := 0; i < len(line); i++ {
+		if line[i] == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+			return line[:i]
+		}
+	}
+	return line
 }
 
 // isShellHook reports whether the hook body's shebang names a shell-family

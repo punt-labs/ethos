@@ -287,6 +287,15 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "missing")
 	})
 
+	t.Run("inline trailing comment mention is not active", func(t *testing.T) {
+		// The phrase in an inline comment after code must not read as a call.
+		body := "#!/bin/sh\necho ok # ethos audit seal\nrun_lint\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
 	t.Run("string-literal mention is not an active call", func(t *testing.T) {
 		// echo/printf text containing the phrase must not read as a call.
 		dir := writeHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
