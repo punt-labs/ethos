@@ -40,7 +40,11 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 			continue
 		}
 		cn, kind := Classify(e.Name(), ns)
-		if ns == MissionNS && (kind == KindValid || kind == KindQuarantine || kind == KindCorrupt) {
+		// In the mission namespace a non-empty session filters to one
+		// session's artifacts; an empty session means "every session"
+		// (the read unions all).
+		if ns == MissionNS && session != "" &&
+			(kind == KindValid || kind == KindQuarantine || kind == KindCorrupt) {
 			if cn.Session != session {
 				continue
 			}

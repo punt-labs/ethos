@@ -53,6 +53,14 @@ type Store struct {
 	// existing callers that wired a trace destination keep the legacy
 	// flat <root>/missions/<id>.yaml shape.
 	twoTreeStorage bool
+
+	// sessionID, when set alongside repoRoot, routes mission event
+	// appends to the DES-058 per-(mission, session) live log under
+	// <repoRoot>/.punt-labs/local/ethos/missions/<id>/<session-id>.log.jsonl
+	// with a strictly-monotonic timestamp, instead of the tracked
+	// log.jsonl. Empty (tests, non-session contexts) keeps the legacy
+	// tracked-log append so the tree behavior is unchanged there.
+	sessionID string
 }
 
 // NewStore creates a Store rooted at the given directory.
@@ -123,6 +131,17 @@ func (s *Store) WithRoleLister(r RoleLister) *Store {
 //	ms := mission.NewStore(root).WithArchetypeStore(as)
 func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 	s.archetypes = as
+	return s
+}
+
+// WithSessionID wires the current session id so mission event appends route
+// to the DES-058 per-(mission, session) live log under
+// <repoRoot>/.punt-labs/local/ethos/missions/<id>/. When unset (the default),
+// appends stay on the legacy tracked log.jsonl path. Only meaningful together
+// with a repoRoot (NewStoreWithRoots). Returns the receiver so construction
+// stays compact.
+func (s *Store) WithSessionID(sessionID string) *Store {
+	s.sessionID = sessionID
 	return s
 }
 

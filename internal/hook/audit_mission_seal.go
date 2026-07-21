@@ -2,6 +2,7 @@ package hook
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -36,6 +37,31 @@ func sealMissionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *S
 		}
 	}
 	return nil
+}
+
+// SealMission seals every session's not-yet-sealed log tail under one
+// mission's directory and stages the chunks (DES-058 §Seal triggers, the
+// mission-close secondary). It is the authoritative seal for the closing
+// checkout: cross-checkout worker tails ride their own checkouts' triggers.
+// A gitlink-mounted repo defers with a one-line stderr notice.
+func SealMission(repoRoot, missionID string, now time.Time, opts SealOptions) (SealResult, error) {
+	if audit.IsGitlinkMount(repoRoot) {
+		fmt.Fprintf(os.Stderr,
+			"ethos: mission close: sealing deferred: .punt-labs/ethos is a gitlink mount, pending e29s (%s)\n",
+			repoRoot)
+		return SealResult{Deferred: true}, nil
+	}
+	sessions, err := listMissionSessions(repoRoot, missionID)
+	if err != nil {
+		return SealResult{}, err
+	}
+	var res SealResult
+	for _, sessionID := range sessions {
+		if err := sealMissionSession(repoRoot, missionID, sessionID, now, opts, &res); err != nil {
+			return res, fmt.Errorf("sealing mission %s session %s: %w", missionID, sessionID, err)
+		}
+	}
+	return res, nil
 }
 
 // sealMissionSession seals one (mission, session) live log tail under its

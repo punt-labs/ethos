@@ -112,6 +112,43 @@ func LiveLinesPastWatermark(livePath, session string, watermark int64) ([]Line, 
 	return out, nil
 }
 
+// LegacyLines reads a frozen legacy file (audit.jsonl or log.jsonl) as
+// ts-tagged lines, kept undeduped and untagged by session — the frozen pool
+// predates the monotonic-ts discipline. Unlike a chunk, a legacy file keeps
+// the tolerant rule: a torn final line is dropped and a terminated
+// unparseable line is skipped, never an error. A missing file yields nil.
+func LegacyLines(path string) ([]Line, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading legacy %s: %w", path, err)
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		if cut := lastNewline(data); cut >= 0 {
+			data = data[:cut+1]
+		} else {
+			data = nil
+		}
+	}
+	var out []Line
+	for _, raw := range SplitLines(data) {
+		var h tsHolder
+		if json.Unmarshal(raw, &h) != nil {
+			continue
+		}
+		ts, perr := ParseLineTS(h.TS)
+		if perr != nil {
+			continue
+		}
+		cp := make([]byte, len(raw))
+		copy(cp, raw)
+		out = append(out, Line{TS: ts, Raw: cp})
+	}
+	return out, nil
+}
+
 // DedupByIdentity collapses lines sharing an identity to the first seen.
 // Post-discipline lines (chunks + live tail) dedup on (session, ts) —
 // loss-free, since equal identity means a byte-identical line from the same

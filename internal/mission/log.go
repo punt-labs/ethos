@@ -65,6 +65,14 @@ type Event struct {
 // corrupting the log. If the truncation-rollback itself fails, the
 // returned error notes both failures.
 func (s *Store) appendEventLocked(missionID string, e Event) error {
+	// DES-058: when a session and repo are wired, the event lands in the
+	// machine-local per-(mission, session) live log with a strictly-monotonic
+	// timestamp, so the tracked tree stays clean between seals. Otherwise the
+	// legacy tracked-log append below is unchanged.
+	if s.repoRoot != "" && s.sessionID != "" {
+		return s.appendLiveEventLocked(missionID, e)
+	}
+
 	data, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("marshaling event: %w", err)
@@ -209,6 +217,18 @@ func (s *Store) LoadEvents(missionID string) ([]Event, []string, error) {
 			return nil, nil, fmt.Errorf("mission %q not found", missionID)
 		}
 		return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, err)
+	}
+	// DES-058: a mission in the per-repo tree reads as the union of every
+	// session's sealed chunks and live tails plus the frozen legacy log.jsonl.
+	// A global-layer (legacy) mission keeps the tracked-log walk below.
+	if s.twoTreeStorage && s.repoRoot != "" {
+		layer, lErr := s.resolveLayer(missionID)
+		if lErr != nil {
+			return nil, nil, fmt.Errorf("loading events for %q: %w", missionID, lErr)
+		}
+		if layer == layerRepo {
+			return s.loadLiveUnionEvents(missionID)
+		}
 	}
 	// Reject symlinks before opening. A symlink pointing outside the
 	// missions directory could trick the log reader into parsing
