@@ -15,6 +15,61 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1" >&2; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1" >&2; exit 1; }
 
+# install_hook DEST SRC TAG DESREF
+# Install the ethos hook at DEST, coexisting with any hook already there.
+#   - no hook present: copy the standalone SRC (fresh install)
+#   - our marker section present: replace it in place (idempotent upgrade)
+#   - our standalone present (mentions DESREF, no markers): refresh it
+#   - a foreign hook present: append a marker-delimited section carrying SRC
+#
+# The appended section runs after the host hook's own content, so it fires
+# only when that content falls through — the beads pre-commit hook, the case
+# this fix exists for, exits nonzero only on failure and otherwise falls
+# through. A host hook that exits unconditionally bypasses the section; that
+# case is detected on the host's last line and warned.
+install_hook() {
+  dest=$1 src=$2 tag=$3 desref=$4
+
+  if [ ! -e "$dest" ]; then
+    cp "$src" "$dest"
+    chmod +x "$dest"
+    ok "$dest installed"
+    return
+  fi
+
+  if grep -q "^# --- BEGIN $tag" "$dest" 2>/dev/null; then
+    : # our section is present — strip and re-append below (idempotent)
+  elif grep -q "$desref" "$dest" 2>/dev/null; then
+    cp "$src" "$dest"
+    chmod +x "$dest"
+    ok "$dest refreshed"
+    return
+  fi
+
+  tmp=$(mktemp "${dest}.XXXXXX") || { warn "mktemp failed — $dest not updated"; return; }
+  awk -v tag="$tag" '
+    $0 ~ "^# --- BEGIN " tag { skip = 1 }
+    skip && $0 ~ "^# --- END " tag { skip = 0; next }
+    !skip { print }
+  ' "$dest" > "$tmp"
+
+  last=$(awk 'NF { l = $0 } END { print l }' "$tmp")
+  case "$last" in
+    exit|exit\ *)
+      warn "$dest ends in an unconditional 'exit' — the ethos section may not run" ;;
+  esac
+
+  {
+    printf '# --- BEGIN %s ---\n' "$tag"
+    awk 'NR == 1 && /^#!/ { next } { print }' "$src"
+    printf '# --- END %s ---\n' "$tag"
+  } >> "$tmp"
+
+  mv "$tmp" "$dest"
+  chmod +x "$dest"
+  ok "$dest chained (ethos section)"
+}
+
 VERSION="4.1.0"
 REPO="punt-labs/ethos"
 BINARY="ethos"
@@ -252,8 +307,9 @@ fi
 # every other commit — the hook exits 0 unless MISSION_ID or
 # DELEGATION_ID is set in the environment.
 #
-# Skipped silently when not in a git work tree (curl|sh from $HOME);
-# warns and skips when an unrelated commit-msg hook already exists (no clobber).
+# Skipped silently when not in a git work tree (curl|sh from $HOME).
+# When an unrelated commit-msg hook already exists, chain into it with a
+# marker-delimited section rather than skipping (ethos-2ol1).
 HOOK_SRC=""
 if [ -f "./hooks/commit-msg.sh" ]; then
   HOOK_SRC="./hooks/commit-msg.sh"
@@ -263,15 +319,8 @@ fi
 if [ -n "$HOOK_SRC" ] && command -v git >/dev/null 2>&1; then
   if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null); then
     info "Installing commit-msg trailer hook..."
-    HOOK_DEST="$GIT_DIR/hooks/commit-msg"
     mkdir -p "$GIT_DIR/hooks"
-    if [ -e "$HOOK_DEST" ] && ! grep -q "DES-054" "$HOOK_DEST" 2>/dev/null; then
-      warn "$HOOK_DEST exists and is not ours — not overwriting"
-    else
-      cp "$HOOK_SRC" "$HOOK_DEST"
-      chmod +x "$HOOK_DEST"
-      ok "$HOOK_DEST installed"
-    fi
+    install_hook "$GIT_DIR/hooks/commit-msg" "$HOOK_SRC" "ETHOS DES-054 TRAILER" "DES-054"
   fi
 fi
 
@@ -283,8 +332,10 @@ fi
 # work. Passthrough (exit 0) when ethos is not installed or nothing is
 # pending; fail-closed (exit 2) on a broken audit store.
 #
-# Skipped silently when not in a git work tree; warns and skips when an
-# unrelated pre-commit hook already exists (no clobber).
+# Skipped silently when not in a git work tree. When a foreign pre-commit
+# hook already exists — the beads hook on every org machine — chain into it
+# with a marker-delimited section rather than skipping (ethos-2ol1). Without
+# this the seal, the feature's primary trigger, never installs.
 PRECOMMIT_SRC=""
 if [ -f "./hooks/pre-commit.sh" ]; then
   PRECOMMIT_SRC="./hooks/pre-commit.sh"
@@ -294,15 +345,8 @@ fi
 if [ -n "$PRECOMMIT_SRC" ] && command -v git >/dev/null 2>&1; then
   if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null); then
     info "Installing pre-commit seal hook..."
-    PRECOMMIT_DEST="$GIT_DIR/hooks/pre-commit"
     mkdir -p "$GIT_DIR/hooks"
-    if [ -e "$PRECOMMIT_DEST" ] && ! grep -q "DES-058" "$PRECOMMIT_DEST" 2>/dev/null; then
-      warn "$PRECOMMIT_DEST exists and is not ours — not overwriting"
-    else
-      cp "$PRECOMMIT_SRC" "$PRECOMMIT_DEST"
-      chmod +x "$PRECOMMIT_DEST"
-      ok "$PRECOMMIT_DEST installed"
-    fi
+    install_hook "$GIT_DIR/hooks/pre-commit" "$PRECOMMIT_SRC" "ETHOS DES-058 SEAL" "DES-058"
   fi
 fi
 
