@@ -1,0 +1,28 @@
+mission_id: m-2026-07-11-010
+status: failed
+type: design
+created_at: "2026-07-11T16:58:15Z"
+updated_at: "2026-07-21T15:27:53Z"
+closed_at: "2026-07-21T15:27:53Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-11T16:58:15Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-ni0y
+write_set:
+    - docs/ni0y-ext-read-carveout.md
+success_criteria:
+    - Design the DES-044 carve-out that makes repo-only mode read ext from the repo layer
+    - Gate ext reads on repoAuthoritative across every ext read surface (loadExtensions/ExtGet and the identity-internal path) using the readNamespace base+.local merge on the repo ext dir
+    - Treat an absent repo ext for a resolved identity as a MISS folded into ErrIncompleteRepoSet so a global-less checkout fails loud not silent
+    - Make the vendor/doctor completeness predicate and the resolution read-path agree (both repo-only)
+    - Specify the explicit DES-044 amendment wording
+    - Confirm layered/default mode is byte-identical (ext still global)
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'ethos-ni0y consumer sanity-check (vox, PR #345 issuecomment-4947892902) found a real gap in DES-057: the ADR COPIES ext into the repo (vendor) and VALIDATES it present (completeness predicate), but Part A preserved DES-044 (ext resolves from global) so repo-only mode never READS the vendored ext. Net: global-less checkout in repo-only -> ext reads global -> absent -> agents lose quarry memory wiring (criterion (a) fails); and predicate (present) disagrees with read-path (global). Close it: in repo-only, ext reads route to the REPO layer via the readNamespace merge (Part C), absent repo ext = miss. This is a carve-out to the SETTLED DES-044 invariant (ext-through-global) — design it precisely, don''t hand-wave. Must compose with the five read surfaces bwk enumerated in docs/ni0y-resolution-mode.md, the readNamespace merge in docs/ni0y-ext-local.md, and the ErrIncompleteRepoSet miss contract. Read those three docs + DES-044/DES-008/DES-051. Design only, no code. Write to docs/ni0y-ext-read-carveout.md; this becomes an amendment folded into DES-057 Part A + Part C.'

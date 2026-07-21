@@ -1,0 +1,38 @@
+reflections:
+    - round: 1
+      created_at: "2026-07-21T05:30:37Z"
+      author: claude
+      converging: true
+      signals:
+        - 'session-audit subsystem complete: live-write redirect + monotonic ts + torn-tail truncation, audit seal verb (watermark, content-verify, temp/rename, orphan staging, stale-temp sweep, gitlink no-op, fail-closed exit 2), install.sh pre-commit hook, union read through audit show AND the precondition evaluator'
+        - 6 feature commits + 1 corrective, each green under make check; 30 DES-058 tests; end-to-end dogfood with expected-vs-actual pasted; result --verify clean against main
+        - corrective commit 0aa33d9 unstaged stale runtime artifacts an early git add -A had caught — net branch diff is exactly the write set
+        - 'deferred to round 2 with leader ordering ruling requested: mission-log live-write/seal + mission-close trigger (criterion 6; chunk primitives already built and tested), quarantine verb + resume state machine, purge tombstone + vacuum cross-check + --ack, gitlink deferred-flag + gap markers in the read'
+      recommendation: continue
+      reason: 'Leader ruling on round-2 ordering: (1) mission-log subsystem + mission-close seal first — contract criterion 6, no half-wiring of mission log; (2) read-side gitlink deferred-flag and gap markers next; (3) quarantine/resume and purge/vacuum/--ack verbs last. All are in the merged design and therefore in scope — round 2 completes the full contract; the evaluator reviews the completed branch; round 3 reserved for evaluator findings.'
+    - round: 2
+      created_at: "2026-07-21T06:30:21Z"
+      author: claude
+      converging: true
+      signals:
+        - 'full contract scope delivered in ruled order: mission-log subsystem, read-side deferred-flag + gap markers, quarantine/resume, purge tombstone + vacuum cross-check + --ack; 13 commits, each green; dogfooded by worker AND independently by evaluator'
+        - 'evaluator (rsc): APPROVE WITH NAMED EDITS; all 12 criteria met on driven surfaces; internal/audit confirmed a genuine leaf (stdlib-only imports) and ratified — leader authorization recorded in round-1/2 messages and this reflection; worker surfaced the deviation rather than hiding it'
+        - 'REQ-1: vacuum/purge guard inspects only the session-audit live file, omitting the mission namespace — a deleted mission live log purges with no refusal (criterion-6 parity broken at the guard); fix = enumerate expected mission live files per spec recipe, both VacuumCrossCheck and purgeOneTombstoned, with test'
+        - 'REQ-2 (empirically confirmed): content-torn name-valid .quarantine marker still covers its .corrupt — seal exits 0 silently and verified_last vanishes from the watermark; fix = coverage consults parsed markers only, torn marker = absent = orphan .corrupt = exit 2, with test'
+        - 'REQ-3: quarantine os.Rename fallback clobbers an existing .corrupt, destroying first-event evidence; minimum fix = stat-guard refusal, with test; full .corrupt-<hash> sequencing folded into round 3 via OPT-1'
+        - 'leader ruling: OPT-1 (no-op content-verify + missing-chunk re-seal), OPT-2 (tombstone overwrite guard), OPT-3 (DES-058 entry sentence on legacy-order equivalence) all included in round 3 — cheap hardening in the same fail-loud subsystem'
+        - 'round 3 also carries: sealed-dir date from roster / purge-tombstone fallback; drained legacy missions/<id>.jsonl residue + full mission-binding vacuum set; canonical .punt-labs/**/local/** line in ethos .gitignore (authorized) + clean-tree verification in this repo'
+      recommendation: continue
+      reason: Round 3 (final budgeted round) lands three REQ fixes with named regression tests, three OPTs, two carried refinements, and the gitignore line; evaluator does a targeted re-check of the fixes, then local review gate, PR, merge, release.
+    - round: 3
+      created_at: "2026-07-21T07:26:50Z"
+      author: claude
+      converging: true
+      signals:
+        - round 3 landed all rsc REQ-1/2/3 fixes with named regression tests, OPT-1/2 hardening, OPT-3 doc note (leader-authored, DESIGN.md), and carried items (a) session-start dating, (b) residue drain, (c) canonical .punt-labs/**/local/** gitignore line with clean-tree verification
+        - 'rsc re-check found one REQ-1 residual (binding-union half of the expected set unimplemented — silent-loss class wider than spec) and one OPT (residue read whole vs per-line filter); both resolved in a post-budget review-cycle fix round: 9ea1af4 (mission.SessionBoundMissions union, both guards wired, layering preserved — audit stays a leaf) and dec3866 (per-line residue filter implemented to spec per leader ruling; whole-read documented-shortcut rejected)'
+        - 'rsc final confirmation: CLEAR — all findings across all rounds closed and confirmed by code read, empirical repro, and named tests; make check green end-to-end; internal/audit leaf ratified; no ruled decision reopened'
+        - 'accepted deferrals, both bead-tracked: quarantine re-seal-when-no-chunk-stands sub-case (ethos-be44, fails loud today); mission write-set amend mechanism (ethos-tksw, process gap)'
+        - one cosmetic diagnostic-string fix (vacuum warning wording) dispatched as a final review-cycle commit
+      recommendation: stop
+      reason: 'Mission complete: all 12 contract criteria met, evaluator CLEAR, budget exhausted at round 3 with post-budget fixes handled as review-cycle commits per convention. Closing as pass; local review gate, PR, merge, and release proceed leader-side.'

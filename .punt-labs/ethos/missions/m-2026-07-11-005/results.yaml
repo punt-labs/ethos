@@ -1,0 +1,18 @@
+results:
+    - mission: m-2026-07-11-005
+      round: 1
+      created_at: "2026-07-21T15:26:53Z"
+      author: bwk
+      verdict: fail
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: administrative close of abandoned mission snapshot — DES-057 work shipped via other missions; no rounds were dispatched
+          status: fail
+      prose: |
+        Administrative close-out during the DES-058 freeze reconciliation
+        (PR #349). This mission was instantiated on 2026-07-11 during DES-057
+        work and abandoned with only create events; the work shipped through
+        other missions and PR #345. Closing as failed so the frozen repo copy
+        does not read as live for mission list and write-set admission
+        (Bugbot finding on PR #349).
