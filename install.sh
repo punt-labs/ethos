@@ -317,10 +317,13 @@ elif [ -n "${TMPDIR_BUILD:-}" ] && [ -f "$TMPDIR_BUILD/hooks/commit-msg.sh" ]; t
   HOOK_SRC="$TMPDIR_BUILD/hooks/commit-msg.sh"
 fi
 if [ -n "$HOOK_SRC" ] && command -v git >/dev/null 2>&1; then
-  if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null); then
+  # `--git-path hooks` resolves the common hooks dir even inside a worktree,
+  # where `--git-dir` points at .git/worktrees/<name> — a dir git never runs
+  # hooks from. Using --git-dir there installs to a dead path (ethos-2ol1).
+  if HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null); then
     info "Installing commit-msg trailer hook..."
-    mkdir -p "$GIT_DIR/hooks"
-    install_hook "$GIT_DIR/hooks/commit-msg" "$HOOK_SRC" "ETHOS DES-054 TRAILER" "DES-054"
+    mkdir -p "$HOOKS_DIR"
+    install_hook "$HOOKS_DIR/commit-msg" "$HOOK_SRC" "ETHOS DES-054 TRAILER" "DES-054"
   fi
 fi
 
@@ -343,10 +346,11 @@ elif [ -n "${TMPDIR_BUILD:-}" ] && [ -f "$TMPDIR_BUILD/hooks/pre-commit.sh" ]; t
   PRECOMMIT_SRC="$TMPDIR_BUILD/hooks/pre-commit.sh"
 fi
 if [ -n "$PRECOMMIT_SRC" ] && command -v git >/dev/null 2>&1; then
-  if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null); then
+  # --git-path hooks, not --git-dir: see the commit-msg step above.
+  if HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null); then
     info "Installing pre-commit seal hook..."
-    mkdir -p "$GIT_DIR/hooks"
-    install_hook "$GIT_DIR/hooks/pre-commit" "$PRECOMMIT_SRC" "ETHOS DES-058 SEAL" "DES-058"
+    mkdir -p "$HOOKS_DIR"
+    install_hook "$HOOKS_DIR/pre-commit" "$PRECOMMIT_SRC" "ETHOS DES-058 SEAL" "DES-058"
   fi
 fi
 
