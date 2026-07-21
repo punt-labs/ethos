@@ -115,6 +115,48 @@ func TestScanParseableMarkerCoversCorrupt(t *testing.T) {
 	}
 }
 
+// TestScanCrossSessionMarkerDoesNotCoverCorrupt is B1: a mission union read
+// (empty session filter) must not let one session's marker cover another
+// session's orphan .corrupt. A range-only coverage check would silence the
+// fail-loud incomplete-quarantine guard for the second session.
+func TestScanCrossSessionMarkerDoesNotCoverCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	// Session B's retired chunk, no marker of its own.
+	writeChunk(t, dir, MissionChunkFile("sessB", 100, 200)+".corrupt", 100, 200)
+	// Session A's marker over the identical range — covers A, not B.
+	m := Marker{Chunk: "log-sessA-" + TSToField(100) + "-" + TSToField(200), VerifiedLast: 200, Reason: "test"}
+	data, err := MarshalMarker(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerName := "log-sessA-" + TSToField(100) + "-" + TSToField(200) + ".quarantine"
+	if err := os.WriteFile(filepath.Join(dir, markerName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ScanSealedDir(dir, MissionNS, ""); err == nil {
+		t.Fatal("cross-session marker covered another session's .corrupt = nil error, want orphan exit-2")
+	}
+}
+
+// TestScanSameSessionMarkerCoversCorrupt is B1's companion: a marker and a
+// .corrupt of the SAME session still cover as before.
+func TestScanSameSessionMarkerCoversCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	writeChunk(t, dir, MissionChunkFile("sessA", 100, 200)+".corrupt", 100, 200)
+	m := Marker{Chunk: "log-sessA-" + TSToField(100) + "-" + TSToField(200), VerifiedLast: 200, Reason: "test"}
+	data, err := MarshalMarker(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markerName := "log-sessA-" + TSToField(100) + "-" + TSToField(200) + ".quarantine"
+	if err := os.WriteFile(filepath.Join(dir, markerName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ScanSealedDir(dir, MissionNS, ""); err != nil {
+		t.Errorf("same-session marker should cover its .corrupt: %v", err)
+	}
+}
+
 func TestScanMissionSessionFilter(t *testing.T) {
 	dir := t.TempDir()
 	writeChunk(t, dir, MissionChunkFile("sessA", 100, 200), 100, 200)

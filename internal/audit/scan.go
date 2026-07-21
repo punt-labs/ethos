@@ -80,11 +80,18 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 	return sc, nil
 }
 
-// coveredByMarker reports whether some marker's named range contains the
-// artifact's named range.
+// coveredByMarker reports whether some marker of the SAME session contains the
+// artifact's named range. Range nesting alone is not enough: a mission union
+// read scans with an empty session filter, so both a marker and a .corrupt from
+// different sessions can share a directory. Requiring m.Session == artifact.Session
+// keeps one session's marker from covering another session's orphan .corrupt,
+// which would silence the fail-loud incomplete-quarantine check. In the session
+// namespace both Session fields are empty and the directory is single-session,
+// so the equality holds trivially and current behavior stands.
 func coveredByMarker(artifact ChunkName, markers []ChunkName) bool {
 	for _, m := range markers {
-		if m.First <= artifact.First && artifact.Last <= m.Last {
+		if m.Session == artifact.Session &&
+			m.First <= artifact.First && artifact.Last <= m.Last {
 			return true
 		}
 	}
