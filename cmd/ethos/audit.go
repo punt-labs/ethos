@@ -190,24 +190,34 @@ func init() {
 // file's first-line date, then now. Best-effort — a read error yields "".
 func sessionStartDateResolver(repoRoot string) func(string) string {
 	ss := sessionStore()
-	home, _ := os.UserHomeDir()
-	globalSessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+	// When home cannot resolve, skip the tombstone lookup entirely rather than
+	// let filepath.Join degrade to the relative ".punt-labs/ethos/sessions" —
+	// a relative path would consult the current working directory, reading a
+	// stray same-named tombstone from wherever the command happened to run.
+	home, homeErr := os.UserHomeDir()
 	return func(sessionID string) string {
 		if roster, err := ss.Load(sessionID); err == nil && len(roster.Started) >= 10 {
 			return roster.Started[:10]
 		}
-		if tb, err := audit.ReadTombstone(filepath.Join(globalSessions, sessionID+".purged")); err == nil {
-			return tb.StartDate
+		if homeErr == nil {
+			globalSessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+			if tb, err := audit.ReadTombstone(filepath.Join(globalSessions, sessionID+".purged")); err == nil {
+				return tb.StartDate
+			}
 		}
 		return ""
 	}
 }
 
-// activeRepoSessions returns the ids of roster-active sessions bound to
-// repoRoot — the second source the vacuum cross-check iterates. A single
-// unreadable roster skips that session (best-effort, the doc-sanctioned case),
-// but a List error empties the whole roster-active half of the cross-check, so
-// it warns on stderr rather than silently returning nil.
+// activeRepoSessions returns the ids of EVERY session whose roster is bound to
+// repoRoot, including stale and crashed rosters — the second source the vacuum
+// cross-check iterates. Stale sessions are returned deliberately: a dead
+// session with unsealed live lines is exactly the loss case the vacuum must
+// warn about, so filtering it out would blind the guard to the very condition
+// it exists to catch. A single unreadable roster skips that session
+// (best-effort, the doc-sanctioned case), but a List error empties the whole
+// half of the cross-check, so it warns on stderr rather than silently
+// returning nil.
 func activeRepoSessions(repoRoot string, errOut io.Writer) []string {
 	ss := sessionStore()
 	ids, err := ss.List()
