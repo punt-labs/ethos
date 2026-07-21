@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DES-058 fail-loud hardening.** A quarantine marker whose name is valid
+  but whose content is garbage now reads as absent, so its `.corrupt`
+  stays an uncovered orphan and the seal fails closed (exit 2) instead of
+  silently dropping the marker's verified watermark and gap. The
+  unsealed-record guard (`ethos audit seal` vacuum cross-check and
+  `ethos session purge`) now spans the mission namespace too, so a session
+  that sealed a mission chunk and lost its mission live log no longer purges
+  or commits silently. `ethos audit quarantine` never overwrites an existing
+  `.corrupt`: fresh damage is retired under a content-hashed
+  `.corrupt-<hash>` name, and the idempotent no-op content-verifies chunks at
+  marker-covered names, retiring fresh corruption as recorded evidence. A
+  brand-new sealed session directory is dated by the session start (roster,
+  then purge tombstone, then the live file's first-line date) rather than the
+  wall clock. The `.gitignore` now carries the canonical
+  `.punt-labs/**/local/**` line so the machine-local live zone stops dirtying
+  the tree it exists to keep clean.
+
 ### Added
 
 - **DES-058 (phase 1): live audit write path and `ethos audit seal`.**
