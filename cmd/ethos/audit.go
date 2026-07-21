@@ -286,8 +286,8 @@ func runAuditSeal(out, errOut io.Writer) error {
 	// failure policy). Warnings only — never blocks the commit.
 	if !auditSealDryRun && res.SessionsSealed == 0 && res.ChunksStaged == 0 {
 		if home, hErr := os.UserHomeDir(); hErr == nil {
-			globalSessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
-			if vErr := hook.VacuumCrossCheck(repoRoot, globalSessions, activeRepoSessions(repoRoot), errOut); vErr != nil {
+			globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+			if vErr := hook.VacuumCrossCheck(repoRoot, globalRoot, activeRepoSessions(repoRoot), errOut); vErr != nil {
 				fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check: %v\n", vErr)
 			}
 		}

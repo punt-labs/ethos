@@ -190,33 +190,56 @@ type MissionLive struct {
 }
 
 // ExpectedMissionLiveFiles returns the per-(mission, session) live-log files a
-// session is expected to have written, enumerated (not globbed) from the
-// tracked mission chunks that carry the session's id: a sealed mission chunk
-// proves the session wrote the live file, and live files are never deleted by
-// design (docs/audit-seal.md §Seal failure policy). A file missing from disk
-// is therefore evidence of loss, which a glob over extant files could never
-// surface. Each entry records whether the expected file is present.
-func ExpectedMissionLiveFiles(repoRoot, sessionID string) ([]MissionLive, error) {
+// session is expected to have written, enumerated (not globbed) so a deleted
+// file surfaces as evidence of loss. The expected set is the spec's union of
+// two sources (docs/audit-seal.md §Seal failure policy):
+//
+//   - the tracked mission chunks that carry the session's id — a sealed chunk
+//     proves the session wrote the live file, and live files are never deleted
+//     by design; and
+//   - boundMissions, the missions the session is bound to in mission records
+//     (the `ethos mission claim` sidecar and Tier B delegation records),
+//     covering a session that claimed or dispatched under a mission but sealed
+//     no chunk yet. The caller derives these — audit stays ignorant of the
+//     record format.
+//
+// A file missing from disk is evidence of loss, which a glob over extant files
+// could never surface. Each entry records whether the expected file is present.
+func ExpectedMissionLiveFiles(repoRoot, sessionID string, boundMissions []string) ([]MissionLive, error) {
+	seen := make(map[string]struct{})
+	var ids []string
+	add := func(id string) {
+		id = filepath.Base(id)
+		if id == "" || id == "." || id == string(filepath.Separator) {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
 	base := SealedMissionsBase(repoRoot)
 	missions, err := os.ReadDir(base)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("reading %s: %w", base, err)
 	}
-	var out []MissionLive
 	for _, d := range missions {
-		if !d.IsDir() {
-			continue
+		if d.IsDir() && missionChunkCarriesSession(filepath.Join(base, d.Name()), sessionID) {
+			add(d.Name())
 		}
-		missionID := d.Name()
-		if !missionChunkCarriesSession(filepath.Join(base, missionID), sessionID) {
-			continue
-		}
-		livePath := LiveMissionLogPath(repoRoot, missionID, sessionID)
+	}
+	for _, id := range boundMissions {
+		add(id)
+	}
+
+	sort.Strings(ids)
+	out := make([]MissionLive, 0, len(ids))
+	for _, id := range ids {
+		livePath := LiveMissionLogPath(repoRoot, id, sessionID)
 		_, statErr := os.Stat(livePath)
-		out = append(out, MissionLive{MissionID: missionID, LivePath: livePath, Present: statErr == nil})
+		out = append(out, MissionLive{MissionID: id, LivePath: livePath, Present: statErr == nil})
 	}
 	return out, nil
 }

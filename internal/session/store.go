@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/internal/mission"
 	"gopkg.in/yaml.v3"
 )
 
@@ -269,9 +270,12 @@ func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
 		liveGone = !audit.SessionLiveFileExists(repo, roster.Session)
 		// REQ-1: the guard spans both namespaces. A session that sealed a
 		// mission chunk and then lost its mission live log (worktree torn
-		// down) must not purge silently — enumerate the expected mission live
-		// files and fold their unsealed/gone state in.
-		if expected, eErr := audit.ExpectedMissionLiveFiles(repo, roster.Session); eErr == nil {
+		// down), or a Tier B session that claimed a mission but sealed no
+		// chunk yet, must not purge silently — enumerate the expected mission
+		// live files (chunk-derived union mission-record bindings) and fold
+		// their unsealed/gone state in.
+		bound, _ := mission.SessionBoundMissions(s.root, repo, roster.Session)
+		if expected, eErr := audit.ExpectedMissionLiveFiles(repo, roster.Session, bound); eErr == nil {
 			for _, ml := range expected {
 				if !ml.Present {
 					liveGone = true

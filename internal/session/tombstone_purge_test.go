@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,6 +50,27 @@ func TestPurgeTombstoned_LostMissionLiveFlagsTombstone(t *testing.T) {
 	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-ml.purged"))
 	require.NoError(t, err)
 	assert.True(t, tb.LiveFileGone, "lost mission live log must set the tombstone flag")
+}
+
+func TestPurgeTombstoned_ClaimedButUnsealedMissionFlagsTombstone(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.Create("sess-claimed", root, primary, repo, ""))
+	// REQ-1 residual: the session CLAIMED a mission (sidecar binding) but sealed
+	// no chunk, and its mission live log is gone. With only chunk-derived
+	// enumeration this loss is silent; the mission-binding union must catch it.
+	require.NoError(t, mission.WriteActiveMission(s.root, "sess-claimed", "m-2026-07-21-009"))
+
+	purged, refused, err := s.PurgeTombstoned(false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-claimed")
+	assert.Empty(t, refused)
+
+	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-claimed.purged"))
+	require.NoError(t, err)
+	assert.True(t, tb.LiveFileGone, "claimed-but-unsealed lost mission live log must set the tombstone flag")
 }
 
 func TestPurgeTombstoned_RefusesUnsealed(t *testing.T) {

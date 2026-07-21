@@ -152,7 +152,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	// A chunk for a different session must not appear for sess1.
 	writeChunk(t, dir, MissionChunkFile("sess2", 300, 400), 300, 400)
 
-	got, err := ExpectedMissionLiveFiles(repo, "sess1")
+	got, err := ExpectedMissionLiveFiles(repo, "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	if err := os.WriteFile(got[0].LivePath, []byte(`{"ts":"`+FormatLineTS(300)+`"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err = ExpectedMissionLiveFiles(repo, "sess1")
+	got, err = ExpectedMissionLiveFiles(repo, "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,8 +3,10 @@ package hook
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 
 	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/internal/mission"
 )
 
 // VacuumCrossCheck guards the seal's silent-vacuum case (docs/audit-seal.md
@@ -20,7 +22,11 @@ import (
 // The tombstone branch is what keeps the crash -> purge -> checkout-deleted ->
 // commit sequence from going silent: purge removed the roster entry the
 // per-session check would otherwise have visited.
-func VacuumCrossCheck(repoRoot, globalSessionsDir string, activeSessions []string, w io.Writer) error {
+//
+// globalRoot is ~/.punt-labs/ethos; the per-session tombstones, rosters, and
+// mission-claim sidecars all live under <globalRoot>/sessions.
+func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io.Writer) error {
+	globalSessionsDir := filepath.Join(globalRoot, "sessions")
 	tombstones, err := audit.ListTombstones(globalSessionsDir)
 	if err != nil {
 		return err
@@ -48,7 +54,7 @@ func VacuumCrossCheck(repoRoot, globalSessionsDir string, activeSessions []strin
 		}
 		// A purged session's mission-log lines are guarded the same way: an
 		// expected mission live file gone is a lost mission-log record.
-		if mErr := warnMissingMissionLives(repoRoot, t.Session, w); mErr != nil {
+		if mErr := warnMissingMissionLives(globalRoot, repoRoot, t.Session, w); mErr != nil {
 			return mErr
 		}
 	}
@@ -64,7 +70,7 @@ func VacuumCrossCheck(repoRoot, globalSessionsDir string, activeSessions []strin
 					"if it was deleted, unsealed lines were lost\n",
 				sessionID)
 		}
-		if mErr := warnMissingMissionLives(repoRoot, sessionID, w); mErr != nil {
+		if mErr := warnMissingMissionLives(globalRoot, repoRoot, sessionID, w); mErr != nil {
 			return mErr
 		}
 	}
@@ -72,11 +78,17 @@ func VacuumCrossCheck(repoRoot, globalSessionsDir string, activeSessions []strin
 }
 
 // warnMissingMissionLives warns for each of a session's expected mission live
-// files (enumerated from tracked mission chunks carrying the session id) that
-// is absent from disk — a lost mission-log record the audit-only check would
-// miss (REQ-1).
-func warnMissingMissionLives(repoRoot, sessionID string, w io.Writer) error {
-	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, sessionID)
+// files that is absent from disk — a lost mission-log record the audit-only
+// check would miss (REQ-1). The expected set unions the tracked mission chunks
+// carrying the session id with the missions the session is bound to in mission
+// records (claim sidecar + delegation records), so a Tier B session that
+// claimed a mission but sealed no chunk is still enumerated.
+func warnMissingMissionLives(globalRoot, repoRoot, sessionID string, w io.Writer) error {
+	bound, err := mission.SessionBoundMissions(globalRoot, repoRoot, sessionID)
+	if err != nil {
+		return err
+	}
+	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, sessionID, bound)
 	if err != nil {
 		return err
 	}
