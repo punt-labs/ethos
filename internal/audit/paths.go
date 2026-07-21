@@ -126,6 +126,81 @@ func SessionLiveFileExists(repoRoot, sessionID string) bool {
 	return err == nil
 }
 
+// MissionLive names one mission live-log file a session is expected to have
+// written, plus whether it is present on disk.
+type MissionLive struct {
+	MissionID string
+	LivePath  string
+	Present   bool
+}
+
+// ExpectedMissionLiveFiles returns the per-(mission, session) live-log files a
+// session is expected to have written, enumerated (not globbed) from the
+// tracked mission chunks that carry the session's id: a sealed mission chunk
+// proves the session wrote the live file, and live files are never deleted by
+// design (docs/audit-seal.md §Seal failure policy). A file missing from disk
+// is therefore evidence of loss, which a glob over extant files could never
+// surface. Each entry records whether the expected file is present.
+func ExpectedMissionLiveFiles(repoRoot, sessionID string) ([]MissionLive, error) {
+	base := SealedMissionsBase(repoRoot)
+	missions, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", base, err)
+	}
+	var out []MissionLive
+	for _, d := range missions {
+		if !d.IsDir() {
+			continue
+		}
+		missionID := d.Name()
+		if !missionChunkCarriesSession(filepath.Join(base, missionID), sessionID) {
+			continue
+		}
+		livePath := LiveMissionLogPath(repoRoot, missionID, sessionID)
+		_, statErr := os.Stat(livePath)
+		out = append(out, MissionLive{MissionID: missionID, LivePath: livePath, Present: statErr == nil})
+	}
+	return out, nil
+}
+
+// missionChunkCarriesSession reports whether any valid mission chunk in dir
+// carries the session's id.
+func missionChunkCarriesSession(dir, sessionID string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if cn, kind := Classify(e.Name(), MissionNS); kind == KindValid && cn.Session == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+// MissionUnsealedCount returns how many lines a mission's per-(mission,
+// session) live log holds past its sealed watermark. Zero when the live file
+// is absent or fully sealed.
+func MissionUnsealedCount(repoRoot, missionID, sessionID string) (int, error) {
+	sealedDir := SealedMissionDir(repoRoot, missionID)
+	legacy := filepath.Join(sealedDir, "log.jsonl")
+	wm, err := Watermark(sealedDir, MissionNS, sessionID, legacy)
+	if err != nil {
+		return 0, err
+	}
+	tail, err := LiveLinesPastWatermark(LiveMissionLogPath(repoRoot, missionID, sessionID), sessionID, wm)
+	if err != nil {
+		return 0, err
+	}
+	return len(tail), nil
+}
+
 // ListLiveLogSessions returns the session ids whose live mission log files
 // (<session-id>.log.jsonl) exist in dir, sorted. A missing directory yields
 // nil.

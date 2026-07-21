@@ -34,26 +34,58 @@ func VacuumCrossCheck(repoRoot, globalSessionsDir string, activeSessions []strin
 				"warning: session %s was purged with unsealed audit lines and its live file is gone; "+
 					"those lines are lost. Acknowledge with `ethos session purge --ack %s`\n",
 				t.Session, t.Session)
-			continue
+		} else {
+			n, cErr := audit.SessionUnsealedCount(repoRoot, t.Session)
+			if cErr != nil {
+				return cErr
+			}
+			if n > 0 {
+				fmt.Fprintf(w,
+					"warning: session %s was purged with %d unsealed audit line(s) still on disk; "+
+						"commit to seal them. Acknowledge with `ethos session purge --ack %s`\n",
+					t.Session, n, t.Session)
+			}
 		}
-		n, cErr := audit.SessionUnsealedCount(repoRoot, t.Session)
-		if cErr != nil {
-			return cErr
+		// A purged session's mission-log lines are guarded the same way: an
+		// expected mission live file gone is a lost mission-log record.
+		if mErr := warnMissingMissionLives(repoRoot, t.Session, w); mErr != nil {
+			return mErr
 		}
-		fmt.Fprintf(w,
-			"warning: session %s was purged with %d unsealed audit line(s) still on disk; "+
-				"commit to seal them. Acknowledge with `ethos session purge --ack %s`\n",
-			t.Session, n, t.Session)
 	}
 
 	// Roster-active sessions bound to this repo whose recorded live file has
-	// vanished — a single deleted live file with no purge to leave a tombstone.
+	// vanished — a single deleted live file with no purge to leave a tombstone,
+	// in either the audit or the mission namespace (REQ-1: the guard is per
+	// session ACROSS BOTH namespaces, not audit-only).
 	for _, sessionID := range activeSessions {
 		if !audit.SessionLiveFileExists(repoRoot, sessionID) {
 			fmt.Fprintf(w,
 				"warning: active session %s has no live audit file in this repo; "+
 					"if it was deleted, unsealed lines were lost\n",
 				sessionID)
+		}
+		if mErr := warnMissingMissionLives(repoRoot, sessionID, w); mErr != nil {
+			return mErr
+		}
+	}
+	return nil
+}
+
+// warnMissingMissionLives warns for each of a session's expected mission live
+// files (enumerated from tracked mission chunks carrying the session id) that
+// is absent from disk — a lost mission-log record the audit-only check would
+// miss (REQ-1).
+func warnMissingMissionLives(repoRoot, sessionID string, w io.Writer) error {
+	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, sessionID)
+	if err != nil {
+		return err
+	}
+	for _, ml := range expected {
+		if !ml.Present {
+			fmt.Fprintf(w,
+				"warning: session %s sealed a chunk for mission %s but its mission live log is gone; "+
+					"unsealed mission-log lines were lost\n",
+				sessionID, ml.MissionID)
 		}
 	}
 	return nil

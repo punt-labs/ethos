@@ -56,3 +56,24 @@ func TestVacuumCrossCheckRosterActiveMissingLive(t *testing.T) {
 		t.Errorf("vacuum did not warn on active session with no live file: %q", buf.String())
 	}
 }
+
+func TestVacuumCrossCheckWarnsOnLostMissionLive(t *testing.T) {
+	repo := t.TempDir()
+	globalSessions := t.TempDir()
+	// A session that sealed a mission chunk (proving it wrote the live log)
+	// whose per-(mission,session) live log is now gone — REQ-1: the vacuum
+	// must warn in the mission namespace, not just the audit one.
+	mid := "m-2026-07-21-001"
+	sealedDir := sealedMissionDir(repo, mid)
+	writeChunkFile(t, sealedDir, audit.MissionChunkFile("sess-ml", 100, 200), 100, 200)
+	// The live log itself is absent under .punt-labs/local/.
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(repo, globalSessions, []string{"sess-ml"}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("mission "+mid)) ||
+		!bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
+		t.Errorf("vacuum did not warn on lost mission live log: %q", buf.String())
+	}
+}

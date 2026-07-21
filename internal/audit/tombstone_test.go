@@ -104,3 +104,47 @@ func TestSessionUnsealedCount(t *testing.T) {
 		t.Errorf("unsealed count = %d, want 2", n)
 	}
 }
+
+func TestExpectedMissionLiveFiles(t *testing.T) {
+	repo := t.TempDir()
+	mid := "m-2026-07-21-001"
+	dir := SealedMissionDir(repo, mid)
+	// A tracked chunk carrying sess1 proves sess1 wrote the mission live log.
+	writeChunk(t, dir, MissionChunkFile("sess1", 100, 200), 100, 200)
+	// A chunk for a different session must not appear for sess1.
+	writeChunk(t, dir, MissionChunkFile("sess2", 300, 400), 300, 400)
+
+	got, err := ExpectedMissionLiveFiles(repo, "sess1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].MissionID != mid {
+		t.Fatalf("expected one mission live for sess1, got %+v", got)
+	}
+	// The live file was never written → absent → evidence of loss.
+	if got[0].Present {
+		t.Error("expected mission live file reported Present, want absent")
+	}
+	// Once the live file exists, Present flips true.
+	if err := os.MkdirAll(filepath.Dir(got[0].LivePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(got[0].LivePath, []byte(`{"ts":"`+FormatLineTS(300)+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = ExpectedMissionLiveFiles(repo, "sess1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got[0].Present {
+		t.Error("expected mission live file reported absent after write")
+	}
+	// It holds one line past the empty watermark → unsealed.
+	n, err := MissionUnsealedCount(repo, mid, "sess1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("mission unsealed count = %d, want 1", n)
+	}
+}

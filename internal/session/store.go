@@ -267,6 +267,21 @@ func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
 			unsealed = n
 		}
 		liveGone = !audit.SessionLiveFileExists(repo, roster.Session)
+		// REQ-1: the guard spans both namespaces. A session that sealed a
+		// mission chunk and then lost its mission live log (worktree torn
+		// down) must not purge silently — enumerate the expected mission live
+		// files and fold their unsealed/gone state in.
+		if expected, eErr := audit.ExpectedMissionLiveFiles(repo, roster.Session); eErr == nil {
+			for _, ml := range expected {
+				if !ml.Present {
+					liveGone = true
+					continue
+				}
+				if n, cErr := audit.MissionUnsealedCount(repo, ml.MissionID, roster.Session); cErr == nil {
+					unsealed += n
+				}
+			}
+		}
 	}
 	if unsealed > 0 && !force {
 		fmt.Fprintf(os.Stderr,
