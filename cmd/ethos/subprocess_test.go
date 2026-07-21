@@ -67,6 +67,14 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".punt-labs", "ethos.yaml"), cfgData, 0o644))
 
+	// A seal-invoking pre-commit hook, as install.sh would leave it, so the
+	// doctor seal-hook check passes for a fully set-up repo. Guarded exactly
+	// like hooks/pre-commit.sh: a repo that commits with no ethos on PATH
+	// (CI) must pass through, not fail the commit. The `audit seal` call is on
+	// an uncommented line so the doctor active-call check still sees it.
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".git", "hooks", "pre-commit"),
+		[]byte("#!/bin/sh\ncommand -v ethos >/dev/null 2>&1 || exit 0\nethos audit seal || exit 2\n"), 0o755))
+
 	env := []string{
 		"HOME=" + home,
 		// USER matches the identity handle so resolve.Resolve step 4

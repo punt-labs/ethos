@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DES-058 seal hook now installs on machines that already have a
+  pre-commit hook (ethos-2ol1).** `install.sh` warned and skipped when
+  `.git/hooks/pre-commit` already existed. On every org machine beads owns
+  that hook, so the seal — the live audit write path's primary trigger —
+  silently never installed, and nothing surfaced the gap. The installer now
+  chains: a foreign hook gets a marker-delimited `ETHOS DES-058 SEAL` section
+  appended (mirroring the beads-integration marker pattern) that runs the
+  seal after the host content falls through; a fresh slot still gets the
+  standalone hook; our own section is stripped and re-appended in place so
+  re-install is idempotent and the hand-appended v4.1.0 interim section
+  upgrades without duplication. The commit-msg trailer hook (DES-054)
+  carried the identical no-clobber flaw and gets the same chaining. `ethos
+  doctor` gains a check that the current repo's pre-commit hook carries an
+  active seal invocation, reporting missing or stale with the remedy to
+  re-run `install.sh`. Installer and doctor both resolve the hooks directory
+  via git's own `git rev-parse --git-path hooks`, so they always agree on where
+  the seal lives — the common `.git/hooks` inside a worktree (not the dead
+  per-worktree path), and the `core.hooksPath` directory when one is
+  configured; installing into a tracked `core.hooksPath` file (husky) warns
+  explicitly rather than dirtying the tree silently. The chained section
+  preserves the host hook's fall-through exit status, so chaining never
+  silently disables a foreign hook that signals failure by fall-through (only a
+  seal failure overrides). Fresh installs write the marker form, and the
+  installer overwrites a hook only when it is positively identified as ours by
+  its header line (checked on line 2, so a `cat`-appended hybrid is chained
+  into, not clobbered) — a foreign hook that merely mentions the seal is
+  chained into, not clobbered. The installer also warns on `exec`/comment-
+  trailing tails that would bypass the section (an `exec` fd-redirection is not
+  flagged), updates a symlinked hook through its target (aborting if the target
+  cannot be resolved), aborts on a truncated section (BEGIN with no END) rather
+  than deleting host content, refuses to chain into a non-shell host
+  (Python/Node/binary — it would break the host), and aborts loudly if it
+  cannot write a temp file. The doctor check requires an `audit seal`
+  invocation in command position on a non-comment line of an executable
+  shell hook, so a commented-out call, a string-literal mention, or a seal
+  stranded in a non-shell hook is no longer a false PASS.
+
 ## [4.1.0] - 2026-07-21
 
 ### Fixed

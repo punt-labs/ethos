@@ -7,9 +7,15 @@
 # Idempotency: re-running on a message already carrying the trailer leaves
 # it unchanged. Uses git-interpret-trailers when available; falls back to
 # a plain append with a blank-line separator.
-[ -z "$1" ] && exit 0
+#
+# Preserve a chained host hook's fall-through status: when install.sh appends
+# this script after a foreign commit-msg hook, $? here is that hook's last
+# command status; every passthrough returns it so chaining never masks a host
+# hook that signals failure by fall-through. Standalone, $? = 0 as before.
+_host_status=$?
+[ -z "$1" ] && exit "$_host_status"
 msg_file="$1"
-[ -f "$msg_file" ] || exit 0
+[ -f "$msg_file" ] || exit "$_host_status"
 # Fallback: when MISSION_ID/DELEGATION_ID aren't in env (the common
 # case for subagent commits — additional_env doesn't persist into
 # subprocess env), read the delegation-binding sidecar written by
@@ -34,7 +40,7 @@ if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
     export DELEGATION_ID MISSION_ID
   fi
 fi
-[ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ] && exit 0
+[ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ] && exit "$_host_status"
 add_trailer() {
   key=$1
   val=$2
@@ -106,4 +112,4 @@ add_trailer() {
 }
 [ -n "${MISSION_ID:-}" ] && add_trailer Mission "$MISSION_ID"
 [ -n "${DELEGATION_ID:-}" ] && add_trailer Delegation "$DELEGATION_ID"
-exit 0
+exit "$_host_status"
