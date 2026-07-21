@@ -27,7 +27,7 @@ import (
 // mission-claim sidecars all live under <globalRoot>/sessions.
 func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io.Writer) error {
 	globalSessionsDir := filepath.Join(globalRoot, "sessions")
-	tombstones, err := audit.ListTombstones(globalSessionsDir)
+	tombstones, err := audit.ListTombstones(globalSessionsDir, w)
 	if err != nil {
 		return err
 	}

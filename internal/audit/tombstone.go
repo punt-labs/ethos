@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -64,7 +65,42 @@ func WriteTombstone(globalSessionsDir string, t Tombstone) error {
 	if err != nil {
 		return fmt.Errorf("marshaling tombstone: %w", err)
 	}
-	return os.WriteFile(tombstonePath(globalSessionsDir, t.Session), append(data, '\n'), 0o600)
+	// Atomic temp + fsync + rename: the tombstone is the sole durable record of
+	// the loss, so a crash or ENOSPC mid-write must not leave a torn file that
+	// reads as absent everywhere (mirrors writeMarkerAtomic, for the same
+	// torn-state reason).
+	return writeFileAtomic(tombstonePath(globalSessionsDir, t.Session), append(data, '\n'))
+}
+
+// writeFileAtomic writes data to path via a temp file in the same directory,
+// fsync, then rename, so path is only ever replaced whole — a crash or ENOSPC
+// leaves either the prior contents or the new file, never a torn one.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tempPath := filepath.Join(dir, "."+filepath.Base(path)+".tmp")
+	f, err := os.OpenFile(tempPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating temp %s: %w", tempPath, err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("writing temp %s: %w", tempPath, err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("syncing temp %s: %w", tempPath, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("closing temp %s: %w", tempPath, err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("renaming temp %s -> %s: %w", tempPath, path, err)
+	}
+	return nil
 }
 
 // ReadTombstone reads a tombstone file. A torn or undecodable file is an
@@ -85,8 +121,11 @@ func ReadTombstone(path string) (Tombstone, error) {
 }
 
 // ListTombstones returns every live (un-acked) tombstone in the global
-// sessions directory. A missing directory yields nil.
-func ListTombstones(globalSessionsDir string) ([]Tombstone, error) {
+// sessions directory. A missing directory yields nil. A torn/undecodable
+// tombstone reads as absent, but the count of skipped files is reported on
+// warn (stderr in production) rather than vanishing — a tombstone is the sole
+// record of a loss, so its silent disappearance must not itself be silent.
+func ListTombstones(globalSessionsDir string, warn io.Writer) ([]Tombstone, error) {
 	entries, err := os.ReadDir(globalSessionsDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -95,15 +134,20 @@ func ListTombstones(globalSessionsDir string) ([]Tombstone, error) {
 		return nil, fmt.Errorf("reading %s: %w", globalSessionsDir, err)
 	}
 	var out []Tombstone
+	skipped := 0
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".purged") {
 			continue
 		}
 		t, err := ReadTombstone(filepath.Join(globalSessionsDir, e.Name()))
 		if err != nil {
-			continue // torn tombstone reads as absent
+			skipped++
+			continue
 		}
 		out = append(out, t)
+	}
+	if skipped > 0 && warn != nil {
+		fmt.Fprintf(warn, "ethos: audit: skipped %d torn tombstone(s) in %s\n", skipped, globalSessionsDir)
 	}
 	return out, nil
 }
@@ -126,12 +170,18 @@ func AckTombstone(globalSessionsDir, session string) (string, error) {
 	}
 	base := filepath.Base(src) + ".acked"
 	candidate := base
-	if _, err := os.Stat(filepath.Join(globalSessionsDir, candidate)); err == nil {
+	if taken, sErr := nameTaken(globalSessionsDir, candidate); sErr != nil {
+		return "", sErr
+	} else if taken {
 		sum := sha256.Sum256(data)
 		hash := hex.EncodeToString(sum[:])[:12]
 		candidate = base + "-" + hash
 		for n := 2; ; n++ {
-			if _, err := os.Stat(filepath.Join(globalSessionsDir, candidate)); errors.Is(err, fs.ErrNotExist) {
+			taken, sErr := nameTaken(globalSessionsDir, candidate)
+			if sErr != nil {
+				return "", sErr
+			}
+			if !taken {
 				break
 			}
 			candidate = fmt.Sprintf("%s-%s-%d", base, hash, n)
@@ -141,4 +191,19 @@ func AckTombstone(globalSessionsDir, session string) (string, error) {
 		return "", fmt.Errorf("acking tombstone: %w", err)
 	}
 	return candidate, nil
+}
+
+// nameTaken reports whether name exists in dir. A non-ENOENT stat error (EACCES,
+// EIO) is returned rather than swallowed, so a rename-candidate loop surfaces
+// the filesystem fault instead of spinning forever treating every candidate as
+// taken.
+func nameTaken(dir, name string) (bool, error) {
+	_, err := os.Stat(filepath.Join(dir, name))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, fmt.Errorf("stat %s: %w", filepath.Join(dir, name), err)
 }

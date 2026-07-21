@@ -1,8 +1,10 @@
 package audit
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,12 +37,55 @@ func TestListTombstones(t *testing.T) {
 	if err := WriteTombstone(dir, Tombstone{Session: "b", Repo: "/r", LiveFileGone: true}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ListTombstones(dir)
+	got, err := ListTombstones(dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 {
 		t.Errorf("ListTombstones = %d, want 2", len(got))
+	}
+}
+
+func TestListTombstonesCountsTorn(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteTombstone(dir, Tombstone{Session: "good", Repo: "/r", UnsealedLines: true}); err != nil {
+		t.Fatal(err)
+	}
+	// A torn tombstone: valid name, undecodable content. It reads as absent but
+	// its loss must not vanish silently — ListTombstones counts it on warn.
+	if err := os.WriteFile(filepath.Join(dir, "torn.purged"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var warn bytes.Buffer
+	got, err := ListTombstones(dir, &warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("live tombstones = %d, want 1", len(got))
+	}
+	if !strings.Contains(warn.String(), "skipped 1 torn tombstone") {
+		t.Errorf("torn tombstone not reported: %q", warn.String())
+	}
+}
+
+func TestWriteTombstoneAtomicLeavesNoTemp(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteTombstone(dir, Tombstone{Session: "s", Repo: "/r", UnsealedLines: true}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Errorf("atomic write left a temp file: %s", e.Name())
+		}
+	}
+	// The tombstone still reads back cleanly.
+	if _, err := ReadTombstone(filepath.Join(dir, "s.purged")); err != nil {
+		t.Errorf("tombstone unreadable after atomic write: %v", err)
 	}
 }
 

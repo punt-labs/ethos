@@ -156,15 +156,22 @@ func renameRetire(repoRoot, src, dst string) error {
 // corruptHashName returns the .corrupt-<hash> filename for a chunk stem and its
 // content, using a deterministic never-overwrite sequence (-2, -3, …) so a
 // second event never collides with the first .corrupt or an identical earlier
-// .corrupt-<hash> (docs/audit-seal.md §Seal failure policy).
-func corruptHashName(dir, stem string, content []byte) string {
+// .corrupt-<hash> (docs/audit-seal.md §Seal failure policy). A non-ENOENT stat
+// error (EACCES, EIO) is returned rather than swallowed, so the loop surfaces
+// the filesystem fault instead of spinning forever treating every candidate as
+// taken.
+func corruptHashName(dir, stem string, content []byte) (string, error) {
 	sum := sha256.Sum256(content)
 	hash := hex.EncodeToString(sum[:])[:12]
 	base := stem + ".jsonl.corrupt-" + hash
 	candidate := base
 	for n := 2; ; n++ {
-		if _, err := os.Stat(filepath.Join(dir, candidate)); errors.Is(err, fs.ErrNotExist) {
-			return candidate
+		_, err := os.Stat(filepath.Join(dir, candidate))
+		if errors.Is(err, fs.ErrNotExist) {
+			return candidate, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("stat %s: %w", filepath.Join(dir, candidate), err)
 		}
 		candidate = fmt.Sprintf("%s-%d", base, n)
 	}
@@ -177,7 +184,10 @@ func retireChunkUnderHash(repoRoot, sealedDir string, chunkCN ChunkName, chunkPa
 	if err != nil {
 		return fmt.Errorf("reading fresh-damage chunk %s: %w", chunkPath, err)
 	}
-	hashed := corruptHashName(sealedDir, chunkCN.Stem(), b)
+	hashed, err := corruptHashName(sealedDir, chunkCN.Stem(), b)
+	if err != nil {
+		return err
+	}
 	return renameRetire(repoRoot, chunkPath, filepath.Join(sealedDir, hashed))
 }
 
