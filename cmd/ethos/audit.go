@@ -253,6 +253,16 @@ func runAuditShow(out, errOut io.Writer) error {
 		return fmt.Errorf("audit show: %w", err)
 	}
 
+	// DES-058 read-time diagnostics: quarantine gaps (lines lost to
+	// corruption) and gitlink-deferred sessions (live lines past the
+	// watermark not yet sealed). Flagged on stderr so the delegation-filtered
+	// stream on stdout stays a valid audit-log fragment.
+	if diag, dErr := hook.CollectAuditDiagnostics(repoRoot, time.Now().UTC()); dErr == nil {
+		diag.WriteDiagnostics(errOut)
+	} else {
+		fmt.Fprintf(errOut, "ethos: audit show: diagnostics: %v\n", dErr)
+	}
+
 	if auditShowFormat == "json" {
 		return renderAuditJSONL(out, entries)
 	}

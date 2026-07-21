@@ -6,8 +6,40 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 )
+
+// Gap records a sub-range of a quarantined chunk that the live file no longer
+// held, so it was unrecoverable. The read surfaces it as an explicit marker
+// so a reader sees which lines were lost to corruption and when — never a
+// silent hole (docs/audit-seal.md §`ethos audit show`).
+type Gap struct {
+	Chunk string
+	First int64
+	Last  int64
+}
+
+// GapMarkers returns the unrecovered sub-ranges recorded by the quarantine
+// markers in a sealed directory. A marker with no gap (full recovery) yields
+// nothing. In the mission namespace, session filters to one session's markers.
+func GapMarkers(dir string, ns Namespace, session string) ([]Gap, error) {
+	sc, err := ScanSealedDir(dir, ns, session)
+	if err != nil {
+		return nil, err
+	}
+	var gaps []Gap
+	for _, m := range sc.Markers {
+		mk, err := ReadMarker(filepath.Join(dir, m.MarkerFile()))
+		if err != nil {
+			continue // a torn marker reads as absent
+		}
+		if mk.HasGap() {
+			gaps = append(gaps, Gap{Chunk: mk.Chunk, First: mk.UnrecoveredFirst, Last: mk.UnrecoveredLast})
+		}
+	}
+	return gaps, nil
+}
 
 // Line is one JSONL line tagged with its parsed timestamp and (in the mission
 // namespace) its session. Raw is the exact on-disk bytes so a caller decodes

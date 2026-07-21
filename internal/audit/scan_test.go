@@ -136,6 +136,48 @@ func TestReadMarkerRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGapMarkers(t *testing.T) {
+	dir := t.TempDir()
+	// A quarantine marker recording an unrecovered sub-range, with its
+	// covering .corrupt so the scan is clean.
+	writeChunk(t, dir, "audit-"+TSToField(100)+"-"+TSToField(300)+".jsonl.corrupt", 100, 200)
+	m := Marker{
+		Chunk: "audit-" + TSToField(100) + "-" + TSToField(300), VerifiedLast: 200,
+		UnrecoveredFirst: 201, UnrecoveredLast: 300, Reason: "parse failure",
+	}
+	data, err := MarshalMarker(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "audit-"+TSToField(100)+"-"+TSToField(300)+".quarantine"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gaps, err := GapMarkers(dir, SessionNS, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gaps) != 1 || gaps[0].First != 201 || gaps[0].Last != 300 {
+		t.Errorf("gaps = %+v, want one [201,300]", gaps)
+	}
+}
+
+func TestGapMarkersNoneWhenFullRecovery(t *testing.T) {
+	dir := t.TempDir()
+	writeChunk(t, dir, "audit-"+TSToField(100)+"-"+TSToField(200)+".jsonl.corrupt", 100, 200)
+	m := Marker{Chunk: "audit-" + TSToField(100) + "-" + TSToField(200), VerifiedLast: 200, Reason: "full recovery"}
+	data, _ := MarshalMarker(m)
+	if err := os.WriteFile(filepath.Join(dir, "audit-"+TSToField(100)+"-"+TSToField(200)+".quarantine"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gaps, err := GapMarkers(dir, SessionNS, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gaps) != 0 {
+		t.Errorf("gaps = %+v, want none (full recovery)", gaps)
+	}
+}
+
 func TestAppendMonotonicStrictlyIncreasing(t *testing.T) {
 	dir := t.TempDir()
 	live := filepath.Join(dir, "s.audit.jsonl")
