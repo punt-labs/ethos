@@ -19,16 +19,31 @@ fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1" >&2; exit 1; }
 # Install the ethos hook at DEST, coexisting with any hook already there.
 #   - no hook present: copy the standalone SRC (fresh install)
 #   - our marker section present: replace it in place (idempotent upgrade)
-#   - our standalone present (mentions DESREF, no markers): refresh it
-#   - a foreign hook present: append a marker-delimited section carrying SRC
+#   - our standalone present (wholly ours): refresh it
+#   - a foreign or hybrid hook present: append a marker-delimited section
 #
 # The appended section runs after the host hook's own content, so it fires
 # only when that content falls through — the beads pre-commit hook, the case
 # this fix exists for, exits nonzero only on failure and otherwise falls
-# through. A host hook that exits unconditionally bypasses the section; that
-# case is detected on the host's last line and warned.
+# through. The section carries SRC, which preserves the host's fall-through
+# exit status (SRC captures $? and returns it on passthrough). A host hook
+# that exits (or execs) unconditionally bypasses the section; that case is
+# detected on the host's last effective line and warned.
 install_hook() {
   dest=$1 src=$2 tag=$3 desref=$4
+
+  # A symlinked hook (dotfile manager, shared hooks dir): operate on the
+  # link's target so mv does not flatten the link into a regular file and
+  # sever the managing tool. One level of indirection covers the common case.
+  if [ -L "$dest" ]; then
+    link=$(readlink "$dest")
+    case "$link" in
+      /*) ;;
+      *) link="$(dirname "$dest")/$link" ;;
+    esac
+    warn "$dest is a symlink — updating its target $link instead"
+    dest=$link
+  fi
 
   if [ ! -e "$dest" ]; then
     cp "$src" "$dest"
@@ -40,23 +55,35 @@ install_hook() {
   if grep -q "^# --- BEGIN $tag" "$dest" 2>/dev/null; then
     : # our section is present — strip and re-append below (idempotent)
   elif grep -q "$desref" "$dest" 2>/dev/null; then
-    cp "$src" "$dest"
-    chmod +x "$dest"
-    ok "$dest refreshed"
-    return
+    # DESREF is present but our marker is not. Refresh by overwrite ONLY when
+    # the file is wholly ours: an ethos shebang and no other section markers.
+    # A hybrid (host hook + a pasted seal body whose marker drifted) mentions
+    # DESREF too; overwriting it would silently delete the host section, so
+    # fall through to strip-and-append, which preserves the host.
+    IFS= read -r first < "$dest" 2>/dev/null || first=""
+    if { [ "$first" = "#!/bin/sh" ] || [ "$first" = "#!/usr/bin/env sh" ]; } &&
+       ! grep -q "^# --- BEGIN " "$dest" 2>/dev/null; then
+      cp "$src" "$dest"
+      chmod +x "$dest"
+      ok "$dest refreshed"
+      return
+    fi
   fi
 
-  tmp=$(mktemp "${dest}.XXXXXX") || { warn "mktemp failed — $dest not updated"; return; }
+  tmp=$(mktemp "${dest}.XXXXXX") || fail "cannot create a temp file next to $dest — hook not installed"
   awk -v tag="$tag" '
     $0 ~ "^# --- BEGIN " tag { skip = 1 }
     skip && $0 ~ "^# --- END " tag { skip = 0; next }
     !skip { print }
   ' "$dest" > "$tmp"
 
-  last=$(awk 'NF { l = $0 } END { sub(/^[[:space:]]+/, "", l); print l }' "$tmp")
+  # Last effective line: the last non-blank, non-comment line. A trailing
+  # comment after an exit must not hide it; `exec` replaces the shell exactly
+  # as an unconditional exit would, so both bypass the appended section.
+  last=$(awk '/^[[:space:]]*#/ { next } NF { l = $0 } END { sub(/^[[:space:]]+/, "", l); print l }' "$tmp")
   case "$last" in
-    exit|exit\ *)
-      warn "$dest ends in an unconditional 'exit' — the ethos section may not run" ;;
+    exit|exit\ *|exec|exec\ *)
+      warn "$dest ends in an unconditional '${last%% *}' — the ethos section may not run" ;;
   esac
 
   {
