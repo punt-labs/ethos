@@ -86,6 +86,35 @@ func TestScanCorruptUnderMarkerOK(t *testing.T) {
 	}
 }
 
+func TestScanTornMarkerLeavesOrphanCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	// A .corrupt covered by a marker whose NAME is valid but whose CONTENT is
+	// garbage — the marker must read as absent, leaving the .corrupt an
+	// uncovered orphan (exit 2), not a silent pass (REQ-2, rsc repro).
+	writeChunk(t, dir, "audit-"+TSToField(100)+"-"+TSToField(200)+".jsonl.corrupt", 100, 200)
+	markerName := "audit-" + TSToField(100) + "-" + TSToField(200) + ".quarantine"
+	if err := os.WriteFile(filepath.Join(dir, markerName), []byte("GARBAGE NOT JSON\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ScanSealedDir(dir, SessionNS, ""); err == nil {
+		t.Fatal("garbage-content marker over a .corrupt = nil error, want orphan exit-2")
+	}
+}
+
+func TestScanParseableMarkerCoversCorrupt(t *testing.T) {
+	dir := t.TempDir()
+	writeChunk(t, dir, "audit-"+TSToField(100)+"-"+TSToField(200)+".jsonl.corrupt", 100, 200)
+	m := Marker{Chunk: "audit-" + TSToField(100) + "-" + TSToField(200), VerifiedLast: 200, Reason: "test"}
+	data, _ := MarshalMarker(m)
+	markerName := "audit-" + TSToField(100) + "-" + TSToField(200) + ".quarantine"
+	if err := os.WriteFile(filepath.Join(dir, markerName), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ScanSealedDir(dir, SessionNS, ""); err != nil {
+		t.Errorf("parseable marker should cover its .corrupt: %v", err)
+	}
+}
+
 func TestScanMissionSessionFilter(t *testing.T) {
 	dir := t.TempDir()
 	writeChunk(t, dir, MissionChunkFile("sessA", 100, 200), 100, 200)

@@ -53,7 +53,15 @@ func ScanSealedDir(dir string, ns Namespace, session string) (ScannedDir, error)
 		case KindValid:
 			sc.Chunks = append(sc.Chunks, cn)
 		case KindQuarantine:
-			sc.Markers = append(sc.Markers, cn)
+			// A marker covers its .corrupt only if it PARSES: a torn or
+			// garbage-content marker with a valid name is treated as absent by
+			// every consumer (docs/audit-seal.md §Watermark, §read, resume
+			// state machine), so its .corrupt stays an uncovered orphan and the
+			// corrupt-coverage check below fails loud (exit 2) rather than
+			// silently dropping the marker's verified_last and gap.
+			if _, mErr := ReadMarker(filepath.Join(dir, cn.MarkerFile())); mErr == nil {
+				sc.Markers = append(sc.Markers, cn)
+			}
 		case KindCorrupt:
 			corrupts = append(corrupts, cn)
 		case KindNearMiss:
