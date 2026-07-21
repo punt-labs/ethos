@@ -518,6 +518,12 @@ func runSessionPurge(cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
+		if jsonOutput {
+			return writeJSON(out, map[string]string{
+				"acked":   sessionPurgeAck,
+				"retired": retired,
+			})
+		}
 		fmt.Fprintf(out, "Acknowledged tombstone for %s (retired to %s)\n", sessionPurgeAck, retired)
 		return nil
 	}
@@ -534,9 +540,6 @@ func runSessionPurge(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	for _, id := range refused {
-		fmt.Fprintf(out, "Refused to purge %s (unsealed audit lines; use --force)\n", id)
-	}
 	if jsonOutput {
 		if purged == nil {
 			purged = []string{}
@@ -544,9 +547,13 @@ func runSessionPurge(cmd *cobra.Command) error {
 		if pidPurged == nil {
 			pidPurged = []string{}
 		}
+		if refused == nil {
+			refused = []string{}
+		}
 		if werr := writeJSON(out, map[string][]string{
 			"sessions":  purged,
 			"pid_files": pidPurged,
+			"refused":   refused,
 		}); werr != nil {
 			return werr
 		}
@@ -554,6 +561,9 @@ func runSessionPurge(cmd *cobra.Command) error {
 			return pidErr
 		}
 		return nil
+	}
+	for _, id := range refused {
+		fmt.Fprintf(out, "Refused to purge %s (unsealed audit lines; use --force)\n", id)
 	}
 	for _, id := range purged {
 		fmt.Fprintf(out, "Purged session %s\n", id)

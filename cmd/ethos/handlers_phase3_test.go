@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -392,6 +394,60 @@ func TestRunSessionPurge(t *testing.T) {
 	stdout, _, err := execHandler(t, "session", "purge")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "No stale sessions found")
+}
+
+// setupRefusedSession creates a stale, repo-bound session with an unsealed
+// live audit line so `session purge` (no --force) refuses it.
+func setupRefusedSession(t *testing.T, se *cliSubprocessEnv, id string) {
+	t.Helper()
+	st := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos"))
+	root := session.Participant{AgentID: "user1"}
+	primary := session.Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, st.Create(id, root, primary, se.repo, ""))
+	live := audit.LiveAuditPath(se.repo, id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + id + `","tool":"Read"}` + "\n"
+	require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+}
+
+func TestRunSessionPurge_JSONRefused(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeForce = false
+	t.Cleanup(func() { sessionPurgeForce = false })
+	setupRefusedSession(t, se, "sess-refused")
+
+	stdout, _, err := execHandler(t, "session", "purge", "--json")
+	require.NoError(t, err)
+
+	// stdout must be valid JSON — no stray prose corrupting the payload.
+	assert.NotContains(t, stdout, "Refused to purge")
+	var got map[string][]string
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --json stdout must parse: %q", stdout)
+	assert.Equal(t, []string{"sess-refused"}, got["refused"])
+	assert.Empty(t, got["sessions"])
+}
+
+func TestRunSessionPurge_JSONAck(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+	sessionPurgeAck = ""
+	t.Cleanup(func() { sessionPurgeAck = "" })
+
+	// A flagged tombstone to acknowledge.
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, audit.WriteTombstone(sessionsDir, audit.Tombstone{
+		Session: "sess-ack", Repo: se.repo, UnsealedLines: true,
+	}))
+
+	stdout, _, err := execHandler(t, "session", "purge", "--ack", "sess-ack", "--json")
+	require.NoError(t, err)
+
+	assert.NotContains(t, stdout, "Acknowledged tombstone")
+	var got map[string]string
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), "purge --ack --json stdout must parse: %q", stdout)
+	assert.Equal(t, "sess-ack", got["acked"])
+	assert.NotEmpty(t, got["retired"])
 }
 
 func TestRunSessionWriteDeleteCurrent(t *testing.T) {
