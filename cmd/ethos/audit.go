@@ -295,6 +295,8 @@ func runAuditSeal(out, errOut io.Writer) error {
 			if vErr := hook.VacuumCrossCheck(repoRoot, globalRoot, activeRepoSessions(repoRoot, errOut), errOut); vErr != nil {
 				fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check: %v\n", vErr)
 			}
+		} else {
+			fmt.Fprintf(errOut, "ethos: audit seal: skipping vacuum cross-check: cannot resolve home dir: %v\n", hErr)
 		}
 	}
 	if auditSealDryRun {
