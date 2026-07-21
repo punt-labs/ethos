@@ -177,6 +177,8 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos mission show <id>` | Show contract, results, reflections |
 | `ethos audit show --delegation <id>` | Full tool-call trace for a delegation |
 | `ethos audit seal [--dry-run]` | Seal pending live audit lines into tracked chunks (run by the pre-commit hook) |
+| `ethos audit quarantine <chunk>` | Retire a corrupt sealed chunk and recover what the live file holds |
+| `ethos session purge [--force] [--ack <id>]` | Clean up stale sessions; guard/acknowledge unsealed audit lines |
 | `ethos find missions` | Query closed missions by date, worker, status |
 | `ethos ui` | Open traceability dashboard in browser |
 

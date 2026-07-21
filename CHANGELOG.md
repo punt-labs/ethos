@@ -33,8 +33,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now returns the union of sealed chunks and the live tail past the
   watermark, deduped on `(session, ts)` for post-discipline lines with the
   frozen legacy `audit.jsonl` passed through undeduped and read as the
-  session's oldest chunk. Mission-log sealing and the quarantine recovery
-  verb follow in a subsequent slice; lock relocation is DES-058 phase 2.
+  session's oldest chunk. Lock relocation is DES-058 phase 2.
+- **DES-058 (phase 1): mission event log joins the live/seal path.**
+  Mission event appends now target the per-(mission, session) live log
+  `<repo>/.punt-labs/local/ethos/missions/<id>/<session-id>.log.jsonl`
+  with a strictly-monotonic timestamp (routed when the CLI knows the
+  current session; sessionless callers keep the legacy tracked-log path).
+  Each session seals into `log-<session-id>-<first>-<last>.jsonl` chunks;
+  `ethos mission log` reads the union of every session's chunks and live
+  tails plus the frozen `log.jsonl`. `ethos mission close` seals the
+  mission tree (the pre-commit `ethos audit seal` is the repo-wide
+  backstop and now drains mission-log lines too).
+- **DES-058 (phase 1): `ethos audit quarantine <chunk>`.** The sanctioned
+  alternative to `git commit --no-verify` when a seal or read fails on a
+  corrupt chunk: it retires the chunk to `<name>.jsonl.corrupt`, re-seals
+  the recoverable lines from the live file into a content-named chunk,
+  writes a deterministic `.quarantine` marker (verified last + unrecovered
+  sub-range, no wall clock), and self-stages all three. Crash-resumable by
+  artifact state. `ethos audit show` flags each read-time quarantine gap
+  and each gitlink-deferred session on stderr.
+- **DES-058 (phase 1): purge tombstones + seal vacuum cross-check.**
+  `ethos session purge` refuses to strand a session's unsealed audit lines
+  unless `--force`, leaving a flagged tombstone; the seal's no-op path
+  warns (exit 0) on any flagged tombstone or roster-active session whose
+  live file was lost. `ethos session purge --ack <session-id>` retires a
+  tombstone under a never-overwrite content-hash sequence.
 
 - **DES-058 (design): live audit write path split from the sealed
   committed record.** The session audit log was both git-tracked and
