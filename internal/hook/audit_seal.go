@@ -289,7 +289,13 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 			add(id)
 		}
 	}
-	// Sealed chunks: log-<session-id>-<first>-<last>.jsonl.
+	// Sealed artifacts: a valid chunk, its .quarantine marker, or a retired
+	// .corrupt, each carrying the sealing session in its stem. Any artifact
+	// with a session names a session that needs a seal-sweep scan. Including
+	// .corrupt is what makes an orphan quarantine — one whose session has no
+	// live log, no valid chunk, and no marker — still get a ScanSealedDir pass
+	// and fail the seal loud (exit 2), rather than passing unseen and deferring
+	// the incomplete quarantine to a later union read.
 	sealedDir := sealedMissionDir(repoRoot, missionID)
 	chunks, err := os.ReadDir(sealedDir)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -299,7 +305,7 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 		if f.IsDir() {
 			continue
 		}
-		if cn, kind := audit.Classify(f.Name(), audit.MissionNS); kind == audit.KindValid || kind == audit.KindQuarantine {
+		if cn, _ := audit.Classify(f.Name(), audit.MissionNS); cn.Session != "" {
 			add(cn.Session)
 		}
 	}

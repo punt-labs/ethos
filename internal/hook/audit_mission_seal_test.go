@@ -3,6 +3,7 @@ package hook
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,6 +125,41 @@ func TestSealMissionIdempotent(t *testing.T) {
 	}
 	if res.SessionsSealed != 0 || res.LinesSealed != 0 {
 		t.Errorf("second seal sealed something: %+v", res)
+	}
+}
+
+// TestSealMissionOrphanCorruptDiscovered covers the seal-discovery gap: a
+// mission dir holding ONLY an orphan .corrupt for a session — no live log, no
+// valid chunk, no covering marker — must still be discovered and fail the seal
+// loud (Bugbot #348), not pass unseen and defer the incomplete quarantine to a
+// later union read. A covering parseable marker flips it back to a clean seal.
+func TestSealMissionOrphanCorruptDiscovered(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	mid := "m-2026-07-21-004"
+	sealedDir := sealedMissionDir(repo, mid)
+	// An orphan .corrupt for session X — the only artifact in the dir.
+	writeChunkFile(t, sealedDir, audit.MissionChunkFile("sessX", 100, 200)+".corrupt", 100, 200)
+
+	_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+	if err == nil {
+		t.Fatal("SealMission over orphan .corrupt = nil, want fail-closed error")
+	}
+	if !strings.Contains(err.Error(), "orphan") {
+		t.Errorf("error = %v, want it to name the orphan", err)
+	}
+
+	// A covering parseable marker for the same session completes the quarantine.
+	cn := audit.ChunkName{Namespace: audit.MissionNS, Session: "sessX", First: 100, Last: 200}
+	data, err := audit.MarshalMarker(audit.Marker{Chunk: cn.Stem(), VerifiedLast: 200, Reason: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sealedDir, cn.MarkerFile()), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{}); err != nil {
+		t.Fatalf("SealMission with covering marker = %v, want clean seal", err)
 	}
 }
 
