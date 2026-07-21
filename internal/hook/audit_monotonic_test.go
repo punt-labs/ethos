@@ -164,6 +164,33 @@ func TestReadSessionAuditCorruptChunkErrors(t *testing.T) {
 	}
 }
 
+func TestReadSessionAuditCrossBranchOverlapDedup(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-overlap"
+	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sid)
+	// Two chunks whose ranges overlap on 100..200 — the shape a
+	// cross-branch re-seal leaves after both branches merge. The wider
+	// chunk (100..300) re-sealed lines the narrower (100..200) already had.
+	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 200)
+	writeChunkFile(t, sealedDir, sessionChunkFile(100, 300), 100, 200, 300)
+	entries, err := readSessionAudit(repo, sid, time.Now())
+	if err != nil {
+		t.Fatalf("readSessionAudit: %v", err)
+	}
+	// (session, ts) dedup collapses the overlap: distinct ts are 100,200,300.
+	if len(entries) != 3 {
+		t.Fatalf("overlap dedup: got %d entries, want 3 (100,200,300): %+v", len(entries), entries)
+	}
+	seen := map[int64]bool{}
+	for _, e := range entries {
+		ts, _ := parseLineTS(e.Ts)
+		if seen[ts] {
+			t.Errorf("duplicate ts %d survived dedup", ts)
+		}
+		seen[ts] = true
+	}
+}
+
 func TestReadSessionAuditLegacyOnly(t *testing.T) {
 	repo := t.TempDir()
 	sid := "sess-legacy"

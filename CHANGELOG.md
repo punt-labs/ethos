@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DES-058 (phase 1): live audit write path and `ethos audit seal`.**
+  The PreToolUse audit append now targets the machine-local, gitignored
+  live file `<repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl`
+  instead of the tracked tree, so a repo with a live session keeps a clean
+  `git status`. Every appended line carries a strictly-monotonic
+  per-session timestamp (`ts = max(now, last_ts + 1ns)`) allocated under a
+  per-session flock that now lives beside the live file; a torn
+  (non-newline-terminated) tail is truncated on reopen. The new
+  `ethos audit seal [--dry-run] [--verbose]` verb copies each session's
+  live lines past the sealed watermark into a new immutable chunk
+  `audit-<first>-<last>.jsonl` (19-digit zero-padded Unix-nanosecond
+  names) under the session's dated sealed directory via temp + rename,
+  sweeps stale temps, and unconditionally `git add`s every untracked chunk
+  (orphan recovery). It fails closed (exit 2, DES-055 shape) on an I/O
+  error, a malformed chunk name, a corrupt sealed chunk (does not parse
+  whole, or last ts ≠ its filename `<last>`), or a git-add failure; it is a
+  no-op exit 0 with a one-line stderr notice in a gitlink-mounted repo, and
+  a silent exit 0 when nothing is pending. A `pre-commit` hook (installed by
+  `install.sh` beside the `commit-msg` hook) runs the seal before the index
+  snapshot, so sealed chunks land in the same commit as the work. Every
+  audit reader — `ethos audit show` and the Tier B precondition evaluator —
+  now returns the union of sealed chunks and the live tail past the
+  watermark, deduped on `(session, ts)` for post-discipline lines with the
+  frozen legacy `audit.jsonl` passed through undeduped and read as the
+  session's oldest chunk. Mission-log sealing and the quarantine recovery
+  verb follow in a subsequent slice; lock relocation is DES-058 phase 2.
+
 - **DES-058 (design): live audit write path split from the sealed
   committed record.** The session audit log was both git-tracked and
   appended on every tool call, so any repo with a live session had a

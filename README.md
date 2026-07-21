@@ -96,6 +96,13 @@ $ ethos audit show --delegation d-2026-05-25-011 --format text
 
 Illustrative — actual SHAs and IDs vary per repo.
 
+The audit log is written to a machine-local, gitignored live file while a
+session runs, so a repo with an active session keeps a clean `git status`.
+A `pre-commit` hook runs `ethos audit seal`, which copies the pending lines
+into immutable, timestamp-named chunk files under the tracked tree so the
+audit record lands in the same commit as the work. Chunks are never
+modified after creation, so branch merges are conflict-free.
+
 Or visually: `ethos ui` opens a localhost dashboard where you browse
 the repo, click a line, and see the agent who wrote it, the prompt
 they received, and every tool call they made.
@@ -169,6 +176,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos mission claim` / `release` | Bind session to mission for Tier B dispatch |
 | `ethos mission show <id>` | Show contract, results, reflections |
 | `ethos audit show --delegation <id>` | Full tool-call trace for a delegation |
+| `ethos audit seal [--dry-run]` | Seal pending live audit lines into tracked chunks (run by the pre-commit hook) |
 | `ethos find missions` | Query closed missions by date, worker, status |
 | `ethos ui` | Open traceability dashboard in browser |
 
