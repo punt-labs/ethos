@@ -3,6 +3,7 @@ package hook
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +48,50 @@ func TestSealMissionWritesChunk(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(sealedDir, audit.MissionChunkFile("sessB", 300, 400))); err != nil {
 		t.Errorf("sessB chunk missing: %v", err)
+	}
+}
+
+// TestSealMissionConcurrentSessions seals one mission from two sessions at
+// once, each under its own per-(mission, session) flock into the shared
+// mission directory. Neither seal may spuriously fail by sweeping the other's
+// in-flight temp: both chunks must land. Run under -race.
+func TestSealMissionConcurrentSessions(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	mid := "m-2026-07-21-010"
+	// Many lines per session widen each WriteChunkAtomic window, so the two
+	// sweeps and writes are more likely to interleave.
+	tss := make([]int64, 0, 200)
+	for i := int64(1); i <= 200; i++ {
+		tss = append(tss, i)
+	}
+	writeMissionLiveLines(t, repo, mid, "sessA", tss...)
+	writeMissionLiveLines(t, repo, mid, "sessB", tss...)
+
+	now := time.Now().UTC()
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	seal := func(idx int, sessionID string) {
+		defer wg.Done()
+		var res SealResult
+		errs[idx] = sealMissionSession(repo, mid, sessionID, now, SealOptions{}, &res)
+	}
+	wg.Add(2)
+	go seal(0, "sessA")
+	go seal(1, "sessB")
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent seal %d failed: %v", i, err)
+		}
+	}
+	sealedDir := sealedMissionDir(repo, mid)
+	if _, err := os.Stat(filepath.Join(sealedDir, audit.MissionChunkFile("sessA", 1, 200))); err != nil {
+		t.Errorf("sessA chunk missing after concurrent seal: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sealedDir, audit.MissionChunkFile("sessB", 1, 200))); err != nil {
+		t.Errorf("sessB chunk missing after concurrent seal: %v", err)
 	}
 }
 

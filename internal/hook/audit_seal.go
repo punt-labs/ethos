@@ -178,7 +178,7 @@ type sealDirParams struct {
 // holds the live-zone flock.
 func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcome, error) {
 	if !opts.DryRun {
-		if err := audit.SweepStaleTemps(p.sealedDir, p.ns); err != nil {
+		if err := audit.SweepStaleTemps(p.sealedDir, p.ns, p.session, now); err != nil {
 			return sealOutcome{}, err
 		}
 	}

@@ -193,11 +193,26 @@ func WriteChunkAtomic(dir, tempName, chunkName string, lines [][]byte) error {
 	return nil
 }
 
+// staleTempAge bounds how long a foreign session's chunk temp may linger
+// before a concurrent seal treats it as a crash orphan. WriteChunkAtomic
+// creates a temp, writes a handful of small lines, fsyncs, and renames — a
+// sub-second window even under load — so a temp older than this is a hung or
+// crashed writer, never an in-flight one. Five minutes is far above any
+// plausible single-chunk write yet prompt enough to keep orphans from
+// accumulating across commits.
+const staleTempAge = 5 * time.Minute
+
 // SweepStaleTemps deletes stale chunk temp files under dir before the seal
-// writes its own. In a session directory the sweep is scoped to that
-// session's own temps by construction; in a mission directory it is
-// namespace-wide, because several sessions seal into one shared directory.
-func SweepStaleTemps(dir string, ns Namespace) error {
+// writes its own. In a session directory (single-session by construction)
+// every temp is this session's, so all are swept. In a mission directory
+// several sessions seal into one shared dir under distinct per-(mission,
+// session) flocks, so the sweep must not delete another session's in-flight
+// temp: it removes its OWN session's temps unconditionally (a leftover is its
+// own prior crash orphan — its flock serializes its seals) and a foreign
+// session's temp only once older than staleTempAge. A temp whose session is
+// unparseable is treated as foreign and swept only when stale. now is the seal
+// clock, passed so tests are deterministic.
+func SweepStaleTemps(dir string, ns Namespace, session string, now time.Time) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -209,7 +224,11 @@ func SweepStaleTemps(dir string, ns Namespace) error {
 		if e.IsDir() {
 			continue
 		}
-		if _, kind := Classify(e.Name(), ns); kind != KindTemp {
+		cn, kind := Classify(e.Name(), ns)
+		if kind != KindTemp {
+			continue
+		}
+		if !sweepable(e, ns, session, cn.Session, now) {
 			continue
 		}
 		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -217,6 +236,22 @@ func SweepStaleTemps(dir string, ns Namespace) error {
 		}
 	}
 	return nil
+}
+
+// sweepable reports whether SweepStaleTemps may remove a temp entry. A session
+// dir sweeps all temps; a mission dir sweeps its own session's temps always and
+// a foreign (or unattributable) session's temp only once its mtime is older
+// than staleTempAge. An unreadable mtime is treated as not-yet-stale so a live
+// temp is never removed on a transient stat error.
+func sweepable(e os.DirEntry, ns Namespace, ownSession, tempSession string, now time.Time) bool {
+	if ns != MissionNS || tempSession == ownSession {
+		return true
+	}
+	info, err := e.Info()
+	if err != nil {
+		return false
+	}
+	return now.Sub(info.ModTime()) > staleTempAge
 }
 
 // StageUntrackedChunks git-adds every chunk-namespace artifact in dir — a
