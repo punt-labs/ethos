@@ -112,6 +112,14 @@ func (c ChunkName) MarkerFile() string {
 	return c.Stem() + ".quarantine"
 }
 
+// TempFile returns the dotted temp name for a parsed chunk's namespace.
+func (c ChunkName) TempFile() string {
+	if c.Namespace == MissionNS {
+		return MissionTempFile(c.Session, c.First, c.Last)
+	}
+	return SessionTempFile(c.First, c.Last)
+}
+
 // SessionTempFile and MissionTempFile return the dotted temp name a seal
 // writes before its atomic rename. The name embeds the range so a widened
 // tail after a crash yields a different temp name.

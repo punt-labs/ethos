@@ -125,6 +125,36 @@ Exit codes:
 	},
 }
 
+// --- audit quarantine ---
+
+var auditQuarantineReason string
+
+var auditQuarantineCmd = &cobra.Command{
+	Use:   "quarantine <chunk-path>",
+	Short: "Retire a corrupt sealed chunk and recover what the live file holds",
+	Long: `Retire a corrupt sealed chunk, the sanctioned alternative to
+git commit --no-verify when a seal or read fails on a corrupt chunk.
+
+Given the chunk path the seal/read error named, it retires the chunk to
+<name>.jsonl.corrupt (committed as evidence), re-seals every line of the
+chunk's range the live file still holds into a fresh content-named chunk,
+writes a deterministic .quarantine marker recording the verified loss
+point and any unrecovered sub-range, and stages all three — so the tree
+is committable without --no-verify and the loss becomes a visible audit
+event and a read-time gap marker, never a silent skip.
+
+Idempotent and crash-resumable: re-running after a mid-verb crash
+completes the quarantine from whichever artifacts exist.
+
+Exit codes:
+  0  quarantined (or already quarantined — idempotent no-op)
+  2  must run inside a repo, or the path is not a recognizable chunk`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runAuditQuarantine(cmd.OutOrStdout(), cmd.ErrOrStderr(), args[0])
+	},
+}
+
 func init() {
 	auditMigrateCmd.Flags().BoolVar(&auditMigrateDryRun, "dry-run", false,
 		"Enumerate what would migrate without making changes")
@@ -142,10 +172,45 @@ func init() {
 	auditSealCmd.Flags().BoolVar(&auditSealVerbose, "verbose", false,
 		"Print one line per sealed session")
 
+	auditQuarantineCmd.Flags().StringVar(&auditQuarantineReason, "reason", "corrupt sealed chunk",
+		"Corruption reason recorded in the quarantine marker")
+
 	auditCmd.AddCommand(auditMigrateCmd)
 	auditCmd.AddCommand(auditShowCmd)
 	auditCmd.AddCommand(auditSealCmd)
+	auditCmd.AddCommand(auditQuarantineCmd)
 	rootCmd.AddCommand(auditCmd)
+}
+
+// runAuditQuarantine is the audit-quarantine command implementation. It
+// retires a corrupt chunk named by chunkPath and recovers what the live file
+// holds, printing a one-line summary of the marker it wrote.
+func runAuditQuarantine(out, errOut io.Writer, chunkPath string) error {
+	repoRoot := resolve.EnvRepoRoot()
+	if repoRoot == "" {
+		fmt.Fprintln(errOut, "ethos: audit quarantine must run inside a repo")
+		return usageError{}
+	}
+	// Resolve a relative path against the repo root so the operator can pass
+	// the path exactly as the seal/read error printed it.
+	if !filepath.IsAbs(chunkPath) {
+		chunkPath = filepath.Join(repoRoot, chunkPath)
+	}
+	marker, err := hook.QuarantineChunk(repoRoot, chunkPath, auditQuarantineReason)
+	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit quarantine: %v\n", err)
+		return failClosed{}
+	}
+	if marker.HasGap() {
+		fmt.Fprintf(out,
+			"quarantined %s: recovered through ts %d, lost [%d,%d] — staged, commit to record\n",
+			marker.Chunk, marker.VerifiedLast, marker.UnrecoveredFirst, marker.UnrecoveredLast)
+	} else {
+		fmt.Fprintf(out,
+			"quarantined %s: fully recovered through ts %d — staged, commit to record\n",
+			marker.Chunk, marker.VerifiedLast)
+	}
+	return nil
 }
 
 // runAuditSeal is the audit-seal command implementation. It seals every
