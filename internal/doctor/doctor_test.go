@@ -267,6 +267,38 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "stale")
 	})
 
+	t.Run("commented-out seal call is not active", func(t *testing.T) {
+		// A disabled invocation must not read as active — that is exactly
+		// the silent-absence recurrence the check exists to catch.
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"# if ! ethos audit seal; then exit 2; fi\n" +
+			"# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("mention in a foreign comment is not active", func(t *testing.T) {
+		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\nrun_lint\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("non-executable hook fails with chmod remedy", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o644))
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "not executable")
+		assert.Contains(t, r.Detail, "chmod +x")
+	})
+
 	t.Run("foreign hook without seal", func(t *testing.T) {
 		dir := writeHook(t, "#!/bin/sh\nbd hooks run pre-commit || exit 1\n")
 		r := CheckSealHook(dir)

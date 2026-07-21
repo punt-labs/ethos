@@ -143,25 +143,52 @@ func CheckSealHook(repoRoot string) Result {
 	}
 
 	hook := filepath.Join(gitHooksDir(repoRoot), "pre-commit")
-	data, err := os.ReadFile(hook)
+	info, err := os.Stat(hook)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return Result{Name: name, Status: "FAIL", Detail: "no pre-commit hook (missing)" + remedy}
 		}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, err, remedy)}
+	}
+	data, err := os.ReadFile(hook)
+	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
 	}
 
 	body := string(data)
-	if strings.Contains(body, "audit seal") {
+	// Require an uncommented `audit seal` line: a commented-out call is a
+	// disabled seal, and a comment that merely mentions the phrase is not a
+	// call at all. Either would let the silent-absence state recur behind a
+	// green check.
+	if containsActiveCall(body, "audit seal") {
+		// Git skips a hook without the executable bit, so a valid-looking
+		// but non-executable hook never fires.
+		if info.Mode().Perm()&0o111 == 0 {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("seal hook present but not executable — run: chmod +x %s", hook)}
+		}
 		if strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL") {
 			return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
 		}
 		return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
 	}
 	if strings.Contains(body, "DES-058") {
-		return Result{Name: name, Status: "FAIL", Detail: "seal section present but no 'audit seal' call (stale)" + remedy}
+		return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
 	}
 	return Result{Name: name, Status: "FAIL", Detail: "seal hook not installed (missing)" + remedy}
+}
+
+// containsActiveCall reports whether substr appears on a line that is not a
+// shell comment (first non-blank character is not '#').
+func containsActiveCall(body, substr string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "#") {
+			continue
+		}
+		if strings.Contains(line, substr) {
+			return true
+		}
+	}
+	return false
 }
 
 // gitHooksDir returns the hooks directory git runs for the repo at
