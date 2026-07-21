@@ -1,0 +1,81 @@
+results:
+    - mission: m-2026-07-20-013
+      round: 1
+      created_at: "2026-07-20T14:28:20Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.85
+      files_changed:
+        - path: docs/audit-seal.md
+          added: 591
+          removed: 0
+      evidence:
+        - name: success-criteria walkthrough (all 10 contract criteria)
+          status: pass
+        - name: markdownlint docs/audit-seal.md (0 issues)
+          status: pass
+        - name: 'problem confirmed: git ls-files lists tracked .create.lock'
+          status: pass
+        - name: DES-054 v5 + audited-delegation redaction/trailer sections read; amendments cite existing invariant block
+          status: pass
+      prose: |
+        docs/audit-seal.md amends DES-054 v5 by splitting the git-tracked audit log from its live append path. Core move: invert the DES-054 tree roles. The global tree becomes the permanent live write path, the repo tree becomes the sealed committed record, and reads merge the two. This reuses the DES-054 read-path state machine and the v3.11 global paths, so it needs almost no new plumbing and no cross-repo gitignore rollout.
+
+        Decisions:
+
+        1. Live-file location: GLOBAL TREE (option a), the v3.11 path ~/.punt-labs/ethos/sessions/<session-id>.audit.jsonl. Rejected the gitignored in-repo sibling (option b): its clean-tree guarantee is conventional (depends on every repo carrying the ignore rule) where (a) is structural (file physically out of tree). (a) needs no rollout and co-locates live audit with session state already living global.
+
+        2. Live lines are REDACTED, not raw. Redaction already precedes hashing in the DES-054 write path, so leaving it there makes the seal a transformation-free byte copy, keeps redaction in one place, and prevents absolute-path leakage into the global tree at rest. tool_input_hash stays over the redacted form (DES-052 unchanged).
+
+        3. Seal points: PRIMARY at pre-commit (seal + git add so the record lands in the same commit/PR as the work; pre-commit not commit-msg because commit-msg runs after the index snapshot). SECONDARY at ethos mission close (Tier B). Session-end rejected as primary because sessions outlive PRs and may never end cleanly.
+
+        4. Seal algorithm: sealed is a byte-exact prefix of live; seal appends live[size(sealed):last_newline(live)] under the SAME per-session flock the live writer uses. Cutting at the last newline skips a crashed writer's torn tail; holding the flock serializes against concurrent appends and concurrent seals (which chain byte ranges — no drop, no duplicate). Repo-scoped: a commit seals only sessions whose roster repo matches, so multi-repo pre-commits touch disjoint files.
+
+        5. Dedup key for merged sealed+live reads: the tuple (session, ts, delegation_id, tool_input_hash), repo-wins. Requires RFC3339Nano ts so the key never collapses two distinct calls. Merged read = sealed ++ {live tail not already keyed in sealed}; output is identical to the pre-change single-file read.
+
+        6. Mission-tree churn: log.jsonl gets the same live-write/seal treatment with the authoritative seal at MISSION CLOSE and pre-commit as the clean-tree backstop (one sweep mechanism, two triggers). All .lock files MOVE to the global tree (never git-tracked); existing tracked .create.lock is git rm --cached'd by migration. A global lock keyed by the globally-unique mission ID is more correct for cross-checkout safety than the DES-054 in-repo lock.
+
+        Invariants: I10-audit-atomic amended (appends target the live log under the session flock; sealed file written only by the seal step); new I11-seal, I11-idem, I12-merge formalize prefix/idempotence/merge. Seal failure is fail-closed (pre-commit exit 2, DES-055 shape); a commit with no repo-bound live lines is a no-op exit 0. Migration keeps existing tracked logs as sealed history, adds ethos audit seal (idempotent, --dry-run, partial-failure resume, does NOT delete the live file), and relocates locks. Transition is two minor versions per DES-054 convention.
+
+        Proposed DES-058 DESIGN.md entry text is included verbatim at the end of the doc for the document stage to drop in after DES-057.
+    - mission: m-2026-07-20-013
+      round: 2
+      created_at: "2026-07-20T14:45:06Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.88
+      files_changed:
+        - path: docs/audit-seal.md
+          added: 825
+          removed: 591
+      evidence:
+        - name: markdownlint docs/audit-seal.md (0 issues)
+          status: pass
+        - name: 'R1 content-anchored resume: verify byte-prefix via last sealed seq before append; fail-closed on divergence with ethos audit reseal remedy; size(sealed) never a blind offset'
+          status: pass
+        - name: R2 per-session monotonic seq allocated under the session flock as line identity; merge collapses to sealed-prefix ++ live-tail-past-last-seq, no content dedup; legacy no-seq lines anchored by byte length
+          status: pass
+        - name: R3 audit migrate fenced off any session with a live writer (owned by seal); legacy file claimed by first pre-commit seal; scoped to no-live-writer sessions
+          status: pass
+        - name: R4 lock relocation removes .create.lock/per-mission .lock from DISK and stops writing in-repo locks (bare git rm --cached leaves an untracked file); idempotent + --dry-run
+          status: pass
+        - name: R5 pre-commit seals committing session + orphaned sessions only (dead roster PID / uncleanly ended), never another live session
+          status: pass
+        - name: 'L1 checkout-path-precise scoping: roster repo field is an absolute checkout path; two checkouts = two sessions = two live files; moved checkout is safe no-auto-seal'
+          status: pass
+        - name: O1 cut = last_newline + 1 (include terminator); algorithm now agrees with I11-seal
+          status: pass
+        - name: 'O2 fail-closed split: ENOENT/no-live-line exit 0 no-op, EACCES/EIO exit 2 scoped to repo-bound sessions; self-contained remedy message'
+          status: pass
+        - name: 'O3 transition: one-time cleanup of already-dirty file + live-file seeding; multi-machine repo skew rule (all sharing machines cross together)'
+          status: pass
+        - name: O4 old readers see committed history only, named as a window property; read path replaced (early-return -> merge), not reused
+          status: pass
+        - name: O5 RFC3339Nano prerequisite dropped; ts demoted to ordering/debugging only (superseded by seq)
+          status: pass
+      prose: |
+        Round 2 hardens the seal mechanism without touching the ratified macro architecture (global-tree live writes, redact-at-write, pre-commit primary, session-end rejected as primary). The load-bearing change is a per-session monotonic seq allocated under the session flock, which dissolves R1 and R2 together: seq is the line identity, so the round-1 (session, ts, delegation_id, tool_input_hash) dedup tuple is gone — the flock orders writes, not the clock, and the tuple could silently drop a line. The seal now anchors resume on the last sealed line's seq, verifies the byte-prefix before appending, and fails closed on any divergence (legacy re-encode, manual edit, merge resolution, older checkout, downgrade skew) with an ethos audit reseal remedy. size(sealed) is never used as a blind offset. The merged read collapses to sealed ++ live-tail-past-last-seq with no content comparison.
+
+        Legacy lines without seq are anchored by byte length for the first post-upgrade seal, and on first live-file open the writer seeds the live file from the committed repo file so the prefix holds across the boundary. audit migrate is fenced off any session with a live writer. Lock relocation removes the in-repo lock from disk and stops writing it (a bare git rm --cached leaves an untracked file that re-fails the very clean-tree gate this design unblocks). Pre-commit scoping is checkout-path-precise (roster repo is an absolute path) and covers the committing session plus orphaned sessions only, never a live bystander's. The fail-closed policy splits ENOENT (no-op exit 0) from EACCES/EIO (block exit 2, scoped to repo-bound sessions) so a broken audit store cannot hard-block unrelated commits.
+
+        The invariant block (I10-audit-atomic, I11-seal, I11-idem, I12-merge) and the verbatim DES-058 DESIGN.md entry are re-synced with every change. Every REQ and the L1 leader finding are applied; every OPT is adopted, none rejected. markdownlint clean. Doc grew 591 -> 825 lines; write set confined to docs/audit-seal.md.

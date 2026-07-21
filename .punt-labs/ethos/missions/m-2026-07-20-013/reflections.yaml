@@ -1,0 +1,17 @@
+reflections:
+    - round: 1
+      created_at: "2026-07-20T14:35:25Z"
+      author: claude
+      converging: true
+      signals:
+        - 'worker round 1: docs/audit-seal.md complete, 591 lines, markdownlint clean, all 11 success criteria structurally covered'
+        - 'evaluator (rsc): APPROVE WITH NAMED EDITS — macro decisions ratified (global tree, redact-at-write, pre-commit primary, session-end rejected); 5 REQ harden the mechanism rather than replace it'
+        - 'REQ R1: seal trusts size(sealed) as raw offset into live; every divergence path (migrate re-encode, manual edit, merge conflict, checkout of older sealed) corrupts/drops/dups — anchor resume on content, fail closed on divergence'
+        - 'REQ R2: dedup tuple (session, ts, delegation_id, tool_input_hash) not collision-free — flock orders writes, not the clock; add per-session monotonic sequence number, supersedes ts->RFC3339Nano prerequisite'
+        - 'REQ R3: audit migrate (temp+rename) and audit seal (append) contend on the same files; fence migrate off DES-058-managed live sessions'
+        - 'REQ R4: git rm --cached leaves untracked .create.lock in the working tree — re-fails the clean-tree gate this design exists to unblock; must remove from disk and stop writing the repo-tree copy'
+        - 'REQ R5: pre-commit sweep stages other live sessions'' lines into the committing agent''s PR — unstated; recommend committing session + orphaned sessions only'
+        - 'leader finding (via punt-kit stakeholder): seal repo-scoping must be checkout-path-precise — two checkouts of one repo must not seal each other''s sessions; state roster repo-field semantics'
+        - 'OPT O1-O5 noted: newline off-by-one vs I11-seal, ENOENT vs EACCES/EIO split in fail-closed policy, multi-machine upgrade skew + one-time cleanup of already-dirty files, pre-DES-058 reader window property, Nano ordering pin'
+      recommendation: continue
+      reason: Round 1 converged on the right architecture; round 2 applies the five REQ edits (R1+R2 dissolve together — sequence-numbered lines collapse the merge to offset concatenation), the checkout-scoping leader finding, and adopts or explicitly rejects each OPT. Design-only; implementation dispatch waits on operator ratification after round 2.

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **DES-058 (design): live audit write path split from the sealed
+  committed record.** The session audit log was both git-tracked and
+  appended on every tool call, so any repo with a live session had a
+  permanently dirty tree — observed blocking `punt release` preflight.
+  The accepted design (docs/audit-seal.md, full entry in DESIGN.md)
+  moves live writes to the gitignored `.punt-labs/local/ethos/` zone
+  and seals them at pre-commit into immutable, timestamp-named chunk
+  files under the tracked tree — tracked files are never modified after
+  creation, so branch merges are conflict-free with stock git outside
+  quarantine recovery.
+  Line identity is a strictly-monotonic per-session timestamp; reads
+  union sealed chunks with the live tail.
+  Design only — implementation follows in a subsequent release.
+
 - **Code archetypes require a delegated worker.** A new
   `require_delegated_worker` archetype field rejects mission contracts
   where `leader == worker`, so shipped code is always written by a
