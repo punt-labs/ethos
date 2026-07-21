@@ -137,9 +137,9 @@ install_hook() {
   # `exec` of a program, bypasses the appended section. `exec` with a
   # redirection target (exec 3>&1, exec >log) is an fd builtin that does not
   # replace the shell, so those forms are excluded rather than flagged.
-  last=$(awk '/^[[:space:]]*#/ { next } NF { l = $0 } END { sub(/^[[:space:]]+/, "", l); print l }' "$tmp")
+  last=$(awk '/^[[:space:]]*#/ { next } NF { l = $0 } END { sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); print l }' "$tmp")
   case "$last" in
-    exit|exit\ *)
+    exit|exit\ *|exit';'*)
       warn "$dest ends in an unconditional 'exit' — the ethos section may not run" ;;
     exec\ [0-9]*|exec\ '<'*|exec\ '>'*|exec\ '&'*)
       : ;; # fd redirection, not a process replacement
@@ -165,21 +165,27 @@ install_hook() {
 # there is correct — the seal must live where git runs hooks — but each case
 # has a different consequence worth naming: a tracked file dirties the tree, a
 # shared dir affects every repo using it. Warn accordingly (to stderr) rather
-# than acting silently. All paths are made absolute first so the comparisons
-# hold regardless of the mix of relative and absolute forms git returns.
+# than acting silently. Relative paths are resolved against the PHYSICAL cwd
+# (pwd -P) so the comparison against git's already-physical --show-toplevel /
+# --git-common-dir is not defeated by a symlinked cwd (macOS /tmp vs
+# /private/tmp). Classification is skipped when either anchor is empty, which
+# would otherwise turn the pattern into "/*" and match every absolute path.
 resolve_hooks_dir() {
   command -v git >/dev/null 2>&1 || return 0
   _hd=$(git rev-parse --git-path hooks 2>/dev/null || true)
   [ -n "$_hd" ] || return 0
   _common=$(git rev-parse --git-common-dir 2>/dev/null || true)
   _top=$(git rev-parse --show-toplevel 2>/dev/null || true)
-  case "$_hd" in /*) ;; *) _hd="$PWD/$_hd" ;; esac
-  case "$_common" in ""|/*) ;; *) _common="$PWD/$_common" ;; esac
-  case "$_hd" in
-    "$_common"/*) ;; # under the git dir — private, not tracked
-    "$_top"/*) warn "core.hooksPath places hooks at $_hd inside the work tree — the seal will be written into a tracked file" ;;
-    *) warn "core.hooksPath places hooks outside the repo at $_hd — shared across every repo using this hooksPath" ;;
-  esac
+  _pwd=$(pwd -P)
+  case "$_hd" in /*) ;; *) _hd="$_pwd/$_hd" ;; esac
+  case "$_common" in ""|/*) ;; *) _common="$_pwd/$_common" ;; esac
+  if [ -n "$_common" ] && [ -n "$_top" ]; then
+    case "$_hd" in
+      "$_common"/*) ;; # under the git dir — private, not tracked
+      "$_top"/*) warn "core.hooksPath places hooks at $_hd inside the work tree — the seal will be written into a tracked file" ;;
+      *) warn "core.hooksPath places hooks outside the repo at $_hd — shared across every repo using this hooksPath" ;;
+    esac
+  fi
   printf '%s\n' "$_hd"
 }
 
