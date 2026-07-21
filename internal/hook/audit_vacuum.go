@@ -95,7 +95,7 @@ func warnMissingMissionLives(globalRoot, repoRoot, sessionID string, w io.Writer
 	for _, ml := range expected {
 		if !ml.Present {
 			fmt.Fprintf(w,
-				"warning: session %s sealed a chunk for mission %s but its mission live log is gone; "+
+				"warning: session %s wrote mission-log lines for mission %s but its mission live log is gone; "+
 					"unsealed mission-log lines were lost\n",
 				sessionID, ml.MissionID)
 		}
