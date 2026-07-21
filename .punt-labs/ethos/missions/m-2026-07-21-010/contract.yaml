@@ -1,0 +1,49 @@
+mission_id: m-2026-07-21-010
+status: closed
+type: implement
+created_at: "2026-07-21T18:42:50Z"
+updated_at: "2026-07-21T20:11:23Z"
+closed_at: "2026-07-21T20:11:23Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-21T18:42:50Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-2ol1
+    files:
+        - install.sh
+        - hooks/pre-commit.sh
+        - docs/audit-seal.md
+write_set:
+    - install.sh
+    - hooks
+    - internal/doctor
+    - internal/hook
+    - CHANGELOG.md
+    - README.md
+success_criteria:
+    - 'install.sh chains the DES-058 pre-commit seal hook with an existing unrelated pre-commit hook instead of warn-and-skip: when .git/hooks/pre-commit exists and is not ours, append a marker-delimited section (BEGIN/END ETHOS DES-058 SEAL markers, mirroring the beads-integration marker pattern) that invokes the seal exactly as hooks/pre-commit.sh does; when no hook exists, install hooks/pre-commit.sh as before; when our section is already present, update it in place (idempotent re-install); apply the same treatment to the commit-msg hook if it shares the no-clobber flaw (verify, state the finding either way)'
+    - 'The appended section preserves the host hook''s semantics: runs after the existing content only when the existing content falls through (document the append-at-end contract and its limitation — a host hook that exits unconditionally will bypass the section; detect that case if cheap, warn if detected)'
+    - 'ethos doctor gains a check: the current repo''s pre-commit hook contains an active DES-058 seal invocation (marker section or our standalone hook); reports missing/stale with the one-line remedy (re-run install.sh)'
+    - Manual interim sections already deployed (this machine's ethos repo has a hand-appended BEGIN ETHOS DES-058 SEAL v4.1.0 section) are recognized and upgradeable by the installer without duplication
+    - 'Tests: installer chaining against a pre-existing foreign hook (appends once, idempotent on re-run, host content untouched); fresh install path unchanged; doctor check present/missing/stale cases; shellcheck clean on install.sh and any hook scripts'
+    - CHANGELOG.md entry under [Unreleased] (Fixed) describing the silent no-clobber gap and the chaining fix; README updated if it documents hook installation; make check passes; no suppressions
+    - Commit incrementally — one commit per logical step. Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: |
+    Bead ethos-2ol1 (P1), found during v4.1.0 local validation: every org
+    machine has a beads-managed .git/hooks/pre-commit, and install.sh's
+    no-clobber warn-and-skip means the DES-058 seal hook — the feature's
+    PRIMARY trigger — silently never installs. Nothing surfaces the
+    absence (the vacuum warning lives inside `audit seal`, which never
+    runs). The beads hook's own marker-delimited-section pattern is the
+    established coexistence mechanism; its tail falls through on success
+    (`if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi`), so an appended
+    section executes. This fix ships as v4.1.1 immediately on merge —
+    the operator is waiting on it. Do not run make install; use .tmp/
+    for scratch and test against throwaway git repos.

@@ -1,0 +1,7 @@
+You are the worker on ethos mission m-2026-07-21-010 (implement archetype). Working directory: <repo>. Start with `ethos mission show m-2026-07-21-010` — the contract carries the scope and 7 success criteria.
+
+Task: fix bead ethos-2ol1 (P1) — install.sh installs the DES-058 pre-commit seal hook with no-clobber warn-and-skip, so on every machine where beads already owns .git/hooks/pre-commit (all org machines), the seal trigger silently never installs. Fix: marker-delimited section chaining (append/update a BEGIN/END ETHOS DES-058 SEAL section into an existing foreign hook; idempotent; recognizes and upgrades the hand-appended interim section already present in THIS repo's .git/hooks/pre-commit — read it for the exact current shape). Also add the ethos doctor check for an active seal hook, and verify whether commit-msg has the same flaw (state the finding).
+
+Work on a branch off main (fix/hook-chain-seal). This ships as v4.2.0 immediately on merge — the operator is waiting. Commit per step, make check green each commit, shellcheck clean, no suppressions. Do not run make install; test the installer against throwaway git repos under .tmp/.
+
+When done: submit the round-1 result (ethos mission result m-2026-07-21-010 --file <result.yaml>; round: 1, author: bwk, verdict, confidence, files_changed, evidence per criterion including the commit-msg finding, prose), write your full report to .tmp/missions/results/m-2026-07-21-010-r1-report.md, push the branch, and reply exactly "written" plus the branch name.
