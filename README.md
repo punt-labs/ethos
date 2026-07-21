@@ -103,6 +103,13 @@ into immutable, timestamp-named chunk files under the tracked tree so the
 audit record lands in the same commit as the work. Chunks are never
 modified after creation, so branch merges are conflict-free.
 
+`install.sh` installs the seal hook into `.git/hooks/pre-commit`. When a
+hook is already there — the beads hook, for one — it appends a
+marker-delimited `ETHOS DES-058 SEAL` section rather than skipping, so the
+seal coexists with the host hook. Re-running is idempotent. `ethos doctor`
+reports whether the current repo's pre-commit hook carries an active seal;
+if it does not, re-run `install.sh` from the repo root.
+
 Or visually: `ethos ui` opens a localhost dashboard where you browse
 the repo, click a line, and see the agent who wrote it, the prompt
 they received, and every tool call they made.

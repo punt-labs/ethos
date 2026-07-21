@@ -493,8 +493,20 @@ pending audit lines into tracked chunks.
 Pre-commit — not commit-msg — because commit-msg runs after the index
 snapshot is taken; a chunk staged there is too late to enter the commit.
 The commit-msg trailer hook (DES-054) stays as it is; sealing needs the
-earlier hook. Both install through the same `install.sh` path that
-already places `commit-msg`.
+earlier hook. Both install through the same `install.sh` path.
+
+**Coexisting with a host hook (ethos-2ol1).** A repo commonly already has a
+`pre-commit` hook — beads installs one on every org machine. The installer
+does not overwrite it and, critically, does not skip: it appends a
+marker-delimited `ETHOS DES-058 SEAL` section (the beads-integration marker
+pattern) that runs the seal after the host hook's content falls through. An
+empty slot still gets the standalone hook; a prior ethos section is stripped
+and re-appended in place, so re-install is idempotent. The append-at-end
+contract has one limit: a host hook that exits unconditionally bypasses the
+section — the installer detects an unconditional `exit` on the host's last
+line and warns. `ethos doctor` reports whether the committed hook carries an
+active seal so the silent-absence failure this fix closes cannot recur
+undetected.
 
 **Secondary — mission close.** `ethos mission close` (Tier B) seals **every**
 live file under the **closing checkout's** `local/ethos/missions/<id>/` — each
