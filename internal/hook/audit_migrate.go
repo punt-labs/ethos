@@ -135,20 +135,27 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 		return "", fmt.Errorf("reading repo %s: %w", repoPath, err)
 	}
 
-	// Dedupe on rawAuditLineKey. Both sides read raw so the key scheme matches:
-	// a hashed entry keys on ts+tool+hash; a hashless line (e.g. a sentinel,
-	// which is ts+empty+empty and so degenerate on ts alone) keys on a hash of
-	// its raw bytes, so only byte-identical lines dedupe.
-	seen := make(map[string]struct{}, len(repoLines))
+	// Dedupe as a MULTISET on rawAuditLineKey. Both sides read raw so the key
+	// scheme matches: a hashed entry keys on ts+tool+hash; a hashless line
+	// (e.g. a sentinel, which is ts+empty+empty and so degenerate on ts alone)
+	// keys on a hash of its raw bytes. Byte-identical legacy lines legitimately
+	// recur: an ENOSPC burst emits one same-second, same-text sentinel per
+	// failed write (emitLegacySentinel), so N identical loss markers must
+	// migrate as N, not collapse to one. Count each key on the repo side and
+	// decrement per legacy match — a key already present M times absorbs the
+	// first M legacy copies and appends the rest. This keeps crash-re-run
+	// idempotency: a run interrupted mid-append tops the repo up to exactly the
+	// legacy count; a completed run appends zero and deletes.
+	repoCounts := make(map[string]int, len(repoLines))
 	for _, rl := range repoLines {
-		seen[rl.key] = struct{}{}
+		repoCounts[rl.key]++
 	}
 	var newLines [][]byte
 	for _, rl := range legacyLines {
-		if _, ok := seen[rl.key]; ok {
+		if repoCounts[rl.key] > 0 {
+			repoCounts[rl.key]--
 			continue
 		}
-		seen[rl.key] = struct{}{}
 		newLines = append(newLines, rl.raw)
 	}
 

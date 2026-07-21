@@ -161,6 +161,67 @@ func TestMigrateAudit_SameSecondSentinelsBothSurvive(t *testing.T) {
 	assert.Contains(t, body, "ENOSPC on chunk 2", "second same-second sentinel must not be deduped away")
 }
 
+// TestMigrateAudit_IdenticalSentinelBurstAllSurvive is SFH R4-1: an ENOSPC
+// burst emits N byte-identical legacy sentinels (same second, same errno text).
+// Set-dedupe would collapse them to one, silently under-reporting the loss;
+// the multiset dedupe migrates all N.
+func TestMigrateAudit_IdenticalSentinelBurstAllSurvive(t *testing.T) {
+	globalDir := filepath.Join(t.TempDir(), "global")
+	repoRoot := t.TempDir()
+	sessID := "sess-enospc"
+
+	s := `{"ts":"2026-05-22T10:00:00Z","session":"sess-enospc","audit_error":"write /x: no space left on device"}`
+	require.NoError(t, os.MkdirAll(globalDir, 0o700))
+	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
+	require.NoError(t, os.WriteFile(legacyPath, []byte(s+"\n"+s+"\n"+s+"\n"), 0o600))
+	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+
+	var out bytes.Buffer
+	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
+
+	got := readRepoAuditEntries(t, repoDir)
+	assert.Len(t, got, 3, "all three identical loss markers must survive migration")
+}
+
+// TestMigrateAudit_IdenticalBurstResumesAfterCrash is SFH R4-1: a crash
+// interrupts the append of a 3-line identical burst after 2 lines landed. The
+// re-run must top the repo up to exactly 3 (append 1), and a further run must
+// append 0 and delete the legacy file.
+func TestMigrateAudit_IdenticalBurstResumesAfterCrash(t *testing.T) {
+	globalDir := filepath.Join(t.TempDir(), "global")
+	repoRoot := t.TempDir()
+	sessID := "sess-resume"
+
+	s := `{"ts":"2026-05-22T10:00:00Z","session":"sess-resume","audit_error":"no space left on device"}`
+	require.NoError(t, os.MkdirAll(globalDir, 0o700))
+	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
+	require.NoError(t, os.WriteFile(legacyPath, []byte(s+"\n"+s+"\n"+s+"\n"), 0o600))
+	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+
+	// Simulate a crash that landed only 2 of the 3 lines in the repo file.
+	repoPath := filepath.Join(repoDir, "audit.jsonl")
+	require.NoError(t, os.WriteFile(repoPath, []byte(s+"\n"+s+"\n"), 0o600))
+
+	var out1 bytes.Buffer
+	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out1))
+	require.Len(t, readRepoAuditEntries(t, repoDir), 3, "re-run must top up to exactly the legacy count")
+	assert.Contains(t, out1.String(), "migrate sess-resume")
+
+	// The top-up run appended one line and then deleted the legacy file.
+	_, statErr := os.Stat(legacyPath)
+	require.True(t, os.IsNotExist(statErr), "legacy file must be deleted after the top-up append")
+
+	// Re-stage the legacy burst (a stale tree or second machine) and run again.
+	// The repo already holds all three, so the dedupe appends zero and deletes.
+	require.NoError(t, os.WriteFile(legacyPath, []byte(s+"\n"+s+"\n"+s+"\n"), 0o600))
+	var out2 bytes.Buffer
+	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out2))
+	assert.Len(t, readRepoAuditEntries(t, repoDir), 3, "completed run must not double-write")
+	assert.Contains(t, out2.String(), "noop sess-resume")
+	_, statErr = os.Stat(legacyPath)
+	assert.True(t, os.IsNotExist(statErr), "legacy file must be deleted after a completed re-run")
+}
+
 // TestMigrateAudit_TornDestinationTailNotFused is SFH R3-2: when the
 // destination already ends in a torn fragment, the first migrated line must not
 // glue onto it. A separator newline keeps the fragment its own (skipped) line
