@@ -72,7 +72,7 @@ func CollectAuditDiagnostics(repoRoot string, now time.Time) (AuditDiagnostics, 
 		// A gitlink mount defers sealing, so the live tail past the watermark
 		// is deliberately not yet in a chunk. Flag it with a count so the
 		// reader knows the sealed record is temporarily incomplete.
-		watermark, err := audit.Watermark(sealedDir, audit.SessionNS, "", sessionLegacyPath(sealedDir))
+		watermark, err := audit.Watermark(sealedDir, audit.SessionNS, "")
 		if err != nil {
 			return diag, err
 		}

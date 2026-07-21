@@ -49,15 +49,14 @@ type auditSentinel struct {
 // sealed and always shown. AppendMonotonic appends in one write and fsyncs, the
 // same atomicity the sentinel needs.
 func emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID string, now time.Time, reason string) error {
-	// Watermark seeds the monotonic floor from sealed chunks + legacy; a
-	// corrupt sealed dir makes it unavailable, in which case a zero floor still
-	// lets AppendMonotonic mint above the live file's own max — a landed marker
-	// beats no marker.
-	watermark, wmErr := audit.Watermark(sealedDir, audit.SessionNS, "", legacyPath)
-	if wmErr != nil {
-		watermark = 0
+	// MonotonicFloor seeds from sealed chunks + legacy; a corrupt sealed dir
+	// makes it unavailable, in which case a zero floor still lets AppendMonotonic
+	// mint above the live file's own max — a landed marker beats no marker.
+	floor, fErr := audit.MonotonicFloor(sealedDir, audit.SessionNS, "", legacyPath)
+	if fErr != nil {
+		floor = 0
 	}
-	_, err := audit.AppendMonotonic(livePath, watermark, now, func(ts int64) ([]byte, error) {
+	_, err := audit.AppendMonotonic(livePath, floor, now, func(ts int64) ([]byte, error) {
 		data, mErr := json.Marshal(auditSentinel{
 			Ts:         audit.FormatLineTS(ts),
 			Session:    sessionID,

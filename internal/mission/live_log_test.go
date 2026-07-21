@@ -51,6 +51,51 @@ func TestMissionLiveLog_WriteLandsInLocalZone(t *testing.T) {
 		"tracked log.jsonl must not be written in the live path: %v", statErr)
 }
 
+// TestMissionLiveLog_SessionlessAppendRoutesToLiveZone is B4(b): a sessionless
+// in-repo append (ad-hoc CLI, no resolvable session) must land in the reserved
+// live log under the local zone, never the tracked log.jsonl, and must not hide
+// a real session's already-written events from the union read.
+func TestMissionLiveLog_SessionlessAppendRoutesToLiveZone(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	id := "m-2026-07-21-050"
+
+	// A session-scoped store creates the mission: the create event lands in
+	// sessA's live log.
+	storeA := NewStoreWithRoots(repoRoot, globalRoot).WithSessionID("sessA")
+	require.NoError(t, storeA.Create(newContract(id)))
+
+	// A sessionless store updates it: the update event must route to the
+	// reserved-session live log, not the tracked tree.
+	storeB := NewStoreWithRoots(repoRoot, globalRoot)
+	loaded, err := storeB.Load(id)
+	require.NoError(t, err)
+	loaded.Context = "touched with no session"
+	require.NoError(t, storeB.Update(loaded))
+
+	assert.FileExists(t, audit.LiveMissionLogPath(repoRoot, id, "sessA"))
+	assert.FileExists(t, audit.LiveMissionLogPath(repoRoot, id, sessionlessID))
+	tracked := filepath.Join(audit.SealedMissionDir(repoRoot, id), "log.jsonl")
+	_, statErr := os.Stat(tracked)
+	assert.True(t, os.IsNotExist(statErr),
+		"sessionless append must not write the tracked log.jsonl: %v", statErr)
+
+	// The union read returns both sessions' events — sessA is not stranded.
+	events, _, err := storeB.LoadEvents(id)
+	require.NoError(t, err)
+	var haveCreate, haveUpdate bool
+	for _, e := range events {
+		switch e.Event {
+		case "create":
+			haveCreate = true
+		case "update":
+			haveUpdate = true
+		}
+	}
+	assert.True(t, haveCreate, "sessA's create event must survive the sessionless append")
+	assert.True(t, haveUpdate, "the sessionless update event must be read")
+}
+
 func TestMissionLiveLog_MonotonicTimestamps(t *testing.T) {
 	s, repoRoot := twoTreeSessionStore(t, "sess1")
 	id := "m-2026-07-21-002"

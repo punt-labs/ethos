@@ -13,6 +13,15 @@ import (
 	"github.com/punt-labs/ethos/internal/audit"
 )
 
+// sessionlessID is the reserved session token for a mission event append made
+// with no resolvable session (an ad-hoc CLI invocation inside a repo). It keeps
+// the append in the machine-local live zone — under its own per-(mission,
+// session) live log and log-no-session-* chunk namespace — instead of the
+// tracked log.jsonl, so the sealed-record invariant holds even without a
+// session. It is a normal session id everywhere downstream (seal, read, dedup);
+// a real session id never collides with it.
+const sessionlessID = "no-session"
+
 // appendLiveEventLocked appends one event to the DES-058 per-(mission,
 // session) live log with a strictly-monotonic per-(mission, session)
 // timestamp (docs/audit-seal.md §Mission-tree churn). The caller already
@@ -20,23 +29,27 @@ import (
 // flock beside the live log so the timestamp allocation and append are
 // atomic against a concurrent seal.
 //
-// The timestamp floor is seeded from the mission watermark — the max <last>
-// over this session's own sealed chunks, plus the frozen legacy log.jsonl's
-// max ts — so a post-upgrade event sorts strictly after frozen history.
+// The timestamp floor is the monotonic floor — the max <last> over this
+// session's own sealed chunks plus the frozen legacy log.jsonl's max ts — so a
+// post-upgrade event sorts strictly after frozen history. A sessionless append
+// lands under the reserved sessionlessID.
 func (s *Store) appendLiveEventLocked(missionID string, e Event) error {
 	repoRoot := s.repoRoot
 	sessionID := s.sessionID
+	if sessionID == "" {
+		sessionID = sessionlessID
+	}
 	sealedDir := audit.SealedMissionDir(repoRoot, missionID)
 	legacy := audit.MissionLegacySources(repoRoot, missionID)
 	livePath := audit.LiveMissionLogPath(repoRoot, missionID, sessionID)
 	lockPath := audit.LiveMissionLockPath(repoRoot, missionID, sessionID)
 
-	watermark, err := audit.Watermark(sealedDir, audit.MissionNS, sessionID, legacy...)
+	floor, err := audit.MonotonicFloor(sealedDir, audit.MissionNS, sessionID, legacy...)
 	if err != nil {
-		return fmt.Errorf("computing mission watermark for %s: %w", missionID, err)
+		return fmt.Errorf("computing mission monotonic floor for %s: %w", missionID, err)
 	}
 	return audit.WithLock(lockPath, func() error {
-		_, aErr := audit.AppendMonotonic(livePath, watermark, time.Now().UTC(), func(ts int64) ([]byte, error) {
+		_, aErr := audit.AppendMonotonic(livePath, floor, time.Now().UTC(), func(ts int64) ([]byte, error) {
 			e.TS = audit.FormatLineTS(ts)
 			data, mErr := json.Marshal(e)
 			if mErr != nil {
@@ -79,14 +92,16 @@ func (s *Store) loadLiveUnionEvents(missionID string) ([]Event, []string, error)
 		}
 	}
 
-	// Live tails: each session's own live log past its own watermark.
+	// Live tails: each session's own live log past its own sealed watermark
+	// (own chunks + markers only — never the shared legacy max, which would
+	// strand lines below a sessionless writer's later append). See
+	// audit.Watermark.
 	sessions, err := s.listLiveMissionSessions(missionID, sc.Chunks)
 	if err != nil {
 		return nil, nil, err
 	}
-	legacySources := audit.MissionLegacySources(repoRoot, missionID)
 	for _, sess := range sessions {
-		wm, wErr := audit.Watermark(sealedDir, audit.MissionNS, sess, legacySources...)
+		wm, wErr := audit.Watermark(sealedDir, audit.MissionNS, sess)
 		if wErr != nil {
 			return nil, nil, wErr
 		}

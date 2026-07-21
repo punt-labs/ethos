@@ -98,15 +98,19 @@ func coveredByMarker(artifact ChunkName, markers []ChunkName) bool {
 	return false
 }
 
-// Watermark returns the max sealed timestamp for a session: the max over the
-// valid chunk names' <last>, the covering markers' verified <last>, and the
-// frozen legacy files' max line ts. Zero when nothing is sealed.
+// Watermark returns the sealed watermark for a session: the max ts already
+// captured in immutable chunks — the max over the valid chunk names' <last> and
+// the covering markers' verified <last>. Zero when nothing is sealed.
 //
-// legacyPaths are frozen files (an audit.jsonl, or a log.jsonl plus a drained
-// missions/<id>.jsonl residue) scanned once for their max ts; each predates
-// the monotonic-ts discipline, so the max over all lines contributes, not the
-// last line.
-func Watermark(dir string, ns Namespace, session string, legacyPaths ...string) (int64, error) {
+// This is the tail-selection boundary. A live line seals (and reads) exactly
+// when its ts is strictly past this watermark. It deliberately EXCLUDES the
+// frozen legacy files: those are read directly as the oldest pool and their
+// lines never live in the per-session live file, so folding their max ts in
+// here would strand live lines whose ts sits below a later-growing legacy max
+// (a shared mission log.jsonl a sessionless writer extends) — SelectLiveTail
+// and LiveLinesPastWatermark would skip them forever. The legacy max belongs
+// only to the monotonic append floor; see MonotonicFloor.
+func Watermark(dir string, ns Namespace, session string) (int64, error) {
 	sc, err := ScanSealedDir(dir, ns, session)
 	if err != nil {
 		return 0, err
@@ -126,6 +130,28 @@ func Watermark(dir string, ns Namespace, session string, legacyPaths ...string) 
 		if mk.VerifiedLast > wm {
 			wm = mk.VerifiedLast
 		}
+	}
+	return wm, nil
+}
+
+// MonotonicFloor returns the floor for minting a new strictly-monotonic live
+// timestamp: the max of the sealed Watermark and every frozen legacy file's max
+// line ts. A new line's ts is allocated strictly above this floor so it sorts
+// after both already-sealed lines and frozen pre-discipline history.
+//
+// Unlike Watermark this is NOT a tail-selection boundary — it only seeds
+// AppendMonotonic. Keeping the legacy max out of Watermark and in here is the
+// point: a shared legacy log a sessionless writer later extends must raise the
+// append floor (so new lines still sort last) without retroactively hiding
+// another session's already-written live lines from the seal.
+//
+// legacyPaths are frozen files (an audit.jsonl, or a log.jsonl plus a drained
+// missions/<id>.jsonl residue) scanned once for their max ts; each predates the
+// monotonic-ts discipline, so the max over all lines contributes, not the last.
+func MonotonicFloor(dir string, ns Namespace, session string, legacyPaths ...string) (int64, error) {
+	wm, err := Watermark(dir, ns, session)
+	if err != nil {
+		return 0, err
 	}
 	for _, lp := range legacyPaths {
 		if lp == "" {

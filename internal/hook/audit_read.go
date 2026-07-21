@@ -67,7 +67,7 @@ func sessionUnionLines(repoRoot, sessionID string, now time.Time) ([]audit.Line,
 		monotonic = append(monotonic, lines...)
 	}
 
-	watermark, err := audit.Watermark(sealedDir, audit.SessionNS, "", legacyPath)
+	watermark, err := audit.Watermark(sealedDir, audit.SessionNS, "")
 	if err != nil {
 		return nil, err
 	}

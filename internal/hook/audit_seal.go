@@ -154,7 +154,6 @@ func sealSessionLocked(repoRoot, sessionID, sealedDir string, now time.Time, opt
 		session:   "",
 		sealedDir: sealedDir,
 		livePath:  liveAuditPath(repoRoot, sessionID),
-		legacy:    []string{sessionLegacyPath(sealedDir)},
 		chunkName: func(first, last int64) string { return audit.SessionChunkFile(first, last) },
 		tempName:  func(first, last int64) string { return audit.SessionTempFile(first, last) },
 		label:     "session " + sessionID,
@@ -168,7 +167,6 @@ type sealDirParams struct {
 	session   string // mission namespace only; "" for session namespace
 	sealedDir string
 	livePath  string
-	legacy    []string
 	chunkName func(first, last int64) string
 	tempName  func(first, last int64) string
 	label     string
@@ -193,7 +191,10 @@ func sealDirLocked(p sealDirParams, now time.Time, opts SealOptions) (sealOutcom
 			return sealOutcome{}, err
 		}
 	}
-	watermark, err := audit.Watermark(p.sealedDir, p.ns, p.session, p.legacy...)
+	// Tail selection uses the sealed watermark (this session's own chunks +
+	// markers), never the frozen legacy max — folding legacy in would strand
+	// live lines below a later-growing shared legacy log. See audit.Watermark.
+	watermark, err := audit.Watermark(p.sealedDir, p.ns, p.session)
 	if err != nil {
 		return sealOutcome{}, err
 	}

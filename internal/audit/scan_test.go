@@ -39,14 +39,29 @@ func TestWatermarkMaxChunkLast(t *testing.T) {
 	}
 }
 
-func TestWatermarkLegacyContributes(t *testing.T) {
+// TestWatermarkExcludesLegacy pins the split: Watermark is the sealed-chunk
+// boundary and must NOT fold the frozen legacy file's max ts in — only
+// MonotonicFloor does.
+func TestWatermarkExcludesLegacy(t *testing.T) {
+	dir := t.TempDir()
+	writeChunk(t, dir, SessionChunkFile(100, 200), 100, 200)
+	writeChunk(t, dir, "audit.jsonl", 50, 500, 300)
+	wm, err := Watermark(dir, SessionNS, "")
+	if err != nil || wm != 200 {
+		t.Fatalf("Watermark = %d, %v; want 200 (chunks only, legacy excluded)", wm, err)
+	}
+}
+
+// TestMonotonicFloorIncludesLegacy pins the other half: the append floor folds
+// the frozen legacy max in so a new line sorts after pre-discipline history.
+func TestMonotonicFloorIncludesLegacy(t *testing.T) {
 	dir := t.TempDir()
 	writeChunk(t, dir, SessionChunkFile(100, 200), 100, 200)
 	legacy := filepath.Join(dir, "audit.jsonl")
 	writeChunk(t, dir, "audit.jsonl", 50, 500, 300)
-	wm, err := Watermark(dir, SessionNS, "", legacy)
-	if err != nil || wm != 500 {
-		t.Fatalf("Watermark = %d, %v; want 500 (legacy max)", wm, err)
+	fl, err := MonotonicFloor(dir, SessionNS, "", legacy)
+	if err != nil || fl != 500 {
+		t.Fatalf("MonotonicFloor = %d, %v; want 500 (legacy max)", fl, err)
 	}
 }
 

@@ -65,11 +65,15 @@ type Event struct {
 // corrupting the log. If the truncation-rollback itself fails, the
 // returned error notes both failures.
 func (s *Store) appendEventLocked(missionID string, e Event) error {
-	// DES-058: when a session and repo are wired, the event lands in the
+	// DES-058: in the two-tree repo layout EVERY event append lands in the
 	// machine-local per-(mission, session) live log with a strictly-monotonic
-	// timestamp, so the tracked tree stays clean between seals. Otherwise the
-	// legacy tracked-log append below is unchanged.
-	if s.repoRoot != "" && s.sessionID != "" {
+	// timestamp, so the tracked tree stays clean between seals. This includes a
+	// sessionless append (ad-hoc CLI with no resolvable session): it routes to a
+	// reserved-session live log rather than the tracked log.jsonl, which is
+	// immutable between seals — writing there would dirty the tracked tree and
+	// violate the sealed-record invariant. Outside a repo (legacy single-tree
+	// under the untracked global root) the tracked-log append below is unchanged.
+	if s.twoTreeStorage && s.repoRoot != "" {
 		return s.appendLiveEventLocked(missionID, e)
 	}
 

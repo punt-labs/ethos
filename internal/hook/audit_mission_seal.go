@@ -76,7 +76,6 @@ func sealMissionSession(repoRoot, missionID, sessionID string, now time.Time, op
 			session:   sessionID,
 			sealedDir: sealedDir,
 			livePath:  liveMissionLogPath(repoRoot, missionID, sessionID),
-			legacy:    audit.MissionLegacySources(repoRoot, missionID),
 			chunkName: func(first, last int64) string { return audit.MissionChunkFile(sessionID, first, last) },
 			tempName:  func(first, last int64) string { return audit.MissionTempFile(sessionID, first, last) },
 			label:     "mission " + missionID + " session " + sessionID,

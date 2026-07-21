@@ -84,7 +84,6 @@ func TestSealMissionConcurrentSessions(t *testing.T) {
 				session:   sessionID,
 				sealedDir: sealedDir,
 				livePath:  liveMissionLogPath(repo, mid, sessionID),
-				legacy:    audit.MissionLegacySources(repo, mid),
 				chunkName: func(f, l int64) string { return audit.MissionChunkFile(sessionID, f, l) },
 				tempName:  func(f, l int64) string { return audit.MissionTempFile(sessionID, f, l) },
 				label:     "mission " + mid + " session " + sessionID,

@@ -19,11 +19,11 @@ import (
 // markers + the frozen legacy file's max ts) so no minted ts sinks below an
 // already-sealed line. Returns the entry with its allocated Ts set.
 func appendLiveAudit(livePath, sealedDir, legacyPath string, entry auditEntry, now time.Time) (auditEntry, error) {
-	watermark, err := audit.Watermark(sealedDir, audit.SessionNS, "", legacyPath)
+	floor, err := audit.MonotonicFloor(sealedDir, audit.SessionNS, "", legacyPath)
 	if err != nil {
-		return entry, fmt.Errorf("computing watermark for %s: %w", livePath, err)
+		return entry, fmt.Errorf("computing monotonic floor for %s: %w", livePath, err)
 	}
-	ts, err := audit.AppendMonotonic(livePath, watermark, now, func(ts int64) ([]byte, error) {
+	ts, err := audit.AppendMonotonic(livePath, floor, now, func(ts int64) ([]byte, error) {
 		entry.Ts = audit.FormatLineTS(ts)
 		data, mErr := json.Marshal(entry)
 		if mErr != nil {

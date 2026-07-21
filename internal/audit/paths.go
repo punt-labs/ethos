@@ -115,19 +115,22 @@ func FindSealedSessionDir(repoRoot, sessionID string) (string, error) {
 	}
 	want := filepath.Base(sessionID)
 	for _, e := range entries {
-		if e.IsDir() && sealedDirIsSession(e.Name(), want) {
+		if e.IsDir() && SessionDirMatches(e.Name(), want) {
 			return filepath.Join(base, e.Name()), nil
 		}
 	}
 	return "", nil
 }
 
-// sealedDirIsSession reports whether name is exactly <YYYY-MM-DD>-<sessionID>.
-// A bare suffix match on "-"+sessionID would let id "abc" match a directory
-// "2026-07-21-x-abc", landing one session's chunks in another's tree with a
-// wrong watermark. Match structurally: a valid 10-char date, the hyphen
-// separator, then the session id verbatim.
-func sealedDirIsSession(name, sessionID string) bool {
+// SessionDirMatches reports whether name is exactly <YYYY-MM-DD>-<sessionID>: a
+// valid 10-char date, the hyphen separator, then the session id verbatim. This
+// is the single matcher every session-directory resolver shares — the sealed
+// tree's seal and read (FindSealedSessionDir) and the live tree's writer,
+// reader, and migrate (hook.findSessionDir) — so seal and read never resolve a
+// colliding id to different directories. A bare "-"+sessionID suffix match
+// would let id "abc" match "2026-07-21-x-abc", landing one session's chunks in
+// another's tree with a wrong watermark.
+func SessionDirMatches(name, sessionID string) bool {
 	const dateLen = len(SessionDateFormat)
 	if len(name) != dateLen+1+len(sessionID) {
 		return false
@@ -149,11 +152,7 @@ func SessionUnsealedCount(repoRoot, sessionID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	var legacy string
-	if dir != "" {
-		legacy = filepath.Join(dir, "audit.jsonl")
-	}
-	wm, err := Watermark(dir, SessionNS, "", legacy)
+	wm, err := Watermark(dir, SessionNS, "")
 	if err != nil {
 		return 0, err
 	}
@@ -285,7 +284,7 @@ func missionChunkCarriesSession(dir, sessionID string) bool {
 // is absent or fully sealed.
 func MissionUnsealedCount(repoRoot, missionID, sessionID string) (int, error) {
 	sealedDir := SealedMissionDir(repoRoot, missionID)
-	wm, err := Watermark(sealedDir, MissionNS, sessionID, MissionLegacySources(repoRoot, missionID)...)
+	wm, err := Watermark(sealedDir, MissionNS, sessionID)
 	if err != nil {
 		return 0, err
 	}
