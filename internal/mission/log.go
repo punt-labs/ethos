@@ -489,7 +489,7 @@ func decodeEventLine(raw []byte) (Event, error) {
 // foreign to the current Event schema and is discarded here rather than
 // rejected. Unlike decodeEventLine, this does not DisallowUnknownFields — the
 // strict decoder guards our own post-discipline lines, not drained legacy
-// (LegacyLines is tolerant for the same reason). The ts, event-type, and actor
+// (the residue read is tolerant for the same reason). The ts, event-type, and actor
 // checks still apply, so a genuinely malformed residue line surfaces as a
 // warning at the call site rather than a silent drop.
 func decodeResidueEventLine(raw []byte) (Event, error) {

@@ -144,43 +144,6 @@ func LiveLinesPastWatermark(livePath, session string, watermark int64) ([]Line, 
 	return out, nil
 }
 
-// LegacyLines reads a frozen legacy file (audit.jsonl or log.jsonl) as
-// ts-tagged lines, kept undeduped and untagged by session — the frozen pool
-// predates the monotonic-ts discipline. Unlike a chunk, a legacy file keeps
-// the tolerant rule: a torn final line is dropped and a terminated
-// unparseable line is skipped, never an error. A missing file yields nil.
-func LegacyLines(path string) ([]Line, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("reading legacy %s: %w", path, err)
-	}
-	if len(data) > 0 && data[len(data)-1] != '\n' {
-		if cut := lastNewline(data); cut >= 0 {
-			data = data[:cut+1]
-		} else {
-			data = nil
-		}
-	}
-	var out []Line
-	for _, raw := range SplitLines(data) {
-		var h tsHolder
-		if json.Unmarshal(raw, &h) != nil {
-			continue
-		}
-		ts, perr := ParseLineTS(h.TS)
-		if perr != nil {
-			continue
-		}
-		cp := make([]byte, len(raw))
-		copy(cp, raw)
-		out = append(out, Line{TS: ts, Raw: cp})
-	}
-	return out, nil
-}
-
 // tsSessionHolder decodes the ts and session fields of a residue line. The
 // superseded shared-live mission log tagged each line with its session so a
 // single shared file stayed attributable; the current per-session live logs
@@ -221,8 +184,9 @@ func MaxLastBySession(chunks []ChunkName) map[string]int64 {
 // session's. Surviving lines carry no session tag — the residue enters the
 // pre-discipline legacy pool undeduped and is never re-attributed.
 //
-// Tolerant like LegacyLines: a torn final line is dropped and a terminated
-// unparseable line is skipped, never an error. A missing file yields nil.
+// Tolerant like the live-tail read: a torn final line is dropped and a
+// terminated unparseable line is skipped, never an error. A missing file
+// yields nil.
 func ResidueLinesFiltered(path string, sessionSealedLast map[string]int64) ([]Line, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -280,12 +244,6 @@ func DedupByIdentity(in []Line) []Line {
 		out = append(out, l)
 	}
 	return out
-}
-
-// StableSortByTS sorts lines by ts, stably, so equal-ts legacy lines keep
-// their file order.
-func StableSortByTS(lines []Line) {
-	sort.SliceStable(lines, func(i, j int) bool { return lines[i].TS < lines[j].TS })
 }
 
 // SortChunks returns chunks ordered by First so a concatenated read is in
