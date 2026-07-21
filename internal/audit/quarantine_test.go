@@ -163,6 +163,36 @@ func TestQuarantineResumeFromCorrupt(t *testing.T) {
 	}
 }
 
+func TestQuarantineNeverOverwritesExistingCorrupt(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealedDir := filepath.Join(repo, "sealed")
+	// Fresh-damage state: a chunk AND an existing .corrupt (from a prior
+	// event), no covering marker. Quarantine must refuse rather than
+	// os.Rename over the first .corrupt (REQ-3).
+	writeChunk(t, sealedDir, SessionChunkFile(100, 300), 100, 200)                 // fresh corrupt chunk
+	writeChunk(t, sealedDir, SessionChunkFile(100, 300)+".corrupt", 100, 200, 300) // prior evidence
+	gitCommitAll(t, repo, "fresh damage")
+	before, err := os.ReadFile(filepath.Join(sealedDir, SessionChunkFile(100, 300)+".corrupt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(repo, "live.jsonl")
+	writeLive(t, live, 100, 200, 300)
+
+	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err == nil {
+		t.Fatal("quarantine over existing .corrupt = nil error, want refusal")
+	}
+	after, err := os.ReadFile(filepath.Join(sealedDir, SessionChunkFile(100, 300)+".corrupt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Error("the prior .corrupt evidence was overwritten")
+	}
+}
+
 func TestSealReadsQuarantinedChunkWithoutError(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)

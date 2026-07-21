@@ -50,10 +50,23 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 	// Ensure the corrupt bytes sit at <stem>.jsonl.corrupt — retire on a
 	// fresh run, or find them already there on a resume.
 	if _, err := os.Stat(chunkPath); err == nil {
+		// A chunk AND an existing .corrupt with no covering marker is the
+		// resume-window "fresh damage" state. os.Rename would atomically
+		// REPLACE the existing .corrupt, destroying the first quarantine's
+		// evidence (docs/audit-seal.md §Seal failure policy: a rename onto an
+		// existing <name>.corrupt never overwrites). Refuse rather than clobber
+		// (REQ-3); the .corrupt-<hash> second-event sequencing is the fuller
+		// recovery for this state.
+		if _, cErr := os.Stat(corruptPath); cErr == nil {
+			return Marker{}, fmt.Errorf(
+				"quarantine %s: a .corrupt already exists (fresh damage during a resume window); "+
+					"refusing to overwrite the prior quarantine's evidence", cn.ChunkFile())
+		}
 		if mvErr := GitMv(repoRoot, chunkPath, corruptPath); mvErr != nil {
 			// git mv fails on an untracked chunk (a fresh seal not yet
 			// committed); a plain rename reaches the same state and staging
-			// adds the .corrupt.
+			// adds the .corrupt. corruptPath is guaranteed absent here (guarded
+			// above), so the rename cannot clobber.
 			if rErr := os.Rename(chunkPath, corruptPath); rErr != nil {
 				return Marker{}, fmt.Errorf("retiring %s: git mv: %v; rename: %w", chunkPath, mvErr, rErr)
 			}
