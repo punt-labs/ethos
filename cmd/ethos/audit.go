@@ -210,8 +210,10 @@ func sessionStartDateResolver(repoRoot string) func(string) string {
 }
 
 // activeRepoSessions returns the ids of EVERY session whose roster is bound to
-// repoRoot, including stale and crashed rosters — the second source the vacuum
-// cross-check iterates. Stale sessions are returned deliberately: a dead
+// this checkout's repo, including stale and crashed rosters — the second source
+// the vacuum cross-check iterates. A roster's Repo is a git-remote identity
+// (org/name), not a checkout path, so it is matched against this checkout's
+// identity, not repoRoot. Stale sessions are returned deliberately: a dead
 // session with unsealed live lines is exactly the loss case the vacuum must
 // warn about, so filtering it out would blind the guard to the very condition
 // it exists to catch. A single unreadable roster skips that session
@@ -219,6 +221,7 @@ func sessionStartDateResolver(repoRoot string) func(string) string {
 // half of the cross-check, so it warns on stderr rather than silently
 // returning nil.
 func activeRepoSessions(repoRoot string, errOut io.Writer) []string {
+	repoID := audit.RepoIdentity(repoRoot)
 	ss := sessionStore()
 	ids, err := ss.List()
 	if err != nil {
@@ -231,7 +234,7 @@ func activeRepoSessions(repoRoot string, errOut io.Writer) []string {
 		if err != nil {
 			continue
 		}
-		if roster.Repo == repoRoot {
+		if roster.Repo == repoID {
 			out = append(out, id)
 		}
 	}

@@ -3,12 +3,18 @@ package hook
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/mission"
 )
+
+// vacuumTestRepoID is the identity the vacuum tests give their checkout's origin
+// remote. VacuumCrossCheck matches a tombstone's Repo (an identity) against the
+// identity it derives from the checkout, not against the checkout path.
+const vacuumTestRepoID = "punt-labs/ethos"
 
 // globalSessionsDir returns the sessions subdir VacuumCrossCheck derives from
 // a global root, creating it so tombstone writes land where the check reads.
@@ -21,13 +27,28 @@ func globalSessionsDir(t *testing.T, globalRoot string) string {
 	return dir
 }
 
+// gitRepoWithOrigin makes dir a git checkout whose origin remote resolves to id,
+// so VacuumCrossCheck derives that identity from the checkout.
+func gitRepoWithOrigin(t *testing.T, dir, id string) {
+	t.Helper()
+	run := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("init")
+	run("remote", "add", "origin", "git@github.com:"+id+".git")
+}
+
 func TestVacuumCrossCheckWarnsOnFlaggedTombstoneGone(t *testing.T) {
 	repo := t.TempDir()
+	gitRepoWithOrigin(t, repo, vacuumTestRepoID)
 	globalRoot := t.TempDir()
 	// A tombstone for a session purged with unsealed lines whose live file is
 	// gone (no live file was ever written under repo).
 	if err := audit.WriteTombstone(globalSessionsDir(t, globalRoot), audit.Tombstone{
-		Session: "sess-lost", Repo: repo, UnsealedLines: true,
+		Session: "sess-lost", Repo: vacuumTestRepoID, UnsealedLines: true,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -43,9 +64,10 @@ func TestVacuumCrossCheckWarnsOnFlaggedTombstoneGone(t *testing.T) {
 
 func TestVacuumCrossCheckIgnoresOtherRepos(t *testing.T) {
 	repo := t.TempDir()
+	gitRepoWithOrigin(t, repo, vacuumTestRepoID)
 	globalRoot := t.TempDir()
 	if err := audit.WriteTombstone(globalSessionsDir(t, globalRoot), audit.Tombstone{
-		Session: "sess-other", Repo: "/some/other/repo", UnsealedLines: true,
+		Session: "sess-other", Repo: "punt-labs/other", UnsealedLines: true,
 	}); err != nil {
 		t.Fatal(err)
 	}

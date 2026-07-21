@@ -219,9 +219,19 @@ func (s *Store) Purge() ([]string, error) {
 // tombstone. The tombstone lets the seal's vacuum cross-check keep looking at
 // a session whose roster entry is gone.
 //
+// A roster's Repo is a git-remote identity (org/name), never a checkout path.
+// The unsealed-state probes read the live audit zone, which lives under a
+// checkout, so they use the passed-in repoRoot — the current checkout. Only
+// sessions whose recorded identity equals this checkout's identity (repoID) are
+// probed: a session bound to a different repo has its live zone under another
+// checkout by construction, so it is left untouched for a purge run there rather
+// than deleted on an unverifiable guess (fail-safe: never drop what we cannot
+// verify). repoRoot and repoID come from the caller — repoID is
+// audit.RepoIdentity(repoRoot).
+//
 // Sessions with no repo binding, or whose live file is clean, purge silently
 // as before. Returns the purged and refused session ids.
-func (s *Store) PurgeTombstoned(force bool) (purged, refused []string, err error) {
+func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, refused []string, err error) {
 	ids, err := s.List()
 	if err != nil {
 		return nil, nil, err
@@ -255,7 +265,7 @@ func (s *Store) PurgeTombstoned(force bool) (purged, refused []string, err error
 			if !isStale(roster) {
 				return nil
 			}
-			didPurge, didRefuse = s.purgeOneTombstoned(roster, force)
+			didPurge, didRefuse = s.purgeOneTombstoned(roster, repoRoot, repoID, force)
 			return nil
 		}); lockErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: purge: failed to lock session %s: %v\n", id, lockErr)
@@ -282,31 +292,41 @@ func (s *Store) PurgeTombstoned(force bool) (purged, refused []string, err error
 // which propagates the same errors. Reading a probe error as "nothing unsealed"
 // is the silent-loss path the tombstone exists to prevent. Under --force the
 // session is purged but a flagged tombstone records the unproven loss.
-func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
+func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, force bool) (bool, bool) {
 	repo := roster.Repo
+	// A session bound to a different repo identity has its live audit zone under
+	// another checkout by construction; this checkout cannot probe it, so leave
+	// it for a purge run inside the checkout that owns it (fail-safe: never delete
+	// a session whose unsealed state we cannot verify). A session with no repo
+	// binding (repo == "") has no audit zone and still purges here — and when this
+	// checkout has no parseable origin repoID is also "", so its own sessions
+	// still match.
+	if repo != "" && repo != repoID {
+		return false, false
+	}
 	unsealed := 0
 	liveGone := false
 	probeFailed := false
 	if repo != "" {
-		if n, cErr := audit.SessionUnsealedCount(repo, roster.Session); cErr != nil {
+		if n, cErr := audit.SessionUnsealedCount(repoRoot, roster.Session); cErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: probing %s unsealed audit lines: %v\n", roster.Session, cErr)
 		} else {
 			unsealed = n
 		}
-		liveGone = !audit.SessionLiveFileExists(repo, roster.Session)
+		liveGone = !audit.SessionLiveFileExists(repoRoot, roster.Session)
 		// REQ-1: the guard spans both namespaces. A session that sealed a
 		// mission chunk and then lost its mission live log (worktree torn
 		// down), or a Tier B session that claimed a mission but sealed no
 		// chunk yet, must not purge silently — enumerate the expected mission
 		// live files (chunk-derived union mission-record bindings) and fold
 		// their unsealed/gone state in.
-		bound, bErr := mission.SessionBoundMissions(s.root, repo, roster.Session)
+		bound, bErr := mission.SessionBoundMissions(s.root, repoRoot, roster.Session)
 		if bErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: resolving %s mission bindings: %v\n", roster.Session, bErr)
 		}
-		expected, eErr := audit.ExpectedMissionLiveFiles(repo, roster.Session, bound)
+		expected, eErr := audit.ExpectedMissionLiveFiles(repoRoot, roster.Session, bound)
 		if eErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: enumerating %s mission live files: %v\n", roster.Session, eErr)
@@ -316,7 +336,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
 				liveGone = true
 				continue
 			}
-			if n, cErr := audit.MissionUnsealedCount(repo, ml.MissionID, roster.Session); cErr != nil {
+			if n, cErr := audit.MissionUnsealedCount(repoRoot, ml.MissionID, roster.Session); cErr != nil {
 				probeFailed = true
 				fmt.Fprintf(os.Stderr, "ethos: purge: probing mission %s unsealed lines for %s: %v\n",
 					ml.MissionID, roster.Session, cErr)
@@ -341,8 +361,8 @@ func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
 		t := audit.Tombstone{
 			Session:       roster.Session,
 			StartDate:     rosterStartDate(roster),
-			Repo:          repo,
-			Checkout:      repo,
+			Repo:          repo,     // git-remote identity — the vacuum matches on it
+			Checkout:      repoRoot, // the filesystem checkout the probes ran under
 			UnsealedLines: unsealed > 0 || probeFailed,
 			LiveFileGone:  liveGone,
 		}

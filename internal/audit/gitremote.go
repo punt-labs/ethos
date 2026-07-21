@@ -1,6 +1,7 @@
-package hook
+package audit
 
 import (
+	"os/exec"
 	"strings"
 )
 
@@ -46,4 +47,25 @@ func ParseGitRemote(url string) string {
 	}
 
 	return ""
+}
+
+// RepoIdentity returns the "org/name" identity of the git checkout at repoRoot,
+// derived from its origin remote. It is the same value session-start records in
+// a roster's Repo field, computed by the same parser, so a roster's Repo and the
+// identity of the checkout that owns it always compare equal.
+//
+// It returns "" when repoRoot is empty, has no origin remote, or the remote URL
+// cannot be parsed. A checkout with no parseable origin also records "" in its
+// rosters, so "" == "" still matches those sessions; callers treat a "" identity
+// as "this checkout's own sessions" and leave differently-identified sessions to
+// the checkout that owns them.
+func RepoIdentity(repoRoot string) string {
+	if repoRoot == "" {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", repoRoot, "remote", "get-url", "origin").Output()
+	if err != nil {
+		return ""
+	}
+	return ParseGitRemote(string(out))
 }

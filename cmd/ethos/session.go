@@ -8,6 +8,7 @@ import (
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/spf13/cobra"
 )
@@ -535,8 +536,14 @@ func runSessionPurge(cmd *cobra.Command) error {
 	}
 
 	// DES-058: PurgeTombstoned refuses to strand a session's unsealed audit
-	// lines unless --force, and leaves a flagged tombstone when it proceeds.
-	purged, refused, err := ss.PurgeTombstoned(sessionPurgeForce)
+	// lines unless --force, and leaves a flagged tombstone when it proceeds. It
+	// probes the live audit zone under this checkout (repoRoot) and only for
+	// sessions whose recorded identity matches this checkout's (repoID); a purge
+	// run outside any repo leaves every repo-bound session for its owning
+	// checkout.
+	repoRoot := resolve.EnvRepoRoot()
+	repoID := audit.RepoIdentity(repoRoot)
+	purged, refused, err := ss.PurgeTombstoned(repoRoot, repoID, sessionPurgeForce)
 	if err != nil {
 		return err
 	}

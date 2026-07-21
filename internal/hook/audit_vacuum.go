@@ -25,14 +25,23 @@ import (
 //
 // globalRoot is ~/.punt-labs/ethos; the per-session tombstones, rosters, and
 // mission-claim sidecars all live under <globalRoot>/sessions.
+//
+// A tombstone's Repo is a git-remote identity (org/name), not a checkout path,
+// so it is matched against this checkout's identity — derived by the same parser
+// session-start used — while filesystem probes stay rooted at repoRoot. A
+// checkout with no parseable origin has identity "", which matches the "" its
+// own sessions recorded. Two checkouts of one repo share an identity, so a seal
+// in one may warn about a session sealed in the other; that is the fail-safe
+// direction (extra caution, never a silent loss).
 func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io.Writer) error {
+	repoID := audit.RepoIdentity(repoRoot)
 	globalSessionsDir := filepath.Join(globalRoot, "sessions")
 	tombstones, err := audit.ListTombstones(globalSessionsDir, w)
 	if err != nil {
 		return err
 	}
 	for _, t := range tombstones {
-		if t.Repo != repoRoot || !t.Flagged() {
+		if t.Repo != repoID || !t.Flagged() {
 			continue
 		}
 		if !audit.SessionLiveFileExists(repoRoot, t.Session) {

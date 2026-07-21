@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -13,6 +14,21 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// phase3RepoID is the identity given to a test repo's origin so the
+// identity-scoped purge and vacuum logic matches the rosters and tombstones
+// these tests create (a roster's Repo is an identity, never a checkout path).
+const phase3RepoID = "punt-labs/ethos"
+
+// addOriginRemote points repo's origin at an org/name so audit.RepoIdentity
+// derives id from the checkout.
+func addOriginRemote(t *testing.T, repo, id string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "remote", "add", "origin", "git@github.com:"+id+".git")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git remote add origin: %v: %s", err, out)
+	}
+}
 
 // resetPhase3Flags zeroes package-level flag vars used by session
 // commands so tests do not leak state.
@@ -403,6 +419,7 @@ func TestRunSessionPurge(t *testing.T) {
 func TestRunAuditSeal_VacuumRunsAfterSealing(t *testing.T) {
 	se := setupPhase3Env(t)
 	resetPhase3Flags(t)
+	addOriginRemote(t, se.repo, phase3RepoID)
 
 	// A live audit line for one session so this seal writes a chunk
 	// (SessionsSealed > 0) — the case the old no-op gate skipped the vacuum on.
@@ -411,11 +428,11 @@ func TestRunAuditSeal_VacuumRunsAfterSealing(t *testing.T) {
 	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"sess-live","tool":"Read"}` + "\n"
 	require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
 
-	// A flagged tombstone for a lost session bound to this repo → the vacuum
-	// must warn regardless of whether anything sealed.
+	// A flagged tombstone for a lost session bound to this repo's identity → the
+	// vacuum must warn regardless of whether anything sealed.
 	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
 	require.NoError(t, audit.WriteTombstone(sessionsDir, audit.Tombstone{
-		Session: "sess-lost", Repo: se.repo, UnsealedLines: true,
+		Session: "sess-lost", Repo: phase3RepoID, UnsealedLines: true,
 	}))
 
 	_, stderr, err := execHandler(t, "audit", "seal")
@@ -431,7 +448,7 @@ func setupRefusedSession(t *testing.T, se *cliSubprocessEnv, id string) {
 	st := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos"))
 	root := session.Participant{AgentID: "user1"}
 	primary := session.Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
-	require.NoError(t, st.Create(id, root, primary, se.repo, ""))
+	require.NoError(t, st.Create(id, root, primary, phase3RepoID, ""))
 	live := audit.LiveAuditPath(se.repo, id)
 	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
 	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + id + `","tool":"Read"}` + "\n"
@@ -443,6 +460,7 @@ func TestRunSessionPurge_JSONRefused(t *testing.T) {
 	resetPhase3Flags(t)
 	sessionPurgeForce = false
 	t.Cleanup(func() { sessionPurgeForce = false })
+	addOriginRemote(t, se.repo, phase3RepoID)
 	setupRefusedSession(t, se, "sess-refused")
 
 	stdout, _, err := execHandler(t, "session", "purge", "--json")
