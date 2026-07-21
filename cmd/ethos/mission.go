@@ -48,7 +48,7 @@ func missionStore() *mission.Store {
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
 	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), root).
-		WithSessionID(currentSessionIDBestEffort())
+		WithSessionResolver(currentSessionIDBestEffort)
 }
 
 // currentSessionIDBestEffort resolves the current session id from
@@ -95,7 +95,7 @@ func missionStoreForCreate() *mission.Store {
 	// summary and leave per-mission storage on the global tree
 	// (m-2026-05-23-004 escalation).
 	ms := mission.NewStoreWithRoots(resolve.FindRepoRoot(), root).
-		WithSessionID(currentSessionIDBestEffort())
+		WithSessionResolver(currentSessionIDBestEffort)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
 	if err != nil {

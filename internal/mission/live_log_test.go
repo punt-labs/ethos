@@ -96,6 +96,45 @@ func TestMissionLiveLog_SessionlessAppendRoutesToLiveZone(t *testing.T) {
 	assert.True(t, haveUpdate, "the sessionless update event must be read")
 }
 
+// TestMissionLiveLog_LazySessionResolverRoutesLater is R7-1: a store built
+// before the session mapping exists (the MCP server starting first) must not
+// freeze the empty resolution. The first non-empty resolver result routes and
+// is then cached, so a session that appears after construction still attributes
+// its events instead of stranding them in the reserved no-session log.
+func TestMissionLiveLog_LazySessionResolverRoutesLater(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	id := "m-2026-07-21-007"
+
+	// The session mapping does not exist yet: the resolver returns empty.
+	var sid string
+	s := NewStoreWithRoots(repoRoot, globalRoot).
+		WithSessionResolver(func() string { return sid })
+
+	require.NoError(t, s.Create(newContract(id)))
+	assert.FileExists(t, audit.LiveMissionLogPath(repoRoot, id, sessionlessID),
+		"a sessionless create lands in the reserved log")
+
+	// The session mapping appears. The next append must route to the real
+	// session's live log, not the reserved no-session log.
+	sid = "sessLate"
+	require.NoError(t, appendEventForTest(t, s, id, Event{
+		TS: "2026-07-21T00:00:00Z", Event: "dispatch", Actor: "claude",
+	}))
+	assert.FileExists(t, audit.LiveMissionLogPath(repoRoot, id, "sessLate"),
+		"an append after the mapping appears must route to the real session")
+
+	// Once resolved non-empty, the id is cached: a later resolver change is
+	// ignored, since a session does not change mid-process.
+	sid = "sessChanged"
+	require.NoError(t, appendEventForTest(t, s, id, Event{
+		TS: "2026-07-21T00:00:01Z", Event: "close", Actor: "claude",
+	}))
+	_, statErr := os.Stat(audit.LiveMissionLogPath(repoRoot, id, "sessChanged"))
+	assert.True(t, os.IsNotExist(statErr),
+		"the resolved session id must be cached, not re-resolved per append")
+}
+
 func TestMissionLiveLog_MonotonicTimestamps(t *testing.T) {
 	s, repoRoot := twoTreeSessionStore(t, "sess1")
 	id := "m-2026-07-21-002"

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -60,7 +61,16 @@ type Store struct {
 	// with a strictly-monotonic timestamp, instead of the tracked
 	// log.jsonl. Empty (tests, non-session contexts) keeps the legacy
 	// tracked-log append so the tree behavior is unchanged there.
-	sessionID string
+	//
+	// A fixed value from WithSessionID wins. Otherwise sessionResolver
+	// is consulted lazily at each append and its first non-empty result
+	// is cached here — so a long-lived process (the MCP server) that
+	// starts before the session mapping exists still attributes later
+	// events to the real session instead of the reserved no-session log.
+	// sessionMu guards the lazy cache-fill against concurrent appends.
+	sessionID       string
+	sessionResolver func() string
+	sessionMu       sync.Mutex
 }
 
 // NewStore creates a Store rooted at the given directory.
@@ -143,6 +153,38 @@ func (s *Store) WithArchetypeStore(as *ArchetypeStore) *Store {
 func (s *Store) WithSessionID(sessionID string) *Store {
 	s.sessionID = sessionID
 	return s
+}
+
+// WithSessionResolver wires a lazy session-id resolver, consulted at each
+// append rather than frozen at construction. A long-lived process (the MCP
+// server) can outlive the moment the session mapping first appears: resolving
+// once at startup would freeze an empty id and misroute every later event to
+// the reserved no-session log. The resolver is called until it returns a
+// non-empty id, which is then cached — a session does not change mid-process.
+//
+// A fixed WithSessionID value takes precedence; the resolver only fills an
+// empty cache. The CLI single-shot path pays one resolution regardless, so it
+// stays zero-cost. Returns the receiver so construction stays compact.
+func (s *Store) WithSessionResolver(resolve func() string) *Store {
+	s.sessionResolver = resolve
+	return s
+}
+
+// resolveSessionID returns the session id for an append: a fixed WithSessionID
+// value, else the first non-empty resolver result (cached), else empty. The
+// caller maps empty to the reserved sessionlessID.
+func (s *Store) resolveSessionID() string {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	if s.sessionID != "" {
+		return s.sessionID
+	}
+	if s.sessionResolver != nil {
+		if id := s.sessionResolver(); id != "" {
+			s.sessionID = id
+		}
+	}
+	return s.sessionID
 }
 
 // WithRepoRoot sets the repository root for the post-close trace

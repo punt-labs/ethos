@@ -35,7 +35,7 @@ const sessionlessID = "no-session"
 // lands under the reserved sessionlessID.
 func (s *Store) appendLiveEventLocked(missionID string, e Event) error {
 	repoRoot := s.repoRoot
-	sessionID := s.sessionID
+	sessionID := s.resolveSessionID()
 	if sessionID == "" {
 		sessionID = sessionlessID
 	}
