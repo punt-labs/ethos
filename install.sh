@@ -74,13 +74,14 @@ install_hook() {
 
   if grep -q "^# --- BEGIN $tag" "$dest" 2>/dev/null; then
     : # our section is present — strip and re-append below (idempotent)
-  elif grep -qF "$ident" "$dest" 2>/dev/null && ! grep -q "^# --- BEGIN " "$dest" 2>/dev/null; then
+  elif awk 'NR == 2' "$dest" 2>/dev/null | grep -qF "$ident" && ! grep -q "^# --- BEGIN " "$dest" 2>/dev/null; then
     # Our own pre-marker standalone: positively identified by the header line
-    # IDENT that every version of our hook carries and no foreign hook does,
-    # and with no section markers of its own. Replace it with the marker form.
-    # Positive identification — not "ethos shebang and no markers", which a
-    # foreign hook with a pasted seal comment would also satisfy and get its
-    # host content overwritten.
+    # IDENT on LINE 2, which every version of our hook carries there. Checking
+    # line 2 specifically — not anywhere — is what distinguishes our standalone
+    # from a `cat hooks/pre-commit.sh >> hook` hybrid, whose host content comes
+    # first and pushes our header mid-file. The hybrid falls through to
+    # strip-and-append, preserving the host. Replace the standalone with the
+    # marker form.
     write_marker_form "$dest" "$src" "$tag"
     ok "$dest refreshed"
     return
@@ -95,13 +96,17 @@ install_hook() {
 
   # Last effective line: the last non-blank, non-comment line. A trailing
   # comment after an exit must not hide it. An unconditional `exit`, or an
-  # `exec` of a program, bypasses the appended section; but `exec` with a
+  # `exec` of a program, bypasses the appended section. `exec` with a
   # redirection target (exec 3>&1, exec >log) is an fd builtin that does not
-  # replace the shell, so it is not flagged.
+  # replace the shell, so those forms are excluded rather than flagged.
   last=$(awk '/^[[:space:]]*#/ { next } NF { l = $0 } END { sub(/^[[:space:]]+/, "", l); print l }' "$tmp")
   case "$last" in
-    exit|exit\ *|exec\ [A-Za-z/._]*)
-      warn "$dest ends in an unconditional '${last%% *}' — the ethos section may not run" ;;
+    exit|exit\ *)
+      warn "$dest ends in an unconditional 'exit' — the ethos section may not run" ;;
+    exec\ [0-9]*|exec\ '<'*|exec\ '>'*|exec\ '&'*)
+      : ;; # fd redirection, not a process replacement
+    exec\ ?*)
+      warn "$dest ends in an unconditional 'exec' — the ethos section may not run" ;;
   esac
 
   emit_section "$tag" "$src" >> "$tmp"
@@ -117,18 +122,25 @@ install_hook() {
 # .git/worktrees/<name>) and honors core.hooksPath. Doctor resolves the same
 # way, so installer and doctor agree on one path.
 #
-# core.hooksPath conventionally points at a TRACKED path inside the work tree
-# (husky's .husky/). Installing there is correct — the seal must live where
-# git runs hooks — but it modifies a version-controlled file, so warn the
-# operator (to stderr) rather than dirtying the tree silently.
+# core.hooksPath can point at a TRACKED path inside the work tree (husky's
+# .husky/) or at a shared directory OUTSIDE the repo (~/.githooks). Installing
+# there is correct — the seal must live where git runs hooks — but each case
+# has a different consequence worth naming: a tracked file dirties the tree, a
+# shared dir affects every repo using it. Warn accordingly (to stderr) rather
+# than acting silently. All paths are made absolute first so the comparisons
+# hold regardless of the mix of relative and absolute forms git returns.
 resolve_hooks_dir() {
   command -v git >/dev/null 2>&1 || return 0
   _hd=$(git rev-parse --git-path hooks 2>/dev/null || true)
   [ -n "$_hd" ] || return 0
   _common=$(git rev-parse --git-common-dir 2>/dev/null || true)
+  _top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  case "$_hd" in /*) ;; *) _hd="$PWD/$_hd" ;; esac
+  case "$_common" in ""|/*) ;; *) _common="$PWD/$_common" ;; esac
   case "$_hd" in
-    "$_common"/*) ;;
-    *) warn "core.hooksPath places hooks at $_hd inside the work tree — the seal will be written into a tracked file" ;;
+    "$_common"/*) ;; # under the git dir — private, not tracked
+    "$_top"/*) warn "core.hooksPath places hooks at $_hd inside the work tree — the seal will be written into a tracked file" ;;
+    *) warn "core.hooksPath places hooks outside the repo at $_hd — shared across every repo using this hooksPath" ;;
   esac
   printf '%s\n' "$_hd"
 }
