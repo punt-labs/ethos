@@ -396,6 +396,34 @@ func TestRunSessionPurge(t *testing.T) {
 	assert.Contains(t, stdout, "No stale sessions found")
 }
 
+// TestRunAuditSeal_VacuumRunsAfterSealing pins SFH S3: the vacuum cross-check
+// must warn about a lost session even on a commit that actually sealed a
+// chunk — not only on a total no-op. A flagged tombstone's warning has to
+// repeat at every commit until acked.
+func TestRunAuditSeal_VacuumRunsAfterSealing(t *testing.T) {
+	se := setupPhase3Env(t)
+	resetPhase3Flags(t)
+
+	// A live audit line for one session so this seal writes a chunk
+	// (SessionsSealed > 0) — the case the old no-op gate skipped the vacuum on.
+	live := audit.LiveAuditPath(se.repo, "sess-live")
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","session":"sess-live","tool":"Read"}` + "\n"
+	require.NoError(t, os.WriteFile(live, []byte(line), 0o600))
+
+	// A flagged tombstone for a lost session bound to this repo → the vacuum
+	// must warn regardless of whether anything sealed.
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, audit.WriteTombstone(sessionsDir, audit.Tombstone{
+		Session: "sess-lost", Repo: se.repo, UnsealedLines: true,
+	}))
+
+	_, stderr, err := execHandler(t, "audit", "seal")
+	require.NoError(t, err)
+	assert.Contains(t, stderr, "sess-lost", "vacuum warning must appear even when a chunk sealed")
+	assert.Contains(t, stderr, "live file is gone")
+}
+
 // setupRefusedSession creates a stale, repo-bound session with an unsealed
 // live audit line so `session purge` (no --force) refuses it.
 func setupRefusedSession(t *testing.T, se *cliSubprocessEnv, id string) {

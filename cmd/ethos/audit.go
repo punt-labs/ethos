@@ -204,12 +204,15 @@ func sessionStartDateResolver(repoRoot string) func(string) string {
 }
 
 // activeRepoSessions returns the ids of roster-active sessions bound to
-// repoRoot — the second source the vacuum cross-check iterates. Best-effort:
-// a roster read error skips that session rather than failing the seal.
-func activeRepoSessions(repoRoot string) []string {
+// repoRoot — the second source the vacuum cross-check iterates. A single
+// unreadable roster skips that session (best-effort, the doc-sanctioned case),
+// but a List error empties the whole roster-active half of the cross-check, so
+// it warns on stderr rather than silently returning nil.
+func activeRepoSessions(repoRoot string, errOut io.Writer) []string {
 	ss := sessionStore()
 	ids, err := ss.List()
 	if err != nil {
+		fmt.Fprintf(errOut, "ethos: audit seal: listing sessions for vacuum cross-check: %v\n", err)
 		return nil
 	}
 	var out []string
@@ -281,13 +284,15 @@ func runAuditSeal(out, errOut io.Writer) error {
 	if res.Deferred {
 		return nil
 	}
-	// Vacuum cross-check on the no-op path: a seal that touched nothing must
-	// still notice a session whose unsealed lines were lost (DES-058 §Seal
-	// failure policy). Warnings only — never blocks the commit.
-	if !auditSealDryRun && res.SessionsSealed == 0 && res.ChunksStaged == 0 {
+	// Vacuum cross-check after EVERY non-dry-run seal, not only the no-op path.
+	// A flagged tombstone's warning must repeat at every commit until the
+	// operator acks it (DES-058 §Seal failure policy); gating on a total no-op
+	// skipped it whenever anything sealed — i.e. on nearly every real commit,
+	// precisely when the repo is busiest. Warn-only; never blocks the commit.
+	if !auditSealDryRun {
 		if home, hErr := os.UserHomeDir(); hErr == nil {
 			globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-			if vErr := hook.VacuumCrossCheck(repoRoot, globalRoot, activeRepoSessions(repoRoot), errOut); vErr != nil {
+			if vErr := hook.VacuumCrossCheck(repoRoot, globalRoot, activeRepoSessions(repoRoot, errOut), errOut); vErr != nil {
 				fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check: %v\n", vErr)
 			}
 		}
