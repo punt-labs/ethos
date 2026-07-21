@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
@@ -76,6 +77,31 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 
 	now := time.Now().UTC()
 	entry := buildAuditEntry(input, sessionID, repoRoot, now)
+
+	// DES-058: inside a repo, appends target the machine-local live file
+	// and carry a strictly-monotonic per-session ts allocated under the
+	// live-zone flock. Outside a repo, the legacy single-tree fallback is
+	// kept — there is no local zone to seal from.
+	if repoRoot != "" {
+		livePath := liveAuditPath(repoRoot, sessionID)
+		sealedDir, dirErr := resolveRepoSessionDir(repoRoot, sessionID, now)
+		if dirErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
+				dirErr, sessionID, entry.Tool, entry.ToolInputPreview)
+			return nil
+		}
+		legacyPath := filepath.Join(sealedDir, "audit.jsonl")
+		if _, writeErr := appendLiveAudit(livePath, sealedDir, legacyPath, entry, now); writeErr != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
+				writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
+			if sentErr := emitAuditSentinel(livePath, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
+				fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
+			}
+		}
+		return nil
+	}
 
 	path, err := resolveAuditWritePath(repoRoot, globalSessionsDir, sessionID, now)
 	if err != nil {

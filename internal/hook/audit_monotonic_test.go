@@ -1,0 +1,180 @@
+package hook
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// liveEntry appends one entry through appendLiveAudit and returns the
+// allocated entry. It resolves the live/sealed paths for a repo+session.
+func liveEntry(t *testing.T, repo, sessionID, tool string, now time.Time) auditEntry {
+	t.Helper()
+	live := liveAuditPath(repo, sessionID)
+	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sessionID)
+	legacy := filepath.Join(sealedDir, "audit.jsonl")
+	e := auditEntry{Session: sessionID, Tool: tool}
+	got, err := appendLiveAudit(live, sealedDir, legacy, e, now)
+	if err != nil {
+		t.Fatalf("appendLiveAudit: %v", err)
+	}
+	return got
+}
+
+func TestAppendLiveAuditMonotonic(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-mono"
+	// Three appends at the same wall-clock instant must get strictly
+	// increasing timestamps.
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	a := liveEntry(t, repo, sid, "Read", now)
+	b := liveEntry(t, repo, sid, "Read", now)
+	c := liveEntry(t, repo, sid, "Read", now)
+	ta, _ := parseLineTS(a.Ts)
+	tb, _ := parseLineTS(b.Ts)
+	tc, _ := parseLineTS(c.Ts)
+	if !(ta < tb && tb < tc) {
+		t.Errorf("timestamps not strictly increasing: %d, %d, %d", ta, tb, tc)
+	}
+}
+
+func TestAppendLiveAuditClockRegression(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-regress"
+	later := time.Date(2026, 7, 20, 12, 0, 5, 0, time.UTC)
+	earlier := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	a := liveEntry(t, repo, sid, "Read", later)
+	// A backward clock step must still produce a strictly greater ts.
+	b := liveEntry(t, repo, sid, "Read", earlier)
+	ta, _ := parseLineTS(a.Ts)
+	tb, _ := parseLineTS(b.Ts)
+	if tb <= ta {
+		t.Errorf("clock regression not corrected: a=%d b=%d", ta, tb)
+	}
+	if tb != ta+1 {
+		t.Errorf("bumped ts = %d, want %d (last+1ns)", tb, ta+1)
+	}
+}
+
+func TestAppendLiveAuditRestartRecovery(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-restart"
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	a := liveEntry(t, repo, sid, "Read", now)
+	// A fresh call (simulating a process restart) recovers last_ts from
+	// the live file tail and continues monotonically at the same instant.
+	b := liveEntry(t, repo, sid, "Read", now)
+	ta, _ := parseLineTS(a.Ts)
+	tb, _ := parseLineTS(b.Ts)
+	if tb <= ta {
+		t.Errorf("restart recovery failed: a=%d b=%d", ta, tb)
+	}
+}
+
+func TestAppendLiveAuditSeedsAboveWatermark(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-seed"
+	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sid)
+	// A committed chunk already covers a high ts. The first live append
+	// must sort strictly after it even though the wall clock is far below.
+	high := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	writeChunkFile(t, sealedDir, sessionChunkFile(high-10, high), high-10, high)
+	past := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	got := liveEntry(t, repo, sid, "Read", past)
+	ts, _ := parseLineTS(got.Ts)
+	if ts <= high {
+		t.Errorf("live ts %d did not sort above watermark %d", ts, high)
+	}
+}
+
+func TestAppendLiveAuditTruncatesTornTail(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-torn"
+	live := liveAuditPath(repo, sid)
+	if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A complete line followed by a torn (no-newline) fragment.
+	complete := `{"ts":"` + formatLineTS(1000) + `","session":"s","tool":"Read"}` + "\n"
+	torn := `{"ts":"` + formatLineTS(2000) + `","session":"s","tool":"Bas`
+	if err := os.WriteFile(live, []byte(complete+torn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	liveEntry(t, repo, sid, "Read", now)
+	data, err := os.ReadFile(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The torn fragment must be gone; the file must hold exactly the
+	// complete line plus the new append (two lines, both terminated).
+	lines := splitLines(data)
+	if len(lines) != 2 {
+		t.Fatalf("want 2 lines after torn-tail truncation, got %d: %q", len(lines), data)
+	}
+	if data[len(data)-1] != '\n' {
+		t.Error("file does not end in newline after append")
+	}
+}
+
+func TestReadSessionAuditUnion(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-union"
+	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sid)
+	// One sealed chunk (ts 100,200) plus live lines past the watermark.
+	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 200)
+	live := liveAuditPath(repo, sid)
+	if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"ts":"` + formatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n" +
+		`{"ts":"` + formatLineTS(300) + `","session":"` + sid + `","tool":"Bash"}` + "\n"
+	if err := os.WriteFile(live, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := readSessionAudit(repo, sid, time.Now())
+	if err != nil {
+		t.Fatalf("readSessionAudit: %v", err)
+	}
+	// Sealed 100,200 + live tail past watermark 200 → only ts 300 added.
+	// The live line at ts 200 is at the watermark, not past it.
+	if len(entries) != 3 {
+		t.Fatalf("union entries = %d, want 3 (100,200 sealed + 300 live): %+v", len(entries), entries)
+	}
+	var last int64
+	for _, e := range entries {
+		ts, _ := parseLineTS(e.Ts)
+		if ts < last {
+			t.Errorf("entries not ordered by ts: %d after %d", ts, last)
+		}
+		last = ts
+	}
+}
+
+func TestReadSessionAuditCorruptChunkErrors(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-corrupt"
+	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sid)
+	// A chunk whose last line ts (150) disagrees with its filename <last> (200).
+	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 150)
+	_, err := readSessionAudit(repo, sid, time.Now())
+	if err == nil {
+		t.Fatal("readSessionAudit over content-vs-name mismatch = nil, want error")
+	}
+}
+
+func TestReadSessionAuditLegacyOnly(t *testing.T) {
+	repo := t.TempDir()
+	sid := "sess-legacy"
+	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sid)
+	// A frozen legacy audit.jsonl with two lines, no chunks, no live file.
+	writeChunkFile(t, sealedDir, "audit.jsonl", 100, 200)
+	entries, err := readSessionAudit(repo, sid, time.Now())
+	if err != nil {
+		t.Fatalf("readSessionAudit legacy-only: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("legacy-only entries = %d, want 2", len(entries))
+	}
+}

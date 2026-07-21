@@ -225,6 +225,24 @@ func runHookAuditLog() error {
 		_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
 		return nil
 	}
+	// DES-058: inside a repo, appends target the machine-local live file
+	// and serialize on the live-zone flock beside it — the same lock a
+	// seal takes. Outside a repo there is no local zone, so the legacy
+	// global session lock still covers the single-tree fallback write.
+	if repoRoot != "" {
+		handlerRan := false
+		if lockErr := hook.WithLiveAuditLock(repoRoot, sessionID, func() error {
+			err := hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
+			handlerRan = true
+			return err
+		}); lockErr != nil && !handlerRan {
+			fmt.Fprintf(os.Stderr,
+				"ethos: audit-log: acquiring live lock %s: %v; falling through unlocked\n",
+				sessionID, lockErr)
+			_ = hook.HandleAuditLog(bytes.NewReader(data), repoRoot, sessionsDir)
+		}
+		return nil
+	}
 	ss := sessionStore()
 	// WithSessionLock returns errors from BOTH lock acquisition AND
 	// the callback fn. Distinguish them with a flag so a future

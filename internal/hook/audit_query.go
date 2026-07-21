@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // AuditView is the exported, render-ready projection of an audit log
@@ -78,10 +79,9 @@ func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([
 	seenSessions := make(map[string]struct{})
 
 	if repoRoot != "" {
-		base := filepath.Join(repoRoot, ".punt-labs", "ethos", "sessions")
-		repoEntries, sessions, err := queryRepoTreeAudit(base, delegationID)
+		repoEntries, sessions, err := queryRepoTreeAudit(repoRoot, delegationID)
 		if err != nil {
-			return nil, fmt.Errorf("querying repo audit %s: %w", base, err)
+			return nil, fmt.Errorf("querying repo audit %s: %w", repoRoot, err)
 		}
 		for _, e := range repoEntries {
 			out = append(out, toView(e))
@@ -102,36 +102,21 @@ func QueryAuditByDelegation(repoRoot, globalSessionsDir, delegationID string) ([
 	return out, nil
 }
 
-// queryRepoTreeAudit walks <base>/<date>-<id>/audit.jsonl files,
-// returns matching entries and the set of session ids that were
-// inspected (so the legacy walker can skip them). A missing base
-// directory is not an error.
-func queryRepoTreeAudit(base, delegationID string) ([]auditEntry, []string, error) {
-	dirs, err := os.ReadDir(base)
+// queryRepoTreeAudit reads every repo session's union stream (sealed
+// chunks + live tail, DES-058) and returns the entries matching the
+// delegation, plus the set of session ids inspected. A missing tree is
+// not an error.
+func queryRepoTreeAudit(repoRoot, delegationID string) ([]auditEntry, []string, error) {
+	sessions, err := listRepoSessions(repoRoot)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, nil
-		}
-		return nil, nil, fmt.Errorf("reading %s: %w", base, err)
+		return nil, nil, err
 	}
-
+	now := time.Now()
 	var out []auditEntry
-	var sessions []string
-	for _, d := range dirs {
-		if !d.IsDir() {
-			continue
-		}
-		name := d.Name()
-		sessionID := sessionIDFromDir(name)
-		if sessionID == "" {
-			continue
-		}
-		sessions = append(sessions, sessionID)
-
-		path := filepath.Join(base, name, "audit.jsonl")
-		entries, err := readAuditEntries(path)
+	for _, sessionID := range sessions {
+		entries, err := readSessionAudit(repoRoot, sessionID, now)
 		if err != nil {
-			return nil, nil, fmt.Errorf("reading %s: %w", path, err)
+			return nil, nil, fmt.Errorf("reading session %s: %w", sessionID, err)
 		}
 		out = append(out, filterByDelegation(entries, delegationID)...)
 	}

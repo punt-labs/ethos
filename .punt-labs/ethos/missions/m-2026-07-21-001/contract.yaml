@@ -1,0 +1,57 @@
+mission_id: m-2026-07-21-001
+status: open
+type: implement
+created_at: "2026-07-21T04:58:10Z"
+updated_at: "2026-07-21T04:58:10Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-21T04:58:10Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-t5b6
+    files:
+        - docs/audit-seal.md
+        - DESIGN.md
+write_set:
+    - internal/hook
+    - internal/mission
+    - internal/session
+    - internal/resolve
+    - cmd/ethos
+    - install.sh
+    - hooks
+    - CHANGELOG.md
+    - README.md
+success_criteria:
+    - Implement DES-058 phase 1 (vX.Y.0 transition slice) exactly as specified in docs/audit-seal.md — the merged design is authoritative; deviations require escalation, not improvisation
+    - 'Live-write redirect: the PreToolUse audit writer appends redacted lines to <repo>/.punt-labs/local/ethos/sessions/<session-id>.audit.jsonl (per-checkout live zone) instead of the tracked repo path; per-line f.Sync preserved; the per-session flock moves beside the live file; torn non-newline-terminated tail is truncated on live-file reopen under the flock before appending'
+    - 'Strictly-monotonic per-session timestamps: ts = max(now, last_ts + 1ns) allocated under the flock; last_ts recovered from the live file tail and seeded above the max ts of existing sealed chunks and frozen legacy audit.jsonl'
+    - 'ethos audit seal [--dry-run] [--verbose]: seals every repo session — writes live lines with ts > watermark into a new immutable chunk audit-<first>-<last>.jsonl (19-digit zero-padded Unix-ns names) in the session''s dated sealed dir (session START date), temp+rename, stale-temp cleanup under the flock, unconditional git add of every untracked chunk across BOTH live-zone and tracked session dirs (orphan recovery), malformed chunk name or content-vs-name mismatch fails exit 2; failure classes exactly per the design: exit 2 on EACCES/EIO/malformed/corrupt/git-add-failure; exit 0 no-op on ENOENT (with roster cross-check warning when active sessions exist), nothing-pending, or gitlink-mounted .punt-labs/ethos/ (with one-line stderr deferral notice)'
+    - 'Pre-commit hook: installed by install.sh alongside the existing commit-msg hook; runs ethos audit seal; DES-055 shape (stderr + exit 2 on failure, silent exit 0 on success/no-op)'
+    - 'Mission-close seal: ethos mission close seals the closing mission''s session audit lines and its mission log; mission live log moves to .punt-labs/local/ethos/missions/ with log-<first>-<last>.jsonl chunks, same rules as audit chunks'
+    - 'Read-path union: ethos audit show (and every audit reader, including the Tier B precondition evaluator) returns sealed chunks + live tail past the watermark, deduped (session, ts) for post-discipline lines and byte-equality for frozen legacy-chunk lines, ordered by ts; corrupt sealed chunk surfaces an error naming the chunk; gitlink-deferred sessions flagged with unsealed-line count; output for a single-file legacy session is byte-identical to the pre-change read'
+    - 'Frozen history: existing tracked audit.jsonl/log.jsonl files are read as their session''s oldest chunk and never rewritten; no seeding, no reconciling rewrite (the one-time commit of the currently-dirty file is an operator action, not code)'
+    - 'Tests: unit + integration covering the seal algorithm (watermark, chunk naming, temp+rename, orphan staging, stale-temp cleanup), monotonic-ts allocation (clock regression, restart recovery, legacy seeding), read union (legacy dedup, corrupt chunk error, torn tails, cross-branch overlapping chunks), failure classes (gitlink no-op, ENOENT+roster warning, EACCES exit 2), and an end-to-end: write lines -> commit with hook -> clean tree -> audit show identical'
+    - 'Dogfood verification with expected-vs-actual output pasted in the result: build .tmp/ethos, run a real session write -> seal -> git status clean -> audit show; one invalid input, one dependency-unavailable case, one boundary condition'
+    - CHANGELOG.md updated under [Unreleased]; README.md updated for the new audit seal verb and hook; make check passes; no suppressions (noqa/nolint/xfail) without operator approval except classes pre-authorized by standards
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+context: |
+    DES-058 implementation, phase 1 of 2. The design merged to main as
+    ethos PR #347 (85489ba); docs/audit-seal.md is the full specification
+    and DESIGN.md carries the DES-058 entry. Phase 2 (a later minor
+    version) relocates .lock files and untracks the repo copies — NOT in
+    this mission; do not touch lock relocation beyond what the live-zone
+    flock move requires. Work on a feature branch off main
+    (feat/des-058-audit-seal-impl). The repo's own working tree currently
+    demonstrates the bug (stale mission dirs, .lock files) — do not
+    commit unrelated stale artifacts; scope commits to your write set.
+    Never run make install (the running binary belongs to Claude Code's
+    process tree); build to .tmp/ethos for dogfooding. Escalate with
+    verdict=escalate if the write set is missing a file you genuinely
+    need.
