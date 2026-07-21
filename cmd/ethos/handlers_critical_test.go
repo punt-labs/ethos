@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -537,6 +538,67 @@ func execGit(dir, home string, args ...string) *exec.Cmd {
 		"PATH=" + os.Getenv("PATH"),
 	}
 	return cmd
+}
+
+// TestSealHookPassthroughWithoutEthos installs the shipped pre-commit hook
+// form (the marker-delimited section install.sh writes) into a scratch repo
+// and commits with no ethos anywhere on PATH or in $HOME/.local/bin — CI's
+// shape. The hook must pass through (exit 0) so the commit succeeds: a missing
+// binary must never block a commit. This guards the CI regression where an
+// unguarded `ethos audit seal` hook made `git commit` fail with
+// "ethos: command not found".
+func TestSealHookPassthroughWithoutEthos(t *testing.T) {
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+
+	body, err := os.ReadFile(filepath.Join("..", "..", "hooks", "pre-commit.sh"))
+	require.NoError(t, err, "read hooks/pre-commit.sh")
+
+	// Build the marker form exactly as install.sh's write_marker_form does:
+	// a shebang, then the script body (minus its own shebang) fenced by the
+	// section markers.
+	lines := strings.SplitN(string(body), "\n", 2)
+	rest := ""
+	if len(lines) == 2 {
+		rest = lines[1]
+	}
+	hook := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" + rest +
+		"# --- END ETHOS DES-058 SEAL ---\n"
+
+	repo := t.TempDir()
+	home := t.TempDir() // no .local/bin/ethos under here
+	// PATH holds git's dir only — no ethos reachable anywhere.
+	env := []string{
+		"HOME=" + home,
+		"PATH=" + filepath.Dir(gitPath),
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"GIT_AUTHOR_NAME=Test",
+		"GIT_AUTHOR_EMAIL=test@test",
+		"GIT_COMMITTER_NAME=Test",
+		"GIT_COMMITTER_EMAIL=test@test",
+	}
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = repo
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	out, err := run("init", "-q")
+	require.NoError(t, err, "git init: %s", out)
+	hooks := filepath.Join(repo, ".git", "hooks")
+	require.NoError(t, os.MkdirAll(hooks, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(hook), 0o755))
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "f.txt"), []byte("x\n"), 0o644))
+	out, err = run("add", "f.txt")
+	require.NoError(t, err, "git add: %s", out)
+	out, err = run("commit", "-m", "initial")
+	require.NoError(t, err, "commit must pass through when ethos is absent: %s", out)
 }
 
 // --- Priority 5: isUsageError ---

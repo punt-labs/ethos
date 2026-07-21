@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -214,6 +215,270 @@ func TestCheckDuplicateFields(t *testing.T) {
 	})
 }
 
+func TestCheckSealHook(t *testing.T) {
+	// writeHook creates a repo with .git/hooks/pre-commit holding body.
+	writeHook := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
+		return dir
+	}
+
+	t.Run("not in a repo", func(t *testing.T) {
+		r := CheckSealHook("")
+		assert.True(t, r.Passed())
+		assert.Equal(t, "not in a repo", r.Detail)
+	})
+
+	t.Run("no pre-commit hook", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+		assert.Contains(t, r.Detail, "install.sh")
+	})
+
+	t.Run("standalone seal hook", func(t *testing.T) {
+		dir := writeHook(t, "#!/bin/sh\n# DES-058\nethos audit seal || exit 2\n")
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "standalone")
+	})
+
+	t.Run("chained seal section", func(t *testing.T) {
+		body := "#!/bin/sh\nbd hooks run pre-commit || exit 1\n" +
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n" +
+			"# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained")
+	})
+
+	t.Run("stale section without seal call", func(t *testing.T) {
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"echo placeholder\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("commented-out seal call is not active", func(t *testing.T) {
+		// A disabled invocation must not read as active — that is exactly
+		// the silent-absence recurrence the check exists to catch.
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"# if ! ethos audit seal; then exit 2; fi\n" +
+			"# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("mention in a foreign comment is not active", func(t *testing.T) {
+		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\nrun_lint\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("inline trailing comment mention is not active", func(t *testing.T) {
+		// The phrase in an inline comment after code must not read as a call.
+		body := "#!/bin/sh\necho ok # ethos audit seal\nrun_lint\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("phrase as arguments to another command is not active", func(t *testing.T) {
+		// `ethos audit seal` passed as args to echo is not a call (C1).
+		body := "#!/bin/sh\necho ethos audit seal\nrun_lint\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("comment after a word-break char is not active", func(t *testing.T) {
+		// Shell starts a comment after ';' or '&', not just whitespace (C2).
+		for _, body := range []string{
+			"#!/bin/sh\ncmd;# ethos audit seal\nrun_lint\n",
+			"#!/bin/sh\ncmd &# ethos audit seal\nrun_lint\n",
+		} {
+			dir := writeHook(t, body)
+			r := CheckSealHook(dir)
+			assert.False(t, r.Passed(), "body: %q", body)
+			assert.Contains(t, r.Detail, "missing")
+		}
+	})
+
+	t.Run("call after a separator is active", func(t *testing.T) {
+		// A genuine command-position call (after '&&') must still PASS.
+		body := "#!/bin/sh\nprecheck && ethos audit seal\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
+
+	t.Run("string-literal mention is not an active call", func(t *testing.T) {
+		// echo/printf text containing the phrase must not read as a call.
+		dir := writeHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("printf note inside a section is stale, not active", func(t *testing.T) {
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"printf 'audit seal is disabled\\n'\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("seal call in a non-shell hook fails", func(t *testing.T) {
+		// A shell seal call pasted into a Python hook can never run as sh.
+		dir := writeHook(t, "#!/usr/bin/env python3\nethos audit seal\n")
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "not a shell")
+	})
+
+	t.Run("non-executable hook fails with chmod remedy", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o644))
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "not executable")
+		assert.Contains(t, r.Detail, "chmod +x")
+	})
+
+	t.Run("foreign hook without seal", func(t *testing.T) {
+		dir := writeHook(t, "#!/bin/sh\nbd hooks run pre-commit || exit 1\n")
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("gitdir file redirects hooks path", func(t *testing.T) {
+		// A submodule .git file points directly at a dir with hooks/ and
+		// no commondir — the hooks dir is target/hooks.
+		real := t.TempDir()
+		hooks := filepath.Join(real, "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+		wt := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
+			[]byte("gitdir: "+real+"\n"), 0o644))
+		r := CheckSealHook(wt)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
+
+	t.Run("worktree resolves hooks through commondir", func(t *testing.T) {
+		// Real worktree layout: the .git file points at
+		// <main>/.git/worktrees/<name>, which has a commondir file (../..)
+		// back to the main .git — where the hooks actually live. The seal
+		// hook at the per-worktree admin dir must be ignored; only the
+		// common hooks dir counts.
+		mainGit := t.TempDir() // stands in for <main>/.git
+		commonHooks := filepath.Join(mainGit, "hooks")
+		require.NoError(t, os.MkdirAll(commonHooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(commonHooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+
+		wtAdmin := filepath.Join(mainGit, "worktrees", "wt")
+		require.NoError(t, os.MkdirAll(filepath.Join(wtAdmin, "hooks"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(wtAdmin, "commondir"),
+			[]byte("../..\n"), 0o644))
+		// A decoy hook at the dead path git never runs — must be ignored.
+		require.NoError(t, os.WriteFile(filepath.Join(wtAdmin, "hooks", "pre-commit"),
+			[]byte("#!/bin/sh\necho decoy\n"), 0o755))
+
+		wt := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
+			[]byte("gitdir: "+wtAdmin+"\n"), 0o644))
+
+		r := CheckSealHook(wt)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "standalone")
+	})
+
+	t.Run("worktree via real git worktree add", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		mainDir := t.TempDir()
+		gitRun := func(dir string, args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(),
+				"HOME="+t.TempDir(),
+				"GIT_CONFIG_GLOBAL=/dev/null",
+				"GIT_CONFIG_SYSTEM=/dev/null",
+				"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+				"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "git %v: %s", args, out)
+		}
+		gitRun(mainDir, "init", "-q")
+		gitRun(mainDir, "commit", "--allow-empty", "-q", "-m", "init")
+
+		// The hook git actually runs lives in the main repo's hooks dir.
+		hooks := filepath.Join(mainDir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+
+		wtDir := filepath.Join(t.TempDir(), "wt")
+		gitRun(mainDir, "worktree", "add", "-q", wtDir, "-b", "b")
+
+		r := CheckSealHook(wtDir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
+
+	t.Run("honors core.hooksPath like the installer", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		repo := t.TempDir()
+		cmd := exec.Command("git", "-C", repo, "init", "-q")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git init: %s", out)
+		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err = cmd.CombinedOutput()
+		require.NoError(t, err, "git config: %s", out)
+
+		// The seal lives where git runs hooks — the tracked .husky dir, the
+		// same path the installer resolves via `git rev-parse --git-path hooks`.
+		husky := filepath.Join(repo, ".husky")
+		require.NoError(t, os.MkdirAll(husky, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(husky, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+		// A seal in .git/hooks must NOT satisfy the check — git never runs it.
+		defaultHooks := filepath.Join(repo, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(defaultHooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(defaultHooks, "pre-commit"),
+			[]byte("#!/bin/sh\necho decoy\n"), 0o755))
+
+		r := CheckSealHook(repo)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
+}
+
 func TestRunAllAndHelpers(t *testing.T) {
 	// A fixture that passes all four checks initially, including
 	// human-identity via USER=mal matching the mal identity.
@@ -233,7 +498,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot and nil teams — the orphaned-agent check
 	// degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", nil)
-	require.Len(t, results, 5)
+	require.Len(t, results, 6)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -245,17 +510,18 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Default agent",
 		"Duplicate fields",
 		"Orphaned agent files",
+		"Audit seal hook",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 5, PassedCount(results))
+	assert.Equal(t, 6, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 5)
+	assert.Less(t, PassedCount(results), 6)
 
 	// At least one result should name the identity directory failure.
 	var found bool

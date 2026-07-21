@@ -493,8 +493,64 @@ pending audit lines into tracked chunks.
 Pre-commit — not commit-msg — because commit-msg runs after the index
 snapshot is taken; a chunk staged there is too late to enter the commit.
 The commit-msg trailer hook (DES-054) stays as it is; sealing needs the
-earlier hook. Both install through the same `install.sh` path that
-already places `commit-msg`.
+earlier hook. Both install through the same `install.sh` path.
+
+**Coexisting with a host hook (ethos-2ol1).** A repo commonly already has a
+`pre-commit` hook — beads installs one on every org machine. The installer
+does not overwrite it and, critically, does not skip: it appends a
+marker-delimited `ETHOS DES-058 SEAL` section (the beads-integration marker
+pattern) that runs the seal after the host hook's content falls through. An
+empty slot still gets the standalone hook; a prior ethos section is stripped
+and re-appended in place, so re-install is idempotent. Fresh installs write
+the marker form too (a shebang plus the section), so every state the installer
+creates is marker-managed. The installer overwrites a file only when it is
+positively identified as our own standalone — our distinctive header comment
+on line 2, where every version of the standalone carries it. A hook that
+carries that text anywhere else (a foreign hook that pasted our whole script
+below its own, or one that merely mentions the seal) is chained into, not
+clobbered, so its content survives. A symlinked hook is updated through its
+target so a dotfile manager's link is not flattened; a symlink whose target
+cannot be resolved aborts the install rather than writing to a wrong path. A
+host hook carrying our BEGIN marker with no matching END (hand-truncated)
+aborts too, rather than letting the strip pass silently delete everything
+after BEGIN. The installer only chains into a shell-family host (`sh`/`bash`/
+`dash`/`ksh`/`zsh`, or a hook with no shebang, which git runs via `sh`): a
+Python, Node, or binary host would be run under its own interpreter on the
+mixed file, breaking the host and never running the seal, so such a host is
+left untouched with a warning — doctor then FAILs on the absent seal, the
+correct signal.
+
+The chained section preserves the host's fall-through exit status: the seal
+scripts capture `$?` on entry and return it on every passthrough, so a host
+hook that signals failure by fall-through (a bare `golangci-lint run`, say)
+still blocks the commit after chaining; only a seal failure overrides, with
+its own blocking exit 2. The append-at-end contract has one limit: a host hook
+that unconditionally `exit`s or `exec`s bypasses the section — the installer
+detects that on the host's last effective line (past trailing comments) and
+warns. `ethos doctor` reports whether the committed hook carries an active
+seal — an `audit seal` invocation in command position (bare `ethos` or the
+hook's `"$ethos_bin"`), on a non-comment line, in an executable shell hook —
+so the silent-absence failure this fix closes cannot recur undetected. The
+check is lexical: it rejects commented-out calls, string-literal mentions
+(`echo "audit seal"`), and calls stranded in a non-shell hook, but cannot see
+through dynamic dispatch (an `eval` or an aliased wrapper), which FAILs the
+check — the safe direction.
+
+Installer and doctor resolve the hooks directory the same way — git's own
+`git rev-parse --git-path hooks` — so they always agree on where the seal
+lives. That resolution handles both worktrees and `core.hooksPath`: inside a
+worktree it returns the common `.git/hooks` git actually runs (not the dead
+per-worktree `.git/worktrees/<name>/hooks`), and in a `core.hooksPath` repo it
+returns that configured directory. Since `core.hooksPath` conventionally
+points at a tracked path inside the work tree (husky's `.husky/`), installing
+there modifies a version-controlled file; the installer warns explicitly
+before doing so rather than dirtying the tree silently. Doctor falls back to
+resolving the `.git` gitdir and `commondir` by hand when git is unavailable.
+
+One known limit remains: doctor verifies the seal section is *present*, not
+*reachable*. If a host hook's tail later becomes an unconditional `exit` or
+`exec`, the seal stops firing while doctor still passes — the install-time
+warning on such a tail is the mitigation.
 
 **Secondary — mission close.** `ethos mission close` (Tier B) seals **every**
 live file under the **closing checkout's** `local/ethos/missions/<id>/` — each

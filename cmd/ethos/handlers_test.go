@@ -94,7 +94,7 @@ func TestRunDoctor_AllPass(t *testing.T) {
 
 	stdout, _, err := execHandler(t, "doctor")
 	require.NoError(t, err, "expected all doctor checks to pass")
-	// Four checks, all should PASS.
+	// All checks should PASS.
 	assert.Contains(t, stdout, "Identity directory")
 	assert.Contains(t, stdout, "Human identity")
 	assert.Contains(t, stdout, "Default agent")
@@ -134,7 +134,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
-	require.Len(t, results, 5)
+	require.Len(t, results, 6)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
