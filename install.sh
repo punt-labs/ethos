@@ -15,22 +15,43 @@ ok()   { printf '  %b✓%b %s\n' "$GREEN" "$NC" "$1"; }
 warn() { printf '  %b!%b %s\n' "$YELLOW" "$NC" "$1" >&2; }
 fail() { printf '  %b✗%b %s\n' "$YELLOW" "$NC" "$1" >&2; exit 1; }
 
-# install_hook DEST SRC TAG DESREF
+# emit_section TAG SRC — print SRC (minus its shebang) fenced by our markers.
+emit_section() {
+  printf '# --- BEGIN %s ---\n' "$1"
+  awk 'NR == 1 && /^#!/ { next } { print }' "$2"
+  printf '# --- END %s ---\n' "$1"
+}
+
+# write_marker_form DEST SRC TAG — write a fresh hook: a shebang plus the
+# marker-delimited section. Every state install_hook creates is marker-managed,
+# so re-install always resolves through the marker branch.
+write_marker_form() {
+  _tmp=$(mktemp "${1}.XXXXXX") || fail "cannot create a temp file next to $1 — hook not installed"
+  {
+    printf '#!/bin/sh\n'
+    emit_section "$3" "$2"
+  } > "$_tmp"
+  mv "$_tmp" "$1"
+  chmod +x "$1"
+}
+
+# install_hook DEST SRC TAG IDENT
 # Install the ethos hook at DEST, coexisting with any hook already there.
-#   - no hook present: copy the standalone SRC (fresh install)
+#   - no hook present: write the marker form
 #   - our marker section present: replace it in place (idempotent upgrade)
-#   - our standalone present (wholly ours): refresh it
-#   - a foreign or hybrid hook present: append a marker-delimited section
+#   - our pre-marker standalone (positively identified by its header IDENT,
+#     no section markers): replace with the marker form
+#   - a foreign or hybrid hook present: append our marker section
 #
 # The appended section runs after the host hook's own content, so it fires
 # only when that content falls through — the beads pre-commit hook, the case
 # this fix exists for, exits nonzero only on failure and otherwise falls
 # through. The section carries SRC, which preserves the host's fall-through
 # exit status (SRC captures $? and returns it on passthrough). A host hook
-# that exits (or execs) unconditionally bypasses the section; that case is
-# detected on the host's last effective line and warned.
+# that exits or execs a program unconditionally bypasses the section; that
+# case is detected on the host's last effective line and warned.
 install_hook() {
-  dest=$1 src=$2 tag=$3 desref=$4
+  dest=$1 src=$2 tag=$3 ident=$4
 
   # A symlinked hook (dotfile manager, shared hooks dir): operate on the
   # link's target so mv does not flatten the link into a regular file and
@@ -46,28 +67,23 @@ install_hook() {
   fi
 
   if [ ! -e "$dest" ]; then
-    cp "$src" "$dest"
-    chmod +x "$dest"
+    write_marker_form "$dest" "$src" "$tag"
     ok "$dest installed"
     return
   fi
 
   if grep -q "^# --- BEGIN $tag" "$dest" 2>/dev/null; then
     : # our section is present — strip and re-append below (idempotent)
-  elif grep -q "$desref" "$dest" 2>/dev/null; then
-    # DESREF is present but our marker is not. Refresh by overwrite ONLY when
-    # the file is wholly ours: an ethos shebang and no other section markers.
-    # A hybrid (host hook + a pasted seal body whose marker drifted) mentions
-    # DESREF too; overwriting it would silently delete the host section, so
-    # fall through to strip-and-append, which preserves the host.
-    IFS= read -r first < "$dest" 2>/dev/null || first=""
-    if { [ "$first" = "#!/bin/sh" ] || [ "$first" = "#!/usr/bin/env sh" ]; } &&
-       ! grep -q "^# --- BEGIN " "$dest" 2>/dev/null; then
-      cp "$src" "$dest"
-      chmod +x "$dest"
-      ok "$dest refreshed"
-      return
-    fi
+  elif grep -qF "$ident" "$dest" 2>/dev/null && ! grep -q "^# --- BEGIN " "$dest" 2>/dev/null; then
+    # Our own pre-marker standalone: positively identified by the header line
+    # IDENT that every version of our hook carries and no foreign hook does,
+    # and with no section markers of its own. Replace it with the marker form.
+    # Positive identification — not "ethos shebang and no markers", which a
+    # foreign hook with a pasted seal comment would also satisfy and get its
+    # host content overwritten.
+    write_marker_form "$dest" "$src" "$tag"
+    ok "$dest refreshed"
+    return
   fi
 
   tmp=$(mktemp "${dest}.XXXXXX") || fail "cannot create a temp file next to $dest — hook not installed"
@@ -78,23 +94,43 @@ install_hook() {
   ' "$dest" > "$tmp"
 
   # Last effective line: the last non-blank, non-comment line. A trailing
-  # comment after an exit must not hide it; `exec` replaces the shell exactly
-  # as an unconditional exit would, so both bypass the appended section.
+  # comment after an exit must not hide it. An unconditional `exit`, or an
+  # `exec` of a program, bypasses the appended section; but `exec` with a
+  # redirection target (exec 3>&1, exec >log) is an fd builtin that does not
+  # replace the shell, so it is not flagged.
   last=$(awk '/^[[:space:]]*#/ { next } NF { l = $0 } END { sub(/^[[:space:]]+/, "", l); print l }' "$tmp")
   case "$last" in
-    exit|exit\ *|exec|exec\ *)
+    exit|exit\ *|exec\ [A-Za-z/._]*)
       warn "$dest ends in an unconditional '${last%% *}' — the ethos section may not run" ;;
   esac
 
-  {
-    printf '# --- BEGIN %s ---\n' "$tag"
-    awk 'NR == 1 && /^#!/ { next } { print }' "$src"
-    printf '# --- END %s ---\n' "$tag"
-  } >> "$tmp"
+  emit_section "$tag" "$src" >> "$tmp"
 
   mv "$tmp" "$dest"
   chmod +x "$dest"
   ok "$dest chained (ethos section)"
+}
+
+# resolve_hooks_dir — print the hooks directory git runs, or nothing when not
+# in a git work tree. `--git-path hooks` is git's own answer: it resolves a
+# worktree's common dir (where --git-dir points at the dead
+# .git/worktrees/<name>) and honors core.hooksPath. Doctor resolves the same
+# way, so installer and doctor agree on one path.
+#
+# core.hooksPath conventionally points at a TRACKED path inside the work tree
+# (husky's .husky/). Installing there is correct — the seal must live where
+# git runs hooks — but it modifies a version-controlled file, so warn the
+# operator (to stderr) rather than dirtying the tree silently.
+resolve_hooks_dir() {
+  command -v git >/dev/null 2>&1 || return 0
+  _hd=$(git rev-parse --git-path hooks 2>/dev/null || true)
+  [ -n "$_hd" ] || return 0
+  _common=$(git rev-parse --git-common-dir 2>/dev/null || true)
+  case "$_hd" in
+    "$_common"/*) ;;
+    *) warn "core.hooksPath places hooks at $_hd inside the work tree — the seal will be written into a tracked file" ;;
+  esac
+  printf '%s\n' "$_hd"
 }
 
 VERSION="4.1.0"
@@ -326,59 +362,56 @@ else
   warn "Could not seed starter content — run 'ethos seed' manually"
 fi
 
-# --- Step 6c: Install commit-msg trailer hook (DES-054) ---
+# --- Step 6c: Resolve the git hooks directory ---
 
-# When run inside a git work tree, install hooks/commit-msg.sh into
-# .git/hooks/commit-msg so commits under a Tier B worker pick up the
-# Mission: and Delegation: git trailers automatically. Passthrough on
-# every other commit — the hook exits 0 unless MISSION_ID or
-# DELEGATION_ID is set in the environment.
+HOOKS_DIR=$(resolve_hooks_dir)
+
+# --- Step 6d: Install commit-msg trailer hook (DES-054) ---
+
+# When run inside a git work tree, install hooks/commit-msg.sh into the hooks
+# dir so commits under a Tier B worker pick up the Mission: and Delegation:
+# git trailers automatically. Passthrough on every other commit — the hook
+# exits with the host status unless MISSION_ID or DELEGATION_ID is set.
 #
-# Skipped silently when not in a git work tree (curl|sh from $HOME).
-# When an unrelated commit-msg hook already exists, chain into it with a
-# marker-delimited section rather than skipping (ethos-2ol1).
+# Skipped silently when not in a git work tree (curl|sh from $HOME). When an
+# unrelated commit-msg hook already exists, chain into it with a marker-
+# delimited section rather than skipping (ethos-2ol1).
 HOOK_SRC=""
 if [ -f "./hooks/commit-msg.sh" ]; then
   HOOK_SRC="./hooks/commit-msg.sh"
 elif [ -n "${TMPDIR_BUILD:-}" ] && [ -f "$TMPDIR_BUILD/hooks/commit-msg.sh" ]; then
   HOOK_SRC="$TMPDIR_BUILD/hooks/commit-msg.sh"
 fi
-if [ -n "$HOOK_SRC" ] && command -v git >/dev/null 2>&1; then
-  # `--git-path hooks` resolves the common hooks dir even inside a worktree,
-  # where `--git-dir` points at .git/worktrees/<name> — a dir git never runs
-  # hooks from. Using --git-dir there installs to a dead path (ethos-2ol1).
-  if HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null); then
-    info "Installing commit-msg trailer hook..."
-    mkdir -p "$HOOKS_DIR"
-    install_hook "$HOOKS_DIR/commit-msg" "$HOOK_SRC" "ETHOS DES-054 TRAILER" "DES-054"
-  fi
+if [ -n "$HOOK_SRC" ] && [ -n "$HOOKS_DIR" ]; then
+  info "Installing commit-msg trailer hook..."
+  mkdir -p "$HOOKS_DIR"
+  install_hook "$HOOKS_DIR/commit-msg" "$HOOK_SRC" "ETHOS DES-054 TRAILER" \
+    "hooks/commit-msg.sh — Append Mission:/Delegation:"
 fi
 
-# --- Step 6d: Install pre-commit seal hook (DES-058) ---
+# --- Step 6e: Install pre-commit seal hook (DES-058) ---
 
-# When run inside a git work tree, install hooks/pre-commit.sh into
-# .git/hooks/pre-commit so `ethos audit seal` runs before every commit's
-# index snapshot — the sealed audit chunks land in the same commit as the
-# work. Passthrough (exit 0) when ethos is not installed or nothing is
-# pending; fail-closed (exit 2) on a broken audit store.
+# When run inside a git work tree, install hooks/pre-commit.sh into the hooks
+# dir so `ethos audit seal` runs before every commit's index snapshot — the
+# sealed audit chunks land in the same commit as the work. Passthrough when
+# ethos is not installed or nothing is pending; fail-closed (exit 2) on a
+# broken audit store.
 #
-# Skipped silently when not in a git work tree. When a foreign pre-commit
-# hook already exists — the beads hook on every org machine — chain into it
-# with a marker-delimited section rather than skipping (ethos-2ol1). Without
-# this the seal, the feature's primary trigger, never installs.
+# Skipped silently when not in a git work tree. When a foreign pre-commit hook
+# already exists — the beads hook on every org machine — chain into it with a
+# marker-delimited section rather than skipping (ethos-2ol1). Without this the
+# seal, the feature's primary trigger, never installs.
 PRECOMMIT_SRC=""
 if [ -f "./hooks/pre-commit.sh" ]; then
   PRECOMMIT_SRC="./hooks/pre-commit.sh"
 elif [ -n "${TMPDIR_BUILD:-}" ] && [ -f "$TMPDIR_BUILD/hooks/pre-commit.sh" ]; then
   PRECOMMIT_SRC="$TMPDIR_BUILD/hooks/pre-commit.sh"
 fi
-if [ -n "$PRECOMMIT_SRC" ] && command -v git >/dev/null 2>&1; then
-  # --git-path hooks, not --git-dir: see the commit-msg step above.
-  if HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null); then
-    info "Installing pre-commit seal hook..."
-    mkdir -p "$HOOKS_DIR"
-    install_hook "$HOOKS_DIR/pre-commit" "$PRECOMMIT_SRC" "ETHOS DES-058 SEAL" "DES-058"
-  fi
+if [ -n "$PRECOMMIT_SRC" ] && [ -n "$HOOKS_DIR" ]; then
+  info "Installing pre-commit seal hook..."
+  mkdir -p "$HOOKS_DIR"
+  install_hook "$HOOKS_DIR/pre-commit" "$PRECOMMIT_SRC" "ETHOS DES-058 SEAL" \
+    "hooks/pre-commit.sh — Seal pending live audit lines"
 fi
 
 # --- Step 7: Health check ---
