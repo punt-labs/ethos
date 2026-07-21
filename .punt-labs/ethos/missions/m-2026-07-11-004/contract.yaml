@@ -1,0 +1,26 @@
+mission_id: m-2026-07-11-004
+status: failed
+type: design
+created_at: "2026-07-11T15:48:04Z"
+updated_at: "2026-07-21T15:26:30Z"
+closed_at: "2026-07-21T15:26:30Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-11T15:48:04Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-ni0y
+write_set:
+    - docs/ni0y-resolution-mode.md
+success_criteria:
+    - Design an opt-in repo-authoritative resolution mode that disables the global fallback across all four layered stores
+    - Specify the config knob in .punt-labs/ethos.yaml and its interaction with active_bundle/DES-051
+    - 'Define repo-only miss behavior: hard error listing exactly which handles/attrs are missing'
+    - Produce a design doc + proposed ADR text with rejected alternatives
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'ethos-ni0y. Today resolution is repo-local -> active bundle -> global (DES-051) where global fallback catches the tail, so global-only handles (ylc, claudia) still resolve against a vendored repo. Vox de-submoduled ethos into a vendored .punt-labs/ethos/ (PR #284) but still resolves via global. This half makes the repo layer authoritative when opted in. Pair with the vendor command (separate mission). Design only, no code. Write the design to docs/ni0y-resolution-mode.md.'

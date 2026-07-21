@@ -1,0 +1,28 @@
+mission_id: m-2026-07-11-008
+status: failed
+type: design
+created_at: "2026-07-11T16:08:01Z"
+updated_at: "2026-07-21T15:27:24Z"
+closed_at: "2026-07-21T15:27:24Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-11T16:08:01Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs:
+    ticket: ethos-ni0y
+write_set:
+    - docs/ni0y-ext-local.md
+success_criteria:
+    - Design a <ns>.local.yaml companion to each ext namespace file for secret/machine-specific values
+    - Specify base + .local merge on read (local overrides per key) extending DES-008
+    - 'Specify write targeting: how ethos ext set chooses base vs .local (recommend a --local flag)'
+    - Specify gitignore for repo-local *.local.yaml and vendor exclusion (include *.yaml skip *.local.yaml)
+    - 'State back-compat: no .local file = today byte-identical'
+    - Produce a design doc + proposed DES-008 amendment/ADR text + rejected alternatives
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'ethos-ni0y ext-safety increment. Discovery: ext across all 30 identities is ZERO secrets — quarry memory_collection+session_context (all 30, the agent memory wiring), vox voice config (3), empty beadle gpg_key_id (1). So ext is useful and MUST be vendored by default (a vendored repo needs it). Jim''s decision: instead of default-off/redaction, split ext per namespace into <ns>.yaml (shareable, vendored, committable) + <ns>.local.yaml (secret/machine-specific, gitignored, NEVER vendored) — mirrors .envrc/.envrc.local and vox.md/vox.local.md. Read merges base+local, local wins. Vendor includes base, always skips .local — that layout IS the safety boundary (no heuristic redaction). This makes ext-on-by-default safe. Coordinate with the vendor design (docs/ni0y-vendor-command.md, mdm) and the resolution-mode design (docs/ni0y-resolution-mode.md, bwk). Read internal/identity/ ext load path, ext.go, DES-008. Design only, no code. Write to docs/ni0y-ext-local.md.'
