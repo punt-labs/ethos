@@ -346,8 +346,16 @@ func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
 			UnsealedLines: unsealed > 0 || probeFailed,
 			LiveFileGone:  liveGone,
 		}
+		// A failed tombstone write means the loss record cannot be created. The
+		// delete below would then destroy the roster — the record's last lookup
+		// key — leaving the vacuum cross-check permanently blind. Refuse and
+		// keep the roster, even under --force: force overrides an unprovable
+		// STATE, never a failed loss RECORD.
 		if tErr := audit.WriteTombstone(s.sessionsDir(), t); tErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: purge: writing tombstone for %s: %v\n", roster.Session, tErr)
+			fmt.Fprintf(os.Stderr,
+				"ethos: purge: refusing to purge %s: cannot write loss tombstone: %v; roster kept so the loss stays discoverable\n",
+				roster.Session, tErr)
+			return false, true
 		}
 	}
 	if dErr := s.deleteFiles(roster.Session); dErr != nil {

@@ -83,6 +83,97 @@ func breakMissionTree(t *testing.T, repo string) {
 	require.NoError(t, os.WriteFile(missions, []byte("x"), 0o600))
 }
 
+// writeOrphanSessionCorrupt plants an orphan .corrupt (no chunk, no marker) in
+// a session's sealed dir, so ScanSealedDir — and thus SessionUnsealedCount —
+// fails loud.
+func writeOrphanSessionCorrupt(t *testing.T, repo, sessionID string) {
+	t.Helper()
+	dir := filepath.Join(repo, ".punt-labs", "ethos", "sessions", "2026-07-21-"+sessionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	name := audit.SessionChunkFile(100, 200) + ".corrupt"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600))
+}
+
+func TestPurgeTombstoned_SessionProbeErrorRefuses(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.Create("sess-sp", root, primary, repo, ""))
+	// Only the SessionUnsealedCount probe fails (orphan .corrupt in the session
+	// sealed dir); the mission probes succeed. Guards the SessionUnsealedCount
+	// swallow specifically — a revert of it would let this session purge.
+	writeOrphanSessionCorrupt(t, repo, "sess-sp")
+
+	purged, refused, err := s.PurgeTombstoned(false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-sp")
+}
+
+func TestPurgeTombstoned_MissionProbeErrorRefuses(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-mp", root, primary, repo, ""))
+	// A valid mission chunk carrying the session (so it is enumerated with a
+	// present live log) plus an orphan .corrupt for a different range, so
+	// MissionUnsealedCount's watermark scan fails. Isolates that swallow.
+	mid := "m-2026-07-21-050"
+	mdir := filepath.Join(repo, ".punt-labs", "ethos", "missions", mid)
+	require.NoError(t, os.MkdirAll(mdir, 0o700))
+	chunk := `{"ts":"` + audit.FormatLineTS(100) + `","event":"create","actor":"a"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(200) + `","event":"close","actor":"a"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(mdir, audit.MissionChunkFile("sess-mp", 100, 200)), []byte(chunk), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(mdir, audit.MissionChunkFile("sess-mp", 300, 400)+".corrupt"), []byte("x"), 0o600))
+	live := audit.LiveMissionLogPath(repo, mid, "sess-mp")
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	require.NoError(t, os.WriteFile(live, []byte(`{"ts":"`+audit.FormatLineTS(250)+`","event":"update","actor":"a"}`+"\n"), 0o600))
+
+	purged, refused, err := s.PurgeTombstoned(false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-mp")
+}
+
+func TestPurgeTombstoned_TombstoneWriteFailureRefuses(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-tb", root, primary, repo, ""))
+	// No live file → liveGone → a tombstone is attempted. Block its write by
+	// planting a directory at the tombstone path; the roster must survive.
+	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tb.purged"), 0o700))
+
+	purged, refused, err := s.PurgeTombstoned(false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-tb")
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-tb", "a failed tombstone write must keep the roster")
+}
+
+func TestPurgeTombstoned_TombstoneWriteFailureRefusesUnderForce(t *testing.T) {
+	s := testStore(t)
+	repo := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-tbf", root, primary, repo, ""))
+	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tbf.purged"), 0o700))
+
+	// --force overrides an unprovable state, never a failed loss record.
+	purged, refused, err := s.PurgeTombstoned(true)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-tbf")
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-tbf")
+}
+
 func TestPurgeTombstoned_ProbeErrorRefuses(t *testing.T) {
 	s := testStore(t)
 	repo := t.TempDir()
