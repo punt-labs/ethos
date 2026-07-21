@@ -88,13 +88,15 @@ session start.
 **When the roster entry is gone.** `ethos session purge` removes stale
 roster entries — precisely the crashed sessions the orphan-recovery promise
 (§Seal triggers) most needs to date. Purge does not outrun the seal: before
-removing an entry it `stat`s the session's recorded live file, and if that
-file still holds lines above the session's sealed watermark it **refuses**,
-or with `--force` warns loudly and proceeds. An **absent** live file is
-itself evidence, not a clean case: if the recorded live file is already gone,
-purge warns and sets the tombstone flag in a distinct **"live file already
-gone"** variant, so a checkout deleted before its lines sealed cannot slip
-through purge unremarked (§Seal failure policy). The seal recovers the date
+removing an entry it `stat`s the session's recorded live file **and every
+mission live file the session left** (the glob
+`local/ethos/missions/*/<session-id>.log.jsonl`), and if any of them still
+holds lines above its sealed watermark it **refuses**,
+or with `--force` warns loudly and proceeds. An **absent** live file in either
+namespace is itself evidence, not a clean case: if a recorded live file is
+already gone, purge warns and sets the tombstone flag in a distinct **"live
+file already gone"** variant, so a checkout deleted before its lines sealed
+cannot slip through purge unremarked (§Seal failure policy). The seal recovers the date
 without the roster and never invents a wall-clock one. If a sealed directory
 already exists for the session, its `<YYYY-MM-DD>` prefix is authoritative.
 If not, `session purge` leaves a dated **tombstone**
@@ -358,14 +360,26 @@ policy): fail-closed must never leave bypass as the only exit.
 **Write atomicity — temp + rename.** The seal writes the chunk to a temp
 file in the sealed directory (same filesystem, so rename is atomic),
 `f.Sync()`s it, then renames it to `audit-<first>-<last>.jsonl`. A crash
-before the rename leaves a stale temp file. Temp names embed the chunk
-range (`.audit-<first>-<last>.jsonl.tmp`), and after the crash more appends
-widen the tail, so the next seal writes a **different** temp name — the
-stale temp is never overwritten naturally. The seal therefore deletes any
-of **its own** stale temps — files matching `.audit-<first>-<last>.jsonl.tmp`
-older than itself — in the session directory, under the flock, before writing
-its own; the tracked chunk never exists in a partial state, and no abandoned
-temp accumulates in the tracked tree. A foreign file that merely ends in
+before the rename leaves a stale temp file. A temp name is the dotted chunk
+name of its namespace — `.audit-<first>-<last>.jsonl.tmp` in a session
+directory, `.log-<session-id>-<first>-<last>.jsonl.tmp` in a mission directory
+(§Mission-tree churn) — and after the crash more appends widen the tail, so
+the next seal writes a **different** temp name — the stale temp is never
+overwritten naturally. The seal therefore deletes any stale temp matching that
+namespace's `.<chunk-stem>.jsonl.tmp` pattern older than itself, in the
+directory it is sealing, under the flock, before writing its own. In a session
+directory that is only its own session's (`.audit-*.jsonl.tmp`); in a
+**mission** directory it is **any** session's (`.log-*-*.jsonl.tmp`,
+namespace-wide, not session-scoped), because several sessions seal into the one
+shared directory and a crashed session whose live file is later removed would
+otherwise leave a temp that no per-(mission, session) seal ever runs to clear —
+a permanent dirty tree. The namespace-wide scope means two sessions seal the
+same mission directory under **different** per-(mission, session) flocks, so
+one seal's "older than itself" deletion can hit another's in-flight temp and
+fail that seal's rename — a **loud and transient** outcome (exit 2, the re-run
+succeeds), never a silent one. The tracked chunk never exists in a partial
+state, and no abandoned temp accumulates in the tracked tree. A foreign file
+that merely ends in
 `.tmp` is not the seal's to destroy: it falls under the sibling rule
 (§Watermark) — ignored, never deleted — so the seal never silently removes a
 file it did not create. A crash after the rename but
@@ -382,7 +396,7 @@ orphan survives the next commit.
 ```text
 seal(session):
     acquire flock(<repo>/.punt-labs/local/ethos/sessions/<session-id>.lock)
-    delete the seal's own stale .audit-*.jsonl.tmp        # foreign *.tmp left untouched
+    delete stale .audit-*.jsonl.tmp older than self       # mission dir: any session's .log-*-*.jsonl.tmp (namespace-wide); a cross-flock hit fails the victim's rename loudly (exit 2), never silently; foreign *.tmp left untouched
     verify each sealed chunk parses and last ts == filename <last>   # else exit 2 (escape: quarantine)
     watermark = max ts over sealed chunks (names; legacy file scanned; .quarantine markers)
                 # a marker present but unparseable does not contribute; its .corrupt is orphan, not covered
@@ -450,15 +464,20 @@ lineage*; across a merged history the read tolerates the overlap.
 ### Seal triggers: pre-commit repo-wide, mission close secondary
 
 **Primary — pre-commit.** A `pre-commit` hook runs `ethos audit seal`. It
-visits **every** session directory in the repo — the union of those under
-`.punt-labs/local/ethos/sessions/` (live lines to seal) and those under the
-tracked `.punt-labs/ethos/sessions/` (chunks to stage) — seals each
-session's not-yet-sealed live lines, and `git add`s **every** untracked
+visits **every** session directory *and* every mission directory in the repo —
+the union of the live trees under `.punt-labs/local/ethos/` (session live files
+`sessions/<session-id>.audit.jsonl` and per-(mission, session) live files
+`missions/<id>/<session-id>.log.jsonl`, lines to seal) and the tracked trees
+under `.punt-labs/ethos/` (`sessions/<YYYY-MM-DD>-<session-id>/` and
+`missions/<id>/`, chunks to stage) — seals each session's not-yet-sealed live
+lines in both namespaces, and `git add`s **every** untracked
 chunk it finds, whether this run wrote it or a prior crashed seal left it
-(§Write atomicity). Visiting the sealed tree too, not only sessions with
+(§Write atomicity). Visiting the sealed trees too, not only directories with
 pending live lines, is what makes orphan recovery reachable: a session whose
-crash left an untracked chunk but no pending live lines — or whose live file
-is already gone — is still visited and its orphan staged. Because pre-commit
+crash left an untracked chunk — an `audit-<..>` chunk in a session dir or a
+`log-<sid>-<..>` chunk in a mission dir — but no pending live lines, or whose
+live file is already gone, is still visited and its orphan staged. Because
+pre-commit
 runs *before* git snapshots the index, the freshly staged chunks land in the
 **same commit** as the work they document.
 
@@ -477,10 +496,21 @@ The commit-msg trailer hook (DES-054) stays as it is; sealing needs the
 earlier hook. Both install through the same `install.sh` path that
 already places `commit-msg`.
 
-**Secondary — mission close.** `ethos mission close` (Tier B) seals the
-closing mission's session and its `log.jsonl` so a closed mission's
-record is complete on disk even if no commit immediately follows. Mission
-close is a deliberate lifecycle boundary; it is the natural second seal.
+**Secondary — mission close.** `ethos mission close` (Tier B) seals **every**
+live file under the **closing checkout's** `local/ethos/missions/<id>/` — each
+session's that wrote into this checkout, taking each per-(mission, session)
+flock in turn (they are shared-inode locks, held trivially) — so the mission's
+record is complete on disk **for the closing checkout** even if no commit
+immediately follows. The live file is per-checkout by construction, and a git
+worktree is its own checkout with its own `local/`: a delegated-worker session
+(the **required** shape for code archetypes, not an edge case) typically lives
+in a worktree and wrote its tail into that worktree's own
+`local/ethos/missions/<id>/`, a path the closing session never enumerates.
+Those cross-checkout tails ride each checkout's own seal triggers — its
+pre-commit seal, and the SessionEnd teardown flush that is the named mitigation
+for a worktree about to be deleted (§Session end). Mission close is a
+deliberate lifecycle boundary; it is the natural second seal for the checkout
+that runs it.
 
 **Session end — courtesy flush, and the worktree-teardown mitigation.** A
 `SessionEnd` hook MAY call `ethos audit seal`. For a long-lived checkout it
@@ -541,7 +571,7 @@ post-discipline pools (sealed chunks and the live tail) dedup on
 ```text
 read_audit(session):
     monotonic   = sealed chunks named audit-<first>-<last>.jsonl   # any order; mission dir: log-<session-id>-<first>-<last>.jsonl
-    legacy      = frozen audit.jsonl if present                    # no ts in its name; mission dir: frozen log.jsonl
+    legacy      = frozen audit.jsonl if present                    # no ts in its name; mission dir: frozen log.jsonl, then drained missions/<id>.jsonl residue (per line: ts > max <last> of chunks for THAT line's own session; unattributed line kept)
     quarantined = ranges named by <chunk>.quarantine markers       # <chunk> = the namespace's stem
     orphan      = .corrupt files with no covering parseable .quarantine marker   # torn marker reads absent; quarantine crashed mid-verb
     if orphan: error naming them (exit 2)     # resume the quarantine, never skip silently
@@ -554,7 +584,8 @@ read_audit(session):
                                               #   unparseable line with a stderr count
     watermark = max line ts in (Sm ++ Sl) or in quarantined ranges   # 0 if none
     L = read(live)                            # local tree; [] if absent; drop torn tail;
-                                              #   skip a terminated unparseable line (stderr count)
+                                              #   skip a terminated unparseable line (stderr count);
+                                              #   mission dir: this session's own <session-id>.log.jsonl (read unions all sessions)
     tail = [ line in L : ts(line) > watermark ]
     # post-discipline lines collapse on (session, ts); legacy lines pass through
     return stable_sort_by_ts( dedup_by_ts(Sm ++ tail) ++ Sl )   # stable: legacy equal-ts lines keep file order; + a gap marker per unrecovered quarantined range
@@ -626,42 +657,65 @@ They are handled by the same principles, split by kind.
 close.** The mission log is tracked shared history like the audit log,
 but it is appended only at operator-driven lifecycle events (create,
 dispatch, result, reflect, close), not per tool call. It takes the same
-treatment: the live writer appends to the `local` mission log
-(`<repo>/.punt-labs/local/ethos/missions/<id>.jsonl`), and each seal
-writes a new immutable chunk under
-`<repo>/.punt-labs/ethos/missions/<id>/log-<session-id>-<first>-<last>.jsonl`.
-The **mission close** is the authoritative seal, because it is the point
-at which the mission's record is complete; the repo-wide pre-commit seal
-is the clean-tree backstop that also drains pending mission-log lines. One
-mechanism (the chunk seal), two triggers.
+treatment, in **full symmetry with the audit path**: the mission live log is
+**per-(mission, session)**, so each session that emits events for mission
+`<id>` appends to its own live file
+`<repo>/.punt-labs/local/ethos/missions/<id>/<session-id>.log.jsonl`,
+allocating a strictly-monotonic per-(mission, session) `ts` under the same
+flock that serializes that session's appends (§timestamp). Each seal writes a
+new immutable chunk under
+`<repo>/.punt-labs/ethos/missions/<id>/log-<session-id>-<first>-<last>.jsonl`
+holding exactly that live file's unsealed tail. The **mission close** is the
+authoritative seal for the closing checkout: because it seals **every**
+session's live tail under that checkout's `missions/<id>/` (§Seal triggers), it
+is the point at which the mission's record is complete on disk **for the
+closing checkout**; cross-checkout worker tails ride their own checkouts' seal
+triggers, and the repo-wide pre-commit seal is the clean-tree backstop that
+also drains pending mission-log lines. One mechanism (the chunk seal), two
+triggers.
 
 **Why the chunk name carries the sealing session id.** An audit chunk is
 collision-free across sessions for free: each session seals into its **own**
 dated `sessions/<dir>/`, so two sessions' chunks are never siblings and can
-never share a name (§Chunk sealing). A mission chunk has no such isolation —
-**every** session that touches mission `<id>` seals into the one shared
-`missions/<id>/` directory. The per-session monotonic-ts discipline
-(§timestamp) makes `<first>` unique only *within* a session; it does not span
-checkouts. Two checkouts running two sessions, each appending different
-mission events, could therefore mint identically named
-`log-<first>-<last>.jsonl` chunks holding **different content** — an add/add
-merge conflict, the exact disease chunk sealing exists to remove. The
-`<session-id>` segment restores the guarantee: two chunks can share a name
-only when they share a session, where strictly-monotonic `ts` makes `<first>`
-unique, so no collision is possible; chunks from different sessions have
-distinct names and merge additively. The session-id segment supplies what
-the shared mission directory does not and the audit chunk's dated directory
-does.
+never share a name (§Chunk sealing). A mission chunk has no such *directory*
+isolation — **every** session that touches mission `<id>` seals into the one
+shared `missions/<id>/` directory. But each session now writes its own
+per-(mission, session) live file (above) under a strictly-monotonic
+per-(mission, session) `ts`, so `<first>` is unique *within* a session exactly
+as it is for an audit chunk; it simply does not span sessions. The
+`<session-id>` segment supplies the cross-session separation that the audit
+chunk gets from its dated directory: two chunks can share a name only when
+they share a session, where monotonic `ts` makes `<first>` unique, so no
+collision is possible, and chunks from different sessions carry distinct names
+and merge additively. This is the same collision-freedom argument as the audit
+path — the session-id segment stands in for the audit chunk's per-session
+directory. Without it, two checkouts each sealing a different session's mission
+events could mint identically named `log-<first>-<last>.jsonl` chunks holding
+**different content** — an add/add merge conflict, the exact disease chunk
+sealing exists to remove.
 
 **Read and watermark are per-session.** The mission-log read is the union
-across **all** sessions' chunks in `missions/<id>/`, stable-sorted by `ts`
-with line identity `(session, ts)` — the same rule the audit read applies
-(§`ethos audit show`). The seal watermark is **per-session**: a session's
-watermark is the max `<last>` over the chunk names carrying **its own**
-`<session-id>`, so one session's seal neither counts another session's chunks
-as already sealed nor skips its own lines for want of a watermark it cannot
-derive. This mirrors the audit read and watermark exactly; only the source
-directory is shared rather than per-session, which is precisely why the name
+across **all** sessions' chunks *and* live tails in `missions/<id>/`,
+stable-sorted by `ts` with line identity `(session, ts)` — the same rule the
+audit read applies across a session's pools (§`ethos audit show`). The
+`session` half of that identity is supplied by the chunk name for a sealed
+line and by the live filename for a live-tail line, so an Event line needs
+**no session field of its own**. The seal is **per-(mission, session)**: a
+session's watermark is the max `<last>` over the chunk names carrying **its
+own** `<session-id>`, joined by the same two extra contributors the audit
+watermark takes (§Watermark) resolved in the mission namespace — every covering
+`log-<session-id>-<first>-<last>.quarantine` marker's **verified** `<last>`,
+and the frozen legacy sources scanned once for their max `ts` (the tracked
+`log.jsonl`, and the legacy per-checkout `missions/<id>.jsonl` residue where
+present, §Migration) — and its tail is exactly its own live file's lines above
+that watermark, so one session's seal neither counts another session's chunks
+as already sealed nor re-seals another session's tail. The live writer seeds
+its per-(mission, session) monotonic floor (§timestamp) from this **same source
+set**, exactly as the audit writer does, so no `ts` it mints can sink below the
+watermark into the gap a partial quarantine's marker opens above the max chunk
+`ts` — the same clock-regression gap the audit floor closes. This mirrors the
+audit read and watermark exactly; only the source directory is shared rather
+than per-session, which is precisely why the chunk name and the live filename
 must name the session.
 
 **`.lock` — never tracked; move to the global tree.** A lock file is not
@@ -784,8 +838,10 @@ the check scopes tombstones to the committing repo and derives the live-file
 path from that recorded path and the session id — without it the tombstone
 branch has nothing to `stat` and nothing to scope by, and would either revert
 to dead code or warn in every repo forever. For each source it `stat`s the
-session's recorded live file and
-**warns on stderr naming any session whose live file is absent** (still exit
+session's recorded live file **and every mission live file the session left**
+(the glob `local/ethos/missions/*/<session-id>.log.jsonl`) and
+**warns on stderr naming any session whose live file is absent** in either
+namespace (still exit
 0 — a missing live file must not block an unrelated commit, but it must not
 pass unremarked either, because it can mean a checkout was deleted, or a
 single session's live file removed, with unsealed lines, §Migration). A
@@ -946,6 +1002,20 @@ which lines were lost to corruption, rather than an error or a silent hole.
 Retiring the chunk therefore does not regress the watermark and no phantom
 re-seal of the covered range fires.
 
+**Mission-namespace quarantine.** The verb resolves the artifact's namespace
+from its name. A `log-<session-id>-<first>-<last>` chunk is a mission chunk:
+the verb parses `<session-id>` out of the chunk name and re-seals (step 2) from
+that session's live file `local/ethos/missions/<id>/<session-id>.log.jsonl` —
+not the session audit live file — the `<id>` taken from the chunk's directory.
+The `.corrupt` rename, the re-sealed content-named `log-<session-id>-<first>-<C>`
+chunk, and the `log-<session-id>-<first>-<last>.quarantine` marker all live in
+`missions/<id>/` beside the chunk, carrying the mission chunk stem. The marker
+contributes its **verified** `<last>` to that session's per-(mission, session)
+watermark source set (§Mission-tree churn). The four steps, the resume state
+machine below, and the cross-checkout merge rule are unchanged in shape — only
+the chunk grammar, the re-seal source path, and the marker directory resolve to
+the mission namespace.
+
 **Resume state machine.** Because the marker is the last durable artifact,
 quarantine is defined by which of the three artifacts exist, so any crash
 mid-verb resumes deterministically:
@@ -1027,13 +1097,17 @@ migration is idempotent, supports `--dry-run`, and follows the shape of
 
 - **`ethos audit seal [--dry-run] [--verbose]`** is the new verb the
   pre-commit hook and mission close both call. It visits **every** session
-  directory in the repo — the union of those under
-  `.punt-labs/local/ethos/sessions/` (live lines) and those under the
-  tracked `.punt-labs/ethos/sessions/` (existing chunks) — seals each
-  session's unsealed live lines into one new chunk, and stages **every**
+  directory *and* mission directory in the repo — the union of the live trees
+  under `.punt-labs/local/ethos/` (session `sessions/<session-id>.audit.jsonl`
+  and per-(mission, session) `missions/<id>/<session-id>.log.jsonl` live lines)
+  and the tracked trees under `.punt-labs/ethos/`
+  (`sessions/<YYYY-MM-DD>-<session-id>/` and `missions/<id>/` existing chunks) —
+  seals each session's unsealed live lines into one new chunk per namespace,
+  and stages **every**
   untracked chunk it finds, including an orphan a prior crashed seal left in
-  a session that now has no pending live lines (§Write atomicity). Visiting
-  the sealed tree, not only sessions with pending live lines, is what keeps
+  a session or mission dir that now has no pending live lines (§Write
+  atomicity). Visiting
+  the sealed trees, not only directories with pending live lines, is what keeps
   orphan recovery reachable. Idempotent: a session whose live lines are all
   at or below its watermark and whose chunks are all tracked seals nothing
   and exits 0. Atomic per session (write chunk via temp + rename under the
@@ -1047,7 +1121,12 @@ migration is idempotent, supports `--dry-run`, and follows the shape of
   watermark at the **verified** loss point, and **stages both the rename and
   the marker itself** (`git mv` + `git add`), so after the verb the repo is
   clean and committable without `--no-verify` and the loss becomes a visible
-  audit event and an explicit read-time gap marker, never a silent skip. A
+  audit event and an explicit read-time gap marker, never a silent skip. The
+  verb resolves the artifact's namespace from its name: a
+  `log-<session-id>-<..>` mission chunk re-seals from the mission live file
+  `missions/<id>/<session-id>.log.jsonl` (session id parsed from the chunk
+  name) and writes its `.corrupt`, re-sealed chunk, and marker in
+  `missions/<id>/`, exactly as an `audit-<..>` chunk works in a session dir. A
   second run over a covered range is a no-op; it never overwrites an existing
   `.corrupt`.
 - **No seeding of the live file.** Chunks are additive: a session that
@@ -1073,9 +1152,33 @@ migration is idempotent, supports `--dry-run`, and follows the shape of
   §Seal triggers names the worktree-teardown seal that mitigates this. The
   seal never deletes the live file either way.
 - **Mission-tree `log.jsonl`.** The existing tracked `log.jsonl` is a
-  frozen chunk too; new mission-log lines go to the `local` mission log
-  and seal into `log-<session-id>-<first>-<last>.jsonl` chunks
-  (§Mission-tree churn).
+  frozen chunk too — read once as the mission's oldest chunk, never
+  re-attributed to a session; new mission-log lines go to the per-session
+  `local` mission log
+  `<repo>/.punt-labs/local/ethos/missions/<id>/<session-id>.log.jsonl` and
+  seal into `log-<session-id>-<first>-<last>.jsonl` chunks (§Mission-tree
+  churn). A per-checkout `missions/<id>.jsonl` live file left by the
+  superseded shared-live design, if any exists pre-upgrade, is **not** treated
+  like the frozen legacy audit file: that superseded design's seal **did** copy
+  its lines into `log-<session-id>-<..>` chunks, so reading it whole would
+  double-count every already-sealed line. It is instead a **one-time drain** —
+  read once at its local path `local/ethos/missions/<id>.jsonl`, filtered **per
+  line** against the line's own session: a line is kept iff its `ts` exceeds the
+  max `<last>` of the chunks carrying **that line's own** session id (a session
+  with no chunks keeps everything; a line with no readable session attribution
+  is **kept**, since over-retention is bounded and visible in the read while
+  over-filtering is silent loss). A cross-session threshold would silently drop
+  a lagging session's never-sealed lines whose range sits entirely below another
+  session's — "sealed" is a per-session property, so the filter consults each
+  line's existing attribution. That consultation does not re-attribute: the
+  surviving residue enters the pre-discipline legacy pool undeduped, carrying no
+  session identity in the new scheme, so only the never-sealed residue
+  contributes. That
+  residue joins the read and the seal as pre-discipline legacy (undeduped,
+  §`ethos audit show`); its ordering against the frozen tracked `log.jsonl` is
+  fixed — the tracked `log.jsonl` sorts first, then the drained
+  `missions/<id>.jsonl` residue — so the two pre-discipline legacy sources have
+  a defined order in the stable sort. It is never re-attributed to a session.
 - **Lock relocation — remove from disk, stop writing.** Unchanged by the
   chunk rulings. Two halves, both required. (1) The per-mission `.lock`
   and `.create.lock` are removed from the working tree **on disk**, not
@@ -1396,9 +1499,12 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   first-line ts — never wall-clock, so one session never splits across two
   dirs). Written via temp + rename for atomicity; temp names embed the chunk
   range, so a widened tail after a crash yields a new temp name rather than an
-  overwrite — the seal deletes only **its own** stale `.audit-*.jsonl.tmp`
-  under the flock before writing its own, and leaves any foreign `*.tmp`
-  untouched (sibling rule). The seal's final act unconditionally `git add`s
+  overwrite — the seal deletes stale `.audit-*.jsonl.tmp` older than itself (in
+  a mission dir **any** session's `.log-*-*.jsonl.tmp`, namespace-wide not
+  session-scoped, so a crashed session's orphaned temp is still collectable; the
+  cross-flock cost — one seal hitting another's in-flight temp — fails that
+  seal's rename loudly (exit 2, re-run succeeds), never silently) under the flock
+  before writing its own, and leaves any foreign `*.tmp` untouched (sibling rule). The seal's final act unconditionally `git add`s
   **every** untracked
   chunk in the session dir (not only the one it wrote), so a crash after
   rename but before staging cannot leave an orphan dirtying the tree. Two
@@ -1406,16 +1512,25 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   with stock git — no merge driver, no `.gitattributes`, no prefix
   invariant, no divergence/reseal.
 - **Seal triggers.** Primary at **pre-commit**: `ethos audit seal` visits
-  **every** session directory in the repo — the union of the live zone
-  (lines to seal) and the tracked sealed tree (chunks to stage) — seals each
-  session's pending live lines and `git add`s **every** untracked chunk it
+  **every** session directory *and* mission directory in the repo — the union
+  of the live zone (session `sessions/<session-id>.audit.jsonl` and
+  per-(mission, session) `missions/<id>/<session-id>.log.jsonl` lines to seal)
+  and the tracked sealed tree (`sessions/<dir>/` and `missions/<id>/` chunks to
+  stage) — seals each session's pending live lines in both namespaces and
+  `git add`s **every** untracked chunk it
   finds, so the record lands in the same commit/PR as the work and a crashed
-  seal's orphan chunk is recovered even when that session has no pending live
-  lines. Repo-wide, not committing-session-scoped: in a squash-merge world
+  seal's orphan chunk is recovered even when that session or mission dir has no
+  pending live lines. Repo-wide, not committing-session-scoped: in a squash-merge world
   per-commit attribution is a non-goal, so orphaned/crashed sessions' lines
   simply land at the next commit — no liveness probe, no session-attribution
   logic. Not commit-msg (runs after the index snapshot). Secondary at
-  **mission close** for Tier B. Session-end sealing is a courtesy flush for a
+  **mission close** for Tier B, which seals **every** live file under the
+  **closing checkout's** `missions/<id>/` — each session's that wrote into this
+  checkout, under its own per-(mission, session) flock — so the record is
+  complete at close **for that checkout**; a delegated worker in a worktree (the
+  required shape for code archetypes, not an edge) wrote its tail into its own
+  checkout, which rides its own seal triggers — pre-commit and the SessionEnd
+  teardown flush. Session-end sealing is a courtesy flush for a
   long-lived checkout, but the load-bearing mitigation for a worktree about
   to be deleted: the live file lives inside the checkout, so worktree removal
   or `git clean -fdx` destroys any unsealed lines, and the SessionEnd flush is
@@ -1467,17 +1582,34 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   writer recovers `last_ts` from the live file's own tail), so timestamps
   never regress across a branch switch even though the seal watermark can.
 - **Mission tree.** `log.jsonl` gets the same live-write/chunk-seal
-  treatment, but the chunk name carries the sealing session id —
-  `log-<session-id>-<first>-<last>.jsonl` — because every session seals into
-  the one shared `missions/<id>/` directory (unlike an audit chunk's own
-  per-session dated dir), so the per-session monotonic-ts guarantee does not
-  span sessions: without the id segment two checkouts appending different
-  mission events could mint identically named chunks with different content,
-  an add/add conflict. The read unions **all** sessions' chunks in the
-  directory (stable-sorted by `ts`, identity `(session, ts)`) and the seal
-  watermark is **per-session** (max `<last>` over that session's own
-  `<session-id>` chunks). Authoritative seal at mission close, pre-commit as
-  the clean-tree backstop. All `.lock` files
+  treatment in **full symmetry with the audit path**: the mission live log is
+  per-(mission, session) —
+  `<repo>/.punt-labs/local/ethos/missions/<id>/<session-id>.log.jsonl`, each
+  session appending under its own strictly-monotonic per-(mission, session)
+  `ts` and the flock that serializes its appends — and each seal writes a
+  chunk `log-<session-id>-<first>-<last>.jsonl` holding exactly that live
+  file's unsealed tail. The chunk name carries the sealing session id because
+  every session seals into the one shared `missions/<id>/` directory (unlike
+  an audit chunk's own per-session dated dir); the `<session-id>` segment
+  supplies the cross-session separation the dated directory gives an audit
+  chunk, so `<first>` is unique within a session and two chunks share a name
+  only when they share a session — no add/add conflict from two checkouts
+  sealing different sessions' events. The read unions **all** sessions' chunks
+  *and* live tails in the directory (stable-sorted by `ts`, identity
+  `(session, ts)`, the `session` half supplied by the chunk name or live
+  filename, so an Event line needs no session field) and the seal is
+  **per-(mission, session)** (watermark = max `<last>` over that session's own
+  `<session-id>` chunks, joined by the mission-namespace `.quarantine` markers'
+  verified `<last>` and the frozen legacy sources' max `ts` — the tracked
+  `log.jsonl` and the legacy per-checkout `missions/<id>.jsonl` residue where
+  present, §Migration — exactly the audit watermark's three-source set resolved
+  in the mission namespace; tail = that session's own live lines above it, the
+  writer seeding its monotonic floor from the same set).
+  Authoritative seal for the closing checkout at mission close (sealing every
+  session's live tail under that checkout's `missions/<id>/`, §Seal triggers;
+  cross-checkout worker tails ride their own checkouts' triggers), pre-commit as
+  the clean-tree backstop.
+  All `.lock` files
   move to the global tree (`~/.punt-labs/ethos/missions/<id>.lock`,
   `.create.lock`) — a lock file never belongs in shared history; migration
   untracks the existing `.create.lock` **and removes it from disk** (a bare
@@ -1505,7 +1637,13 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   chunk from the same state produce byte-identical artifacts that merge clean),
   and **stages every quarantine artifact the marker covers** — the `.corrupt`,
   the marker, the re-sealed chunk, and any `.corrupt-<hash>` — itself
-  (`git mv` + `git add`) so the tree is clean with no hand-staging. The marker contributes to the watermark its
+  (`git mv` + `git add`) so the tree is clean with no hand-staging. The verb
+  resolves the artifact's namespace from its name: a `log-<session-id>-<..>`
+  mission chunk re-seals from `missions/<id>/<session-id>.log.jsonl` (session id
+  parsed from the chunk name) and writes its `.corrupt`, re-sealed chunk, and
+  marker in `missions/<id>/`, the marker contributing its verified `<last>` to
+  that session's mission watermark — the same verb resolved in the mission
+  namespace. The marker contributes to the watermark its
   **verified** `<last>`, never the filename `<last>` on faith, which would
   silently suppress every later line's seal. `audit show` then shows only the
   unrecovered sub-range as an explicit gap. Because the marker is the last
@@ -1559,12 +1697,16 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   rather than refusing, so two byte-identical tombstones stay two records and
   the warning is always retirable. For
   each the hook `stat`s
-  the recorded live file and **warns on stderr naming any session whose live
-  file is absent** (still exit 0 — it may mean a checkout was deleted, or one
+  the recorded live file **and every mission live file the session left** (the
+  glob `local/ethos/missions/*/<session-id>.log.jsonl`) and **warns on stderr
+  naming any session whose live
+  file is absent** in either namespace (still exit 0 — it may mean a checkout
+  was deleted, or one
   session's live file removed, with unsealed lines). `session purge` itself
-  refuses (or with `--force` warns and sets the tombstone flag) when the live
-  file still holds lines above the watermark, and sets the flag in a distinct
-  "live file already gone" variant when the recorded live file is already
+  refuses (or with `--force` warns and sets the tombstone flag) when a live
+  file in either namespace still holds lines above its watermark, and sets the
+  flag in a distinct
+  "live file already gone" variant when a recorded live file is already
   absent (so the crash → checkout-deleted → purge → commit order is caught
   too). A
   **gitlink-mounted** `.punt-labs/ethos/` (a consuming repo before bead
@@ -1605,7 +1747,19 @@ monotonic chunk surfaces as an error, not a drop).
 
 Existing tracked `audit.jsonl`/`log.jsonl` are frozen historical chunks
 and stay — each reads as its session's oldest chunk. Only the write path
-moves to `.punt-labs/local/`. New verb `ethos audit seal [--dry-run]`
+moves to `.punt-labs/local/` (the mission live log to the per-session
+`missions/<id>/<session-id>.log.jsonl`; a pre-upgrade per-checkout
+`missions/<id>.jsonl` from the superseded shared-live design is **not** like
+the frozen legacy audit file — that design's seal copied its lines into chunks,
+so it is drained **once**, filtered **per line** — a line is kept iff its `ts`
+exceeds the max `<last>` of the chunks carrying that line's own session id (a
+session with no chunks keeps everything; a line with no readable attribution is
+kept), since "sealed" is per-session and a cross-session threshold would
+silently drop a lagging session's never-sealed lines — contributing only the
+never-sealed residue as pre-discipline legacy, ordered after the frozen tracked
+`log.jsonl`; the per-line filter consults existing attribution and never
+re-attributes to a session). New verb
+`ethos audit seal [--dry-run]`
 (idempotent, atomic per session via temp+rename, partial-failure resume;
 visits every session dir under both the live zone and the tracked sealed
 tree so orphan chunks are staged even when a session has no pending live
