@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 )
 
@@ -114,13 +113,32 @@ func FindSealedSessionDir(repoRoot, sessionID string) (string, error) {
 		}
 		return "", fmt.Errorf("reading %s: %w", base, err)
 	}
-	suffix := "-" + filepath.Base(sessionID)
+	want := filepath.Base(sessionID)
 	for _, e := range entries {
-		if e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
+		if e.IsDir() && sealedDirIsSession(e.Name(), want) {
 			return filepath.Join(base, e.Name()), nil
 		}
 	}
 	return "", nil
+}
+
+// sealedDirIsSession reports whether name is exactly <YYYY-MM-DD>-<sessionID>.
+// A bare suffix match on "-"+sessionID would let id "abc" match a directory
+// "2026-07-21-x-abc", landing one session's chunks in another's tree with a
+// wrong watermark. Match structurally: a valid 10-char date, the hyphen
+// separator, then the session id verbatim.
+func sealedDirIsSession(name, sessionID string) bool {
+	const dateLen = len(SessionDateFormat)
+	if len(name) != dateLen+1+len(sessionID) {
+		return false
+	}
+	if name[dateLen] != '-' {
+		return false
+	}
+	if _, err := time.Parse(SessionDateFormat, name[:dateLen]); err != nil {
+		return false
+	}
+	return name[dateLen+1:] == sessionID
 }
 
 // SessionUnsealedCount returns how many live audit lines a session holds past
