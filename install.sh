@@ -53,7 +53,7 @@ install_hook() {
     !skip { print }
   ' "$dest" > "$tmp"
 
-  last=$(awk 'NF { l = $0 } END { print l }' "$tmp")
+  last=$(awk 'NF { l = $0 } END { sub(/^[[:space:]]+/, "", l); print l }' "$tmp")
   case "$last" in
     exit|exit\ *)
       warn "$dest ends in an unconditional 'exit' — the ethos section may not run" ;;

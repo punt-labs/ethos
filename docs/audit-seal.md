@@ -508,6 +508,14 @@ line and warns. `ethos doctor` reports whether the committed hook carries an
 active seal so the silent-absence failure this fix closes cannot recur
 undetected.
 
+Two known limits. Neither the installer nor doctor honors `core.hooksPath`:
+both act on `.git/hooks/pre-commit`. This is mutually consistent for every
+normal clone and worktree; a repo that redirects hooks with `core.hooksPath`
+gets neither the chained seal nor the doctor check. And doctor verifies the
+seal section is *present*, not *reachable*: if a host hook's tail later becomes
+an unconditional `exit`, the seal stops firing while doctor still passes — the
+install-time unconditional-`exit` warning is the mitigation.
+
 **Secondary — mission close.** `ethos mission close` (Tier B) seals **every**
 live file under the **closing checkout's** `local/ethos/missions/<id>/` — each
 session's that wrote into this checkout, taking each per-(mission, session)
