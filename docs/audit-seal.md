@@ -509,7 +509,16 @@ on line 2, where every version of the standalone carries it. A hook that
 carries that text anywhere else (a foreign hook that pasted our whole script
 below its own, or one that merely mentions the seal) is chained into, not
 clobbered, so its content survives. A symlinked hook is updated through its
-target so a dotfile manager's link is not flattened.
+target so a dotfile manager's link is not flattened; a symlink whose target
+cannot be resolved aborts the install rather than writing to a wrong path. A
+host hook carrying our BEGIN marker with no matching END (hand-truncated)
+aborts too, rather than letting the strip pass silently delete everything
+after BEGIN. The installer only chains into a shell-family host (`sh`/`bash`/
+`dash`/`ksh`/`zsh`, or a hook with no shebang, which git runs via `sh`): a
+Python, Node, or binary host would be run under its own interpreter on the
+mixed file, breaking the host and never running the seal, so such a host is
+left untouched with a warning — doctor then FAILs on the absent seal, the
+correct signal.
 
 The chained section preserves the host's fall-through exit status: the seal
 scripts capture `$?` on entry and return it on every passthrough, so a host
@@ -519,8 +528,13 @@ its own blocking exit 2. The append-at-end contract has one limit: a host hook
 that unconditionally `exit`s or `exec`s bypasses the section — the installer
 detects that on the host's last effective line (past trailing comments) and
 warns. `ethos doctor` reports whether the committed hook carries an active
-seal — an uncommented `audit seal` call in an executable hook — so the
-silent-absence failure this fix closes cannot recur undetected.
+seal — an `audit seal` invocation in command position (bare `ethos` or the
+hook's `"$ethos_bin"`), on a non-comment line, in an executable shell hook —
+so the silent-absence failure this fix closes cannot recur undetected. The
+check is lexical: it rejects commented-out calls, string-literal mentions
+(`echo "audit seal"`), and calls stranded in a non-shell hook, but cannot see
+through dynamic dispatch (an `eval` or an aliased wrapper), which FAILs the
+check — the safe direction.
 
 Installer and doctor resolve the hooks directory the same way — git's own
 `git rev-parse --git-path hooks` — so they always agree on where the seal

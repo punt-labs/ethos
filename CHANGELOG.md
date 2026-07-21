@@ -33,13 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently disables a foreign hook that signals failure by fall-through (only a
   seal failure overrides). Fresh installs write the marker form, and the
   installer overwrites a hook only when it is positively identified as ours by
-  its header line — a foreign hook that merely mentions the seal is chained
-  into, not clobbered. The installer also warns on `exec`/comment-trailing
-  tails that would bypass the section (an `exec` fd-redirection is not
-  flagged), updates a symlinked hook through its target, and aborts loudly if
-  it cannot write a temp file. The doctor check requires an *uncommented* seal
-  call in an *executable* hook, so a commented-out call or a non-executable
-  hook is no longer a false PASS.
+  its header line (checked on line 2, so a `cat`-appended hybrid is chained
+  into, not clobbered) — a foreign hook that merely mentions the seal is
+  chained into, not clobbered. The installer also warns on `exec`/comment-
+  trailing tails that would bypass the section (an `exec` fd-redirection is not
+  flagged), updates a symlinked hook through its target (aborting if the target
+  cannot be resolved), aborts on a truncated section (BEGIN with no END) rather
+  than deleting host content, refuses to chain into a non-shell host
+  (Python/Node/binary — it would break the host), and aborts loudly if it
+  cannot write a temp file. The doctor check requires an `audit seal`
+  invocation in command position on a non-comment line of an executable
+  shell hook, so a commented-out call, a string-literal mention, or a seal
+  stranded in a non-shell hook is no longer a false PASS.
 
 ## [4.1.0] - 2026-07-21
 
