@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
@@ -182,6 +183,26 @@ func init() {
 	rootCmd.AddCommand(auditCmd)
 }
 
+// sessionStartDateResolver returns a StartDate function for the seal that
+// names a brand-new sealed directory by session start rather than wall clock
+// (carried refinement (a)). It reads the roster's Started date first, then a
+// purge tombstone's recorded StartDate; "" lets the seal fall back to the live
+// file's first-line date, then now. Best-effort — a read error yields "".
+func sessionStartDateResolver(repoRoot string) func(string) string {
+	ss := sessionStore()
+	home, _ := os.UserHomeDir()
+	globalSessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+	return func(sessionID string) string {
+		if roster, err := ss.Load(sessionID); err == nil && len(roster.Started) >= 10 {
+			return roster.Started[:10]
+		}
+		if tb, err := audit.ReadTombstone(filepath.Join(globalSessions, sessionID+".purged")); err == nil {
+			return tb.StartDate
+		}
+		return ""
+	}
+}
+
 // activeRepoSessions returns the ids of roster-active sessions bound to
 // repoRoot — the second source the vacuum cross-check iterates. Best-effort:
 // a roster read error skips that session rather than failing the seal.
@@ -246,7 +267,12 @@ func runAuditSeal(out, errOut io.Writer) error {
 		fmt.Fprintln(errOut, "ethos: audit seal must run inside a repo")
 		return usageError{}
 	}
-	opts := hook.SealOptions{DryRun: auditSealDryRun, Verbose: auditSealVerbose, Out: out}
+	opts := hook.SealOptions{
+		DryRun:    auditSealDryRun,
+		Verbose:   auditSealVerbose,
+		Out:       out,
+		StartDate: sessionStartDateResolver(repoRoot),
+	}
 	res, err := hook.SealRepo(repoRoot, time.Now().UTC(), opts)
 	if err != nil {
 		fmt.Fprintf(errOut, "ethos: audit seal: %v\n", err)

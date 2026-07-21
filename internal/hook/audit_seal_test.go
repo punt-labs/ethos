@@ -26,6 +26,45 @@ func writeLiveLines(t *testing.T, repo, sessionID string, tss ...int64) {
 	}
 }
 
+func TestSealRepoDatesDirBySessionStart(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-dated"
+	// The live file's first line is dated 2026-07-15; the seal runs on
+	// 2026-07-20. The brand-new sealed dir must carry the session's first-write
+	// date, not the wall-clock seal date (carried refinement (a)).
+	firstTS := time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC).UnixNano()
+	writeLiveLines(t, repo, sid, firstTS, firstTS+1)
+	sealNow := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	if _, err := SealRepo(repo, sealNow, SealOptions{}); err != nil {
+		t.Fatalf("SealRepo: %v", err)
+	}
+	dir, err := audit.FindSealedSessionDir(repo, sid)
+	if err != nil || dir == "" {
+		t.Fatalf("no sealed dir: %v", err)
+	}
+	if got := filepath.Base(dir); got != "2026-07-15-"+sid {
+		t.Errorf("sealed dir = %q, want 2026-07-15-%s (first-line date, not seal date)", got, sid)
+	}
+}
+
+func TestSealRepoStartDateOverridesLiveDate(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-roster"
+	firstTS := time.Date(2026, 7, 15, 9, 0, 0, 0, time.UTC).UnixNano()
+	writeLiveLines(t, repo, sid, firstTS)
+	// An authoritative roster start date wins over the live first-line date.
+	opts := SealOptions{StartDate: func(string) string { return "2026-07-10" }}
+	if _, err := SealRepo(repo, time.Now().UTC(), opts); err != nil {
+		t.Fatalf("SealRepo: %v", err)
+	}
+	dir, _ := audit.FindSealedSessionDir(repo, sid)
+	if got := filepath.Base(dir); got != "2026-07-10-"+sid {
+		t.Errorf("sealed dir = %q, want 2026-07-10-%s (roster start date)", got, sid)
+	}
+}
+
 func TestSealRepoWritesChunk(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)

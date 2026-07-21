@@ -19,6 +19,12 @@ type SealOptions struct {
 	Verbose bool
 	// Out receives per-session dry-run/verbose reporting. Nil discards it.
 	Out io.Writer
+	// StartDate, when set, returns a session's start date (YYYY-MM-DD) from an
+	// authoritative source — the roster, or a purge tombstone — used to name a
+	// brand-new sealed directory instead of the wall clock (carried refinement
+	// (a); docs/audit-seal.md §Two zones). "" falls back to the live file's
+	// first-line date, then to now. An existing dated directory always wins.
+	StartDate func(sessionID string) string
 }
 
 // SealResult reports what a repo-wide seal did.
@@ -64,7 +70,7 @@ func sealSessionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *S
 		return err
 	}
 	for _, sessionID := range sessions {
-		sealedDir, err := resolveRepoSessionDir(repoRoot, sessionID, now)
+		sealedDir, err := resolveSealDir(repoRoot, sessionID, now, opts)
 		if err != nil {
 			return fmt.Errorf("resolving session dir for %s: %w", sessionID, err)
 		}
@@ -82,6 +88,34 @@ func sealSessionsInRepo(repoRoot string, now time.Time, opts SealOptions, res *S
 		}
 	}
 	return nil
+}
+
+// resolveSealDir resolves a session's sealed directory, dating a brand-new one
+// by session start rather than wall clock (carried refinement (a)). Precedence
+// per docs/audit-seal.md §Two zones: an existing dated directory (any date
+// prefix) always wins; else an authoritative start date from the roster or a
+// purge tombstone (opts.StartDate); else the live file's first-line date; else
+// now. All three fallbacks are fixed properties of the session, so none splits
+// a session across two dated directories.
+func resolveSealDir(repoRoot, sessionID string, now time.Time, opts SealOptions) (string, error) {
+	existing, err := audit.FindSealedSessionDir(repoRoot, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if existing != "" {
+		return existing, nil
+	}
+	date := ""
+	if opts.StartDate != nil {
+		date = opts.StartDate(sessionID)
+	}
+	if date == "" {
+		date = audit.LiveFirstLineDate(liveAuditPath(repoRoot, sessionID))
+	}
+	if date == "" {
+		date = now.UTC().Format(audit.SessionDateFormat)
+	}
+	return filepath.Join(sealedSessionsBase(repoRoot), date+"-"+sessionID), nil
 }
 
 // sealOutcome is the per-unit result of the locked seal steps.

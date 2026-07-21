@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -8,7 +9,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
+
+// timeFromUnixNanoDate renders a Unix-nanosecond timestamp as a UTC
+// YYYY-MM-DD date.
+func timeFromUnixNanoDate(ns int64) string {
+	return time.Unix(0, ns).UTC().Format(SessionDateFormat)
+}
 
 // The live write path and the sealed record live in two zones of the same
 // checkout (DES-058). The live zone under .punt-labs/local/ is gitignored and
@@ -124,6 +132,33 @@ func SessionUnsealedCount(repoRoot, sessionID string) (int, error) {
 func SessionLiveFileExists(repoRoot, sessionID string) bool {
 	_, err := os.Stat(LiveAuditPath(repoRoot, sessionID))
 	return err == nil
+}
+
+// SessionDateFormat is the YYYY-MM-DD prefix on a dated per-session sealed
+// directory. UTC by convention so two operators in different timezones see the
+// same directory name for the same session.
+const SessionDateFormat = "2006-01-02"
+
+// LiveFirstLineDate returns the UTC date (YYYY-MM-DD) of a live audit file's
+// first parseable line — the session's first-write day, the design's
+// last-resort fallback for a sealed directory's date when the roster entry is
+// gone (docs/audit-seal.md §Two zones). Empty when the file is absent or holds
+// no parseable line.
+func LiveFirstLineDate(livePath string) string {
+	data, err := os.ReadFile(livePath)
+	if err != nil {
+		return ""
+	}
+	for _, raw := range SplitLines(data) {
+		var h tsHolder
+		if json.Unmarshal(raw, &h) != nil {
+			continue
+		}
+		if ns, perr := ParseLineTS(h.TS); perr == nil {
+			return timeFromUnixNanoDate(ns)
+		}
+	}
+	return ""
 }
 
 // MissionLive names one mission live-log file a session is expected to have
