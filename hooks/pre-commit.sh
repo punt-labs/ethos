@@ -11,6 +11,14 @@
 # Passthrough when ethos is not installed — a missing binary must never
 # block a commit in an unrelated repo.
 
+# Preserve a chained host hook's fall-through status. When install.sh appends
+# this script after a foreign hook's content, $? here is that hook's last
+# command status; returning it on passthrough keeps chaining from masking a
+# host hook that signals failure by fall-through. Standalone, git invokes us
+# fresh with $? = 0, so this is exit 0 as before. Captured before any command
+# runs (a later assignment would reset $?).
+_host_status=$?
+
 # Resolve the ethos binary: PATH first, then the default install dir.
 ethos_bin=""
 if command -v ethos >/dev/null 2>&1; then
@@ -18,7 +26,7 @@ if command -v ethos >/dev/null 2>&1; then
 elif [ -x "$HOME/.local/bin/ethos" ]; then
   ethos_bin="$HOME/.local/bin/ethos"
 else
-  exit 0
+  exit "$_host_status"
 fi
 
 # `ethos audit seal` is fail-closed: exit 2 on an I/O error, a malformed or
@@ -27,4 +35,4 @@ fi
 if ! "$ethos_bin" audit seal; then
   exit 2
 fi
-exit 0
+exit "$_host_status"
