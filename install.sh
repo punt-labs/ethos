@@ -275,6 +275,37 @@ if [ -n "$HOOK_SRC" ] && command -v git >/dev/null 2>&1; then
   fi
 fi
 
+# --- Step 6d: Install pre-commit seal hook (DES-058) ---
+
+# When run inside a git work tree, install hooks/pre-commit.sh into
+# .git/hooks/pre-commit so `ethos audit seal` runs before every commit's
+# index snapshot — the sealed audit chunks land in the same commit as the
+# work. Passthrough (exit 0) when ethos is not installed or nothing is
+# pending; fail-closed (exit 2) on a broken audit store.
+#
+# Skipped silently when not in a git work tree and when an unrelated
+# pre-commit hook already exists (no clobber).
+PRECOMMIT_SRC=""
+if [ -f "./hooks/pre-commit.sh" ]; then
+  PRECOMMIT_SRC="./hooks/pre-commit.sh"
+elif [ -n "${TMPDIR_BUILD:-}" ] && [ -f "$TMPDIR_BUILD/hooks/pre-commit.sh" ]; then
+  PRECOMMIT_SRC="$TMPDIR_BUILD/hooks/pre-commit.sh"
+fi
+if [ -n "$PRECOMMIT_SRC" ] && command -v git >/dev/null 2>&1; then
+  if GIT_DIR=$(git rev-parse --git-dir 2>/dev/null); then
+    info "Installing pre-commit seal hook..."
+    PRECOMMIT_DEST="$GIT_DIR/hooks/pre-commit"
+    mkdir -p "$GIT_DIR/hooks"
+    if [ -e "$PRECOMMIT_DEST" ] && ! grep -q "DES-058" "$PRECOMMIT_DEST" 2>/dev/null; then
+      warn "$PRECOMMIT_DEST exists and is not ours — not overwriting"
+    else
+      cp "$PRECOMMIT_SRC" "$PRECOMMIT_DEST"
+      chmod +x "$PRECOMMIT_DEST"
+      ok "$PRECOMMIT_DEST installed"
+    fi
+  fi
+fi
+
 # --- Step 7: Health check ---
 
 info "Verifying installation..."
