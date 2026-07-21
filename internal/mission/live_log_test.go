@@ -118,3 +118,24 @@ func TestMissionLiveLog_UnionReadUnionsSealedAndLive(t *testing.T) {
 	assert.Equal(t, "create", events[0].Event)
 	assert.Equal(t, "close", events[1].Event)
 }
+
+func TestMissionLiveLog_DrainsLegacyResidue(t *testing.T) {
+	s, repoRoot := twoTreeSessionStore(t, "sess1")
+	id := "m-2026-07-21-005"
+	require.NoError(t, s.Create(newContract(id)))
+	// A superseded shared-live missions/<id>.jsonl residue holds a
+	// pre-discipline event that must join the read as the oldest legacy pool
+	// (carried refinement (b), docs §Migration).
+	residue := audit.MissionResiduePath(repoRoot, id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(residue), 0o700))
+	require.NoError(t, os.WriteFile(residue,
+		[]byte(`{"ts":"2020-01-01T00:00:00Z","event":"dispatch","actor":"legacy"}`+"\n"), 0o600))
+
+	events, _, err := s.LoadEvents(id)
+	require.NoError(t, err)
+	require.Len(t, events, 2, "residue dispatch + live create")
+	// The residue line predates the discipline, so it sorts first.
+	assert.Equal(t, "dispatch", events[0].Event)
+	assert.Equal(t, "legacy", events[0].Actor)
+	assert.Equal(t, "create", events[1].Event)
+}

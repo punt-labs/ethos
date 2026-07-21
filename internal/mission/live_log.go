@@ -27,11 +27,11 @@ func (s *Store) appendLiveEventLocked(missionID string, e Event) error {
 	repoRoot := s.repoRoot
 	sessionID := s.sessionID
 	sealedDir := audit.SealedMissionDir(repoRoot, missionID)
-	legacy := missionLegacyLogPath(sealedDir)
+	legacy := audit.MissionLegacySources(repoRoot, missionID)
 	livePath := audit.LiveMissionLogPath(repoRoot, missionID, sessionID)
 	lockPath := audit.LiveMissionLockPath(repoRoot, missionID, sessionID)
 
-	watermark, err := audit.Watermark(sealedDir, audit.MissionNS, sessionID, legacy)
+	watermark, err := audit.Watermark(sealedDir, audit.MissionNS, sessionID, legacy...)
 	if err != nil {
 		return fmt.Errorf("computing mission watermark for %s: %w", missionID, err)
 	}
@@ -46,13 +46,6 @@ func (s *Store) appendLiveEventLocked(missionID string, e Event) error {
 		})
 		return aErr
 	})
-}
-
-// missionLegacyLogPath returns the frozen legacy log.jsonl in a mission's
-// tracked directory — the pre-DES-058 committed mission log, read as the
-// mission's oldest chunk and never rewritten.
-func missionLegacyLogPath(sealedMissionDir string) string {
-	return filepath.Join(sealedMissionDir, "log.jsonl")
 }
 
 // loadLiveUnionEvents reconstructs a mission's full event stream as the union
@@ -91,9 +84,9 @@ func (s *Store) loadLiveUnionEvents(missionID string) ([]Event, []string, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	legacy := missionLegacyLogPath(sealedDir)
+	legacySources := audit.MissionLegacySources(repoRoot, missionID)
 	for _, sess := range sessions {
-		wm, wErr := audit.Watermark(sealedDir, audit.MissionNS, sess, legacy)
+		wm, wErr := audit.Watermark(sealedDir, audit.MissionNS, sess, legacySources...)
 		if wErr != nil {
 			return nil, nil, wErr
 		}
@@ -121,21 +114,26 @@ func (s *Store) loadLiveUnionEvents(missionID string) ([]Event, []string, error)
 		entries = append(entries, tsEvent{ts: l.TS, e: e})
 	}
 
-	// Sl: the frozen legacy log.jsonl, decoded through the strict walker so
-	// a corrupt line surfaces as a warning (the design's skip-with-a-count),
-	// then merged as the oldest pool — its pre-discipline ts sort before the
-	// post-discipline ts.
-	legacyEvents, legacyWarnings, err := loadFrozenLog(legacy)
-	if err != nil {
-		return nil, nil, err
-	}
-	warnings = append(warnings, legacyWarnings...)
-	for _, e := range legacyEvents {
-		ts, perr := audit.ParseLineTS(e.TS)
-		if perr != nil {
-			ts = 0 // sorts first; a decoded event always has a valid RFC3339 ts
+	// Sl: the frozen legacy sources — the tracked log.jsonl first, then the
+	// drained missions/<id>.jsonl residue of the superseded shared-live design
+	// (docs/audit-seal.md §Migration). Each is decoded through the strict
+	// walker so a corrupt line surfaces as a warning, then merged as the
+	// oldest pool — pre-discipline ts sort before post-discipline ts, and
+	// log.jsonl is inserted before the residue so the stable sort keeps their
+	// defined order for any equal ts.
+	for _, src := range legacySources {
+		legacyEvents, legacyWarnings, lErr := loadFrozenLog(src)
+		if lErr != nil {
+			return nil, nil, lErr
 		}
-		entries = append(entries, tsEvent{ts: ts, e: e})
+		warnings = append(warnings, legacyWarnings...)
+		for _, e := range legacyEvents {
+			ts, perr := audit.ParseLineTS(e.TS)
+			if perr != nil {
+				ts = 0 // sorts first; a decoded event always has a valid RFC3339 ts
+			}
+			entries = append(entries, tsEvent{ts: ts, e: e})
+		}
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].ts < entries[j].ts })

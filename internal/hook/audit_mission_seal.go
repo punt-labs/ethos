@@ -3,7 +3,6 @@ package hook
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/audit"
@@ -77,7 +76,7 @@ func sealMissionSession(repoRoot, missionID, sessionID string, now time.Time, op
 			session:   sessionID,
 			sealedDir: sealedDir,
 			livePath:  liveMissionLogPath(repoRoot, missionID, sessionID),
-			legacy:    []string{missionLegacyLogPath(sealedDir)},
+			legacy:    audit.MissionLegacySources(repoRoot, missionID),
 			chunkName: func(first, last int64) string { return audit.MissionChunkFile(sessionID, first, last) },
 			tempName:  func(first, last int64) string { return audit.MissionTempFile(sessionID, first, last) },
 			label:     "mission " + missionID + " session " + sessionID,
@@ -88,11 +87,4 @@ func sealMissionSession(repoRoot, missionID, sessionID string, now time.Time, op
 		return lockErr
 	}
 	return tallyAndStage(repoRoot, sealedDir, audit.MissionNS, sessionID, out, opts, res)
-}
-
-// missionLegacyLogPath returns the frozen legacy log.jsonl in a mission's
-// tracked directory — the pre-DES-058 committed mission log, read as the
-// mission's oldest chunk and never rewritten.
-func missionLegacyLogPath(sealedMissionDir string) string {
-	return filepath.Join(sealedMissionDir, "log.jsonl")
 }

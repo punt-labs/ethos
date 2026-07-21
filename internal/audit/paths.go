@@ -81,6 +81,26 @@ func SealedMissionDir(repoRoot, missionID string) string {
 	return filepath.Join(SealedMissionsBase(repoRoot), filepath.Base(missionID))
 }
 
+// MissionResiduePath returns the superseded shared-live design's per-checkout
+// missions/<id>.jsonl residue in the local zone. That design's seal copied
+// its lines into chunks, so it is NOT the frozen legacy log.jsonl: it is
+// drained once as a pre-discipline legacy source, ordered after the tracked
+// log.jsonl (docs/audit-seal.md §Migration).
+func MissionResiduePath(repoRoot, missionID string) string {
+	return filepath.Join(LiveMissionsDir(repoRoot), filepath.Base(missionID)+".jsonl")
+}
+
+// MissionLegacySources returns a mission's frozen pre-discipline sources in
+// read order: the tracked log.jsonl first, then the drained missions/<id>.jsonl
+// residue. Both contribute their max ts to the mission watermark and pass
+// through the read undeduped as the mission's oldest lines.
+func MissionLegacySources(repoRoot, missionID string) []string {
+	return []string{
+		filepath.Join(SealedMissionDir(repoRoot, missionID), "log.jsonl"),
+		MissionResiduePath(repoRoot, missionID),
+	}
+}
+
 // FindSealedSessionDir returns the existing dated sealed directory for a
 // session (any date prefix), or "" when none exists yet. Both the seal and
 // the purge check resolve a session's sealed directory through this so a
@@ -224,8 +244,7 @@ func missionChunkCarriesSession(dir, sessionID string) bool {
 // is absent or fully sealed.
 func MissionUnsealedCount(repoRoot, missionID, sessionID string) (int, error) {
 	sealedDir := SealedMissionDir(repoRoot, missionID)
-	legacy := filepath.Join(sealedDir, "log.jsonl")
-	wm, err := Watermark(sealedDir, MissionNS, sessionID, legacy)
+	wm, err := Watermark(sealedDir, MissionNS, sessionID, MissionLegacySources(repoRoot, missionID)...)
 	if err != nil {
 		return 0, err
 	}
