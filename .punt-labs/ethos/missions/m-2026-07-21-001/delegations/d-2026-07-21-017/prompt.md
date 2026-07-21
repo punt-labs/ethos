@@ -1,4 +1,4 @@
-You are the pinned evaluator on ethos mission m-2026-07-21-001 (implement archetype). Working directory: /Users/jfreeman/Coding/punt-labs/ethos. Your lens: Go internals, module/dependency structure, compatibility, rolling upgrades — you also evaluated the DES-058 design rounds (.tmp/missions/results/m-2026-07-20-016-eval-rsc.md).
+You are the pinned evaluator on ethos mission m-2026-07-21-001 (implement archetype). Working directory: <repo>. Your lens: Go internals, module/dependency structure, compatibility, rolling upgrades — you also evaluated the DES-058 design rounds (.tmp/missions/results/m-2026-07-20-016-eval-rsc.md).
 
 Evaluate the completed implementation on branch feat/des-058-audit-seal-impl (rounds 1+2; ~13 commits off main). The spec is the merged docs/audit-seal.md (authoritative) + the DES-058 DESIGN.md entry. Worker reports: .tmp/missions/results/m-2026-07-21-001-r1-report.md and -r2-report.md; contract: `ethos mission show m-2026-07-21-001`.
 

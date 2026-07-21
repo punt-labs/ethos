@@ -1,8 +1,9 @@
 mission_id: m-2026-07-11-008
-status: open
+status: failed
 type: design
 created_at: "2026-07-11T16:08:01Z"
-updated_at: "2026-07-11T16:08:01Z"
+updated_at: "2026-07-21T15:27:24Z"
+closed_at: "2026-07-21T15:27:24Z"
 leader: claude
 worker: bwk
 evaluator:

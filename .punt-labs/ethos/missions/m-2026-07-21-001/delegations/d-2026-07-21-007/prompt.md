@@ -1,4 +1,4 @@
-You are the worker on ethos mission m-2026-07-21-001 (implement archetype). Working directory: /Users/jfreeman/Coding/punt-labs/ethos. Start with `ethos mission show m-2026-07-21-001` — the contract is authoritative for scope, write set, and the 12 success criteria.
+You are the worker on ethos mission m-2026-07-21-001 (implement archetype). Working directory: <repo>. Start with `ethos mission show m-2026-07-21-001` — the contract is authoritative for scope, write set, and the 12 success criteria.
 
 Task: implement DES-058 phase 1 — the live audit write path split from the sealed committed record. The merged design docs/audit-seal.md is the complete specification (read it end-to-end first, plus the DES-058 entry at the tail of DESIGN.md); the contract's criteria restate its load-bearing requirements. Phase 2 (lock relocation) is explicitly out of scope.
 

@@ -1,8 +1,9 @@
 mission_id: m-2026-07-11-005
-status: open
+status: failed
 type: design
 created_at: "2026-07-11T15:48:04Z"
-updated_at: "2026-07-11T15:48:04Z"
+updated_at: "2026-07-21T15:27:01Z"
+closed_at: "2026-07-21T15:27:01Z"
 leader: claude
 worker: mdm
 evaluator:
