@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -157,11 +159,15 @@ func CheckSealHook(repoRoot string) Result {
 	}
 
 	body := string(data)
-	// Require an uncommented `audit seal` line: a commented-out call is a
-	// disabled seal, and a comment that merely mentions the phrase is not a
-	// call at all. Either would let the silent-absence state recur behind a
-	// green check.
-	if containsActiveCall(body, "audit seal") {
+	// Require an actual seal invocation, not the substring: a commented-out
+	// call, a string-literal mention (echo/printf), or a dead branch must not
+	// read as active, or the silent-absence state recurs behind a green check.
+	if hasActiveSealCall(body) {
+		// A shell section pasted into a non-shell hook (Python/Node) can never
+		// run as sh, so the call text is meaningless there.
+		if !isShellHook(body) {
+			return Result{Name: name, Status: "FAIL", Detail: "seal call present but the hook's shebang is not a shell — git runs it under another interpreter" + remedy}
+		}
 		// Git skips a hook without the executable bit, so a valid-looking
 		// but non-executable hook never fires.
 		if info.Mode().Perm()&0o111 == 0 {
@@ -178,16 +184,53 @@ func CheckSealHook(repoRoot string) Result {
 	return Result{Name: name, Status: "FAIL", Detail: "seal hook not installed (missing)" + remedy}
 }
 
-// containsActiveCall reports whether substr appears on a line that is not a
-// shell comment (first non-blank character is not '#').
-func containsActiveCall(body, substr string) bool {
+// sealInvocation matches an `audit seal` call in command position: the ethos
+// binary (bare `ethos` or the hook's "$ethos_bin" variable) followed by
+// `audit seal`, at a line/statement boundary. It deliberately rejects a
+// string-literal mention like `echo "audit seal"`, whose `audit seal` is not
+// preceded by the ethos command token.
+var sealInvocation = regexp.MustCompile(`(^|[\s;&|(!])("?\$\{?ethos_bin\}?"?|ethos)[\t ]+audit[\t ]+seal([\s;&|)]|$)`)
+
+// hasActiveSealCall reports whether body invokes `ethos audit seal` on a
+// non-comment line. The check is lexical, not semantic: it stops string
+// mentions and comments from passing, but cannot see through dynamic dispatch
+// (eval, an aliased wrapper) — such a hook FAILs the check, the safe direction.
+func hasActiveSealCall(body string) bool {
 	for _, line := range strings.Split(body, "\n") {
 		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "#") {
 			continue
 		}
-		if strings.Contains(line, substr) {
+		if sealInvocation.MatchString(line) {
 			return true
 		}
+	}
+	return false
+}
+
+// isShellHook reports whether the hook body's shebang names a shell-family
+// interpreter, or there is no shebang (git runs such a hook via sh). A
+// non-shell shebang (Python/Node/binary) means a pasted shell seal call
+// cannot run.
+func isShellHook(body string) bool {
+	first := body
+	if nl := strings.IndexByte(body, '\n'); nl >= 0 {
+		first = body[:nl]
+	}
+	first = strings.TrimRight(first, "\r")
+	if !strings.HasPrefix(first, "#!") {
+		return true
+	}
+	fields := strings.Fields(first[2:])
+	if len(fields) == 0 {
+		return true
+	}
+	interp := path.Base(fields[0])
+	if interp == "env" && len(fields) > 1 {
+		interp = path.Base(fields[1])
+	}
+	switch interp {
+	case "sh", "bash", "dash", "ksh", "zsh", "mksh", "ash":
+		return true
 	}
 	return false
 }

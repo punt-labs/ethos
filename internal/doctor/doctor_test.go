@@ -287,6 +287,31 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "missing")
 	})
 
+	t.Run("string-literal mention is not an active call", func(t *testing.T) {
+		// echo/printf text containing the phrase must not read as a call.
+		dir := writeHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("printf note inside a section is stale, not active", func(t *testing.T) {
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"printf 'audit seal is disabled\\n'\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("seal call in a non-shell hook fails", func(t *testing.T) {
+		// A shell seal call pasted into a Python hook can never run as sh.
+		dir := writeHook(t, "#!/usr/bin/env python3\nethos audit seal\n")
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "not a shell")
+	})
+
 	t.Run("non-executable hook fails with chmod remedy", func(t *testing.T) {
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
