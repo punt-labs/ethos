@@ -23,19 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carried the identical no-clobber flaw and gets the same chaining. `ethos
   doctor` gains a check that the current repo's pre-commit hook carries an
   active seal invocation, reporting missing or stale with the remedy to
-  re-run `install.sh`. Both the installer and the doctor check resolve the
-  hooks directory git actually runs from inside a worktree (via `git rev-parse
-  --git-path hooks` and the worktree `commondir`), so a seal installed from a
-  worktree lands on the common `.git/hooks` instead of a dead per-worktree
-  path that would silently never fire. The chained section preserves the host
-  hook's fall-through exit status, so chaining never silently disables a
-  foreign hook that signals failure by fall-through (only a seal failure
-  overrides). The installer also warns on `exec`/comment-trailing tails that
-  would bypass the section, refuses to overwrite a hybrid host+seal file,
-  updates a symlinked hook through its target, and aborts loudly if it cannot
-  write a temp file. The doctor check requires an *uncommented* seal call in
-  an *executable* hook, so a commented-out call or a non-executable hook is no
-  longer a false PASS.
+  re-run `install.sh`. Installer and doctor both resolve the hooks directory
+  via git's own `git rev-parse --git-path hooks`, so they always agree on where
+  the seal lives — the common `.git/hooks` inside a worktree (not the dead
+  per-worktree path), and the `core.hooksPath` directory when one is
+  configured; installing into a tracked `core.hooksPath` file (husky) warns
+  explicitly rather than dirtying the tree silently. The chained section
+  preserves the host hook's fall-through exit status, so chaining never
+  silently disables a foreign hook that signals failure by fall-through (only a
+  seal failure overrides). Fresh installs write the marker form, and the
+  installer overwrites a hook only when it is positively identified as ours by
+  its header line — a foreign hook that merely mentions the seal is chained
+  into, not clobbered. The installer also warns on `exec`/comment-trailing
+  tails that would bypass the section (an `exec` fd-redirection is not
+  flagged), updates a symlinked hook through its target, and aborts loudly if
+  it cannot write a temp file. The doctor check requires an *uncommented* seal
+  call in an *executable* hook, so a commented-out call or a non-executable
+  hook is no longer a false PASS.
 
 ## [4.1.0] - 2026-07-21
 

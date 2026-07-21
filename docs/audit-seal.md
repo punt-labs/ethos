@@ -501,11 +501,13 @@ does not overwrite it and, critically, does not skip: it appends a
 marker-delimited `ETHOS DES-058 SEAL` section (the beads-integration marker
 pattern) that runs the seal after the host hook's content falls through. An
 empty slot still gets the standalone hook; a prior ethos section is stripped
-and re-appended in place, so re-install is idempotent. A hybrid file (host
-hook plus a pasted seal body whose marker drifted) is never overwritten — the
-installer refreshes by copy only when the file is wholly ours, otherwise it
-strips-and-appends and preserves the host. A symlinked hook is updated through
-its target so a dotfile manager's link is not flattened.
+and re-appended in place, so re-install is idempotent. Fresh installs write
+the marker form too (a shebang plus the section), so every state the installer
+creates is marker-managed. The installer overwrites a file only when it is
+positively identified as ours — the standalone hook's distinctive header line,
+which no foreign hook carries; a foreign hook that merely mentions the seal is
+chained into, not clobbered, so its content survives. A symlinked hook is
+updated through its target so a dotfile manager's link is not flattened.
 
 The chained section preserves the host's fall-through exit status: the seal
 scripts capture `$?` on entry and return it on every passthrough, so a host
@@ -518,20 +520,21 @@ warns. `ethos doctor` reports whether the committed hook carries an active
 seal — an uncommented `audit seal` call in an executable hook — so the
 silent-absence failure this fix closes cannot recur undetected.
 
-Worktrees are handled correctly: the installer resolves the hooks directory
-with `git rev-parse --git-path hooks` and doctor follows the worktree admin
-dir's `commondir` file, so both land on the common `.git/hooks` git actually
-runs — not the per-worktree `.git/worktrees/<name>/hooks`, which git never
-consults. This matters because agent isolation leans on worktrees; installing
-or checking the seal at the admin dir would silently miss every commit made in
-the worktree.
+Installer and doctor resolve the hooks directory the same way — git's own
+`git rev-parse --git-path hooks` — so they always agree on where the seal
+lives. That resolution handles both worktrees and `core.hooksPath`: inside a
+worktree it returns the common `.git/hooks` git actually runs (not the dead
+per-worktree `.git/worktrees/<name>/hooks`), and in a `core.hooksPath` repo it
+returns that configured directory. Since `core.hooksPath` conventionally
+points at a tracked path inside the work tree (husky's `.husky/`), installing
+there modifies a version-controlled file; the installer warns explicitly
+before doing so rather than dirtying the tree silently. Doctor falls back to
+resolving the `.git` gitdir and `commondir` by hand when git is unavailable.
 
-Two known limits. Neither the installer nor doctor honors `core.hooksPath`: a
-repo that redirects hooks with `core.hooksPath` gets neither the chained seal
-nor the doctor check. And doctor verifies the seal section is *present*, not
-*reachable*: if a host hook's tail later becomes an unconditional `exit`, the
-seal stops firing while doctor still passes — the install-time
-unconditional-`exit` warning is the mitigation.
+One known limit remains: doctor verifies the seal section is *present*, not
+*reachable*. If a host hook's tail later becomes an unconditional `exit` or
+`exec`, the seal stops firing while doctor still passes — the install-time
+warning on such a tail is the mitigation.
 
 **Secondary — mission close.** `ethos mission close` (Tier B) seals **every**
 live file under the **closing checkout's** `local/ethos/missions/<id>/` — each
