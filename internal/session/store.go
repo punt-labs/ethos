@@ -221,16 +221,21 @@ func (s *Store) Purge() ([]string, error) {
 //
 // A roster's Repo is a git-remote identity (org/name), never a checkout path.
 // The unsealed-state probes read the live audit zone, which lives under a
-// checkout, so they use the passed-in repoRoot — the current checkout. Only
-// sessions whose recorded identity equals this checkout's identity (repoID) are
-// probed: a session bound to a different repo has its live zone under another
-// checkout by construction, so it is left untouched for a purge run there rather
-// than deleted on an unverifiable guess (fail-safe: never drop what we cannot
-// verify). repoRoot and repoID come from the caller — repoID is
+// checkout, so they use the passed-in repoRoot — the current checkout. A session
+// bound to a DIFFERENT repo identity has its live zone under another checkout by
+// construction, so it is left untouched for a purge run there rather than deleted
+// on an unverifiable guess (fail-safe: never drop what we cannot verify). An
+// EMPTY binding is not a different identity — it belongs to a no-origin checkout,
+// which also records "" — so it is probed under repoRoot like this checkout's own
+// sessions; under DES-058 its live writes landed under a checkout too, so it
+// cannot skip the guard. repoRoot and repoID come from the caller — repoID is
 // audit.RepoIdentity(repoRoot).
 //
-// Sessions with no repo binding, or whose live file is clean, purge silently
-// as before. Returns the purged and refused session ids.
+// A session whose live file is clean purges silently. One whose unsealed state
+// cannot be verified — because the purge runs outside any repo (repoRoot == "")
+// and an empty-binding session's checkout is then unnameable — refuses without
+// force and leaves a flagged tombstone under force, the fail-safe pattern for
+// unprovable state. Returns the purged and refused session ids.
 func (s *Store) PurgeTombstoned(repoRoot, repoID string, force bool) (purged, refused []string, err error) {
 	ids, err := s.List()
 	if err != nil {
@@ -297,17 +302,26 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	// A session bound to a different repo identity has its live audit zone under
 	// another checkout by construction; this checkout cannot probe it, so leave
 	// it for a purge run inside the checkout that owns it (fail-safe: never delete
-	// a session whose unsealed state we cannot verify). A session with no repo
-	// binding (repo == "") has no audit zone and still purges here — and when this
-	// checkout has no parseable origin repoID is also "", so its own sessions
-	// still match.
+	// a session whose unsealed state we cannot verify). An empty binding is NOT a
+	// different identity: it belongs to a checkout with no parseable origin, which
+	// records "" in its rosters, so it is this checkout's own session whenever
+	// repoID is also "". Under DES-058 its live writes still landed under a
+	// checkout, so it must be probed — the empty-binding case cannot short-circuit
+	// past the guard.
 	if repo != "" && repo != repoID {
 		return false, false
 	}
 	unsealed := 0
 	liveGone := false
 	probeFailed := false
-	if repo != "" {
+	// The probes read the live audit zone under repoRoot keyed by session id — a
+	// bound session reaching here has repo == repoID, so repoRoot owns its zone,
+	// and an empty-binding session's zone is repoRoot too whenever a checkout is
+	// in scope. With no checkout in scope (purge run outside any repo) an
+	// empty-binding session's zone lives under a no-origin checkout we cannot name,
+	// so its unsealed state is unprovable — fail safe exactly as a probe error
+	// does: flag it and let the refuse/tombstone logic below handle force.
+	if repoRoot != "" {
 		if n, cErr := audit.SessionUnsealedCount(repoRoot, roster.Session); cErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: probing %s unsealed audit lines: %v\n", roster.Session, cErr)
@@ -344,6 +358,11 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 				unsealed += n
 			}
 		}
+	} else {
+		probeFailed = true
+		fmt.Fprintf(os.Stderr,
+			"ethos: purge: cannot verify %s unsealed audit lines: no repo checkout in scope; "+
+				"run inside its checkout or re-run with --force\n", roster.Session)
 	}
 	if !force && (unsealed > 0 || probeFailed) {
 		if probeFailed {
@@ -357,12 +376,12 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		}
 		return false, true
 	}
-	if repo != "" && (unsealed > 0 || liveGone || probeFailed) {
+	if unsealed > 0 || liveGone || probeFailed {
 		t := audit.Tombstone{
 			Session:       roster.Session,
 			StartDate:     rosterStartDate(roster),
-			Repo:          repo,     // git-remote identity — the vacuum matches on it
-			Checkout:      repoRoot, // the filesystem checkout the probes ran under
+			Repo:          repo,     // git-remote identity ("" for a no-origin checkout) — the vacuum matches on it
+			Checkout:      repoRoot, // the filesystem checkout the probes ran under ("" when out of repo)
 			UnsealedLines: unsealed > 0 || probeFailed,
 			LiveFileGone:  liveGone,
 		}

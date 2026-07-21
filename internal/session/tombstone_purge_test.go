@@ -306,6 +306,115 @@ func TestPurgeTombstoned_CleanSessionNoTombstone(t *testing.T) {
 	assert.Empty(t, refused)
 }
 
+// TestPurgeTombstoned_EmptyBindingUnsealedRefuses is the R8 guard: a session
+// with no repo binding belongs to a no-origin checkout, which records "" in its
+// roster. Under DES-058 its live writes still land under the checkout, so
+// unsealed lines here must block the purge. Pre-fix the empty binding skipped
+// the probes entirely and this session purged silently, stranding the lines.
+func TestPurgeTombstoned_EmptyBindingUnsealedRefuses(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.Create("sess-empty", root, primary, "", ""))
+	writeUnsealedLive(t, repoRoot, "sess-empty")
+
+	// repoID is "" for a no-origin checkout; the empty binding matches it.
+	purged, refused, err := s.PurgeTombstoned(repoRoot, "", false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-empty")
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-empty", "a refused empty-binding purge must not delete the session")
+}
+
+// TestPurgeTombstoned_EmptyBindingForceFlagsTombstone is the R8 force path: an
+// empty-binding session forced past unsealed lines leaves a flagged tombstone.
+// Its Repo is "" so the vacuum matches it in a no-origin checkout (repoID == ""),
+// and Checkout records the path the probes ran under.
+func TestPurgeTombstoned_EmptyBindingForceFlagsTombstone(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-empty-force", root, primary, "", ""))
+	writeUnsealedLive(t, repoRoot, "sess-empty-force")
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, "", true)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-empty-force")
+	assert.Empty(t, refused)
+
+	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-empty-force.purged"))
+	require.NoError(t, err)
+	assert.True(t, tb.UnsealedLines)
+	assert.Equal(t, "", tb.Repo)
+	assert.Equal(t, repoRoot, tb.Checkout)
+}
+
+// TestPurgeTombstoned_EmptyBindingNoCheckoutRefuses covers the unprovable case:
+// a purge run outside any repo (repoRoot == "") cannot name an empty-binding
+// session's checkout, so its unsealed state is unverifiable — refuse without
+// --force rather than delete on a guess.
+func TestPurgeTombstoned_EmptyBindingNoCheckoutRefuses(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-nocheckout", root, primary, "", ""))
+
+	purged, refused, err := s.PurgeTombstoned("", "", false)
+	require.NoError(t, err)
+	assert.Empty(t, purged)
+	assert.Contains(t, refused, "sess-nocheckout")
+
+	ids, err := s.List()
+	require.NoError(t, err)
+	assert.Contains(t, ids, "sess-nocheckout")
+}
+
+// TestPurgeTombstoned_EmptyBindingNoCheckoutForceFlagsTombstone is the force
+// path of the unprovable case: --force purges but records the unproven loss.
+func TestPurgeTombstoned_EmptyBindingNoCheckoutForceFlagsTombstone(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-nocheckout-force", root, primary, "", ""))
+
+	purged, refused, err := s.PurgeTombstoned("", "", true)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-nocheckout-force")
+	assert.Empty(t, refused)
+
+	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-nocheckout-force.purged"))
+	require.NoError(t, err)
+	assert.True(t, tb.UnsealedLines, "an unprovable no-checkout state must flag the tombstone under --force")
+}
+
+// TestPurgeTombstoned_NonEmptyBindingUnchanged pins the R5-1 semantics the R8
+// fix must not disturb: a bound session whose live file is clean under this
+// checkout still purges silently, with no tombstone.
+func TestPurgeTombstoned_NonEmptyBindingUnchanged(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"}
+	require.NoError(t, s.Create("sess-bound-clean", root, primary, testRepoID, ""))
+	// A present, fully-sealed live file: no unsealed lines and the file is not gone.
+	live := audit.LiveAuditPath(repoRoot, "sess-bound-clean")
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	require.NoError(t, os.WriteFile(live, []byte{}, 0o600))
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-bound-clean")
+	assert.Empty(t, refused)
+
+	_, statErr := os.Stat(filepath.Join(s.sessionsDir(), "sess-bound-clean.purged"))
+	assert.True(t, os.IsNotExist(statErr), "a clean bound session must purge with no tombstone")
+}
+
 // TestPurgeTombstoned_OtherRepoIdentitySkipped is the R5-1 guard: a stale
 // session bound to a DIFFERENT repo identity cannot be probed from this checkout,
 // so purge must leave it — neither deleted (its unsealed state is unverifiable)
