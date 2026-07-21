@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -206,6 +207,99 @@ func (s *Store) Purge() ([]string, error) {
 	}
 
 	return purged, nil
+}
+
+// PurgeTombstoned is Purge with the DES-058 unsealed-lines guard. Before
+// removing a stale session bound to a repo, it checks the session's live
+// audit file: if it still holds lines above the sealed watermark, purge
+// refuses (the id is returned in refused) unless force is set, in which case
+// it leaves a flagged tombstone and proceeds. An already-absent live file
+// (a checkout deleted before its lines sealed) also leaves a flagged
+// tombstone. The tombstone lets the seal's vacuum cross-check keep looking at
+// a session whose roster entry is gone.
+//
+// Sessions with no repo binding, or whose live file is clean, purge silently
+// as before. Returns the purged and refused session ids.
+func (s *Store) PurgeTombstoned(force bool) (purged, refused []string, err error) {
+	ids, err := s.List()
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, id := range ids {
+		var didPurge, didRefuse bool
+		if lockErr := s.withLock(id, func() error {
+			roster, lErr := s.Load(id)
+			if lErr != nil {
+				if s.deleteFiles(id) == nil {
+					didPurge = true
+				}
+				return nil
+			}
+			if !isStale(roster) {
+				return nil
+			}
+			didPurge, didRefuse = s.purgeOneTombstoned(roster, force)
+			return nil
+		}); lockErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: purge: failed to lock session %s: %v\n", id, lockErr)
+			continue
+		}
+		if didPurge {
+			os.Remove(s.lockPath(id))
+			purged = append(purged, id)
+		}
+		if didRefuse {
+			refused = append(refused, id)
+		}
+	}
+	return purged, refused, nil
+}
+
+// purgeOneTombstoned applies the unsealed-lines guard to one stale roster
+// under the caller's lock, writing a flagged tombstone when it proceeds past
+// pending or already-gone lines. Returns (didPurge, didRefuse).
+func (s *Store) purgeOneTombstoned(roster *Roster, force bool) (bool, bool) {
+	repo := roster.Repo
+	unsealed := 0
+	liveGone := false
+	if repo != "" {
+		if n, cErr := audit.SessionUnsealedCount(repo, roster.Session); cErr == nil {
+			unsealed = n
+		}
+		liveGone = !audit.SessionLiveFileExists(repo, roster.Session)
+	}
+	if unsealed > 0 && !force {
+		fmt.Fprintf(os.Stderr,
+			"ethos: purge: refusing to purge %s: %d unsealed audit line(s); commit to seal them or re-run with --force\n",
+			roster.Session, unsealed)
+		return false, true
+	}
+	if repo != "" && (unsealed > 0 || liveGone) {
+		t := audit.Tombstone{
+			Session:       roster.Session,
+			StartDate:     rosterStartDate(roster),
+			Repo:          repo,
+			Checkout:      repo,
+			UnsealedLines: unsealed > 0,
+			LiveFileGone:  liveGone,
+		}
+		if tErr := audit.WriteTombstone(s.sessionsDir(), t); tErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: purge: writing tombstone for %s: %v\n", roster.Session, tErr)
+		}
+	}
+	if s.deleteFiles(roster.Session) != nil {
+		return false, false
+	}
+	return true, false
+}
+
+// rosterStartDate returns the YYYY-MM-DD start date from a roster's Started
+// timestamp, or "" when it cannot be parsed.
+func rosterStartDate(roster *Roster) string {
+	if len(roster.Started) >= 10 {
+		return roster.Started[:10]
+	}
+	return roster.Started
 }
 
 // PurgeCurrent removes PID files from sessions/current/ where the

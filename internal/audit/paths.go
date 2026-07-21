@@ -2,10 +2,12 @@ package audit
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // The live write path and the sealed record live in two zones of the same
@@ -69,6 +71,59 @@ func SealedMissionsBase(repoRoot string) string {
 // SealedMissionDir returns a mission's tracked sealed directory.
 func SealedMissionDir(repoRoot, missionID string) string {
 	return filepath.Join(SealedMissionsBase(repoRoot), filepath.Base(missionID))
+}
+
+// FindSealedSessionDir returns the existing dated sealed directory for a
+// session (any date prefix), or "" when none exists yet. Both the seal and
+// the purge check resolve a session's sealed directory through this so a
+// session whose start date differs from today still resolves to one place.
+func FindSealedSessionDir(repoRoot, sessionID string) (string, error) {
+	base := SealedSessionsBase(repoRoot)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("reading %s: %w", base, err)
+	}
+	suffix := "-" + filepath.Base(sessionID)
+	for _, e := range entries {
+		if e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
+			return filepath.Join(base, e.Name()), nil
+		}
+	}
+	return "", nil
+}
+
+// SessionUnsealedCount returns how many live audit lines a session holds past
+// its sealed watermark — the lines a purge would strand. Zero when the live
+// file is absent or fully sealed.
+func SessionUnsealedCount(repoRoot, sessionID string) (int, error) {
+	dir, err := FindSealedSessionDir(repoRoot, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	var legacy string
+	if dir != "" {
+		legacy = filepath.Join(dir, "audit.jsonl")
+	}
+	wm, err := Watermark(dir, SessionNS, "", legacy)
+	if err != nil {
+		return 0, err
+	}
+	tail, err := LiveLinesPastWatermark(LiveAuditPath(repoRoot, sessionID), "", wm)
+	if err != nil {
+		return 0, err
+	}
+	return len(tail), nil
+}
+
+// SessionLiveFileExists reports whether a session's recorded live audit file
+// is present. An absent recorded live file at purge time is itself evidence —
+// a checkout deleted before its lines sealed.
+func SessionLiveFileExists(repoRoot, sessionID string) bool {
+	_, err := os.Stat(LiveAuditPath(repoRoot, sessionID))
+	return err == nil
 }
 
 // ListLiveLogSessions returns the session ids whose live mission log files

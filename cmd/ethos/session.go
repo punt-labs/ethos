@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
@@ -175,10 +177,23 @@ var sessionIamCmd = &cobra.Command{
 
 // --- session purge ---
 
+var (
+	sessionPurgeForce bool
+	sessionPurgeAck   string
+)
+
 var sessionPurgeCmd = &cobra.Command{
 	Use:   "purge",
 	Short: "Clean up stale sessions",
-	Args:  cobra.NoArgs,
+	Long: `Clean up stale sessions.
+
+Refuses to purge a session whose live audit file still holds unsealed
+lines (commit to seal them, or re-run with --force to leave a flagged
+tombstone and proceed). The seal's vacuum cross-check warns on a flagged
+tombstone at every commit until it is acknowledged with
+--ack <session-id>, which retires the tombstone without discarding the
+loss record.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSessionPurge(cmd)
 	},
@@ -198,6 +213,12 @@ func init() {
 	// session delete flags
 	sessionDeleteCmd.Flags().StringVar(&sessionDeleteSession, "session", "", "Session ID (required)")
 	_ = sessionDeleteCmd.MarkFlagRequired("session")
+
+	// session purge flags
+	sessionPurgeCmd.Flags().BoolVar(&sessionPurgeForce, "force", false,
+		"Purge even when a session has unsealed audit lines (leaves a flagged tombstone)")
+	sessionPurgeCmd.Flags().StringVar(&sessionPurgeAck, "ack", "",
+		"Acknowledge and retire the tombstone for the named session id")
 
 	// session join flags
 	sessionJoinCmd.Flags().StringVar(&sessionJoinAgentID, "agent-id", "", "Agent ID (required)")
@@ -484,6 +505,22 @@ func formatStarted(raw string) string {
 
 func runSessionPurge(cmd *cobra.Command) error {
 	ss := sessionStore()
+	out := cmd.OutOrStdout()
+
+	// --ack retires a session's tombstone so the seal's vacuum cross-check
+	// stops warning on it, without discarding the loss record (DES-058).
+	if sessionPurgeAck != "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("resolving home directory: %w", err)
+		}
+		retired, err := audit.AckTombstone(filepath.Join(home, ".punt-labs", "ethos", "sessions"), sessionPurgeAck)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Acknowledged tombstone for %s (retired to %s)\n", sessionPurgeAck, retired)
+		return nil
+	}
 
 	// Purge stale PID files first (independent of roster purge).
 	pidPurged, pidErr := ss.PurgeCurrent()
@@ -491,11 +528,15 @@ func runSessionPurge(cmd *cobra.Command) error {
 		pidErr = fmt.Errorf("purging PID files: %w", pidErr)
 	}
 
-	purged, err := ss.Purge()
+	// DES-058: PurgeTombstoned refuses to strand a session's unsealed audit
+	// lines unless --force, and leaves a flagged tombstone when it proceeds.
+	purged, refused, err := ss.PurgeTombstoned(sessionPurgeForce)
 	if err != nil {
 		return err
 	}
-	out := cmd.OutOrStdout()
+	for _, id := range refused {
+		fmt.Fprintf(out, "Refused to purge %s (unsealed audit lines; use --force)\n", id)
+	}
 	if jsonOutput {
 		if purged == nil {
 			purged = []string{}

@@ -182,6 +182,28 @@ func init() {
 	rootCmd.AddCommand(auditCmd)
 }
 
+// activeRepoSessions returns the ids of roster-active sessions bound to
+// repoRoot — the second source the vacuum cross-check iterates. Best-effort:
+// a roster read error skips that session rather than failing the seal.
+func activeRepoSessions(repoRoot string) []string {
+	ss := sessionStore()
+	ids, err := ss.List()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, id := range ids {
+		roster, err := ss.Load(id)
+		if err != nil {
+			continue
+		}
+		if roster.Repo == repoRoot {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 // runAuditQuarantine is the audit-quarantine command implementation. It
 // retires a corrupt chunk named by chunkPath and recovers what the live file
 // holds, printing a one-line summary of the marker it wrote.
@@ -232,6 +254,17 @@ func runAuditSeal(out, errOut io.Writer) error {
 	}
 	if res.Deferred {
 		return nil
+	}
+	// Vacuum cross-check on the no-op path: a seal that touched nothing must
+	// still notice a session whose unsealed lines were lost (DES-058 §Seal
+	// failure policy). Warnings only — never blocks the commit.
+	if !auditSealDryRun && res.SessionsSealed == 0 && res.ChunksStaged == 0 {
+		if home, hErr := os.UserHomeDir(); hErr == nil {
+			globalSessions := filepath.Join(home, ".punt-labs", "ethos", "sessions")
+			if vErr := hook.VacuumCrossCheck(repoRoot, globalSessions, activeRepoSessions(repoRoot), errOut); vErr != nil {
+				fmt.Fprintf(errOut, "ethos: audit seal: vacuum cross-check: %v\n", vErr)
+			}
+		}
 	}
 	if auditSealDryRun {
 		fmt.Fprintf(out, "audit seal: dry-run complete (%d line(s) pending)\n", res.LinesSealed)
