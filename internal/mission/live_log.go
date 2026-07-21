@@ -114,26 +114,46 @@ func (s *Store) loadLiveUnionEvents(missionID string) ([]Event, []string, error)
 		entries = append(entries, tsEvent{ts: l.TS, e: e})
 	}
 
-	// Sl: the frozen legacy sources — the tracked log.jsonl first, then the
-	// drained missions/<id>.jsonl residue of the superseded shared-live design
-	// (docs/audit-seal.md §Migration). Each is decoded through the strict
-	// walker so a corrupt line surfaces as a warning, then merged as the
-	// oldest pool — pre-discipline ts sort before post-discipline ts, and
-	// log.jsonl is inserted before the residue so the stable sort keeps their
-	// defined order for any equal ts.
-	for _, src := range legacySources {
-		legacyEvents, legacyWarnings, lErr := loadFrozenLog(src)
-		if lErr != nil {
-			return nil, nil, lErr
+	// Sl: the frozen legacy sources, merged as the oldest pool — pre-discipline
+	// ts sort before post-discipline ts, and the tracked log.jsonl inserted
+	// before the residue so the stable sort keeps their defined order for any
+	// equal ts (docs/audit-seal.md §Migration).
+	//
+	// The tracked log.jsonl is the true frozen legacy — read whole and undeduped
+	// through the strict walker so a corrupt line surfaces as a warning.
+	trackedLog := filepath.Join(sealedDir, "log.jsonl")
+	trackedEvents, trackedWarnings, lErr := loadFrozenLog(trackedLog)
+	if lErr != nil {
+		return nil, nil, lErr
+	}
+	warnings = append(warnings, trackedWarnings...)
+	for _, e := range trackedEvents {
+		ts, perr := audit.ParseLineTS(e.TS)
+		if perr != nil {
+			ts = 0 // sorts first; a decoded event always has a valid RFC3339 ts
 		}
-		warnings = append(warnings, legacyWarnings...)
-		for _, e := range legacyEvents {
-			ts, perr := audit.ParseLineTS(e.TS)
-			if perr != nil {
-				ts = 0 // sorts first; a decoded event always has a valid RFC3339 ts
-			}
-			entries = append(entries, tsEvent{ts: ts, e: e})
+		entries = append(entries, tsEvent{ts: ts, e: e})
+	}
+
+	// The superseded shared-live missions/<id>.jsonl residue is drained once
+	// with a PER-LINE filter: a line survives only if its ts is past the max
+	// <last> of the sealed chunks carrying its own session id, because that
+	// design's seal already copied some lines into chunks. Reading it whole
+	// would re-add every already-sealed line as a duplicate. Survivors carry no
+	// session identity in the new scheme, so they decode through the tolerant
+	// residue decoder (the foreign session tag is discarded, not rejected).
+	residueLines, rErr := audit.ResidueLinesFiltered(
+		audit.MissionResiduePath(repoRoot, missionID), audit.MaxLastBySession(sc.Chunks))
+	if rErr != nil {
+		return nil, nil, rErr
+	}
+	for _, l := range residueLines {
+		e, derr := decodeResidueEventLine(l.Raw)
+		if derr != nil {
+			warnings = append(warnings, fmt.Sprintf("residue line: %v", derr))
+			continue
 		}
+		entries = append(entries, tsEvent{ts: l.TS, e: e})
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].ts < entries[j].ts })

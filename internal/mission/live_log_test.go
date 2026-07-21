@@ -119,6 +119,54 @@ func TestMissionLiveLog_UnionReadUnionsSealedAndLive(t *testing.T) {
 	assert.Equal(t, "close", events[1].Event)
 }
 
+func TestMissionLiveLog_ResiduePerLineFilter(t *testing.T) {
+	s, repoRoot := twoTreeSessionStore(t, "reader")
+	id := "m-2026-07-21-006"
+	require.NoError(t, s.Create(newContract(id)))
+	// Drop the reader session's own create event so the fixture is exactly the
+	// two residue lines plus A's sealed chunk under test.
+	require.NoError(t, os.Remove(audit.LiveMissionLogPath(repoRoot, id, "reader")))
+
+	// Session A sealed a chunk up to ts=200: its residue lines at or below 200
+	// were already copied into that chunk. Session B never sealed a chunk.
+	sealedDir := audit.SealedMissionDir(repoRoot, id)
+	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(sealedDir, audit.MissionChunkFile("A", 200, 200)),
+		[]byte(`{"ts":"`+audit.FormatLineTS(200)+`","event":"create","actor":"a"}`+"\n"), 0o600))
+
+	// The superseded shared-live residue holds one already-sealed line for A
+	// (ts 150 <= A's sealed 200 → drop) and one never-sealed line for the
+	// lagging B (no chunk → keep). Each carries its own session tag.
+	residue := audit.MissionResiduePath(repoRoot, id)
+	require.NoError(t, os.MkdirAll(filepath.Dir(residue), 0o700))
+	body := `{"ts":"` + audit.FormatLineTS(150) + `","session":"A","event":"dispatch","actor":"a"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(150) + `","session":"B","event":"dispatch","actor":"b"}` + "\n"
+	require.NoError(t, os.WriteFile(residue, []byte(body), 0o600))
+
+	events, warnings, err := s.LoadEvents(id)
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+
+	// A's residue line was already sealed → dropped, no duplicate. B's lagging
+	// line survives. The chunk's create line is the only A event.
+	require.Len(t, events, 2)
+	var dispatchA, dispatchB, createA int
+	for _, e := range events {
+		switch {
+		case e.Event == "dispatch" && e.Actor == "a":
+			dispatchA++
+		case e.Event == "dispatch" && e.Actor == "b":
+			dispatchB++
+		case e.Event == "create" && e.Actor == "a":
+			createA++
+		}
+	}
+	assert.Zero(t, dispatchA, "A's already-sealed residue line must be dropped, not duplicated")
+	assert.Equal(t, 1, dispatchB, "B's never-sealed residue line must survive")
+	assert.Equal(t, 1, createA, "A's sealed chunk line must remain")
+}
+
 func TestMissionLiveLog_DrainsLegacyResidue(t *testing.T) {
 	s, repoRoot := twoTreeSessionStore(t, "sess1")
 	id := "m-2026-07-21-005"

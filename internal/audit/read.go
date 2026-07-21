@@ -181,6 +181,85 @@ func LegacyLines(path string) ([]Line, error) {
 	return out, nil
 }
 
+// tsSessionHolder decodes the ts and session fields of a residue line. The
+// superseded shared-live mission log tagged each line with its session so a
+// single shared file stayed attributable; the current per-session live logs
+// carry identity in the path, not the line. Lenient by default — unknown
+// fields are ignored — so a residue line's session is readable even though the
+// strict event decoder rejects the field.
+type tsSessionHolder struct {
+	TS      string `json:"ts"`
+	Session string `json:"session"`
+}
+
+// MaxLastBySession returns each session's greatest chunk <last> across chunks —
+// the per-session sealed watermark the legacy residue drain filters against
+// (docs/audit-seal.md §Migration). A session absent from the map has no sealed
+// chunk.
+func MaxLastBySession(chunks []ChunkName) map[string]int64 {
+	m := make(map[string]int64, len(chunks))
+	for _, c := range chunks {
+		if cur, ok := m[c.Session]; !ok || c.Last > cur {
+			m[c.Session] = c.Last
+		}
+	}
+	return m
+}
+
+// ResidueLinesFiltered reads the superseded shared-live design's per-checkout
+// missions/<id>.jsonl residue, draining it once with a PER-LINE filter: a line
+// is kept iff its ts is strictly past the max <last> of the sealed chunks
+// carrying THAT LINE'S OWN session id (docs/audit-seal.md §Migration). That
+// design's seal already copied some lines into log-<session>-<..> chunks, so a
+// whole read would double-count every already-sealed line.
+//
+// "Sealed" is a per-session property, so the threshold is per session, never
+// cross-session: a line whose session has no sealed chunk keeps everything, and
+// a line with no readable session attribution is kept. Over-retention is
+// bounded and visible in the read; a cross-session threshold would silently
+// drop a lagging session's never-sealed lines whose range sits below another
+// session's. Surviving lines carry no session tag — the residue enters the
+// pre-discipline legacy pool undeduped and is never re-attributed.
+//
+// Tolerant like LegacyLines: a torn final line is dropped and a terminated
+// unparseable line is skipped, never an error. A missing file yields nil.
+func ResidueLinesFiltered(path string, sessionSealedLast map[string]int64) ([]Line, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading residue %s: %w", path, err)
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		if cut := lastNewline(data); cut >= 0 {
+			data = data[:cut+1]
+		} else {
+			data = nil
+		}
+	}
+	var out []Line
+	for _, raw := range SplitLines(data) {
+		var h tsSessionHolder
+		if json.Unmarshal(raw, &h) != nil {
+			continue
+		}
+		ts, perr := ParseLineTS(h.TS)
+		if perr != nil {
+			continue
+		}
+		if h.Session != "" {
+			if last, ok := sessionSealedLast[h.Session]; ok && ts <= last {
+				continue // already copied into that session's sealed chunk
+			}
+		}
+		cp := make([]byte, len(raw))
+		copy(cp, raw)
+		out = append(out, Line{TS: ts, Raw: cp})
+	}
+	return out, nil
+}
+
 // DedupByIdentity collapses lines sharing an identity to the first seen.
 // Post-discipline lines (chunks + live tail) dedup on (session, ts) —
 // loss-free, since equal identity means a byte-identical line from the same

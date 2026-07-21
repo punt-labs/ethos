@@ -479,6 +479,35 @@ func decodeEventLine(raw []byte) (Event, error) {
 	return e, nil
 }
 
+// decodeResidueEventLine decodes one surviving line of the superseded
+// shared-live missions/<id>.jsonl residue into an Event. That design tagged
+// each line with its session for the per-line drain filter; the field is
+// foreign to the current Event schema and is discarded here rather than
+// rejected. Unlike decodeEventLine, this does not DisallowUnknownFields — the
+// strict decoder guards our own post-discipline lines, not drained legacy
+// (LegacyLines is tolerant for the same reason). The ts, event-type, and actor
+// checks still apply, so a genuinely malformed residue line surfaces as a
+// warning at the call site rather than a silent drop.
+func decodeResidueEventLine(raw []byte) (Event, error) {
+	var e Event
+	if err := json.Unmarshal(raw, &e); err != nil {
+		return Event{}, fmt.Errorf("decoding residue event: %w", err)
+	}
+	if strings.TrimSpace(e.TS) == "" {
+		return Event{}, fmt.Errorf("residue event missing ts")
+	}
+	if _, err := time.Parse(time.RFC3339, e.TS); err != nil {
+		return Event{}, fmt.Errorf("residue event ts %q is not RFC3339: %w", e.TS, err)
+	}
+	if strings.TrimSpace(e.Event) == "" {
+		return Event{}, fmt.Errorf("residue event missing event type")
+	}
+	if strings.TrimSpace(e.Actor) == "" {
+		return Event{}, fmt.Errorf("residue event missing actor")
+	}
+	return e, nil
+}
+
 // FilterEvents returns the subset of events that match every
 // supplied filter. Filters AND-compose: an event is included only
 // if it passes type and since.
