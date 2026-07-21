@@ -252,8 +252,8 @@ fi
 # every other commit — the hook exits 0 unless MISSION_ID or
 # DELEGATION_ID is set in the environment.
 #
-# Skipped silently when not in a git work tree (curl|sh from $HOME)
-# and when an unrelated commit-msg hook already exists (no clobber).
+# Skipped silently when not in a git work tree (curl|sh from $HOME);
+# warns and skips when an unrelated commit-msg hook already exists (no clobber).
 HOOK_SRC=""
 if [ -f "./hooks/commit-msg.sh" ]; then
   HOOK_SRC="./hooks/commit-msg.sh"
@@ -283,8 +283,8 @@ fi
 # work. Passthrough (exit 0) when ethos is not installed or nothing is
 # pending; fail-closed (exit 2) on a broken audit store.
 #
-# Skipped silently when not in a git work tree and when an unrelated
-# pre-commit hook already exists (no clobber).
+# Skipped silently when not in a git work tree; warns and skips when an
+# unrelated pre-commit hook already exists (no clobber).
 PRECOMMIT_SRC=""
 if [ -f "./hooks/pre-commit.sh" ]; then
   PRECOMMIT_SRC="./hooks/pre-commit.sh"
