@@ -168,8 +168,9 @@ func TestQuarantineNeverOverwritesExistingCorrupt(t *testing.T) {
 	initGitRepo(t, repo)
 	sealedDir := filepath.Join(repo, "sealed")
 	// Fresh-damage state: a chunk AND an existing .corrupt (from a prior
-	// event), no covering marker. Quarantine must refuse rather than
-	// os.Rename over the first .corrupt (REQ-3).
+	// event), no covering marker. Quarantine must NOT clobber the first
+	// .corrupt — it retires the fresh chunk under a content-hashed name
+	// (OPT-1: the never-overwrite .corrupt-<hash> sequence) and proceeds.
 	writeChunk(t, sealedDir, SessionChunkFile(100, 300), 100, 200)                 // fresh corrupt chunk
 	writeChunk(t, sealedDir, SessionChunkFile(100, 300)+".corrupt", 100, 200, 300) // prior evidence
 	gitCommitAll(t, repo, "fresh damage")
@@ -181,15 +182,55 @@ func TestQuarantineNeverOverwritesExistingCorrupt(t *testing.T) {
 	writeLive(t, live, 100, 200, 300)
 
 	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
-	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err == nil {
-		t.Fatal("quarantine over existing .corrupt = nil error, want refusal")
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err != nil {
+		t.Fatalf("quarantine over existing .corrupt: %v", err)
 	}
+	// The prior .corrupt evidence survives untouched.
 	after, err := os.ReadFile(filepath.Join(sealedDir, SessionChunkFile(100, 300)+".corrupt"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(before) != string(after) {
 		t.Error("the prior .corrupt evidence was overwritten")
+	}
+	// The fresh chunk was retired under a distinct .corrupt-<hash> name.
+	matches, _ := filepath.Glob(filepath.Join(sealedDir, SessionChunkFile(100, 300)+".corrupt-*"))
+	if len(matches) != 1 {
+		t.Errorf("fresh damage not retired under .corrupt-<hash>: %v", matches)
+	}
+}
+
+func TestQuarantineNoOpRetiresFreshCorruptionAtCoveredName(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealedDir := filepath.Join(repo, "sealed")
+	live := filepath.Join(repo, "live.jsonl")
+	writeLive(t, live, 100, 200, 300)
+	// Complete a quarantine (marker present).
+	writeChunk(t, sealedDir, SessionChunkFile(100, 300), 100, 200)
+	gitCommitAll(t, repo, "seal")
+	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err != nil {
+		t.Fatal(err)
+	}
+	// The re-seal produced a content-named chunk at [100,200] (a covered name).
+	// Now corrupt it: last-line ts disagrees with the filename <last>.
+	reChunk := filepath.Join(sealedDir, SessionChunkFile(100, 200))
+	if err := os.WriteFile(reChunk, []byte(`{"ts":"`+FormatLineTS(150)+`","tool":"Read"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A second quarantine (idempotent no-op) must NOT be blind to it: it
+	// retires the fresh corruption under a .corrupt-<hash> and succeeds.
+	if _, err := Quarantine(repo, sealedDir, cn, live, "ts mismatch"); err != nil {
+		t.Fatalf("no-op reconcile: %v", err)
+	}
+	// The scan is clean again — no valid chunk at [100,200] trips the check.
+	if _, err := ScanSealedDir(sealedDir, SessionNS, ""); err != nil {
+		t.Errorf("scan after no-op reconcile errored: %v", err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(sealedDir, SessionChunkFile(100, 200)+".corrupt-*"))
+	if len(matches) < 1 {
+		t.Errorf("fresh corruption at covered name not retired: %v", matches)
 	}
 }
 

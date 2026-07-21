@@ -1,6 +1,8 @@
 package audit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,8 +41,14 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 	corruptPath := filepath.Join(sealedDir, stem+".jsonl.corrupt")
 	markerPath := filepath.Join(sealedDir, cn.MarkerFile())
 
-	// State: a parseable marker means the quarantine already completed.
+	// State: a parseable marker means the quarantine already completed — an
+	// idempotent no-op, but NOT blind to fresh damage (OPT-1): content-verify
+	// any chunk standing at a name the marker covers and retire fresh
+	// corruption as a new event under a content-hashed name, then re-stage.
 	if mk, err := ReadMarker(markerPath); err == nil {
+		if err := reconcileUnderMarker(repoRoot, sealedDir, cn); err != nil {
+			return Marker{}, err
+		}
 		if _, sErr := stageQuarantineArtifacts(repoRoot, sealedDir, cn); sErr != nil {
 			return Marker{}, sErr
 		}
@@ -51,25 +59,17 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 	// fresh run, or find them already there on a resume.
 	if _, err := os.Stat(chunkPath); err == nil {
 		// A chunk AND an existing .corrupt with no covering marker is the
-		// resume-window "fresh damage" state. os.Rename would atomically
-		// REPLACE the existing .corrupt, destroying the first quarantine's
-		// evidence (docs/audit-seal.md §Seal failure policy: a rename onto an
-		// existing <name>.corrupt never overwrites). Refuse rather than clobber
-		// (REQ-3); the .corrupt-<hash> second-event sequencing is the fuller
-		// recovery for this state.
+		// resume-window "fresh damage" state. The first event's .corrupt must
+		// never be overwritten (docs §Seal failure policy), so the fresh chunk
+		// is retired under a content-hashed .corrupt-<hash> name that cannot
+		// collide with it (OPT-1), preserving both evidences; the re-seal +
+		// marker below then complete the quarantine.
 		if _, cErr := os.Stat(corruptPath); cErr == nil {
-			return Marker{}, fmt.Errorf(
-				"quarantine %s: a .corrupt already exists (fresh damage during a resume window); "+
-					"refusing to overwrite the prior quarantine's evidence", cn.ChunkFile())
-		}
-		if mvErr := GitMv(repoRoot, chunkPath, corruptPath); mvErr != nil {
-			// git mv fails on an untracked chunk (a fresh seal not yet
-			// committed); a plain rename reaches the same state and staging
-			// adds the .corrupt. corruptPath is guaranteed absent here (guarded
-			// above), so the rename cannot clobber.
-			if rErr := os.Rename(chunkPath, corruptPath); rErr != nil {
-				return Marker{}, fmt.Errorf("retiring %s: git mv: %v; rename: %w", chunkPath, mvErr, rErr)
+			if rErr := retireChunkUnderHash(repoRoot, sealedDir, cn, chunkPath); rErr != nil {
+				return Marker{}, rErr
 			}
+		} else if rErr := renameRetire(repoRoot, chunkPath, corruptPath); rErr != nil {
+			return Marker{}, rErr
 		}
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return Marker{}, fmt.Errorf("stat %s: %w", chunkPath, err)
@@ -139,6 +139,82 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 // clean and committable with no hand-staging.
 func stageQuarantineArtifacts(repoRoot, sealedDir string, cn ChunkName) (int, error) {
 	return StageUntrackedChunks(repoRoot, sealedDir, cn.Namespace, cn.Session)
+}
+
+// renameRetire moves src to dst via git (staging the rename) or a plain
+// rename when git mv fails (an untracked source). The caller guarantees dst is
+// absent, so the rename cannot clobber.
+func renameRetire(repoRoot, src, dst string) error {
+	if mvErr := GitMv(repoRoot, src, dst); mvErr != nil {
+		if rErr := os.Rename(src, dst); rErr != nil {
+			return fmt.Errorf("retiring %s: git mv: %v; rename: %w", src, mvErr, rErr)
+		}
+	}
+	return nil
+}
+
+// corruptHashName returns the .corrupt-<hash> filename for a chunk stem and its
+// content, using a deterministic never-overwrite sequence (-2, -3, …) so a
+// second event never collides with the first .corrupt or an identical earlier
+// .corrupt-<hash> (docs/audit-seal.md §Seal failure policy).
+func corruptHashName(dir, stem string, content []byte) string {
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])[:12]
+	base := stem + ".jsonl.corrupt-" + hash
+	candidate := base
+	for n := 2; ; n++ {
+		if _, err := os.Stat(filepath.Join(dir, candidate)); errors.Is(err, fs.ErrNotExist) {
+			return candidate
+		}
+		candidate = fmt.Sprintf("%s-%d", base, n)
+	}
+}
+
+// retireChunkUnderHash retires the chunk at chunkPath under a content-hashed
+// .corrupt-<hash> name, preserving any existing .corrupt evidence.
+func retireChunkUnderHash(repoRoot, sealedDir string, chunkCN ChunkName, chunkPath string) error {
+	b, err := os.ReadFile(chunkPath)
+	if err != nil {
+		return fmt.Errorf("reading fresh-damage chunk %s: %w", chunkPath, err)
+	}
+	hashed := corruptHashName(sealedDir, chunkCN.Stem(), b)
+	return renameRetire(repoRoot, chunkPath, filepath.Join(sealedDir, hashed))
+}
+
+// reconcileUnderMarker is the "not blind to fresh damage" half of the
+// idempotent no-op (OPT-1): it content-verifies every valid chunk standing at
+// a name the marker's range covers and retires a corrupt one as a new event
+// under a content-hashed .corrupt-<hash> name, so fresh corruption of a
+// re-sealed chunk becomes recorded evidence rather than a chunk a later
+// seal/read trips over.
+func reconcileUnderMarker(repoRoot, sealedDir string, cn ChunkName) error {
+	entries, err := os.ReadDir(sealedDir)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", sealedDir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		c, kind := Classify(e.Name(), cn.Namespace)
+		if kind != KindValid {
+			continue
+		}
+		if cn.Namespace == MissionNS && c.Session != cn.Session {
+			continue
+		}
+		// Only chunks whose range the marker covers are its concern.
+		if !(cn.First <= c.First && c.Last <= cn.Last) {
+			continue
+		}
+		p := filepath.Join(sealedDir, e.Name())
+		if _, vErr := ReadChunkVerified(p, c.Last); vErr != nil {
+			if rErr := retireChunkUnderHash(repoRoot, sealedDir, c, p); rErr != nil {
+				return rErr
+			}
+		}
+	}
+	return nil
 }
 
 // liveLinesInRange returns the live file's complete, parseable lines whose ts
