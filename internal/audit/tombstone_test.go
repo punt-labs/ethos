@@ -78,6 +78,44 @@ func TestAckTombstoneNeverOverwrites(t *testing.T) {
 	}
 }
 
+func TestWriteTombstoneRetiresFlaggedPrior(t *testing.T) {
+	dir := t.TempDir()
+	// First flagged tombstone.
+	if err := WriteTombstone(dir, Tombstone{Session: "s", Repo: "/r", UnsealedLines: true}); err != nil {
+		t.Fatal(err)
+	}
+	// A re-purge before an ack must NOT overwrite the first loss record.
+	if err := WriteTombstone(dir, Tombstone{Session: "s", Repo: "/r", LiveFileGone: true}); err != nil {
+		t.Fatal(err)
+	}
+	// The fresh tombstone stands at the name.
+	fresh, err := ReadTombstone(filepath.Join(dir, "s.purged"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fresh.LiveFileGone {
+		t.Errorf("fresh tombstone = %+v, want LiveFileGone", fresh)
+	}
+	// The prior flagged tombstone was retired, not dropped.
+	if _, err := os.Stat(filepath.Join(dir, "s.purged.acked")); err != nil {
+		t.Errorf("prior flagged tombstone not retired to .acked: %v", err)
+	}
+}
+
+func TestWriteTombstoneReplacesUnflaggedPrior(t *testing.T) {
+	dir := t.TempDir()
+	// An unflagged tombstone carries no loss signal, so it may be replaced.
+	if err := WriteTombstone(dir, Tombstone{Session: "s", Repo: "/r"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteTombstone(dir, Tombstone{Session: "s", Repo: "/r", UnsealedLines: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "s.purged.acked")); !os.IsNotExist(err) {
+		t.Errorf("unflagged prior should be replaced, not retired: %v", err)
+	}
+}
+
 func TestAckTombstoneMissing(t *testing.T) {
 	if _, err := AckTombstone(t.TempDir(), "nope"); err == nil {
 		t.Error("acking a missing tombstone = nil error, want error")

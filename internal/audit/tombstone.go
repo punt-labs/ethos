@@ -45,12 +45,20 @@ func tombstonePath(globalSessionsDir, session string) string {
 	return filepath.Join(globalSessionsDir, filepath.Base(session)+".purged")
 }
 
-// WriteTombstone writes (or overwrites) a session's tombstone. Overwrite is
-// intentional: a re-purged session gets a fresh tombstone at the freed name
-// (the prior one was retired to .acked-<hash> on acknowledgment).
+// WriteTombstone writes a session's tombstone. If a flagged, un-acked
+// tombstone already stands at the name (a re-purge before the operator
+// acknowledged the prior loss), it is retired first via the same
+// never-overwrite sequence AckTombstone uses, so a fresh tombstone never drops
+// the earlier loss record (OPT-2, docs/audit-seal.md §Two zones). An unflagged
+// existing tombstone carries no loss signal and is simply replaced.
 func WriteTombstone(globalSessionsDir string, t Tombstone) error {
 	if err := os.MkdirAll(globalSessionsDir, 0o700); err != nil {
 		return fmt.Errorf("creating sessions dir: %w", err)
+	}
+	if prior, err := ReadTombstone(tombstonePath(globalSessionsDir, t.Session)); err == nil && prior.Flagged() {
+		if _, aErr := AckTombstone(globalSessionsDir, t.Session); aErr != nil {
+			return fmt.Errorf("retiring prior flagged tombstone before re-purge: %w", aErr)
+		}
 	}
 	data, err := json.Marshal(t)
 	if err != nil {
