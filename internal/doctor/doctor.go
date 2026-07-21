@@ -5,6 +5,7 @@ package doctor
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -191,13 +192,16 @@ func containsActiveCall(body, substr string) bool {
 	return false
 }
 
-// gitHooksDir returns the hooks directory git runs for the repo at
-// repoRoot. For a normal repo that is ".git/hooks". For a worktree the
-// ".git" file points at ".git/worktrees/<name>", which has no hooks of its
-// own — git resolves hooks through that directory's "commondir" file back to
-// the main ".git". Following commondir is what keeps a worktree from
-// reporting a hook installed at a path git never runs (ethos-2ol1).
+// gitHooksDir returns the hooks directory git runs for the repo at repoRoot.
+// It asks git directly (`git rev-parse --git-path hooks`), which is the one
+// source of truth the installer also uses: git honors core.hooksPath and
+// resolves a worktree's commondir. When git is unavailable it falls back to
+// resolving the ".git" gitdir file and its "commondir" by hand, so a worktree
+// still lands on the common ".git/hooks" git actually runs (ethos-2ol1).
 func gitHooksDir(repoRoot string) string {
+	if p := gitHooksPath(repoRoot); p != "" {
+		return p
+	}
 	dot := filepath.Join(repoRoot, ".git")
 	gd := dot
 	if info, err := os.Stat(dot); err != nil || !info.IsDir() {
@@ -220,6 +224,42 @@ func gitHooksDir(repoRoot string) string {
 		}
 	}
 	return filepath.Join(gd, "hooks")
+}
+
+// gitHooksPath returns git's own resolution of the hooks directory, or "" if
+// git is unavailable or repoRoot is not itself a git work tree root. The
+// work-tree-root anchor matters: without it, git would walk up from a
+// non-repo repoRoot and resolve an ancestor repo's hooks — reporting on the
+// wrong repository. A relative result is resolved against repoRoot, matching
+// git's `-C` semantics.
+func gitHooksPath(repoRoot string) string {
+	top, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--show-toplevel").Output()
+	if err != nil || !samePath(strings.TrimSpace(string(top)), repoRoot) {
+		return ""
+	}
+	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "hooks").Output()
+	if err != nil {
+		return ""
+	}
+	p := strings.TrimSpace(string(out))
+	if p == "" {
+		return ""
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(repoRoot, p)
+	}
+	return p
+}
+
+// samePath reports whether a and b name the same location, tolerating the
+// symlinked temp roots (macOS /tmp → /private/tmp) that show up in tests.
+func samePath(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, err1 := filepath.EvalSymlinks(a)
+	rb, err2 := filepath.EvalSymlinks(b)
+	return err1 == nil && err2 == nil && ra == rb
 }
 
 // CheckIdentityDir verifies the identity directory exists.

@@ -383,6 +383,36 @@ func TestCheckSealHook(t *testing.T) {
 		r := CheckSealHook(wtDir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
+
+	t.Run("honors core.hooksPath like the installer", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		repo := t.TempDir()
+		cmd := exec.Command("git", "-C", repo, "init", "-q")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git init: %s", out)
+		cmd = exec.Command("git", "-C", repo, "config", "core.hooksPath", ".husky")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		out, err = cmd.CombinedOutput()
+		require.NoError(t, err, "git config: %s", out)
+
+		// The seal lives where git runs hooks — the tracked .husky dir, the
+		// same path the installer resolves via `git rev-parse --git-path hooks`.
+		husky := filepath.Join(repo, ".husky")
+		require.NoError(t, os.MkdirAll(husky, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(husky, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+		// A seal in .git/hooks must NOT satisfy the check — git never runs it.
+		defaultHooks := filepath.Join(repo, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(defaultHooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(defaultHooks, "pre-commit"),
+			[]byte("#!/bin/sh\necho decoy\n"), 0o755))
+
+		r := CheckSealHook(repo)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
 }
 
 func TestRunAllAndHelpers(t *testing.T) {
