@@ -110,7 +110,15 @@ func Quarantine(repoRoot, sealedDir string, cn ChunkName, livePath, reason strin
 		verifiedLast = corruptMax
 	}
 	var unrecFirst, unrecLast int64
-	if verifiedLast > resealMax {
+	switch {
+	case verifiedLast < cn.First:
+		// Total loss: the live file held none of the range and the corrupt
+		// bytes yielded no ts within it, so nothing was verified. Record the
+		// whole nominal range [First,Last] as the gap — the maximal-loss case
+		// must report loss, not silent full recovery.
+		unrecFirst = cn.First
+		unrecLast = cn.Last
+	case verifiedLast > resealMax:
 		unrecFirst = resealMax + 1
 		if len(reseal) == 0 {
 			unrecFirst = cn.First

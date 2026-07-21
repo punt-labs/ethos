@@ -116,6 +116,38 @@ func TestQuarantinePartialRecoveryLeavesGap(t *testing.T) {
 	}
 }
 
+func TestQuarantineTotalLossRecordsFullRangeGap(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sealedDir := filepath.Join(repo, "sealed")
+	// The corrupt chunk claims [100,300] by its name but its bytes hold no
+	// parseable timestamp at all — maximal corruption.
+	if err := os.MkdirAll(sealedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	garbage := []byte("\x00not json at all\nstill garbage\n")
+	if err := os.WriteFile(filepath.Join(sealedDir, SessionChunkFile(100, 300)), garbage, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitAll(t, repo, "seal")
+	// The live file holds nothing in the chunk's range — total loss.
+	live := filepath.Join(repo, "live.jsonl")
+	writeLive(t, live, 50, 60)
+
+	cn, _ := Classify(SessionChunkFile(100, 300), SessionNS)
+	m, err := Quarantine(repo, sealedDir, cn, live, "unparseable")
+	if err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	if !m.HasGap() {
+		t.Fatalf("total loss must record a gap, not report full recovery: %+v", m)
+	}
+	if m.UnrecoveredFirst != 100 || m.UnrecoveredLast != 300 {
+		t.Errorf("gap = [%d,%d], want the whole nominal range [100,300]",
+			m.UnrecoveredFirst, m.UnrecoveredLast)
+	}
+}
+
 func TestQuarantineIdempotent(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)

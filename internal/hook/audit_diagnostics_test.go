@@ -43,6 +43,59 @@ func TestCollectAuditDiagnosticsGaps(t *testing.T) {
 	}
 }
 
+// TestCollectAuditDiagnosticsTotalLossGap is Bugbot R6-1: a quarantine that
+// recovers nothing — an unparseable corrupt chunk whose range the live file no
+// longer holds — must surface the whole nominal range as a gap in audit-show
+// diagnostics, not report silent full recovery.
+func TestCollectAuditDiagnosticsTotalLossGap(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	sid := "sess-total-loss"
+	now := time.Now().UTC()
+	sealedDir, err := resolveRepoSessionDir(repo, sid, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(sealedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A chunk claiming [100,300] by name but holding no parseable timestamp.
+	chunk := audit.SessionChunkFile(100, 300)
+	if err := os.WriteFile(filepath.Join(sealedDir, chunk), []byte("\x00garbage\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The live file holds nothing in the chunk's range.
+	live := liveAuditPath(repo, sid)
+	if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(live, []byte(`{"ts":"`+audit.FormatLineTS(50)+`","session":"`+sid+`","tool":"Read"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cn, _ := audit.Classify(chunk, audit.SessionNS)
+	m, err := audit.Quarantine(repo, sealedDir, cn, live, "unparseable")
+	if err != nil {
+		t.Fatalf("Quarantine: %v", err)
+	}
+	if !m.HasGap() {
+		t.Fatalf("total loss must record a gap: %+v", m)
+	}
+
+	diag, err := CollectAuditDiagnostics(repo, now)
+	if err != nil {
+		t.Fatalf("CollectAuditDiagnostics: %v", err)
+	}
+	if len(diag.Gaps) != 1 || diag.Gaps[0].First != 100 || diag.Gaps[0].Last != 300 {
+		t.Errorf("gaps = %+v, want one [100,300]", diag.Gaps)
+	}
+	var buf bytes.Buffer
+	diag.WriteDiagnostics(&buf)
+	if !bytes.Contains(buf.Bytes(), []byte("lost lines [100,300]")) {
+		t.Errorf("diagnostics output missing full-range gap line: %q", buf.String())
+	}
+}
+
 func TestCollectAuditDiagnosticsCleanRepoNoDiag(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)
