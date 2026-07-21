@@ -1,6 +1,8 @@
 package hook
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -128,16 +130,18 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 	}
 
 	repoPath := filepath.Join(repoDir, "audit.jsonl")
-	repoEntries, err := readAuditEntries(repoPath)
+	repoLines, err := readRawAuditLines(repoPath)
 	if err != nil {
 		return "", fmt.Errorf("reading repo %s: %w", repoPath, err)
 	}
 
-	// Dedupe on auditEntryKey, but keep the raw bytes of each surviving line to
-	// write out.
-	seen := make(map[string]struct{}, len(repoEntries))
-	for _, e := range repoEntries {
-		seen[auditEntryKey(e)] = struct{}{}
+	// Dedupe on rawAuditLineKey. Both sides read raw so the key scheme matches:
+	// a hashed entry keys on ts+tool+hash; a hashless line (e.g. a sentinel,
+	// which is ts+empty+empty and so degenerate on ts alone) keys on a hash of
+	// its raw bytes, so only byte-identical lines dedupe.
+	seen := make(map[string]struct{}, len(repoLines))
+	for _, rl := range repoLines {
+		seen[rl.key] = struct{}{}
 	}
 	var newLines [][]byte
 	for _, rl := range legacyLines {
@@ -189,11 +193,16 @@ func migrateOneSession(legacyPath, sessionsBase, sessionID string, dryRun bool) 
 // and fsyncs once. Used by migration to copy legacy lines byte-for-byte,
 // preserving unknown fields a decode-remarshal round-trip would drop.
 func appendRawAuditLines(path string, lines [][]byte) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", path, err)
 	}
 	defer f.Close()
+	// A torn fragment at the destination tail must not fuse onto the first
+	// migrated line (R3-2) — separate it with a newline first.
+	if err := ensureNewlineBoundary(f); err != nil {
+		return fmt.Errorf("checking tail of %s: %w", path, err)
+	}
 	for _, l := range lines {
 		if _, err := f.Write(l); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
@@ -208,15 +217,17 @@ func appendRawAuditLines(path string, lines [][]byte) error {
 	return nil
 }
 
-// auditEntryKey returns the dedupe key for one audit entry. Prefers
-// the sha256 hash when present; falls back to the preview field for
-// older lines. Two entries match when their ts, tool name, and
-// tool_input_hash are equal; entries with no hash (older v3.11.0 lines)
-// fall back to ts + tool + tool_input_preview — best-effort, acceptable
-// because the migration is one-shot per machine.
-func auditEntryKey(e auditEntry) string {
+// rawAuditLineKey returns the dedupe key for one audit line, computed from both
+// its decoded entry and its raw bytes. A hashed entry keys on ts + tool +
+// tool_input_hash, so two byte-different encodings of the same logical
+// tool_input dedupe. A hashless line (older v3.11.0 entries, and sentinels,
+// whose ts + empty tool + empty preview is degenerate — a burst of same-second
+// sentinels would collapse to one) keys on ts + tool + a sha256 of the RAW
+// bytes, so only byte-identical lines dedupe and distinct losses each survive.
+func rawAuditLineKey(e auditEntry, raw []byte) string {
 	if e.ToolInputHash != "" {
 		return e.Ts + "|" + e.Tool + "|" + e.ToolInputHash
 	}
-	return e.Ts + "|" + e.Tool + "|preview:" + e.ToolInputPreview
+	sum := sha256.Sum256(raw)
+	return e.Ts + "|" + e.Tool + "|raw:" + hex.EncodeToString(sum[:])
 }

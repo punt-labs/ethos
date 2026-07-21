@@ -135,6 +135,65 @@ func TestMigrateAudit_PreservesRawUnknownFields(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "legacy file should be deleted after migration")
 }
 
+// TestMigrateAudit_SameSecondSentinelsBothSurvive is SFH R3-1: two sentinels
+// with the same second-precision ts but different audit_error content must both
+// migrate — the hashless dedupe key falls back to the raw bytes, so distinct
+// losses are not collapsed to one.
+func TestMigrateAudit_SameSecondSentinelsBothSurvive(t *testing.T) {
+	globalDir := filepath.Join(t.TempDir(), "global")
+	repoRoot := t.TempDir()
+	sessID := "sess-burst"
+
+	s1 := `{"ts":"2026-05-22T10:00:00Z","session":"sess-burst","audit_error":"ENOSPC on chunk 1"}`
+	s2 := `{"ts":"2026-05-22T10:00:00Z","session":"sess-burst","audit_error":"ENOSPC on chunk 2"}`
+	require.NoError(t, os.MkdirAll(globalDir, 0o700))
+	legacyPath := filepath.Join(globalDir, sessID+".audit.jsonl")
+	require.NoError(t, os.WriteFile(legacyPath, []byte(s1+"\n"+s2+"\n"), 0o600))
+	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+
+	var out bytes.Buffer
+	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
+
+	data, err := os.ReadFile(filepath.Join(repoDir, "audit.jsonl"))
+	require.NoError(t, err)
+	body := string(data)
+	assert.Contains(t, body, "ENOSPC on chunk 1", "first same-second sentinel must survive")
+	assert.Contains(t, body, "ENOSPC on chunk 2", "second same-second sentinel must not be deduped away")
+}
+
+// TestMigrateAudit_TornDestinationTailNotFused is SFH R3-2: when the
+// destination already ends in a torn fragment, the first migrated line must not
+// glue onto it. A separator newline keeps the fragment its own (skipped) line
+// and the migrated sentinel decodable.
+func TestMigrateAudit_TornDestinationTailNotFused(t *testing.T) {
+	globalDir := filepath.Join(t.TempDir(), "global")
+	repoRoot := t.TempDir()
+	sessID := "sess-torn"
+
+	sentinel := `{"ts":"2026-05-22T10:00:01Z","session":"sess-torn","audit_error":"boom"}`
+	require.NoError(t, os.MkdirAll(globalDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(globalDir, sessID+".audit.jsonl"), []byte(sentinel+"\n"), 0o600))
+	repoDir := repoSessionDir(t, repoRoot, "2026-05-22", sessID)
+	// A prior write crashed mid-line, leaving a fragment with no terminator.
+	repoPath := filepath.Join(repoDir, "audit.jsonl")
+	require.NoError(t, os.WriteFile(repoPath, []byte(`{"ts":"2026-05-22T09:59:59Z","session":"sess-torn","tool":"Ba`), 0o600))
+
+	var out bytes.Buffer
+	require.NoError(t, MigrateAudit(globalDir, repoRoot, false, &out))
+
+	// The sentinel must be its own decodable line, not fused onto the fragment.
+	entries, err := readRawAuditLines(repoPath)
+	require.NoError(t, err)
+	var found bool
+	for _, rl := range entries {
+		if bytes.Contains(rl.raw, []byte(`"audit_error":"boom"`)) {
+			found = true
+		}
+	}
+	data, _ := os.ReadFile(repoPath)
+	assert.True(t, found, "migrated sentinel must survive as its own line: %q", string(data))
+}
+
 func TestMigrateAudit_IdempotentNoDoubleWrite(t *testing.T) {
 	globalDir := filepath.Join(t.TempDir(), "global")
 	repoRoot := t.TempDir()

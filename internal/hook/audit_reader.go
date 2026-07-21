@@ -114,7 +114,7 @@ func readRawAuditLines(path string) ([]rawAuditLine, error) {
 	defer f.Close()
 	var out []rawAuditLine
 	err = walkAuditLines(f, path, func(raw []byte, e auditEntry) {
-		out = append(out, rawAuditLine{key: auditEntryKey(e), raw: raw})
+		out = append(out, rawAuditLine{key: rawAuditLineKey(e, raw), raw: raw})
 	})
 	return out, err
 }
