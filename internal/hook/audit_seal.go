@@ -261,7 +261,9 @@ func listRepoMissions(repoRoot string) ([]string, error) {
 }
 
 // listMissionSessions returns the union of session ids that have live logs or
-// sealed chunks under a mission directory.
+// sealed chunks under a mission directory. A malformed (near-miss) chunk name in
+// the sealed dir is a hard error: it names no session, so it would otherwise
+// leave the dir unscanned and slip past the fail-closed malformed-chunk check.
 func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 	seen := make(map[string]struct{})
 	var ids []string
@@ -305,7 +307,18 @@ func listMissionSessions(repoRoot, missionID string) ([]string, error) {
 		if f.IsDir() {
 			continue
 		}
-		if cn, _ := audit.Classify(f.Name(), audit.MissionNS); cn.Session != "" {
+		cn, kind := audit.Classify(f.Name(), audit.MissionNS)
+		if kind == audit.KindNearMiss {
+			// A near-miss (unparseable stem, empty session — this also covers a
+			// .corrupt whose stem does not parse) names no session, so it would
+			// add nothing and the per-session ScanSealedDir sweep would never run
+			// for this dir. That skips the fail-closed malformed-chunk check when
+			// a near-miss is the ONLY chunk-namespace artifact. Fail loud here at
+			// discovery, matching ScanSealedDir's error, so the commit blocks
+			// (exit 2) rather than deferring the malformed chunk to a later read.
+			return nil, fmt.Errorf("malformed chunk name %q in %s", f.Name(), sealedDir)
+		}
+		if cn.Session != "" {
 			add(cn.Session)
 		}
 	}

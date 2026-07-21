@@ -163,6 +163,41 @@ func TestSealMissionOrphanCorruptDiscovered(t *testing.T) {
 	}
 }
 
+// TestSealMissionNearMissDiscovered covers the discovery gap Bugbot #348 R5-2
+// flagged: a mission dir whose only chunk-namespace artifact is a near-miss name
+// (the "log-" prefix but an unparseable stem, so it names no session) would
+// enumerate zero sessions, run no per-session scan, and slip past the
+// fail-closed malformed-chunk check. The seal must fail loud, naming the file.
+func TestSealMissionNearMissDiscovered(t *testing.T) {
+	repo := t.TempDir()
+	initGitRepo(t, repo)
+	mid := "m-2026-07-21-006"
+	sealedDir := sealedMissionDir(repo, mid)
+	if err := os.MkdirAll(sealedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A near-miss: "log-" prefix, ".jsonl" suffix, but a stem that does not parse.
+	nearMiss := "log-garbage.jsonl"
+	if err := os.WriteFile(filepath.Join(sealedDir, nearMiss), []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := SealMission(repo, mid, time.Now().UTC(), SealOptions{})
+	if err == nil {
+		t.Fatal("SealMission over a lone near-miss = nil, want fail-closed error")
+	}
+	if !strings.Contains(err.Error(), nearMiss) {
+		t.Errorf("error = %v, want it to name the malformed file %q", err, nearMiss)
+	}
+
+	// SealRepo's mission backstop must fail the same way.
+	if err := sealMissionsInRepo(repo, time.Now().UTC(), SealOptions{}, &SealResult{}); err == nil {
+		t.Fatal("sealMissionsInRepo over a lone near-miss = nil, want fail-closed error")
+	} else if !strings.Contains(err.Error(), nearMiss) {
+		t.Errorf("error = %v, want it to name the malformed file %q", err, nearMiss)
+	}
+}
+
 func TestSealRepoSealsMissionsToo(t *testing.T) {
 	repo := t.TempDir()
 	initGitRepo(t, repo)
