@@ -1,0 +1,50 @@
+results:
+    - mission: m-2026-07-21-010
+      round: 1
+      created_at: "2026-07-21T19:07:41Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: install.sh
+          added: 64
+          removed: 20
+        - path: internal/doctor/doctor.go
+          added: 56
+          removed: 0
+        - path: internal/doctor/doctor_test.go
+          added: 78
+          removed: 3
+        - path: CHANGELOG.md
+          added: 18
+          removed: 0
+        - path: README.md
+          added: 7
+          removed: 0
+      evidence:
+        - name: 'install_hook chaining: 17-scenario extraction test (.tmp/test-hook-chain.sh)'
+          status: pass
+        - name: 'e2e throwaway repo: host hook + chained seal both run, commit succeeds'
+          status: pass
+        - name: 'e2e throwaway repo: failing seal (exit 2) blocks commit (fail-closed)'
+          status: pass
+        - name: interim v4.1.0 section recognized and upgraded without duplication
+          status: pass
+        - name: 'TestCheckSealHook: present(chained+standalone)/missing/stale/gitdir'
+          status: pass
+        - name: 'built binary: doctor reports this repo''s hook ''PASS chained seal section active'''
+          status: pass
+        - name: shellcheck -x install.sh clean; make check green (all gates)
+          status: pass
+      prose: |-
+        Root cause: install.sh treated an existing hook as a reason to skip (warn-and-skip). Beads installs .git/hooks/pre-commit on every org machine, so the DES-058 seal — the live audit write path's primary trigger — never installed, and the only vacuum warning lives inside `audit seal`, which never ran. Nothing surfaced the absence.
+
+        Fix (install.sh): new install_hook() replaces both no-clobber blocks (step 6c commit-msg, 6d pre-commit). Four cases — no hook -> cp standalone (fresh path unchanged); our marker section present -> strip and re-append (idempotent); our standalone present (grep DESREF, no markers) -> refresh; foreign hook -> append a marker-delimited "ETHOS DES-058 SEAL" / "ETHOS DES-054 TRAILER" section (beads-integration marker pattern) carrying the hook body. Section is appended at end so it runs when the host content falls through; the host's last non-blank line is checked and an unconditional `exit` is warned. Marker match is by prefix, so the versioned interim BEGIN (v4.1.0) is stripped and upgraded in place with no duplication.
+
+        Doctor: CheckSealHook (internal/doctor) verifies the current repo's pre-commit hook carries an active seal — PASS for a chained marker section or the standalone hook; FAIL "missing" (no hook / foreign hook without seal) and FAIL "stale" (DES-058 section present but no `audit seal` call), each with the remedy to re-run install.sh. gitHooksDir resolves the .git gitdir file for worktrees and submodules. Registered in RunAll; check count in the cmd and mcp doctor tests updated 5 -> 6, and the cmd all-pass fixture now installs a seal hook.
+
+        commit-msg finding: commit-msg SHARES the identical no-clobber flaw (install.sh:268-274 pre-change). It differs in one respect — it is not triggered on org machines today, because beads does NOT install a commit-msg hook (this repo's .git/hooks/ shows beads owns post-checkout, post-merge, pre-push, prepare-commit-msg, and pre-commit, but not commit-msg), so ethos wins the empty slot and the standalone cp succeeds. pre-commit's no-clobber path, by contrast, fired on every machine because beads owns pre-commit. Fixed both the same way for defense in depth: if any future tool claims commit-msg, ethos now chains instead of silently skipping.
+
+        Release note: install.sh VERSION left at 4.1.0 — the release process owns the version bump; setting it to an untagged version here would break the binary download until the tag exists.
+
+        Verification: make check green (go vet, staticcheck, shellcheck hooks/*.sh install.sh, markdownlint, go test -race, validate-content). No suppressions added. Three incremental commits, each make-check-green: a1349f9 installer, 72fd8d9 doctor + fixtures, 2d0b478 docs. Branch fix/hook-chain-seal pushed.
