@@ -214,6 +214,80 @@ func TestCheckDuplicateFields(t *testing.T) {
 	})
 }
 
+func TestCheckSealHook(t *testing.T) {
+	// writeHook creates a repo with .git/hooks/pre-commit holding body.
+	writeHook := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
+		return dir
+	}
+
+	t.Run("not in a repo", func(t *testing.T) {
+		r := CheckSealHook("")
+		assert.True(t, r.Passed())
+		assert.Equal(t, "not in a repo", r.Detail)
+	})
+
+	t.Run("no pre-commit hook", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+		assert.Contains(t, r.Detail, "install.sh")
+	})
+
+	t.Run("standalone seal hook", func(t *testing.T) {
+		dir := writeHook(t, "#!/bin/sh\n# DES-058\nethos audit seal || exit 2\n")
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "standalone")
+	})
+
+	t.Run("chained seal section", func(t *testing.T) {
+		body := "#!/bin/sh\nbd hooks run pre-commit || exit 1\n" +
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n" +
+			"# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained")
+	})
+
+	t.Run("stale section without seal call", func(t *testing.T) {
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"echo placeholder\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "stale")
+	})
+
+	t.Run("foreign hook without seal", func(t *testing.T) {
+		dir := writeHook(t, "#!/bin/sh\nbd hooks run pre-commit || exit 1\n")
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed())
+		assert.Contains(t, r.Detail, "missing")
+	})
+
+	t.Run("gitdir file redirects hooks path", func(t *testing.T) {
+		// A worktree/submodule .git file points elsewhere via "gitdir:".
+		real := t.TempDir()
+		hooks := filepath.Join(real, "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+		wt := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
+			[]byte("gitdir: "+real+"\n"), 0o644))
+		r := CheckSealHook(wt)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
+}
+
 func TestRunAllAndHelpers(t *testing.T) {
 	// A fixture that passes all four checks initially, including
 	// human-identity via USER=mal matching the mal identity.
@@ -233,7 +307,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot and nil teams — the orphaned-agent check
 	// degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", nil)
-	require.Len(t, results, 5)
+	require.Len(t, results, 6)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -245,17 +319,18 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Default agent",
 		"Duplicate fields",
 		"Orphaned agent files",
+		"Audit seal hook",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 5, PassedCount(results))
+	assert.Equal(t, 6, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 5)
+	assert.Less(t, PassedCount(results), 6)
 
 	// At least one result should name the identity directory failure.
 	var found bool

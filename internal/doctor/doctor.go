@@ -50,6 +50,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, teams 
 	}
 
 	results = append(results, CheckOrphanedAgentFiles(repoRoot, teams))
+	results = append(results, CheckSealHook(repoRoot))
 	return results
 }
 
@@ -126,6 +127,61 @@ func CheckOrphanedAgentFiles(repoRoot string, teams *team.LayeredStore) Result {
 	}
 	sort.Strings(orphaned)
 	return Result{Name: name, Status: "FAIL", Detail: "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")}
+}
+
+// CheckSealHook verifies the current repo's pre-commit hook carries an
+// active DES-058 audit-seal invocation — either the ethos marker section
+// chained into a host hook or the standalone ethos hook. The seal is the
+// live audit write path's primary trigger; a repo missing it commits work
+// without sealing the pending audit lines that document it.
+func CheckSealHook(repoRoot string) Result {
+	name := "Audit seal hook"
+	const remedy = " — re-run install.sh from the repo root"
+
+	if repoRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+
+	hook := filepath.Join(gitHooksDir(repoRoot), "pre-commit")
+	data, err := os.ReadFile(hook)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Result{Name: name, Status: "FAIL", Detail: "no pre-commit hook (missing)" + remedy}
+		}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
+	}
+
+	body := string(data)
+	if strings.Contains(body, "audit seal") {
+		if strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL") {
+			return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
+		}
+		return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
+	}
+	if strings.Contains(body, "DES-058") || strings.Contains(body, "ETHOS DES-058 SEAL") {
+		return Result{Name: name, Status: "FAIL", Detail: "seal section present but no 'audit seal' call (stale)" + remedy}
+	}
+	return Result{Name: name, Status: "FAIL", Detail: "seal hook not installed (missing)" + remedy}
+}
+
+// gitHooksDir returns the hooks directory for the repo at repoRoot. It
+// resolves the ".git" gitdir file used by worktrees and submodules, falling
+// back to ".git/hooks" when ".git" is a normal directory or unreadable.
+func gitHooksDir(repoRoot string) string {
+	dot := filepath.Join(repoRoot, ".git")
+	if info, err := os.Stat(dot); err == nil && info.IsDir() {
+		return filepath.Join(dot, "hooks")
+	}
+	if data, err := os.ReadFile(dot); err == nil {
+		line := strings.TrimSpace(string(data))
+		if gd := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")); gd != line {
+			if !filepath.IsAbs(gd) {
+				gd = filepath.Join(repoRoot, gd)
+			}
+			return filepath.Join(gd, "hooks")
+		}
+	}
+	return filepath.Join(dot, "hooks")
 }
 
 // CheckIdentityDir verifies the identity directory exists.
