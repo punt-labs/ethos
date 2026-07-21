@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -274,7 +275,8 @@ func TestCheckSealHook(t *testing.T) {
 	})
 
 	t.Run("gitdir file redirects hooks path", func(t *testing.T) {
-		// A worktree/submodule .git file points elsewhere via "gitdir:".
+		// A submodule .git file points directly at a dir with hooks/ and
+		// no commondir — the hooks dir is target/hooks.
 		real := t.TempDir()
 		hooks := filepath.Join(real, "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
@@ -284,6 +286,69 @@ func TestCheckSealHook(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
 			[]byte("gitdir: "+real+"\n"), 0o644))
 		r := CheckSealHook(wt)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+	})
+
+	t.Run("worktree resolves hooks through commondir", func(t *testing.T) {
+		// Real worktree layout: the .git file points at
+		// <main>/.git/worktrees/<name>, which has a commondir file (../..)
+		// back to the main .git — where the hooks actually live. The seal
+		// hook at the per-worktree admin dir must be ignored; only the
+		// common hooks dir counts.
+		mainGit := t.TempDir() // stands in for <main>/.git
+		commonHooks := filepath.Join(mainGit, "hooks")
+		require.NoError(t, os.MkdirAll(commonHooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(commonHooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+
+		wtAdmin := filepath.Join(mainGit, "worktrees", "wt")
+		require.NoError(t, os.MkdirAll(filepath.Join(wtAdmin, "hooks"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(wtAdmin, "commondir"),
+			[]byte("../..\n"), 0o644))
+		// A decoy hook at the dead path git never runs — must be ignored.
+		require.NoError(t, os.WriteFile(filepath.Join(wtAdmin, "hooks", "pre-commit"),
+			[]byte("#!/bin/sh\necho decoy\n"), 0o755))
+
+		wt := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
+			[]byte("gitdir: "+wtAdmin+"\n"), 0o644))
+
+		r := CheckSealHook(wt)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "standalone")
+	})
+
+	t.Run("worktree via real git worktree add", func(t *testing.T) {
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git not available")
+		}
+		mainDir := t.TempDir()
+		gitRun := func(dir string, args ...string) {
+			t.Helper()
+			cmd := exec.Command("git", append([]string{"-c", "commit.gpgsign=false"}, args...)...)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(),
+				"HOME="+t.TempDir(),
+				"GIT_CONFIG_GLOBAL=/dev/null",
+				"GIT_CONFIG_SYSTEM=/dev/null",
+				"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t",
+				"GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "git %v: %s", args, out)
+		}
+		gitRun(mainDir, "init", "-q")
+		gitRun(mainDir, "commit", "--allow-empty", "-q", "-m", "init")
+
+		// The hook git actually runs lives in the main repo's hooks dir.
+		hooks := filepath.Join(mainDir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o755))
+
+		wtDir := filepath.Join(t.TempDir(), "wt")
+		gitRun(mainDir, "worktree", "add", "-q", wtDir, "-b", "b")
+
+		r := CheckSealHook(wtDir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
 }

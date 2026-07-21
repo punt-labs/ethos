@@ -158,30 +158,41 @@ func CheckSealHook(repoRoot string) Result {
 		}
 		return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
 	}
-	if strings.Contains(body, "DES-058") || strings.Contains(body, "ETHOS DES-058 SEAL") {
+	if strings.Contains(body, "DES-058") {
 		return Result{Name: name, Status: "FAIL", Detail: "seal section present but no 'audit seal' call (stale)" + remedy}
 	}
 	return Result{Name: name, Status: "FAIL", Detail: "seal hook not installed (missing)" + remedy}
 }
 
-// gitHooksDir returns the hooks directory for the repo at repoRoot. It
-// resolves the ".git" gitdir file used by worktrees and submodules, falling
-// back to ".git/hooks" when ".git" is a normal directory or unreadable.
+// gitHooksDir returns the hooks directory git runs for the repo at
+// repoRoot. For a normal repo that is ".git/hooks". For a worktree the
+// ".git" file points at ".git/worktrees/<name>", which has no hooks of its
+// own — git resolves hooks through that directory's "commondir" file back to
+// the main ".git". Following commondir is what keeps a worktree from
+// reporting a hook installed at a path git never runs (ethos-2ol1).
 func gitHooksDir(repoRoot string) string {
 	dot := filepath.Join(repoRoot, ".git")
-	if info, err := os.Stat(dot); err == nil && info.IsDir() {
-		return filepath.Join(dot, "hooks")
-	}
-	if data, err := os.ReadFile(dot); err == nil {
-		line := strings.TrimSpace(string(data))
-		if gd := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")); gd != line {
-			if !filepath.IsAbs(gd) {
-				gd = filepath.Join(repoRoot, gd)
+	gd := dot
+	if info, err := os.Stat(dot); err != nil || !info.IsDir() {
+		if data, err := os.ReadFile(dot); err == nil {
+			line := strings.TrimSpace(string(data))
+			if target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")); target != line && target != "" {
+				gd = target
+				if !filepath.IsAbs(gd) {
+					gd = filepath.Join(repoRoot, gd)
+				}
 			}
-			return filepath.Join(gd, "hooks")
 		}
 	}
-	return filepath.Join(dot, "hooks")
+	if data, err := os.ReadFile(filepath.Join(gd, "commondir")); err == nil {
+		if common := strings.TrimSpace(string(data)); common != "" {
+			if !filepath.IsAbs(common) {
+				common = filepath.Join(gd, common)
+			}
+			gd = common
+		}
+	}
+	return filepath.Join(gd, "hooks")
 }
 
 // CheckIdentityDir verifies the identity directory exists.
