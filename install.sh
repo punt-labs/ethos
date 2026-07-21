@@ -189,7 +189,7 @@ resolve_hooks_dir() {
   printf '%s\n' "$_hd"
 }
 
-VERSION="4.1.0"
+VERSION="4.1.1"
 REPO="punt-labs/ethos"
 BINARY="ethos"
 MARKETPLACE_REPO="punt-labs/claude-plugins"

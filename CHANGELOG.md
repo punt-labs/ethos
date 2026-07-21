@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-07-21
+
 ### Fixed
 
 - **DES-058 seal hook now installs on machines that already have a
