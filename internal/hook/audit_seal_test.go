@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/audit"
 )
 
 // writeLiveLines writes ts lines to a session's live audit file.
@@ -17,7 +19,7 @@ func writeLiveLines(t *testing.T, repo, sessionID string, tss ...int64) {
 	}
 	var body []byte
 	for _, ts := range tss {
-		body = append(body, []byte(`{"ts":"`+formatLineTS(ts)+`","session":"`+sessionID+`","tool":"Read"}`+"\n")...)
+		body = append(body, []byte(`{"ts":"`+audit.FormatLineTS(ts)+`","session":"`+sessionID+`","tool":"Read"}`+"\n")...)
 	}
 	if err := os.WriteFile(live, body, 0o600); err != nil {
 		t.Fatal(err)
@@ -40,7 +42,7 @@ func TestSealRepoWritesChunk(t *testing.T) {
 	}
 	// The chunk exists and is named for the range.
 	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
-	chunk := filepath.Join(sealedDir, sessionChunkFile(100, 300))
+	chunk := filepath.Join(sealedDir, audit.SessionChunkFile(100, 300))
 	if _, err := os.Stat(chunk); err != nil {
 		t.Fatalf("expected chunk %s: %v", chunk, err)
 	}
@@ -84,7 +86,7 @@ func TestSealRepoIncrementalTail(t *testing.T) {
 		t.Errorf("incremental seal = %d lines, want 2 (300,400)", res.LinesSealed)
 	}
 	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
-	if _, err := os.Stat(filepath.Join(sealedDir, sessionChunkFile(300, 400))); err != nil {
+	if _, err := os.Stat(filepath.Join(sealedDir, audit.SessionChunkFile(300, 400))); err != nil {
 		t.Errorf("expected second chunk 300-400: %v", err)
 	}
 }
@@ -97,7 +99,7 @@ func TestSealRepoStagesOrphanChunk(t *testing.T) {
 	// Simulate a crash after rename but before staging: a complete,
 	// untracked chunk with no pending live lines.
 	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
-	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 200)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(100, 200), 100, 200)
 
 	res, err := SealRepo(repo, now, SealOptions{})
 	if err != nil {
@@ -107,7 +109,7 @@ func TestSealRepoStagesOrphanChunk(t *testing.T) {
 		t.Errorf("orphan chunk not staged: %+v", res)
 	}
 	// The chunk is now tracked (git status shows it staged, not untracked).
-	cmd := exec.Command("git", "status", "--porcelain", "--", filepath.Join(sealedDir, sessionChunkFile(100, 200)))
+	cmd := exec.Command("git", "status", "--porcelain", "--", filepath.Join(sealedDir, audit.SessionChunkFile(100, 200)))
 	cmd.Dir = repo
 	out, _ := cmd.Output()
 	if len(out) > 0 && out[0] == '?' {
@@ -130,7 +132,7 @@ func TestSealRepoDryRun(t *testing.T) {
 	}
 	// No chunk written.
 	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
-	if _, err := os.Stat(filepath.Join(sealedDir, sessionChunkFile(100, 200))); err == nil {
+	if _, err := os.Stat(filepath.Join(sealedDir, audit.SessionChunkFile(100, 200))); err == nil {
 		t.Error("dry-run wrote a chunk")
 	}
 }
@@ -142,7 +144,7 @@ func TestSealRepoCorruptChunkFailsClosed(t *testing.T) {
 	now := time.Now().UTC()
 	sealedDir, _ := resolveRepoSessionDir(repo, sid, now)
 	// A chunk whose last ts (150) disagrees with its filename <last> (200).
-	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 150)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(100, 200), 100, 150)
 	writeLiveLines(t, repo, sid, 300)
 	_, err := SealRepo(repo, now, SealOptions{})
 	if err == nil {
@@ -160,7 +162,7 @@ func TestSealRepoSweepsStaleTemp(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A stale temp from a crashed seal.
-	stale := filepath.Join(sealedDir, sessionTempFile(100, 150))
+	stale := filepath.Join(sealedDir, audit.SessionTempFile(100, 150))
 	if err := os.WriteFile(stale, []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}

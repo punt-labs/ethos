@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/punt-labs/ethos/internal/audit"
 )
 
 // liveEntry appends one entry through appendLiveAudit and returns the
@@ -31,9 +33,9 @@ func TestAppendLiveAuditMonotonic(t *testing.T) {
 	a := liveEntry(t, repo, sid, "Read", now)
 	b := liveEntry(t, repo, sid, "Read", now)
 	c := liveEntry(t, repo, sid, "Read", now)
-	ta, _ := parseLineTS(a.Ts)
-	tb, _ := parseLineTS(b.Ts)
-	tc, _ := parseLineTS(c.Ts)
+	ta, _ := audit.ParseLineTS(a.Ts)
+	tb, _ := audit.ParseLineTS(b.Ts)
+	tc, _ := audit.ParseLineTS(c.Ts)
 	if !(ta < tb && tb < tc) {
 		t.Errorf("timestamps not strictly increasing: %d, %d, %d", ta, tb, tc)
 	}
@@ -47,8 +49,8 @@ func TestAppendLiveAuditClockRegression(t *testing.T) {
 	a := liveEntry(t, repo, sid, "Read", later)
 	// A backward clock step must still produce a strictly greater ts.
 	b := liveEntry(t, repo, sid, "Read", earlier)
-	ta, _ := parseLineTS(a.Ts)
-	tb, _ := parseLineTS(b.Ts)
+	ta, _ := audit.ParseLineTS(a.Ts)
+	tb, _ := audit.ParseLineTS(b.Ts)
 	if tb <= ta {
 		t.Errorf("clock regression not corrected: a=%d b=%d", ta, tb)
 	}
@@ -65,8 +67,8 @@ func TestAppendLiveAuditRestartRecovery(t *testing.T) {
 	// A fresh call (simulating a process restart) recovers last_ts from
 	// the live file tail and continues monotonically at the same instant.
 	b := liveEntry(t, repo, sid, "Read", now)
-	ta, _ := parseLineTS(a.Ts)
-	tb, _ := parseLineTS(b.Ts)
+	ta, _ := audit.ParseLineTS(a.Ts)
+	tb, _ := audit.ParseLineTS(b.Ts)
 	if tb <= ta {
 		t.Errorf("restart recovery failed: a=%d b=%d", ta, tb)
 	}
@@ -79,10 +81,10 @@ func TestAppendLiveAuditSeedsAboveWatermark(t *testing.T) {
 	// A committed chunk already covers a high ts. The first live append
 	// must sort strictly after it even though the wall clock is far below.
 	high := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()
-	writeChunkFile(t, sealedDir, sessionChunkFile(high-10, high), high-10, high)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(high-10, high), high-10, high)
 	past := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
 	got := liveEntry(t, repo, sid, "Read", past)
-	ts, _ := parseLineTS(got.Ts)
+	ts, _ := audit.ParseLineTS(got.Ts)
 	if ts <= high {
 		t.Errorf("live ts %d did not sort above watermark %d", ts, high)
 	}
@@ -96,8 +98,8 @@ func TestAppendLiveAuditTruncatesTornTail(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A complete line followed by a torn (no-newline) fragment.
-	complete := `{"ts":"` + formatLineTS(1000) + `","session":"s","tool":"Read"}` + "\n"
-	torn := `{"ts":"` + formatLineTS(2000) + `","session":"s","tool":"Bas`
+	complete := `{"ts":"` + audit.FormatLineTS(1000) + `","session":"s","tool":"Read"}` + "\n"
+	torn := `{"ts":"` + audit.FormatLineTS(2000) + `","session":"s","tool":"Bas`
 	if err := os.WriteFile(live, []byte(complete+torn), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +111,7 @@ func TestAppendLiveAuditTruncatesTornTail(t *testing.T) {
 	}
 	// The torn fragment must be gone; the file must hold exactly the
 	// complete line plus the new append (two lines, both terminated).
-	lines := splitLines(data)
+	lines := audit.SplitLines(data)
 	if len(lines) != 2 {
 		t.Fatalf("want 2 lines after torn-tail truncation, got %d: %q", len(lines), data)
 	}
@@ -123,13 +125,13 @@ func TestReadSessionAuditUnion(t *testing.T) {
 	sid := "sess-union"
 	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sid)
 	// One sealed chunk (ts 100,200) plus live lines past the watermark.
-	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 200)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(100, 200), 100, 200)
 	live := liveAuditPath(repo, sid)
 	if err := os.MkdirAll(filepath.Dir(live), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"ts":"` + formatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n" +
-		`{"ts":"` + formatLineTS(300) + `","session":"` + sid + `","tool":"Bash"}` + "\n"
+	body := `{"ts":"` + audit.FormatLineTS(200) + `","session":"` + sid + `","tool":"Read"}` + "\n" +
+		`{"ts":"` + audit.FormatLineTS(300) + `","session":"` + sid + `","tool":"Bash"}` + "\n"
 	if err := os.WriteFile(live, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +146,7 @@ func TestReadSessionAuditUnion(t *testing.T) {
 	}
 	var last int64
 	for _, e := range entries {
-		ts, _ := parseLineTS(e.Ts)
+		ts, _ := audit.ParseLineTS(e.Ts)
 		if ts < last {
 			t.Errorf("entries not ordered by ts: %d after %d", ts, last)
 		}
@@ -157,7 +159,7 @@ func TestReadSessionAuditCorruptChunkErrors(t *testing.T) {
 	sid := "sess-corrupt"
 	sealedDir := filepath.Join(sealedSessionsBase(repo), "2026-01-01-"+sid)
 	// A chunk whose last line ts (150) disagrees with its filename <last> (200).
-	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 150)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(100, 200), 100, 150)
 	_, err := readSessionAudit(repo, sid, time.Now())
 	if err == nil {
 		t.Fatal("readSessionAudit over content-vs-name mismatch = nil, want error")
@@ -171,8 +173,8 @@ func TestReadSessionAuditCrossBranchOverlapDedup(t *testing.T) {
 	// Two chunks whose ranges overlap on 100..200 — the shape a
 	// cross-branch re-seal leaves after both branches merge. The wider
 	// chunk (100..300) re-sealed lines the narrower (100..200) already had.
-	writeChunkFile(t, sealedDir, sessionChunkFile(100, 200), 100, 200)
-	writeChunkFile(t, sealedDir, sessionChunkFile(100, 300), 100, 200, 300)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(100, 200), 100, 200)
+	writeChunkFile(t, sealedDir, audit.SessionChunkFile(100, 300), 100, 200, 300)
 	entries, err := readSessionAudit(repo, sid, time.Now())
 	if err != nil {
 		t.Fatalf("readSessionAudit: %v", err)
@@ -183,7 +185,7 @@ func TestReadSessionAuditCrossBranchOverlapDedup(t *testing.T) {
 	}
 	seen := map[int64]bool{}
 	for _, e := range entries {
-		ts, _ := parseLineTS(e.Ts)
+		ts, _ := audit.ParseLineTS(e.Ts)
 		if seen[ts] {
 			t.Errorf("duplicate ts %d survived dedup", ts)
 		}
