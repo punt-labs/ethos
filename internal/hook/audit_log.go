@@ -96,7 +96,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 			fmt.Fprintf(os.Stderr,
 				"ethos: audit-log: %v; lost session=%s tool=%s preview=%s\n",
 				writeErr, sessionID, entry.Tool, entry.ToolInputPreview)
-			if sentErr := emitAuditSentinel(livePath, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
+			if sentErr := emitAuditSentinel(livePath, sealedDir, legacyPath, sessionID, now, writeErr.Error()); sentErr != nil {
 				fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
 			}
 		}
@@ -129,7 +129,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 		// when the file system has truly broken (the 0o000 directory
 		// case) the sentinel write returns its own error and stderr
 		// stays the only signal.
-		if sentErr := emitAuditSentinel(path, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
+		if sentErr := emitLegacySentinel(path, sessionID, entry.Ts, writeErr.Error()); sentErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: audit-log: sentinel: %v\n", sentErr)
 		}
 	}
