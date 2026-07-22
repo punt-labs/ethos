@@ -5,13 +5,13 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
@@ -65,6 +65,18 @@ func AllPassed(results []Result) bool {
 		}
 	}
 	return true
+}
+
+// AnyFailed returns true when any result is an outright FAIL. A WARN is
+// advisory and does not count — doctor's exit status gates on this, not on
+// AllPassed, so a gated-but-unenabled repo (WARN) does not fail the command.
+func AnyFailed(results []Result) bool {
+	for _, r := range results {
+		if r.Status == "FAIL" {
+			return true
+		}
+	}
+	return false
 }
 
 // PassedCount returns the number of passed results.
@@ -132,56 +144,80 @@ func CheckOrphanedAgentFiles(repoRoot string, teams *team.LayeredStore) Result {
 	return Result{Name: name, Status: "FAIL", Detail: "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")}
 }
 
-// CheckSealHook verifies the current repo's pre-commit hook carries an
-// active DES-058 audit-seal invocation — either the ethos marker section
-// chained into a host hook or the standalone ethos hook. The seal is the
-// live audit write path's primary trigger; a repo missing it commits work
-// without sealing the pending audit lines that document it.
+// CheckSealHook reports on the DES-058 audit-seal pre-commit hook, keyed on
+// the enabled marker (§2.11). Four states:
+//
+//   - Enabled (marker present): FAIL when the seal hook is missing or
+//     inactive; PASS when it carries an active seal call.
+//   - Dormant / Absent (marker absent, no ethos hook): PASS "not enabled
+//     here" — a never-enabled or disabled repo must not fail.
+//   - Gated-but-unenabled (marker absent, hook chained): WARN — the chained
+//     hook is inert behind its own marker gate, so a PASS would hide it and a
+//     FAIL would over-report a repo awaiting convergence.
 func CheckSealHook(repoRoot string) Result {
 	name := "Audit seal hook"
-	const remedy = " — re-run install.sh from the repo root"
+	const remedy = " — run `ethos enable`"
 
 	if repoRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
-	hook := filepath.Join(gitHooksDir(repoRoot), "pre-commit")
-	info, err := os.Stat(hook)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Result{Name: name, Status: "FAIL", Detail: "no pre-commit hook (missing)" + remedy}
+	markerPresent := fileExists(filepath.Join(repoRoot, ".punt-labs", "ethos", "enabled"))
+	dir, _ := githook.HooksDir(repoRoot)
+	hook := filepath.Join(dir, "pre-commit")
+
+	info, statErr := os.Stat(hook)
+	var body string
+	if statErr == nil {
+		data, err := os.ReadFile(hook)
+		if err != nil {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
 		}
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, err, remedy)}
+		body = string(data)
 	}
-	data, err := os.ReadFile(hook)
-	if err != nil {
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
+	// A commented-out call, a string-literal mention, or a dead branch must
+	// not read as active, or the silent-absence state recurs behind a green
+	// check. "Chained" for the gate check is the section marker OR an active
+	// call — a stale section still counts as present.
+	active := statErr == nil && hasActiveSealCall(body)
+	chained := statErr == nil && (active || strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL"))
+
+	if !markerPresent {
+		if chained {
+			return Result{Name: name, Status: "WARN", Detail: "seal hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
+		}
+		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
 	}
 
-	body := string(data)
-	// Require an actual seal invocation, not the substring: a commented-out
-	// call, a string-literal mention (echo/printf), or a dead branch must not
-	// read as active, or the silent-absence state recurs behind a green check.
-	if hasActiveSealCall(body) {
-		// A shell section pasted into a non-shell hook (Python/Node) can never
-		// run as sh, so the call text is meaningless there.
-		if !isShellHook(body) {
-			return Result{Name: name, Status: "FAIL", Detail: "seal call present but the hook's shebang is not a shell — git runs it under another interpreter" + remedy}
+	// Enabled: the seal must be present and active.
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return Result{Name: name, Status: "FAIL", Detail: "enabled here but no pre-commit hook" + remedy}
 		}
-		// Git skips a hook without the executable bit, so a valid-looking
-		// but non-executable hook never fires.
-		if info.Mode().Perm()&0o111 == 0 {
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("seal hook present but not executable — run: chmod +x %s", hook)}
-		}
-		if strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL") {
-			return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
-		}
-		return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, statErr, remedy)}
 	}
-	if strings.Contains(body, "DES-058") {
-		return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
+	if !active {
+		if strings.Contains(body, "DES-058") {
+			return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
+		}
+		return Result{Name: name, Status: "FAIL", Detail: "enabled here but the seal hook is not chained" + remedy}
 	}
-	return Result{Name: name, Status: "FAIL", Detail: "seal hook not installed (missing)" + remedy}
+	if !isShellHook(body) {
+		return Result{Name: name, Status: "FAIL", Detail: "seal call present but the hook's shebang is not a shell — git runs it under another interpreter" + remedy}
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("seal hook present but not executable — run: chmod +x %s", hook)}
+	}
+	if strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL") {
+		return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
+	}
+	return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
+}
+
+// fileExists reports whether path exists.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // sealInvocation matches an `audit seal` call in command position: the ethos
@@ -259,76 +295,6 @@ func isShellHook(body string) bool {
 		return true
 	}
 	return false
-}
-
-// gitHooksDir returns the hooks directory git runs for the repo at repoRoot.
-// It asks git directly (`git rev-parse --git-path hooks`), which is the one
-// source of truth the installer also uses: git honors core.hooksPath and
-// resolves a worktree's commondir. When git is unavailable it falls back to
-// resolving the ".git" gitdir file and its "commondir" by hand, so a worktree
-// still lands on the common ".git/hooks" git actually runs (ethos-2ol1).
-func gitHooksDir(repoRoot string) string {
-	if p := gitHooksPath(repoRoot); p != "" {
-		return p
-	}
-	dot := filepath.Join(repoRoot, ".git")
-	gd := dot
-	if info, err := os.Stat(dot); err != nil || !info.IsDir() {
-		if data, err := os.ReadFile(dot); err == nil {
-			line := strings.TrimSpace(string(data))
-			if target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")); target != line && target != "" {
-				gd = target
-				if !filepath.IsAbs(gd) {
-					gd = filepath.Join(repoRoot, gd)
-				}
-			}
-		}
-	}
-	if data, err := os.ReadFile(filepath.Join(gd, "commondir")); err == nil {
-		if common := strings.TrimSpace(string(data)); common != "" {
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(gd, common)
-			}
-			gd = common
-		}
-	}
-	return filepath.Join(gd, "hooks")
-}
-
-// gitHooksPath returns git's own resolution of the hooks directory, or "" if
-// git is unavailable or repoRoot is not itself a git work tree root. The
-// work-tree-root anchor matters: without it, git would walk up from a
-// non-repo repoRoot and resolve an ancestor repo's hooks — reporting on the
-// wrong repository. A relative result is resolved against repoRoot, matching
-// git's `-C` semantics.
-func gitHooksPath(repoRoot string) string {
-	top, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--show-toplevel").Output()
-	if err != nil || !samePath(strings.TrimSpace(string(top)), repoRoot) {
-		return ""
-	}
-	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "hooks").Output()
-	if err != nil {
-		return ""
-	}
-	p := strings.TrimSpace(string(out))
-	if p == "" {
-		return ""
-	}
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(repoRoot, p)
-	}
-	return p
-}
-
-// samePath reports whether a and b name the same location, tolerating the
-// symlinked temp roots (macOS /tmp → /private/tmp) that show up in tests.
-func samePath(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ra, err1 := filepath.EvalSymlinks(a)
-	rb, err2 := filepath.EvalSymlinks(b)
-	return err1 == nil && err2 == nil && ra == rb
 }
 
 // CheckIdentityDir verifies the identity directory exists.

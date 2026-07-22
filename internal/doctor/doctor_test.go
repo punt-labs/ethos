@@ -216,13 +216,21 @@ func TestCheckDuplicateFields(t *testing.T) {
 }
 
 func TestCheckSealHook(t *testing.T) {
-	// writeHook creates a repo with .git/hooks/pre-commit holding body.
-	writeHook := func(t *testing.T, body string) string {
+	// mark writes the enabled marker so a repo reads as "enabled here".
+	mark := func(t *testing.T, dir string) {
+		t.Helper()
+		zone := filepath.Join(dir, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(zone, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+	}
+	// writeEnabledHook creates an enabled repo whose pre-commit holds body.
+	writeEnabledHook := func(t *testing.T, body string) string {
 		t.Helper()
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
+		mark(t, dir)
 		return dir
 	}
 
@@ -232,17 +240,53 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Equal(t, "not in a repo", r.Detail)
 	})
 
-	t.Run("no pre-commit hook", func(t *testing.T) {
+	// --- Four-state model (§2.7/§2.11) ---
+
+	t.Run("dormant: no marker, no hook → PASS not enabled here", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
 		r := CheckSealHook(dir)
-		assert.False(t, r.Passed())
-		assert.Contains(t, r.Detail, "missing")
-		assert.Contains(t, r.Detail, "install.sh")
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
 	})
 
+	t.Run("dormant: no marker, foreign hook without ethos → PASS not enabled here", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
+			[]byte("#!/bin/sh\nbd hooks run pre-commit || exit 1\n"), 0o755))
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
+	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
+			"ethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
+		r := CheckSealHook(dir)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "not enabled here")
+	})
+
+	t.Run("enabled but no pre-commit hook → FAIL", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		mark(t, dir)
+		r := CheckSealHook(dir)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "no pre-commit hook")
+		assert.Contains(t, r.Detail, "ethos enable")
+	})
+
+	// --- Enabled: seal-call detection (marker present) ---
+
 	t.Run("standalone seal hook", func(t *testing.T) {
-		dir := writeHook(t, "#!/bin/sh\n# DES-058\nethos audit seal || exit 2\n")
+		dir := writeEnabledHook(t, "#!/bin/sh\n# DES-058\nethos audit seal || exit 2\n")
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "standalone")
@@ -252,7 +296,7 @@ func TestCheckSealHook(t *testing.T) {
 		body := "#!/bin/sh\nbd hooks run pre-commit || exit 1\n" +
 			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n" +
 			"# --- END ETHOS DES-058 SEAL ---\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "chained")
@@ -261,7 +305,7 @@ func TestCheckSealHook(t *testing.T) {
 	t.Run("stale section without seal call", func(t *testing.T) {
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
 			"echo placeholder\n# --- END ETHOS DES-058 SEAL ---\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "stale")
@@ -273,7 +317,7 @@ func TestCheckSealHook(t *testing.T) {
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
 			"# if ! ethos audit seal; then exit 2; fi\n" +
 			"# --- END ETHOS DES-058 SEAL ---\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "stale")
@@ -281,28 +325,28 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("mention in a foreign comment is not active", func(t *testing.T) {
 		body := "#!/bin/sh\n# TODO: wire up ethos audit seal here\nrun_lint\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
-		assert.Contains(t, r.Detail, "missing")
+		assert.Contains(t, r.Detail, "not chained")
 	})
 
 	t.Run("inline trailing comment mention is not active", func(t *testing.T) {
 		// The phrase in an inline comment after code must not read as a call.
 		body := "#!/bin/sh\necho ok # ethos audit seal\nrun_lint\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
-		assert.Contains(t, r.Detail, "missing")
+		assert.Contains(t, r.Detail, "not chained")
 	})
 
 	t.Run("phrase as arguments to another command is not active", func(t *testing.T) {
 		// `ethos audit seal` passed as args to echo is not a call (C1).
 		body := "#!/bin/sh\necho ethos audit seal\nrun_lint\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
-		assert.Contains(t, r.Detail, "missing")
+		assert.Contains(t, r.Detail, "not chained")
 	})
 
 	t.Run("comment after a word-break char is not active", func(t *testing.T) {
@@ -311,33 +355,33 @@ func TestCheckSealHook(t *testing.T) {
 			"#!/bin/sh\ncmd;# ethos audit seal\nrun_lint\n",
 			"#!/bin/sh\ncmd &# ethos audit seal\nrun_lint\n",
 		} {
-			dir := writeHook(t, body)
+			dir := writeEnabledHook(t, body)
 			r := CheckSealHook(dir)
 			assert.False(t, r.Passed(), "body: %q", body)
-			assert.Contains(t, r.Detail, "missing")
+			assert.Contains(t, r.Detail, "not chained")
 		}
 	})
 
 	t.Run("call after a separator is active", func(t *testing.T) {
 		// A genuine command-position call (after '&&') must still PASS.
 		body := "#!/bin/sh\nprecheck && ethos audit seal\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
 
 	t.Run("string-literal mention is not an active call", func(t *testing.T) {
 		// echo/printf text containing the phrase must not read as a call.
-		dir := writeHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
+		dir := writeEnabledHook(t, "#!/bin/sh\necho \"remember to run audit seal\"\nrun_lint\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
-		assert.Contains(t, r.Detail, "missing")
+		assert.Contains(t, r.Detail, "not chained")
 	})
 
 	t.Run("printf note inside a section is stale, not active", func(t *testing.T) {
 		body := "#!/bin/sh\n# --- BEGIN ETHOS DES-058 SEAL ---\n" +
 			"printf 'audit seal is disabled\\n'\n# --- END ETHOS DES-058 SEAL ---\n"
-		dir := writeHook(t, body)
+		dir := writeEnabledHook(t, body)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "stale")
@@ -345,7 +389,7 @@ func TestCheckSealHook(t *testing.T) {
 
 	t.Run("seal call in a non-shell hook fails", func(t *testing.T) {
 		// A shell seal call pasted into a Python hook can never run as sh.
-		dir := writeHook(t, "#!/usr/bin/env python3\nethos audit seal\n")
+		dir := writeEnabledHook(t, "#!/usr/bin/env python3\nethos audit seal\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "not a shell")
@@ -357,17 +401,18 @@ func TestCheckSealHook(t *testing.T) {
 		require.NoError(t, os.MkdirAll(hooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"),
 			[]byte("#!/bin/sh\nethos audit seal || exit 2\n"), 0o644))
+		mark(t, dir)
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
 		assert.Contains(t, r.Detail, "not executable")
 		assert.Contains(t, r.Detail, "chmod +x")
 	})
 
-	t.Run("foreign hook without seal", func(t *testing.T) {
-		dir := writeHook(t, "#!/bin/sh\nbd hooks run pre-commit || exit 1\n")
+	t.Run("enabled foreign hook without seal → FAIL not chained", func(t *testing.T) {
+		dir := writeEnabledHook(t, "#!/bin/sh\nbd hooks run pre-commit || exit 1\n")
 		r := CheckSealHook(dir)
 		assert.False(t, r.Passed())
-		assert.Contains(t, r.Detail, "missing")
+		assert.Contains(t, r.Detail, "not chained")
 	})
 
 	t.Run("gitdir file redirects hooks path", func(t *testing.T) {
@@ -381,6 +426,7 @@ func TestCheckSealHook(t *testing.T) {
 		wt := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
 			[]byte("gitdir: "+real+"\n"), 0o644))
+		mark(t, wt)
 		r := CheckSealHook(wt)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
 	})
@@ -408,6 +454,7 @@ func TestCheckSealHook(t *testing.T) {
 		wt := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(wt, ".git"),
 			[]byte("gitdir: "+wtAdmin+"\n"), 0o644))
+		mark(t, wt)
 
 		r := CheckSealHook(wt)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -443,6 +490,7 @@ func TestCheckSealHook(t *testing.T) {
 
 		wtDir := filepath.Join(t.TempDir(), "wt")
 		gitRun(mainDir, "worktree", "add", "-q", wtDir, "-b", "b")
+		mark(t, wtDir)
 
 		r := CheckSealHook(wtDir)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
@@ -473,6 +521,7 @@ func TestCheckSealHook(t *testing.T) {
 		require.NoError(t, os.MkdirAll(defaultHooks, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(defaultHooks, "pre-commit"),
 			[]byte("#!/bin/sh\necho decoy\n"), 0o755))
+		mark(t, repo)
 
 		r := CheckSealHook(repo)
 		assert.True(t, r.Passed(), "detail: %s", r.Detail)
