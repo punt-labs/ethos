@@ -433,6 +433,18 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "not chained")
 	})
 
+	t.Run("multi-line arithmetic above the seal section still PASSes", func(t *testing.T) {
+		// A healthy repo whose hook has multi-line arithmetic above the real
+		// seal section must not FAIL "stale": the arithmetic's second line
+		// must not be misread as opening a heredoc that masks the seal call.
+		body := "#!/bin/sh\nx=$((1 +\n2 << 3))\n" +
+			"# --- BEGIN ETHOS DES-058 SEAL ---\nethos audit seal || exit 2\n# --- END ETHOS DES-058 SEAL ---\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.True(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "chained")
+	})
+
 	t.Run("heredoc-quoted seal mention is not an active call", func(t *testing.T) {
 		// A hook that only documents the seal in a heredoc body (usage/help
 		// text) never runs it — CheckSealHook must NOT return PASS, or the

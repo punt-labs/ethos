@@ -131,6 +131,21 @@ func TestHeredocMask(t *testing.T) {
 			src:  "y=$(( (1<<2) + 3 ))\nafter\n",
 			want: []bool{false, false},
 		},
+		{
+			name: "multi-line arithmetic shift spans lines, no heredoc",
+			src:  "x=$((1 +\n2 << 3))\nafter\n",
+			want: []bool{false, false, false},
+		},
+		{
+			name: "bare (( arithmetic command shift is not a heredoc",
+			src:  "(( 1 << 2 ))\nafter\n",
+			want: []bool{false, false},
+		},
+		{
+			name: "subshell ( ( is not arithmetic — its heredoc is real",
+			src:  "( (cat <<EOF\nbody\nEOF\n) )\n",
+			want: []bool{false, true, false, false},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

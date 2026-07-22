@@ -539,6 +539,70 @@ func TestChainArithmeticShiftHostIsClean(t *testing.T) {
 	}
 }
 
+func TestChainMultiLineArithmeticHost(t *testing.T) {
+	// Multi-line arithmetic ($((1 +\n2 << 3))) must not be misread as opening a
+	// heredoc on its second line: Chain appends once and is idempotent, and
+	// Unchain restores the host byte-for-byte.
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\nx=$((1 +\n2 << 3))\necho \"$x\"\nrun_lint || exit 1\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if res := chainPre(t, dest); res.Action != "chained" {
+		t.Errorf("action = %q, want chained", res.Action)
+	}
+	if res := chainPre(t, dest); res.Action != "refreshed" {
+		t.Errorf("re-chain action = %q, want refreshed", res.Action)
+	}
+	if n := countBegin(read(t, dest)); n != 1 {
+		t.Errorf("BEGIN markers = %d, want 1", n)
+	}
+	if _, err := Unchain(dest, tag, ident); err != nil {
+		t.Fatalf("Unchain: %v", err)
+	}
+	if got := read(t, dest); got != host {
+		t.Errorf("Unchain did not restore the host:\nwant=%q\ngot =%q", host, got)
+	}
+}
+
+func TestChainMultiLineArithmeticAboveSectionNoDuplicate(t *testing.T) {
+	// The worst case: multi-line arithmetic above a real section, where the
+	// phantom delimiter a per-line scan would open masks the real section and
+	// produces a DUPLICATE. With span state carried across lines there is no
+	// phantom: exactly one section.
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\nx=$((1 +\n2 << 3))\n" + string(sectionBytes(tag, src))
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Chain(dest, src, tag, ident)
+	if err != nil {
+		t.Fatalf("Chain: %v", err)
+	}
+	if res.Action != "refreshed" {
+		t.Errorf("action = %q, want refreshed", res.Action)
+	}
+	if n := countBegin(read(t, dest)); n != 1 {
+		t.Errorf("BEGIN markers = %d, want exactly 1 (no phantom-heredoc duplicate)", n)
+	}
+}
+
+func TestChainBareArithmeticCommandHost(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\n(( flag = 1 << 2 ))\nrun_lint || exit 1\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chainPre(t, dest)
+	body := read(t, dest)
+	if countBegin(body) != 1 {
+		t.Errorf("BEGIN markers = %d, want 1", countBegin(body))
+	}
+	if !strings.Contains(body, "(( flag = 1 << 2 ))") {
+		t.Error("bare arithmetic host line lost")
+	}
+}
+
 func TestChainRefusesUnterminatedHeredoc(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "pre-commit")
 	host := "#!/bin/sh\nrun_lint\ncat <<EOF\nnever closed\n"

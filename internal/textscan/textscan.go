@@ -5,9 +5,16 @@
 //
 // The heredoc classifier is deliberately narrow: it recognizes here-document
 // bodies so a marker-shaped line or an `ethos audit seal` mention inside one
-// is never misread as real shell. It is not a shell lexer — it tracks
-// heredocs and nothing else, the same bounded approach claudemd takes for
+// is never misread as real shell. It tracks heredocs and arithmetic spans
+// (which claim `<<` as a shift), the same bounded approach claudemd takes for
 // markdown code fences.
+//
+// This lexical scope is frozen: heredocs and arithmetic spans, no more. A
+// future lexical corner a reviewer or tool finds is handled by refuse-on-
+// ambiguity or a documented limitation, never by adding another grammar rule
+// — the durable safeguards are githook's ident-fingerprint guard and
+// execution-based doctor verification (bead ethos-kcbv), not an ever-growing
+// half-lexer here.
 package textscan
 
 import (
@@ -96,22 +103,30 @@ func HeredocOpenAtEOF(data []byte) bool {
 }
 
 // scanHeredocs classifies each line of data (opaque iff inside a heredoc
-// body) and reports whether a heredoc is still open at EOF.
+// body) and reports whether a heredoc is still open at EOF. Arithmetic-span
+// depth is carried across lines as loop state — NOT re-derived per line — so
+// a `<<` inside a multi-line `$(( … ))` or bare `(( … ))` is the shift
+// operator it is, never a phantom heredoc opener.
 func scanHeredocs(data []byte) (mask []bool, openAtEOF bool) {
 	lines := SplitKeepEnds(data)
 	mask = make([]bool, len(lines))
 	var queue []delim
+	arith := 0 // paren depth inside an arithmetic span; carries across lines
 	for i, raw := range lines {
 		content := StripTerminator(raw)
 		if len(queue) > 0 {
+			// Inside a heredoc body — opaque until the terminator line. Do not
+			// scan it (arithmetic depth freezes across the body).
 			if queue[0].terminates(content) {
 				queue = queue[1:]
-				continue // terminator line is structural, not body
+				continue
 			}
 			mask[i] = true
 			continue
 		}
-		queue = append(queue, parseHeredocStarts(content)...)
+		var delims []delim
+		delims, arith = scanLine(content, arith)
+		queue = append(queue, delims...)
 	}
 	return mask, len(queue) > 0
 }
@@ -130,37 +145,31 @@ func (d delim) terminates(content string) bool {
 	return content == d.text
 }
 
-// parseHeredocStarts returns the heredoc delimiters opened on line, in order.
-// It tracks quotes and stops at a comment so `<<` inside a string or comment
-// is not misread as a redirection, and skips `$((…))` arithmetic spans so a
-// left-shift (`$((1<<2))`) is not misread as a heredoc opener.
-func parseHeredocStarts(line string) []delim {
+// scanLine walks one line for heredoc openers, given the arithmetic-span depth
+// carried in from prior lines, and returns any delimiters opened plus the
+// depth to carry out. While the depth is positive the line is inside an
+// arithmetic span, where `<<` is a shift and no opener, comment, or quote is
+// recognized; the span opens at `$((` or a bare command-position `((` (two
+// adjacent parens — a subshell writes `( (` or a lone `(`) and closes when the
+// paren depth returns to zero. Quotes and comments are per-line.
+func scanLine(line string, arith int) ([]delim, int) {
 	var out []delim
 	var quote byte
 	for i := 0; i < len(line); i++ {
 		c := line[i]
+		if arith > 0 {
+			switch c {
+			case '(':
+				arith++
+			case ')':
+				arith--
+			}
+			continue
+		}
 		if quote != 0 {
 			if c == quote {
 				quote = 0
 			}
-			continue
-		}
-		// Arithmetic expansion $(( … )): `<<` here is a shift operator, never
-		// a heredoc. Skip the whole span by paren depth (handles nested
-		// parens), starting at depth 2 for the opening `((`.
-		if c == '$' && i+2 < len(line) && line[i+1] == '(' && line[i+2] == '(' {
-			depth := 2
-			i += 3
-			for i < len(line) && depth > 0 {
-				switch line[i] {
-				case '(':
-					depth++
-				case ')':
-					depth--
-				}
-				i++
-			}
-			i-- // the loop's i++ will re-advance past the last char examined
 			continue
 		}
 		switch c {
@@ -168,7 +177,21 @@ func parseHeredocStarts(line string) []delim {
 			quote = c
 		case '#':
 			if i == 0 || isWordBreak(line[i-1]) {
-				return out // rest of the line is a comment
+				return out, arith // rest of the line is a comment
+			}
+		case '$':
+			// Arithmetic expansion $(( … )).
+			if i+2 < len(line) && line[i+1] == '(' && line[i+2] == '(' {
+				arith = 2
+				i += 2 // consume both '('
+			}
+		case '(':
+			// Bare arithmetic command (( … )) — two adjacent parens. A
+			// subshell is "( (" (separated) or a lone "(", neither of which
+			// starts an arithmetic span.
+			if i+1 < len(line) && line[i+1] == '(' {
+				arith = 2
+				i++ // consume the second '('
 			}
 		case '<':
 			if i+1 >= len(line) || line[i+1] != '<' {
@@ -197,7 +220,7 @@ func parseHeredocStarts(line string) []delim {
 			i = next - 1
 		}
 	}
-	return out
+	return out, arith
 }
 
 // readDelim reads a heredoc delimiter word starting at j and returns its text
