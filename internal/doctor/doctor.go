@@ -97,11 +97,15 @@ func WarnCount(results []Result) int {
 	return n
 }
 
-// PassedCount returns the number of passed results.
+// PassedCount returns the number of strictly-PASS results. WARN is excluded
+// so a summary that also reports WarnCount does not count a warned check
+// twice (as both passed and a warning); the total is PassedCount + WarnCount +
+// failures. Advisory gating (Passed/AllPassed treating WARN as not-failed) is
+// unchanged — this is a counting distinction, not a status one.
 func PassedCount(results []Result) int {
 	n := 0
 	for _, r := range results {
-		if r.Passed() {
+		if r.Status == "PASS" {
 			n++
 		}
 	}

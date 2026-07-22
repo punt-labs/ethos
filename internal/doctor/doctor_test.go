@@ -63,6 +63,21 @@ func TestResultPassed(t *testing.T) {
 	}
 }
 
+func TestPassedCountExcludesWarn(t *testing.T) {
+	// A warned check must not be counted as both passed and a warning: strict
+	// PassedCount excludes WARN, WarnCount counts it, and Passed/AllPassed keep
+	// their advisory (WARN=not-failed) semantics.
+	results := []Result{
+		{Status: "PASS"}, {Status: "PASS"}, {Status: "WARN"}, {Status: "FAIL"},
+	}
+	assert.Equal(t, 2, PassedCount(results), "PASS-only count")
+	assert.Equal(t, 1, WarnCount(results))
+	assert.True(t, AnyFailed(results))
+	assert.False(t, AllPassed(results)) // a FAIL is present
+	// PassedCount + WarnCount + failures accounts for every result exactly once.
+	assert.Equal(t, len(results), PassedCount(results)+WarnCount(results)+1)
+}
+
 func TestCheckIdentityDir(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
 		s, ss, _ := newFixture(t)
