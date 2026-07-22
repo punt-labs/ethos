@@ -16,6 +16,7 @@ import (
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/internal/textscan"
 )
 
 // Result holds the outcome of a single health check.
@@ -230,13 +231,20 @@ func fileExists(path string) bool {
 var sealInvocation = regexp.MustCompile(`(^[\t ]*|[;&|(!][\t ]*)("?\$\{?ethos_bin\}?"?|ethos)[\t ]+audit[\t ]+seal([\s;&|)]|$)`)
 
 // hasActiveSealCall reports whether body invokes `ethos audit seal` on a
-// non-comment line. The check is lexical, not semantic: it drops full-line and
-// inline comments so a call named in a comment cannot pass, but it cannot see
-// through dynamic dispatch (eval, an aliased wrapper) — such a hook FAILs the
-// check, the safe direction.
+// non-comment, non-heredoc line. The check is lexical, not a shell parser: it
+// drops full-line and inline comments and skips here-document bodies (so a
+// seal mention in usage text quoted via `cat <<EOF ... EOF` is not read as a
+// real call), but it cannot see through dynamic dispatch (eval, an aliased
+// wrapper) — such a hook FAILs the check, the safe direction.
 func hasActiveSealCall(body string) bool {
-	for _, line := range strings.Split(body, "\n") {
-		code := stripInlineComment(line)
+	data := []byte(body)
+	lines := textscan.SplitKeepEnds(data)
+	mask := textscan.HeredocMask(data)
+	for i, raw := range lines {
+		if mask[i] {
+			continue // heredoc body — opaque, never a command position
+		}
+		code := stripInlineComment(textscan.StripTerminator(raw))
 		if strings.TrimSpace(code) == "" {
 			continue
 		}

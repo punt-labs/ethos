@@ -415,6 +415,17 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "not chained")
 	})
 
+	t.Run("heredoc-quoted seal mention is not an active call", func(t *testing.T) {
+		// A hook that only documents the seal in a heredoc body (usage/help
+		// text) never runs it — CheckSealHook must NOT return PASS, or the
+		// silent-absence bug this branch exists to close reopens.
+		body := "#!/bin/sh\ncat <<'EOF'\nethos audit seal\nEOF\nbd hooks run pre-commit || exit 1\n"
+		dir := writeEnabledHook(t, body)
+		r := CheckSealHook(dir)
+		assert.False(t, r.Passed(), "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "not chained")
+	})
+
 	t.Run("gitdir file redirects hooks path", func(t *testing.T) {
 		// A submodule .git file points directly at a dir with hooks/ and
 		// no commondir — the hooks dir is target/hooks.
