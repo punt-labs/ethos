@@ -182,3 +182,4 @@ Module path: `github.com/punt-labs/ethos`. Follows [Go standards](https://github
 ## Operational Constraints
 
 - **Never self-install.** Do not run `make install` from inside Claude Code. The ethos binary is loaded by Claude Code's process tree; macOS will not allow overwriting a running binary. Ask the user to run `make install` from their shell. Use `.tmp/ethos` for testing.
+@.punt-labs/ethos/CLAUDE.md
