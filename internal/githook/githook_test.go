@@ -510,6 +510,58 @@ func TestStripSectionRefusesForeignFingerprint(t *testing.T) {
 	}
 }
 
+func TestChainArithmeticShiftHostIsClean(t *testing.T) {
+	// A host using $((1<<2)) must not be misread as opening a heredoc: Chain
+	// appends once and is idempotent, and Unchain restores the host exactly.
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\nx=$((1<<2))\necho \"$x\"\nrun_lint || exit 1\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chainPre(t, dest)
+	chainPre(t, dest) // idempotent
+	body := read(t, dest)
+	if countBegin(body) != 1 {
+		t.Errorf("BEGIN markers = %d, want 1", countBegin(body))
+	}
+	if !strings.Contains(body, "x=$((1<<2))") {
+		t.Error("arithmetic host line lost")
+	}
+	res, err := Unchain(dest, tag, ident)
+	if err != nil {
+		t.Fatalf("Unchain: %v", err)
+	}
+	if res.Action != "reduced" {
+		t.Errorf("action = %q, want reduced", res.Action)
+	}
+	if got := read(t, dest); got != host {
+		t.Errorf("Unchain did not restore the host:\nwant=%q\ngot =%q", host, got)
+	}
+}
+
+func TestChainRefusesUnterminatedHeredoc(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\nrun_lint\ncat <<EOF\nnever closed\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Chain(dest, src, tag, ident); err == nil {
+		t.Fatal("expected a refusal on an unterminated heredoc")
+	} else if !strings.Contains(err.Error(), "unterminated here-document") {
+		t.Errorf("error = %q, want an unterminated-heredoc refusal", err)
+	}
+	if got := read(t, dest); got != host {
+		t.Error("host changed despite the refusal")
+	}
+	// Unchain must refuse too, not lie "noop".
+	if _, err := Unchain(dest, tag, ident); err == nil {
+		t.Fatal("expected Unchain to refuse on an unterminated heredoc")
+	}
+	if got := read(t, dest); got != host {
+		t.Error("host changed despite the Unchain refusal")
+	}
+}
+
 func TestHooksDir(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")

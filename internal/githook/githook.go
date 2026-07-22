@@ -74,6 +74,14 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 		return res, fmt.Errorf("reading %s: %w", destPath, err)
 	}
 
+	// A host ending inside an unterminated heredoc is malformed: its trailing
+	// lines — including our own append point — are masked opaque, so any edit
+	// would be blind. Refuse rather than guess (parity with claudemd's open
+	// fence).
+	if textscan.HeredocOpenAtEOF(data) {
+		return res, fmt.Errorf("%s ends inside an unterminated here-document — close it and re-run", destPath)
+	}
+
 	hadMarker := hasBegin(data, tag)
 	if !hadMarker && isOurStandalone(data, ident) {
 		if err := writeExec(destPath, markerForm(tag, src)); err != nil {
@@ -157,6 +165,12 @@ func Unchain(destPath, tag, ident string) (Result, error) {
 			return res, nil
 		}
 		return res, fmt.Errorf("reading %s: %w", destPath, err)
+	}
+
+	// Refuse a host ending inside an unterminated heredoc: our section could
+	// be masked opaque, so "noop" would be a lie and a strip would be blind.
+	if textscan.HeredocOpenAtEOF(data) {
+		return res, fmt.Errorf("%s ends inside an unterminated here-document — close it and re-run", destPath)
 	}
 
 	if !hasBegin(data, tag) {
