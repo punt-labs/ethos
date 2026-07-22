@@ -207,7 +207,7 @@ func CheckSealHook(repoRoot string) Result {
 	// check. "Chained" for the gate check is the section marker OR an active
 	// call — a stale section still counts as present.
 	active := statErr == nil && hasActiveSealCall(body)
-	chained := statErr == nil && (active || strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL"))
+	chained := statErr == nil && (active || hasSealMarker(body))
 
 	if !markerPresent {
 		if chained {
@@ -235,10 +235,26 @@ func CheckSealHook(repoRoot string) Result {
 	if info.Mode().Perm()&0o111 == 0 {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("seal hook present but not executable — run: chmod +x %s", hook)}
 	}
-	if strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL") {
+	if hasSealMarker(body) {
 		return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
 	}
 	return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
+}
+
+// hasSealMarker reports whether body carries the DES-058 seal BEGIN marker on
+// a real (non-heredoc) line. It consults the same textscan heredoc mask as
+// hasActiveSealCall and githook, so a foreign hook that merely documents the
+// marker text inside a heredoc is not misread as a chained section.
+func hasSealMarker(body string) bool {
+	data := []byte(body)
+	lines := textscan.SplitKeepEnds(data)
+	mask := textscan.HeredocMask(data)
+	for i, raw := range lines {
+		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN ETHOS DES-058 SEAL") {
+			return true
+		}
+	}
+	return false
 }
 
 // sealInvocation matches an `audit seal` call in command position: the ethos

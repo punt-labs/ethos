@@ -263,6 +263,20 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Equal(t, "not enabled here", r.Detail)
 	})
 
+	t.Run("heredoc-quoted marker on a never-enabled repo → PASS not WARN", func(t *testing.T) {
+		// A foreign hook that only documents the marker text inside a heredoc,
+		// on a repo with no enabled marker, must not read as a chained section
+		// (no false WARN) — the marker scan consults the heredoc mask (E2).
+		dir := t.TempDir()
+		hooks := filepath.Join(dir, ".git", "hooks")
+		require.NoError(t, os.MkdirAll(hooks, 0o755))
+		body := "#!/bin/sh\ncat <<'EOF'\n# --- BEGIN ETHOS DES-058 SEAL ---\nEOF\nbd hooks run pre-commit || exit 1\n"
+		require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte(body), 0o755))
+		r := CheckSealHook(dir)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Equal(t, "not enabled here", r.Detail)
+	})
+
 	t.Run("gated-but-unenabled: chained hook, no marker → WARN", func(t *testing.T) {
 		dir := t.TempDir()
 		hooks := filepath.Join(dir, ".git", "hooks")
