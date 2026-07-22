@@ -101,14 +101,17 @@ never touch Config, Local, or seal-managed data.
 | `.punt-labs/ethos/roles/` | Config | repo | **Never touched** |
 | `.punt-labs/ethos/agents/` | Config | repo | **Never touched** |
 | `.punt-labs/ethos/personalities/`, `talents/`, `writing-styles/` | Config | repo | **Never touched** |
-| `.punt-labs/ethos/config.yaml` (future home of `ethos.yaml`, §9) | Config | repo (via `init`) | **Never touched** |
+| `.punt-labs/ethos.yaml` (today) → `.punt-labs/ethos/config.yaml` (planned, punt-labs-dir §9/§10 identity-pointer row = *Planned*) | Config | repo (via `setup`) | **Never touched** — enable interacts with neither the bare pointer today nor its future config-zone home |
 | `.punt-labs/ethos/sessions/<date>-<sid>/audit-*.jsonl` | Seal-managed (audit-seal.md) | ethos audit | **Never touched** — sealed chunks are add-only, written by the seal, not by enable |
 | `.punt-labs/ethos/missions/<id>/log-*.jsonl`, `missions.jsonl` | Seal-managed / tracked | ethos mission | **Never touched** |
 | `.punt-labs/ethos/local/`, `*.local`, `*.local.*` | Local | user | **Never touched** |
 | `.punt-labs/local/ethos/` | top-level local zone (punt-labs-dir §2) | ethos runtime | **Never touched** — live audit/mission writes, gitignored |
 | `<repo>/CLAUDE.md` | host file | user | One import line added/removed (§2.4) |
-| `<repo>/.claude/settings.json` | host file | shared | Additive entries merged/removed under lock (§2.8) |
 | git hooks dir `pre-commit`, `commit-msg` | outside subtree | shared | Marker section chained/unchained (§2.8, DES-058/DES-054) |
+
+`.claude/settings.json` is deliberately **absent** from this table: ethos
+registers no repo-scoped settings entry today, so `enable`/`disable` do not
+touch it. §2.8 remains available as future work — see "Deferred: `.claude/settings.json`" below.
 
 **The carve-out is enforced by the manifest, not by good intentions.** Per
 §7, `enable` writes **exactly** the vendored-zone-manifest set
@@ -159,14 +162,12 @@ Steps, in order:
    full §2.4 write contract (below). Never twice.
 6. **Chain the git hooks** via `internal/githook`: chain the DES-058 seal
    section into `pre-commit` and the DES-054 trailer section into
-   `commit-msg`, carrying all v4.1.1 protections (below).
-7. **Merge `.claude/settings.json`** entries (§2.8) under the same
-   exclusive lock as the import line — additive, deterministic set,
-   order-preserving jq-equivalent merge (permissions.md §6). Ethos's
-   current entry set is empty pending a decision (Open Question #4); the
-   plumbing lands now so a later entry needs no new write path.
+   `commit-msg`, carrying all v4.1.1 protections (below). Both embedded
+   scripts carry the §2.7 marker gate (see "The §2.7 marker gate" below).
 
-Exit 0 on success or clean re-run. `--json` emits the per-step result.
+Ethos registers no `.claude/settings.json` entry, so `enable` has no §2.8
+step (see "Deferred: `.claude/settings.json`"). Exit 0 on success or clean
+re-run. `--json` emits the per-step result.
 
 #### The §2.4 import-line write contract (ported from vox `GlobalClaudeImports`)
 
@@ -251,6 +252,39 @@ dropped in the port:
   the repo (shared across repos) (`install.sh:173–190`). This is the same
   resolver `doctor.gitHooksDir` uses (`doctor.go:270–296`); the port makes
   it one shared function, so installer, `enable`, and `doctor` cannot drift.
+  **The unified resolver keeps doctor's manual fallback, not install.sh's
+  git-required form (REC-2).** `install.sh:174` returns empty when `git` is
+  not on `PATH`; `doctor.go:274–295` falls back to reading `.git` /
+  `commondir` by hand and still resolves a worktree's common `hooks`. The
+  shared function keeps the manual fallback, so `enable` resolves the hooks
+  directory in a git-less environment where doctor already succeeds —
+  adopting the git-required form would regress that.
+
+#### The §2.7 marker gate in the embedded hook scripts
+
+Per §2.7, "hook shell gates test the marker, not the directory." Both
+embedded scripts — `hooks/pre-commit.sh` and `hooks/commit-msg.sh` — gain
+the normative gate as their first executable step, immediately after the
+`$?` capture that preserves the host's fall-through status:
+
+```sh
+_host_status=$?
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit "$_host_status"
+[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
+```
+
+`REPO_ROOT` is resolved **inside the hook** via `git rev-parse
+--show-toplevel` (worktree-safe: a worktree resolves to its own work-tree
+root, and the marker lives in that root's `.punt-labs/ethos/`), not
+baked in at install time. Gate absent-marker → exit with the captured host
+status (`$?`), never a bare `exit 0`, so chaining after a host hook that
+signals failure by fall-through is preserved even when ethos is dormant.
+The gate sits before the `ethos` binary is ever resolved or invoked, so a
+dormant repo does no ethos work at commit time.
+
+This gate collides with the v4.1.1 convergence case (repos with hooks
+chained but no marker); the migration section resolves it — SessionStart
+writes the marker before the gate can suppress a seal.
 
 ### `ethos disable`
 
@@ -273,10 +307,7 @@ Run from inside a repo. Non-destructive (§2.9). Steps:
    standalone (shebang + our section, nothing else), remove the file; if it
    leaves host content, keep the reduced host hook (§2.9 step 3). This is
    the inverse of `Chain` and is new — `install.sh` only ever appends.
-5. **Remove the `.claude/settings.json`** entries by exact value-match
-   (permissions.md §6 removal pattern), under lock, touching no unrelated
-   entry (§2.8).
-6. **Leave the rest of `.punt-labs/ethos/` dormant** — the vendored guide,
+5. **Leave the rest of `.punt-labs/ethos/` dormant** — the vendored guide,
    the manifest, and all Config/seal data stay on disk (§2.9). `--purge` is
    out of scope for this design; if added later it deletes only the
    Vendored and Marker zones, never Config or seal data.
@@ -332,23 +363,48 @@ and sourcing.
 ## Three-state model and what doctor reports
 
 Per §2.7, the marker `.punt-labs/ethos/enabled` is the enabled signal —
-directory presence is not. Hook shell gates test the marker
-(`[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit 0`).
+directory presence is not. The embedded hook scripts gate on the marker
+(`[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"`,
+see "The §2.7 marker gate" above).
 
-| State | Directory | `enabled` marker | Import line | `doctor` seal check |
-|-------|-----------|------------------|-------------|---------------------|
-| Enabled | present | present | present | FAIL if seal hook missing/inactive |
-| Dormant (disabled) | present | absent | absent | PASS (not enabled here) |
-| Absent | absent | absent | absent | PASS (not enabled here) |
+| State | `enabled` marker | Hook chained | Import line | `doctor` seal check |
+|-------|------------------|--------------|-------------|---------------------|
+| Enabled | present | yes | present | FAIL if seal hook missing/inactive |
+| Dormant (disabled) | absent | no | absent | PASS (not enabled here) |
+| Absent | absent | no | absent | PASS (not enabled here) |
+| Gated-but-unenabled (transient) | absent | yes | absent | WARN (see below) |
 
 **Required doctor change (conformance).** `CheckSealHook`
 (`doctor.go:140`) currently FAILs any repo whose pre-commit hook lacks an
 active seal call, including never-enabled repos. §2.11 requires the check
 to key on the marker: FAIL only when `.punt-labs/ethos/enabled` is present
 and the seal is missing/inactive; PASS (with "not enabled here") when the
-marker is absent. Without this, every dormant or unadopted repo fails
-doctor forever — the exact false-positive §2.7's three-state model exists
-to prevent.
+marker is absent and no ethos hook is chained. Without this, every dormant
+or unadopted repo fails doctor forever — the exact false-positive §2.7's
+three-state model exists to prevent.
+
+**Gated-but-unenabled: doctor WARNs.** A fourth state is reachable only
+transiently — the seal hook is chained but the marker is absent. It occurs
+mid-migration (v4.1.1 interim repos before their first post-adoption
+session, resolved by SessionStart migration below) or after manual surgery
+(someone deleted the marker but left the hook, or a partial `disable`). In
+this state the gate makes the chained hook a no-op — it exits at the marker
+check and never seals — so a green PASS would hide a hook that is present
+but inert, while a FAIL would over-report a repo that is simply
+converging. `doctor` therefore **WARNs**: "seal hook chained but ethos not
+enabled here — run `ethos enable` to converge, or remove the stale hook."
+
+**Residual window, stated plainly.** A v4.1.1-interim repo that has the
+hooks chained but never runs another ethos session never writes the marker
+(SessionStart is the trigger) and so, once the gate lands, never seals
+again. This is **acceptable**: no session means no new audit lines are
+produced, so there is nothing to seal — the seal only ever had work to do
+when a session was active. The window closes the moment any session starts
+(SessionStart migration writes the marker) or an operator runs
+`ethos enable`. The only lines at risk are those a *prior* session left
+unsealed in the local zone before the gate landed; those seal on the next
+commit of a session that has since written the marker, and are covered by
+`disable`'s seal-first step and the SessionEnd courtesy flush (DES-058).
 
 ## `install.sh` delegation
 
@@ -369,7 +425,7 @@ implementations of marker-section chaining (shell in `install.sh`, Go in
 commit `01a90ec`) is precisely a bug that lived in the shell copy. One
 implementation in Go, called by both `install.sh` and `ethos enable`,
 removes the drift surface entirely. Curl-bootstrap still works: the binary
-is on disk before `enable` is invoked. (See Open Question #4.)
+is on disk before `enable` is invoked.
 
 ## `enable` versus `init` and `setup`
 
@@ -413,6 +469,23 @@ From §2.11 (and punt-labs-dir §8, keyed by the marker):
   `config.local.yaml` (ignored) and `CLAUDE.md`, `config.yaml`,
   `locales/en.yaml` (tracked).
 
+## Deferred: `.claude/settings.json` (§2.8)
+
+§2.8 **permits** `enable` to register additive `.claude/settings.json`
+entries ("may register"), it does not require it. Ethos has no repo-scoped
+settings entry today, so this design ships **no** settings.json write path
+— not even an empty-set merge (REC-1). An empty merge/remove path is dead
+code that would still need the exclusive lock, the deterministic-set
+computation, the order-preserving merge, and the exact-value-match removal,
+all tested, to register zero entries.
+
+**Rule for adding it later:** the settings.json path is added only when the
+first concrete repo-scoped entry exists, and it ships with that entry —
+never speculatively. When it lands it must take the same exclusive lock as
+the §2.4 import-line write (§2.8 extends the lock requirement to every
+shared host-file mutation) and use the permissions.md §6 idempotent
+merge / exact-value-match removal.
+
 ## Migration (§2.12)
 
 Forward integration, no compat shim (PL-PP-1). Ethos never shipped a
@@ -426,8 +499,34 @@ is nothing to retire — the migration is pure convergence:
   hooks idempotently (the existing marker sections are stripped and
   re-appended in place, `install.sh:96–97` semantics, ported). No hook
   content is lost; the run is safe to repeat.
+- **SessionStart hook performs the first-run migration (REQ-1 resolution).**
+  Relying on an operator to run `ethos enable` is not enough: once the §2.7
+  gate lands in the embedded hooks, an interim repo whose marker is absent
+  stops sealing until the marker exists. §2.12 explicitly blesses the
+  SessionStart path ("`enable` — or the tool's SessionStart hook — detects
+  the legacy state and, in one operation, deposits `.punt-labs/<tool>/` +
+  the `enabled` marker"). The ethos SessionStart hook therefore detects the
+  **chained-hooks-present + marker-absent** state — legacy-enabled — and
+  converges it in one step: deposit the vendored zone (guide + manifest) and
+  write the marker, exactly as `enable` does (the SessionStart hook calls
+  the same `internal/enable` deposit path). This runs **before** any tool
+  call in the session, so the marker exists before the first commit's seal
+  gate is evaluated — the gate never suppresses a seal for a genuinely-active
+  interim session. In a gitlink-mounted repo the deposit defers (Open
+  Question #1), and the migration is a no-op there until `ethos-e29s`.
+  Detection is conservative: it fires only when an ethos marker section is
+  present in the chained hook (an unambiguous ethos fingerprint), never on a
+  bare foreign hook, so it cannot mis-enable a repo that merely has some
+  other pre-commit hook.
 - **No legacy sentinel to retire.** Ethos never used `.biff`/`.quarry.toml`
   style presence dotfiles; the `enabled` marker is new, not a replacement.
+- **User-scope closure (§2.6).** Ethos is **repo-scoped only**: its guidance
+  is per-repo (team identities, missions, the audit trail all live in a
+  repo), so it registers no `@~/.punt-labs/ethos/CLAUDE.md` user-scope import
+  and ships no `~/.claude/CLAUDE.md` line. §2.6's mandatory-and-symmetric
+  user-scope install/teardown therefore **does not apply** — there is no
+  user-scope line to add at `install` or remove at `uninstall`. This closes
+  the §2.6 obligation affirmatively rather than leaving it open.
 - **Ordering dependency.** The gitlink → inline-vendored registry
   migration (`ethos-e29s`, punt-labs-dir §10 ethos(registry)) must precede
   reliance on `enable` in consuming repos — you cannot deposit the guide
@@ -521,8 +620,20 @@ Port the `.tmp/test-hook-chain.sh` scenario suite into Go table tests:
 - **v4.1.1 interim convergence.** A repo with chained hooks but no
   marker/import → first `enable` adds the marker and import, re-chains
   hooks, loses no host content.
-- **doctor marker-gating.** `CheckSealHook` PASSes a repo with no marker;
-  FAILs a repo with the marker but no active seal.
+- **SessionStart migration.** A repo with the ethos seal section chained but
+  no marker → the SessionStart hook deposits the vendored zone and writes
+  the marker before the session's first tool call; a repo with only a
+  foreign pre-commit hook (no ethos section) → SessionStart does **not**
+  mis-enable it.
+- **Marker gate in the embedded hooks.** With the marker absent the chained
+  `pre-commit` exits at the gate and never invokes `ethos audit seal`
+  (verify the binary is not called); with the marker present it seals. The
+  gate exits with the captured host status, not a bare `exit 0`, so a
+  chained host's failing fall-through still blocks the commit when ethos is
+  dormant.
+- **doctor states.** `CheckSealHook` PASSes a repo with no marker and no
+  chained hook; FAILs a repo with the marker but no active seal; WARNs a
+  repo with the seal chained but the marker absent (gated-but-unenabled).
 - **gitlink guard.** `enable` in a repo where `.punt-labs/ethos` is a
   gitlink errors (or defers) per the leader's Open Question #1 ruling.
 - **not-in-a-repo.** `enable` outside a work tree exits 2 with a clear
@@ -555,12 +666,12 @@ necessary but not sufficient.
    one to call the other. **Recommend: `setup` calls `enable` as its final
    step** so a fresh setup leaves the repo enabled (guide, marker, import
    line, and hooks), matching user expectation. Confirm.
-4. **`.claude/settings.json` entry set.** §2.8 allows `enable` to register
-   additive settings entries. Ethos has none defined today. **Recommend:
-   land the merge/remove plumbing now (empty set) and defer the actual
-   entries** to a follow-up when a concrete repo-scoped permission or hook
-   entry is identified. Confirm, or name the entries to ship in round 1.
-5. **`--purge` scope.** §2.9 lists `disable --purge` as optional.
+4. **`--purge` scope.** §2.9 lists `disable --purge` as optional.
    **Recommend: out of scope for this design**, specified as a follow-up
    that deletes only the Vendored and Marker zones (never Config or seal
    data). Confirm deferral.
+
+Round-2 note: the round-1 settings.json open question is closed — settings
+plumbing is dropped per REC-1 (see "Deferred: `.claude/settings.json`"),
+and REQ-1's marker-gate + SessionStart-migration decisions are folded into
+the three-state and migration sections above, no longer open.
