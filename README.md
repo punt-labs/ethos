@@ -103,15 +103,19 @@ into immutable, timestamp-named chunk files under the tracked tree so the
 audit record lands in the same commit as the work. Chunks are never
 modified after creation, so branch merges are conflict-free.
 
-`install.sh` installs the seal hook into the pre-commit hook git actually
+`ethos enable` chains the seal hook into the pre-commit hook git actually
 runs — resolved with `git rev-parse --git-path hooks`, so it lands in
 `.git/hooks/` normally, the common hooks dir inside a worktree, or the
 `core.hooksPath` directory (e.g. `.husky/`) when one is configured. When a
 hook is already there — the beads hook, for one — it appends a
 marker-delimited `ETHOS DES-058 SEAL` section rather than skipping, so the
-seal coexists with the host hook. Re-running is idempotent. `ethos doctor`
-resolves the same path and reports whether that hook carries an active seal;
-if it does not, re-run `install.sh` from the repo root.
+seal coexists with the host hook. The chained script gates on the enabled
+marker: it does nothing at commit time unless `.punt-labs/ethos/enabled`
+exists, so a disabled repo's hook is inert (and still preserves a host
+hook's failing fall-through). Re-running `enable` is idempotent. `ethos
+doctor` resolves the same path and reports on the seal hook only when the
+repo is enabled — a never-enabled or disabled repo passes; a repo with the
+hook chained but no marker WARNs. See [enable / disable](#enable--disable).
 
 Or visually: `ethos ui` opens a localhost dashboard where you browse
 the repo, click a line, and see the agent who wrote it, the prompt
@@ -179,6 +183,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 
 | Command | What it does |
 |---------|--------------|
+| `ethos enable` / `disable` | Turn ethos on/off in this repo (see below) |
 | `ethos setup` | Set up identities and team (60-second wizard) |
 | `ethos whoami` | Show your resolved identity |
 | `ethos doctor` | Check installation health |
@@ -191,6 +196,43 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos session purge [--force] [--ack <id>]` | Clean up stale sessions; guard/acknowledge unsealed audit lines |
 | `ethos find missions` | Query closed missions by date, worker, status |
 | `ethos ui` | Open traceability dashboard in browser |
+
+### enable / disable
+
+`install.sh` is machine scope only — it installs the binary, registers the
+plugin, and seeds global content. Per-repo enablement is `ethos enable`,
+run inside a repo (and delegated to automatically by `install.sh` when it is
+run inside a work tree). `enable`:
+
+1. deposits the vendored agent guide `.punt-labs/ethos/CLAUDE.md` and its
+   `.vendored-manifest`;
+2. writes the enabled marker `.punt-labs/ethos/enabled`;
+3. adds the `@.punt-labs/ethos/CLAUDE.md` import line to the repo `CLAUDE.md`;
+4. chains the `ETHOS DES-058 SEAL` and `ETHOS DES-054 TRAILER` sections into
+   the `pre-commit` and `commit-msg` hooks.
+
+It is idempotent — re-running is the upgrade path — and prints a "run `ethos
+setup`" hint when the repo has no identity config. `enable` and `setup` stay
+separate: neither calls the other.
+
+`ethos disable` reverses it non-destructively: it removes the import line,
+deletes the marker, and unchains both hooks, but leaves the vendored guide
+and all config and audit data on disk, dormant. It refuses when a sibling
+worktree is still enabled (the git hooks are shared across worktrees); pass
+`--force` to unchain anyway. It runs no final seal — any unsealed audit
+lines stay in the gitignored local zone and seal on a later re-enable.
+
+The three states a repo can be in:
+
+| State | `enabled` marker | Import line | Hooks | `doctor` seal check |
+|-------|------------------|-------------|-------|---------------------|
+| Enabled | present | present | chained + active | FAIL if seal missing/inactive |
+| Dormant / Absent | absent | absent | absent | PASS (not enabled here) |
+| Gated-but-unenabled | absent | absent | chained (inert) | WARN |
+
+The chained hook scripts gate on the marker: they do no commit-time work
+unless `.punt-labs/ethos/enabled` exists, so a dormant repo's hook is inert
+while still preserving a host hook's failing fall-through.
 
 ## How this is different
 
