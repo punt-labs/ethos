@@ -65,7 +65,7 @@ data; the vendored zone is a two-file manifest and the collision rule
 | Package | Responsibility | Ports / reuses |
 |---------|---------------|----------------|
 | `internal/claudemd/` | The §2.4 import-line writer: exclusive lock, atomic temp+rename, byte-preserving host-EOL append, terminator-insensitive idempotent match, fenced/indented code-block exclusion, symlink-resolving, mode-preserving. Pure, host-file-agnostic. | Ports the *correctness* of vox `GlobalClaudeImports` (`punt-labs/vox`, `src/punt_vox/claude_md.py`) into Go (§2.4). Adds the exclusive lock vox lacks. |
-| `internal/githook/` | Git-hook chaining: marker sections, line-2 wholly-ours ID, non-shell skip-and-warn, unterminated-marker abort, symlink-target resolve, mktemp-fail-loud, host-status preservation, hooksPath/worktree resolution. `Chain(dest, src, tag, ident)` and `Unchain(dest, tag)`. | Ports `install.sh`'s `install_hook` / `emit_section` / `write_marker_form` / `is_shell_hook` / `resolve_hooks_dir` into Go; **shares** the resolver with `doctor.gitHooksDir` (§8 below). Embeds `hooks/pre-commit.sh` and `hooks/commit-msg.sh` via `go:embed`. |
+| `internal/githook/` | Git-hook chaining: marker sections, line-2 wholly-ours ID, non-shell skip-and-warn, unterminated-marker abort, symlink-target resolve, mktemp-fail-loud, host-status preservation, hooksPath/worktree resolution. `Chain(dest, src, tag, ident)` and `Unchain(dest, tag)`. | Ports `install.sh`'s `install_hook` / `emit_section` / `write_marker_form` / `is_shell_hook` / `resolve_hooks_dir` into Go; **shares** the resolver with `doctor.gitHooksDir` (§8 below). Stays a **pure chainer** — it receives the script bytes as `src` and never embeds them. The scripts are embedded by a separate `hooks` package (`hooks/embed.go`: `hooks.PreCommit`, `hooks.CommitMsg`), which sits beside the shellcheck-linted `.sh` files so one authoritative copy serves both the shell test suite and the Go chainer (an embed directive cannot reach files above its own package directory). This is a cleaner factoring than the round-2 design text, which put the embed in `githook` (rop NIT-1). |
 | `internal/enable/` | Orchestration: deposit the vendored zone from the manifest, write/delete the `enabled` marker, drive `claudemd` for the import line, drive `githook` for the two chained hooks, merge/remove the `.claude/settings.json` entries. Embeds the vendored user guide via `go:embed`. | New. Depends on the two packages above. |
 
 CLI surface: `cmd/ethos/enable.go` and `cmd/ethos/disable.go`, both in the
@@ -270,6 +270,23 @@ dropped in the port:
   shared function keeps the manual fallback, so `enable` resolves the hooks
   directory in a git-less environment where doctor already succeeds —
   adopting the git-required form would regress that.
+
+**Lexical-scanner scope is frozen (ethos-kcbv).** The shell text scan that
+finds the host's last effective line, strips inline comments, and detects a
+seal invocation (`doctor.go`'s `stripInlineComment` / `sealInvocation`,
+shared by the chainer) is a *lexical* recognizer, not a shell parser. Its
+recognized scope is **frozen** at the corners it handles today — fenced
+here-docs, comment fences, and arithmetic-expansion spans; any shell corner
+outside that frozen set (nested command substitution, exotic quoting) is
+handled by **refuse-on-ambiguity**: the scan does not guess, it declines to
+classify and the surrounding logic takes the safe branch (skip-and-warn on
+chaining, FAIL on the doctor seal check). The two exits from that
+conservatism are the **fingerprint guard** — chaining only into a hook
+positively identified as ours (line-2 IDENT) or an unambiguous shell host —
+and **execution-based verification** — doctor confirms the seal is present
+*and reachable in a shell hook*, not merely that the text matches. Freezing
+the lexical scope rather than growing it keeps a hand-rolled recognizer from
+drifting toward a half-parser that is wrong in new ways.
 
 #### The §2.7 marker gate in the embedded hook scripts
 
