@@ -3,6 +3,7 @@ package enable
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +16,8 @@ func TestDepositBootstrapGrandfathersExistingGuide(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, guideRel), []byte("old guide\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := deposit(dir, []byte("new guide\n")); err != nil {
+	warns, err := deposit(dir, []byte("new guide\n"))
+	if err != nil {
 		t.Fatalf("deposit: %v", err)
 	}
 	if got, _ := os.ReadFile(filepath.Join(dir, guideRel)); string(got) != "new guide\n" {
@@ -23,6 +25,34 @@ func TestDepositBootstrapGrandfathersExistingGuide(t *testing.T) {
 	}
 	if !exists(filepath.Join(dir, manifestRel)) {
 		t.Error("manifest not written")
+	}
+	// The differing-content overwrite must be surfaced, not silent (S2).
+	found := false
+	for _, w := range warns {
+		if strings.Contains(w, guideRel) && strings.Contains(w, "overwritten") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a grandfather-overwrite warning naming %s, got %v", guideRel, warns)
+	}
+}
+
+func TestDepositBootstrapNoWarningWhenContentMatches(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// An existing guide identical to what we deposit → no overwrite warning.
+	if err := os.WriteFile(filepath.Join(dir, guideRel), []byte("same guide\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	warns, err := deposit(dir, []byte("same guide\n"))
+	if err != nil {
+		t.Fatalf("deposit: %v", err)
+	}
+	if len(warns) != 0 {
+		t.Errorf("unexpected warnings for identical content: %v", warns)
 	}
 }
 
@@ -36,7 +66,7 @@ func TestDepositCollisionOnUnlistedExistingPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	// manifestRel exists but is not in the previous set → collision.
-	if err := deposit(dir, []byte("guide\n")); err == nil {
+	if _, err := deposit(dir, []byte("guide\n")); err == nil {
 		t.Fatal("expected a collision error")
 	}
 }

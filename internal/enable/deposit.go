@@ -1,6 +1,7 @@
 package enable
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,12 +24,18 @@ const (
 // manifest) the new set is grandfathered as the previous set, so an
 // already-deposited guide does not error — but a manifest path in a
 // non-vendored zone errors unconditionally.
-func deposit(repoRoot string, guide []byte) error {
+//
+// It returns any warnings — on first contact (bootstrap), overwriting an
+// existing vendored file whose content differs from what we deposit is
+// grandfathered by punt-labs-dir §7, but the overwrite is surfaced by naming
+// the path so the (git-tracked, recoverable) clobber is not silent (S2).
+func deposit(repoRoot string, guide []byte) ([]string, error) {
 	newSet := []string{guideRel, manifestRel}
+	want := map[string][]byte{guideRel: guide, manifestRel: manifestBytes(newSet)}
 
 	prev, err := readManifest(filepath.Join(repoRoot, manifestRel))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	prevSet := prev
 	bootstrap := prev == nil
@@ -36,15 +43,24 @@ func deposit(repoRoot string, guide []byte) error {
 		prevSet = newSet
 	}
 
+	var warnings []string
 	for _, rel := range newSet {
 		if !isVendored(rel) {
-			return fmt.Errorf("enable: manifest path %s is not in the vendored zone — refusing to deposit", rel)
+			return nil, fmt.Errorf("enable: manifest path %s is not in the vendored zone — refusing to deposit", rel)
 		}
 		if contains(prevSet, rel) {
+			// Grandfathered on first contact: warn when we are about to
+			// overwrite differing content, so the clobber is visible.
+			if bootstrap {
+				if existing, err := os.ReadFile(filepath.Join(repoRoot, rel)); err == nil && !bytes.Equal(existing, want[rel]) {
+					warnings = append(warnings, fmt.Sprintf(
+						"%s existed with different content and was overwritten by the vendored guide (punt-labs-dir §7 first-enable grandfather; the prior file is recoverable from git)", rel))
+				}
+			}
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(repoRoot, rel)); err == nil {
-			return fmt.Errorf("enable: %s already exists and is not in the previous vendored manifest — refusing to overwrite repo-owned data (collision)", rel)
+			return nil, fmt.Errorf("enable: %s already exists and is not in the previous vendored manifest — refusing to overwrite repo-owned data (collision)", rel)
 		}
 	}
 
@@ -53,14 +69,17 @@ func deposit(repoRoot string, guide []byte) error {
 			continue
 		}
 		if err := os.Remove(filepath.Join(repoRoot, rel)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("enable: removing stale vendored path %s: %w", rel, err)
+			return nil, fmt.Errorf("enable: removing stale vendored path %s: %w", rel, err)
 		}
 	}
 
 	if err := writeVendored(filepath.Join(repoRoot, guideRel), guide); err != nil {
-		return err
+		return nil, err
 	}
-	return writeVendored(filepath.Join(repoRoot, manifestRel), manifestBytes(newSet))
+	if err := writeVendored(filepath.Join(repoRoot, manifestRel), manifestBytes(newSet)); err != nil {
+		return nil, err
+	}
+	return warnings, nil
 }
 
 // isVendored reports whether rel is one of the two paths the vendored zone

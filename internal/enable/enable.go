@@ -78,9 +78,11 @@ func Enable(repoRoot string) (*Report, error) {
 			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
 	}
 
-	if err := deposit(repoRoot, Guide); err != nil {
+	depositWarns, err := deposit(repoRoot, Guide)
+	if err != nil {
 		return rep, err
 	}
+	rep.Warnings = append(rep.Warnings, depositWarns...)
 	rep.step("vendored", "done", "deposited "+guideRel+" and "+manifestRel)
 
 	// Marker-last: written only after the deposit completes, so a marker
@@ -104,9 +106,11 @@ func Enable(repoRoot string) (*Report, error) {
 		return rep, err
 	}
 
-	if repoConfigAbsent(repoRoot) {
-		rep.Hint = "run `ethos setup` to configure identities"
+	hint, warning := configStatus(repoRoot)
+	if warning != "" {
+		rep.Warnings = append(rep.Warnings, warning)
 	}
+	rep.Hint = hint
 	return rep, nil
 }
 
@@ -119,7 +123,15 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
 
 	if !force {
-		if siblings := enabledSiblingWorktrees(repoRoot); len(siblings) > 0 {
+		// Fail closed: a probe that cannot confirm the siblings are disabled
+		// must refuse, not silently degrade the operator-ruled refuse-by-
+		// default to --force behavior.
+		siblings, err := enabledSiblingWorktrees(repoRoot)
+		if err != nil {
+			return rep, fmt.Errorf(
+				"cannot verify sibling worktrees are disabled: %w — refusing; re-run with --force to unchain anyway", err)
+		}
+		if len(siblings) > 0 {
 			return rep, fmt.Errorf(
 				"disable would unchain the shared git hooks, but these worktrees are still enabled: %s — re-run with --force to unchain anyway",
 				strings.Join(siblings, ", "))
@@ -136,11 +148,14 @@ func Disable(repoRoot string, force bool) (*Report, error) {
 		rep.step("import", "already", "no import line present")
 	}
 
-	switch err := removeMarker(repoRoot); {
-	case err != nil:
+	markerRemoved, err := removeMarker(repoRoot)
+	if err != nil {
 		return rep, err
-	default:
+	}
+	if markerRemoved {
 		rep.step("marker", "done", "deleted "+markerRel)
+	} else {
+		rep.step("marker", "already", "no marker present")
 	}
 
 	if err := unchainHooks(repoRoot, rep); err != nil {
@@ -166,11 +181,18 @@ func writeMarker(repoRoot string) error {
 	return nil
 }
 
-func removeMarker(repoRoot string) error {
-	if err := os.Remove(filepath.Join(repoRoot, markerRel)); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("deleting marker %s: %w", markerRel, err)
+// removeMarker deletes the enabled marker and reports whether it removed one.
+// A missing marker is not an error (idempotent) but returns removed=false, so
+// disable can report "already" rather than telling a --json consumer a
+// deletion happened.
+func removeMarker(repoRoot string) (bool, error) {
+	if err := os.Remove(filepath.Join(repoRoot, markerRel)); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("deleting marker %s: %w", markerRel, err)
 	}
-	return nil
+	return true, nil
 }
 
 // chainHooks resolves the shared hooks directory and chains the seal and
@@ -224,26 +246,35 @@ func unchainHooks(repoRoot string, rep *Report) error {
 	return nil
 }
 
-// repoConfigAbsent reports whether the repo has no ethos config — no
-// .punt-labs/ethos.yaml (or legacy config.yaml) and no identities.
-func repoConfigAbsent(repoRoot string) bool {
+// configStatus decides enable's closing message. It returns a "run ethos
+// setup" hint when the repo has no ethos config (no .punt-labs/ethos.yaml and
+// no identities), or a warning when the config file exists but cannot be read
+// or parsed — a malformed config must not masquerade as absent and draw the
+// setup hint. At most one of the two is non-empty.
+func configStatus(repoRoot string) (hint, warning string) {
 	cfg, err := resolve.LoadRepoConfig(repoRoot)
-	if err == nil && cfg != nil {
-		return false
+	if err != nil {
+		return "", fmt.Sprintf(".punt-labs/ethos.yaml is unreadable: %v", err)
+	}
+	if cfg != nil {
+		return "", ""
 	}
 	if entries, err := os.ReadDir(filepath.Join(repoRoot, ".punt-labs", "ethos", "identities")); err == nil && len(entries) > 0 {
-		return false
+		return "", ""
 	}
-	return true
+	return "run `ethos setup` to configure identities", ""
 }
 
 // enabledSiblingWorktrees returns the other worktrees of this repo that still
 // carry the enabled marker. The git hooks dir is shared across all worktrees,
-// so unchaining here disables the seal for every one of them.
-func enabledSiblingWorktrees(repoRoot string) []string {
+// so unchaining here disables the seal for every one of them. It fails closed:
+// a worktree-list probe failure returns an error (disable refuses), and a
+// sibling marker whose stat fails for a non-IsNotExist reason is counted as
+// enabled with the errno named, never silently treated as disabled.
+func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
 	out, err := exec.Command("git", "-C", repoRoot, "worktree", "list", "--porcelain").Output()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("git worktree list: %w", err)
 	}
 	var enabled []string
 	for _, line := range strings.Split(string(out), "\n") {
@@ -255,11 +286,15 @@ func enabledSiblingWorktrees(repoRoot string) []string {
 		if path == "" || textscan.SamePath(path, repoRoot) {
 			continue
 		}
-		if _, err := os.Stat(filepath.Join(path, markerRel)); err == nil {
+		_, statErr := os.Stat(filepath.Join(path, markerRel))
+		switch {
+		case statErr == nil:
 			enabled = append(enabled, path)
+		case !os.IsNotExist(statErr):
+			enabled = append(enabled, fmt.Sprintf("%s (marker stat error: %v)", path, statErr))
 		}
 	}
-	return enabled
+	return enabled, nil
 }
 
 // unsealedAuditLines counts live session audit lines past the sealed

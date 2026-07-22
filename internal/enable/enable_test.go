@@ -295,6 +295,72 @@ func TestDisableRefusesEnabledSiblingWorktree(t *testing.T) {
 	}
 }
 
+func TestDisableRefusesWhenWorktreeProbeFails(t *testing.T) {
+	// A directory that is not a git repo (and, via /tmp, has no git ancestor)
+	// makes `git worktree list` fail; disable must refuse (fail closed), not
+	// silently degrade to --force behavior (S3). /tmp escapes the repo-nested
+	// TMPDIR, the same escape the doctor tests use.
+	nonRepo, err := os.MkdirTemp("/tmp", "ethos-disable-*")
+	if err != nil {
+		t.Skipf("cannot create an outside-repo temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
+
+	if _, err := Disable(nonRepo, false); err == nil {
+		t.Fatal("expected disable to refuse when the worktree probe fails")
+	} else if !strings.Contains(err.Error(), "verify sibling worktrees") {
+		t.Errorf("error = %q, want a fail-closed probe refusal", err)
+	}
+	// --force still overrides the probe failure.
+	if _, err := Disable(nonRepo, true); err != nil {
+		t.Fatalf("Disable --force over a probe failure: %v", err)
+	}
+}
+
+func TestDisableReportsMarkerAlreadyWhenAbsent(t *testing.T) {
+	dir := gitRepo(t)
+	rep, err := Disable(dir, false)
+	if err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	// A never-enabled repo has no marker; the step must say "already", not
+	// tell a --json consumer a deletion happened (S5).
+	for _, s := range rep.Steps {
+		if s.Step == "marker" {
+			if s.Status != "already" {
+				t.Errorf("marker step status = %q, want already", s.Status)
+			}
+		}
+	}
+}
+
+func TestEnableWarnsOnUnreadableConfig(t *testing.T) {
+	dir := gitRepo(t)
+	// A malformed config must not read as absent and draw the setup hint (S7).
+	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".punt-labs", "ethos.yaml"), []byte("agent: [unclosed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Enable(dir)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if rep.Hint != "" {
+		t.Errorf("hint = %q, want none for a malformed config", rep.Hint)
+	}
+	found := false
+	for _, w := range rep.Warnings {
+		if strings.Contains(w, "unreadable") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected an 'unreadable' config warning, got %v", rep.Warnings)
+	}
+}
+
 // TestMarkerGateRuntime exercises the embedded pre-commit gate: it seals only
 // when the marker is present and preserves the host's fall-through status when
 // dormant.
