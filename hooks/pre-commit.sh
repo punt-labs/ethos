@@ -25,6 +25,16 @@
 # runs (a later assignment would reset $?).
 _host_status=$?
 
+# §2.7 marker gate: ethos does no commit-time work unless it is enabled in
+# this repo. REPO_ROOT is resolved inside the hook (worktree-safe: a worktree
+# resolves to its own work-tree root, where its .punt-labs/ethos/ lives), not
+# baked in at install time. Absent marker → exit with the captured host status,
+# never a bare exit 0, so a chained host that signals failure by fall-through
+# still blocks the commit even when ethos is dormant. The gate sits before the
+# binary is ever resolved, so a dormant repo does no ethos work at commit time.
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit "$_host_status"
+[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
+
 # Resolve the ethos binary: PATH first, then the default install dir.
 ethos_bin=""
 if command -v ethos >/dev/null 2>&1; then

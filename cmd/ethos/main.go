@@ -241,7 +241,9 @@ func runDoctor(cmd *cobra.Command) error {
 		}
 	}
 
-	if !doctor.AllPassed(results) {
+	// A WARN (gated-but-unenabled) is advisory and must not fail the command;
+	// only an outright FAIL sets a non-zero exit.
+	if doctor.AnyFailed(results) {
 		return silentError{}
 	}
 	return nil

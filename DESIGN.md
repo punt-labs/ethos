@@ -6063,3 +6063,75 @@ accepted as the bounded pre-`e29s` limitation); a durable home-tree deferral
 record to make the teardown notice loud (spool-lite creep — the same
 write-only subsystem under another name; the teardown deferral is accepted as
 unannounced and post-hoc undetectable).
+
+## DES-059: `ethos enable` / `disable` — mapping the tool-enable-disable standard (SETTLED)
+
+**Status**: Settled. Design ratified 2026-07-22 (bead `ethos-ik4j`, missions
+`m-2026-07-22-001` design, `-005` document). Conforms to punt-kit
+`standards/tool-enable-disable.md` (§2.1–2.13) and `standards/punt-labs-dir.md`
+(§7 zones, §9 migration). Full design and the operator-rulings appendix:
+`docs/enable-disable.md`.
+
+### Problem
+
+The org standard requires every repo-scoped CLI to ship `enable` / `disable`:
+one `@`-import line in the user's `CLAUDE.md`, one tool-owned
+`.punt-labs/<tool>/` directory, an `enabled` marker, and repo-scoped hook
+registration. Ethos had none of these. Instead `install.sh` (machine scope)
+reached into a specific repo to chain the DES-058 seal and DES-054 trailer git
+hooks — the standard's exact anti-pattern (§2.13) — with no marker, no import
+line, and no vendored guide. `doctor` FAILed every repo lacking the seal hook,
+including never-enabled ones, contradicting §2.7's three-state model.
+
+The ethos-specific hazard: `.punt-labs/ethos/` already holds repo-owned content
+(identities, teams, roles, agents, missions, sealed audit chunks). The
+standard's wholesale-overwrite ownership model (§2.2) would destroy it.
+
+### Decision
+
+`enable` / `disable` are thin cobra verbs over three packages: `internal/claudemd`
+(the §2.4 import-line writer — exclusive lock, atomic temp+rename,
+byte-preserving host-EOL append, terminator-insensitive match, code-block
+exclusion, symlink/mode preserving — porting vox `GlobalClaudeImports`'s
+correctness into Go), `internal/githook` (a pure chainer porting `install.sh`'s
+`install_hook` logic with all v4.1.1 protections and sharing the hooks-dir
+resolver with `doctor`), and `internal/enable` (orchestration). The git-hook
+scripts are embedded by a separate `hooks` package so one shellcheck-linted
+copy serves both the shell test suite and the Go chainer.
+
+The `.punt-labs/ethos/` subtree is carved into punt-labs-dir §7 zones: the
+Vendored zone is a **two-file allowlist** (`CLAUDE.md` + `.vendored-manifest`),
+and the §7 manifest collision rule makes an overwrite of any identity, team,
+role, or sealed-chunk path a hard error that deposits nothing. The marker is
+written **last**, after the deposit completes, so a marker present implies a
+complete deposit. Both embedded hooks gate on `.punt-labs/ethos/enabled`, so a
+dormant repo's hook is inert; `doctor` keys its seal check on the marker with
+four states (PASS unenabled, FAIL enabled-but-missing, WARN gated-but-unenabled).
+`disable` is non-destructive and strands (does not seal) pending live lines,
+which seal on a later re-enable via the seal's live-tail union; it refuses when
+a sibling worktree is still enabled unless `--force` is given. `install.sh`
+becomes machine-scope only and delegates per-repo enablement to `ethos enable`.
+Migration to interim v4.1.1 repos is by-hand at rollout, not a SessionStart auto
+step. `enable` and `setup` stay fully separate.
+
+### Rejected alternatives
+
+- **`install.sh`-owned per-repo enablement** (the v4.1.1 arrangement): conflates
+  machine `install` with repo `enable` (§2.13), and cannot write a marker or
+  import line without duplicating the enable path in shell.
+- **Managed `CLAUDE.md` sections** (`<!-- ethos:begin -->` … `end`): §2.1 forbids
+  tooling from owning any bytes inside the user's `CLAUDE.md` beyond one
+  `@`-import line; composition happens at read time.
+- **Hooks-only `enable` verb** (an early bead): skips the guide, marker, and
+  import line — fails §2.3 and §2.7; without the marker there is no three-state
+  model.
+- **Dual shell/Go hook-chaining implementations** (keep `install.sh`'s copy
+  alongside the Go port): two copies drift — the v4.1.1 `ethos-2ol1` seal-chain
+  bug lived in the shell copy. One Go source of truth, shell functions deleted.
+- **SessionStart auto-migration** of interim repos: operator rejected in favor
+  of explicit by-hand convergence; doctor's WARN and `install.sh` delegation
+  are the backstops. Keeps migration a reviewable operator action rather than a
+  silent hook side effect.
+- **`disable` seals before stripping**: operator overruled; `disable` means the
+  user is done — strand-not-seal, with recovery on re-enable, avoids an
+  off-switch that runs work the user did not ask for.
