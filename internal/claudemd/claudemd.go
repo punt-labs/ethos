@@ -1,0 +1,273 @@
+// Package claudemd registers and removes a single canonical @-import line
+// in a user-owned CLAUDE.md, under the tool-enable-disable §2.4 write
+// contract: exclusive lock, atomic temp+rename, byte-preserving with the
+// host's EOL convention, terminator-insensitive idempotent matching,
+// code-block exclusion, symlink resolution, and mode preservation.
+//
+// It is host-file-agnostic: the caller supplies both the target path and
+// the canonical line, so the package owns the write correctness and knows
+// nothing about ethos's canonical string.
+package claudemd
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"golang.org/x/sys/unix"
+)
+
+// Register appends line to the CLAUDE.md at path when no top-level,
+// terminator-insensitive match is already present, and returns whether it
+// wrote. A missing file is created (mode 0644). Every byte outside the
+// appended line is preserved; the appended line uses the host's EOL.
+func Register(path, line string) (bool, error) {
+	real, mode, err := resolveTarget(path)
+	if err != nil {
+		return false, err
+	}
+	wrote := false
+	err = withLock(real, func() error {
+		data, err := readIfExists(real)
+		if err != nil {
+			return err
+		}
+		if len(matchIndices(data, line)) > 0 {
+			return nil
+		}
+		eol := detectEOL(data)
+		out := make([]byte, 0, len(data)+len(line)+2*len(eol))
+		out = append(out, data...)
+		if len(data) > 0 && !endsWithTerminator(data) {
+			out = append(out, eol...)
+		}
+		out = append(out, line...)
+		out = append(out, eol...)
+		if err := writeAtomic(real, out, mode); err != nil {
+			return err
+		}
+		wrote = true
+		return nil
+	})
+	return wrote, err
+}
+
+// Deregister removes every top-level, terminator-insensitive match of line
+// from the CLAUDE.md at path, collapsing an accidental duplicate to zero,
+// and returns whether it wrote. A missing file is a no-op. Every byte
+// outside the removed lines is preserved.
+func Deregister(path, line string) (bool, error) {
+	real, mode, err := resolveTarget(path)
+	if err != nil {
+		return false, err
+	}
+	wrote := false
+	err = withLock(real, func() error {
+		data, err := readIfExists(real)
+		if err != nil {
+			return err
+		}
+		idx := matchIndices(data, line)
+		if len(idx) == 0 {
+			return nil
+		}
+		drop := make(map[int]bool, len(idx))
+		for _, i := range idx {
+			drop[i] = true
+		}
+		lines := splitKeepEnds(data)
+		out := make([]byte, 0, len(data))
+		for i, l := range lines {
+			if drop[i] {
+				continue
+			}
+			out = append(out, l...)
+		}
+		if err := writeAtomic(real, out, mode); err != nil {
+			return err
+		}
+		wrote = true
+		return nil
+	})
+	return wrote, err
+}
+
+// resolveTarget returns the real path to operate on (following one symlink
+// so a dotfile-manager link survives the rename), the mode to preserve
+// (0644 for a new file), and any resolution error.
+func resolveTarget(path string) (string, os.FileMode, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", 0, fmt.Errorf("resolving path %s: %w", path, err)
+	}
+	li, err := os.Lstat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return abs, 0o644, nil
+		}
+		return "", 0, fmt.Errorf("stat %s: %w", abs, err)
+	}
+	if li.Mode()&os.ModeSymlink != 0 {
+		real, err := filepath.EvalSymlinks(abs)
+		if err != nil {
+			return "", 0, fmt.Errorf("resolving symlink %s: %w", abs, err)
+		}
+		fi, err := os.Stat(real)
+		if err != nil {
+			return "", 0, fmt.Errorf("stat symlink target %s: %w", real, err)
+		}
+		return real, fi.Mode().Perm(), nil
+	}
+	return abs, li.Mode().Perm(), nil
+}
+
+// readIfExists returns the file's bytes, or nil when it does not exist.
+func readIfExists(real string) ([]byte, error) {
+	data, err := os.ReadFile(real)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading %s: %w", real, err)
+	}
+	return data, nil
+}
+
+// withLock runs fn while holding an exclusive lock keyed on real. The lock
+// lives on a stable sibling file in the temp dir, not on the target: an
+// atomic rename replaces the target's inode, so a lock held on the target's
+// own fd would not serialize two writers across the rename. Keying the lock
+// on the resolved path lets two concurrent Register calls (in-process
+// goroutines or separate processes) coordinate.
+func withLock(real string, fn func() error) error {
+	sum := sha256.Sum256([]byte(real))
+	lockPath := filepath.Join(os.TempDir(), "ethos-claudemd-"+hex.EncodeToString(sum[:8])+".lock")
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening lock %s: %w", lockPath, err)
+	}
+	defer func() { _ = f.Close() }()
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("locking %s: %w", lockPath, err)
+	}
+	defer func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }()
+	return fn()
+}
+
+// writeAtomic writes data to a temp file in real's own directory, then
+// renames it over real. The rename is atomic on POSIX, so no reader ever
+// sees a torn file.
+func writeAtomic(real string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(real)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(real)+".tmp*")
+	if err != nil {
+		return fmt.Errorf("creating temp file in %s: %w", dir, err)
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("writing %s: %w", name, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", name, err)
+	}
+	if err := os.Chmod(name, mode); err != nil {
+		return fmt.Errorf("setting mode on %s: %w", name, err)
+	}
+	if err := os.Rename(name, real); err != nil {
+		return fmt.Errorf("renaming %s to %s: %w", name, real, err)
+	}
+	return nil
+}
+
+// matchIndices returns the indices, into splitKeepEnds(data), of the lines
+// that equal line net of their terminator and sit at the markdown top level
+// (not inside a fenced or indented code block).
+func matchIndices(data []byte, line string) []int {
+	lines := splitKeepEnds(data)
+	var out []int
+	fenceOpen := false
+	for i, raw := range lines {
+		content := stripTerminator(raw)
+		if isFence(content) {
+			fenceOpen = !fenceOpen
+			continue
+		}
+		if fenceOpen || isIndentedCode(content) {
+			continue
+		}
+		if content == line {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// splitKeepEnds splits data into lines, each retaining its trailing
+// terminator (\n, \r\n, or \r). A final line without a terminator is kept
+// as-is. Concatenating the result reproduces data byte-for-byte.
+func splitKeepEnds(data []byte) []string {
+	var lines []string
+	for i := 0; i < len(data); {
+		j := i
+		for j < len(data) && data[j] != '\n' && data[j] != '\r' {
+			j++
+		}
+		if j < len(data) {
+			if data[j] == '\r' && j+1 < len(data) && data[j+1] == '\n' {
+				j += 2
+			} else {
+				j++
+			}
+		}
+		lines = append(lines, string(data[i:j]))
+		i = j
+	}
+	return lines
+}
+
+// stripTerminator drops a single trailing \n, \r\n, or \r.
+func stripTerminator(s string) string {
+	s = strings.TrimSuffix(s, "\n")
+	return strings.TrimSuffix(s, "\r")
+}
+
+// detectEOL returns the host file's EOL convention: CRLF if any \r\n is
+// present, else lone CR if any \r, else LF (also the default for an empty
+// or new file).
+func detectEOL(data []byte) []byte {
+	if bytes.Contains(data, []byte("\r\n")) {
+		return []byte("\r\n")
+	}
+	if bytes.IndexByte(data, '\r') >= 0 {
+		return []byte("\r")
+	}
+	return []byte("\n")
+}
+
+// endsWithTerminator reports whether data's last byte is a line terminator.
+func endsWithTerminator(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	last := data[len(data)-1]
+	return last == '\n' || last == '\r'
+}
+
+// isFence reports whether content is a fence delimiter: its first
+// non-whitespace characters are three or more backticks or tildes.
+func isFence(content string) bool {
+	t := strings.TrimLeft(content, " \t")
+	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
+}
+
+// isIndentedCode reports whether content begins an indented code block: it
+// starts with a tab or four or more spaces.
+func isIndentedCode(content string) bool {
+	return strings.HasPrefix(content, "\t") || strings.HasPrefix(content, "    ")
+}
