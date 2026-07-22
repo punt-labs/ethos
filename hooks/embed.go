@@ -1,8 +1,8 @@
 // Package hooks embeds the git-hook scripts ethos chains into a repo, so a
 // single authoritative copy — the shellcheck-linted scripts in this
 // directory — is the one both the shell test suite and the Go chainer use.
-// go:embed cannot reach files above the embedding package's directory, so the
-// embed lives here beside the scripts rather than in internal/githook.
+// The embed lives here beside the scripts because an embed directive cannot
+// reach files above its own package directory (no "..").
 package hooks
 
 import _ "embed"
