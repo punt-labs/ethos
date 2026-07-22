@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/internal/textscan"
 )
 
 // HooksDir returns the hooks directory git runs for the repo at repoRoot,
@@ -33,7 +35,7 @@ func HooksDir(repoRoot string) (string, []string) {
 // repoRoot and resolve an ancestor repo's hooks.
 func gitHooksPath(repoRoot string) (string, []string, bool) {
 	top, err := gitOut(repoRoot, "rev-parse", "--show-toplevel")
-	if err != nil || !samePath(top, repoRoot) {
+	if err != nil || !textscan.SamePath(top, repoRoot) {
 		return "", nil, false
 	}
 	hdRaw, err := gitOut(repoRoot, "rev-parse", "--git-path", "hooks")
@@ -128,15 +130,4 @@ func evalPath(p string) string {
 		return r
 	}
 	return filepath.Clean(p)
-}
-
-// samePath reports whether a and b name the same location, tolerating the
-// symlinked temp roots (macOS /tmp → /private/tmp) tests run under.
-func samePath(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ra, err1 := filepath.EvalSymlinks(a)
-	rb, err2 := filepath.EvalSymlinks(b)
-	return err1 == nil && err2 == nil && ra == rb
 }

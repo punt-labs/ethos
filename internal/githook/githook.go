@@ -6,6 +6,12 @@
 // abort, symlink-target resolution, temp-fail-loud, host-status
 // preservation, and the exit/exec tail warning — into Go, and adds the
 // Unchain inverse the shell never had.
+//
+// Marker scanning is heredoc-aware (internal/textscan): a marker-shaped line
+// inside a here-document body is host-owned text, never a real section
+// boundary, so Chain/Unchain never delete host data that merely looks like a
+// marker. As defense in depth, stripSection refuses to remove a region whose
+// line after BEGIN does not carry the ethos ident fingerprint.
 package githook
 
 import (
@@ -14,6 +20,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/punt-labs/ethos/internal/textscan"
 )
 
 // Result reports the outcome of a Chain or Unchain call.
@@ -39,8 +47,10 @@ type Result struct {
 //   - a non-shell host: leave it untouched with a warning
 //
 // tag is the marker tag (e.g. "ETHOS DES-058 SEAL"); ident is the header
-// line that positively identifies our own pre-marker standalone. src is the
-// hook script; its shebang is dropped when emitted inside a section.
+// line that positively identifies our own section — both our pre-marker
+// standalone (on line 2) and, immediately after BEGIN, the fingerprint that
+// guards stripSection. src is the hook script; its shebang is dropped when
+// emitted inside a section.
 func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 	res := Result{Path: destPath}
 
@@ -91,17 +101,28 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 			"%s has a %q BEGIN marker with no matching END — refusing to edit a truncated hook; fix it by hand", destPath, tag)
 	}
 
-	stripped := stripSection(data, tag)
+	stripped, err := stripSection(data, tag, ident)
+	if err != nil {
+		return res, fmt.Errorf("%s: %w", destPath, err)
+	}
 	if w := warnTail(lastEffectiveLine(stripped)); w != "" {
 		res.Warnings = append(res.Warnings, destPath+" "+w)
 	}
 
-	out := make([]byte, 0, len(stripped)+64)
-	out = append(out, stripped...)
-	if len(out) > 0 && !endsWithNewline(out) {
-		out = append(out, '\n')
+	// Match the host's EOL for the appended section so a CRLF host does not
+	// gain LF-only lines (reviewer N1).
+	eol := textscan.DetectEOL(stripped)
+	section := sectionBytes(tag, src)
+	if !bytes.Equal(eol, []byte("\n")) {
+		section = bytes.ReplaceAll(section, []byte("\n"), eol)
 	}
-	out = append(out, sectionBytes(tag, src)...)
+
+	out := make([]byte, 0, len(stripped)+len(section)+len(eol))
+	out = append(out, stripped...)
+	if len(out) > 0 && !endsWithTerminator(out) {
+		out = append(out, eol...)
+	}
+	out = append(out, section...)
 	if err := writeExec(destPath, out); err != nil {
 		return res, err
 	}
@@ -116,9 +137,10 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 // Unchain removes our tag's marker section from the hook at destPath. If
 // stripping leaves only our standalone (a shebang and nothing else) the file
 // is removed; a hook with remaining host content is kept, reduced. A hook
-// without our section, or no hook at all, is a no-op. This is the inverse of
+// without our section, or no hook at all, is a no-op. ident is the fingerprint
+// stripSection verifies before removing the region. This is the inverse of
 // Chain.
-func Unchain(destPath, tag string) (Result, error) {
+func Unchain(destPath, tag, ident string) (Result, error) {
 	res := Result{Path: destPath}
 
 	target, _, err := resolveHookSymlink(destPath)
@@ -146,7 +168,10 @@ func Unchain(destPath, tag string) (Result, error) {
 			"%s has a %q BEGIN marker with no matching END — refusing to edit a truncated hook; fix it by hand", destPath, tag)
 	}
 
-	stripped := stripSection(data, tag)
+	stripped, err := stripSection(data, tag, ident)
+	if err != nil {
+		return res, fmt.Errorf("%s: %w", destPath, err)
+	}
 	if isBareShebang(stripped) {
 		if err := os.Remove(destPath); err != nil {
 			return res, fmt.Errorf("removing %s: %w", destPath, err)
@@ -213,50 +238,66 @@ func stripShebang(src []byte) []byte {
 	return nil
 }
 
-// stripSection removes every line from a BEGIN-tag marker to its matching
-// END-tag marker, inclusive, preserving every other byte. A versioned marker
-// (e.g. "ETHOS DES-058 SEAL v4.1.0") matches by prefix, so an interim
+// stripSection removes the lines from a real BEGIN-tag marker to its matching
+// END-tag marker, inclusive, preserving every other byte. "Real" excludes any
+// marker-shaped line inside a heredoc body (host-owned text). A versioned
+// marker (e.g. "ETHOS DES-058 SEAL v4.1.0") matches by prefix, so an interim
 // versioned section is replaced.
-func stripSection(data []byte, tag string) []byte {
+//
+// Defense in depth: before removing a region it verifies the line immediately
+// after BEGIN carries the ethos ident fingerprint. A region that does not is
+// not an ethos-written section — stripSection refuses with a named error
+// rather than delete host data, so even a scanner gap degrades to a loud
+// refusal instead of silent deletion.
+func stripSection(data []byte, tag, ident string) ([]byte, error) {
+	lines := textscan.SplitKeepEnds(data)
+	mask := textscan.HeredocMask(data)
 	begin := "# --- BEGIN " + tag
 	end := "# --- END " + tag
 	out := make([]byte, 0, len(data))
-	skip := false
-	for _, raw := range splitKeepEnds(data) {
-		c := stripTerminator(raw)
-		if !skip {
-			if strings.HasPrefix(c, begin) {
-				skip = true
-				continue
+	for i := 0; i < len(lines); {
+		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(lines[i]), begin) {
+			if i+1 >= len(lines) || !strings.Contains(textscan.StripTerminator(lines[i+1]), ident) {
+				return nil, fmt.Errorf(
+					"%q section does not carry the ethos fingerprint %q — refusing to remove a region that is not an ethos-written section; fix it by hand", tag, ident)
 			}
-			out = append(out, raw...)
+			i++
+			for i < len(lines) {
+				last := !mask[i] && strings.HasPrefix(textscan.StripTerminator(lines[i]), end)
+				i++
+				if last {
+					break
+				}
+			}
 			continue
 		}
-		if strings.HasPrefix(c, end) {
-			skip = false
-		}
+		out = append(out, lines[i]...)
+		i++
 	}
-	return out
+	return out, nil
 }
 
-// hasBegin reports whether data carries a BEGIN marker for tag.
+// hasBegin reports whether data carries a real (non-heredoc) BEGIN marker for tag.
 func hasBegin(data []byte, tag string) bool {
 	return hasLinePrefix(data, "# --- BEGIN "+tag)
 }
 
-// hasEnd reports whether data carries an END marker for tag.
+// hasEnd reports whether data carries a real (non-heredoc) END marker for tag.
 func hasEnd(data []byte, tag string) bool {
 	return hasLinePrefix(data, "# --- END "+tag)
 }
 
-// hasAnyBegin reports whether data carries any BEGIN marker.
+// hasAnyBegin reports whether data carries any real (non-heredoc) BEGIN marker.
 func hasAnyBegin(data []byte) bool {
 	return hasLinePrefix(data, "# --- BEGIN ")
 }
 
+// hasLinePrefix reports whether any non-heredoc line has the given prefix.
 func hasLinePrefix(data []byte, prefix string) bool {
-	for _, raw := range splitKeepEnds(data) {
-		if strings.HasPrefix(stripTerminator(raw), prefix) {
+	lines := textscan.SplitKeepEnds(data)
+	mask := textscan.HeredocMask(data)
+	for i, raw := range lines {
+		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), prefix) {
 			return true
 		}
 	}
@@ -271,11 +312,11 @@ func isOurStandalone(data []byte, ident string) bool {
 	if hasAnyBegin(data) {
 		return false
 	}
-	lines := splitKeepEnds(data)
+	lines := textscan.SplitKeepEnds(data)
 	if len(lines) < 2 {
 		return false
 	}
-	return strings.Contains(stripTerminator(lines[1]), ident)
+	return strings.Contains(textscan.StripTerminator(lines[1]), ident)
 }
 
 // isShellHook reports whether data's shebang names a shell-family
@@ -308,8 +349,8 @@ func isShellHook(data []byte) bool {
 // nothing of the host's own remains.
 func isBareShebang(data []byte) bool {
 	first := true
-	for _, raw := range splitKeepEnds(data) {
-		c := stripTerminator(raw)
+	for _, raw := range textscan.SplitKeepEnds(data) {
+		c := textscan.StripTerminator(raw)
 		if first {
 			first = false
 			if strings.HasPrefix(c, "#!") {
@@ -328,8 +369,8 @@ func isBareShebang(data []byte) bool {
 // trailing comment after an exit must not hide it.
 func lastEffectiveLine(data []byte) string {
 	last := ""
-	for _, raw := range splitKeepEnds(data) {
-		c := stripTerminator(raw)
+	for _, raw := range textscan.SplitKeepEnds(data) {
+		c := textscan.StripTerminator(raw)
 		if strings.TrimSpace(c) == "" {
 			continue
 		}
@@ -392,33 +433,11 @@ func writeExec(dest string, data []byte) error {
 	return nil
 }
 
-// splitKeepEnds splits data into lines, each retaining its trailing
-// terminator. Concatenating the result reproduces data byte-for-byte.
-func splitKeepEnds(data []byte) []string {
-	var lines []string
-	for i := 0; i < len(data); {
-		j := i
-		for j < len(data) && data[j] != '\n' && data[j] != '\r' {
-			j++
-		}
-		if j < len(data) {
-			if data[j] == '\r' && j+1 < len(data) && data[j+1] == '\n' {
-				j += 2
-			} else {
-				j++
-			}
-		}
-		lines = append(lines, string(data[i:j]))
-		i = j
+// endsWithTerminator reports whether data's last byte is a line terminator.
+func endsWithTerminator(data []byte) bool {
+	if len(data) == 0 {
+		return false
 	}
-	return lines
-}
-
-func stripTerminator(s string) string {
-	s = strings.TrimSuffix(s, "\n")
-	return strings.TrimSuffix(s, "\r")
-}
-
-func endsWithNewline(data []byte) bool {
-	return len(data) > 0 && data[len(data)-1] == '\n'
+	last := data[len(data)-1]
+	return last == '\n' || last == '\r'
 }

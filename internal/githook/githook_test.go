@@ -126,11 +126,14 @@ func TestChainIdempotent(t *testing.T) {
 
 func TestChainInterimVersionedMarkerReplaced(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "pre-commit")
+	// A real v4.1.0 section carried the whole pre-commit script, so its first
+	// body line is the ident header — the fingerprint stripSection checks.
 	host := "#!/usr/bin/env sh\n" +
 		"# --- BEGIN BEADS INTEGRATION v1.0.4 ---\n" +
 		"bd hooks run pre-commit \"$@\" || true\n" +
 		"# --- END BEADS INTEGRATION v1.0.4 ---\n\n" +
 		"# --- BEGIN ETHOS DES-058 SEAL v4.1.0 ---\n" +
+		"# " + ident + "\n" +
 		"ethos audit seal || exit 2\n" +
 		"# --- END ETHOS DES-058 SEAL ---\n"
 	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
@@ -367,7 +370,7 @@ func TestUnchainRoundTripForeignHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	chainPre(t, dest)
-	res, err := Unchain(dest, tag)
+	res, err := Unchain(dest, tag, ident)
 	if err != nil {
 		t.Fatalf("Unchain: %v", err)
 	}
@@ -382,7 +385,7 @@ func TestUnchainRoundTripForeignHost(t *testing.T) {
 func TestUnchainStandaloneRemovesFile(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "pre-commit")
 	chainPre(t, dest) // fresh install → standalone marker form
-	res, err := Unchain(dest, tag)
+	res, err := Unchain(dest, tag, ident)
 	if err != nil {
 		t.Fatalf("Unchain: %v", err)
 	}
@@ -400,7 +403,7 @@ func TestUnchainNoSectionNoop(t *testing.T) {
 	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	res, err := Unchain(dest, tag)
+	res, err := Unchain(dest, tag, ident)
 	if err != nil {
 		t.Fatalf("Unchain: %v", err)
 	}
@@ -414,12 +417,96 @@ func TestUnchainNoSectionNoop(t *testing.T) {
 
 func TestUnchainAbsent(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "pre-commit")
-	res, err := Unchain(dest, tag)
+	res, err := Unchain(dest, tag, ident)
 	if err != nil {
 		t.Fatalf("Unchain: %v", err)
 	}
 	if res.Action != "absent" {
 		t.Errorf("action = %q, want absent", res.Action)
+	}
+}
+
+func TestChainPreservesHeredocFakeMarker(t *testing.T) {
+	// A host documenting the marker format inside a heredoc must not have its
+	// heredoc body deleted: the fake BEGIN/END inside it are host-owned text,
+	// not real section boundaries.
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\n" +
+		"cat <<'EOF'\n" +
+		"# --- BEGIN " + tag + " ---\n" +
+		"example documentation, not a real marker\n" +
+		"# --- END " + tag + " ---\n" +
+		"EOF\n" +
+		"echo done\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	res := chainPre(t, dest)
+	if res.Action != "chained" {
+		t.Errorf("action = %q, want chained", res.Action)
+	}
+	body := read(t, dest)
+	// The entire host prefix (heredoc and all) must survive verbatim.
+	if !strings.HasPrefix(body, host) {
+		t.Errorf("host heredoc content not preserved:\n%q", body)
+	}
+	if !strings.Contains(body, "example documentation, not a real marker") {
+		t.Error("heredoc documentation line was deleted")
+	}
+	// Exactly one real section — our appended one — must exist.
+	if countBegin(body) != 2 {
+		// two textual BEGINs: the heredoc's fake one + our real one.
+		t.Errorf("BEGIN text count = %d, want 2 (1 fake in heredoc + 1 real)", countBegin(body))
+	}
+
+	// Unchain must remove only our real section and restore the host exactly.
+	if _, err := Unchain(dest, tag, ident); err != nil {
+		t.Fatalf("Unchain: %v", err)
+	}
+	if got := read(t, dest); got != host {
+		t.Errorf("Unchain did not restore the host byte-for-byte:\nwant=%q\ngot =%q", host, got)
+	}
+}
+
+func TestChainCRLFHostGetsCRLFSection(t *testing.T) {
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\r\nrun_something || exit 1\r\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	chainPre(t, dest)
+	body := read(t, dest)
+	// The appended section's marker lines must use CRLF, matching the host.
+	if !strings.Contains(body, "# --- BEGIN "+tag+" ---\r\n") {
+		t.Errorf("section BEGIN did not use CRLF:\n%q", body)
+	}
+	if !strings.Contains(body, "# --- END "+tag+" ---\r\n") {
+		t.Errorf("section END did not use CRLF:\n%q", body)
+	}
+	// No bare LF-only marker line leaked in.
+	if strings.Contains(body, "# --- BEGIN "+tag+" ---\n") && !strings.Contains(body, "# --- BEGIN "+tag+" ---\r\n") {
+		t.Error("section used LF in a CRLF host")
+	}
+}
+
+func TestStripSectionRefusesForeignFingerprint(t *testing.T) {
+	// A real (non-heredoc) BEGIN whose body does not carry our ident is not an
+	// ethos-written section — Chain must refuse rather than delete it.
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\n" +
+		"# --- BEGIN " + tag + " ---\n" +
+		"someone hand-wrote this and it is not ours\n" +
+		"# --- END " + tag + " ---\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Chain(dest, src, tag, ident); err == nil {
+		t.Fatal("expected a fingerprint refusal, got nil")
+	} else if !strings.Contains(err.Error(), "fingerprint") {
+		t.Errorf("error = %q, want a fingerprint refusal", err)
+	}
+	if got := read(t, dest); got != host {
+		t.Error("host changed despite the refusal")
 	}
 }
 

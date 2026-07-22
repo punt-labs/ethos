@@ -173,11 +173,14 @@ func TestEnableConvergesInterimRepo(t *testing.T) {
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// A real interim section carried the whole pre-commit script, so its first
+	// body line is the ident header — the fingerprint stripSection verifies.
 	host := "#!/bin/sh\n" +
 		"# --- BEGIN BEADS INTEGRATION ---\n" +
 		"bd hooks run pre-commit || exit 1\n" +
 		"# --- END BEADS INTEGRATION ---\n" +
 		"# --- BEGIN " + sealTag + " ---\n" +
+		"# " + sealIdent + "\n" +
 		"ethos audit seal || exit 2\n" +
 		"# --- END " + sealTag + " ---\n"
 	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(host), 0o755); err != nil {

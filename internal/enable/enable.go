@@ -20,6 +20,7 @@ import (
 	"github.com/punt-labs/ethos/internal/claudemd"
 	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/textscan"
 )
 
 // Guide is the vendored agent-facing user guide deposited at
@@ -205,14 +206,15 @@ func unchainHooks(repoRoot string, rep *Report) error {
 	dir, warns := githook.HooksDir(repoRoot)
 	rep.Warnings = append(rep.Warnings, warns...)
 	specs := []struct {
-		name string
-		tag  string
+		name  string
+		tag   string
+		ident string
 	}{
-		{"pre-commit", sealTag},
-		{"commit-msg", trailerTag},
+		{"pre-commit", sealTag, sealIdent},
+		{"commit-msg", trailerTag, trailerIdent},
 	}
 	for _, s := range specs {
-		res, err := githook.Unchain(filepath.Join(dir, s.name), s.tag)
+		res, err := githook.Unchain(filepath.Join(dir, s.name), s.tag, s.ident)
 		if err != nil {
 			return fmt.Errorf("unchaining %s: %w", s.name, err)
 		}
@@ -250,7 +252,7 @@ func enabledSiblingWorktrees(repoRoot string) []string {
 			continue
 		}
 		path = strings.TrimSpace(path)
-		if path == "" || samePath(path, repoRoot) {
+		if path == "" || textscan.SamePath(path, repoRoot) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(path, markerRel)); err == nil {
@@ -297,15 +299,4 @@ func countNonEmptyLines(path string) int {
 		}
 	}
 	return n
-}
-
-// samePath reports whether a and b name the same location, tolerating
-// symlinked temp roots.
-func samePath(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ra, err1 := filepath.EvalSymlinks(a)
-	rb, err2 := filepath.EvalSymlinks(b)
-	return err1 == nil && err2 == nil && ra == rb
 }
