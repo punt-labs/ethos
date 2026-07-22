@@ -5,17 +5,17 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/internal/textscan"
 )
 
 // Result holds the outcome of a single health check.
@@ -25,9 +25,15 @@ type Result struct {
 	Detail string `json:"detail"`
 }
 
-// Passed returns true when the check did not fail.
+// Passed reports whether the check did not fail. It is explicit about the
+// three valid statuses: PASS and WARN return true (WARN is advisory — the
+// gated-but-unenabled state), FAIL returns false. Any other value (empty or a
+// typo like "PAS") returns false, so a malformed status surfaces as a failure
+// in summaries rather than being silently counted as passed. Only AnyFailed
+// gates a non-zero exit; callers that want to surface WARN distinctly read
+// Status, which renders verbatim in the CLI table and the MCP summary.
 func (r Result) Passed() bool {
-	return r.Status == "PASS"
+	return r.Status == "PASS" || r.Status == "WARN"
 }
 
 // RunAll executes every standard health check and returns the results.
@@ -67,11 +73,39 @@ func AllPassed(results []Result) bool {
 	return true
 }
 
-// PassedCount returns the number of passed results.
+// AnyFailed returns true when any result is an outright FAIL. A WARN is
+// advisory and does not count — doctor's exit status gates on this, not on
+// AllPassed, so a gated-but-unenabled repo (WARN) does not fail the command.
+func AnyFailed(results []Result) bool {
+	for _, r := range results {
+		if r.Status == "FAIL" {
+			return true
+		}
+	}
+	return false
+}
+
+// WarnCount returns the number of advisory WARN results, so a summary can
+// surface them distinctly rather than folding them into "passed".
+func WarnCount(results []Result) int {
+	n := 0
+	for _, r := range results {
+		if r.Status == "WARN" {
+			n++
+		}
+	}
+	return n
+}
+
+// PassedCount returns the number of strictly-PASS results. WARN is excluded
+// so a summary that also reports WarnCount does not count a warned check
+// twice (as both passed and a warning); the total is PassedCount + WarnCount +
+// failures. Advisory gating (Passed/AllPassed treating WARN as not-failed) is
+// unchanged — this is a counting distinction, not a status one.
 func PassedCount(results []Result) int {
 	n := 0
 	for _, r := range results {
-		if r.Passed() {
+		if r.Status == "PASS" {
 			n++
 		}
 	}
@@ -132,56 +166,99 @@ func CheckOrphanedAgentFiles(repoRoot string, teams *team.LayeredStore) Result {
 	return Result{Name: name, Status: "FAIL", Detail: "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")}
 }
 
-// CheckSealHook verifies the current repo's pre-commit hook carries an
-// active DES-058 audit-seal invocation — either the ethos marker section
-// chained into a host hook or the standalone ethos hook. The seal is the
-// live audit write path's primary trigger; a repo missing it commits work
-// without sealing the pending audit lines that document it.
+// CheckSealHook reports on the DES-058 audit-seal pre-commit hook, keyed on
+// the enabled marker (§2.11). Four states:
+//
+//   - Enabled (marker present): FAIL when the seal hook is missing or
+//     inactive; PASS when it carries an active seal call.
+//   - Dormant / Absent (marker absent, no ethos hook): PASS "not enabled
+//     here" — a never-enabled or disabled repo must not fail.
+//   - Gated-but-unenabled (marker absent, hook chained): WARN — the chained
+//     hook is inert behind its own marker gate, so a PASS would hide it and a
+//     FAIL would over-report a repo awaiting convergence.
 func CheckSealHook(repoRoot string) Result {
 	name := "Audit seal hook"
-	const remedy = " — re-run install.sh from the repo root"
+	const remedy = " — run `ethos enable`"
 
 	if repoRoot == "" {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
-	hook := filepath.Join(gitHooksDir(repoRoot), "pre-commit")
-	info, err := os.Stat(hook)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Result{Name: name, Status: "FAIL", Detail: "no pre-commit hook (missing)" + remedy}
-		}
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, err, remedy)}
+	// A marker stat error that is not "does not exist" must not collapse to
+	// "not enabled" — a doubly-broken repo (unreadable .punt-labs/ethos plus a
+	// lost hook) would then read PASS while commits flow unsealed. Surface it
+	// as a FAIL instead of guessing dormancy (S4).
+	markerPresent := false
+	if _, err := os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "enabled")); err == nil {
+		markerPresent = true
+	} else if !os.IsNotExist(err) {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
 	}
-	data, err := os.ReadFile(hook)
-	if err != nil {
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
+	dir, _ := githook.HooksDir(repoRoot)
+	hook := filepath.Join(dir, "pre-commit")
+
+	info, statErr := os.Stat(hook)
+	var body string
+	if statErr == nil {
+		data, err := os.ReadFile(hook)
+		if err != nil {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hook, err, remedy)}
+		}
+		body = string(data)
+	}
+	// A commented-out call, a string-literal mention, or a dead branch must
+	// not read as active, or the silent-absence state recurs behind a green
+	// check. "Chained" for the gate check is the section marker OR an active
+	// call — a stale section still counts as present.
+	active := statErr == nil && hasActiveSealCall(body)
+	chained := statErr == nil && (active || hasSealMarker(body))
+
+	if !markerPresent {
+		if chained {
+			return Result{Name: name, Status: "WARN", Detail: "seal hook chained but ethos not enabled here" + remedy + " to converge, or remove the stale hook"}
+		}
+		return Result{Name: name, Status: "PASS", Detail: "not enabled here"}
 	}
 
-	body := string(data)
-	// Require an actual seal invocation, not the substring: a commented-out
-	// call, a string-literal mention (echo/printf), or a dead branch must not
-	// read as active, or the silent-absence state recurs behind a green check.
-	if hasActiveSealCall(body) {
-		// A shell section pasted into a non-shell hook (Python/Node) can never
-		// run as sh, so the call text is meaningless there.
-		if !isShellHook(body) {
-			return Result{Name: name, Status: "FAIL", Detail: "seal call present but the hook's shebang is not a shell — git runs it under another interpreter" + remedy}
+	// Enabled: the seal must be present and active.
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return Result{Name: name, Status: "FAIL", Detail: "enabled here but no pre-commit hook" + remedy}
 		}
-		// Git skips a hook without the executable bit, so a valid-looking
-		// but non-executable hook never fires.
-		if info.Mode().Perm()&0o111 == 0 {
-			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("seal hook present but not executable — run: chmod +x %s", hook)}
-		}
-		if strings.Contains(body, "# --- BEGIN ETHOS DES-058 SEAL") {
-			return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
-		}
-		return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, statErr, remedy)}
 	}
-	if strings.Contains(body, "DES-058") {
-		return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
+	if !active {
+		if strings.Contains(body, "DES-058") {
+			return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
+		}
+		return Result{Name: name, Status: "FAIL", Detail: "enabled here but the seal hook is not chained" + remedy}
 	}
-	return Result{Name: name, Status: "FAIL", Detail: "seal hook not installed (missing)" + remedy}
+	if !textscan.IsShellHook([]byte(body)) {
+		return Result{Name: name, Status: "FAIL", Detail: "seal call present but the hook's shebang is not a shell — git runs it under another interpreter" + remedy}
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("seal hook present but not executable — run: chmod +x %s", hook)}
+	}
+	if hasSealMarker(body) {
+		return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
+	}
+	return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
+}
+
+// hasSealMarker reports whether body carries the DES-058 seal BEGIN marker on
+// a real (non-heredoc) line. It consults the same textscan heredoc mask as
+// hasActiveSealCall and githook, so a foreign hook that merely documents the
+// marker text inside a heredoc is not misread as a chained section.
+func hasSealMarker(body string) bool {
+	data := []byte(body)
+	lines := textscan.SplitKeepEnds(data)
+	mask := textscan.HeredocMask(data)
+	for i, raw := range lines {
+		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN ETHOS DES-058 SEAL") {
+			return true
+		}
+	}
+	return false
 }
 
 // sealInvocation matches an `audit seal` call in command position: the ethos
@@ -194,13 +271,20 @@ func CheckSealHook(repoRoot string) Result {
 var sealInvocation = regexp.MustCompile(`(^[\t ]*|[;&|(!][\t ]*)("?\$\{?ethos_bin\}?"?|ethos)[\t ]+audit[\t ]+seal([\s;&|)]|$)`)
 
 // hasActiveSealCall reports whether body invokes `ethos audit seal` on a
-// non-comment line. The check is lexical, not semantic: it drops full-line and
-// inline comments so a call named in a comment cannot pass, but it cannot see
-// through dynamic dispatch (eval, an aliased wrapper) — such a hook FAILs the
-// check, the safe direction.
+// non-comment, non-heredoc line. The check is lexical, not a shell parser: it
+// drops full-line and inline comments and skips here-document bodies (so a
+// seal mention in usage text quoted via `cat <<EOF ... EOF` is not read as a
+// real call), but it cannot see through dynamic dispatch (eval, an aliased
+// wrapper) — such a hook FAILs the check, the safe direction.
 func hasActiveSealCall(body string) bool {
-	for _, line := range strings.Split(body, "\n") {
-		code := stripInlineComment(line)
+	data := []byte(body)
+	lines := textscan.SplitKeepEnds(data)
+	mask := textscan.HeredocMask(data)
+	for i, raw := range lines {
+		if mask[i] {
+			continue // heredoc body — opaque, never a command position
+		}
+		code := stripInlineComment(textscan.StripTerminator(raw))
 		if strings.TrimSpace(code) == "" {
 			continue
 		}
@@ -231,104 +315,6 @@ func stripInlineComment(line string) string {
 		}
 	}
 	return line
-}
-
-// isShellHook reports whether the hook body's shebang names a shell-family
-// interpreter, or there is no shebang (git runs such a hook via sh). A
-// non-shell shebang (Python/Node/binary) means a pasted shell seal call
-// cannot run.
-func isShellHook(body string) bool {
-	first := body
-	if nl := strings.IndexByte(body, '\n'); nl >= 0 {
-		first = body[:nl]
-	}
-	first = strings.TrimRight(first, "\r")
-	if !strings.HasPrefix(first, "#!") {
-		return true
-	}
-	fields := strings.Fields(first[2:])
-	if len(fields) == 0 {
-		return true
-	}
-	interp := path.Base(fields[0])
-	if interp == "env" && len(fields) > 1 {
-		interp = path.Base(fields[1])
-	}
-	switch interp {
-	case "sh", "bash", "dash", "ksh", "zsh", "mksh", "ash":
-		return true
-	}
-	return false
-}
-
-// gitHooksDir returns the hooks directory git runs for the repo at repoRoot.
-// It asks git directly (`git rev-parse --git-path hooks`), which is the one
-// source of truth the installer also uses: git honors core.hooksPath and
-// resolves a worktree's commondir. When git is unavailable it falls back to
-// resolving the ".git" gitdir file and its "commondir" by hand, so a worktree
-// still lands on the common ".git/hooks" git actually runs (ethos-2ol1).
-func gitHooksDir(repoRoot string) string {
-	if p := gitHooksPath(repoRoot); p != "" {
-		return p
-	}
-	dot := filepath.Join(repoRoot, ".git")
-	gd := dot
-	if info, err := os.Stat(dot); err != nil || !info.IsDir() {
-		if data, err := os.ReadFile(dot); err == nil {
-			line := strings.TrimSpace(string(data))
-			if target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:")); target != line && target != "" {
-				gd = target
-				if !filepath.IsAbs(gd) {
-					gd = filepath.Join(repoRoot, gd)
-				}
-			}
-		}
-	}
-	if data, err := os.ReadFile(filepath.Join(gd, "commondir")); err == nil {
-		if common := strings.TrimSpace(string(data)); common != "" {
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(gd, common)
-			}
-			gd = common
-		}
-	}
-	return filepath.Join(gd, "hooks")
-}
-
-// gitHooksPath returns git's own resolution of the hooks directory, or "" if
-// git is unavailable or repoRoot is not itself a git work tree root. The
-// work-tree-root anchor matters: without it, git would walk up from a
-// non-repo repoRoot and resolve an ancestor repo's hooks — reporting on the
-// wrong repository. A relative result is resolved against repoRoot, matching
-// git's `-C` semantics.
-func gitHooksPath(repoRoot string) string {
-	top, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--show-toplevel").Output()
-	if err != nil || !samePath(strings.TrimSpace(string(top)), repoRoot) {
-		return ""
-	}
-	out, err := exec.Command("git", "-C", repoRoot, "rev-parse", "--git-path", "hooks").Output()
-	if err != nil {
-		return ""
-	}
-	p := strings.TrimSpace(string(out))
-	if p == "" {
-		return ""
-	}
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(repoRoot, p)
-	}
-	return p
-}
-
-// samePath reports whether a and b name the same location, tolerating the
-// symlinked temp roots (macOS /tmp → /private/tmp) that show up in tests.
-func samePath(a, b string) bool {
-	if a == b {
-		return true
-	}
-	ra, err1 := filepath.EvalSymlinks(a)
-	rb, err2 := filepath.EvalSymlinks(b)
-	return err1 == nil && err2 == nil && ra == rb
 }
 
 // CheckIdentityDir verifies the identity directory exists.

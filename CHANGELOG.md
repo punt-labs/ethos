@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos enable` / `ethos disable` — turn ethos on and off in a repo**
+  (per the org tool-enable-disable standard). `enable` deposits the vendored
+  agent guide `.punt-labs/ethos/CLAUDE.md`, writes the `.punt-labs/ethos/enabled`
+  marker, adds the `@.punt-labs/ethos/CLAUDE.md` import line to the repo
+  `CLAUDE.md`, and chains the `ETHOS DES-058 SEAL` and `ETHOS DES-054 TRAILER`
+  sections into the `pre-commit` and `commit-msg` git hooks. It is idempotent
+  (re-running is the upgrade path) and prints a "run `ethos setup`" hint when
+  the repo has no identity config. `disable` reverses it non-destructively —
+  removes the import line, deletes the marker, unchains both hooks — but leaves
+  the vendored guide and all config and audit data on disk, dormant. `disable`
+  refuses when a sibling worktree is still enabled (the git hooks are shared
+  across worktrees); pass `--force` to unchain anyway. It runs no final seal:
+  any unsealed audit lines stay in the gitignored local zone and seal on a
+  later re-enable. The hook-chaining logic (marker sections, coexistence with a
+  host hook, worktree/`core.hooksPath` resolution) now lives in the binary
+  rather than the installer. Full design in `docs/enable-disable.md`.
+
+### Changed
+
+- **`install.sh` is machine-scope only and delegates per-repo enablement to
+  `ethos enable`.** The installer installs the binary, registers the plugin,
+  and seeds global content; when run inside a work tree it calls `ethos enable`
+  for that repo and fails loudly if it cannot, rather than chaining hooks
+  itself. This removes the duplicated shell/Go hook-chaining implementations.
+- **The embedded git hooks gate on the enabled marker.** `pre-commit` and
+  `commit-msg` do no commit-time work unless `.punt-labs/ethos/enabled` exists,
+  so a dormant or never-enabled repo's hook is inert (while still preserving a
+  host hook's failing fall-through).
+- **`ethos doctor`'s seal-hook check keys on the enabled marker.** It reports
+  on the seal only when the repo is enabled: a never-enabled or disabled repo
+  PASSes; an enabled repo with the seal missing or inactive FAILs; a repo with
+  the hook chained but no marker (mid-migration or after manual surgery) WARNs.
+
 ## [4.1.1] - 2026-07-21
 
 ### Fixed

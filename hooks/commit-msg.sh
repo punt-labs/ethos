@@ -13,6 +13,15 @@
 # command status; every passthrough returns it so chaining never masks a host
 # hook that signals failure by fall-through. Standalone, $? = 0 as before.
 _host_status=$?
+
+# §2.7 marker gate: ethos does no commit-time work unless it is enabled in
+# this repo. REPO_ROOT is resolved inside the hook (worktree-safe), not baked
+# in at install time. Absent marker → exit with the captured host status,
+# never a bare exit 0, so a chained host that signals failure by fall-through
+# still blocks the commit even when ethos is dormant.
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit "$_host_status"
+[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ] || exit "$_host_status"
+
 [ -z "$1" ] && exit "$_host_status"
 msg_file="$1"
 [ -f "$msg_file" ] || exit "$_host_status"

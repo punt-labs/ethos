@@ -60,6 +60,46 @@ Tools integrate with ethos at whatever coupling level fits:
 - **CLI** — call `ethos whoami`, `ethos show`, etc. from hooks and scripts. Requires the binary.
 - **MCP server** — connect to `ethos serve` for structured identity operations during a session.
 
+## Repo Enablement
+
+`install.sh` is machine scope only (binary, plugin, seed). Turning ethos on
+in a specific repo is `ethos enable`; `install.sh` delegates to it
+automatically when run inside a work tree.
+
+```bash
+ethos enable            # deposit guide + marker + import line; chain the hooks
+ethos enable --json     # per-step report
+ethos disable           # remove import line + marker; unchain hooks (non-destructive)
+ethos disable --force   # unchain even when a sibling worktree is still enabled
+```
+
+`enable` does four things and is idempotent (re-running is the upgrade path):
+
+1. deposits the vendored agent guide `.punt-labs/ethos/CLAUDE.md` and its
+   `.vendored-manifest` (the vendored zone — never touches identities, teams,
+   sessions, or other repo-owned data);
+2. writes the enabled marker `.punt-labs/ethos/enabled` — after the deposit,
+   so a marker present always implies a complete guide;
+3. adds the `@.punt-labs/ethos/CLAUDE.md` import line to the repo `CLAUDE.md`;
+4. chains the `ETHOS DES-058 SEAL` and `ETHOS DES-054 TRAILER` sections into
+   the `pre-commit` and `commit-msg` hooks.
+
+`enable` and `setup` stay separate — neither calls the other. `enable` prints
+a "run `ethos setup`" hint when the repo has no identity config.
+
+`disable` removes the import line, deletes the marker, and unchains the hooks,
+but leaves the vendored guide and all config and audit data dormant on disk.
+It runs no final seal; unsealed audit lines stay in the gitignored local zone
+and seal on a later re-enable.
+
+**The enabled marker is the signal, not directory presence.** The chained
+hook scripts gate on it — `[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ]` —
+so a disabled repo's hook does no commit-time work while still preserving a
+host hook's failing fall-through. `ethos doctor` keys its seal-hook check on
+the marker: a never-enabled or disabled repo passes ("not enabled here"); a
+repo with the hook chained but no marker WARNs (gated-but-unenabled); an
+enabled repo FAILs if the seal is missing or inactive.
+
 ## Identity Operations
 
 ### CLI
