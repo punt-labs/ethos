@@ -1,0 +1,26 @@
+mission_id: m-2026-07-22-002
+status: closed
+type: implement
+created_at: "2026-07-22T07:52:31Z"
+updated_at: "2026-07-22T16:56:35Z"
+closed_at: "2026-07-22T16:56:35Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-22T07:52:31Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - cmd/ethos internal install.sh hooks README.md AGENTS.md
+success_criteria:
+    - make check passes
+    - all design decisions implemented
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 2
+context: Implement enable-disable in cmd/ethos internal install.sh hooks README.md AGENTS.md per design
+pipeline: standard-2026-07-22-5cc925
+depends_on:
+    - m-2026-07-22-001

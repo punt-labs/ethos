@@ -1,0 +1,158 @@
+results:
+    - mission: m-2026-07-22-003
+      round: 1
+      created_at: "2026-07-22T17:20:29Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.95
+      files_changed: []
+      evidence:
+        - name: make check green with -race (go vet, staticcheck, shellcheck, markdownlint, all packages, validate-content)
+          status: pass
+        - name: internal/claudemd coverage 89.0% (was 86.2%)
+          status: pass
+        - name: internal/enable coverage 78.5% (unchanged, no decrease)
+          status: pass
+        - name: internal/githook coverage 85.6% (unchanged, no decrease)
+          status: pass
+        - name: cmd/ethos coverage 66.7% (unchanged; subprocess/integration tests run out-of-process so add no in-process coverage)
+          status: pass
+        - name: real git commit through the chained pre-commit seals live audit lines into a tracked chunk (built binary on PATH)
+          status: pass
+        - name: disabled repo commit produces no new chunk and the foreign host hook still runs; re-enable + commit seals the stranded line
+          status: pass
+        - name: CLI exit codes via the built binary — enable success 0, not-in-repo 2, gitlink guard 1, open-fence host 1, worktree refusal 1, --force 0
+          status: pass
+        - name: enable --json parsed; per-step step+status fields and repo_root asserted
+          status: pass
+        - name: dangling-symlink and unwritable-dir hosts error with no half-state (claudemd)
+          status: pass
+        - name: no-host-file semantics pinned — CLAUDE.md created 0644 with exactly the canonical import
+          status: pass
+        - name: setup/enable separation — enable writes no ethos.yaml/identities and prints the setup hint
+          status: pass
+        - name: all fixtures under /tmp (never inside this repo); two commits, each passing make check with -race
+          status: pass
+      prose: |
+        files_changed intentionally empty: contract write_set defect
+        (ethos-t2lb); enumeration follows, authorized by leader
+        reflections. New test files, all additive, no production code
+        touched:
+          - internal/claudemd/adversarial_test.go        (+78)
+          - internal/enable/semantics_test.go            (+79)
+          - cmd/ethos/enable_subprocess_test.go          (+287)
+          - cmd/ethos/enable_seal_integration_test.go    (+175)
+        Total +619 across 4 files, 0 removed. Two commits: 2c15357
+        (claudemd + enable edge-case unit tests), e3a95a0 (cmd
+        black-box CLI + real-commit seal lifecycle).
+
+        Lens: black-box, CLI-surface, adversarial. I read the round-2
+        evaluation (m-2026-07-22-002-eval-rop.md) and the design's
+        test-strategy section and added only the gaps, never re-testing
+        what the existing tables cover.
+
+        What was already covered and left alone: claudemd EOL/idempotent/
+        code-block/open-fence/trailing-whitespace/symlink/mode/lock;
+        every githook chain/unchain scenario incl. worktree/hooksPath
+        parity; enable round-trip/zone-carve-out/idempotent/interim-
+        convergence/marker-last/gitlink-guard/worktree-refuse and the
+        in-process marker-gate runtime; doctor's four seal states in
+        doctor_test.go.
+
+        Gaps I closed:
+          1. Cross-feature integration (the one behavior nobody had
+             tested end-to-end): a REAL git commit driving the chained
+             pre-commit with the built ethos binary on PATH. Phase 1
+             enabled → two live lines seal into a tracked chunk. Phase 2
+             disabled → no new chunk AND a foreign host pre-commit still
+             runs (sentinel counter proves it). Phase 3 re-enabled → the
+             line stranded during the disabled window seals on the next
+             commit (the seal unions the live tail past the watermark —
+             the operator-ratified strand semantics). This is also the
+             automated dogfood the design calls for.
+          2. Black-box CLI surface via the built binary (subprocess,
+             matching cmd/ethos/subprocess_test.go): enable/disable
+             success, --json per-step shape, CLI-level re-run idempotence,
+             and exit codes (not-in-repo=2, gitlink=1, open-fence=1,
+             worktree-refusal=1, --force=0) — the in-process tests never
+             exercised real argv, real exit codes, or real stderr.
+          3. Adversarial hosts (claudemd): a dangling CLAUDE.md symlink
+             (EvalSymlinks fails → error, link and target untouched) and
+             an unwritable target directory (CreateTemp fails → error,
+             host file byte-unchanged — the atomic rename never fires, so
+             no half-state). Both were safe, defined behaviors; no
+             production bug found.
+          4. No-host-file semantics pinned with a citing comment: enable
+             on a repo with no CLAUDE.md creates it 0644 containing only
+             the canonical import — the standard's "append to the host"
+             degrading to create-with-just-the-import. Plus setup/enable
+             separation: enable writes no config zone and emits the setup
+             hint.
+
+        No production code modified (write-set is tests only). No
+        suppressions, no skipped-by-default tests, no xfail. Fixtures use
+        /tmp or t.TempDir() for explicit-path unit tests; every
+        enable/CLI/seal fixture is rooted in /tmp with an isolated HOME so
+        a resolution escape cannot contaminate this repo and the seal's
+        global reads stay off the real home. Coverage did not decrease in
+        any package.
+    - mission: m-2026-07-22-003
+      round: 2
+      created_at: "2026-07-22T17:47:41Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.95
+      files_changed: []
+      evidence:
+        - name: two clean-cache full `go test -race ./...` runs, both green (cmd/ethos and internal/mcp included) — the method rop caught the flake with
+          status: pass
+        - name: make check green (go vet, staticcheck, shellcheck, markdownlint, race tests, validate-content)
+          status: pass
+        - name: runCLI timeout branch now kills then waits on the done channel before reading buffers — no kill-then-read data race
+          status: pass
+        - name: runCLI per-subprocess budget raised 5s to 30s so a real-git-commit enable does not time out under full -race load
+          status: pass
+        - name: MCP integration deadlines raised 5s to 30s via a named mcpRPCTimeout const — a pure deadline tune, no data-race shape
+          status: pass
+      prose: |
+        files_changed intentionally empty: contract write_set defect
+        (ethos-t2lb); enumeration follows, authorized by leader
+        reflections. Round-2 fix, tests only, no production code:
+          - cmd/ethos/subprocess_test.go        (+10 -3)
+          - internal/mcp/integration_test.go    (+10 -3)
+        Commit fa9a864.
+
+        REQ-1 (blocking) fixed. rop's diagnosis was exact: two coupled
+        faults on the shared runCLI helper's timeout branch. (1) After
+        cmd.Process.Kill() the branch read errBuf.String() while the
+        os/exec output-copy goroutine was still writing and cmd.Wait()
+        had not returned — a real data race that -race turns a load
+        timeout into. Fixed by killing, then draining the done channel
+        (Wait returned) BEFORE touching either buffer. (2) The 5s
+        per-subprocess budget was too tight for a real-git-work `ethos
+        enable` when ~20 -race packages compile and run concurrently, so
+        the racy branch actually fired. Raised to 30s — reached only on a
+        genuine hang. Both changes carry a comment explaining why. The
+        helper predates this stage but the new seal test (six
+        subprocess-heavy phases) is what trips it and the fix belongs
+        here; no existing-issue excuse.
+
+        MCP item: FIXED, not deferred. TestMCP_ToolsList (internal/mcp,
+        in the write-set) failed the same clean -race run with "transport
+        error: context deadline exceeded". Investigated: it is the same
+        class — a too-tight deadline under load, NOT the kill-then-read
+        shape. The MCP stdio transport spawns `ethos serve` as a
+        subprocess; under -race that server binary is itself
+        race-instrumented and competes for CPU, so the client's 5s
+        context deadline expired mid-handshake. There is no shared-buffer
+        race in the MCP test (unlike runCLI), so the correct minimal fix
+        is a deadline tune. Replaced the three 5s literals
+        (Initialize, CallTool, ListTools) with one named const
+        mcpRPCTimeout = 30s carrying an explanatory comment. Confirmed
+        green across both clean-cache runs.
+
+        Verified exactly as rop caught it: `go clean -testcache` then a
+        full `go test -race ./...`, twice, both green, then make check.
+        No suppressions, no skipped tests, no xfail. Coverage unchanged
+        (the edits are to test-harness control flow and deadlines, not
+        new assertions).
