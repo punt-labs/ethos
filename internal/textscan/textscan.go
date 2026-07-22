@@ -75,6 +75,35 @@ func SamePath(a, b string) bool {
 	return err1 == nil && err2 == nil && ra == rb
 }
 
+// IsShellHook reports whether data's shebang names a shell-family interpreter,
+// or there is no shebang (git runs such a hook via sh). A non-shell shebang
+// (Python/Node/binary) means a pasted POSIX-sh section can never run. This is
+// the single shebang classifier both githook (enable-time chaining) and doctor
+// (the seal check) share, so they cannot drift.
+func IsShellHook(data []byte) bool {
+	first := data
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		first = data[:i]
+	}
+	line := strings.TrimRight(string(first), "\r")
+	if !strings.HasPrefix(line, "#!") {
+		return true
+	}
+	fields := strings.Fields(line[2:])
+	if len(fields) == 0 {
+		return true
+	}
+	interp := filepath.Base(fields[0])
+	if interp == "env" && len(fields) > 1 {
+		interp = filepath.Base(fields[1])
+	}
+	switch interp {
+	case "sh", "bash", "dash", "ksh", "zsh", "mksh", "ash":
+		return true
+	}
+	return false
+}
+
 // HeredocMask returns, for each line in SplitKeepEnds(data), whether that
 // line sits inside a here-document body. A body line is opaque: callers must
 // never read it as a marker boundary, a comment, or a command position. The
@@ -149,9 +178,18 @@ func (d delim) terminates(content string) bool {
 // carried in from prior lines, and returns any delimiters opened plus the
 // depth to carry out. While the depth is positive the line is inside an
 // arithmetic span, where `<<` is a shift and no opener, comment, or quote is
-// recognized; the span opens at `$((` or a bare command-position `((` (two
-// adjacent parens — a subshell writes `( (` or a lone `(`) and closes when the
-// paren depth returns to zero. Quotes and comments are per-line.
+// recognized; the span opens at `$((` or a bare `((` (any two adjacent parens
+// outside a quote or comment — a subshell writes `( (` or a lone `(`) and
+// closes when the paren depth returns to zero. Quotes and comments are
+// per-line.
+//
+// Documented limitation: the bare `((` recognition matches two adjacent parens
+// anywhere, not strictly command position, so a mid-word `foo((` would also
+// open a span. That shape is invalid bash (a bare unquoted `((` mid-word is a
+// syntax error), so no runnable hook reaches it; and if such a span never
+// closed, HeredocOpenAtEOF plus githook's ident-fingerprint guard still refuse
+// rather than mis-edit. Per the frozen-scope rule (see the package doc), this
+// is documented, not fixed with more grammar.
 func scanLine(line string, arith int) ([]delim, int) {
 	var out []delim
 	var quote byte
@@ -186,9 +224,10 @@ func scanLine(line string, arith int) ([]delim, int) {
 				i += 2 // consume both '('
 			}
 		case '(':
-			// Bare arithmetic command (( … )) — two adjacent parens. A
-			// subshell is "( (" (separated) or a lone "(", neither of which
-			// starts an arithmetic span.
+			// Bare arithmetic command (( … )): any two adjacent parens outside
+			// a quote or comment. A subshell is "( (" (separated) or a lone
+			// "(". This also matches a mid-word "foo((", which is invalid bash
+			// and so never reached by a runnable hook (see the doc comment).
 			if i+1 < len(line) && line[i+1] == '(' {
 				arith = 2
 				i++ // consume the second '('
