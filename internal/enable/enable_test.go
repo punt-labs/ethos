@@ -9,6 +9,20 @@ import (
 	"testing"
 )
 
+// TestMain isolates HOME so the claudemd per-user lock dir
+// (~/.punt-labs/ethos/locks) lands in a temp dir, not the developer's real
+// home, when a test enables/disables a repo.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "enable-home-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}
+
 func gitRepo(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("git"); err != nil {
@@ -18,12 +32,20 @@ func gitRepo(t *testing.T) string {
 	gitRun(t, dir, "init", "-q")
 	gitRun(t, dir, "config", "user.email", "test@example.com")
 	gitRun(t, dir, "config", "user.name", "test")
+	gitRun(t, dir, "config", "commit.gpgsign", "false")
 	return dir
 }
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	// Neutralize the session's env-injected git config (GIT_CONFIG_COUNT with
+	// commit.gpgsign=true and a signing key) — it has the highest precedence
+	// and would force gpg signing, which fails under the isolated test HOME.
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_COUNT=0",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null")
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
@@ -314,6 +336,37 @@ func TestDisableRefusesWhenWorktreeProbeFails(t *testing.T) {
 	// --force still overrides the probe failure.
 	if _, err := Disable(nonRepo, true); err != nil {
 		t.Fatalf("Disable --force over a probe failure: %v", err)
+	}
+}
+
+func TestEnableDisableLeavesNoWorkTreeLitter(t *testing.T) {
+	dir := gitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# host\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if _, err := Disable(dir, false); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
+	// After a full enable+disable cycle, nothing named like a lock file may
+	// remain anywhere in the work tree (R2 — the lock lives in the per-user
+	// dir, never beside the target).
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.Name() == ".git" && d.IsDir() {
+			return filepath.SkipDir
+		}
+		if strings.HasSuffix(d.Name(), ".lock") {
+			t.Errorf("work-tree litter: %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
 	}
 }
 

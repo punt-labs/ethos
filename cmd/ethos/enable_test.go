@@ -32,6 +32,8 @@ func enableGitRepo(t *testing.T) string {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	// Isolate HOME so claudemd's per-user lock dir lands in a temp dir.
+	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()
 	cmd := exec.Command("git", "-C", dir, "init", "-q")
 	if err := cmd.Run(); err != nil {

@@ -3,11 +3,25 @@ package claudemd
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
 
 const canonical = "@.punt-labs/ethos/CLAUDE.md"
+
+// TestMain isolates HOME so the per-user lock dir (~/.punt-labs/ethos/locks)
+// lands in a temp dir, not the developer's real home.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "claudemd-home-*")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("HOME", home)
+	code := m.Run()
+	_ = os.RemoveAll(home)
+	os.Exit(code)
+}
 
 // write a fixture file and return its path.
 func fixture(t *testing.T, name, body string) string {
@@ -314,18 +328,33 @@ func TestModePreserved(t *testing.T) {
 }
 
 func TestLockPathIgnoresTMPDIR(t *testing.T) {
-	// The lock must live beside the target, not under TMPDIR — two writers on
-	// different TMPDIRs (direnv-shell vs env-less hook) must share one lock.
+	// The lock must be deterministic from the resolved target alone (under the
+	// per-user locks dir), independent of TMPDIR — so two writers on different
+	// TMPDIRs (direnv-shell vs env-less hook) share one lock — and must not
+	// live in the work tree.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	target := filepath.Join(t.TempDir(), "sub", "CLAUDE.md")
-	want := filepath.Join(filepath.Dir(target), ".CLAUDE.md.lock")
 
 	t.Setenv("TMPDIR", "/some/other/tmp")
-	if got := lockPathFor(target); got != want {
-		t.Errorf("lockPathFor = %q, want %q (TMPDIR must not influence it)", got, want)
+	first, err := lockPathFor(target)
+	if err != nil {
+		t.Fatalf("lockPathFor: %v", err)
 	}
 	t.Setenv("TMPDIR", "/a/different/tmp")
-	if got := lockPathFor(target); got != want {
-		t.Errorf("lockPathFor changed with TMPDIR: %q, want %q", got, want)
+	second, err := lockPathFor(target)
+	if err != nil {
+		t.Fatalf("lockPathFor: %v", err)
+	}
+	if first != second {
+		t.Errorf("lock path changed with TMPDIR: %q vs %q", first, second)
+	}
+	locksDir := filepath.Join(home, ".punt-labs", "ethos", "locks")
+	if filepath.Dir(first) != locksDir {
+		t.Errorf("lock dir = %q, want %q", filepath.Dir(first), locksDir)
+	}
+	if strings.HasPrefix(first, filepath.Dir(target)) {
+		t.Errorf("lock %q is inside the target's directory — work-tree litter", first)
 	}
 }
 

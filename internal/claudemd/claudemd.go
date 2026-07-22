@@ -10,6 +10,8 @@
 package claudemd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -143,23 +145,42 @@ func readIfExists(real string) ([]byte, error) {
 	return data, nil
 }
 
-// lockPathFor returns the sibling lock file for real: a dotfile in real's own
-// directory. It is deliberately NOT under os.TempDir(): this org sets TMPDIR
-// per-repo via direnv, so a temp-dir lock would put a direnv-shell writer and
-// an env-less writer (a hook, a daemon) on different lock files for the same
-// target — no exclusion, a lost update. Keying the lock on the target's own
-// directory is env-independent and on the same filesystem (§2.4 suggested
-// form). A lock held on this stable file survives the atomic rename that
-// replaces the target's own inode.
-func lockPathFor(real string) string {
-	return filepath.Join(filepath.Dir(real), "."+filepath.Base(real)+".lock")
+// lockPathFor returns the lock file for real: a per-user file named by the
+// SHA-256 of the resolved target path, under ~/.punt-labs/ethos/locks/.
+//
+// It is deliberately NOT under os.TempDir() (this org sets TMPDIR per-repo via
+// direnv, so a temp-dir lock would put a direnv-shell writer and an env-less
+// writer — a hook, a daemon — on different lock files for the same target, a
+// lost update) and NOT a sibling in the work tree (that litters the repo with
+// an untracked .CLAUDE.md.lock that survives disable). Keying on the resolved
+// target alone makes it deterministic across TMPDIR, direnv, and callers,
+// env-independent, and leaves zero work-tree litter.
+//
+// Scope: same-user exclusion. Two different users sharing one checkout are out
+// of scope — they already collide on file permissions and are not a case §2.4
+// targets.
+func lockPathFor(real string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home dir for the lock: %w", err)
+	}
+	sum := sha256.Sum256([]byte(real))
+	dir := filepath.Join(home, ".punt-labs", "ethos", "locks")
+	return filepath.Join(dir, hex.EncodeToString(sum[:])+".lock"), nil
 }
 
-// withLock runs fn while holding an exclusive lock on the sibling lock file
+// withLock runs fn while holding an exclusive lock on the per-user lock file
 // for real, so two concurrent Register/Deregister calls (in-process
-// goroutines or separate processes) coordinate regardless of TMPDIR.
+// goroutines or separate processes, same user) coordinate regardless of
+// TMPDIR — without leaving a lock file in the work tree.
 func withLock(real string, fn func() error) error {
-	lockPath := lockPathFor(real)
+	lockPath, err := lockPathFor(real)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return fmt.Errorf("creating lock dir %s: %w", filepath.Dir(lockPath), err)
+	}
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening lock %s: %w", lockPath, err)
