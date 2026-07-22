@@ -121,6 +121,16 @@ func TestHeredocMask(t *testing.T) {
 			src:  "cat <<EOF\nbody1\nbody2\n",
 			want: []bool{false, true, true},
 		},
+		{
+			name: "arithmetic left-shift is not a heredoc opener",
+			src:  "x=$((1<<2))\nafter\n",
+			want: []bool{false, false},
+		},
+		{
+			name: "nested-paren arithmetic shift is not a heredoc",
+			src:  "y=$(( (1<<2) + 3 ))\nafter\n",
+			want: []bool{false, false},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -132,6 +142,27 @@ func TestHeredocMask(t *testing.T) {
 				if got[i] != tt.want[i] {
 					t.Errorf("line %d: mask = %v, want %v (full %v)", i, got[i], tt.want[i], got)
 				}
+			}
+		})
+	}
+}
+
+func TestHeredocOpenAtEOF(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{"terminated heredoc", "cat <<EOF\nbody\nEOF\n", false},
+		{"unterminated heredoc", "cat <<EOF\nbody\n", true},
+		{"no heredoc", "echo hi\n", false},
+		{"arithmetic shift is not open", "x=$((1<<2))\n", false},
+		{"one of two stacked left open", "cmd <<A <<B\naaa\nA\nbbb\n", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := HeredocOpenAtEOF([]byte(c.src)); got != c.want {
+				t.Errorf("HeredocOpenAtEOF(%q) = %v, want %v", c.src, got, c.want)
 			}
 		})
 	}

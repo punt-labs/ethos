@@ -80,8 +80,26 @@ func SamePath(a, b string) bool {
 // one line stack in order. `<<` inside a quote or after a `#` comment on the
 // introducing line is not treated as a heredoc.
 func HeredocMask(data []byte) []bool {
+	mask, _ := scanHeredocs(data)
+	return mask
+}
+
+// HeredocOpenAtEOF reports whether data ends inside an unterminated
+// here-document — a body opened but never closed by its terminator. Such a
+// host is malformed for line-oriented editing (its trailing lines, including
+// an appender's own insertion point, are all masked opaque), so callers
+// should refuse rather than edit it, in parity with claudemd's open-fence
+// check.
+func HeredocOpenAtEOF(data []byte) bool {
+	_, open := scanHeredocs(data)
+	return open
+}
+
+// scanHeredocs classifies each line of data (opaque iff inside a heredoc
+// body) and reports whether a heredoc is still open at EOF.
+func scanHeredocs(data []byte) (mask []bool, openAtEOF bool) {
 	lines := SplitKeepEnds(data)
-	mask := make([]bool, len(lines))
+	mask = make([]bool, len(lines))
 	var queue []delim
 	for i, raw := range lines {
 		content := StripTerminator(raw)
@@ -95,7 +113,7 @@ func HeredocMask(data []byte) []bool {
 		}
 		queue = append(queue, parseHeredocStarts(content)...)
 	}
-	return mask
+	return mask, len(queue) > 0
 }
 
 // delim is a queued here-document delimiter.
@@ -114,7 +132,8 @@ func (d delim) terminates(content string) bool {
 
 // parseHeredocStarts returns the heredoc delimiters opened on line, in order.
 // It tracks quotes and stops at a comment so `<<` inside a string or comment
-// is not misread as a redirection.
+// is not misread as a redirection, and skips `$((…))` arithmetic spans so a
+// left-shift (`$((1<<2))`) is not misread as a heredoc opener.
 func parseHeredocStarts(line string) []delim {
 	var out []delim
 	var quote byte
@@ -124,6 +143,24 @@ func parseHeredocStarts(line string) []delim {
 			if c == quote {
 				quote = 0
 			}
+			continue
+		}
+		// Arithmetic expansion $(( … )): `<<` here is a shift operator, never
+		// a heredoc. Skip the whole span by paren depth (handles nested
+		// parens), starting at depth 2 for the opening `((`.
+		if c == '$' && i+2 < len(line) && line[i+1] == '(' && line[i+2] == '(' {
+			depth := 2
+			i += 3
+			for i < len(line) && depth > 0 {
+				switch line[i] {
+				case '(':
+					depth++
+				case ')':
+					depth--
+				}
+				i++
+			}
+			i-- // the loop's i++ will re-advance past the last char examined
 			continue
 		}
 		switch c {
