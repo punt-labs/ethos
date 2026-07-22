@@ -39,6 +39,7 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	rep, err := enable.Enable(repoRoot)
 	if err != nil {
+		emitPartialReport(cmd, rep)
 		return err
 	}
 	if jsonOutput {
@@ -46,6 +47,27 @@ func runEnable(cmd *cobra.Command) error {
 	}
 	printEnableReport(cmd.OutOrStdout(), cmd.ErrOrStderr(), rep, "enabled")
 	return nil
+}
+
+// emitPartialReport surfaces the completed steps and warnings to stderr on the
+// error path, so a warning already produced (e.g. deposit's grandfather
+// overwrite) is not lost when a later step fails. In --json mode it writes the
+// partial report as JSON to stderr so machine consumers keep it too.
+func emitPartialReport(cmd *cobra.Command, rep *enable.Report) {
+	if rep == nil {
+		return
+	}
+	errOut := cmd.ErrOrStderr()
+	if jsonOutput {
+		_ = writeJSON(errOut, rep)
+		return
+	}
+	for _, s := range rep.Steps {
+		fmt.Fprintf(errOut, "  %-14s %-9s %s\n", s.Step, s.Status, s.Detail)
+	}
+	for _, w := range rep.Warnings {
+		fmt.Fprintf(errOut, "ethos: %s\n", w)
+	}
 }
 
 // printEnableReport writes the per-step outcome to out and any warnings to

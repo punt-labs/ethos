@@ -40,6 +40,7 @@ func runDisable(cmd *cobra.Command) error {
 	}
 	rep, err := enable.Disable(repoRoot, disableForce)
 	if err != nil {
+		emitPartialReport(cmd, rep)
 		return err
 	}
 	if jsonOutput {
