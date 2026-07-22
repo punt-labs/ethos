@@ -1,0 +1,26 @@
+mission_id: m-2026-07-22-003
+status: closed
+type: test
+created_at: "2026-07-22T07:52:31Z"
+updated_at: "2026-07-22T18:11:31Z"
+closed_at: "2026-07-22T18:11:31Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-22T07:52:31Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - cmd/ethos internal install.sh hooks README.md AGENTS.md
+success_criteria:
+    - coverage does not decrease
+    - edge cases and error paths covered
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: Add tests for enable-disable in cmd/ethos internal install.sh hooks README.md AGENTS.md
+pipeline: standard-2026-07-22-5cc925
+depends_on:
+    - m-2026-07-22-002

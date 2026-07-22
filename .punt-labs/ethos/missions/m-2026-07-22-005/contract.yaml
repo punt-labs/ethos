@@ -1,0 +1,29 @@
+mission_id: m-2026-07-22-005
+status: closed
+type: design
+created_at: "2026-07-22T07:52:31Z"
+updated_at: "2026-07-22T19:39:54Z"
+closed_at: "2026-07-22T19:39:54Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-22T07:52:31Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - CHANGELOG.md
+    - README.md
+    - DESIGN.md
+success_criteria:
+    - CHANGELOG entry under [Unreleased]
+    - README reflects new commands/flags
+    - DESIGN.md has an ADR for non-trivial design decisions
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: Update user-facing documentation for enable-disable
+pipeline: standard-2026-07-22-5cc925
+depends_on:
+    - m-2026-07-22-004

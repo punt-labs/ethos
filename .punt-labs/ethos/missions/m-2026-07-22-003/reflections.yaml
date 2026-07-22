@@ -1,0 +1,23 @@
+reflections:
+    - round: 1
+      created_at: "2026-07-22T17:38:32Z"
+      author: claude
+      converging: true
+      signals:
+        - test stage delivered four groups (seal lifecycle end-to-end incl. the operator-ruled strand semantics, black-box CLI subprocess suite with parsed --json and exact exit codes, adversarial hosts, no-host-file semantics pin); no production bugs found; coverage held or rose (claudemd 86.2->89.0)
+        - 'rop REVISE on one blocker: the seal-lifecycle test flakes the -race gate under full-package load — root cause is the shared runCLI helper''s timeout branch (kill-then-read buffer race + 5s budget too tight under -race load); helper predates the stage but is ours to fix (no existing-issue excuse)'
+        - 'rop verified the test LOGIC is sound: real chunk counts, host sentinel, watermark genuinely crossed — no always-pass shapes; fixtures rooted in /tmp with isolated HOME'
+        - 'out-of-scope catch: TestMCP_ToolsList (internal/mcp) fails the same clean -race run with a load timeout — same class; round 2 investigates (fix if a timeout tune, bead if deeper)'
+      recommendation: continue
+      reason: 'One small fix round on the shared helper (wait-for-done before buffer reads, realistic budget), verified the way it was caught: two clean-cache full -race runs.'
+    - round: 2
+      created_at: "2026-07-22T18:08:12Z"
+      author: claude
+      converging: true
+      signals:
+        - 'round-2 fixes (fa9a864, two test files, 13 lines each) closed the -race blocker at its root per rop: Kill -> drain done (Wait returned) -> only then buffer reads, audited across every .String() in the file; budget 5s->30s fires only on genuine hangs'
+        - 'the internal/mcp flake was the same class (race-instrumented server starved under full-package load) and got the minimal correct fix: one named 30s RPC deadline const replacing three 5s literals; no kill-then-read shape in that transport'
+        - 'gate verified the way it was caught: clean-testcache full go test -race ./... twice, both green; diff scope confirmed to the two concerns'
+        - 'round-1 verification stands: seal-lifecycle logic sound (no always-pass shapes), exact exit codes, parsed --json, /tmp-rooted fixtures with isolated HOME, coverage held or rose'
+      recommendation: stop
+      reason: Test stage complete and evaluator-approved. Review stage (m-2026-07-22-004) runs the org Phase-5 local gate on the full branch diff.

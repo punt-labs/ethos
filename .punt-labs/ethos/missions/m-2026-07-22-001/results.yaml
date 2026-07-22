@@ -1,0 +1,45 @@
+results:
+    - mission: m-2026-07-22-001
+      round: 2
+      created_at: "2026-07-22T14:59:15Z"
+      author: claude
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs/enable-disable.md
+          added: 811
+          removed: 0
+      evidence:
+        - name: 'rop round-1 evaluation: full §2.3-§2.13 conformance walk, 1 REQ + 2 REC + 2 NIT (.tmp/missions/results/m-2026-07-22-001-eval-rop.md)'
+          status: pass
+        - name: 'rop round-2 re-verify: all five findings closed-not-narrowed, verdict APPROVE'
+          status: pass
+        - name: leader end-to-end review + six-decision operator gate (marker tracking, migration mode, worktree disable, gitlink, disable semantics, setup separation)
+          status: pass
+        - name: operator ratified/overruled all six (2026-07-22); amendment cf75786 verified against each ruling
+          status: pass
+        - name: make check green on every design commit (4c779f5, 990741d, cf75786)
+          status: pass
+      prose: |-
+        Deliverable: docs/enable-disable.md at cf75786 — the operator-ratified design
+        mapping punt-kit tool-enable-disable.md (§2.1-2.13) onto ethos. Three
+        packages (claudemd: §2.4 import-line writer ported from vox reference;
+        githook: Go port of the v4.1.1 install_hook chaining with all ten
+        protections + Unchain; enable: orchestration with the §7 two-file
+        vendored-manifest carve-out protecting repo-owned identities/teams/seal
+        data). Marker-gated embedded hooks; four-state doctor model
+        (enabled/dormant/absent/gated-but-unenabled WARN); install.sh reverts to
+        machine scope and delegates to `ethos enable`; shell chaining functions
+        deleted (drift precedent: ethos-2ol1).
+
+        Operator rulings recorded in the doc's rulings appendix: gitlink repos
+        error with vendor-first remedy (org clears submodules by hand first);
+        disable strands pending live lines (no final seal — re-enable picks them
+        up via the live-past-watermark union); setup and enable stay separate
+        (enable prints a setup hint); --purge deferred; SessionStart auto-migration
+        deleted in favor of by-hand convergence of the nine known interim repos at
+        rollout; worktree disable refuses when a sibling worktree is enabled,
+        --force overrides.
+
+        Leader note: result artifact submitted by the leader; the worker (mdm)
+        authored the design across three commits and both revision rounds.

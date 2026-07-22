@@ -1,0 +1,23 @@
+mission_id: m-2026-07-22-001
+status: closed
+type: design
+created_at: "2026-07-22T07:52:31Z"
+updated_at: "2026-07-22T14:59:22Z"
+closed_at: "2026-07-22T14:59:22Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-22T07:52:31Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - docs/enable-disable.md
+success_criteria:
+    - covers problem, chosen approach, rejected alternatives, migration plan
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: Produce the design document for enable-disable
+pipeline: standard-2026-07-22-5cc925

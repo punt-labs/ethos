@@ -1,0 +1,79 @@
+results:
+    - mission: m-2026-07-22-002
+      round: 2
+      created_at: "2026-07-22T16:55:01Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.95
+      files_changed: []
+      evidence:
+        - name: 'claudemd: table tests — LF/CRLF/lone-CR EOL, no-trailing-newline, terminator-insensitive idempotent, fenced(backtick+tilde,info-string)/indented exclusion, duplicate collapse, symlink write-through, mode preserve, 16-goroutine lock contention'
+          status: pass
+        - name: 'claudemd round 2: open-fence host errors + nothing written; closed fence appends top-level and is idempotent; trailing-whitespace host import recognized (no duplicate on Register, removed on Deregister)'
+          status: pass
+        - name: 'githook: ported shell suite (fresh/foreign/idempotent/interim-versioned/standalone/cat-append hybrid/exit-exec tail with fd exclusion/non-shell skip/unterminated abort/symlink/mktemp-fail) + Unchain round-trip restores host byte-for-byte, standalone removed, reduced host kept'
+          status: pass
+        - name: 'githook.HooksDir: git-first with core.hooksPath classification (inside-worktree/outside-repo warnings) and manual gitdir/commondir worktree fallback'
+          status: pass
+        - name: 'enable: four-artifact deposit, §7 manifest collision + bootstrap grandfather, marker-last (no marker on failed deposit), config-zone byte-identical, idempotent re-enable, interim convergence, gitlink guard (ethos-e29s), disable round-trip, strand-no-seal notice, worktree refuse+--force, embedded marker-gate runtime (seals when marked, inert+host-status-preserving when dormant)'
+          status: pass
+        - name: 'doctor CheckSealHook four-state: enabled FAIL/PASS, dormant PASS ''not enabled here'', gated-but-unenabled WARN; exit gates on AnyFailed so WARN is advisory; shares githook.HooksDir'
+          status: pass
+        - name: 'install.sh: shell chaining functions + per-repo hook steps deleted; delegates to `ethos enable` in a work tree; shellcheck -x clean'
+          status: pass
+        - name: make check green (go vet, staticcheck, shellcheck, markdownlint, go test -race -count=1, validate-content) at every commit; no suppressions
+          status: pass
+        - name: 'dogfood scratch clone: enable deposits 4 artifacts (host prose preserved) + chains both hooks; real commit fires the seal and lands; dormant hook does no ethos work; disable round-trips (guide dormant, host prose intact, standalone hooks removed); worktree refusal names sibling, --force overrides; doctor PASS ''not enabled here'' -> PASS ''chained seal section active'''
+          status: pass
+      prose: |-
+        files_changed intentionally empty: the contract's write_set is a single space-joined string (instantiate defect, bead ethos-t2lb), so the gate rejects all real paths; the authoritative change enumeration follows, authorized by the leader's round reflections.
+
+        Change enumeration (cumulative across rounds 1+2, cf75786..311c546; added/removed):
+          internal/claudemd/claudemd.go            +298 -0
+          internal/claudemd/claudemd_test.go       +338 -0
+          internal/githook/githook.go              +424 -0
+          internal/githook/resolver.go             +142 -0
+          internal/githook/githook_test.go         +528 -0
+          hooks/pre-commit.sh                       +10 -0
+          hooks/commit-msg.sh                        +9 -0
+          hooks/embed.go                            +20 -0
+          internal/enable/enable.go                +311 -0
+          internal/enable/deposit.go               +134 -0
+          internal/enable/guide/CLAUDE.md           +48 -0
+          internal/enable/enable_test.go           +355 -0
+          internal/enable/deposit_test.go           +68 -0
+          cmd/ethos/enable.go                        +68 -0
+          cmd/ethos/disable.go                       +50 -0
+          cmd/ethos/enable_test.go                  +113 -0
+          cmd/ethos/main.go                           +3 -1
+          internal/doctor/doctor.go                  +74 -108
+          internal/doctor/doctor_test.go             +75 -26
+          install.sh                                 +14 -224
+          README.md                                  +46 -4
+          AGENTS.md                                  +40 -0
+
+        ── Round 1 ──────────────────────────────────────────────────────────
+
+        Implemented `ethos enable` / `ethos disable` per docs/enable-disable.md at cf75786. Commits (each make-check-green with -race): 7486148 claudemd, 3a861f0 githook, 1523c87 hooks marker gate + embed, 78b0025 enable orchestration + guide, ef57ea9 cmd + doctor, ad09c85 install.sh + docs.
+
+        Three single-responsibility packages. internal/claudemd is the §2.4 import-line writer — exclusive flock keyed on the resolved path (not the target inode, so it survives the atomic rename), temp+rename in the target dir, byte-preserving host-EOL append, terminator-insensitive idempotent matching, fenced/indented code-block exclusion, symlink resolution, mode preservation; it ports the correctness of vox GlobalClaudeImports and adds the lock. internal/githook ports every install_hook protection into Chain and adds the Unchain inverse the shell never had (strip our section; remove a wholly-ours standalone; keep a reduced host — restoring a newline-terminated host byte-for-byte). internal/enable composes the two: gitlink guard (ethos-e29s), §7 vendored-manifest deposit with collision semantics and bootstrap grandfather, marker written LAST so a marker present implies a complete deposit, import line, hook chaining; disable refuses on an enabled sibling worktree (--force overrides), strands unsealed lines with a non-blocking notice, and runs no final seal.
+
+        The one shared resolver (githook.HooksDir) is used by githook, enable, and doctor; doctor's private gitHooksDir/gitHooksPath/samePath copies were deleted, keeping doctor's manual gitdir/commondir fallback (REC-2). doctor's CheckSealHook now keys on the §2.7 marker with the four-state model; the command's exit gates on the new AnyFailed helper so an advisory WARN (gated-but-unenabled) does not fail doctor. Both embedded hook scripts gained the §2.7 marker gate as the first executable step after the $? capture, resolving REPO_ROOT in-hook via git rev-parse --show-toplevel and exiting with the captured host status (never bare exit 0) when the marker is absent.
+
+        install.sh reverted to machine scope: the is_shell_hook / emit_section / write_marker_form / install_hook / resolve_hooks_dir functions and the per-repo commit-msg/pre-commit steps are deleted (224 lines removed), and it now delegates to `ethos enable` when run inside a work tree — one Go implementation, no shell copy to drift.
+
+        Write-set deviation (in-envelope): go:embed cannot traverse "..", so the root hooks/ scripts are embedded via a new hooks/embed.go (package hooks) rather than from internal/githook as the deliverable text literally read. Both hooks/ and internal/ are in the write-set; this keeps a single authoritative, shellcheck-linted copy and preserves the Makefile's `shellcheck hooks/*.sh`. githook stays pure (takes src bytes as a parameter); enable passes hooks.PreCommit / hooks.CommitMsg.
+
+        Dogfood (scratch clone under .tmp, not this repo): enable deposited the guide, .vendored-manifest, marker, and import line (host prose byte-preserved), chained both hooks, and printed the setup hint; a real commit invoked `ethos audit seal` and landed; with the marker removed the chained pre-commit did no ethos work (exit preserved host status); disable removed the import line and marker, unchained both standalone hooks, and left the guide dormant with host prose intact; the worktree refusal named the enabled sibling and --force proceeded; doctor reported "not enabled here" when disabled and "chained seal section active" when enabled.
+
+        ── Round 2 (rop REVISE: REQ-1 + REC-1) ──────────────────────────────
+
+        Commit 311c546 (make check green with -race), internal/claudemd only.
+
+        REQ-1 (blocking): a host CLAUDE.md ending inside an unterminated code fence is malformed — an appended import would land inside the open fence (dead, Claude Code ignores fenced imports) and never match on re-run, so enable would append duplicates forever. Register now detects an open (odd-count) fence at EOF via a new fenceOpenAtEOF scan and returns an error naming the condition ("<path> ends inside an unterminated code fence — close the fence and re-run"), writing nothing. It does not reposition user content; the user closes the fence and re-runs. Table cases: open-backtick-fence errors + file byte-unchanged; closed fence appends top-level and is idempotent.
+
+        REC-1: a hand-edited import line with trailing whitespace defeated the terminator-insensitive exact match, so enable appended a duplicate beside it. matchIndices now strips trailing spaces/tabs from the host line before comparing (both presence and removal), so such a line is recognized — no duplicate on enable, removed on disable. The written line stays exactly canonical. A code comment cites audit AC4/AC6 as the reason for this deliberate relaxation beyond §2.4's letter. One table case covers both directions.
+
+        NIT-1 (hooks/embed.go design-doc staleness) is the document stage's, not this mission's.
+
+        Cleanup note: an early round-1 CLI-test run (before its outside-repo fixture was switched to /tmp) created a temp dir under .tmp, which sits inside this repo, so FindRepoRoot resolved to the ethos repo and `enable` ran against it — leaving an import line in the root CLAUDE.md and enable artifacts under .punt-labs/ethos/. Reverted CLAUDE.md and moved the three artifacts to .tmp/contamination/; the working tree carries no enable artifacts. The fixture is fixed (uses /tmp) so it cannot recur.

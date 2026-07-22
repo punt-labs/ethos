@@ -1,0 +1,23 @@
+reflections:
+    - round: 1
+      created_at: "2026-07-22T16:33:23Z"
+      author: claude
+      converging: true
+      signals:
+        - 'worker delivered all eight deliverables in 7 make-check-green commits with a real dogfood; evaluator verified empirically (branch binary against throwaway repos): marker gate, round-trip, Chain/Unchain parity, resolver agreement, four doctor states, zone safety, gitlink guard, worktree refuse, install.sh deletion walk'
+        - 'REVISE on one REQ: the claudemd writer appends at EOF without consulting its own fence state — a host ending inside an unterminated fence gets a dead (code-block-excluded) import and non-idempotent duplicates on re-enable (breaks §2.3 upgrade-path, audit AC1/AC4); the design''s ''top-level by construction'' claim is false in that state'
+        - 'REC-1: trailing-whitespace hand-edit defeats the idempotent match (duplicate + AC4/AC6 trip); NIT-1: worker''s hooks/embed.go deviation judged sound, better factoring than the design text — doc sentence stale'
+        - contract defect (space-joined write_set from pipeline instantiate --var, bead ethos-t2lb) blocks the result gate; resolution deferred to close time via escalate-close-recreate
+      recommendation: continue
+      reason: 'One small, well-located fix round: writer errors on an open-fence host (boring, content-preserving) + trailing-whitespace-tolerant match, both with table cases. NIT-1''s design-doc sentence goes to the document stage.'
+    - round: 2
+      created_at: "2026-07-22T16:56:21Z"
+      author: claude
+      converging: true
+      signals:
+        - 'round-2 fixes (311c546, claudemd only) closed both findings empirically per rop: open-fence-at-EOF errors before any write (backtick and tilde hosts byte-unchanged), trailing-whitespace match survives the combined CRLF+trailing-spaces probe, no flock leak on the error return; make check green with -race'
+        - rop verdict APPROVE; sole remainder NIT-1 is doc-only (design text says githook embeds the hook scripts; the shipped pure-chainer + hooks/embed.go package is better factoring) — routed to the document stage (m-2026-07-22-005)
+        - 'result submitted via the out-of-band convention: files_changed empty with the authoritative 22-path enumeration in prose, because the contract write_set is a single space-joined string (pipeline instantiate defect, bead ethos-t2lb); leader reflections are the authorization record; worker executed as bwk under delegation-time stage reassignment, contract records mdm'
+        - worker self-reported and cleaned a test-fixture contamination (an early CLI test ran enable against this repo); evaluator independently verified the revert left no residue and the fixture now uses /tmp
+      recommendation: stop
+      reason: Implementation complete and evaluator-approved across two rounds. Test stage (m-2026-07-22-003) dispatches next; it inherits the same write_set defect, so the same out-of-band convention applies until ethos-t2lb is fixed.

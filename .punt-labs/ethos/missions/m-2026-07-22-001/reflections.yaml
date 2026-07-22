@@ -1,0 +1,23 @@
+reflections:
+    - round: 1
+      created_at: "2026-07-22T08:08:22Z"
+      author: claude
+      converging: true
+      signals:
+        - worker produced a 33KB conformance design; evaluator (rop) verified every §2.4 write-contract clause, the two-file vendored allowlist carve-out, and all ten v4.1.1 hook protections carried into the Go port
+        - 'verdict REVISE on one REQ: the §2.7 marker gate inside the embedded hook scripts is unspecified, and adding it collides with the v4.1.1-interim repos (hooks chained, marker absent) — they would silently stop sealing, regressing the DES-058 primary trigger'
+        - two RECs (drop speculative settings.json plumbing; unified resolver keeps doctor's git-less fallback) and two NITs (close §2.6 scope affirmatively; note ethos.yaml current-vs-planned)
+      recommendation: continue
+      reason: 'REQ-1 is cheap to settle in design and expensive in implementation. Direction to worker: hooks gain the marker gate; the ethos SessionStart hook performs §2.12 first-run migration (chained-hooks-but-no-marker → write marker, converging interim repos before the gate can suppress); doctor warns on the gated-but-unenabled state. Apply both RECs and both NITs.'
+    - round: 2
+      created_at: "2026-07-22T14:58:14Z"
+      author: claude
+      converging: true
+      signals:
+        - 'round-2 revision closed all five round-1 findings (rop: closed-not-narrowed); rop verdict APPROVE with two non-blocking carry-forwards (REC-3 worktree disable, NIT-3 marker-last invariant)'
+        - leader end-to-end review surfaced the tracked-marker implications and the migration-mode question; six decisions presented to the operator with recommendations per the mandatory gate
+        - 'operator ruled on all six (2026-07-22): gitlink=error+manual submodule clearing (org-internal), disable strands pending lines (seal-first OVERRULED), setup/enable fully separate with printed hint (setup-calls-enable OVERRULED), --purge deferred, SessionStart auto-migration DELETED in favor of by-hand convergence of the nine known interim repos, worktree disable refuses with --force override'
+        - amendment cf75786 folds in all six rulings + NIT-3; verified against each ruling by the leader; design is final at cf75786
+        - 'defect noted, non-blocking: the amendment commit trailer carries a stale mission/delegation ID from the worker session env (m-2026-05-25-003) — trailer hygiene, follow-up candidate'
+      recommendation: stop
+      reason: Design complete, evaluator-approved, operator-ratified, amendments verified. Implementation (m-2026-07-22-002) dispatches against cf75786.
