@@ -276,10 +276,24 @@ func endsWithTerminator(data []byte) bool {
 	return last == '\n' || last == '\r'
 }
 
-// isFence reports whether content is a fence delimiter: its first
-// non-whitespace characters are three or more backticks or tildes.
+// isFence reports whether content is a fence delimiter: after at most three
+// leading spaces (and no tab) it begins with three or more backticks or
+// tildes. Per tool-enable-disable §2.4, a line indented with a tab or four or
+// more spaces is an INDENTED CODE line, not a fence — so an indented ``` must
+// not be misread as opening a real fence (which would false-refuse a host
+// ending on such a line). Indentation precedence therefore lives here.
 func isFence(content string) bool {
-	t := strings.TrimLeft(content, " \t")
+	spaces := 0
+	for spaces < len(content) && content[spaces] == ' ' {
+		spaces++
+	}
+	if spaces > 3 {
+		return false // four or more leading spaces: indented code
+	}
+	t := content[spaces:]
+	if strings.HasPrefix(t, "\t") {
+		return false // a tab in the indent: indented code
+	}
 	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
 }
 

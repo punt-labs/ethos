@@ -190,6 +190,62 @@ func TestDeregisterErrorsOnOpenFence(t *testing.T) {
 	}
 }
 
+func TestIsFenceIndentationPrecedence(t *testing.T) {
+	// Per §2.4: 0–3 leading spaces (no tab) → fence; a tab or 4+ spaces →
+	// indented code, not a fence.
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{"```", true},
+		{"  ```", true},  // 2 spaces
+		{"   ```", true}, // 3 spaces
+		{"~~~", true},
+		{"    ```", false}, // 4 spaces → indented code
+		{"\t```", false},   // tab → indented code
+		{"  \t```", false}, // spaces then tab → indented code
+		{"text", false},
+	}
+	for _, c := range cases {
+		if got := isFence(c.line); got != c.want {
+			t.Errorf("isFence(%q) = %v, want %v", c.line, got, c.want)
+		}
+	}
+}
+
+func TestRegisterIndentedFenceIsNotAnOpenFence(t *testing.T) {
+	// A host ending with an indented ``` line (tab or 4 spaces) is indented
+	// code, not an open fence — Register must append, not false-refuse (E1).
+	for _, body := range []string{"text\n\t```\n", "text\n    ```\n"} {
+		p := fixture(t, "CLAUDE.md", body)
+		wrote, err := Register(p, canonical)
+		if err != nil {
+			t.Fatalf("Register(%q): unexpected refusal: %v", body, err)
+		}
+		if !wrote {
+			t.Errorf("Register(%q) did not append", body)
+		}
+		wrote, err = Register(p, canonical)
+		if err != nil || wrote {
+			t.Errorf("re-Register(%q): wrote=%v err=%v, want no duplicate", body, wrote, err)
+		}
+	}
+}
+
+func TestRegisterTwoSpaceFenceStillFences(t *testing.T) {
+	// A 2-space-indented fence is a real fence: a canonical line inside it is
+	// not matched, so Register appends a fresh top-level line.
+	body := "text\n  ```\n" + canonical + "\n  ```\n"
+	p := fixture(t, "CLAUDE.md", body)
+	wrote, err := Register(p, canonical)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if !wrote {
+		t.Error("Register treated a fenced line as a top-level match")
+	}
+}
+
 func TestRegisterClosedFenceAppendsAndIsIdempotent(t *testing.T) {
 	// A properly closed fence is not open at EOF: Register appends a
 	// top-level line and a re-run does not duplicate it.
