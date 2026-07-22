@@ -10,8 +10,6 @@
 package claudemd
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -145,15 +143,23 @@ func readIfExists(real string) ([]byte, error) {
 	return data, nil
 }
 
-// withLock runs fn while holding an exclusive lock keyed on real. The lock
-// lives on a stable sibling file in the temp dir, not on the target: an
-// atomic rename replaces the target's inode, so a lock held on the target's
-// own fd would not serialize two writers across the rename. Keying the lock
-// on the resolved path lets two concurrent Register calls (in-process
-// goroutines or separate processes) coordinate.
+// lockPathFor returns the sibling lock file for real: a dotfile in real's own
+// directory. It is deliberately NOT under os.TempDir(): this org sets TMPDIR
+// per-repo via direnv, so a temp-dir lock would put a direnv-shell writer and
+// an env-less writer (a hook, a daemon) on different lock files for the same
+// target — no exclusion, a lost update. Keying the lock on the target's own
+// directory is env-independent and on the same filesystem (§2.4 suggested
+// form). A lock held on this stable file survives the atomic rename that
+// replaces the target's own inode.
+func lockPathFor(real string) string {
+	return filepath.Join(filepath.Dir(real), "."+filepath.Base(real)+".lock")
+}
+
+// withLock runs fn while holding an exclusive lock on the sibling lock file
+// for real, so two concurrent Register/Deregister calls (in-process
+// goroutines or separate processes) coordinate regardless of TMPDIR.
 func withLock(real string, fn func() error) error {
-	sum := sha256.Sum256([]byte(real))
-	lockPath := filepath.Join(os.TempDir(), "ethos-claudemd-"+hex.EncodeToString(sum[:8])+".lock")
+	lockPath := lockPathFor(real)
 	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening lock %s: %w", lockPath, err)

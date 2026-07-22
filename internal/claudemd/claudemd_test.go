@@ -313,6 +313,22 @@ func TestModePreserved(t *testing.T) {
 	}
 }
 
+func TestLockPathIgnoresTMPDIR(t *testing.T) {
+	// The lock must live beside the target, not under TMPDIR — two writers on
+	// different TMPDIRs (direnv-shell vs env-less hook) must share one lock.
+	target := filepath.Join(t.TempDir(), "sub", "CLAUDE.md")
+	want := filepath.Join(filepath.Dir(target), ".CLAUDE.md.lock")
+
+	t.Setenv("TMPDIR", "/some/other/tmp")
+	if got := lockPathFor(target); got != want {
+		t.Errorf("lockPathFor = %q, want %q (TMPDIR must not influence it)", got, want)
+	}
+	t.Setenv("TMPDIR", "/a/different/tmp")
+	if got := lockPathFor(target); got != want {
+		t.Errorf("lockPathFor changed with TMPDIR: %q, want %q", got, want)
+	}
+}
+
 func TestLockContentionNoLostUpdate(t *testing.T) {
 	p := fixture(t, "CLAUDE.md", "host\n")
 	const n = 16
