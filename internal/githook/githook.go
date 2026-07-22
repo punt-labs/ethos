@@ -95,7 +95,7 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 	// interpreter, so appending a POSIX-sh section to a Python/Node/binary
 	// hook would break the host and never run the section. Leaving it
 	// untouched is better; doctor then FAILs on the missing seal.
-	if !isShellHook(data) {
+	if !textscan.IsShellHook(data) {
 		res.Warnings = append(res.Warnings, fmt.Sprintf(
 			"%s has a non-shell shebang — leaving it untouched; the ethos section was not chained in", destPath))
 		res.Action = "skipped-non-shell"
@@ -275,14 +275,24 @@ func stripSection(data []byte, tag, ident string) ([]byte, error) {
 				return nil, fmt.Errorf(
 					"%q section does not carry the ethos fingerprint %q — refusing to remove a region that is not an ethos-written section; fix it by hand", tag, ident)
 			}
-			i++
-			for i < len(lines) {
-				last := !mask[i] && strings.HasPrefix(textscan.StripTerminator(lines[i]), end)
-				i++
-				if last {
+			// Pair this BEGIN with the next END after it. Checking per-BEGIN
+			// (not file-global) is what catches a complete section followed by
+			// a truncated duplicate BEGIN: an unpaired BEGIN refuses rather
+			// than dropping from it to EOF (silent host-content deletion).
+			j := i + 1
+			paired := false
+			for j < len(lines) {
+				if !mask[j] && strings.HasPrefix(textscan.StripTerminator(lines[j]), end) {
+					paired = true
 					break
 				}
+				j++
 			}
+			if !paired {
+				return nil, fmt.Errorf(
+					"%q section has a BEGIN with no matching END — refusing to edit a truncated hook; fix it by hand", tag)
+			}
+			i = j + 1
 			continue
 		}
 		out = append(out, lines[i]...)
@@ -331,32 +341,6 @@ func isOurStandalone(data []byte, ident string) bool {
 		return false
 	}
 	return strings.Contains(textscan.StripTerminator(lines[1]), ident)
-}
-
-// isShellHook reports whether data's shebang names a shell-family
-// interpreter, or there is no shebang (git runs such a hook via sh).
-func isShellHook(data []byte) bool {
-	first := data
-	if i := bytes.IndexByte(data, '\n'); i >= 0 {
-		first = data[:i]
-	}
-	line := strings.TrimRight(string(first), "\r")
-	if !strings.HasPrefix(line, "#!") {
-		return true
-	}
-	fields := strings.Fields(line[2:])
-	if len(fields) == 0 {
-		return true
-	}
-	interp := filepath.Base(fields[0])
-	if interp == "env" && len(fields) > 1 {
-		interp = filepath.Base(fields[1])
-	}
-	switch interp {
-	case "sh", "bash", "dash", "ksh", "zsh", "mksh", "ash":
-		return true
-	}
-	return false
 }
 
 // isBareShebang reports whether data is only a shebang line and blank lines —
@@ -422,9 +406,17 @@ func warnTail(last string) string {
 }
 
 // writeExec writes data to a temp file in dest's own directory, renames it
-// over dest, and makes it executable. A temp-file failure aborts loudly.
+// over dest, and makes it executable. An existing hook's mode is preserved
+// (only the owner-exec bit is OR'd in if missing) so chaining never silently
+// widens a 0700 hook to 0755; a brand-new hook gets 0755. A temp-file failure
+// aborts loudly.
 func writeExec(dest string, data []byte) error {
 	dir := filepath.Dir(dest)
+	// Preserve an existing hook's mode; a new hook gets 0755.
+	mode := os.FileMode(0o755)
+	if fi, err := os.Stat(dest); err == nil {
+		mode = fi.Mode().Perm() | 0o100 // ensure owner-exec without widening
+	}
 	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dest)+".*")
 	if err != nil {
 		return fmt.Errorf("cannot create a temp file next to %s — hook not installed: %w", dest, err)
@@ -438,7 +430,7 @@ func writeExec(dest string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("closing %s: %w", name, err)
 	}
-	if err := os.Chmod(name, 0o755); err != nil {
+	if err := os.Chmod(name, mode); err != nil {
 		return fmt.Errorf("setting mode on %s: %w", name, err)
 	}
 	if err := os.Rename(name, dest); err != nil {

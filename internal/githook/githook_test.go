@@ -67,6 +67,12 @@ func TestChainFreshInstall(t *testing.T) {
 	if !isExec(t, dest) {
 		t.Error("hook not executable")
 	}
+	// A brand-new hook gets 0755.
+	if info, err := os.Stat(dest); err != nil {
+		t.Fatal(err)
+	} else if info.Mode().Perm() != 0o755 {
+		t.Errorf("new hook mode = %o, want 0755", info.Mode().Perm())
+	}
 	if !strings.HasPrefix(body, "#!/bin/sh\n") {
 		t.Error("first line is not a shebang")
 	}
@@ -78,6 +84,22 @@ func TestChainFreshInstall(t *testing.T) {
 	}
 	if !strings.Contains(body, "audit seal") {
 		t.Error("seal body missing")
+	}
+}
+
+func TestChainPreservesExistingHookMode(t *testing.T) {
+	// Chaining into an existing 0700 hook must not widen it to 0755 (C2).
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	if err := os.WriteFile(dest, []byte("#!/bin/sh\nrun_lint || exit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	chainPre(t, dest)
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Errorf("hook mode = %o, want 0700 (chaining must not widen it)", info.Mode().Perm())
 	}
 }
 
@@ -600,6 +622,30 @@ func TestChainBareArithmeticCommandHost(t *testing.T) {
 	}
 	if !strings.Contains(body, "(( flag = 1 << 2 ))") {
 		t.Error("bare arithmetic host line lost")
+	}
+}
+
+func TestChainRefusesTruncatedDuplicateAfterCompleteSection(t *testing.T) {
+	// A complete fingerprinted section, then a truncated duplicate BEGIN (no
+	// END after it) with host content below. File-global pairing passed the
+	// gate and stripSection dropped from the second BEGIN to EOF (silent host
+	// deletion). Per-BEGIN pairing must refuse, byte-unchanged (B1).
+	dest := filepath.Join(t.TempDir(), "pre-commit")
+	host := "#!/bin/sh\n" +
+		string(sectionBytes(tag, src)) +
+		"# --- BEGIN " + tag + " ---\n" +
+		"# " + ident + "\n" +
+		"precious host content below the truncated BEGIN\n"
+	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Chain(dest, src, tag, ident); err == nil {
+		t.Fatal("expected a refusal on a truncated duplicate BEGIN")
+	} else if !strings.Contains(err.Error(), "no matching END") {
+		t.Errorf("error = %q, want an unpaired-BEGIN refusal", err)
+	}
+	if got := read(t, dest); got != host {
+		t.Error("host content changed despite the refusal")
 	}
 }
 
