@@ -251,12 +251,19 @@ fi
 # git hooks — is `ethos enable`, which owns that logic in one place (no shell
 # copy to drift). When run inside a git work tree, delegate to the binary just
 # installed; skipped silently when not in a work tree (curl|sh from $HOME).
+# An enable failure here is fatal (the old installer's hook install was too):
+# doctor cannot be the backstop because a repo where enable never ran has no
+# marker and CheckSealHook returns PASS "not enabled here" by design — so a
+# green doctor after a failed enable would print "ready!" over a repo with no
+# seal hook, the exact silent-absence state this feature exists to prevent.
+ENABLE_FAILED=0
 if command -v git >/dev/null 2>&1 && git rev-parse --show-toplevel >/dev/null 2>&1; then
   info "Enabling ethos in this repo..."
   if "$INSTALL_DIR/$BINARY" enable; then
     ok "ethos enabled in this repo"
   else
-    warn "could not enable ethos here — run 'ethos enable' manually"
+    ENABLE_FAILED=1
+    warn "ethos enable failed in this repo (see the error above)"
   fi
 fi
 
@@ -264,10 +271,15 @@ fi
 
 info "Verifying installation..."
 printf '\n'
-if "$INSTALL_DIR/$BINARY" doctor; then
+if "$INSTALL_DIR/$BINARY" doctor && [ "$ENABLE_FAILED" = "0" ]; then
   printf '\n%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$BINARY" "$NC"
   printf 'Run "ethos setup" in your project directory to get started.\n'
   printf 'Restart Claude Code twice to activate the plugin.\n\n'
+elif [ "$ENABLE_FAILED" = "1" ]; then
+  printf '\n'
+  warn "ethos enable failed — the seal hook and import line were not installed"
+  printf 'Resolve the error above, then run "ethos enable" from the repo root.\n\n'
+  exit 1
 else
   printf '\n'
   warn "ethos installed but doctor found issues (see above)"
