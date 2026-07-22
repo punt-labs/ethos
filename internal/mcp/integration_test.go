@@ -22,6 +22,13 @@ import (
 
 var ethosBinary string
 
+// mcpRPCTimeout bounds each JSON-RPC round-trip to the spawned `ethos serve`
+// subprocess. Under a full `go test -race ./...` run the server binary is
+// race-instrumented and competes with ~20 other packages for CPU, so a 5s
+// deadline expired mid-handshake ("context deadline exceeded"). 30s only
+// elapses on a genuine hang; a healthy server answers in milliseconds.
+const mcpRPCTimeout = 30 * time.Second
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "ethos-mcp-integration-*")
 	if err != nil {
@@ -137,7 +144,7 @@ func startMCPClient(t *testing.T, env *mcpTestEnv) *client.Client {
 	require.NoError(t, err)
 	t.Cleanup(func() { c.Close() })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), mcpRPCTimeout)
 	defer cancel()
 	_, err = c.Initialize(ctx, mcplib.InitializeRequest{
 		Params: mcplib.InitializeParams{
@@ -155,7 +162,7 @@ func startMCPClient(t *testing.T, env *mcpTestEnv) *client.Client {
 // callTool is a helper that calls a tool and returns the result.
 func callTool(t *testing.T, c *client.Client, name string, args map[string]interface{}) *mcplib.CallToolResult {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), mcpRPCTimeout)
 	defer cancel()
 	result, err := c.CallTool(ctx, mcplib.CallToolRequest{
 		Params: mcplib.CallToolParams{
@@ -184,7 +191,7 @@ func TestMCP_ToolsList(t *testing.T) {
 	env := setupMCPTestEnv(t)
 	c := startMCPClient(t, env)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), mcpRPCTimeout)
 	defer cancel()
 	result, err := c.ListTools(ctx, mcplib.ListToolsRequest{})
 	require.NoError(t, err)

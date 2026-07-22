@@ -118,9 +118,16 @@ func runCLI(t *testing.T, se *cliSubprocessEnv, args ...string) (stdout, stderr 
 			t.Fatalf("ethos %v: unexpected error: %v", args, waitErr)
 		}
 		return outBuf.String(), errBuf.String(), 0
-	case <-time.After(5 * time.Second):
-		cmd.Process.Kill()
-		t.Fatalf("ethos %v hung — did not exit within 5 seconds\nstderr: %s", args, errBuf.String())
+	case <-time.After(30 * time.Second):
+		// Kill, then wait for cmd.Wait() to return before reading either
+		// buffer. The os/exec output-copy goroutine writes into errBuf until
+		// Wait completes; reading it while that goroutine is live is a data
+		// race the -race gate catches. 30s (up from 5s) only ever elapses on
+		// a genuine hang — a real-git-commit subprocess under full -race
+		// package load can legitimately approach the old 5s bound.
+		_ = cmd.Process.Kill()
+		<-done
+		t.Fatalf("ethos %v hung — did not exit within 30 seconds\nstderr: %s", args, errBuf.String())
 		return "", "", -1
 	}
 }
