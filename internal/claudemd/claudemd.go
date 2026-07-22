@@ -36,6 +36,14 @@ func Register(path, line string) (bool, error) {
 		if err != nil {
 			return err
 		}
+		// A host ending inside an unterminated fence is malformed: an appended
+		// import would land inside the open fence (dead — Claude Code ignores
+		// fenced imports) and never match on re-run, so enable would append
+		// duplicates forever. Error rather than repositioning the user's
+		// content; the user closes the fence and re-runs.
+		if fenceOpenAtEOF(data) {
+			return fmt.Errorf("%s ends inside an unterminated code fence — close the fence and re-run", real)
+		}
 		if len(matchIndices(data, line)) > 0 {
 			return nil
 		}
@@ -201,11 +209,28 @@ func matchIndices(data []byte, line string) []int {
 		if fenceOpen || isIndentedCode(content) {
 			continue
 		}
-		if content == line {
+		// Tolerate trailing whitespace on the host line: a hand-edited import
+		// with trailing spaces/tabs must still match, or enable appends a
+		// duplicate beside it (audit AC4) and disable leaves an ill-formed
+		// line behind (AC6). The written line stays exactly canonical.
+		if strings.TrimRight(content, " \t") == line {
 			out = append(out, i)
 		}
 	}
 	return out
+}
+
+// fenceOpenAtEOF reports whether data ends with an open (unterminated) code
+// fence — an odd number of fence delimiters. Such a host is malformed: an
+// appended top-level import would fall inside the open fence.
+func fenceOpenAtEOF(data []byte) bool {
+	open := false
+	for _, raw := range splitKeepEnds(data) {
+		if isFence(stripTerminator(raw)) {
+			open = !open
+		}
+	}
+	return open
 }
 
 // splitKeepEnds splits data into lines, each retaining its trailing

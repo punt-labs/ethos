@@ -141,6 +141,72 @@ func TestRegisterSkipsCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestRegisterErrorsOnOpenFence(t *testing.T) {
+	// A host ending inside an unterminated fence is malformed: Register must
+	// error and write nothing rather than append inside the open fence.
+	body := "text\n```sh\necho hi\n"
+	p := fixture(t, "CLAUDE.md", body)
+	wrote, err := Register(p, canonical)
+	if err == nil {
+		t.Fatal("Register accepted a host ending inside an open fence")
+	}
+	if wrote {
+		t.Error("Register reported a write despite the error")
+	}
+	if got := read(t, p); got != body {
+		t.Errorf("file changed on error: got %q, want %q", got, body)
+	}
+}
+
+func TestRegisterClosedFenceAppendsAndIsIdempotent(t *testing.T) {
+	// A properly closed fence is not open at EOF: Register appends a
+	// top-level line and a re-run does not duplicate it.
+	body := "text\n```sh\necho hi\n```\n"
+	p := fixture(t, "CLAUDE.md", body)
+	wrote, err := Register(p, canonical)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if !wrote {
+		t.Fatal("Register did not append past a closed fence")
+	}
+	want := body + canonical + "\n"
+	if got := read(t, p); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	wrote, err = Register(p, canonical)
+	if err != nil {
+		t.Fatalf("re-Register: %v", err)
+	}
+	if wrote {
+		t.Error("re-Register appended a duplicate")
+	}
+}
+
+func TestTrailingWhitespaceTolerantMatch(t *testing.T) {
+	// A hand-edited import line with trailing whitespace must be recognized:
+	// Register does not duplicate it, and Deregister removes it.
+	body := "top\n" + canonical + "   \n"
+	p := fixture(t, "CLAUDE.md", body)
+	wrote, err := Register(p, canonical)
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if wrote {
+		t.Error("Register appended a duplicate beside a trailing-whitespace line")
+	}
+	removed, err := Deregister(p, canonical)
+	if err != nil {
+		t.Fatalf("Deregister: %v", err)
+	}
+	if !removed {
+		t.Fatal("Deregister did not remove the trailing-whitespace line")
+	}
+	if got := read(t, p); got != "top\n" {
+		t.Errorf("got %q, want %q", got, "top\n")
+	}
+}
+
 func TestDeregisterRemovesTopLevelOnly(t *testing.T) {
 	body := "top\n" + canonical + "\n```\n" + canonical + "\n```\n"
 	p := fixture(t, "CLAUDE.md", body)
