@@ -1,0 +1,62 @@
+results:
+    - mission: m-2026-07-22-005
+      round: 1
+      created_at: "2026-07-22T19:38:33Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.9
+      files_changed: []
+      evidence:
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: markdownlint-cli2 CHANGELOG.md README.md DESIGN.md docs/enable-disable.md
+          status: pass
+        - name: git push origin feat/enable-disable (b4f069e..78bcefc)
+          status: pass
+      prose: |
+        ethos-t2lb convention: files_changed is declared [] because one edited
+        file (docs/enable-disable.md) is outside this mission's write_set
+        (CHANGELOG.md, README.md, DESIGN.md); the two design-doc fixes were
+        leader-authorized out-of-envelope. All changes are enumerated here in
+        prose instead. Commit 78bcefc on feat/enable-disable.
+
+        CHANGELOG.md (write_set) — added an ## [Unreleased] block: Added entry
+        for `ethos enable` / `ethos disable` (vendored guide, enabled marker,
+        import line, hook chaining moved into the binary, idempotent, setup hint,
+        non-destructive disable with worktree refuse + --force, strand-not-seal);
+        Changed entries for install.sh becoming machine-scope-only and delegating
+        to `ethos enable`, the embedded hooks gating on the marker, and doctor's
+        four-state marker-keyed seal check. No Fixed entry (feature branch).
+        User-facing, no implementation trivia.
+
+        README.md (write_set) — VERIFIED complete and current at b4f069e; no edit
+        needed. The enable/disable section (verbs, three states + WARN, marker
+        gate, install.sh delegation, worktree refuse + --force, strand-on-disable,
+        setup separation) already reflects the ratified design. The quick-start
+        carries no stale "installer chains hooks" language. No CHANGELOG
+        duplication introduced.
+
+        DESIGN.md (write_set) — added DES-059 (next number after DES-058), SETTLED,
+        summarizing the enable/disable decision: three-package layout, the §7
+        two-file Vendored-zone allowlist + collision carve-out, marker-last
+        invariant, marker-gated hooks, four-state doctor check, strand-on-disable,
+        worktree refuse, install.sh delegation, by-hand migration, setup
+        separation. Six rejected alternatives (install.sh-owned enablement, managed
+        CLAUDE.md sections, hooks-only verb, dual shell/Go implementations,
+        SessionStart auto-migration, disable-seals-first). Cites
+        docs/enable-disable.md as the full design and operator-rulings appendix.
+
+        docs/enable-disable.md (OUT-OF-ENVELOPE, leader-authorized) — two staleness
+        fixes: (a) corrected the package-layout table: internal/githook is a pure
+        chainer receiving script bytes as `src`; the go:embed of pre-commit.sh /
+        commit-msg.sh lives in a separate `hooks` package (hooks/embed.go:
+        hooks.PreCommit, hooks.CommitMsg) beside the shellcheck-linted scripts so
+        one authoritative copy serves both the shell test suite and the Go chainer
+        (embed cannot reach above its package dir) — verified against the shipped
+        tree (rop NIT-1). (b) added the textscan freeze ruling (ethos-kcbv) to the
+        hook-chaining contract: the lexical recognizer's scope is frozen at
+        fences/here-docs/arithmetic spans, corners outside that set are handled by
+        refuse-on-ambiguity, and the two exits are the fingerprint guard (line-2
+        IDENT / unambiguous shell host) plus execution-based verification (doctor
+        confirms the seal is present and reachable in a shell hook, not just a text
+        match).

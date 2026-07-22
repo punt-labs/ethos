@@ -1,0 +1,25 @@
+mission_id: m-2026-07-22-004
+status: closed
+type: report
+created_at: "2026-07-22T07:52:31Z"
+updated_at: "2026-07-22T19:32:45Z"
+closed_at: "2026-07-22T19:32:45Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-22T07:52:31Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - .tmp/review-enable-disable.md
+success_criteria:
+    - findings reported with severity and file:line references
+budget:
+    rounds: 1
+    reflection_after_each: true
+current_round: 1
+context: Review the enable-disable change end-to-end
+pipeline: standard-2026-07-22-5cc925
+depends_on:
+    - m-2026-07-22-003
