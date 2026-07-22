@@ -50,8 +50,9 @@ func TestResultPassed(t *testing.T) {
 		want   bool
 	}{
 		{"PASS", true},
+		{"WARN", true}, // advisory — not a failure
 		{"FAIL", false},
-		{"", false},
+		{"", true}, // only FAIL is a failure
 	}
 	for _, tc := range cases {
 		t.Run(tc.status, func(t *testing.T) {

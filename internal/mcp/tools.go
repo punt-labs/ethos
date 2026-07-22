@@ -513,6 +513,9 @@ func (h *Handler) handleDoctor(_ context.Context, _ mcplib.CallToolRequest) (*mc
 	}
 
 	summary := fmt.Sprintf("%d checks, %d passed", len(results), doctor.PassedCount(results))
+	if w := doctor.WarnCount(results); w > 0 {
+		summary += fmt.Sprintf(", %d warning(s)", w)
+	}
 	table := hook.FormatTable(headers, rows)
 	return mcplib.NewToolResultText(summary + "\n\n" + table), nil
 }

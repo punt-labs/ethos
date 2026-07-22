@@ -5,7 +5,6 @@ package doctor
 import (
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -26,9 +25,13 @@ type Result struct {
 	Detail string `json:"detail"`
 }
 
-// Passed returns true when the check did not fail.
+// Passed reports whether the check did not fail. There are three statuses:
+// PASS and WARN both count as passed (WARN is advisory — the gated-but-
+// unenabled state), FAIL does not. Only AnyFailed gates a non-zero exit;
+// callers that want to surface WARN distinctly must read Status, which
+// renders verbatim in the CLI table and the MCP summary.
 func (r Result) Passed() bool {
-	return r.Status == "PASS"
+	return r.Status != "FAIL"
 }
 
 // RunAll executes every standard health check and returns the results.
@@ -78,6 +81,18 @@ func AnyFailed(results []Result) bool {
 		}
 	}
 	return false
+}
+
+// WarnCount returns the number of advisory WARN results, so a summary can
+// surface them distinctly rather than folding them into "passed".
+func WarnCount(results []Result) int {
+	n := 0
+	for _, r := range results {
+		if r.Status == "WARN" {
+			n++
+		}
+	}
+	return n
 }
 
 // PassedCount returns the number of passed results.
@@ -212,7 +227,7 @@ func CheckSealHook(repoRoot string) Result {
 		}
 		return Result{Name: name, Status: "FAIL", Detail: "enabled here but the seal hook is not chained" + remedy}
 	}
-	if !isShellHook(body) {
+	if !textscan.IsShellHook([]byte(body)) {
 		return Result{Name: name, Status: "FAIL", Detail: "seal call present but the hook's shebang is not a shell — git runs it under another interpreter" + remedy}
 	}
 	if info.Mode().Perm()&0o111 == 0 {
@@ -278,34 +293,6 @@ func stripInlineComment(line string) string {
 		}
 	}
 	return line
-}
-
-// isShellHook reports whether the hook body's shebang names a shell-family
-// interpreter, or there is no shebang (git runs such a hook via sh). A
-// non-shell shebang (Python/Node/binary) means a pasted shell seal call
-// cannot run.
-func isShellHook(body string) bool {
-	first := body
-	if nl := strings.IndexByte(body, '\n'); nl >= 0 {
-		first = body[:nl]
-	}
-	first = strings.TrimRight(first, "\r")
-	if !strings.HasPrefix(first, "#!") {
-		return true
-	}
-	fields := strings.Fields(first[2:])
-	if len(fields) == 0 {
-		return true
-	}
-	interp := path.Base(fields[0])
-	if interp == "env" && len(fields) > 1 {
-		interp = path.Base(fields[1])
-	}
-	switch interp {
-	case "sh", "bash", "dash", "ksh", "zsh", "mksh", "ash":
-		return true
-	}
-	return false
 }
 
 // CheckIdentityDir verifies the identity directory exists.
