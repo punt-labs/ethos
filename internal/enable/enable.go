@@ -9,6 +9,7 @@ package enable
 
 import (
 	_ "embed"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -274,6 +275,12 @@ func configStatus(repoRoot string) (hint, warning string) {
 func enabledSiblingWorktrees(repoRoot string) ([]string, error) {
 	out, err := exec.Command("git", "-C", repoRoot, "worktree", "list", "--porcelain").Output()
 	if err != nil {
+		// Surface git's own diagnostic (dubious ownership, not a repo, …)
+		// rather than a bare "exit status 128".
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("git worktree list: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
 		return nil, fmt.Errorf("git worktree list: %w", err)
 	}
 	var enabled []string
