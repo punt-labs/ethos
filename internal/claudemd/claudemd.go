@@ -78,6 +78,14 @@ func Deregister(path, line string) (bool, error) {
 		if err != nil {
 			return err
 		}
+		// A host ending inside an unterminated fence is malformed: the import
+		// line would be classified fenced and go unmatched, so Deregister would
+		// report "already absent" and leave the line behind — breaking the
+		// enabled⟺import biconditional (§2.11). Error rather than half-remove,
+		// symmetric with Register.
+		if fenceOpenAtEOF(data) {
+			return fmt.Errorf("%s ends inside an unterminated code fence — close the fence and re-run", real)
+		}
 		idx := matchIndices(data, line)
 		if len(idx) == 0 {
 			return nil

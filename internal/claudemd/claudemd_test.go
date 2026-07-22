@@ -172,6 +172,24 @@ func TestRegisterErrorsOnOpenFence(t *testing.T) {
 	}
 }
 
+func TestDeregisterErrorsOnOpenFence(t *testing.T) {
+	// A real import line sitting after an unterminated fence opener would be
+	// classified fenced. Deregister must error and write nothing rather than
+	// report "already absent" and leave the line behind (D1).
+	body := "text\n```sh\n" + canonical + "\n"
+	p := fixture(t, "CLAUDE.md", body)
+	wrote, err := Deregister(p, canonical)
+	if err == nil {
+		t.Fatal("Deregister accepted a host ending inside an open fence")
+	}
+	if wrote {
+		t.Error("Deregister reported a write despite the error")
+	}
+	if got := read(t, p); got != body {
+		t.Errorf("file changed on error: got %q, want %q", got, body)
+	}
+}
+
 func TestRegisterClosedFenceAppendsAndIsIdempotent(t *testing.T) {
 	// A properly closed fence is not open at EOF: Register appends a
 	// top-level line and a re-run does not duplicate it.
