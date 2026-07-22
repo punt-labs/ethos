@@ -10,7 +10,6 @@
 package claudemd
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -18,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/textscan"
 	"golang.org/x/sys/unix"
 )
 
@@ -47,7 +47,7 @@ func Register(path, line string) (bool, error) {
 		if len(matchIndices(data, line)) > 0 {
 			return nil
 		}
-		eol := detectEOL(data)
+		eol := textscan.DetectEOL(data)
 		out := make([]byte, 0, len(data)+len(line)+2*len(eol))
 		out = append(out, data...)
 		if len(data) > 0 && !endsWithTerminator(data) {
@@ -87,7 +87,7 @@ func Deregister(path, line string) (bool, error) {
 		for _, i := range idx {
 			drop[i] = true
 		}
-		lines := splitKeepEnds(data)
+		lines := textscan.SplitKeepEnds(data)
 		out := make([]byte, 0, len(data))
 		for i, l := range lines {
 			if drop[i] {
@@ -197,11 +197,11 @@ func writeAtomic(real string, data []byte, mode os.FileMode) error {
 // that equal line net of their terminator and sit at the markdown top level
 // (not inside a fenced or indented code block).
 func matchIndices(data []byte, line string) []int {
-	lines := splitKeepEnds(data)
+	lines := textscan.SplitKeepEnds(data)
 	var out []int
 	fenceOpen := false
 	for i, raw := range lines {
-		content := stripTerminator(raw)
+		content := textscan.StripTerminator(raw)
 		if isFence(content) {
 			fenceOpen = !fenceOpen
 			continue
@@ -225,54 +225,12 @@ func matchIndices(data []byte, line string) []int {
 // appended top-level import would fall inside the open fence.
 func fenceOpenAtEOF(data []byte) bool {
 	open := false
-	for _, raw := range splitKeepEnds(data) {
-		if isFence(stripTerminator(raw)) {
+	for _, raw := range textscan.SplitKeepEnds(data) {
+		if isFence(textscan.StripTerminator(raw)) {
 			open = !open
 		}
 	}
 	return open
-}
-
-// splitKeepEnds splits data into lines, each retaining its trailing
-// terminator (\n, \r\n, or \r). A final line without a terminator is kept
-// as-is. Concatenating the result reproduces data byte-for-byte.
-func splitKeepEnds(data []byte) []string {
-	var lines []string
-	for i := 0; i < len(data); {
-		j := i
-		for j < len(data) && data[j] != '\n' && data[j] != '\r' {
-			j++
-		}
-		if j < len(data) {
-			if data[j] == '\r' && j+1 < len(data) && data[j+1] == '\n' {
-				j += 2
-			} else {
-				j++
-			}
-		}
-		lines = append(lines, string(data[i:j]))
-		i = j
-	}
-	return lines
-}
-
-// stripTerminator drops a single trailing \n, \r\n, or \r.
-func stripTerminator(s string) string {
-	s = strings.TrimSuffix(s, "\n")
-	return strings.TrimSuffix(s, "\r")
-}
-
-// detectEOL returns the host file's EOL convention: CRLF if any \r\n is
-// present, else lone CR if any \r, else LF (also the default for an empty
-// or new file).
-func detectEOL(data []byte) []byte {
-	if bytes.Contains(data, []byte("\r\n")) {
-		return []byte("\r\n")
-	}
-	if bytes.IndexByte(data, '\r') >= 0 {
-		return []byte("\r")
-	}
-	return []byte("\n")
 }
 
 // endsWithTerminator reports whether data's last byte is a line terminator.
