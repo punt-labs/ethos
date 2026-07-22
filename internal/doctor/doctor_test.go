@@ -52,7 +52,8 @@ func TestResultPassed(t *testing.T) {
 		{"PASS", true},
 		{"WARN", true}, // advisory — not a failure
 		{"FAIL", false},
-		{"", true}, // only FAIL is a failure
+		{"", false},    // unknown status is not "passed"
+		{"PAS", false}, // a typo must not read as passed
 	}
 	for _, tc := range cases {
 		t.Run(tc.status, func(t *testing.T) {

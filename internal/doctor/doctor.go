@@ -25,13 +25,15 @@ type Result struct {
 	Detail string `json:"detail"`
 }
 
-// Passed reports whether the check did not fail. There are three statuses:
-// PASS and WARN both count as passed (WARN is advisory — the gated-but-
-// unenabled state), FAIL does not. Only AnyFailed gates a non-zero exit;
-// callers that want to surface WARN distinctly must read Status, which
-// renders verbatim in the CLI table and the MCP summary.
+// Passed reports whether the check did not fail. It is explicit about the
+// three valid statuses: PASS and WARN return true (WARN is advisory — the
+// gated-but-unenabled state), FAIL returns false. Any other value (empty or a
+// typo like "PAS") returns false, so a malformed status surfaces as a failure
+// in summaries rather than being silently counted as passed. Only AnyFailed
+// gates a non-zero exit; callers that want to surface WARN distinctly read
+// Status, which renders verbatim in the CLI table and the MCP summary.
 func (r Result) Passed() bool {
-	return r.Status != "FAIL"
+	return r.Status == "PASS" || r.Status == "WARN"
 }
 
 // RunAll executes every standard health check and returns the results.
