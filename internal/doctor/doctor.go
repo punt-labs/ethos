@@ -163,7 +163,16 @@ func CheckSealHook(repoRoot string) Result {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
-	markerPresent := fileExists(filepath.Join(repoRoot, ".punt-labs", "ethos", "enabled"))
+	// A marker stat error that is not "does not exist" must not collapse to
+	// "not enabled" — a doubly-broken repo (unreadable .punt-labs/ethos plus a
+	// lost hook) would then read PASS while commits flow unsealed. Surface it
+	// as a FAIL instead of guessing dormancy (S4).
+	markerPresent := false
+	if _, err := os.Stat(filepath.Join(repoRoot, ".punt-labs", "ethos", "enabled")); err == nil {
+		markerPresent = true
+	} else if !os.IsNotExist(err) {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot determine enablement here: %v", err)}
+	}
 	dir, _ := githook.HooksDir(repoRoot)
 	hook := filepath.Join(dir, "pre-commit")
 
@@ -213,12 +222,6 @@ func CheckSealHook(repoRoot string) Result {
 		return Result{Name: name, Status: "PASS", Detail: "chained seal section active"}
 	}
 	return Result{Name: name, Status: "PASS", Detail: "standalone seal hook active"}
-}
-
-// fileExists reports whether path exists.
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 // sealInvocation matches an `audit seal` call in command position: the ethos

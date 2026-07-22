@@ -283,6 +283,24 @@ func TestCheckSealHook(t *testing.T) {
 		assert.Contains(t, r.Detail, "ethos enable")
 	})
 
+	t.Run("marker stat error is not read as disabled → FAIL", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses directory permissions")
+		}
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+		zone := filepath.Join(dir, ".punt-labs", "ethos")
+		require.NoError(t, os.MkdirAll(zone, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(zone, "enabled"), nil, 0o644))
+		// Strip permissions on the zone so stat of the marker fails with a
+		// permission error rather than IsNotExist.
+		require.NoError(t, os.Chmod(zone, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(zone, 0o755) })
+		r := CheckSealHook(dir)
+		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "cannot determine enablement")
+	})
+
 	// --- Enabled: seal-call detection (marker present) ---
 
 	t.Run("standalone seal hook", func(t *testing.T) {
