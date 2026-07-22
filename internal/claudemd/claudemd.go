@@ -18,7 +18,6 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/textscan"
-	"golang.org/x/sys/unix"
 )
 
 // Register appends line to the CLAUDE.md at path when no top-level,
@@ -186,10 +185,10 @@ func withLock(real string, fn func() error) error {
 		return fmt.Errorf("opening lock %s: %w", lockPath, err)
 	}
 	defer func() { _ = f.Close() }()
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+	if err := flock(f); err != nil {
 		return fmt.Errorf("locking %s: %w", lockPath, err)
 	}
-	defer func() { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }()
+	defer func() { _ = funlock(f) }()
 	return fn()
 }
 
