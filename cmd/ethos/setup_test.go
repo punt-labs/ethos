@@ -407,31 +407,51 @@ func TestEnsureTeamKey(t *testing.T) {
 		repo := t.TempDir()
 		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\n")
 		var buf bytes.Buffer
-		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", ""))
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "", false))
 		assert.Contains(t, buf.String(), `repaired: team "foundation"`)
 		team, err := resolve.ResolveTeam(repo)
 		require.NoError(t, err)
 		assert.Equal(t, "foundation", team)
 	})
 
-	t.Run("mismatch warns without touching", func(t *testing.T) {
+	t.Run("custom-team mismatch: single-direction warning, untouched", func(t *testing.T) {
 		repo := t.TempDir()
 		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: custom-team\n")
 		var buf bytes.Buffer
-		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "custom-team"))
+		// team is not a known bundle → offer only the align-to-active remedy.
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "custom-team", false))
 		assert.Contains(t, buf.String(), "warning:")
 		assert.Contains(t, buf.String(), `team "custom-team"`)
 		assert.Contains(t, buf.String(), `active bundle "foundation"`)
+		assert.Contains(t, buf.String(), `ethos team activate foundation`)
+		assert.NotContains(t, buf.String(), "complete a switch",
+			"a custom team is not a half-switch — no second direction")
 		team, err := resolve.ResolveTeam(repo)
 		require.NoError(t, err)
 		assert.Equal(t, "custom-team", team, "a divergent team key must not be overwritten")
+	})
+
+	t.Run("known-bundle mismatch: two-direction warning, untouched", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: gstack\n")
+		var buf bytes.Buffer
+		// team names a known bundle → may be a half-finished switch; offer both.
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "gstack", true))
+		out := buf.String()
+		assert.Contains(t, out, "warning:")
+		assert.Contains(t, out, `ethos team activate foundation`, "align-to-active remedy")
+		assert.Contains(t, out, `ethos team activate gstack`, "complete-the-switch remedy")
+		assert.Contains(t, out, "complete a switch")
+		team, err := resolve.ResolveTeam(repo)
+		require.NoError(t, err)
+		assert.Equal(t, "gstack", team, "a divergent team key must not be overwritten")
 	})
 
 	t.Run("match is a no-op", func(t *testing.T) {
 		repo := t.TempDir()
 		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: foundation\n")
 		var buf bytes.Buffer
-		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "foundation"))
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "foundation", false))
 		assert.Empty(t, buf.String(), "a matching team key produces no output")
 	})
 }

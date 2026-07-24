@@ -256,18 +256,19 @@ func runSetup(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("setup: reading team: %w", err)
 	}
+	teamNamesBundle := bundleNameExists(bundles, team)
 	switch {
 	case current != "" && !cmd.Flags().Changed("bundle"):
 		fmt.Fprintf(errw, "skipped: bundle %q already active (use --bundle to switch)\n", current)
 		result.Skipped = append(result.Skipped, "bundle")
 		cfg.Bundle = current
-		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team); err != nil {
+		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
 			return err
 		}
 	case current == cfg.Bundle:
 		fmt.Fprintf(errw, "skipped: bundle %q already active\n", cfg.Bundle)
 		result.Skipped = append(result.Skipped, "bundle")
-		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team); err != nil {
+		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
 			return err
 		}
 	default:
@@ -449,8 +450,15 @@ func mergeRepoConfig(repoRoot string) error {
 // injects no team context with no other signal. A team key that merely
 // DIFFERS from the active bundle is left untouched: no schema requires
 // team == active_bundle, so a repo-local team may diverge deliberately. A
-// mismatch is surfaced as a warning naming both values, not overwritten.
-func ensureTeamKey(errw io.Writer, repoRoot, bundle, currentTeam string) error {
+// mismatch is surfaced as a warning, not overwritten.
+//
+// teamNamesBundle reports whether the divergent team value is itself a known
+// bundle. If so, the divergence may be a half-finished switch (team-first
+// ordering leaves team=NEW / active_bundle=OLD after an interrupted switch),
+// and setup cannot know the intended direction — so the warning offers both
+// remedies. Otherwise (a custom team) it offers the single align-to-active
+// remedy.
+func ensureTeamKey(errw io.Writer, repoRoot, bundle, currentTeam string, teamNamesBundle bool) error {
 	switch {
 	case bundle == "" || currentTeam == bundle:
 		return nil
@@ -459,11 +467,30 @@ func ensureTeamKey(errw io.Writer, repoRoot, bundle, currentTeam string) error {
 			return fmt.Errorf("setup: repairing team key: %w", err)
 		}
 		fmt.Fprintf(errw, "repaired: team %q (was missing)\n", bundle)
+	case teamNamesBundle:
+		fmt.Fprintf(errw, "ethos: warning: team %q differs from active bundle %q — run \"ethos team activate %s\" to align to the active bundle, or \"ethos team activate %s\" to complete a switch to it\n",
+			currentTeam, bundle, bundle, currentTeam)
 	default:
 		fmt.Fprintf(errw, "ethos: warning: team %q differs from active bundle %q — if this is unintended, run \"ethos team activate %s\"\n",
 			currentTeam, bundle, bundle)
 	}
 	return nil
+}
+
+// bundleNameExists reports whether name matches a non-legacy bundle.
+func bundleNameExists(bundles []bundle.Bundle, name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := range bundles {
+		if bundles[i].Source == bundle.SourceLegacy {
+			continue
+		}
+		if bundles[i].Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // setupSaveError translates a Store.Save failure into an actionable
