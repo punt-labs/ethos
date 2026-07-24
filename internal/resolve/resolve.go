@@ -101,22 +101,45 @@ type sessionPersona struct {
 	found  bool   // true if a session participant was found
 }
 
-// resolveFromSession uses FindClaudePID to locate the session via the
-// PID-keyed current file, then returns the caller's persona from the
-// roster. Returns found=false if no session or no matching participant.
-// Returns found=true with empty handle if the participant exists but
-// has no persona configured — callers must not fall through to git/OS.
-func resolveFromSession(ss *session.Store) sessionPersona {
-	pid := process.FindClaudePID()
-	sessionID, err := ss.ReadCurrentSession(pid)
+// SessionID resolves the active session ID using the harness-neutral
+// chain: ETHOS_SESSION, then the Claude process-tree current-pointer. It
+// returns ("", false) when neither yields one. Callers that accept an
+// explicit session (a --session flag or an MCP session_id arg) check that
+// first and bypass this; SessionID covers the env + walk steps every
+// consumer shares (DES-061).
+func SessionID(ss *session.Store) (string, bool) {
+	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
+		return sid, true
+	}
+	sid, err := ss.ReadCurrentSession(process.FindClaudePID())
 	if err != nil {
+		return "", false
+	}
+	return sid, true
+}
+
+// resolveFromSession resolves the session via the harness-neutral chain
+// (ETHOS_SESSION, then the Claude PID walk), then returns the caller's
+// persona from the roster. The caller's participant is keyed on
+// ETHOS_AGENT_ID when set — matching how iam records it on both the CLI
+// and MCP surfaces — else on the Claude PID. Returns found=false if no
+// session or no matching participant. Returns found=true with empty handle
+// if the participant exists but has no persona configured — callers must
+// not fall through to git/OS.
+func resolveFromSession(ss *session.Store) sessionPersona {
+	sessionID, ok := SessionID(ss)
+	if !ok {
 		return sessionPersona{}
 	}
 	roster, err := ss.Load(sessionID)
 	if err != nil {
 		return sessionPersona{}
 	}
-	p := roster.FindParticipant(pid)
+	agentID := os.Getenv("ETHOS_AGENT_ID")
+	if agentID == "" {
+		agentID = process.FindClaudePID()
+	}
+	p := roster.FindParticipant(agentID)
 	if p == nil {
 		return sessionPersona{}
 	}
