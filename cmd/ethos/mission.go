@@ -59,10 +59,7 @@ func missionStore() *mission.Store {
 // created" — or, for a read, "the mission is gone" (ethos-yofr). Called from
 // both mission store constructors so every subcommand, read and mutator
 // alike, warns rather than degrading silently (SFH F3); each single-shot CLI
-// command builds one store, so it warns at most once. WarnOnce dedupes
-// against the shared resolution-diagnostics set so a command that builds the
-// store more than once (missionStore plus missionStoreForCreate) still
-// prints this a single time.
+// command builds one store, so it warns at most once.
 func warnIfGlobalFallback(repoRoot string) {
 	if repoRoot != "" {
 		return
@@ -71,11 +68,11 @@ func warnIfGlobalFallback(repoRoot string) {
 	if home, err := os.UserHomeDir(); err == nil {
 		root = filepath.Join(home, ".punt-labs", "ethos")
 	}
-	resolve.WarnOnce(fmt.Sprintf(
+	fmt.Fprintf(os.Stderr,
 		"ethos: no git repository found for the current directory; operating on "+
 			"the global mission store at %s. Missions here are not visible from any "+
-			"repo checkout — set ETHOS_REPO_ROOT to force a repo store.",
-		root))
+			"repo checkout — set ETHOS_REPO_ROOT to force a repo store.\n",
+		root)
 }
 
 // currentSessionIDBestEffort resolves the current session id from

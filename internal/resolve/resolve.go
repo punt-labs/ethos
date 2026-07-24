@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
@@ -18,29 +17,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
-
-var (
-	warnedMu   sync.Mutex
-	warnedSeen = map[string]bool{}
-)
-
-// WarnOnce writes msg to stderr at most once per process, keyed on the
-// message text. Store-root resolution runs several times per command
-// (identity, bundle, mission, archetype), so a bad override, a genuine
-// resolution error, or a global-store fallback would otherwise repeat the
-// same line 2-4x. Loud means once, not spammy. Distinct roots produce
-// distinct messages and so each still warns. Shared with cmd/ethos so the
-// override refusal, the worktree-resolution warnings, and the mission
-// global-fallback warning all dedupe against one set.
-func WarnOnce(msg string) {
-	warnedMu.Lock()
-	defer warnedMu.Unlock()
-	if warnedSeen[msg] {
-		return
-	}
-	warnedSeen[msg] = true
-	fmt.Fprintln(os.Stderr, msg)
-}
 
 // RepoConfig holds the repo-local ethos configuration.
 //
@@ -337,14 +313,14 @@ func repoRootOverride(requireStore bool) (root string, set bool) {
 		return "", false
 	}
 	if info, err := os.Stat(v); err != nil || !info.IsDir() {
-		WarnOnce(fmt.Sprintf("ethos: ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it", v))
+		fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it\n", v)
 		return "", true
 	}
 	if requireStore {
 		store := filepath.Join(v, ".punt-labs", "ethos")
 		if info, err := os.Stat(store); err != nil || !info.IsDir() {
-			WarnOnce(fmt.Sprintf("ethos: ETHOS_REPO_ROOT=%q has no %s store; refusing to use it",
-				v, filepath.Join(".punt-labs", "ethos")))
+			fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q has no %s store; refusing to use it\n",
+				v, filepath.Join(".punt-labs", "ethos"))
 			return "", true
 		}
 	}
@@ -497,12 +473,12 @@ func manualStoreRoot(worktree string) string {
 	dotgit := filepath.Join(worktree, ".git")
 	data, err := os.ReadFile(dotgit)
 	if err != nil {
-		WarnOnce(fmt.Sprintf("ethos: warning: cannot read %s (%v); using the worktree store at %s", dotgit, err, worktree))
+		fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", dotgit, err, worktree)
 		return worktree
 	}
 	gd := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
 	if gd == "" {
-		WarnOnce(fmt.Sprintf("ethos: warning: %s has no gitdir pointer; using the worktree store at %s", dotgit, worktree))
+		fmt.Fprintf(os.Stderr, "ethos: warning: %s has no gitdir pointer; using the worktree store at %s\n", dotgit, worktree)
 		return worktree
 	}
 	if !filepath.IsAbs(gd) {
@@ -512,7 +488,7 @@ func manualStoreRoot(worktree string) string {
 		// The gitdir target is gone — a stale worktree (its main repo moved
 		// or was deleted), not a clean submodule. Do not silently treat it
 		// as one.
-		WarnOnce(fmt.Sprintf("ethos: warning: worktree git dir %s is unreadable (%v); the main repo may have moved — using the worktree store at %s", gd, err, worktree))
+		fmt.Fprintf(os.Stderr, "ethos: warning: worktree git dir %s is unreadable (%v); the main repo may have moved — using the worktree store at %s\n", gd, err, worktree)
 		return worktree
 	}
 	data, err = os.ReadFile(filepath.Join(gd, "commondir"))
@@ -520,7 +496,7 @@ func manualStoreRoot(worktree string) string {
 		if !os.IsNotExist(err) {
 			// A present-but-unreadable commondir is a real error, not the
 			// clean submodule signal (which is commondir simply absent).
-			WarnOnce(fmt.Sprintf("ethos: warning: cannot read %s (%v); using the worktree store at %s", filepath.Join(gd, "commondir"), err, worktree))
+			fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", filepath.Join(gd, "commondir"), err, worktree)
 		}
 		return worktree // absent commondir: a submodule keeps its own store
 	}
