@@ -73,6 +73,23 @@ func missionCheckoutRoot(storeRoot string) string {
 	return resolve.EnvRepoRoot()
 }
 
+// refuseBadStoreOverride hard-errors a mission WRITE op when ETHOS_REPO_ROOT
+// is set but StoreRepoRoot refused it — a create/dispatch/claim must not
+// silently land a mission in the global store behind a typo'd override (the
+// yofr symptom gated behind a bad env var), matching setup's fail-loud (#370
+// F-A). It fires ONLY when an override was set AND refused; a genuinely unset
+// override with no repo keeps the legitimate warn+global mission mode
+// (warnIfGlobalFallback), which reads/writes support. Reads stay on
+// warn+global — a read hitting global is not destructive.
+func refuseBadStoreOverride(op string) error {
+	if _, set := resolve.RepoRootOverride(); set && resolve.StoreRepoRoot() == "" {
+		return fmt.Errorf("mission %s: ETHOS_REPO_ROOT was refused (missing "+
+			"directory or no .punt-labs/ethos store); unset it or point it at a "+
+			"repo with a store", op)
+	}
+	return nil
+}
+
 // warnIfGlobalFallback warns loudly when no repo store is in scope, so an
 // operator sees that the mission store resolved to the global tree
 // (~/.punt-labs/ethos) rather than a repo-local one. A mission stored there
@@ -844,6 +861,9 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 // Uses missionStoreForCreate so the Phase 3.5 role-overlap gate
 // fires; read-only subcommands use the bare missionStore.
 func runMissionCreate() error {
+	if err := refuseBadStoreOverride("create"); err != nil {
+		return err
+	}
 	ms := missionStoreForCreate()
 
 	data, err := os.ReadFile(missionCreateFile)
@@ -1545,6 +1565,9 @@ func runMissionExport(cmd *cobra.Command, args []string) error {
 // as runMissionCreate — evaluator pinning, write-set overlap check,
 // archetype validation all fire identically.
 func runMissionDispatch() error {
+	if err := refuseBadStoreOverride("dispatch"); err != nil {
+		return err
+	}
 	if dispatchWorker == "" {
 		return fmt.Errorf("mission dispatch: --worker is required")
 	}
@@ -1600,6 +1623,9 @@ func runMissionDispatch() error {
 // resolve. Validates the mission resolves via MatchByPrefix so a typo
 // cannot stage a phantom binding.
 func runMissionClaim(idOrPrefix string) error {
+	if err := refuseBadStoreOverride("claim"); err != nil {
+		return err
+	}
 	sessionID, _, err := resolveSessionContext()
 	if err != nil {
 		return fmt.Errorf("mission claim: %w", err)

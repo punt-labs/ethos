@@ -3700,3 +3700,32 @@ func TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect(t *testing.T) {
 	assert.Equal(t, "", missionCheckoutRoot(resolve.StoreRepoRoot()),
 		"a refused override must not leak into the audit checkout root")
 }
+
+// TestRefuseBadStoreOverride pins the #370 F-A consistency fix for mission
+// WRITE ops: a set-but-refused ETHOS_REPO_ROOT hard-errors (a create must not
+// silently land in the global store behind a typo'd override), while a
+// genuinely unset override keeps the legitimate warn+global mission mode.
+func TestRefuseBadStoreOverride(t *testing.T) {
+	t.Run("refused override errors", func(t *testing.T) {
+		dir := t.TempDir() // exists, no .punt-labs/ethos store
+		t.Setenv("ETHOS_REPO_ROOT", dir)
+		err := refuseBadStoreOverride("create")
+		require.Error(t, err, "a refused override must hard-error a mission write")
+		assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	})
+
+	t.Run("unset override keeps global mode", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", "")
+		// Not in a repo (unset override) → no error; the caller's
+		// warn+global path handles the legitimate global mission mode.
+		nonRepo, err := os.MkdirTemp("/tmp", "ethos-refuse-norepo-*")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
+		orig, err := os.Getwd()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+		require.NoError(t, os.Chdir(nonRepo))
+		assert.NoError(t, refuseBadStoreOverride("create"),
+			"a genuinely unset override must not error (global mission mode is supported)")
+	})
+}
