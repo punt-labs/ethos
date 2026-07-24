@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -528,6 +529,53 @@ handle: legacy-user
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "legacy submodule detected")
 	assert.Contains(t, stderr, "ethos team migrate")
+}
+
+// TestWritingStyleMenu_SurfacesWarnings pins the S4 fix: the wizard's
+// style step surfaces per-entry List warnings instead of silently
+// dropping corrupt entries from the menu.
+func TestWritingStyleMenu_SurfacesWarnings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	stylesDir := filepath.Join(home, ".punt-labs", "ethos", "writing-styles")
+	require.NoError(t, os.MkdirAll(stylesDir, 0o755))
+	// A valid entry and a malformed-slug entry (List warns on the latter).
+	require.NoError(t, os.WriteFile(filepath.Join(stylesDir, "good.md"), []byte("# Good\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(stylesDir, "Bad Style.md"), []byte("# Bad\n"), 0o644))
+
+	var errw bytes.Buffer
+	styles := writingStyleMenu(&errw)
+
+	assert.Contains(t, errw.String(), "ethos: warning:", "corrupt entry must surface a warning")
+	assert.Contains(t, errw.String(), "Bad Style", "warning must name the offending entry")
+	var slugs []string
+	for _, a := range styles {
+		slugs = append(slugs, a.Slug)
+	}
+	assert.Contains(t, slugs, "good", "valid entries still returned")
+}
+
+// TestSetup_RejectsMalformedAgentKey pins the S6 fix: a present-but-
+// non-string agent key in the repo config is surfaced as an error, not
+// silently clobbered.
+func TestSetup_RejectsMalformedAgentKey(t *testing.T) {
+	_, repo := setupTestEnv(t)
+
+	// Pre-existing config with a malformed (list-valued) agent key.
+	writeRepoConfigFile(t, repo, "agent:\n  - one\n  - two\n")
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Malformed User\nhandle: malformed-user\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-string value")
+	assert.Contains(t, err.Error(), "agent")
+
+	// The malformed key is not clobbered.
+	body := readRepoConfigFile(t, repo)
+	assert.Contains(t, body, "- one", "malformed agent key must be left intact for the user to fix")
 }
 
 func TestSetup_ResolveStyleChoice(t *testing.T) {
