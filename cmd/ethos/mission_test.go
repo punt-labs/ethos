@@ -14,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3627,4 +3628,104 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	assert.Contains(t, stderrBuf.String(), "no active session")
 	assert.Contains(t, stderrBuf.String(), "ethos session start",
 		"the refusal must name the remedy (DES-061 step-4 error)")
+}
+
+// captureStderrFn redirects os.Stderr for the duration of fn and returns
+// what was written.
+func captureStderrFn(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	w.Close()
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(r)
+	require.NoError(t, err)
+	return buf.String()
+}
+
+// TestWarnIfGlobalFallback pins the ethos-yofr loudness requirement: when
+// no repo store is in scope, the warning names the global store and the
+// ETHOS_REPO_ROOT override; with a repo root it stays quiet.
+func TestWarnIfGlobalFallback(t *testing.T) {
+	out := captureStderrFn(t, func() { warnIfGlobalFallback("") })
+	assert.Contains(t, out, "no git repository found")
+	assert.Contains(t, out, "global mission store")
+	assert.Contains(t, out, "ETHOS_REPO_ROOT")
+
+	quiet := captureStderrFn(t, func() { warnIfGlobalFallback("/some/repo") })
+	assert.Empty(t, quiet)
+}
+
+// TestMissionStore_ReadWarnsOnGlobalFallback pins SFH F3: a READ path
+// (missionStore, used by show/list/log and the mutators) warns when it
+// falls back to the global store — the operator's report was "list/show
+// sees a different store," so reads must not be silent.
+func TestMissionStore_ReadWarnsOnGlobalFallback(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	// /tmp has no .git ancestor, so StoreRepoRoot resolves empty.
+	nonRepo, err := os.MkdirTemp("/tmp", "ethos-mission-norepo-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	require.NoError(t, os.Chdir(nonRepo))
+
+	out := captureStderrFn(t, func() { _ = missionStore() })
+	assert.Contains(t, out, "no git repository found")
+	assert.Contains(t, out, "global mission store")
+}
+
+// TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect pins the Bugbot MED
+// on PR #370: when ETHOS_REPO_ROOT is set-but-invalid, StoreRepoRoot refuses
+// it (records fall back to global), but EnvRepoRoot re-accepts the bad path.
+// The mission store's audit checkout root must follow the refused store to
+// empty — not the resurrected override — so records and live/seal stay in one
+// tree instead of splitting contract(global) from audit(<refused>).
+func TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect(t *testing.T) {
+	dir := t.TempDir() // exists, but has no .punt-labs/ethos store
+	t.Setenv("ETHOS_REPO_ROOT", dir)
+
+	// StoreRepoRoot fail-closed refuses the override; EnvRepoRoot re-accepts it.
+	require.Equal(t, "", resolve.StoreRepoRoot(),
+		"StoreRepoRoot must refuse an override with no .punt-labs/ethos store")
+	require.Equal(t, dir, resolve.EnvRepoRoot(),
+		"EnvRepoRoot accepts the same path (requireStore=false) — the resurrection risk")
+
+	// The checkout root follows the (refused → "") store, not the bad path.
+	assert.Equal(t, "", missionCheckoutRoot(resolve.StoreRepoRoot()),
+		"a refused override must not leak into the audit checkout root")
+}
+
+// TestRefuseBadStoreOverride pins the #370 F-A consistency fix for mission
+// WRITE ops: a set-but-refused ETHOS_REPO_ROOT hard-errors (a create must not
+// silently land in the global store behind a typo'd override), while a
+// genuinely unset override keeps the legitimate warn+global mission mode.
+func TestRefuseBadStoreOverride(t *testing.T) {
+	t.Run("refused override errors", func(t *testing.T) {
+		dir := t.TempDir() // exists, no .punt-labs/ethos store
+		t.Setenv("ETHOS_REPO_ROOT", dir)
+		err := refuseBadStoreOverride("create")
+		require.Error(t, err, "a refused override must hard-error a mission write")
+		assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT")
+	})
+
+	t.Run("unset override keeps global mode", func(t *testing.T) {
+		t.Setenv("ETHOS_REPO_ROOT", "")
+		// Not in a repo (unset override) → no error; the caller's
+		// warn+global path handles the legitimate global mission mode.
+		nonRepo, err := os.MkdirTemp("/tmp", "ethos-refuse-norepo-*")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
+		orig, err := os.Getwd()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.Chdir(orig) })
+		require.NoError(t, os.Chdir(nonRepo))
+		assert.NoError(t, refuseBadStoreOverride("create"),
+			"a genuinely unset override must not error (global mission mode is supported)")
+	})
 }

@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle; the same `email` and `github` keys are accepted in `--file`.
   Both are persisted on the created human identity. The email prompt
   defaults to `git config user.email` (bead `ethos-2q0n`).
+- **`ETHOS_REPO_ROOT` override** forces the repo store location when
+  automatic resolution is wrong or absent, reaching every store call
+  site (bead `ethos-yofr`).
 
 ### Fixed
 
@@ -26,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actionable remedy (writing nothing) when no email can be resolved,
   rather than silently persisting an unresolvable identity (bead
   `ethos-2q0n`).
+- **Store resolution fell back to the global store inside git worktrees,
+  silently.** From a linked worktree (the org-standard agent-isolation
+  mechanism), `.git` is a file so store resolution returned the worktree
+  cwd — whose `.punt-labs/ethos/` is empty or absent — and identity and
+  mission stores silently used `~/.punt-labs/ethos` instead. Missions
+  created in a worktree were invisible to the main checkout and vice
+  versa; `mission create` hit unresolved-attribute warnings for talents
+  that existed in the repo store. Store resolution now follows the git
+  common dir to the repo that owns the store (per-checkout state —
+  enable/disable markers, audit chunks — correctly stays worktree-local),
+  and a genuine fall back to the global store warns loudly instead of
+  proceeding silently (bead `ethos-yofr`).
 
 ## [4.3.0] - 2026-07-24
 

@@ -175,6 +175,29 @@ func writeFile(t *testing.T, path, content string) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 }
 
+// TestGenerateAgentFilesTo_WritesToDestRootNotConfigRoot pins the Bugbot HIGH
+// on PR #370: session-start resolves the agent/team CONFIG from the shared
+// store but must WRITE .claude/agents/ into the current checkout. From a
+// linked worktree a single root wrote the generated agents into the main tree,
+// where the worktree's Claude never sees them. GenerateAgentFilesTo splits the
+// two: configRoot reads the config + team data, destRoot receives the files.
+func TestGenerateAgentFilesTo_WritesToDestRootNotConfigRoot(t *testing.T) {
+	configRoot, ids, teams, roles := setupTestRepo(t)
+	destRoot := t.TempDir() // a separate tree, standing in for the worktree
+	writeFile(t, filepath.Join(destRoot, "go.mod"), "module example.com/wt\n")
+
+	require.NoError(t, GenerateAgentFilesTo(configRoot, destRoot, ids, teams, roles))
+
+	// Files land under the dest (checkout) root — where the worktree's Claude
+	// reads them and InstallAgentDefinitions writes.
+	assert.FileExists(t, filepath.Join(destRoot, ".claude", "agents", "bwk.md"),
+		"agents must be generated into the dest (checkout) root")
+	// And NOT under the config (store) root.
+	_, statErr := os.Stat(filepath.Join(configRoot, ".claude", "agents", "bwk.md"))
+	assert.True(t, os.IsNotExist(statErr),
+		"agent files must not be written under the config/store root")
+}
+
 func TestGenerateAgentFiles(t *testing.T) {
 	tests := []struct {
 		name  string

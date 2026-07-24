@@ -70,6 +70,17 @@ func (r *Report) step(name, status, detail string) {
 // deposit, marker (written only after a complete deposit), import line, hook
 // chaining. It ends with a next-step hint when the repo has no ethos config.
 func Enable(repoRoot string) (*Report, error) {
+	return EnableTo(repoRoot, repoRoot)
+}
+
+// EnableTo is Enable with the checkout root (repoRoot: the per-checkout
+// deposit — vendored guide, marker, @-import, hooks) split from the store
+// root (storeRoot: the "has setup been run?" config-existence read). They
+// differ only in a linked worktree: setup writes .punt-labs/ethos.yaml to the
+// store, so configStatus must read it there or it spuriously hints "run
+// setup" (#370 reader-side). Enable(repoRoot) passes repoRoot for both, so
+// existing callers and the single-tree case are unchanged.
+func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	rep := &Report{RepoRoot: repoRoot}
 
 	// Guard the gitlink case: a submodule-mounted .punt-labs/ethos is a
@@ -107,7 +118,7 @@ func Enable(repoRoot string) (*Report, error) {
 		return rep, err
 	}
 
-	hint, warning := configStatus(repoRoot)
+	hint, warning := configStatus(storeRoot)
 	if warning != "" {
 		rep.Warnings = append(rep.Warnings, warning)
 	}
@@ -252,15 +263,25 @@ func unchainHooks(repoRoot string, rep *Report) error {
 // no identities), or a warning when the config file exists but cannot be read
 // or parsed — a malformed config must not masquerade as absent and draw the
 // setup hint. At most one of the two is non-empty.
-func configStatus(repoRoot string) (hint, warning string) {
-	cfg, err := resolve.LoadRepoConfig(repoRoot)
+//
+// storeRoot is the shared store (StoreRepoRoot), where setup writes
+// .punt-labs/ethos.yaml and identities live — NOT the checkout, or from a
+// worktree the check reads an absent config and spuriously hints "run setup"
+// (#370). An empty storeRoot (no repo / a refused override) yields no hint:
+// the config existence cannot be determined, and a relative read would probe
+// the cwd.
+func configStatus(storeRoot string) (hint, warning string) {
+	if storeRoot == "" {
+		return "", ""
+	}
+	cfg, err := resolve.LoadRepoConfig(storeRoot)
 	if err != nil {
 		return "", fmt.Sprintf(".punt-labs/ethos.yaml is unreadable: %v", err)
 	}
 	if cfg != nil {
 		return "", ""
 	}
-	if entries, err := os.ReadDir(filepath.Join(repoRoot, ".punt-labs", "ethos", "identities")); err == nil && len(entries) > 0 {
+	if entries, err := os.ReadDir(filepath.Join(storeRoot, ".punt-labs", "ethos", "identities")); err == nil && len(entries) > 0 {
 		return "", ""
 	}
 	return "run `ethos setup` to configure identities", ""

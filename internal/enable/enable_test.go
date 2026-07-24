@@ -475,3 +475,32 @@ func TestMarkerGateRuntime(t *testing.T) {
 		t.Errorf("dormant gate exit = %d, want 1 (host fall-through preserved)", code)
 	}
 }
+
+// TestConfigStatus_ReadsStoreRoot pins the #370 reader-side fix: configStatus
+// checks "has setup been run?" against the shared store (where setup writes
+// .punt-labs/ethos.yaml), not the checkout — so from a worktree it does not
+// spuriously hint "run setup" when the config lives in the main store.
+func TestConfigStatus_ReadsStoreRoot(t *testing.T) {
+	// Config present in the store → no hint.
+	store := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(store, ".punt-labs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, ".punt-labs", "ethos.yaml"), []byte("agent: claude\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if hint, warn := configStatus(store); hint != "" || warn != "" {
+		t.Errorf("config present in store: want no hint/warning, got hint=%q warn=%q", hint, warn)
+	}
+
+	// Empty store root (no repo / refused override) → no hint, no relative read.
+	if hint, warn := configStatus(""); hint != "" || warn != "" {
+		t.Errorf("empty store root: want no hint/warning, got hint=%q warn=%q", hint, warn)
+	}
+
+	// Store with no config and no identities → the setup hint.
+	empty := t.TempDir()
+	if hint, _ := configStatus(empty); !strings.Contains(hint, "ethos setup") {
+		t.Errorf("no config: want run-setup hint, got %q", hint)
+	}
+}

@@ -180,7 +180,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	success := false
 	defer func() { releaseID(success) }()
 
-	repoRoot := tierBRepoRoot()
+	repoRoot := tierBStoreRoot()
 	releaseMission, err := mission.AcquireMissionLock(repoRoot, missionID)
 	if err != nil {
 		return writeAgentBlock(w,
@@ -373,23 +373,42 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 	}
 }
 
-// tierBRepoRoot resolves the enclosing repo root for the Tier B
-// skeleton write. Mirrors the resolve used by tierBMissionStore so
-// the lock files, record.yaml, and the MISSION_ARTIFACTS_DIR env all
-// agree on the same .ethos tree.
+// tierBStoreRoot resolves the repo whose .punt-labs/ethos mission store the
+// Tier B dispatch reads and writes — the contract Load, the per-mission
+// lock, the delegation skeleton (record.yaml), the MISSION_ARTIFACTS_DIR
+// env, the depth-walk scan, and the aborted-close. It resolves through the
+// git common dir (resolve.StoreRepoRoot) so a leader dispatching from a
+// linked worktree writes and reads the SAME store the CLI's `mission create`
+// wrote to (the main work tree), not the worktree's empty tree. Without this
+// the CLI and the dispatch hook disagree and delegation is refused with
+// "resolving MISSION_ID not found" — the core ethos-yofr symptom (CR#1).
+//
+// It returns exactly what StoreRepoRoot returns, INCLUDING "" — it must NOT
+// bare-Getwd-fall-back the way tierBRepoRoot does. StoreRepoRoot returns ""
+// in two cases: no git repo at all, and (crucially) a set-but-invalid
+// ETHOS_REPO_ROOT, where F1's repoRootOverride deliberately returns "" so
+// the caller does not resolve some other tree. Substituting the raw cwd here
+// would, inside a worktree under a bad override, point the store at the
+// worktree's own tree — reintroducing ethos-yofr behind a bad override
+// (code-review round 2). On "", NewStoreWithRoots falls back to the global
+// tree (a warned, known state) for reads, and the write path
+// (AcquireMissionLock, WriteDelegationSkeleton) fails loud on the empty
+// repoRoot — never a silent worktree-local write.
+func tierBStoreRoot() string {
+	return resolve.StoreRepoRoot()
+}
+
+// tierBRepoRoot resolves the current work tree root for the per-checkout
+// portions of the hook — the audit/precondition read path (via
+// preconditions.go's envRepoRoot fallback), whose entries live in the
+// committing checkout, not the shared store. Store portions use
+// tierBStoreRoot instead (CR#1).
 //
 // Resolution order:
 //  1. ETHOS_REPO_ROOT env override
 //  2. resolve.FindRepoRoot (walk for .git)
 //  3. os.Getwd fallback (logs to stderr; downstream sites defend
 //     against an empty return)
-//
-// The env override means the precondition evaluator's loadSessionReads
-// and the dispatch + inheritance paths all resolve to the same tree
-// (Bugbot MED on PR #328: previously dispatch + inheritance used
-// FindRepoRoot only while audit + preconditions honored the env var,
-// allowing the dispatch path to write to a different tree than the
-// hook later read).
 func tierBRepoRoot() string {
 	if root := resolve.EnvRepoRoot(); root != "" {
 		return root
@@ -442,10 +461,31 @@ func tierBMissionStore() (*mission.Store, error) {
 	// trace-only and would miss contracts that live in the repo tree
 	// (Copilot HIGH-equivalent on PR #327: Tier B dispatch would
 	// block "malformed MISSION_ID" on any in-repo contract).
-	// Use tierBRepoRoot() (env-aware) so the mission Store walks the
-	// same tree as the dispatch + inheritance + audit + preconditions
-	// paths (Bugbot MED on PR #328: split repoRoot resolution).
-	return mission.NewStoreWithRoots(tierBRepoRoot(), globalRoot), nil
+	// Use tierBStoreRoot() so the mission Store walks the same tree as the
+	// dispatch skeleton write and the CLI's `mission create` — the main work
+	// tree in a linked worktree (CR#1). Without this the dispatch hook reads
+	// a different store than the CLI wrote and refuses the spawn.
+	//
+	// WithCheckoutRoot keeps the two-root invariant uniform across every
+	// mission Store: the record resolves to the store root, the DES-058 audit
+	// zone to the checkout (tierBRepoRoot). The dispatch path only Loads the
+	// contract today (no event append/read), so this is defensive — but it
+	// means a future audit access here cannot silently route to the store tree
+	// (PR #370 sweep).
+	//
+	// The checkout root FOLLOWS the store root to "" when the store refuses:
+	// tierBStoreRoot is StoreRepoRoot (fail-closed on a bad ETHOS_REPO_ROOT),
+	// but tierBRepoRoot (EnvRepoRoot, requireStore=false) re-accepts the
+	// refused path. Pairing them unconditionally would let the audit zone
+	// resurrect a path the store already refused (PR #370 override-resurrection
+	// class, same guard as missionCheckoutRoot + runUI).
+	storeRoot := tierBStoreRoot()
+	checkoutRoot := ""
+	if storeRoot != "" {
+		checkoutRoot = tierBRepoRoot()
+	}
+	return mission.NewStoreWithRoots(storeRoot, globalRoot).
+		WithCheckoutRoot(checkoutRoot), nil
 }
 
 // writeAgentBlock emits a block decision with a named reason. Used on

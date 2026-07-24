@@ -56,10 +56,19 @@ type SubagentStartDeps struct {
 	// the live evaluator content. Required when Missions is non-nil
 	// and Phase 3.3 verifier discipline is in effect.
 	Hash mission.HashSources
-	// RepoRoot is the repository root directory, used by the verifier
-	// isolation block to resolve write_set entries to concrete files
-	// on disk via WalkWriteSet. Empty means the walk is skipped.
+	// RepoRoot is the current work tree root, used by the verifier
+	// isolation block to resolve write_set entries to concrete files on
+	// disk via WalkWriteSet. The files under review live in this checkout
+	// (a linked worktree holds the branch), so this is the work-tree root
+	// (FindRepoRoot). Empty means the walk is skipped.
 	RepoRoot string
+	// StoreRoot is the repo whose .punt-labs/ethos mission store the
+	// hash-refusal path closes the delegation skeleton in. The skeleton
+	// was written by the Tier B dispatch against the store root, so the
+	// close must target the same tree — the main work tree in a linked
+	// worktree (StoreRepoRoot), not this checkout (CR#3). Empty skips the
+	// close.
+	StoreRoot string
 }
 
 // HandleSubagentStart reads the SubagentStart hook payload from stdin,
@@ -123,7 +132,7 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 		// logged but never masks the original refusal — the operator's
 		// primary diagnostic stays the hash drift, not a follow-on
 		// audit-store failure.
-		closeSkeletonOnHashRefusal(deps.RepoRoot)
+		closeSkeletonOnHashRefusal(deps.StoreRoot)
 		// Return a non-nil error so cmd/ethos/hook.go's runner exits
 		// non-zero, which Claude Code surfaces to the operator as a
 		// fatal subagent launch failure. The error string carries

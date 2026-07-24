@@ -78,7 +78,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readMissionsJSONL() []missionRow {
-	path := mission.RepoStatePath(s.repoRoot, "missions.jsonl")
+	path := mission.RepoStatePath(s.storeRoot, "missions.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -123,6 +123,18 @@ type missionData struct {
 	AuditCount   int
 }
 
+// missionStore builds the mission store the UI reads from. The record
+// (contract, results) resolves under the store root, but the DES-058 event
+// union is the per-checkout audit concern — it lives under the work tree
+// where the events were appended and sealed. Wiring the checkout root
+// (s.repoRoot, the work-tree root per CR#2) keeps the mission timeline
+// non-empty when the UI runs from a linked worktree (Bugbot HIGH #370 class,
+// one layer up).
+func (s *Server) missionStore() *mission.Store {
+	return mission.NewStoreWithRoots(s.storeRoot, s.globalRoot).
+		WithCheckoutRoot(s.repoRoot)
+}
+
 func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	id := filepath.Base(strings.TrimPrefix(r.URL.Path, "/missions/"))
 	if id == "" || id == "." || id == ".." {
@@ -130,7 +142,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store := mission.NewStoreWithRoots(s.repoRoot, s.globalRoot)
+	store := s.missionStore()
 	c, err := store.Load(id)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("mission %q: %v", id, err), 404)
@@ -164,7 +176,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) loadDelegations(missionID string) []*mission.Delegation {
-	dir := mission.RepoStatePath(s.repoRoot, "missions", missionID, "delegations")
+	dir := mission.RepoStatePath(s.storeRoot, "missions", missionID, "delegations")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
@@ -223,7 +235,7 @@ func (s *Server) handleDelegation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dir := mission.RepoStatePath(s.repoRoot, "missions", missionID, "delegations", delegationID)
+	dir := mission.RepoStatePath(s.storeRoot, "missions", missionID, "delegations", delegationID)
 	d, err := mission.LoadDelegation(filepath.Join(dir, "record.yaml"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("delegation %q: %v", delegationID, err), 404)

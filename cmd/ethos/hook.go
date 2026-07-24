@@ -146,7 +146,11 @@ func runHookSubagentStart() error {
 		Sessions:   ss,
 		Missions:   ms,
 		Hash:       hashSources,
-		RepoRoot:   resolve.FindRepoRoot(),
+		// RepoRoot is the work-tree root for the write-set walk (files
+		// under review live in this checkout); StoreRoot is the mission
+		// store's repo for the hash-refusal skeleton close (CR#3).
+		RepoRoot:  resolve.FindRepoRoot(),
+		StoreRoot: resolve.StoreRepoRoot(),
 	}
 	if err := hook.HandleSubagentStartWithDeps(os.Stdin, deps); err != nil {
 		return fmt.Errorf("hook subagent-start: %w", err)

@@ -113,7 +113,7 @@ type availableRow struct {
 }
 
 func runTeamAvailable(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	globalRoot := defaultGlobalRoot()
 
 	bundles, err := bundle.List(repoRoot, globalRoot)
@@ -174,7 +174,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	if !bundle.ValidName.MatchString(name) {
 		return fmt.Errorf("invalid bundle name %q (must match %s)", name, bundle.ValidName.String())
 	}
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
@@ -273,7 +273,7 @@ func listBundleNames(bundles []bundle.Bundle) string {
 // --- active ---
 
 func runTeamActive(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	globalRoot := defaultGlobalRoot()
 
 	b, err := bundle.ResolveActive(repoRoot, globalRoot)
@@ -310,7 +310,7 @@ func runTeamActive(cmd *cobra.Command) error {
 // --- deactivate ---
 
 func runTeamDeactivate(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
@@ -376,7 +376,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 		targetDir = filepath.Join(globalRoot, "bundles", name)
 		gitArgs = []string{"git", "clone", url, targetDir}
 	} else {
-		repoRoot := resolve.FindRepoRoot()
+		repoRoot := resolve.StoreRepoRoot()
 		if repoRoot == "" {
 			return fmt.Errorf("not in a git repository (use --global to install without a repo)")
 		}
@@ -489,7 +489,7 @@ func legacySubmoduleURL(repoRoot string) (string, error) {
 }
 
 func runTeamMigrate(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	if repoRoot == "" {
 		return fmt.Errorf("not in a git repository")
 	}
