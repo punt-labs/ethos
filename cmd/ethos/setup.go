@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -145,8 +146,8 @@ func runSetup(cmd *cobra.Command) error {
 			WritingStyle: cfg.WritingStyle,
 			Personality:  "principal-engineer",
 		}
-		if err := saveIdentityNoRefs(store, human); err != nil {
-			return fmt.Errorf("setup: creating human identity: %w", err)
+		if err := store.Save(human); err != nil {
+			return setupSaveError("human", human, globalRoot, err)
 		}
 		fmt.Fprintf(errw, "created: identity %q\n", cfg.Handle)
 	}
@@ -168,8 +169,8 @@ func runSetup(cmd *cobra.Command) error {
 			Personality:  "principal-engineer",
 			Talents:      []string{"engineering"},
 		}
-		if err := saveIdentityNoRefs(store, agent); err != nil {
-			return fmt.Errorf("setup: creating agent identity: %w", err)
+		if err := store.Save(agent); err != nil {
+			return setupSaveError("agent", agent, globalRoot, err)
 		}
 		fmt.Fprintf(errw, "created: identity %q\n", "claude")
 	}
@@ -402,36 +403,64 @@ func mergeRepoConfig(repoRoot string) error {
 	return nil
 }
 
-// saveIdentityNoRefs writes an identity YAML file, skipping attribute
-// ref validation. Setup runs in a bootstrapping context where the
-// referenced personality or writing style may not exist in the store
-// yet (e.g. principal-engineer is a convention, not a seeded file).
-// Structural validation (name, handle, kind) is still enforced.
-func saveIdentityNoRefs(store *identity.Store, id *identity.Identity) error {
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	dir := store.IdentitiesDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("creating identity directory: %w", err)
-	}
-	data, err := yaml.Marshal(id)
-	if err != nil {
-		return fmt.Errorf("marshaling identity: %w", err)
-	}
-	path := store.Path(id.Handle)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("identity %q already exists", id.Handle)
+// setupSaveError translates a Store.Save failure into an actionable
+// setup error. When the failure is a missing attribute reference — the
+// case where setup ran before seed — it names the missing slug and the
+// remedy. Other failures (structural, already-exists) pass through with
+// context.
+func setupSaveError(kind string, id *identity.Identity, globalRoot string, err error) error {
+	var ve *identity.ValidationError
+	if errors.As(err, &ve) {
+		if slug := missingRefSlug(ve, id, globalRoot); slug != "" {
+			return fmt.Errorf("setup: identity %q references %s %q, which is not installed; run \"ethos seed\" first",
+				id.Handle, refNoun(ve.Field), slug)
 		}
-		return fmt.Errorf("creating identity file: %w", err)
 	}
-	defer f.Close()
-	if _, err = f.Write(data); err != nil {
-		return err
+	return fmt.Errorf("setup: creating %s identity: %w", kind, err)
+}
+
+// missingRefSlug returns the referenced slug that failed validation
+// because it is absent from the global store. It returns "" when the
+// failure is not a missing-attribute case (e.g. a malformed slug), so
+// the caller falls back to the underlying error.
+func missingRefSlug(ve *identity.ValidationError, id *identity.Identity, globalRoot string) string {
+	switch ve.Field {
+	case "personality":
+		return missingSlug(globalRoot, attribute.Personalities, id.Personality)
+	case "writing_style":
+		return missingSlug(globalRoot, attribute.WritingStyles, id.WritingStyle)
+	case "talents":
+		for _, s := range id.Talents {
+			if m := missingSlug(globalRoot, attribute.Talents, s); m != "" {
+				return m
+			}
+		}
 	}
-	return os.MkdirAll(store.ExtDir(id.Handle), 0o700)
+	return ""
+}
+
+// missingSlug returns slug if it is a well-formed slug that does not
+// exist in the given store, otherwise "".
+func missingSlug(root string, kind attribute.Kind, slug string) string {
+	if slug == "" || attribute.ValidateSlug(slug) != nil {
+		return ""
+	}
+	if attribute.NewStore(root, kind).Exists(slug) {
+		return ""
+	}
+	return slug
+}
+
+// refNoun maps an identity attribute field to a human-readable noun.
+func refNoun(field string) string {
+	switch field {
+	case "writing_style":
+		return "writing style"
+	case "talents":
+		return "talent"
+	default:
+		return field
+	}
 }
 
 // isTTY reports whether f is connected to a terminal.

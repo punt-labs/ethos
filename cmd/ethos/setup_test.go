@@ -308,6 +308,79 @@ handle: no-repo
 	assert.True(t, os.IsNotExist(statErr))
 }
 
+// setupTestEnvNoSeed is like setupTestEnv but does not run seed, so the
+// conventional attributes are absent from the global layer.
+func setupTestEnvNoSeed(t *testing.T) (home, repo string) {
+	t.Helper()
+
+	setupBundle = "foundation"
+	setupSolo = false
+	setupFile = ""
+	t.Cleanup(func() {
+		setupBundle = "foundation"
+		setupSolo = false
+		setupFile = ""
+	})
+
+	home = t.TempDir()
+	repo = t.TempDir()
+	gitInitDir(t, repo, home)
+
+	t.Setenv("HOME", home)
+	t.Setenv("USER", "test-user")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Chdir(repo)
+
+	return home, repo
+}
+
+// TestSetup_HardValidation_UnseededFails proves setup fails hard with an
+// actionable error when run before seed, and writes no dangling identity.
+// After seeding, the same setup succeeds.
+func TestSetup_HardValidation_UnseededFails(t *testing.T) {
+	home, repo := setupTestEnvNoSeed(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Unseeded User\nhandle: unseeded-user\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `references personality "principal-engineer"`)
+	assert.Contains(t, err.Error(), "not installed")
+	assert.Contains(t, err.Error(), `run "ethos seed" first`)
+
+	// Nothing dangling: the human identity file must not exist.
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "unseeded-user.yaml"))
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "claude.yaml"))
+
+	// Seed, then retry — now it succeeds.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	skillsRoot := filepath.Join(home, ".claude", "skills")
+	_, seedErr := seed.Seed(globalRoot, skillsRoot, false)
+	require.NoError(t, seedErr)
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr)
+	assert.FileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "unseeded-user.yaml"))
+}
+
+// TestSetup_HardValidation_BadStyle proves a writing_style slug that is
+// not installed fails hard rather than writing a dangling reference.
+func TestSetup_HardValidation_BadStyle(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Typo User\nhandle: typo-user\nwriting_style: not-a-real-style\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `references writing style "not-a-real-style"`)
+	assert.Contains(t, err.Error(), `run "ethos seed" first`)
+
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "typo-user.yaml"))
+}
+
 func TestSetup_NameRequired(t *testing.T) {
 	_, repo := setupTestEnv(t)
 
