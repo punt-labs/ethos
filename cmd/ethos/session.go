@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -390,12 +391,17 @@ func inferRole(index int, parent string) string {
 func runSessionStart(cmd *cobra.Command) error {
 	ss := sessionStore()
 
-	// 1. Idempotency: an existing ETHOS_SESSION that names a live roster.
-	//    A re-run with --persona still folds the iam — upsert-join the
-	//    persona so the advertised ETHOS_AGENT_ID names a real participant
-	//    (Join is idempotent: same persona twice stays one participant).
+	// 1. Idempotency: an existing ETHOS_SESSION. A live roster re-attaches;
+	//    a not-found env is stale and mints a fresh session (by design). An
+	//    exists-but-unparseable roster is a crash artifact that most likely
+	//    holds unsealed audit lines — do NOT silently mint over it (which
+	//    would repoint the env anchor away from it), fail with a remedy.
 	if envID := os.Getenv("ETHOS_SESSION"); envID != "" {
-		if _, err := ss.Load(envID); err == nil {
+		switch _, lerr := ss.Load(envID); {
+		case lerr == nil:
+			// A re-run with --persona still folds the iam — upsert-join the
+			// persona so the advertised ETHOS_AGENT_ID names a real
+			// participant (Join is idempotent: same persona stays one).
 			if sessionStartPersona != "" {
 				human, herr := resolve.Resolve(identityStore(), ss)
 				if herr != nil {
@@ -406,9 +412,11 @@ func runSessionStart(cmd *cobra.Command) error {
 					return fmt.Errorf("session start: joining persona: %w", jerr)
 				}
 			}
-			printSessionStart(cmd, envID, sessionStartPersona, false)
-			return nil
+			return printSessionStart(cmd, envID, sessionStartPersona, false)
+		case !errors.Is(lerr, os.ErrNotExist):
+			return fmt.Errorf("session start: ETHOS_SESSION %q names an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", envID, lerr)
 		}
+		// not-found: fall through to mint a fresh session (by design).
 	}
 
 	// 2. Mint an opaque 32-hex ID (16 bytes of crypto/rand).
@@ -454,23 +462,23 @@ func runSessionStart(cmd *cobra.Command) error {
 		return fmt.Errorf("session start: creating roster: %w", err)
 	}
 
-	printSessionStart(cmd, id, sessionStartPersona, true)
-	return nil
+	return printSessionStart(cmd, id, sessionStartPersona, true)
 }
 
 // printSessionStart writes the eval-able export line(s) to stdout and a
 // human-readable confirmation to stderr, so eval "$(ethos session start)"
 // captures only the exports. When persona is non-empty (--persona folded
 // the first iam), a second export sets ETHOS_AGENT_ID to it so the eval'd
-// shell resolves that persona — the primary participant is keyed on it.
-func printSessionStart(cmd *cobra.Command, id, persona string, created bool) {
+// shell resolves that persona — the primary participant is keyed on it. The
+// export line IS the contract, so a failed --json stdout write propagates
+// to a non-zero exit rather than exiting 0 having emitted nothing.
+func printSessionStart(cmd *cobra.Command, id, persona string, created bool) error {
 	if jsonOutput {
 		out := map[string]any{"session": id, "created": created}
 		if persona != "" {
 			out["agent_id"] = persona
 		}
-		_ = writeJSON(cmd.OutOrStdout(), out)
-		return
+		return writeJSON(cmd.OutOrStdout(), out)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_SESSION=%s\n", id)
 	if persona != "" {
@@ -481,6 +489,7 @@ func printSessionStart(cmd *cobra.Command, id, persona string, created bool) {
 	} else {
 		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s already active\n", id)
 	}
+	return nil
 }
 
 // mintSessionID returns 16 bytes of crypto/rand hex-encoded to a

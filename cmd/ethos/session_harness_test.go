@@ -184,6 +184,42 @@ func TestCLI_SessionStart_IdempotentPersonaJoins(t *testing.T) {
 	assert.Equal(t, 1, bwkCount, "re-running the same persona must not duplicate the participant")
 }
 
+// TestCLI_SessionStart_CorruptRosterFails pins M3: ETHOS_SESSION naming an
+// exists-but-unparseable roster must fail with a remedy rather than silently
+// minting over it (repointing the env anchor away from a session whose
+// unsealed audit lines just lost it). A not-found env still mints.
+func TestCLI_SessionStart_CorruptRosterFails(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	sdir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, os.MkdirAll(sdir, 0o700))
+	badID := "corruptbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.NoError(t, os.WriteFile(filepath.Join(sdir, badID+".yaml"), []byte("not a roster mapping\n"), 0o644))
+
+	_, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+badID), "session", "start")
+	require.NotEqual(t, 0, code, "start over a corrupt roster must fail; stderr=%s", stderr)
+	assert.Contains(t, stderr, "unreadable roster")
+
+	entries, err := os.ReadDir(sdir)
+	require.NoError(t, err)
+	var rosters int
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".yaml") {
+			rosters++
+		}
+	}
+	assert.Equal(t, 1, rosters, "must not mint over the corrupt roster")
+
+	// A not-found env is stale — start mints a fresh session (by design).
+	stdout, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION=doesnotexistdoesnotexistdoesnot"), "session", "start")
+	require.Equal(t, 0, code, "not-found env must mint a fresh session; stderr=%s", stderr)
+	newID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(stdout), "export ETHOS_SESSION="))
+	assert.NotEqual(t, "doesnotexistdoesnotexistdoesnot", newID, "must not reuse the stale env id")
+	assert.Regexp(t, hex32, newID)
+}
+
 // TestCLI_SessionStart_PersonaSelfConsistent pins REQ-1: with --persona,
 // start emits a second `export ETHOS_AGENT_ID=<persona>` line and keys the
 // primary on it, so the eval-then-whoami flow the README promises reflects
