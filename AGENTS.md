@@ -11,7 +11,7 @@ active bundle, global `~/.punt-labs/ethos/`.
 **New repo (preferred) — activate a bundle:**
 
 ```bash
-ethos seed                     # deploys embedded gstack to global
+ethos seed                     # deploys bundles + starter attributes to global
 ethos team activate gstack     # writes active_bundle: gstack
 ```
 
