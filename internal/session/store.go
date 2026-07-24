@@ -594,11 +594,19 @@ func (s *Store) withLock(sessionID string, fn func() error) error {
 // staleTTL is the maximum age of a session with an uncheckable primary PID.
 const staleTTL = 24 * time.Hour
 
-// isStale checks if a roster's primary agent PID is no longer alive.
-// Falls back to age-based staleness for non-numeric agent IDs.
+// isStale checks whether a roster should be reclaimed. An empty roster
+// never really started and is stale. A roster with a single participant is
+// a solo session (the agent resolves to the human — see Store.Create's
+// collapse): it has no PID-bearing primary, so it ages out by the TTL, not
+// by participant count. Otherwise the primary is participant[1]: a numeric
+// agent_id is checked for process liveness; a non-numeric one (a persona
+// handle) ages out by the TTL (R5).
 func isStale(roster *Roster) bool {
-	if len(roster.Participants) < 2 {
+	if len(roster.Participants) == 0 {
 		return true
+	}
+	if len(roster.Participants) < 2 {
+		return isOlderThan(roster, staleTTL)
 	}
 	// Primary agent is the second participant (index 1).
 	primaryID := roster.Participants[1].AgentID

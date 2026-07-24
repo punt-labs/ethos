@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -320,6 +322,41 @@ func TestStore_FilePermissions(t *testing.T) {
 	info, err := os.Stat(filepath.Join(s.sessionsDir(), "sess-perms.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+// TestIsStale pins that staleness keys on AGE, not participant count: a
+// solo session (one participant, from Store.Create's root==primary collapse)
+// ages out by the TTL rather than being immediately reclaimed. Only a
+// genuinely empty roster is stale on sight.
+func TestIsStale(t *testing.T) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	old := time.Now().UTC().Add(-48 * time.Hour).Format(time.RFC3339)
+
+	t.Run("fresh solo session is not stale", func(t *testing.T) {
+		r := &Roster{Started: now, Participants: []Participant{{AgentID: "jim", Persona: "jim"}}}
+		assert.False(t, isStale(r))
+	})
+	t.Run("solo session past TTL is stale", func(t *testing.T) {
+		r := &Roster{Started: old, Participants: []Participant{{AgentID: "jim", Persona: "jim"}}}
+		assert.True(t, isStale(r))
+	})
+	t.Run("empty roster is stale", func(t *testing.T) {
+		r := &Roster{Started: now, Participants: nil}
+		assert.True(t, isStale(r))
+	})
+	t.Run("fresh persona primary is not stale", func(t *testing.T) {
+		r := &Roster{Started: now, Participants: []Participant{{AgentID: "jim"}, {AgentID: "bwk", Parent: "jim"}}}
+		assert.False(t, isStale(r))
+	})
+	t.Run("persona primary past TTL is stale", func(t *testing.T) {
+		r := &Roster{Started: old, Participants: []Participant{{AgentID: "jim"}, {AgentID: "bwk", Parent: "jim"}}}
+		assert.True(t, isStale(r))
+	})
+	t.Run("live numeric primary is not stale even past TTL", func(t *testing.T) {
+		pid := strconv.Itoa(os.Getpid())
+		r := &Roster{Started: old, Participants: []Participant{{AgentID: "jim"}, {AgentID: pid, Parent: "jim"}}}
+		assert.False(t, isStale(r), "a live PID wins over the age fallback")
+	})
 }
 
 func TestRoster_FindParticipant(t *testing.T) {
