@@ -601,6 +601,69 @@ func TestFindRepoRoot_NoGitDir(t *testing.T) {
 	}
 }
 
+// TestFindRepoRoot_LinkedWorktree pins the ethos-yofr fix: from inside a
+// linked git worktree, FindRepoRoot resolves the MAIN work tree that holds
+// .punt-labs/ethos, not the worktree cwd (which would silently fall back to
+// the global store).
+func TestFindRepoRoot_LinkedWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(main, 0o755))
+
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	git(main, "init")
+	git(main, "config", "user.email", "t@example.com")
+	git(main, "config", "user.name", "t")
+	git(main, "commit", "--allow-empty", "-m", "init")
+
+	// The repo-layer store the worktree must resolve to.
+	ethosRoot := filepath.Join(main, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(ethosRoot, 0o755))
+
+	wt := filepath.Join(base, "wt")
+	git(main, "worktree", "add", wt)
+
+	origDir, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+	require.NoError(t, os.Chdir(wt))
+
+	assert.Equal(t, realpath(t, main), realpath(t, FindRepoRoot()),
+		"worktree must resolve to the main work tree that holds .punt-labs/ethos")
+	assert.Equal(t, realpath(t, ethosRoot), realpath(t, FindRepoEthosRoot()),
+		"FindRepoEthosRoot rides on FindRepoRoot, so the repo store resolves from the worktree")
+}
+
+// TestFindRepoRoot_EnvOverride pins that ETHOS_REPO_ROOT forces the repo
+// root for both FindRepoRoot and EnvRepoRoot, so an operator can override
+// auto-resolution when it is wrong.
+func TestFindRepoRoot_EnvOverride(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", "/forced/root")
+	assert.Equal(t, "/forced/root", FindRepoRoot())
+	assert.Equal(t, "/forced/root", EnvRepoRoot())
+}
+
+// realpath resolves symlinks so a comparison holds on macOS, where
+// t.TempDir() lives under /var → /private/var and git reports the resolved
+// form while os.Getwd preserves the symlink.
+func realpath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return r
+}
+
 // --- GitConfig tests ---
 
 func TestGitConfig_ReadsValue(t *testing.T) {
