@@ -1,0 +1,49 @@
+results:
+    - mission: m-2026-07-24-016
+      round: 1
+      created_at: "2026-07-24T14:01:03Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: cmd/ethos/setup.go
+          added: 40
+          removed: 3
+        - path: cmd/ethos/setup_test.go
+          added: 74
+          removed: 0
+        - path: cmd/ethos/handlers_test.go
+          added: 11
+          removed: 3
+        - path: README.md
+          added: 21
+          removed: 5
+        - path: AGENTS.md
+          added: 24
+          removed: 0
+      evidence:
+        - name: setupConfig + wizard capture email and github; both persisted on human identity
+          status: pass
+        - name: email defaults to git user.email; hard-fails writing nothing when unresolvable
+          status: pass
+        - name: 'dogfood: email omitted + git email set -> identity carries it -> whoami resolves by git email'
+          status: pass
+        - name: 'dogfood: session start --persona dogfood succeeds, whoami reflects persona'
+          status: pass
+        - name: 'dogfood: --file explicit email/github persisted'
+          status: pass
+        - name: 'dogfood: no email + no git user.email -> exit 1, no identity files written'
+          status: pass
+        - name: 'tests: EmailGitHubRoundTrip, EmailDefaultsFromGit (resolve.Resolve by git email), HardFailNoEmail'
+          status: pass
+        - name: make check passes; direct staticcheck ./... clean; no suppressions
+          status: pass
+      prose: |
+        Root cause: setup never populated identity.Email, so resolve.Resolve
+        step 3 (git user.email -> identity email) had nothing to match. Fresh
+        identities were unresolvable, breaking whoami and session-start on a
+        clean machine. Fix populates email (defaulted from git) and github,
+        and refuses to persist an identity with no resolvable email. The
+        interactive path reads os.Stdin behind a TTY gate and is not testable
+        in-process; the email-default logic it shares with --file is covered by
+        the --file default test.

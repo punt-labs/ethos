@@ -1,0 +1,13 @@
+You are the pinned evaluator on ethos mission m-2026-07-24-016 (implement archetype). Working directory <repo>, branch fix/setup-captures-email (commits 7ee8db8 impl+tests, 553526d docs). Run `ethos mission show m-2026-07-24-016`.
+
+CONTEXT: fixes ethos-2q0n (P1) — `ethos setup` captured neither email nor github, so a fresh identity was unresolvable by git-email and both `ethos whoami` and (v4.3.0) `ethos session start` root-resolution failed for a new user. Leader rulings (in the mission context): capture email+github in setupConfig(--file) and the wizard; default email to git user.email when unspecified; hard-fail (no write) if no email resolves; github optional; scope to the human identity.
+
+Your lens: resolution correctness, compatibility, minimalism. Verify EMPIRICALLY — build .tmp/ethos-2q0n-eval from the branch, scratch HOME + scratch git repo, do NOT trust the worker's paste:
+1. Reproduce all three scenarios: (a) email omitted + git user.email set → identity on disk carries that email, whoami resolves the human by git email, session start --persona <handle> succeeds and whoami reflects; (b) --file explicit email+github → persisted verbatim; (c) no email anywhere → hard-fail, NOTHING written (identities dir has only the seeded README).
+2. The default logic: what if git user.email is set but --file ALSO gives an email — the file wins (explicit beats inferred)? Confirm. And a repo-local vs global git email — which does it read (should be the effective `git config user.email`)?
+3. Resolution correctness: does the created identity resolve by email THROUGH resolve.Resolve's actual chain (not just field-present)? And does adding email introduce any COLLISION risk — two identities sharing the defaulted git email (e.g. human + a later setup) — how does resolve behave on ambiguous email match? Probe it.
+4. Hard-fail placement: is it truly before ANY write (no partial repo config / no ethos.yaml / no agent files left behind on the no-email abort)? Check write ordering.
+5. Interactive path: the worker says the TTY-gated prompt isn't in-process testable and the default logic is shared/covered via --file. Verify the default logic is genuinely shared (one code path), not duplicated — a duplicated interactive path could drift.
+6. github: optional, persisted when given, empty otherwise — no spurious default, no hard-fail.
+7. make check -race + direct staticcheck clean; no suppressions in the diff; README/AGENTS accurate to actual behavior.
+Write .tmp/missions/results/m-2026-07-24-016-eval-rsc.md, numbered REQ/REC/NIT + verdict. Reply "written — <verdict>".
