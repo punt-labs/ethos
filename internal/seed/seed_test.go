@@ -157,6 +157,42 @@ func TestSeedNoClobber(t *testing.T) {
 	assert.FileExists(t, filepath.Join(rolesDir, "reviewer.yaml"))
 }
 
+// TestSeedRepairsZeroByteFile pins the S3 fix: a zero-byte file left by an
+// interrupted seed is corruption, not user content. A re-seed overwrites it
+// atomically and reports it as repaired, while a non-empty existing file is
+// left untouched.
+func TestSeedRepairsZeroByteFile(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// A zero-byte talent (partial from a killed seed).
+	talentsDir := filepath.Join(dest, "talents")
+	require.NoError(t, os.MkdirAll(talentsDir, 0o755))
+	zeroPath := filepath.Join(talentsDir, "engineering.md")
+	require.NoError(t, os.WriteFile(zeroPath, []byte{}, 0o644))
+
+	// A non-empty user-edited role that must survive.
+	rolesDir := filepath.Join(dest, "roles")
+	require.NoError(t, os.MkdirAll(rolesDir, 0o755))
+	custom := []byte("name: implementer\nmodel: opus\n")
+	require.NoError(t, os.WriteFile(filepath.Join(rolesDir, "implementer.yaml"), custom, 0o644))
+
+	result, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	// Zero-byte file repaired to real content.
+	repaired, err := os.ReadFile(zeroPath)
+	require.NoError(t, err)
+	assert.NotEmpty(t, repaired, "zero-byte file must be repaired to real content")
+	assert.Contains(t, result.Repaired, zeroPath, "repaired file must be reported")
+	assert.NotContains(t, result.Skipped, zeroPath, "a zero-byte file is not a no-clobber skip")
+
+	// Non-empty user file untouched.
+	got, err := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, custom, got, "non-empty existing file must not be clobbered")
+}
+
 func TestSeedForce(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
