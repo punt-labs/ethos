@@ -37,16 +37,17 @@ func NewLayeredStoreWithBundle(repo, bundle, global *Store) *LayeredStore {
 	return &LayeredStore{repo: repo, bundle: bundle, global: global}
 }
 
-// Load reads an identity by handle, checking repo first then global.
-// Extensions always come from global. Attribute resolution falls back
-// to global when repo attributes are missing.
+// Load reads an identity by handle, checking repo, then bundle, then
+// global. Extensions always come from global. Attribute content resolves
+// through the full repo → bundle → global chain (DES-051), regardless of
+// which layer the identity record itself came from.
 func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	var cfg loadConfig
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	id, source, err := ls.loadRaw(handle)
+	id, _, err := ls.loadRaw(handle)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q: %w", handle, err)
 	}
@@ -55,9 +56,10 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 	extData, extWarnings := ls.global.loadExtensions(handle)
 	id.Ext = extData
 
-	// Attribute resolution: try repo first, fall back to global.
+	// Attribute resolution walks the full layer chain regardless of
+	// which layer the identity record came from.
 	if !cfg.reference {
-		id.Warnings = ls.resolveAttributesLayered(id, source)
+		id.Warnings = ls.resolveAttributesLayered(id)
 	}
 	id.Warnings = append(id.Warnings, extWarnings...)
 
@@ -143,40 +145,51 @@ func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 	return ls.repo.rewriteRaw(path, raw)
 }
 
-// resolveAttributesLayered resolves attribute content, trying the source
-// layer first and falling through to any remaining layers for missing
-// attributes. The chain is: start from source; then the layers of
-// lower precedence (repo → bundle → global).
-func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []string {
-	chain := ls.attrChain(source)
+// resolveAttributesLayered resolves attribute content, walking the layer
+// chain repo → bundle → global (skipping absent layers) and taking the
+// first match. The chain does not depend on which layer the identity
+// record came from: a globally-stored identity still resolves attribute
+// content from the active bundle, honoring DES-051.
+func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
+	chain := ls.attrChain()
 
 	var warnings []string
-	resolve := func(kind attribute.Kind, slug string) (string, error) {
+	// resolve walks the chain and returns the first layer's content. It
+	// falls through to a lower layer only when the slug is absent there;
+	// a real read error (permission, a directory in place of the file) is
+	// surfaced as a warning naming the layer, even when a lower layer then
+	// supplies content — a silent fall-through would mask a precedence
+	// inversion (DES-051's higher layer skipped without a word).
+	resolve := func(field string, kind attribute.Kind, slug string) (string, bool) {
 		var lastErr error
-		for _, s := range chain {
-			content, err := loadAttribute(s, kind, slug)
+		for _, l := range chain {
+			content, err := loadAttribute(l.store, kind, slug)
 			if err == nil {
-				return content, nil
+				return content, true
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				warnings = append(warnings,
+					fmt.Sprintf("%s %q unreadable in %s layer: %v", field, slug, l.name, err))
 			}
 			lastErr = err
 		}
-		return "", lastErr
+		// A real read error on the last layer was already warned in the
+		// loop; only the not-found tail needs the "unresolved" summary, so
+		// an unreadable global layer produces one warning, not two.
+		if errors.Is(lastErr, os.ErrNotExist) {
+			warnings = append(warnings, fmt.Sprintf("%s %q: %v", field, slug, lastErr))
+		}
+		return "", false
 	}
 
 	if id.Personality != "" {
-		content, err := resolve(attribute.Personalities, id.Personality)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("personality %q: %v", id.Personality, err))
-		} else {
+		if content, ok := resolve("personality", attribute.Personalities, id.Personality); ok {
 			id.PersonalityContent = content
 		}
 	}
 
 	if id.WritingStyle != "" {
-		content, err := resolve(attribute.WritingStyles, id.WritingStyle)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("writing_style %q: %v", id.WritingStyle, err))
-		} else {
+		if content, ok := resolve("writing_style", attribute.WritingStyles, id.WritingStyle); ok {
 			id.WritingStyleContent = content
 		}
 	}
@@ -184,10 +197,7 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []
 	if len(id.Talents) > 0 {
 		id.TalentContents = make([]string, len(id.Talents))
 		for i, slug := range id.Talents {
-			content, err := resolve(attribute.Talents, slug)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("talent %q: %v", slug, err))
-			} else {
+			if content, ok := resolve("talent", attribute.Talents, slug); ok {
 				id.TalentContents[i] = content
 			}
 		}
@@ -196,28 +206,25 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []
 	return warnings
 }
 
-// attrChain returns the ordered list of stores to consult when
-// resolving attribute content, starting from the identity's source
-// layer and falling through to lower-precedence layers.
-func (ls *LayeredStore) attrChain(source string) []*Store {
-	var chain []*Store
-	switch source {
-	case "repo":
-		if ls.repo != nil {
-			chain = append(chain, ls.repo)
-		}
-		if ls.bundle != nil {
-			chain = append(chain, ls.bundle)
-		}
-		chain = append(chain, ls.global)
-	case "bundle":
-		if ls.bundle != nil {
-			chain = append(chain, ls.bundle)
-		}
-		chain = append(chain, ls.global)
-	default:
-		chain = append(chain, ls.global)
+// attrLayer pairs a store with its layer name for diagnostics.
+type attrLayer struct {
+	store *Store
+	name  string
+}
+
+// attrChain returns the ordered list of layers to consult when resolving
+// attribute content: repo, then bundle, then global, skipping any layer
+// that is absent. Global is always last. The chain is the same for every
+// identity regardless of its source layer (DES-051).
+func (ls *LayeredStore) attrChain() []attrLayer {
+	var chain []attrLayer
+	if ls.repo != nil {
+		chain = append(chain, attrLayer{ls.repo, "repo"})
 	}
+	if ls.bundle != nil {
+		chain = append(chain, attrLayer{ls.bundle, "bundle"})
+	}
+	chain = append(chain, attrLayer{ls.global, "global"})
 	return chain
 }
 

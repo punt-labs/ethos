@@ -2,11 +2,11 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -63,12 +63,13 @@ type setupConfig struct {
 
 // setupResult tracks what was created for --json output.
 type setupResult struct {
-	HumanIdentity string   `json:"human_identity"`
-	AgentIdentity string   `json:"agent_identity"`
-	RepoConfig    string   `json:"repo_config,omitempty"`
-	Bundle        string   `json:"bundle,omitempty"`
-	AgentFiles    []string `json:"agent_files,omitempty"`
-	Skipped       []string `json:"skipped"`
+	HumanIdentity   string   `json:"human_identity"`
+	AgentIdentity   string   `json:"agent_identity"`
+	RepoConfig      string   `json:"repo_config,omitempty"`
+	Bundle          string   `json:"bundle,omitempty"`
+	AgentFiles      []string `json:"agent_files,omitempty"`
+	AgentFilesError string   `json:"agent_files_error,omitempty"`
+	Skipped         []string `json:"skipped"`
 }
 
 func runSetup(cmd *cobra.Command) error {
@@ -110,15 +111,14 @@ func runSetup(cmd *cobra.Command) error {
 		}
 	}
 
-	// Validate.
+	// Fast-fail on the required name before any I/O. Handle format and
+	// kind are validated by identity.Validate at Save time (below), the
+	// single source of structural validation shared with `ethos create`.
 	if cfg.Name == "" {
 		return fmt.Errorf("setup: name is required")
 	}
 	if cfg.Handle == "" {
 		cfg.Handle = slugify(cfg.Name)
-	}
-	if !validSetupHandle(cfg.Handle) {
-		return fmt.Errorf("setup: handle %q must be lowercase alphanumeric with hyphens", cfg.Handle)
 	}
 
 	home, err := os.UserHomeDir()
@@ -145,8 +145,11 @@ func runSetup(cmd *cobra.Command) error {
 			WritingStyle: cfg.WritingStyle,
 			Personality:  "principal-engineer",
 		}
-		if err := saveIdentityNoRefs(store, human); err != nil {
+		if err := human.Validate(); err != nil {
 			return fmt.Errorf("setup: creating human identity: %w", err)
+		}
+		if err := store.Save(human); err != nil {
+			return setupSaveError("human", human, globalRoot, err)
 		}
 		fmt.Fprintf(errw, "created: identity %q\n", cfg.Handle)
 	}
@@ -168,8 +171,11 @@ func runSetup(cmd *cobra.Command) error {
 			Personality:  "principal-engineer",
 			Talents:      []string{"engineering"},
 		}
-		if err := saveIdentityNoRefs(store, agent); err != nil {
+		if err := agent.Validate(); err != nil {
 			return fmt.Errorf("setup: creating agent identity: %w", err)
+		}
+		if err := store.Save(agent); err != nil {
+			return setupSaveError("agent", agent, globalRoot, err)
 		}
 		fmt.Fprintf(errw, "created: identity %q\n", "claude")
 	}
@@ -246,19 +252,35 @@ func runSetup(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("setup: reading active bundle: %w", err)
 	}
-	if current != "" && !cmd.Flags().Changed("bundle") {
+	team, err := resolve.ResolveTeam(repoRoot)
+	if err != nil {
+		return fmt.Errorf("setup: reading team: %w", err)
+	}
+	teamNamesBundle := bundleNameExists(bundles, team)
+	switch {
+	case current != "" && !cmd.Flags().Changed("bundle"):
 		fmt.Fprintf(errw, "skipped: bundle %q already active (use --bundle to switch)\n", current)
 		result.Skipped = append(result.Skipped, "bundle")
 		cfg.Bundle = current
-	} else if current == cfg.Bundle {
+		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
+			return err
+		}
+	case current == cfg.Bundle:
 		fmt.Fprintf(errw, "skipped: bundle %q already active\n", cfg.Bundle)
 		result.Skipped = append(result.Skipped, "bundle")
-	} else {
-		if err := setConfigKey(repoRoot, "active_bundle", cfg.Bundle); err != nil {
-			return fmt.Errorf("setup: activating bundle: %w", err)
+		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
+			return err
 		}
+	default:
+		// Write team FIRST so active_bundle — the idempotency sentinel the
+		// skip branches above key off — lands last. If the run is
+		// interrupted between the two writes, the next setup sees no
+		// active_bundle, takes this branch again, and self-heals.
 		if err := setConfigKey(repoRoot, "team", cfg.Bundle); err != nil {
 			return fmt.Errorf("setup: setting team: %w", err)
+		}
+		if err := setConfigKey(repoRoot, "active_bundle", cfg.Bundle); err != nil {
+			return fmt.Errorf("setup: activating bundle: %w", err)
 		}
 		fmt.Fprintf(errw, "activated: bundle %q\n", cfg.Bundle)
 	}
@@ -272,11 +294,15 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: generating agent files: %w", err)
 	}
 
-	// List generated agent files.
+	// List generated agent files. Generation already succeeded above; if
+	// the enumeration read fails, record an explicit marker so --json does
+	// not imply nothing was generated.
 	agentsDir := filepath.Join(repoRoot, ".claude", "agents")
 	entries, err := os.ReadDir(agentsDir)
 	if err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(errw, "ethos: setup: reading agent files: %v\n", err)
+		msg := fmt.Sprintf("reading agent files: %v", err)
+		fmt.Fprintf(errw, "ethos: setup: %s\n", msg)
+		result.AgentFilesError = msg
 	}
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
@@ -324,27 +350,44 @@ func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 	cfg.Handle = handle
 
 	// Prompt 3: Working style (from global store).
-	home, err := os.UserHomeDir()
-	if err == nil {
-		globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-		ws := attribute.NewStore(globalRoot, attribute.WritingStyles)
-		result, listErr := ws.List()
-		if listErr == nil && result != nil && len(result.Attributes) > 0 {
-			fmt.Fprintln(errw, "Working style:")
-			for i, a := range result.Attributes {
-				fmt.Fprintf(errw, "  %d. %s\n", i+1, a.Slug)
-			}
-			fmt.Fprintln(errw, "  (enter to skip)")
-			fmt.Fprint(errw, "Choice: ")
-			choice, _ := reader.ReadString('\n')
-			choice = strings.TrimSpace(choice)
-			if choice != "" {
-				cfg.WritingStyle = resolveStyleChoice(choice, result.Attributes)
-			}
+	styles := writingStyleMenu(errw)
+	if len(styles) > 0 {
+		fmt.Fprintln(errw, "Working style:")
+		for i, a := range styles {
+			fmt.Fprintf(errw, "  %d. %s\n", i+1, a.Slug)
+		}
+		fmt.Fprintln(errw, "  (enter to skip)")
+		fmt.Fprint(errw, "Choice: ")
+		choice, _ := reader.ReadString('\n')
+		choice = strings.TrimSpace(choice)
+		if choice != "" {
+			cfg.WritingStyle = resolveStyleChoice(choice, styles)
 		}
 	}
 
 	return cfg, nil
+}
+
+// writingStyleMenu loads the writing-style choices for the wizard,
+// surfacing — not swallowing — any load error or per-entry warning to
+// errw. A user who sees no styles must be able to tell an empty store
+// from one that failed to read. Returns nil when the menu is unavailable.
+func writingStyleMenu(errw io.Writer) []*attribute.Attribute {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(errw, "ethos: setup: cannot locate home directory, skipping style prompt: %v\n", err)
+		return nil
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	result, err := attribute.NewStore(globalRoot, attribute.WritingStyles).List()
+	if err != nil {
+		fmt.Fprintf(errw, "ethos: setup: cannot list writing styles, skipping style prompt: %v\n", err)
+		return nil
+	}
+	for _, w := range result.Warnings {
+		fmt.Fprintf(errw, "ethos: warning: %s\n", w)
+	}
+	return result.Attributes
 }
 
 // resolveStyleChoice resolves a numeric index or slug to a writing style slug.
@@ -356,15 +399,6 @@ func resolveStyleChoice(choice string, attrs []*attribute.Attribute) string {
 	}
 	// Treat as slug.
 	return choice
-}
-
-// setupHandleRe matches the same pattern as identity.validHandle:
-// lowercase alphanumeric, internal hyphens only, no leading or trailing hyphen.
-var setupHandleRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
-
-// validSetupHandle checks the handle matches the identity package's pattern.
-func validSetupHandle(h string) bool {
-	return setupHandleRe.MatchString(h)
 }
 
 // mergeRepoConfig writes .punt-labs/ethos.yaml, merging with any existing
@@ -383,6 +417,14 @@ func mergeRepoConfig(repoRoot string) error {
 	if err == nil && len(data) > 0 {
 		var raw map[string]interface{}
 		if err := yaml.Unmarshal(data, &raw); err == nil {
+			// A present-but-non-string agent key is malformed. Surface it
+			// rather than treating it as absent and clobbering it — the
+			// merge contract is "existing keys are never overwritten".
+			if v, present := raw["agent"]; present {
+				if _, ok := v.(string); !ok {
+					return fmt.Errorf("setup: repo config key \"agent\" has a non-string value (%T); fix .punt-labs/ethos.yaml by hand", v)
+				}
+			}
 			for k, v := range raw {
 				if s, ok := v.(string); ok {
 					existing[k] = s
@@ -402,36 +444,113 @@ func mergeRepoConfig(repoRoot string) error {
 	return nil
 }
 
-// saveIdentityNoRefs writes an identity YAML file, skipping attribute
-// ref validation. Setup runs in a bootstrapping context where the
-// referenced personality or writing style may not exist in the store
-// yet (e.g. principal-engineer is a convention, not a seeded file).
-// Structural validation (name, handle, kind) is still enforced.
-func saveIdentityNoRefs(store *identity.Store, id *identity.Identity) error {
-	if err := id.Validate(); err != nil {
-		return err
-	}
-	dir := store.IdentitiesDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("creating identity directory: %w", err)
-	}
-	data, err := yaml.Marshal(id)
-	if err != nil {
-		return fmt.Errorf("marshaling identity: %w", err)
-	}
-	path := store.Path(id.Handle)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		if os.IsExist(err) {
-			return fmt.Errorf("identity %q already exists", id.Handle)
+// ensureTeamKey repairs an ABSENT team key. active_bundle is the
+// idempotency sentinel setup keys off, but an interrupted activation or an
+// `ethos team bundle use` can leave the team key absent — SessionStart then
+// injects no team context with no other signal. A team key that merely
+// DIFFERS from the active bundle is left untouched: no schema requires
+// team == active_bundle, so a repo-local team may diverge deliberately. A
+// mismatch is surfaced as a warning, not overwritten.
+//
+// teamNamesBundle reports whether the divergent team value is itself a known
+// bundle. If so, the divergence may be a half-finished switch (team-first
+// ordering leaves team=NEW / active_bundle=OLD after an interrupted switch),
+// and setup cannot know the intended direction — so the warning offers both
+// remedies. Otherwise (a custom team) it offers the single align-to-active
+// remedy.
+func ensureTeamKey(errw io.Writer, repoRoot, bundle, currentTeam string, teamNamesBundle bool) error {
+	switch {
+	case bundle == "" || currentTeam == bundle:
+		return nil
+	case currentTeam == "":
+		if err := setConfigKey(repoRoot, "team", bundle); err != nil {
+			return fmt.Errorf("setup: repairing team key: %w", err)
 		}
-		return fmt.Errorf("creating identity file: %w", err)
+		fmt.Fprintf(errw, "repaired: team %q (was missing)\n", bundle)
+	case teamNamesBundle:
+		fmt.Fprintf(errw, "ethos: warning: team %q differs from active bundle %q — run \"ethos team activate %s\" to align to the active bundle, or \"ethos team activate %s\" to complete a switch to it\n",
+			currentTeam, bundle, bundle, currentTeam)
+	default:
+		fmt.Fprintf(errw, "ethos: warning: team %q differs from active bundle %q — if this is unintended, run \"ethos team activate %s\"\n",
+			currentTeam, bundle, bundle)
 	}
-	defer f.Close()
-	if _, err = f.Write(data); err != nil {
-		return err
+	return nil
+}
+
+// bundleNameExists reports whether name matches a non-legacy bundle.
+func bundleNameExists(bundles []bundle.Bundle, name string) bool {
+	if name == "" {
+		return false
 	}
-	return os.MkdirAll(store.ExtDir(id.Handle), 0o700)
+	for i := range bundles {
+		if bundles[i].Source == bundle.SourceLegacy {
+			continue
+		}
+		if bundles[i].Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// setupSaveError translates a Store.Save failure into an actionable
+// setup error. When the failure is a missing attribute reference — the
+// case where setup ran before seed — it names the missing slug and the
+// remedy. Other failures (structural, already-exists) pass through with
+// context.
+func setupSaveError(kind string, id *identity.Identity, globalRoot string, err error) error {
+	var ve *identity.ValidationError
+	if errors.As(err, &ve) {
+		if slug := missingRefSlug(ve, id, globalRoot); slug != "" {
+			return fmt.Errorf("setup: identity %q references %s %q, which is not installed; run \"ethos seed\" first",
+				id.Handle, refNoun(ve.Field), slug)
+		}
+	}
+	return fmt.Errorf("setup: creating %s identity: %w", kind, err)
+}
+
+// missingRefSlug returns the referenced slug that failed validation
+// because it is absent from the global store. It returns "" when the
+// failure is not a missing-attribute case (e.g. a malformed slug), so
+// the caller falls back to the underlying error.
+func missingRefSlug(ve *identity.ValidationError, id *identity.Identity, globalRoot string) string {
+	switch ve.Field {
+	case "personality":
+		return missingSlug(globalRoot, attribute.Personalities, id.Personality)
+	case "writing_style":
+		return missingSlug(globalRoot, attribute.WritingStyles, id.WritingStyle)
+	case "talents":
+		for _, s := range id.Talents {
+			if m := missingSlug(globalRoot, attribute.Talents, s); m != "" {
+				return m
+			}
+		}
+	}
+	return ""
+}
+
+// missingSlug returns slug if it is a well-formed slug that does not
+// exist in the given store, otherwise "".
+func missingSlug(root string, kind attribute.Kind, slug string) string {
+	if slug == "" || attribute.ValidateSlug(slug) != nil {
+		return ""
+	}
+	if attribute.NewStore(root, kind).Exists(slug) {
+		return ""
+	}
+	return slug
+}
+
+// refNoun maps an identity attribute field to a human-readable noun.
+func refNoun(field string) string {
+	switch field {
+	case "writing_style":
+		return "writing style"
+	case "talents":
+		return "talent"
+	default:
+		return field
+	}
 }
 
 // isTTY reports whether f is connected to a terminal.

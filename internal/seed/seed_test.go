@@ -1,8 +1,10 @@
 package seed
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/role"
@@ -59,6 +61,22 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "talents", "documentation.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "api-design.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "cli-design.md"))
+
+	// Should have deployed the conventional attributes that setup-created
+	// identities reference, so a fresh machine resolves them from global
+	// even with no bundle active.
+	assert.FileExists(t, filepath.Join(dest, "personalities", "principal-engineer.md"))
+	assert.FileExists(t, filepath.Join(dest, "writing-styles", "concise-quantified.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "engineering.md"))
+
+	// The previously-dead sidecar files now deploy as live starter content.
+	assert.FileExists(t, filepath.Join(dest, "personalities", "sprint-architect.md"))
+	assert.FileExists(t, filepath.Join(dest, "personalities", "product-thinker.md"))
+	assert.FileExists(t, filepath.Join(dest, "writing-styles", "reviewer-prose.md"))
+
+	// README.md must deploy only via seedReadmes, never as attribute content.
+	assert.FileExists(t, filepath.Join(dest, "personalities", "README.md"))
+	assert.FileExists(t, filepath.Join(dest, "writing-styles", "README.md"))
 
 	// Should have deployed skills
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
@@ -139,6 +157,111 @@ func TestSeedNoClobber(t *testing.T) {
 
 	// Other roles should still be deployed
 	assert.FileExists(t, filepath.Join(rolesDir, "reviewer.yaml"))
+}
+
+// TestSeedRepairsZeroByteFile pins the S3 fix: a zero-byte file left by an
+// interrupted seed is corruption, not user content. A re-seed overwrites it
+// atomically and reports it as repaired, while a non-empty existing file is
+// left untouched.
+func TestSeedRepairsZeroByteFile(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// A zero-byte talent (partial from a killed seed).
+	talentsDir := filepath.Join(dest, "talents")
+	require.NoError(t, os.MkdirAll(talentsDir, 0o755))
+	zeroPath := filepath.Join(talentsDir, "engineering.md")
+	require.NoError(t, os.WriteFile(zeroPath, []byte{}, 0o644))
+
+	// A non-empty user-edited role that must survive.
+	rolesDir := filepath.Join(dest, "roles")
+	require.NoError(t, os.MkdirAll(rolesDir, 0o755))
+	custom := []byte("name: implementer\nmodel: opus\n")
+	require.NoError(t, os.WriteFile(filepath.Join(rolesDir, "implementer.yaml"), custom, 0o644))
+
+	result, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	// Zero-byte file repaired to real content.
+	repaired, err := os.ReadFile(zeroPath)
+	require.NoError(t, err)
+	assert.NotEmpty(t, repaired, "zero-byte file must be repaired to real content")
+	assert.Contains(t, result.Repaired, zeroPath, "repaired file must be reported")
+	assert.NotContains(t, result.Skipped, zeroPath, "a zero-byte file is not a no-clobber skip")
+
+	// Non-empty user file untouched.
+	got, err := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, custom, got, "non-empty existing file must not be clobbered")
+}
+
+// TestSeed_DirAtDestFailsLoud pins the B1 ruling: a directory occupying a
+// file dest is corruption, not a no-clobber skip. Seed must fail loud and
+// name the path rather than report "skipped (exists)" and leave the real
+// file undeployed.
+func TestSeed_DirAtDestFailsLoud(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// A directory where a talent file belongs.
+	badPath := filepath.Join(dest, "talents", "engineering.md")
+	require.NoError(t, os.MkdirAll(badPath, 0o755))
+
+	result, err := Seed(dest, skills, false)
+	require.Error(t, err, "a directory at a file dest must fail seed")
+
+	var named bool
+	for _, e := range result.Errors {
+		if strings.Contains(e, badPath) && strings.Contains(e, "directory") {
+			named = true
+		}
+	}
+	assert.True(t, named, "error must name the directory dest; got %v", result.Errors)
+	assert.NotContains(t, result.Skipped, badPath, "a directory must not be reported as a skip")
+
+	// The failure is isolated: other files still deploy.
+	assert.FileExists(t, filepath.Join(dest, "roles", "implementer.yaml"))
+}
+
+// TestLinkInstall_FreshCreate pins the atomic create path: a fresh dest is
+// written with 0644 perms and the exact content, leaving no temp file.
+func TestLinkInstall_FreshCreate(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "attr.md")
+	require.NoError(t, linkInstall(dest, []byte("# content\n")))
+
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, "# content\n", string(got))
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "temp file must be cleaned up")
+}
+
+// TestLinkInstall_FailsOnExisting pins the TOCTOU close: os.Link refuses to
+// clobber an existing dest, surfacing os.ErrExist atomically. That signal is
+// what installNoClobber keys off to re-decide (skip or repair) rather than
+// replacing a file that raced in after the Stat.
+func TestLinkInstall_FailsOnExisting(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "attr.md")
+	require.NoError(t, os.WriteFile(dest, []byte("user content\n"), 0o644))
+
+	err := linkInstall(dest, []byte("seed content\n"))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, os.ErrExist), "link to an existing dest must report ErrExist; got %v", err)
+
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, "user content\n", string(got), "existing file must not be clobbered")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "temp file must be cleaned up even on link failure")
 }
 
 func TestSeedForce(t *testing.T) {

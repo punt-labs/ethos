@@ -3,6 +3,7 @@ package identity
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -306,6 +307,164 @@ func TestLayered_AttributeResolutionRepoWins(t *testing.T) {
 	id, err := ls.Load("mal")
 	require.NoError(t, err)
 	assert.Contains(t, id.PersonalityContent, "Repo Analytical", "repo attribute should win")
+}
+
+// setupLayeredWithBundle creates repo, bundle, and global stores in
+// temp dirs. Returns (layered, repoStore, bundleStore, globalStore).
+func setupLayeredWithBundle(t *testing.T) (*LayeredStore, *Store, *Store, *Store) {
+	t.Helper()
+	repo := NewStore(t.TempDir())
+	bundle := NewStore(t.TempDir())
+	global := NewStore(t.TempDir())
+	ls := NewLayeredStoreWithBundle(repo, bundle, global)
+	return ls, repo, bundle, global
+}
+
+// corruptAttribute puts a directory where an attribute's .md file belongs,
+// so reading it fails with a non-not-found error (EISDIR).
+func corruptAttribute(t *testing.T, root string, kind attribute.Kind, slug string) {
+	t.Helper()
+	p, err := attribute.NewStore(root, kind).Path(slug)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(p, 0o700))
+}
+
+// TestLayered_UnreadableHigherLayerWarnsAndFallsThrough pins the S2 fix: a
+// higher-layer attribute that exists but cannot be read must not silently
+// lose to a lower layer. Resolution still returns the lower layer's content
+// (best effort), but a warning names the unreadable higher layer.
+func TestLayered_UnreadableHigherLayerWarnsAndFallsThrough(t *testing.T) {
+	ls, _, bundle, global := setupLayeredWithBundle(t)
+
+	corruptAttribute(t, bundle.Root(), attribute.Personalities, "p")
+	createTestAttribute(t, global.Root(), attribute.Personalities, "p", "# global-personality\n")
+
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: p\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Contains(t, id.PersonalityContent, "global-personality",
+		"content falls through to the readable lower layer")
+	require.NotEmpty(t, id.Warnings, "the unreadable bundle copy must produce a warning")
+	assert.Contains(t, id.Warnings[0], "bundle", "warning must name the unreadable layer")
+	assert.Contains(t, id.Warnings[0], "unreadable")
+}
+
+// TestLayered_UnreadableLayerAllFailNamesRealError pins the second half of
+// S2: when a higher layer is unreadable and no lower layer has the slug, the
+// warning must name the real error on the layer that holds the file, not
+// only the lowest layer's not-found.
+func TestLayered_UnreadableLayerAllFailNamesRealError(t *testing.T) {
+	ls, _, bundle, _ := setupLayeredWithBundle(t)
+
+	corruptAttribute(t, bundle.Root(), attribute.Talents, "t")
+
+	writeIdentityYAML(t, bundle, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\ntalents:\n  - t\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Empty(t, id.TalentContents[0], "no layer supplies readable content")
+
+	var named bool
+	for _, w := range id.Warnings {
+		if strings.Contains(w, "bundle") && strings.Contains(w, "unreadable") {
+			named = true
+		}
+	}
+	assert.True(t, named, "a warning must name the unreadable bundle layer; got %v", id.Warnings)
+}
+
+// TestLayered_UnreadableGlobalWarnsOnce pins the N2 dedupe: an unreadable
+// last (global) layer must produce a single warning, not a duplicate pair
+// (the per-layer "unreadable" line plus a redundant "unresolved" summary).
+func TestLayered_UnreadableGlobalWarnsOnce(t *testing.T) {
+	ls, _, _, global := setupLayeredWithBundle(t)
+
+	corruptAttribute(t, global.Root(), attribute.Personalities, "p")
+
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: p\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Empty(t, id.PersonalityContent)
+	require.Len(t, id.Warnings, 1, "one layer failure must warn once, not twice: %v", id.Warnings)
+	assert.Contains(t, id.Warnings[0], "global")
+	assert.Contains(t, id.Warnings[0], "unreadable")
+}
+
+// TestLayered_GlobalIdentityResolvesFromBundle pins the F3 fix: an
+// identity stored in the global layer resolves attribute content from the
+// active bundle, not just from global.
+func TestLayered_GlobalIdentityResolvesFromBundle(t *testing.T) {
+	ls, _, bundle, global := setupLayeredWithBundle(t)
+
+	createTestAttribute(t, bundle.Root(), attribute.Personalities, "principal-engineer", "# Principal\nPrincipled.\n")
+	createTestAttribute(t, bundle.Root(), attribute.WritingStyles, "concise-quantified", "# Concise\nQuantified.\n")
+	createTestAttribute(t, bundle.Root(), attribute.Talents, "engineering", "# Engineering\nSystems.\n")
+
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: principal-engineer\nwriting_style: concise-quantified\ntalents:\n  - engineering\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Empty(t, id.Warnings, "bundle should resolve all three attributes for a global identity")
+	assert.Contains(t, id.PersonalityContent, "Principal")
+	assert.Contains(t, id.WritingStyleContent, "Concise")
+	require.Len(t, id.TalentContents, 1)
+	assert.Contains(t, id.TalentContents[0], "Engineering")
+}
+
+// TestLayered_AttrChainPrecedence pins repo → bundle → global precedence
+// for all three attribute types, for a global-sourced identity.
+func TestLayered_AttrChainPrecedence(t *testing.T) {
+	ls, repo, bundle, global := setupLayeredWithBundle(t)
+
+	// Personality present in all three layers — repo wins.
+	createTestAttribute(t, repo.Root(), attribute.Personalities, "p", "# repo-personality\n")
+	createTestAttribute(t, bundle.Root(), attribute.Personalities, "p", "# bundle-personality\n")
+	createTestAttribute(t, global.Root(), attribute.Personalities, "p", "# global-personality\n")
+
+	// Writing style present in bundle and global — bundle wins over global.
+	createTestAttribute(t, bundle.Root(), attribute.WritingStyles, "w", "# bundle-style\n")
+	createTestAttribute(t, global.Root(), attribute.WritingStyles, "w", "# global-style\n")
+
+	// Talent present only in global — global resolves it.
+	createTestAttribute(t, global.Root(), attribute.Talents, "t", "# global-talent\n")
+
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: p\nwriting_style: w\ntalents:\n  - t\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Empty(t, id.Warnings)
+	assert.Contains(t, id.PersonalityContent, "repo-personality", "repo shadows bundle and global")
+	assert.Contains(t, id.WritingStyleContent, "bundle-style", "bundle shadows global")
+	require.Len(t, id.TalentContents, 1)
+	assert.Contains(t, id.TalentContents[0], "global-talent", "global resolves when higher layers absent")
+}
+
+// TestLayered_MultipleDanglingRefs_AggregatesWarnings pins that
+// resolution reports EVERY unresolved attribute, not just the first. An
+// identity with two dangling refs must produce two warnings — a
+// return-on-first-warning refactor would silently drop the second, and
+// only a count assertion catches that.
+func TestLayered_MultipleDanglingRefs_AggregatesWarnings(t *testing.T) {
+	ls, _, _, global := setupLayeredWithBundle(t)
+
+	// Neither attribute exists in any layer — both refs dangle.
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: ghost-personality\nwriting_style: ghost-style\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	require.Len(t, id.Warnings, 2, "both dangling refs must be reported, not just the first")
+
+	joined := strings.Join(id.Warnings, "\n")
+	assert.Contains(t, joined, `personality "ghost-personality"`, "the dangling personality must be named")
+	assert.Contains(t, joined, `writing_style "ghost-style"`, "the dangling writing style must be named")
 }
 
 func TestLayered_RootAndPaths(t *testing.T) {

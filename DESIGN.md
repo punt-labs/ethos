@@ -6135,3 +6135,78 @@ step. `enable` and `setup` stay fully separate.
 - **`disable` seals before stripping**: operator overruled; `disable` means the
   user is done — strand-not-seal, with recovery on re-enable, avoids an
   off-switch that runs work the user did not ask for.
+
+## DES-060: Setup/seed consistency — resolvable identities on a fresh machine (SETTLED)
+
+**Status**: Settled. Bead `ethos-5zwn`. Full design in
+`docs/setup-consistency.md`.
+
+### Problem
+
+On a fresh machine the bundles onboarding path (`ethos seed` then `ethos
+setup --bundle …`) produced identities whose attributes resolved to
+nothing. Two subsystems disagreed about the global layer. `ethos setup`
+wrote a `claude` agent and a human identity referencing
+`principal-engineer`, `concise-quantified`, and `engineering`; `ethos
+seed` deployed none of those to the global layer (it embedded only the
+READMEs of the personalities/writing-styles dirs). And attribute
+resolution for a globally-stored identity consulted the global layer only,
+so even an attribute a bundle carried never resolved for a global
+identity. It worked on existing machines solely because the live repo
+carried the three files in its `.punt-labs/ethos/` submodule (the repo
+layer).
+
+### Decision
+
+Fix the contradiction as belt-and-suspenders, both parts shipped together:
+
+- **Uniform DES-051 chain.** Attribute content resolves through repo →
+  active bundle → global for *all* identities, including globally-stored
+  ones. The per-source-layer chain that skipped the bundle for global
+  identities was a conformance bug against DES-051, not a design choice;
+  the fix collapses it to one chain over whichever layers are present. The
+  bundle-blind set was exactly {personality, writing_style, talents};
+  identity lookup, the attribute store, role, and team already threaded the
+  bundle.
+- **Seed the conventional attributes.** `ethos seed` deploys personalities
+  and writing-styles to the global layer, vendoring the three
+  setup-referenced slugs from the team registry, so a fresh machine
+  resolves even with no bundle active.
+- **Hard validation.** `ethos setup` validates the identities it writes and
+  fails before `ethos seed` has run, with an actionable error, rather than
+  writing a dangling reference.
+
+### Blast radius (decided behavior)
+
+The uniform chain makes a global identity's resolved persona *content*
+bundle-dependent: `claude`'s `engineering` talent reads foundation's text
+in a foundation repo, gstack's in a gstack repo, and the global-seed copy
+only with no bundle active. This is precisely the property the bug's
+symptom raised as questionable, and it is ratified: global-identity content
+follows the active bundle by design, and the global seed is load-bearing
+only on the no-bundle path (a bundle shadows the seed copy whenever it
+ships the same slug). See `docs/setup-consistency.md` for the full analysis.
+
+### Gate rulings
+
+- **Never overwrite divergent team config on a guess.** When a repo's
+  `team` key deliberately differs from the bundle, `setup` warns and leaves
+  it — it does not clobber a value the user chose.
+- **Convergence is an explicit command.** `ethos team activate` on an
+  already-active bundle is the reviewable step that repairs a `team` value
+  which has drifted from the active bundle; convergence never happens as a
+  silent side effect.
+
+### Rejected alternatives
+
+- **`setup` writes identities to the repo layer** instead of global:
+  `claude` and the human are user-scoped identities shared across every
+  repo; repo-layer storage duplicates them per-repo and breaks the
+  single-identity model. DES-051 writes target global by contract.
+- **Bundle-only resolution without the global seed** (the uniform chain
+  alone): fails the no-bundle path — `ethos setup --solo` and any repo with
+  no active bundle would leave `claude`/human unresolved.
+- **SessionStart-style auto-repair** of dangling references: rejected for
+  the same reason DES-059 rejected SessionStart auto-migration — repair is
+  an explicit, reviewable operator action (`ethos seed`, `ethos team
+  activate`), not a silent hook side effect.

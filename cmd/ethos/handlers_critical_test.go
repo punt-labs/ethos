@@ -397,6 +397,25 @@ func TestSeed_Idempotent(t *testing.T) {
 	assert.Contains(t, stdout, "skipped")
 }
 
+// TestSeed_RepairedLineOnStdout pins the stream fix: repaired lines ride
+// stdout with their deployed/skipped siblings, so `ethos seed > log.txt`
+// captures the most surprising output rather than dropping it to stderr.
+func TestSeed_RepairedLineOnStdout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// A zero-byte talent left by an interrupted seed.
+	talentsDir := filepath.Join(home, ".punt-labs", "ethos", "talents")
+	require.NoError(t, os.MkdirAll(talentsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(talentsDir, "engineering.md"), []byte{}, 0o644))
+
+	// captureStdout captures only stdout, so this fails if the line is on stderr.
+	stdout, err := execSeed(t, "seed")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "repaired (was empty):")
+	assert.Contains(t, stdout, "engineering.md")
+}
+
 func TestSeed_Force(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

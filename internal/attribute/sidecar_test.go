@@ -19,12 +19,13 @@ func attrSidecarRoot(t *testing.T) string {
 func TestSidecarTalentsLoad(t *testing.T) {
 	store := NewStore(attrSidecarRoot(t), Talents)
 
-	expected := []string{
+	// The language and discipline talents are substantial reference docs.
+	substantial := []string{
 		"api-design", "cli-design", "code-review", "devops",
 		"documentation", "go", "python", "security", "testing", "typescript",
 	}
 
-	for _, slug := range expected {
+	for _, slug := range substantial {
 		t.Run(slug, func(t *testing.T) {
 			attr, err := store.Load(slug)
 			require.NoError(t, err)
@@ -35,6 +36,13 @@ func TestSidecarTalentsLoad(t *testing.T) {
 		})
 	}
 
+	// engineering is the conventional talent setup-created identities
+	// reference; it is a short umbrella talent, not a reference doc.
+	engineering, err := store.Load("engineering")
+	require.NoError(t, err)
+	assert.NotEmpty(t, engineering.Content)
+
+	expected := append(substantial, "engineering")
 	listed, err := store.List()
 	require.NoError(t, err)
 	var slugs []string

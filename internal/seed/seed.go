@@ -2,6 +2,7 @@ package seed
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -13,6 +14,7 @@ import (
 type Result struct {
 	Deployed []string // files written
 	Skipped  []string // files that already existed (no-clobber)
+	Repaired []string // zero-byte files overwritten (partial from an interrupted seed)
 	Errors   []string // files that failed
 }
 
@@ -28,6 +30,12 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 
 	// Talents (skip README.md — handled separately)
 	seedFS(Talents, "sidecar/talents", filepath.Join(destRoot, "talents"), ".md", force, r)
+
+	// Personalities and writing-styles: the conventional attributes that
+	// setup-created identities reference, plus starter sidecar content.
+	// A fresh machine resolves these from global when no bundle is active.
+	seedFS(Personalities, "sidecar/personalities", filepath.Join(destRoot, "personalities"), ".md", force, r)
+	seedFS(WritingStyles, "sidecar/writing-styles", filepath.Join(destRoot, "writing-styles"), ".md", force, r)
 
 	// Archetypes
 	seedFS(Archetypes, "sidecar/archetypes", filepath.Join(destRoot, "archetypes"), ".yaml", force, r)
@@ -160,57 +168,128 @@ func writeFile(dest string, data []byte, force bool, r *Result) {
 	}
 
 	if force {
-		tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".seed.*.tmp")
-		if err != nil {
+		if err := atomicWrite(dest, data); err != nil {
 			r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
-			return
-		}
-		tmpPath := tmp.Name()
-		if _, err := tmp.Write(data); err != nil {
-			r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
-			tmp.Close()
-			os.Remove(tmpPath)
-			return
-		}
-		if err := tmp.Close(); err != nil {
-			r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
-			os.Remove(tmpPath)
-			return
-		}
-		if err := os.Chmod(tmpPath, 0o644); err != nil {
-			r.Errors = append(r.Errors, fmt.Sprintf("chmod %s: %v", dest, err))
-			os.Remove(tmpPath)
-			return
-		}
-		if err := os.Rename(tmpPath, dest); err != nil {
-			r.Errors = append(r.Errors, fmt.Sprintf("renaming %s: %v", dest, err))
-			os.Remove(tmpPath)
 			return
 		}
 		r.Deployed = append(r.Deployed, dest)
 		return
 	}
 
-	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if os.IsExist(err) {
-			r.Skipped = append(r.Skipped, dest)
-			return
-		}
-		r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
-		return
-	}
+	installNoClobber(dest, data, r)
+}
 
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		os.Remove(dest)
+// installNoClobber writes dest without clobbering existing user content. A
+// non-empty file is kept; a zero-byte file is a partial from an interrupted
+// seed and is repaired. Creation uses os.Link, which fails atomically if
+// dest already exists — closing the Stat→create race a plain
+// stat-then-rename leaves open.
+func installNoClobber(dest string, data []byte, r *Result) {
+	if handled := classifyExisting(dest, data, r); handled {
+		return
+	}
+	// dest was absent — create it atomically without clobbering a file that
+	// races in between the Stat above and this create.
+	err := linkInstall(dest, data)
+	switch {
+	case err == nil:
+		r.Deployed = append(r.Deployed, dest)
+	case errors.Is(err, os.ErrExist):
+		// A file appeared in the race window. Re-decide against it once.
+		if handled := classifyExisting(dest, data, r); !handled {
+			r.Errors = append(r.Errors,
+				fmt.Sprintf("writing %s: file appeared and vanished during install", dest))
+		}
+	default:
 		r.Errors = append(r.Errors, fmt.Sprintf("writing %s: %v", dest, err))
-		return
 	}
-	if err := f.Close(); err != nil {
-		os.Remove(dest)
-		r.Errors = append(r.Errors, fmt.Sprintf("closing %s: %v", dest, err))
-		return
+}
+
+// classifyExisting acts on a dest that already exists: a non-empty file is
+// skipped (no-clobber), a zero-byte file is repaired, a directory is a hard
+// error. It returns true when dest existed (action taken or error recorded),
+// false when dest is absent and the caller should create it.
+func classifyExisting(dest string, data []byte, r *Result) bool {
+	info, err := os.Stat(dest)
+	switch {
+	case err == nil && info.IsDir():
+		// A directory where a file belongs is corruption/misplacement: it
+		// passes a Size()>0 check but the real file can never deploy, so fail
+		// loud rather than silently skip it.
+		r.Errors = append(r.Errors, fmt.Sprintf("%s is a directory, expected a file", dest))
+		return true
+	case err == nil && info.Size() > 0:
+		// A non-empty existing file is user content — never clobber it.
+		r.Skipped = append(r.Skipped, dest)
+		return true
+	case err == nil:
+		// A zero-byte file is a partial write left by an interrupted seed.
+		// Repair replaces it with os.Rename. The only writers to these paths
+		// are seed itself with deterministic embedded content (a racing
+		// seeder writes identical bytes); a concurrent user hand-edit landing
+		// in this window is accepted as negligible — stdlib offers no
+		// portable exclusive-replace.
+		if werr := atomicWrite(dest, data); werr != nil {
+			r.Errors = append(r.Errors, fmt.Sprintf("repairing %s: %v", dest, werr))
+		} else {
+			r.Repaired = append(r.Repaired, dest)
+		}
+		return true
+	case !os.IsNotExist(err):
+		r.Errors = append(r.Errors, fmt.Sprintf("stat %s: %v", dest, err))
+		return true
 	}
-	r.Deployed = append(r.Deployed, dest)
+	return false // absent
+}
+
+// linkInstall writes data to a temp file in dest's directory, then hard-links
+// it to dest. os.Link fails with os.ErrExist if dest already exists, giving
+// an atomic no-clobber create. The temp file is always removed.
+func linkInstall(dest string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".seed.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return err
+	}
+	return os.Link(tmpPath, dest)
+}
+
+// atomicWrite writes data to a temp file in dest's directory, then renames
+// it over dest. A kill at any point leaves either the old file or the new
+// complete one — never a partial file at dest.
+func atomicWrite(dest string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".seed.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
