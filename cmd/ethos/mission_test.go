@@ -3629,52 +3629,52 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 		"the refusal must name the remedy (DES-061 step-4 error)")
 }
 
+// captureStderrFn redirects os.Stderr for the duration of fn and returns
+// what was written.
+func captureStderrFn(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	w.Close()
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(r)
+	require.NoError(t, err)
+	return buf.String()
+}
+
 // TestWarnIfGlobalFallback pins the ethos-yofr loudness requirement: when
-// no git repository is in scope, a write/claim path warns to stderr naming
-// the global store and the ETHOS_REPO_ROOT override, rather than silently
-// operating on the global tree. Inside a repo it stays quiet.
+// no repo store is in scope, the warning names the global store and the
+// ETHOS_REPO_ROOT override; with a repo root it stays quiet.
 func TestWarnIfGlobalFallback(t *testing.T) {
-	captureStderr := func(fn func()) string {
-		old := os.Stderr
-		r, w, err := os.Pipe()
-		require.NoError(t, err)
-		os.Stderr = w
-		defer func() { os.Stderr = old }()
-		fn()
-		w.Close()
-		var buf bytes.Buffer
-		_, err = buf.ReadFrom(r)
-		require.NoError(t, err)
-		return buf.String()
-	}
+	out := captureStderrFn(t, func() { warnIfGlobalFallback("") })
+	assert.Contains(t, out, "no git repository found")
+	assert.Contains(t, out, "global mission store")
+	assert.Contains(t, out, "ETHOS_REPO_ROOT")
 
-	t.Run("no repo warns loudly", func(t *testing.T) {
-		t.Setenv("ETHOS_REPO_ROOT", "")
-		// /tmp has no .git ancestor, so FindRepoRoot resolves empty.
-		nonRepo, err := os.MkdirTemp("/tmp", "ethos-mission-norepo-*")
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
-		orig, err := os.Getwd()
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = os.Chdir(orig) })
-		require.NoError(t, os.Chdir(nonRepo))
+	quiet := captureStderrFn(t, func() { warnIfGlobalFallback("/some/repo") })
+	assert.Empty(t, quiet)
+}
 
-		out := captureStderr(func() { warnIfGlobalFallback("create") })
-		assert.Contains(t, out, "no git repository found")
-		assert.Contains(t, out, "global store")
-		assert.Contains(t, out, "ETHOS_REPO_ROOT")
-	})
+// TestMissionStore_ReadWarnsOnGlobalFallback pins SFH F3: a READ path
+// (missionStore, used by show/list/log and the mutators) warns when it
+// falls back to the global store — the operator's report was "list/show
+// sees a different store," so reads must not be silent.
+func TestMissionStore_ReadWarnsOnGlobalFallback(t *testing.T) {
+	t.Setenv("ETHOS_REPO_ROOT", "")
+	// /tmp has no .git ancestor, so StoreRepoRoot resolves empty.
+	nonRepo, err := os.MkdirTemp("/tmp", "ethos-mission-norepo-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(nonRepo) })
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	require.NoError(t, os.Chdir(nonRepo))
 
-	t.Run("inside a repo stays quiet", func(t *testing.T) {
-		t.Setenv("ETHOS_REPO_ROOT", "")
-		repo := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
-		orig, err := os.Getwd()
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = os.Chdir(orig) })
-		require.NoError(t, os.Chdir(repo))
-
-		out := captureStderr(func() { warnIfGlobalFallback("create") })
-		assert.Empty(t, out)
-	})
+	out := captureStderrFn(t, func() { _ = missionStore() })
+	assert.Contains(t, out, "no git repository found")
+	assert.Contains(t, out, "global mission store")
 }

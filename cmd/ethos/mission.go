@@ -46,19 +46,22 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	return mission.NewStoreWithRoots(resolve.StoreRepoRoot(), root).
+	repoRoot := resolve.StoreRepoRoot()
+	warnIfGlobalFallback(repoRoot)
+	return mission.NewStoreWithRoots(repoRoot, root).
 		WithSessionResolver(currentSessionIDBestEffort)
 }
 
-// warnIfGlobalFallback warns loudly when no git repository is in scope,
-// so an operator sees that a write or claim is about to operate on the
-// global store (~/.punt-labs/ethos) rather than a repo-local one. A
-// mission created or claimed there is invisible from any repo checkout,
-// which reads as "the mission was never created" (ethos-yofr). Silent
-// degradation is the failure mode; a warning that names the resolved root
-// is the fix. Read-only queries stay quiet.
-func warnIfGlobalFallback(op string) {
-	if resolve.StoreRepoRoot() != "" {
+// warnIfGlobalFallback warns loudly when no repo store is in scope, so an
+// operator sees that the mission store resolved to the global tree
+// (~/.punt-labs/ethos) rather than a repo-local one. A mission stored there
+// is invisible from any repo checkout, which reads as "the mission was never
+// created" — or, for a read, "the mission is gone" (ethos-yofr). Called from
+// both mission store constructors so every subcommand, read and mutator
+// alike, warns rather than degrading silently (SFH F3); each single-shot CLI
+// command builds one store, so it warns at most once.
+func warnIfGlobalFallback(repoRoot string) {
+	if repoRoot != "" {
 		return
 	}
 	root := "~/.punt-labs/ethos"
@@ -66,10 +69,10 @@ func warnIfGlobalFallback(op string) {
 		root = filepath.Join(home, ".punt-labs", "ethos")
 	}
 	fmt.Fprintf(os.Stderr,
-		"ethos: mission %s: no git repository found for the current directory; "+
-			"operating on the global store at %s. A mission here is not visible from "+
-			"any repo checkout — set ETHOS_REPO_ROOT to force a repo store.\n",
-		op, root)
+		"ethos: no git repository found for the current directory; operating on "+
+			"the global mission store at %s. Missions here are not visible from any "+
+			"repo checkout — set ETHOS_REPO_ROOT to force a repo store.\n",
+		root)
 }
 
 // currentSessionIDBestEffort resolves the current session id from
@@ -121,7 +124,9 @@ func missionStoreForCreate() *mission.Store {
 	// fallback. NewStore + WithRepoRoot would only wire the trace
 	// summary and leave per-mission storage on the global tree
 	// (m-2026-05-23-004 escalation).
-	ms := mission.NewStoreWithRoots(resolve.StoreRepoRoot(), root).
+	storeRoot := resolve.StoreRepoRoot()
+	warnIfGlobalFallback(storeRoot)
+	ms := mission.NewStoreWithRoots(storeRoot, root).
 		WithSessionResolver(currentSessionIDBestEffort)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
@@ -815,7 +820,6 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 // Uses missionStoreForCreate so the Phase 3.5 role-overlap gate
 // fires; read-only subcommands use the bare missionStore.
 func runMissionCreate() error {
-	warnIfGlobalFallback("create")
 	ms := missionStoreForCreate()
 
 	data, err := os.ReadFile(missionCreateFile)
@@ -1537,7 +1541,6 @@ func runMissionDispatch() error {
 		Budget:          mission.Budget{Rounds: dispatchBudget, ReflectionAfterEach: true},
 	}
 
-	warnIfGlobalFallback("dispatch")
 	ms := missionStoreForCreate()
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
@@ -1571,7 +1574,6 @@ func runMissionClaim(idOrPrefix string) error {
 	if err != nil {
 		return fmt.Errorf("mission claim: %w", err)
 	}
-	warnIfGlobalFallback("claim")
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
