@@ -605,6 +605,45 @@ func TestHandleSession_Iam(t *testing.T) {
 	assert.True(t, found, "expected participant with persona 'new-persona' in roster")
 }
 
+// TestResolveSessionID_HonorsEnv pins DES-061 R4: with no session_id arg,
+// the MCP surface resolves ETHOS_SESSION, matching the CLI.
+func TestResolveSessionID_HonorsEnv(t *testing.T) {
+	h := testHandlerWithSession(t)
+	t.Setenv("ETHOS_SESSION", "env-mcp-session")
+
+	sid, err := h.resolveSessionID(callTool(map[string]interface{}{"method": "roster"}))
+	require.NoError(t, err)
+	assert.Equal(t, "env-mcp-session", sid, "resolveSessionID must honor ETHOS_SESSION")
+}
+
+// TestHandleIam_HonorsAgentID pins DES-061 R4: the MCP iam handler keys the
+// participant on ETHOS_AGENT_ID when set, matching the CLI, so the same
+// declaration records the same agent key on both surfaces.
+func TestHandleIam_HonorsAgentID(t *testing.T) {
+	h := testHandlerWithSession(t)
+	t.Setenv("ETHOS_AGENT_ID", "codex-key")
+
+	require.NoError(t, h.sessionStore.Create("test-iam-agentid",
+		session.Participant{AgentID: "user1", Persona: "user1"},
+		session.Participant{AgentID: "12345", Persona: "archie", Parent: "user1"},
+		"", "",
+	))
+
+	result, err := h.handleSession(context.Background(), callTool(map[string]interface{}{
+		"method":     "iam",
+		"session_id": "test-iam-agentid",
+		"persona":    "codex-persona",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	roster, err := h.sessionStore.Load("test-iam-agentid")
+	require.NoError(t, err)
+	p := roster.FindParticipant("codex-key")
+	require.NotNil(t, p, "participant must be keyed on ETHOS_AGENT_ID")
+	assert.Equal(t, "codex-persona", p.Persona)
+}
+
 func TestHandleSession_Leave(t *testing.T) {
 	h := testHandlerWithSession(t)
 
