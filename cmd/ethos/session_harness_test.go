@@ -252,9 +252,9 @@ func TestCLI_SessionStart_PersonaSelfConsistent(t *testing.T) {
 	assert.Contains(t, out, "test-agent", "eval-then-whoami must reflect the --persona identity")
 }
 
-// TestCLI_SessionEnd: end deletes the roster. A second end under the same
-// (now-stale) ETHOS_SESSION fails loud rather than silently "ending nothing"
-// — the H2 contract that a stale env must not sail through the hard chain.
+// TestCLI_SessionEnd: end deletes the roster; a second end under the same
+// (now-stale) env is a clean no-op with a note — teardown is idempotent
+// (rm -f), so H2's hard env verification does not apply here.
 func TestCLI_SessionEnd(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -269,10 +269,10 @@ func TestCLI_SessionEnd(t *testing.T) {
 	require.Equal(t, 0, code, "stderr=%s", stderr)
 	assert.NoFileExists(t, rosterPath, "end must delete the roster")
 
-	// The env now names a deleted roster: a second end refuses loudly.
+	// The env now names a deleted roster: a second end is a no-op with a note.
 	_, stderr2, code2 := runCLI(t, env, "session", "end")
-	require.NotEqual(t, 0, code2, "a stale ETHOS_SESSION must not silently succeed; stderr=%s", stderr2)
-	assert.Contains(t, stderr2, "ETHOS_SESSION")
+	assert.Equal(t, 0, code2, "second end must be a clean no-op; stderr=%s", stderr2)
+	assert.Contains(t, stderr2, "nothing to end")
 }
 
 // TestCLI_Whoami_ReflectsPersona covers acceptance case 5 (REC-1/REC-3):

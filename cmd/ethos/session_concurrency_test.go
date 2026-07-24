@@ -116,11 +116,12 @@ func TestCLI_ConcurrentIam_FlockNoLoss(t *testing.T) {
 	}
 }
 
-// TestCLI_DoubleSessionEnd_RefusesStaleEnv pins that ending an
-// already-ended session (env still set, roster gone) refuses loudly rather
-// than "ending nothing" — a stale ETHOS_SESSION must not sail through the
-// hard chain (DES-061 H2). This supersedes the earlier no-op behavior.
-func TestCLI_DoubleSessionEnd_RefusesStaleEnv(t *testing.T) {
+// TestCLI_DoubleSessionEnd_NoOp pins that ending an already-ended session
+// (env still set, roster gone) is a clean no-op with a stderr note — end is
+// teardown, so "already gone" is success (the rm -f norm), preserving the
+// trap-handler/rc cleanup pattern. H2's hard verification is scoped to
+// state-writers (claim/release/iam), not teardown.
+func TestCLI_DoubleSessionEnd_NoOp(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
@@ -134,8 +135,8 @@ func TestCLI_DoubleSessionEnd_RefusesStaleEnv(t *testing.T) {
 	require.Equal(t, 0, code, "first end should succeed")
 
 	_, stderr, code := runCLI(t, sh, "session", "end")
-	require.NotEqual(t, 0, code, "a stale ETHOS_SESSION must not silently succeed; stderr=%s", stderr)
-	assert.Contains(t, stderr, "ETHOS_SESSION")
+	assert.Equal(t, 0, code, "a second end with the env still set is a clean no-op; stderr=%s", stderr)
+	assert.Contains(t, stderr, "nothing to end", "the no-op must note the already-gone session")
 }
 
 // TestCLI_IamAfterEnd_NoResurrection pins that iam after the session ended

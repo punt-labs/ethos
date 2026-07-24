@@ -47,15 +47,26 @@ func resolveSessionContext() (sessionID, agentID string, err error) {
 }
 
 // resolveHardSession applies the session resolution chain for a
-// session-required consumer (iam, session join/leave/end, mission
-// claim/release). Order (DES-061 R2):
+// state-writing consumer (iam, mission claim/release) where operating on a
+// session that does not exist causes real harm — so an env-sourced ID is
+// verified. See resolveSession.
+func resolveHardSession(explicit string) (sessionID, agentID string, err error) {
+	return resolveSession(explicit, true)
+}
+
+// resolveSession applies the session resolution chain (DES-061 R2):
 //  1. explicit --session/arg (full or prefix match; walk bypassed — R3)
 //  2. ETHOS_SESSION env      (walk bypassed — R3)
 //  3. Claude process-tree walk (zero-config inside Claude Code)
 //  4. errNoSession — actionable, names `ethos session start`
 //
+// When verifyEnv is true, an env-sourced ID must name a real roster (parity
+// with --session's MatchByPrefix) — a stale env would otherwise stage a
+// phantom mission binding. Teardown (session end) passes false: "already
+// gone" is success there, handled by the caller.
+//
 // agentID keys the participant: ETHOS_AGENT_ID if set, else the Claude PID.
-func resolveHardSession(explicit string) (sessionID, agentID string, err error) {
+func resolveSession(explicit string, verifyEnv bool) (sessionID, agentID string, err error) {
 	agentID = os.Getenv("ETHOS_AGENT_ID")
 	ss := sessionStore()
 
@@ -70,11 +81,7 @@ func resolveHardSession(explicit string) (sessionID, agentID string, err error) 
 	if sessionID == "" {
 		sid, source := resolve.SessionID(ss)
 		if sid != "" {
-			// An explicit ETHOS_SESSION must name a real roster — same
-			// contract as --session (validated above). Without this a stale
-			// env sails through the hard chain and stages a phantom binding
-			// (mission claim/release) or a teardown of nothing.
-			if source == resolve.SessionSourceEnv {
+			if verifyEnv && source == resolve.SessionSourceEnv {
 				if _, lerr := ss.Load(sid); lerr != nil {
 					return "", "", fmt.Errorf("ETHOS_SESSION %q: %w", sid, lerr)
 				}

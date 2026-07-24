@@ -510,9 +510,16 @@ func mintSessionID() (string, error) {
 // Claude session's discovery channel.
 func runSessionEnd(cmd *cobra.Command) error {
 	ss := sessionStore()
-	sid, _, err := resolveHardSession(sessionEndSession)
+	// Teardown does NOT hard-verify an env-sourced ID: "already gone" is
+	// success (the rm -f norm), so a re-run in a trap handler or rc cleanup
+	// with a stale ETHOS_SESSION is a no-op with a note, not an error.
+	sid, _, err := resolveSession(sessionEndSession, false)
 	if err != nil {
 		return err
+	}
+	if _, lerr := ss.Load(sid); lerr != nil && errors.Is(lerr, os.ErrNotExist) {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s not found; nothing to end\n", sid)
+		return nil
 	}
 	if err := ss.Delete(sid); err != nil {
 		return err
