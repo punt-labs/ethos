@@ -465,7 +465,15 @@ func tierBMissionStore() (*mission.Store, error) {
 	// dispatch skeleton write and the CLI's `mission create` — the main work
 	// tree in a linked worktree (CR#1). Without this the dispatch hook reads
 	// a different store than the CLI wrote and refuses the spawn.
-	return mission.NewStoreWithRoots(tierBStoreRoot(), globalRoot), nil
+	//
+	// WithCheckoutRoot keeps the two-root invariant uniform across every
+	// mission Store: the record resolves to the store root, the DES-058 audit
+	// zone to the checkout (tierBRepoRoot). The dispatch path only Loads the
+	// contract today (no event append/read), so this is defensive — but it
+	// means a future audit access here cannot silently route to the store tree
+	// (PR #370 sweep).
+	return mission.NewStoreWithRoots(tierBStoreRoot(), globalRoot).
+		WithCheckoutRoot(tierBRepoRoot()), nil
 }
 
 // writeAgentBlock emits a block decision with a named reason. Used on
