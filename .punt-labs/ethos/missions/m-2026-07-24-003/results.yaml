@@ -1,0 +1,41 @@
+results:
+    - mission: m-2026-07-24-003
+      round: 1
+      created_at: "2026-07-24T05:15:55Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/setup-consistency.md
+          added: 340
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+        - name: covers problem, chosen approach, rejected alternatives, migration plan
+          status: pass
+      open_questions:
+        - R3 collides with two generator invariants (main-agent skip generate_agents.go:79-81; kind==agent gate :89-91). Design recommends ratifying no agent file for claude/human; flagged for morning review.
+        - R1b wording names principal-engineer/concise-quantified as existing dead sidecar files; they exist only in the team submodule, not the sidecar. Design vendors them in — no decision needed, recorded for accuracy.
+      prose: |
+        Design doc docs/setup-consistency.md covers F1/F2/F3/F7 in four parts:
+        A) attrChain collapses to a uniform repo→bundle→global chain
+        (layered.go:216-219 default branch was global-only; bundle-blind types
+        are personality/writing_style/talents only — roles and the attribute
+        store already thread the bundle). B) seed embeds+deploys personalities
+        and writing-styles to global and vendors the three setup-referenced
+        slugs (principal-engineer, concise-quantified, engineering) from the
+        team submodule; sweeps the sprint-*/*-prose dead sidecars in passing
+        per the R4 exception. C) setup keeps writing identities to global
+        (stated explicitly), drops saveIdentityNoRefs for the ref-validating
+        Save, and errors actionably if seed hasn't run. D) keeps existing
+        bundle-agent generation; recommends no agent file for claude (main
+        agent, deliberately skipped) or the human (kind!=agent).
+        Migration: binary update + no-clobber re-seed converges without --force.
+        Test strategy: fresh-HOME table tests for foundation/gstack/no-bundle
+        asserting zero id.Warnings, an attrChain unit test, a hard-validation
+        test, and a doctor test with git identity configured. Rejected:
+        repo-layer identity writes, bundle-only resolution without global seed,
+        narrow single-branch attrChain patch, sub-agent claude.md.
+        Siblings noted not absorbed: ethos-hnxz (validation gate), ethos-bljl
+        (F4 gstack edge, F6 self-containment).
