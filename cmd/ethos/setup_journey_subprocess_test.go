@@ -96,9 +96,9 @@ func TestCLI_SetupJourney_Foundation(t *testing.T) {
 		assert.NotContains(t, errOut, "warning:", "show %s should emit no warnings; stderr=%s", h, errOut)
 	}
 
-	// Step 4: the human's engineering talent resolves to foundation's copy
-	// (Part A: a global identity resolves attribute content through the
-	// active bundle).
+	// Step 4: the default agent (claude)'s engineering talent resolves to
+	// foundation's copy (Part A: a global identity resolves attribute
+	// content through the active bundle).
 	claudeTalents, _, _, _ := showJSON(t, se, "claude")
 	require.NotEmpty(t, claudeTalents)
 	assert.Contains(t, claudeTalents[0], "General engineering discipline",

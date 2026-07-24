@@ -126,7 +126,9 @@ func TestCLI_SeedFailsLoud_UnwritableDest(t *testing.T) {
 
 	stdout, stderr, code := runCLI(t, se, "seed")
 	require.NotEqual(t, 0, code, "seed must exit non-zero when its dest is unwritable; stdout=%s", stdout)
-	assert.Contains(t, stderr, "error", "seed must report the write failure on stderr; stderr=%s", stderr)
+	// Seed returns "seed encountered N errors" (seed.go), which cobra
+	// prints to stderr — assert that exact shape, not a bare "error".
+	assert.Contains(t, stderr, "seed encountered", "seed must report the aggregate failure; stderr=%s", stderr)
 
 	// The ethos tree was never created — the blocking path is still a file.
 	info, statErr := os.Stat(filepath.Join(home, ".punt-labs"))

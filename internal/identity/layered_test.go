@@ -3,6 +3,7 @@ package identity
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -368,6 +369,27 @@ func TestLayered_AttrChainPrecedence(t *testing.T) {
 	assert.Contains(t, id.WritingStyleContent, "bundle-style", "bundle shadows global")
 	require.Len(t, id.TalentContents, 1)
 	assert.Contains(t, id.TalentContents[0], "global-talent", "global resolves when higher layers absent")
+}
+
+// TestLayered_MultipleDanglingRefs_AggregatesWarnings pins that
+// resolution reports EVERY unresolved attribute, not just the first. An
+// identity with two dangling refs must produce two warnings — a
+// return-on-first-warning refactor would silently drop the second, and
+// only a count assertion catches that.
+func TestLayered_MultipleDanglingRefs_AggregatesWarnings(t *testing.T) {
+	ls, _, _, global := setupLayeredWithBundle(t)
+
+	// Neither attribute exists in any layer — both refs dangle.
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: ghost-personality\nwriting_style: ghost-style\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	require.Len(t, id.Warnings, 2, "both dangling refs must be reported, not just the first")
+
+	joined := strings.Join(id.Warnings, "\n")
+	assert.Contains(t, joined, `personality "ghost-personality"`, "the dangling personality must be named")
+	assert.Contains(t, joined, `writing_style "ghost-style"`, "the dangling writing style must be named")
 }
 
 func TestLayered_RootAndPaths(t *testing.T) {
