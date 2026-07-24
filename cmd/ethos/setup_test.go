@@ -15,6 +15,7 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/seed"
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -295,6 +296,7 @@ func TestSetup_NotInGitRepo(t *testing.T) {
 	writeSetupFile(t, cfgPath, `
 name: No Repo User
 handle: no-repo
+email: no-repo@example.com
 `)
 
 	_, stderr, runErr := execHandler(t, "setup", "--file", cfgPath)
@@ -499,6 +501,78 @@ func TestSetup_ValidateCallIsLive(t *testing.T) {
 				"no identity file should be written for a rejected handle")
 		}
 	}
+}
+
+// TestSetup_EmailGitHubRoundTrip proves an explicit email and github in the
+// --file are persisted on the human identity.
+func TestSetup_EmailGitHubRoundTrip(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Alice Bind\nhandle: alice-bind\nemail: alice@corp.example\ngithub: alice-gh\n")
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr)
+
+	store := identity.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
+	human, err := store.Load("alice-bind", identity.Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "alice@corp.example", human.Email)
+	assert.Equal(t, "alice-gh", human.GitHub)
+}
+
+// TestSetup_EmailDefaultsFromGit proves that when --file omits email, setup
+// defaults it to git user.email, and the created identity is then resolvable
+// by that email through resolve.Resolve — the core fresh-machine fix.
+func TestSetup_EmailDefaultsFromGit(t *testing.T) {
+	home, repo := setupTestEnv(t) // gitInitDir set user.email = test-user@example.com
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Git Default\nhandle: git-default\n")
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	store := identity.NewStore(globalRoot)
+	human, err := store.Load("git-default", identity.Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "test-user@example.com", human.Email, "email must default to git user.email")
+
+	// The identity resolves by git email: no session, git user.name unset,
+	// so resolve falls to the email step (resolve.Resolve step 3).
+	handle, err := resolve.Resolve(store, session.NewStore(globalRoot))
+	require.NoError(t, err)
+	assert.Equal(t, "git-default", handle, "created identity must resolve by git email")
+}
+
+// TestSetup_HardFailNoEmail proves setup fails hard with an actionable remedy
+// when no email is given and git user.email is unset, and writes nothing.
+func TestSetup_HardFailNoEmail(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	// Remove the repo-local email so neither the file nor git supplies one.
+	unset := exec.Command("git", "-C", repo, "config", "--unset", "user.email")
+	unset.Env = []string{
+		"HOME=" + home,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"PATH=" + os.Getenv("PATH"),
+	}
+	out, err := unset.CombinedOutput()
+	require.NoError(t, err, "git config --unset: %s", out)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: No Email\nhandle: no-email\n")
+
+	_, _, err = execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no email")
+	assert.Contains(t, err.Error(), "set git user.email")
+
+	// Nothing dangling: neither identity file is written.
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "no-email.yaml"))
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "claude.yaml"))
 }
 
 func TestSetup_NameRequired(t *testing.T) {

@@ -15,18 +15,26 @@ import (
 )
 
 // gitInitDir runs `git init` in dir so FindRepoRoot stops there rather
-// than walking up past the temp dir into a real git ancestor.
+// than walking up past the temp dir into a real git ancestor. It sets a
+// repo-local user.email — the realistic state of a fresh clone, and what
+// setup defaults the identity's email from.
 func gitInitDir(t *testing.T, dir, home string) {
 	t.Helper()
-	cmd := exec.Command("git", "init", dir)
-	cmd.Env = []string{
+	env := []string{
 		"HOME=" + home,
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
 	}
+	cmd := exec.Command("git", "init", dir)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git init %s: %s", dir, out)
+
+	cfg := exec.Command("git", "-C", dir, "config", "user.email", "test-user@example.com")
+	cfg.Env = env
+	out, err = cfg.CombinedOutput()
+	require.NoError(t, err, "git config user.email in %s: %s", dir, out)
 }
 
 // execHandler runs a cobra command in-process with stdout/stderr captured
