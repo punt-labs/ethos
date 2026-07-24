@@ -6357,7 +6357,7 @@ resolves each operation against the correct one.
   is wrong or absent, reaching every store call site. It is validated: a
   nonexistent path, or an existing path with no `.punt-labs/ethos`, is refused
   loudly and never returned.
-- **Loud, never silent.** A genuine fall back to the global store warns,
+- **Loud, never silent.** A genuine fallback to the global store warns,
   naming the root. A *refused* override hard-errors on every store **write**
   (`setup`, `mission create`/`dispatch`/`claim`) rather than writing to the
   wrong tree; a genuine no-repo keeps the legitimate global mode. Reads warn
