@@ -92,6 +92,30 @@ but leaves the vendored guide and all config and audit data dormant on disk.
 It runs no final seal; unsealed audit lines stay in the gitignored local zone
 and seal on a later re-enable.
 
+### Setup identities
+
+`ethos setup` creates the human identity, the paired `claude` agent, repo
+config, and (unless `--solo`) a team bundle. The interactive wizard prompts
+for name, handle, email, GitHub handle (optional), and working style. The
+same fields drive `--file`:
+
+```yaml
+name: Mal Reynolds
+handle: mal
+email: mal@serenity.ship   # optional; defaults to git config user.email
+github: mal                # optional
+writing_style: concise-quantified
+bundle: foundation         # or set --solo for no team
+```
+
+`email` defaults to `git config user.email` when the prompt is left blank or
+the key is absent from `--file`. The created identity carries that email so
+`ethos whoami` resolves the caller by git email (resolution chain step 3) and
+`ethos session start` can seat the roster root on a fresh machine. When no
+email is given and `git config user.email` is unset, setup fails with a remedy
+and writes nothing — an identity with no resolvable email is never persisted.
+`github` is optional and left empty when not supplied.
+
 **The enabled marker is the signal, not directory presence.** The chained
 hook scripts gate on it — `[ -f "$REPO_ROOT/.punt-labs/ethos/enabled" ]` —
 so a disabled repo's hook does no commit-time work while still preserving a

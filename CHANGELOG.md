@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos setup` captures email and GitHub handle.** The interactive
+  wizard now prompts for email (after handle) and an optional GitHub
+  handle; the same `email` and `github` keys are accepted in `--file`.
+  Both are persisted on the created human identity. The email prompt
+  defaults to `git config user.email` (bead `ethos-2q0n`).
+
+### Fixed
+
+- **`ethos setup` created identities with no email, leaving them
+  unresolvable by git identity** — `ethos whoami` and `ethos session
+  start` failed for a freshly set-up user on a clean machine, because
+  identity resolution matches `git config user.email` against the
+  identity's email field and setup never wrote one. Setup now defaults
+  the email to `git config user.email`, and hard-fails with an
+  actionable remedy (writing nothing) when no email can be resolved,
+  rather than silently persisting an unresolvable identity (bead
+  `ethos-2q0n`).
+
 ## [4.3.0] - 2026-07-24
 
 ### Added
