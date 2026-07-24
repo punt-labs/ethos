@@ -397,17 +397,22 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    holds unsealed audit lines — do NOT silently mint over it (which
 	//    would repoint the env anchor away from it), fail with a remedy.
 	if envID := os.Getenv("ETHOS_SESSION"); envID != "" {
-		switch _, lerr := ss.Load(envID); {
+		switch roster, lerr := ss.Load(envID); {
 		case lerr == nil:
 			// A re-run with --persona still folds the iam — upsert-join the
 			// persona so the advertised ETHOS_AGENT_ID names a real
 			// participant (Join is idempotent: same persona stays one).
+			// Parent is the root recorded at mint, read from the roster —
+			// NOT re-resolved: a prior run may have exported
+			// ETHOS_AGENT_ID=<persona>, which would make resolve.Resolve
+			// return the persona itself and self-parent it, silently
+			// breaking post-compaction primary-agent discovery (Parent==root).
 			if sessionStartPersona != "" {
-				human, herr := resolve.Resolve(identityStore(), ss)
-				if herr != nil {
-					return fmt.Errorf("session start: resolving identity: %w", herr)
+				parent := ""
+				if len(roster.Participants) > 0 {
+					parent = roster.Participants[0].AgentID
 				}
-				p := session.Participant{AgentID: sessionStartPersona, Persona: sessionStartPersona, Parent: human}
+				p := session.Participant{AgentID: sessionStartPersona, Persona: sessionStartPersona, Parent: parent}
 				if jerr := ss.Join(envID, p); jerr != nil {
 					return fmt.Errorf("session start: joining persona: %w", jerr)
 				}
@@ -517,9 +522,15 @@ func runSessionEnd(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
-	if _, lerr := ss.Load(sid); lerr != nil && errors.Is(lerr, os.ErrNotExist) {
-		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s not found; nothing to end\n", sid)
-		return nil
+	if _, lerr := ss.Load(sid); lerr != nil {
+		// not-found is a clean no-op (rm -f); an exists-but-unparseable
+		// roster is a crash artifact most likely holding unsealed audit
+		// lines — refuse rather than os.Remove it out from under the seal.
+		if errors.Is(lerr, os.ErrNotExist) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s not found; nothing to end\n", sid)
+			return nil
+		}
+		return fmt.Errorf("session end: session %q has an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", sid, lerr)
 	}
 	if err := ss.Delete(sid); err != nil {
 		return err

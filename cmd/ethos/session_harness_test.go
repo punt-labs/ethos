@@ -184,6 +184,61 @@ func TestCLI_SessionStart_IdempotentPersonaJoins(t *testing.T) {
 	assert.Equal(t, 1, bwkCount, "re-running the same persona must not duplicate the participant")
 }
 
+// TestCLI_SessionStart_IdempotentPersonaParentIsRoot pins F2: a second
+// re-run with ETHOS_AGENT_ID already exported must not self-parent the
+// persona. Parent must be the root recorded at mint (read from the roster),
+// so post-compaction primary discovery (Parent==root) still finds it.
+func TestCLI_SessionStart_IdempotentPersonaParentIsRoot(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	id := startedSessionID(t, se) // fresh, no persona; root == test-agent
+
+	// Two re-runs with the persona AND ETHOS_AGENT_ID exported — the second
+	// is where a re-resolve would return the persona itself.
+	env := withEnv(se, "ETHOS_SESSION="+id, "ETHOS_AGENT_ID=bwk")
+	_, stderr, code := runCLI(t, env, "session", "start", "--persona", "bwk")
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+	_, stderr, code = runCLI(t, env, "session", "start", "--persona", "bwk")
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+
+	roster, err := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos")).Load(id)
+	require.NoError(t, err)
+	require.NotEmpty(t, roster.Participants)
+	root := roster.Participants[0].AgentID
+
+	var found bool
+	for _, p := range roster.Participants {
+		if p.AgentID == "bwk" {
+			found = true
+			assert.Equal(t, root, p.Parent, "persona must be parented to root, not itself")
+			assert.NotEqual(t, "bwk", p.Parent, "must not self-parent")
+		}
+	}
+	require.True(t, found, "persona bwk must be a participant")
+}
+
+// TestCLI_SessionEnd_CorruptRosterRefuses pins F3: end must refuse a corrupt
+// roster (a crash artifact likely holding unsealed audit lines) rather than
+// os.Remove it, mirroring start's M3 split.
+func TestCLI_SessionEnd_CorruptRosterRefuses(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	sdir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, os.MkdirAll(sdir, 0o700))
+	badID := "corruptccccccccccccccccccccccccc"
+	rosterPath := filepath.Join(sdir, badID+".yaml")
+	require.NoError(t, os.WriteFile(rosterPath, []byte("not a roster mapping\n"), 0o644))
+
+	_, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+badID), "session", "end")
+	require.NotEqual(t, 0, code, "end over a corrupt roster must refuse; stderr=%s", stderr)
+	assert.Contains(t, stderr, "unreadable roster")
+	assert.FileExists(t, rosterPath, "end must not destroy the corrupt roster")
+}
+
 // TestCLI_SessionStart_CorruptRosterFails pins M3: ETHOS_SESSION naming an
 // exists-but-unparseable roster must fail with a remedy rather than silently
 // minting over it (repointing the env anchor away from a session whose
