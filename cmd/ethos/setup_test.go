@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -308,6 +310,197 @@ handle: no-repo
 	assert.True(t, os.IsNotExist(statErr))
 }
 
+// setupTestEnvNoSeed is like setupTestEnv but does not run seed, so the
+// conventional attributes are absent from the global layer.
+func setupTestEnvNoSeed(t *testing.T) (home, repo string) {
+	t.Helper()
+
+	setupBundle = "foundation"
+	setupSolo = false
+	setupFile = ""
+	t.Cleanup(func() {
+		setupBundle = "foundation"
+		setupSolo = false
+		setupFile = ""
+	})
+
+	home = t.TempDir()
+	repo = t.TempDir()
+	gitInitDir(t, repo, home)
+
+	t.Setenv("HOME", home)
+	t.Setenv("USER", "test-user")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Chdir(repo)
+
+	return home, repo
+}
+
+// TestSetup_HardValidation_UnseededFails proves setup fails hard with an
+// actionable error when run before seed, and writes no dangling identity.
+// After seeding, the same setup succeeds.
+func TestSetup_HardValidation_UnseededFails(t *testing.T) {
+	home, repo := setupTestEnvNoSeed(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Unseeded User\nhandle: unseeded-user\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `references personality "principal-engineer"`)
+	assert.Contains(t, err.Error(), "not installed")
+	assert.Contains(t, err.Error(), `run "ethos seed" first`)
+
+	// Nothing dangling: the human identity file must not exist.
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "unseeded-user.yaml"))
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "claude.yaml"))
+
+	// Seed, then retry — now it succeeds.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	skillsRoot := filepath.Join(home, ".claude", "skills")
+	_, seedErr := seed.Seed(globalRoot, skillsRoot, false)
+	require.NoError(t, seedErr)
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr)
+	assert.FileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "unseeded-user.yaml"))
+}
+
+// TestSetup_RepairsMissingTeamKey pins the S1 fix: an interrupted
+// activation (or `ethos team bundle use`) can leave active_bundle set with
+// no team key. A later setup that hits the "already active" skip branch
+// must repair the team key rather than reporting success and leaving
+// SessionStart with no team context.
+func TestSetup_RepairsMissingTeamKey(t *testing.T) {
+	_, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Interrupted User\nhandle: interrupted-user\n")
+
+	// First setup activates foundation fully.
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err)
+
+	// Simulate an interrupted activation: active_bundle written, team lost.
+	writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\n")
+	team, err := resolve.ResolveTeam(repo)
+	require.NoError(t, err)
+	require.Empty(t, team, "precondition: team key must be missing")
+
+	// Re-run setup (no --bundle change → the skip branch). It must self-heal.
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr)
+
+	team, err = resolve.ResolveTeam(repo)
+	require.NoError(t, err)
+	assert.Equal(t, "foundation", team, "missing team key must be repaired on re-run")
+}
+
+// TestEnsureTeamKey pins the N1 ruling: an absent team key is repaired, but
+// a team key that merely DIFFERS from the active bundle is a legitimate
+// repo-local choice — warn, but never overwrite. (Driven at the unit level
+// because a divergent team that names a non-existent team would fail the
+// later agent-file generation, which is unrelated to this behavior.)
+func TestEnsureTeamKey(t *testing.T) {
+	t.Run("absent repairs", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\n")
+		var buf bytes.Buffer
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "", false))
+		assert.Contains(t, buf.String(), `repaired: team "foundation"`)
+		team, err := resolve.ResolveTeam(repo)
+		require.NoError(t, err)
+		assert.Equal(t, "foundation", team)
+	})
+
+	t.Run("custom-team mismatch: single-direction warning, untouched", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: custom-team\n")
+		var buf bytes.Buffer
+		// team is not a known bundle → offer only the align-to-active remedy.
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "custom-team", false))
+		assert.Contains(t, buf.String(), "warning:")
+		assert.Contains(t, buf.String(), `team "custom-team"`)
+		assert.Contains(t, buf.String(), `active bundle "foundation"`)
+		assert.Contains(t, buf.String(), `ethos team activate foundation`)
+		assert.NotContains(t, buf.String(), "complete a switch",
+			"a custom team is not a half-switch — no second direction")
+		team, err := resolve.ResolveTeam(repo)
+		require.NoError(t, err)
+		assert.Equal(t, "custom-team", team, "a divergent team key must not be overwritten")
+	})
+
+	t.Run("known-bundle mismatch: two-direction warning, untouched", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: gstack\n")
+		var buf bytes.Buffer
+		// team names a known bundle → may be a half-finished switch; offer both.
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "gstack", true))
+		out := buf.String()
+		assert.Contains(t, out, "warning:")
+		assert.Contains(t, out, `ethos team activate foundation`, "align-to-active remedy")
+		assert.Contains(t, out, `ethos team activate gstack`, "complete-the-switch remedy")
+		assert.Contains(t, out, "complete a switch")
+		team, err := resolve.ResolveTeam(repo)
+		require.NoError(t, err)
+		assert.Equal(t, "gstack", team, "a divergent team key must not be overwritten")
+	})
+
+	t.Run("match is a no-op", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: foundation\n")
+		var buf bytes.Buffer
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "foundation", false))
+		assert.Empty(t, buf.String(), "a matching team key produces no output")
+	})
+}
+
+// TestSetup_HardValidation_BadStyle proves a writing_style slug that is
+// not installed fails hard rather than writing a dangling reference.
+func TestSetup_HardValidation_BadStyle(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Typo User\nhandle: typo-user\nwriting_style: not-a-real-style\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `references writing style "not-a-real-style"`)
+	assert.Contains(t, err.Error(), `run "ethos seed" first`)
+
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "typo-user.yaml"))
+}
+
+// TestSetup_ValidateCallIsLive proves setup's structural validation runs
+// through identity.Validate at Save time. A malformed handle is caught by
+// human.Validate() — the error carries the "creating human identity"
+// context only that branch produces, and no identity file is written. If
+// the Validate() call were dropped, the bad handle would fall through to
+// Store.Save (which validates refs, not structure) and a file named for
+// the bad handle would be written, failing this test.
+func TestSetup_ValidateCallIsLive(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Bad Handle User\nhandle: Bad Handle\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating human identity",
+		"a malformed handle must be rejected by human.Validate(), not an inline check")
+	assert.Contains(t, err.Error(), "must be lowercase alphanumeric")
+
+	// Nothing dangling: no identity file for the malformed handle.
+	entries, readErr := os.ReadDir(filepath.Join(home, ".punt-labs", "ethos", "identities"))
+	if readErr == nil {
+		for _, e := range entries {
+			assert.NotContains(t, e.Name(), "Bad Handle",
+				"no identity file should be written for a rejected handle")
+		}
+	}
+}
+
 func TestSetup_NameRequired(t *testing.T) {
 	_, repo := setupTestEnv(t)
 
@@ -395,6 +588,53 @@ handle: legacy-user
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "legacy submodule detected")
 	assert.Contains(t, stderr, "ethos team migrate")
+}
+
+// TestWritingStyleMenu_SurfacesWarnings pins the S4 fix: the wizard's
+// style step surfaces per-entry List warnings instead of silently
+// dropping corrupt entries from the menu.
+func TestWritingStyleMenu_SurfacesWarnings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	stylesDir := filepath.Join(home, ".punt-labs", "ethos", "writing-styles")
+	require.NoError(t, os.MkdirAll(stylesDir, 0o755))
+	// A valid entry and a malformed-slug entry (List warns on the latter).
+	require.NoError(t, os.WriteFile(filepath.Join(stylesDir, "good.md"), []byte("# Good\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(stylesDir, "Bad Style.md"), []byte("# Bad\n"), 0o644))
+
+	var errw bytes.Buffer
+	styles := writingStyleMenu(&errw)
+
+	assert.Contains(t, errw.String(), "ethos: warning:", "corrupt entry must surface a warning")
+	assert.Contains(t, errw.String(), "Bad Style", "warning must name the offending entry")
+	var slugs []string
+	for _, a := range styles {
+		slugs = append(slugs, a.Slug)
+	}
+	assert.Contains(t, slugs, "good", "valid entries still returned")
+}
+
+// TestSetup_RejectsMalformedAgentKey pins the S6 fix: a present-but-
+// non-string agent key in the repo config is surfaced as an error, not
+// silently clobbered.
+func TestSetup_RejectsMalformedAgentKey(t *testing.T) {
+	_, repo := setupTestEnv(t)
+
+	// Pre-existing config with a malformed (list-valued) agent key.
+	writeRepoConfigFile(t, repo, "agent:\n  - one\n  - two\n")
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Malformed User\nhandle: malformed-user\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "non-string value")
+	assert.Contains(t, err.Error(), "agent")
+
+	// The malformed key is not clobbered.
+	body := readRepoConfigFile(t, repo)
+	assert.Contains(t, body, "- one", "malformed agent key must be left intact for the user to fix")
 }
 
 func TestSetup_ResolveStyleChoice(t *testing.T) {

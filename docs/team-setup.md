@@ -19,11 +19,11 @@ Each layer holds the same subdirectories: `identities/`,
 `personalities/`, `writing-styles/`, `talents/`, `roles/`, `teams/`.
 
 Attribute content (personalities, writing styles, talents) resolves
-starting from the layer where the identity was found, then falls
-through to lower-precedence layers. For example, a bundle-sourced
-identity looks up its personality in the bundle first, then global —
-not repo-local. To override attributes for a bundle identity, override
-the identity itself in repo-local.
+through the full repo → bundle → global chain, regardless of which
+layer the identity record itself came from (DES-051). A repo-local
+attribute file shadows the bundle's, which shadows global. To override
+a bundle identity's personality, drop a personality file of the same
+slug into the repo-local layer — no need to re-declare the identity.
 
 Three ways to provide team data:
 

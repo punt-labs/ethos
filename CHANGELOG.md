@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fresh-machine setup no longer produces identities with unresolvable
+  attributes.** `ethos seed` now deploys personalities and writing-styles
+  to the global layer — including the conventional attributes `ethos setup`
+  references (`principal-engineer`, `concise-quantified`, `engineering`) —
+  and global identities now resolve attribute content through the active
+  bundle per the three-layer DES-051 chain. Previously a seeded-then-set-up
+  machine emitted "not found" warnings for the default agent and the human
+  identity. Full design in `docs/setup-consistency.md` (bead `ethos-5zwn`).
+- **Attribute resolution no longer silently falls through on read errors.**
+  A layer file that exists but cannot be read (e.g. replaced by a directory,
+  permission-denied) now surfaces a warning naming the attribute and the
+  layer, instead of being treated as absent and masked by a lower layer.
+- **Interrupted bundle activation can no longer strand a missing team key.**
+  Activation writes `active_bundle` and `team` together; a crash between the
+  two no longer leaves a repo with an active bundle but no team.
+- **A kill during `ethos seed` can no longer leave a permanently-blessed
+  truncated file.** Non-force seed writes are atomic; a 0-byte file left by
+  an interrupted run is repaired on the next seed with a notice, rather than
+  being treated as a valid existing file and skipped forever.
+
+### Changed
+
+- **`ethos setup` hard-validates the identities it writes and fails before
+  `ethos seed` has run.** Instead of silently writing a dangling reference,
+  it exits with an actionable error naming the missing attribute and telling
+  you to run `ethos seed` first.
+- **`ethos team activate` on an already-active bundle repairs a divergent
+  team key.** Re-running activation is now an explicit convergence step: it
+  rewrites a `team` value that disagrees with the active bundle.
+- **`ethos setup` never overwrites a deliberately different team key.** When
+  the repo config already names a team that differs from the bundle, setup
+  warns and leaves it, rather than guessing and clobbering it.
+
 ## [4.2.0] - 2026-07-22
 
 ### Added
