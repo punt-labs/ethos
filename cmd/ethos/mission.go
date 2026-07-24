@@ -48,7 +48,11 @@ func missionStore() *mission.Store {
 	root := filepath.Join(home, ".punt-labs", "ethos")
 	repoRoot := resolve.StoreRepoRoot()
 	warnIfGlobalFallback(repoRoot)
+	// The record resolves to the store root (main in a worktree); the DES-058
+	// audit concern (live zone + sealed chunks) resolves to the checkout so
+	// it agrees with the pre-commit seal that runs there (Bugbot HIGH #370).
 	return mission.NewStoreWithRoots(repoRoot, root).
+		WithCheckoutRoot(resolve.EnvRepoRoot()).
 		WithSessionResolver(currentSessionIDBestEffort)
 }
 
@@ -126,7 +130,10 @@ func missionStoreForCreate() *mission.Store {
 	// (m-2026-05-23-004 escalation).
 	storeRoot := resolve.StoreRepoRoot()
 	warnIfGlobalFallback(storeRoot)
+	// Record → store root; DES-058 audit (live + sealed chunks) → checkout
+	// root, matching the pre-commit seal (Bugbot HIGH #370).
 	ms := mission.NewStoreWithRoots(storeRoot, root).
+		WithCheckoutRoot(resolve.EnvRepoRoot()).
 		WithSessionResolver(currentSessionIDBestEffort)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
@@ -1105,7 +1112,13 @@ func runMissionClose(idOrPrefix, status string) error {
 	// immediately follows. A seal failure must not lose the close (the
 	// contract is already closed on disk); surface it on stderr and carry
 	// on — the pre-commit seal is the clean-tree backstop.
-	if repoRoot := resolve.StoreRepoRoot(); repoRoot != "" {
+	//
+	// Seal against the CHECKOUT root, not the store root: the live zone it
+	// consumes and the chunks it stages belong to the committing checkout,
+	// and this must resolve the same tree the pre-commit seal (EnvRepoRoot)
+	// does — else it seals a tree the worktree never commits (Bugbot HIGH
+	// on PR #370).
+	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
 		}

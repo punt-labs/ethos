@@ -42,11 +42,27 @@ type Store struct {
 	roles      RoleLister      // optional; wires the Phase 3.5 role-overlap check
 	archetypes *ArchetypeStore // optional; validates Type on Create
 
-	// repoRoot, when set, names the repository directory under which
-	// trace summaries are written (<repoRoot>/.punt-labs/ethos/missions.jsonl).
-	// Set via WithRepoRoot (legacy single-tree mode) or
-	// NewStoreWithRoots (two-tree mode).
+	// repoRoot, when set, names the repository directory under which the
+	// SHARED mission RECORD lives — contracts, results, reflections,
+	// delegations, and the missions.jsonl trace, all under
+	// <repoRoot>/.punt-labs/ethos/missions/. This is the store root
+	// (StoreRepoRoot): in a linked worktree it resolves to the main work
+	// tree so every checkout sees the same record. Set via WithRepoRoot
+	// (legacy single-tree mode) or NewStoreWithRoots (two-tree mode).
 	repoRoot string
+
+	// checkoutRoot, when set, names the PER-CHECKOUT directory the DES-058
+	// audit concern lives under — the machine-local live zone
+	// (<checkoutRoot>/.punt-labs/local/ethos/) and the sealed mission chunks
+	// the pre-commit seal writes and stages. It is the current work tree
+	// (FindRepoRoot/EnvRepoRoot), NOT the store root: audit chunks travel in
+	// the committing checkout's commit and the pre-commit seal runs there, so
+	// the live append, the seal, and the reader must all agree on the
+	// worktree, while the record resolves to the main store (Bugbot HIGH on
+	// PR #370: a single root routed live events into the main tree that the
+	// worktree's pre-commit seal never sealed). Empty falls back to repoRoot
+	// via auditRoot() so single-tree callers and tests are unchanged.
+	checkoutRoot string
 
 	// twoTreeStorage, when true, activates the DES-054 phase 1
 	// per-mission directory layout under <repoRoot>/.punt-labs/ethos/missions/.
@@ -205,6 +221,33 @@ func (s *Store) resolveSessionID() string {
 func (s *Store) WithRepoRoot(root string) *Store {
 	s.repoRoot = root
 	return s
+}
+
+// WithCheckoutRoot sets the per-checkout root for the DES-058 audit
+// concern — the live zone and sealed mission chunks. When unset the audit
+// path falls back to repoRoot (auditRoot), preserving single-tree and test
+// behavior. Callers in a worktree pass the work-tree root (FindRepoRoot/
+// EnvRepoRoot) so live appends and the pre-commit seal agree on the
+// committing checkout while the record resolves to the main store (Bugbot
+// HIGH on PR #370). Returns the receiver so construction stays compact:
+//
+//	ms := mission.NewStoreWithRoots(storeRoot, global).WithCheckoutRoot(wt)
+func (s *Store) WithCheckoutRoot(root string) *Store {
+	s.checkoutRoot = root
+	return s
+}
+
+// auditRoot returns the root the DES-058 live zone and sealed mission
+// chunks resolve under: the per-checkout root when set, else repoRoot. The
+// audit concern is per-checkout (chunks commit with the worktree, the
+// pre-commit seal runs there); the mission record is shared-store. Keeping
+// the fallback means a Store constructed without a checkout root behaves
+// exactly as before (single-tree callers, tests).
+func (s *Store) auditRoot() string {
+	if s.checkoutRoot != "" {
+		return s.checkoutRoot
+	}
+	return s.repoRoot
 }
 
 // Root returns the store's root directory.
