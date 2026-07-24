@@ -472,8 +472,20 @@ func tierBMissionStore() (*mission.Store, error) {
 	// contract today (no event append/read), so this is defensive — but it
 	// means a future audit access here cannot silently route to the store tree
 	// (PR #370 sweep).
-	return mission.NewStoreWithRoots(tierBStoreRoot(), globalRoot).
-		WithCheckoutRoot(tierBRepoRoot()), nil
+	//
+	// The checkout root FOLLOWS the store root to "" when the store refuses:
+	// tierBStoreRoot is StoreRepoRoot (fail-closed on a bad ETHOS_REPO_ROOT),
+	// but tierBRepoRoot (EnvRepoRoot, requireStore=false) re-accepts the
+	// refused path. Pairing them unconditionally would let the audit zone
+	// resurrect a path the store already refused (PR #370 override-resurrection
+	// class, same guard as missionCheckoutRoot + runUI).
+	storeRoot := tierBStoreRoot()
+	checkoutRoot := ""
+	if storeRoot != "" {
+		checkoutRoot = tierBRepoRoot()
+	}
+	return mission.NewStoreWithRoots(storeRoot, globalRoot).
+		WithCheckoutRoot(checkoutRoot), nil
 }
 
 // writeAgentBlock emits a block decision with a named reason. Used on
