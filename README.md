@@ -244,9 +244,13 @@ error naming `ethos session start`.
 The repo-layer store lives at `<repo>/.punt-labs/ethos/`. Ethos resolves it
 through the git common dir, so an agent working in a linked worktree
 (`<repo>/.claude/worktrees/x`) still addresses the store in the main work
-tree — a mission created from either checkout is visible from the other.
-When no git repository is in scope, `mission create`, `dispatch`, and
-`claim` warn to stderr that they are operating on the global store
+tree — a mission created from either checkout is visible from the other, and
+a leader dispatching from a worktree binds the same store the CLI wrote to,
+so delegation resolves rather than failing "MISSION_ID not found". Only the
+mission store crosses to the main tree; per-checkout state (the enable
+marker, generated `.claude/agents/`, audit trail, and the files a verifier
+inspects) stays in the worktree. When no git repository is in scope, the
+mission store warns to stderr that it is operating on the global store
 (`~/.punt-labs/ethos/`) rather than silently switching.
 
 Set `ETHOS_REPO_ROOT` to force the store location when auto-resolution is

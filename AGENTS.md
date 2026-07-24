@@ -210,9 +210,14 @@ session, `iam` and `mission claim` fail with an error naming
 
 The repo store (`<repo>/.punt-labs/ethos/`) resolves through the git common
 dir, so a linked worktree addresses the main work tree's store — a mission
-is visible from either checkout. `mission create`, `dispatch`, and `claim`
-warn when no repo is in scope and they fall back to the global store. Set
-`ETHOS_REPO_ROOT` to force the store root when auto-resolution is wrong.
+is visible from either checkout, and dispatch from a worktree binds the same
+store the CLI wrote to, so delegation resolves instead of failing
+"MISSION_ID not found". Per-checkout state (enable marker, generated
+`.claude/agents/`, audit trail, verifier file walk) stays in the worktree.
+The mission store warns when no repo is in scope and it falls back to the
+global store. Set `ETHOS_REPO_ROOT` to force the store root when
+auto-resolution is wrong; a bogus override (missing dir, or no
+`.punt-labs/ethos`) is refused loudly rather than silently used.
 
 ### CLI
 
