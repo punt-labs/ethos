@@ -228,7 +228,9 @@ func runDoctor(cmd *cobra.Command) error {
 	ss := sessionStore()
 	ts := teamStore()
 	repoRoot := resolve.FindRepoRoot()
-	results := doctor.RunAll(is, ss, repoRoot, ts)
+	// repoRoot = checkout (agents/seal hook); StoreRepoRoot = shared store
+	// for the team-config read inside CheckOrphanedAgentFiles (#370).
+	results := doctor.RunAll(is, ss, repoRoot, resolve.StoreRepoRoot(), ts)
 
 	out := cmd.OutOrStdout()
 	if jsonOutput {

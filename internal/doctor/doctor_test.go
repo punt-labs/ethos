@@ -9,6 +9,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -616,9 +617,9 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// and trigger a non-deterministic result.
 	t.Chdir(outsideRepoTempDir(t))
 
-	// Pass empty repoRoot and nil teams — the orphaned-agent check
-	// degrades to PASS ("not in a repo") in this configuration.
-	results := RunAll(s, ss, "", nil)
+	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
+	// check degrades to PASS ("not in a repo") in this configuration.
+	results := RunAll(s, ss, "", "", nil)
 	require.Len(t, results, 6)
 
 	names := make([]string, len(results))
@@ -640,7 +641,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-	results = RunAll(s, ss, "", nil)
+	results = RunAll(s, ss, "", "", nil)
 	assert.False(t, AllPassed(results))
 	assert.Less(t, PassedCount(results), 6)
 
@@ -654,4 +655,46 @@ func TestRunAllAndHelpers(t *testing.T) {
 		}
 	}
 	assert.True(t, found)
+}
+
+// TestCheckOrphanedAgentFiles_ResolvesTeamFromStoreRoot pins the Bugbot #370
+// class in doctor: the .claude/agents glob is per-checkout (repoRoot), but the
+// active-team read must resolve from the shared store (storeRoot) — the tree
+// where `ethos team activate` wrote it and every other reader resolves it.
+// Resolving the team from the checkout instead misclassifies agents as
+// orphaned when a worktree's ethos.yaml names a different team than the store.
+func TestCheckOrphanedAgentFiles_ResolvesTeamFromStoreRoot(t *testing.T) {
+	// checkoutRoot holds the per-checkout agent file, and its OWN config
+	// names a team (nobwk) that does NOT include bwk.
+	checkoutRoot := t.TempDir()
+	agentsDir := filepath.Join(checkoutRoot, ".claude", "agents")
+	require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(agentsDir, "bwk.md"), []byte("# bwk\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(checkoutRoot, ".punt-labs"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(checkoutRoot, ".punt-labs", "ethos.yaml"), []byte("team: nobwk\n"), 0o644))
+
+	// storeRoot is where activation wrote team: withbwk, whose members
+	// include bwk. Both team definitions live in the store's team dir.
+	storeRoot := t.TempDir()
+	ethosDir := filepath.Join(storeRoot, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(storeRoot, ".punt-labs", "ethos.yaml"), []byte("team: withbwk\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "withbwk.yaml"),
+		[]byte("name: withbwk\nmembers:\n  - identity: bwk\n    role: go-specialist\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "nobwk.yaml"),
+		[]byte("name: nobwk\nmembers:\n  - identity: someone\n    role: other\n"), 0o644))
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+
+	// Team resolved from the store (withbwk, has bwk) → bwk not orphaned.
+	res := CheckOrphanedAgentFiles(checkoutRoot, storeRoot, teams)
+	assert.Equal(t, "PASS", res.Status,
+		"bwk is on the store's active team; must not be flagged orphaned: %+v", res)
+
+	// Regression guard: resolving the team from the checkout (nobwk, lacks
+	// bwk) misclassifies bwk as orphaned — the bug this split fixes.
+	buggy := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams)
+	assert.Equal(t, "FAIL", buggy.Status,
+		"resolving the team from the checkout root falsely flags bwk as orphaned")
 }
