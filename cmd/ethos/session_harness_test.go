@@ -357,6 +357,31 @@ func TestCLI_SessionStart_RejectsUnsafePersona(t *testing.T) {
 	}
 }
 
+// TestCLI_SessionStart_RejectsNonHexReattach pins the Copilot hardening: an
+// ETHOS_SESSION that names a loadable roster but is NOT the minted 32-hex
+// shape (e.g. carrying a newline/control char) is refused — never echoed,
+// no roster mutation — so it cannot become a multi-line eval surface.
+func TestCLI_SessionStart_RejectsNonHexReattach(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	sdir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, os.MkdirAll(sdir, 0o700))
+
+	// A loadable roster whose id carries a newline (rosterPath uses
+	// filepath.Base, so a newline-bearing name resolves to a real file).
+	badID := "abc\necho pwned"
+	roster := "session: \"" + badID + "\"\nparticipants:\n  - agent_id: jim\n    persona: jim\n"
+	require.NoError(t, os.WriteFile(filepath.Join(sdir, badID+".yaml"), []byte(roster), 0o644))
+
+	stdout, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+badID), "session", "start")
+	require.NotEqual(t, 0, code, "a non-hex loadable ETHOS_SESSION must be refused; stdout=%q", stdout)
+	assert.Contains(t, stderr, "32-hex")
+	assert.NotContains(t, stdout, "export ETHOS_SESSION", "the bad id must never be echoed")
+	assert.NotContains(t, stdout, "pwned")
+}
+
 // TestCLI_SessionStart_ExportsEvalCleanly pins B1: the export lines survive
 // an actual `eval` in a POSIX shell and set the variables intact.
 func TestCLI_SessionStart_ExportsEvalCleanly(t *testing.T) {
