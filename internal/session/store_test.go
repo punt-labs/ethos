@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,6 +16,43 @@ import (
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	return NewStore(t.TempDir())
+}
+
+// TestStore_IDPathSanitization pins the ID→path defense at the exact line
+// it lives: rosterPath and lockPath run the session ID through
+// filepath.Base, so a traversal-shaped ID (from an attacker-controlled
+// ETHOS_SESSION) can never derive a path outside the sessions dir. The
+// store sanitizes rather than rejects — this table asserts sanitization.
+// If filepath.Base is ever dropped, this fails loudly here rather than
+// only in the end-to-end subprocess tests.
+func TestStore_IDPathSanitization(t *testing.T) {
+	s := testStore(t)
+	sessionsDir := s.sessionsDir()
+
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{"clean", "abc123"},
+		{"dotdot", "../escape"},
+		{"dotdot-deep", "../../../../etc/passwd"},
+		{"absolute", "/etc/passwd"},
+		{"embedded-slash", "a/b/c"},
+		{"trailing-slash", "evil/"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, p := range []string{s.rosterPath(tc.id), s.lockPath(tc.id)} {
+				assert.Equal(t, sessionsDir, filepath.Dir(p),
+					"derived path %q must sit directly in the sessions dir", p)
+				rel, err := filepath.Rel(sessionsDir, p)
+				require.NoError(t, err)
+				assert.False(t, strings.HasPrefix(rel, ".."),
+					"derived path %q must not escape the sessions dir (rel %q)", p, rel)
+			}
+		})
+	}
 }
 
 func TestStore_CreateAndLoad(t *testing.T) {
