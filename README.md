@@ -64,6 +64,12 @@ agent, repo config, a 4-agent team, and agent definition files.
 Start Claude Code — the agent knows who it is, who you are, and how
 to delegate. See [Onboarding](docs/onboarding.md) for the full walkthrough.
 
+`ethos setup` requires starter content to be seeded first. The
+installer runs `ethos seed` for you, so the quick start above just
+works. If you build from source or run `setup` on a machine that was
+never seeded, run `ethos seed` first — `setup` otherwise fails with an
+error naming the missing attribute and telling you to seed.
+
 **Platforms:** macOS, Linux (amd64, arm64).
 
 ## What it looks like
