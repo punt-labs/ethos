@@ -14,22 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handle; the same `email` and `github` keys are accepted in `--file`.
   Both are persisted on the created human identity. The email prompt
   defaults to `git config user.email` (bead `ethos-2q0n`).
-- **`ETHOS_REPO_ROOT` forces the store root.** The override is now honored
-  by every repo-store resolution (not just the DES-054 hook paths), so a
-  caller can point ethos at a specific repo when auto-resolution is wrong
-  (bead `ethos-yofr`).
 
 ### Fixed
-
-- **Ethos resolved the global store instead of the repo store inside a git
-  worktree.** Repo-layer resolution walked to the first `.git` and, in a
-  linked worktree where `.git` is a file, returned the worktree cwd — which
-  lacks `.punt-labs/ethos/` — so identity and mission commands silently
-  fell back to the global store. A mission created from the main checkout
-  read as "never created" from the worktree. Resolution now follows the git
-  common dir to the main work tree that owns the store, and `mission
-  create`/`dispatch`/`claim` warn loudly instead of silently degrading when
-  no repo is in scope (bead `ethos-yofr`).
 
 - **`ethos setup` created identities with no email, leaving them
   unresolvable by git identity** — `ethos whoami` and `ethos session
