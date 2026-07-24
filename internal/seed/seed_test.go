@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/role"
@@ -192,6 +193,34 @@ func TestSeedRepairsZeroByteFile(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, custom, got, "non-empty existing file must not be clobbered")
+}
+
+// TestSeed_DirAtDestFailsLoud pins the B1 ruling: a directory occupying a
+// file dest is corruption, not a no-clobber skip. Seed must fail loud and
+// name the path rather than report "skipped (exists)" and leave the real
+// file undeployed.
+func TestSeed_DirAtDestFailsLoud(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// A directory where a talent file belongs.
+	badPath := filepath.Join(dest, "talents", "engineering.md")
+	require.NoError(t, os.MkdirAll(badPath, 0o755))
+
+	result, err := Seed(dest, skills, false)
+	require.Error(t, err, "a directory at a file dest must fail seed")
+
+	var named bool
+	for _, e := range result.Errors {
+		if strings.Contains(e, badPath) && strings.Contains(e, "directory") {
+			named = true
+		}
+	}
+	assert.True(t, named, "error must name the directory dest; got %v", result.Errors)
+	assert.NotContains(t, result.Skipped, badPath, "a directory must not be reported as a skip")
+
+	// The failure is isolated: other files still deploy.
+	assert.FileExists(t, filepath.Join(dest, "roles", "implementer.yaml"))
 }
 
 // TestLinkInstall_FreshCreate pins the atomic create path: a fresh dest is

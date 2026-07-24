@@ -206,12 +206,18 @@ func installNoClobber(dest string, data []byte, r *Result) {
 }
 
 // classifyExisting acts on a dest that already exists: a non-empty file is
-// skipped (no-clobber), a zero-byte file is repaired. It returns true when
-// dest existed (action taken or error recorded), false when dest is absent
-// and the caller should create it.
+// skipped (no-clobber), a zero-byte file is repaired, a directory is a hard
+// error. It returns true when dest existed (action taken or error recorded),
+// false when dest is absent and the caller should create it.
 func classifyExisting(dest string, data []byte, r *Result) bool {
 	info, err := os.Stat(dest)
 	switch {
+	case err == nil && info.IsDir():
+		// A directory where a file belongs is corruption/misplacement: it
+		// passes a Size()>0 check but the real file can never deploy, so fail
+		// loud rather than silently skip it.
+		r.Errors = append(r.Errors, fmt.Sprintf("%s is a directory, expected a file", dest))
+		return true
 	case err == nil && info.Size() > 0:
 		// A non-empty existing file is user content — never clobber it.
 		r.Skipped = append(r.Skipped, dest)
