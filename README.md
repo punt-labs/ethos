@@ -192,6 +192,8 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos enable` / `disable` | Turn ethos on/off in this repo (see below) |
 | `ethos setup` | Set up identities and team (60-second wizard) |
 | `ethos whoami` | Show your resolved identity |
+| `ethos session start` / `end` | Open/close a session from any harness — `eval "$(ethos session start)"` |
+| `ethos iam <persona>` | Declare your persona in the active session |
 | `ethos doctor` | Check installation health |
 | `ethos mission create` / `dispatch` | Create a mission contract |
 | `ethos mission claim` / `release` | Bind session to mission for Tier B dispatch |
@@ -202,6 +204,24 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos session purge [--force] [--ack <id>]` | Clean up stale sessions; guard/acknowledge unsealed audit lines |
 | `ethos find missions` | Query closed missions by date, worker, status |
 | `ethos ui` | Open traceability dashboard in browser |
+
+### Outside Claude Code (Codex, plain terminal)
+
+Ethos is harness-neutral. Inside Claude Code a session is created for you by
+hooks. Anywhere else, open one explicitly — one line at shell or harness
+init:
+
+```bash
+eval "$(ethos session start --persona bwk)"   # exports ETHOS_SESSION
+ethos whoami                                   # reports the declared persona
+ethos session                                  # shows the roster
+ethos session end                              # teardown
+```
+
+`session start` is idempotent (a live `ETHOS_SESSION` is reported, not
+re-minted), and resolution is `--session` > `ETHOS_SESSION` > the Claude
+process walk. Outside a session, `iam` and `mission claim` fail with an
+error naming `ethos session start`.
 
 ### enable / disable
 

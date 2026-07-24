@@ -145,22 +145,52 @@ Returns JSON with all core fields, resolved attribute content (`writing_style_co
 
 ## Session Roster
 
-The session roster tracks all participants in a Claude Code session.
+The session roster tracks all participants in a session.
 
 ### How It Works
 
-Sessions are managed automatically by hooks — no manual setup required.
+Inside Claude Code, sessions are managed automatically by hooks — no manual
+setup required.
 
 1. **SessionStart** hook creates the roster with two participants: the human user (root) and the primary Claude agent.
 2. **SubagentStart** hook adds each subagent to the roster.
 3. **SubagentStop** hook removes the subagent.
 4. **SessionEnd** hook tears down the roster.
 
+### Outside Claude Code (Codex, plain terminal)
+
+Ethos is harness-neutral. Where no Claude hook fires, open a session
+explicitly with `ethos session start` — one line at shell or harness init:
+
+```bash
+# Start (or re-attach to) an ethos session for this shell.
+eval "$(ethos session start --persona bwk)"
+# ETHOS_SESSION is now exported; iam, session, and mission all resolve it.
+ethos whoami          # reports the declared persona
+ethos session         # shows the roster
+```
+
+On teardown:
+
+```bash
+ethos session end     # deletes the roster
+```
+
+`session start` prints `export ETHOS_SESSION=<id>` on stdout (prose on
+stderr), so `eval` sets the env in the calling shell. It is idempotent: with
+a live `ETHOS_SESSION` it reports that session rather than minting a second,
+so re-running it in a subshell or re-sourced rc is safe. Session resolution
+is `--session` > `ETHOS_SESSION` > the Claude process-tree walk; outside a
+session, `iam` and `mission claim` fail with an error naming
+`ethos session start`.
+
 ### CLI
 
 ```bash
+ethos session start                   # Open a session (prints the export line)
 ethos iam archie                      # Declare "I am archie" in this session
 ethos session                         # Show current session roster
+ethos session end                     # Delete the current session roster
 ethos session purge                   # Clean up stale rosters
 ```
 
