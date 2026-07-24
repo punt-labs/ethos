@@ -1,0 +1,75 @@
+results:
+    - mission: m-2026-07-24-017
+      round: 1
+      created_at: "2026-07-24T15:48:15Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/resolve/resolve.go
+          added: 151
+          removed: 19
+        - path: internal/resolve/resolve_test.go
+          added: 66
+          removed: 0
+        - path: cmd/ethos/mission.go
+          added: 30
+          removed: 5
+        - path: cmd/ethos/mission_test.go
+          added: 50
+          removed: 0
+        - path: cmd/ethos/bundle.go
+          added: 1
+          removed: 1
+        - path: cmd/ethos/team_bundle.go
+          added: 6
+          removed: 6
+        - path: cmd/ethos/main.go
+          added: 1
+          removed: 1
+        - path: cmd/ethos/session.go
+          added: 1
+          removed: 1
+        - path: cmd/ethos/find.go
+          added: 1
+          removed: 1
+        - path: internal/hook/session_start.go
+          added: 1
+          removed: 1
+        - path: internal/hook/pre_compact.go
+          added: 1
+          removed: 1
+        - path: README.md
+          added: 17
+          removed: 0
+        - path: AGENTS.md
+          added: 6
+          removed: 0
+      evidence:
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: staticcheck ./... (direct, Makefile swallows it per ethos-cmmu)
+          status: pass
+        - name: go test -race -count=1 ./... (all packages)
+          status: pass
+        - name: dogfood in a linked worktree (built binary) — identity list sees main-only untracked identity; mission create from worktree lands in main store, visible from main; no-repo create warns loudly naming the global root; ETHOS_REPO_ROOT forces the root
+          status: pass
+      open_questions:
+        - CHANGELOG.md is outside the write-set (internal, cmd/ethos, README.md, AGENTS.md) and is a leader-authored file — the Unreleased entry is left for the leader to add.
+      prose: |
+        FindRepoRoot returned the first .git ancestor; in a linked worktree .git is a
+        file, so it returned the worktree cwd whose .punt-labs/ethos is empty (submodule)
+        or absent, and identity/mission stores silently fell back to the global tree
+        (ethos-yofr). Split the concern: FindRepoRoot stays work-tree-local for
+        per-checkout state (enable/disable markers, .claude/agents, audit chunks); a new
+        StoreRepoRoot resolves a .git file through the shared common dir to the main work
+        tree that owns the store — git-first (git rev-parse --path-format=absolute
+        --git-common-dir) with a manual gitdir/commondir fallback, the doctor/githook
+        idiom. Routed every store locator through StoreRepoRoot: FindRepoEthosRoot
+        (identity, talents, personalities, roles, teams, agents source, pipelines,
+        validate-content), the mission contract store (missionStore/ForCreate, migrate,
+        seal, resolveLeader), bundle+config resolution, find missions, and the
+        SessionStart/PreCompact persona-config reads. ETHOS_REPO_ROOT overrides both
+        resolvers. mission create/dispatch/claim warn loudly on global fallback instead
+        of degrading silently. Docs updated in README + AGENTS; a worktree test creates a
+        real linked worktree via git worktree add and asserts resolution.
