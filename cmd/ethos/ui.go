@@ -40,8 +40,16 @@ func runUI() error {
 	if repoRoot == "" {
 		return fmt.Errorf("ethos ui must run inside a repo (no .git found)")
 	}
+	// storeRoot resolves the mission store through the git common dir, so
+	// the dashboard shows the main work tree's missions when run from a
+	// linked worktree (CR#2). It falls back to repoRoot when store
+	// resolution comes up empty so a plain checkout is unaffected.
+	storeRoot := resolve.StoreRepoRoot()
+	if storeRoot == "" {
+		storeRoot = repoRoot
+	}
 
-	srv, err := ui.NewServer(repoRoot)
+	srv, err := ui.NewServer(repoRoot, storeRoot)
 	if err != nil {
 		return fmt.Errorf("creating UI server: %w", err)
 	}
