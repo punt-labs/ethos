@@ -141,6 +141,38 @@ func TestSessionEnd_KeepsForeignPointer(t *testing.T) {
 	assert.Equal(t, "s1live", cur)
 }
 
+// TestSessionEnd_WarnsOnUnverifiablePointer pins finding 8: when the
+// current-pointer cannot be read (a non-not-found error), end leaves it in
+// place — never delete on an unverifiable read — but surfaces the reason
+// rather than swallowing it. In-process so the test and handler share one
+// FindClaudePID.
+func TestSessionEnd_WarnsOnUnverifiablePointer(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setInProcessEnv(t, se)
+	sessionEndSession = ""
+	t.Cleanup(func() { sessionEndSession = "" })
+
+	ss := sessionStore()
+	require.NoError(t, ss.Create("endme",
+		session.Participant{AgentID: "jim", Persona: "jim"},
+		session.Participant{AgentID: "a", Persona: "a", Parent: "jim"}, "", ""))
+	t.Setenv("ETHOS_SESSION", "endme")
+
+	// Make the current-pointer unreadable: a directory where the PID file
+	// belongs forces EISDIR on read, uid-independent (chmod is bypassed by root).
+	pid := process.FindClaudePID()
+	pointer := filepath.Join(se.home, ".punt-labs", "ethos", "sessions", "current", pid)
+	require.NoError(t, os.MkdirAll(pointer, 0o755))
+
+	_, stderr, err := execHandler(t, "session", "end")
+	require.NoError(t, err, "end must still succeed; stderr=%s", stderr)
+	assert.Contains(t, stderr, "could not be verified", "an unverifiable pointer must be surfaced")
+
+	info, statErr := os.Stat(pointer)
+	require.NoError(t, statErr, "the pointer must be left in place")
+	assert.True(t, info.IsDir())
+}
+
 // TestCLI_SessionStart_IdempotentPersonaJoins pins the gate defect: a
 // re-run with --persona on the idempotent branch (live ETHOS_SESSION) must
 // upsert-join the persona, not just advertise it — otherwise whoami keys on

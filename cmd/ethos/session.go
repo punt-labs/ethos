@@ -539,10 +539,15 @@ func runSessionEnd(cmd *cobra.Command) error {
 	// otherwise a stale-session teardown from inside a live Claude session
 	// would silently orphan that live session.
 	claudePID := process.FindClaudePID()
-	if cur, rerr := ss.ReadCurrentSession(claudePID); rerr == nil && cur == sid {
+	switch cur, rerr := ss.ReadCurrentSession(claudePID); {
+	case rerr == nil && cur == sid:
 		if derr := ss.DeleteCurrentSession(claudePID); derr != nil {
 			return fmt.Errorf("session end: %w", derr)
 		}
+	case rerr != nil && !errors.Is(rerr, os.ErrNotExist):
+		// Never delete on an unverifiable read — but a dangling pointer that
+		// now names a deleted session would confuse walk consumers, so say so.
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: current-pointer could not be verified and was left in place: %v\n", rerr)
 	}
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), map[string]string{"ended": sid})
