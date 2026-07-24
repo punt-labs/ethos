@@ -27,7 +27,9 @@ import (
 // malformed env" rule is satisfied because the warning is operator-
 // visible and the spawn proceeds without an inherited contract.
 //
-// repoRoot is the enclosing repo (tierBRepoRoot). parentDelegation
+// repoRoot is the mission store's repo (tierBStoreRoot) — the inheritance
+// walk reads delegation records and contracts from the store, so it must
+// resolve the main work tree in a linked worktree (CR#1). parentDelegation
 // is the value of PARENT_DELEGATION_ID. childAgentType is the
 // CLAUDE_AGENT_TYPE for the spawn being dispatched.
 func tryTierBByInheritance(repoRoot, parentDelegation, childAgentType string) (string, bool) {
@@ -260,7 +262,7 @@ func dispatchTierBOrTierA(w io.Writer, sessionID string, toolInput map[string]an
 	if childAgentType == "" {
 		childAgentType = os.Getenv("CLAUDE_AGENT_TYPE")
 	}
-	repoRoot := tierBRepoRoot()
+	repoRoot := tierBStoreRoot()
 	if missionID, ok := pretooluseInheritReader(repoRoot, parentDelegation, childAgentType); ok {
 		return dispatchTierB(w, sessionID, missionID, toolInput)
 	}
