@@ -1,0 +1,71 @@
+results:
+    - mission: m-2026-07-24-005
+      round: 1
+      created_at: "2026-07-24T06:06:59Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.9
+      files_changed: []
+      evidence:
+        - name: go test -race ./cmd/ethos (7 new subprocess tests)
+          status: pass
+        - name: make check
+          status: pass
+        - name: coverage no-decrease (cmd/ethos 66.8%, identity 80.6%, seed 74.2% before and after)
+          status: pass
+      open_questions:
+        - 'Subprocess integration tests do not raise go-test statement coverage: the cover tool instruments the in-process test binary, not the spawned ethos child. Coverage is unchanged (no decrease), which meets the criterion; the behavioral confidence is real but does not register as statement %.'
+      prose: |
+        Per write-set defect ethos-t2lb, files enumerated here instead of in
+        files_changed. Tests only, no production code. Two new files under the
+        contract write-set (cmd/ethos):
+
+        1. cmd/ethos/setup_journey_subprocess_test.go (+~215 lines) — black-box
+           CLI integration via the built binary:
+           - TestCLI_SetupJourney_Foundation: full user journey seed → setup
+             --file --bundle foundation → show/whoami/doctor, asserting exit
+             codes and parsed JSON (zero show warnings on tester/claude and
+             bundle agents; claude's engineering talent resolves foundation's
+             text; whoami exit 0; doctor exit 0).
+           - TestCLI_Setup_UnseededFailsLoud: setup before seed exits non-zero,
+             stderr carries the actionable remedy naming principal-engineer and
+             "run ethos seed first", and no global identity file is written
+             (CLI exit-code complement to the in-process err-string test).
+           - TestCLI_Setup_ReRunIdempotent: second setup on a configured repo
+             exits 0 and reports skips (semantic pinned in a comment).
+           - TestCLI_CrossBundleSwitch: after rewriting active_bundle
+             foundation→gstack in ethos.yaml, claude's engineering talent
+             resolves gstack's text instead of foundation's, no re-setup, no
+             warnings — the Part A blast radius pinned at the CLI boundary.
+
+        2. cmd/ethos/setup_adversarial_test.go (+~150 lines) — adversarial
+           inputs:
+           - TestCLI_MissingBundleAttr_FallsThroughThenWarns: deleting only the
+             bundle's engineering.md is masked by the global-seed belt (still
+             resolves, zero warnings); deleting the global copy too yields an
+             actionable warning naming the slug and "not found", show still
+             exits 0. Pins the belt-and-suspenders + graceful-degradation
+             semantic.
+           - TestCLI_UnreadableGlobalAttr_WarnsGracefully: an attribute file
+             replaced by a directory (uid-independent read failure) produces a
+             warning naming the personality, exit 0, no crash. Comment notes
+             markdown attrs have no parse step, so inaccessibility is the
+             failure mode.
+           - TestCLI_SeedFailsLoud_UnwritableDest: ~/.punt-labs as a regular
+             file blocks every ethos write; seed exits non-zero, reports the
+             error, and creates no ethos tree. Comment pins seed's actual
+             best-effort-per-file semantic (aggregates errors, non-zero exit;
+             skills deploy to a separate root).
+
+        No production bug found — every behavior matches the design. The
+        belt-and-suspenders fallthrough, graceful missing-attribute
+        degradation, hard-fail-loud seed, and cross-bundle content divergence
+        all behave as specified.
+
+        Coverage before/after (go test -cover, -count=1): cmd/ethos 66.8% →
+        66.8%; internal/identity 80.6% → 80.6%; internal/seed 74.2% → 74.2%.
+        No decrease. Flat because subprocess tests exercise a child process the
+        parent's cover instrumentation does not measure (see open_questions).
+
+        make check green from each commit. Two commits: 1f1fd16 (journey +
+        cross-bundle), cc9aeaa (adversarial).

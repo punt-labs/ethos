@@ -1,0 +1,26 @@
+mission_id: m-2026-07-24-004
+status: closed
+type: implement
+created_at: "2026-07-24T05:03:54Z"
+updated_at: "2026-07-24T05:56:00Z"
+closed_at: "2026-07-24T05:56:00Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-24T05:03:54Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - cmd/ethos internal install.sh README.md AGENTS.md
+success_criteria:
+    - make check passes
+    - all design decisions implemented
+budget:
+    rounds: 3
+    reflection_after_each: true
+current_round: 1
+context: Implement setup-consistency in cmd/ethos internal install.sh README.md AGENTS.md per design
+pipeline: standard-2026-07-24-59417a
+depends_on:
+    - m-2026-07-24-003

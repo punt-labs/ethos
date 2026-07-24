@@ -1,0 +1,73 @@
+results:
+    - mission: m-2026-07-24-004
+      round: 1
+      created_at: "2026-07-24T05:47:47Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed: []
+      evidence:
+        - name: make check (go vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: go test -race ./internal/identity/ (attrChain three-layer precedence + F3 fix)
+          status: pass
+        - name: go test -race ./internal/seed/ ./internal/attribute/ (seed deploy + sidecar enumeration)
+          status: pass
+        - name: go test -race ./cmd/ethos/ (setup hard-validation paths)
+          status: pass
+        - name: dogfood fresh-HOME foundation/gstack/solo — zero warnings, doctor exit 0
+          status: pass
+      prose: |
+        ethos-t2lb note: the contract write_set is a single space-joined string
+        ("cmd/ethos internal install.sh README.md AGENTS.md"), so path-level
+        files_changed cannot be validated against it. Per the leader's dispatch
+        instruction, files_changed is [] and the enumeration is in prose below.
+        All edited paths fall inside the intended write-set (cmd/ethos, internal,
+        AGENTS.md; install.sh and README.md needed no change).
+
+        Files changed (tip 59a1277):
+        - internal/identity/layered.go — attrChain collapsed to a uniform
+          repo -> bundle -> global chain for all identity sources (Part A / R1a,
+          F3). resolveAttributesLayered and attrChain no longer take a source arg.
+        - internal/identity/layered_test.go — added TestLayered_GlobalIdentityResolvesFromBundle
+          (F3 pin) and TestLayered_AttrChainPrecedence (repo shadows bundle
+          shadows global across all three attribute types).
+        - internal/seed/embed.go — added //go:embed globs for sidecar
+          personalities and writing-styles.
+        - internal/seed/seed.go — added two seedFS calls to deploy personalities
+          and writing-styles to global (Part B / R1b).
+        - internal/seed/sidecar/personalities/principal-engineer.md,
+          internal/seed/sidecar/writing-styles/concise-quantified.md,
+          internal/seed/sidecar/talents/engineering.md — vendored the three
+          conventional slugs from the team submodule (Part B / R1b file-move).
+          The two new globs also sweep in the ~13 previously-dead sidecars
+          (sprint-*, product-thinker, *-prose) as live starter content
+          (R4 exception, dead-embedded-file portion of ethos-bljl).
+        - internal/seed/seed_test.go — assert the three referenced slugs deploy,
+          representative swept-in dead files deploy, and READMEs still route via
+          seedReadmes.
+        - internal/attribute/sidecar_test.go — added engineering to the sidecar
+          talents enumeration (it is a short umbrella talent, kept out of the
+          >1000-char substantial subset).
+        - cmd/ethos/setup.go — dropped saveIdentityNoRefs; both identities now go
+          through Store.Save (global-layer ValidateRefs). setupSaveError maps a
+          missing-attribute ValidationError to an actionable "run ethos seed
+          first" error naming the slug (Part C / R2).
+        - cmd/ethos/setup_test.go — added TestSetup_HardValidation_UnseededFails
+          (unseeded setup fails, writes nothing dangling, then succeeds after
+          seed) and TestSetup_HardValidation_BadStyle (bogus writing_style slug).
+        - AGENTS.md — corrected the seed one-liner to say it deploys bundles plus
+          starter attributes, not just gstack.
+
+        Part D (R3): no code change. generate_agents.go:80-82 (main-agent skip)
+        and the kind=="agent" guard are deliberate invariants, ratified as-is;
+        the main-agent persona-injection concern is fixed by Part A's resolution.
+
+        Dogfood evidence (built .tmp/ethos, fresh scratch HOME per case,
+        $USER aligned to the human handle so doctor's step-4 match passes):
+          foundation — 6 identities checked, 0 warnings, doctor exit 0
+          gstack     — 8 identities checked, 0 warnings, doctor exit 0
+          solo       — 2 identities checked, 0 warnings, doctor exit 0
+        The solo (no-bundle) row proves R1b's belt: claude and the human resolve
+        principal-engineer / concise-quantified / engineering from the global
+        seed with no bundle active.

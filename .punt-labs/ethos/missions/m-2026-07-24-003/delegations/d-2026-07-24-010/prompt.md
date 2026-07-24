@@ -1,0 +1,13 @@
+You are the pinned evaluator on ethos mission m-2026-07-24-003 (design archetype). Working directory <repo>, branch feat/setup-consistency, design at docs/setup-consistency.md (commit 33b4bbf). Run `ethos mission show m-2026-07-24-003` for the contract.
+
+CONTEXT: fixes bead ethos-5zwn — fresh-machine setup produces unresolvable identities. Problem statement: .tmp/investigations/bundle-consistency.md (findings F1/F2/F3/F7). Leader rulings R1-R4 are in the design's rulings section; ruling update: R3 is ratified as the DESIGNER's version (no agent files for main agent/human — the generator's skip is a deliberate invariant; Part A's persona resolution is the fix).
+
+Your lens: compatibility, migration cost, layered-store correctness (you know internal/identity, internal/bundle, DES-051). Evaluate:
+1. Part A (attrChain uniform repo→bundle→global): is the claimed bundle-blind set (personality/writing_style/talents ONLY; roles+attribute store already threaded; ext global-by-design) COMPLETE and correct? Read layered.go end-to-end — a missed attribute type ships the same bug for that type. Is there any consumer that DEPENDS on the current global-only behavior (a global identity that would now resolve differently when a bundle is active — behavior change surface)? Name the blast radius.
+2. Part B (embed the three setup-referenced attrs from the team submodule into seed): licensing/content correctness aside, is vendoring FROM the submodule the right source of truth, and does the design state what happens when the submodule content drifts from the embedded copy? Is the dead-file sweep scoped safely?
+3. Part C (setup uses ref-validating Save, errors if seed hasn't run): does the error path give a fresh-machine user an actionable remedy? Does ANY existing setup flow (--solo, --file, --bundle) break under hard validation?
+4. Migration: existing machines with warning-carrying identities — does the design's convergence story (re-run seed) actually fix them without clobbering user-modified global attrs? The §7 zone rules apply to ~/.punt-labs/ethos global content too? State whether seed overwrites or skips existing files and whether that's the right call.
+5. Acceptance criterion: fresh-HOME both-bundles zero-warnings — is the test strategy sufficient to PROVE it (does it cover the no-bundle path and the doctor run)?
+6. Contract criteria: problem, chosen approach, rejected alternatives, migration plan present and substantive.
+
+Write to .tmp/missions/results/m-2026-07-24-003-eval-rsc.md: numbered findings REQ/REC/NIT with file:line, verdict APPROVE or REVISE (REQ list). Reply "written — <verdict>".
