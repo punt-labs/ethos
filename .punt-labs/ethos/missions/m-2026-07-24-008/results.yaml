@@ -1,0 +1,50 @@
+results:
+    - mission: m-2026-07-24-008
+      round: 1
+      created_at: "2026-07-24T07:51:08Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/harness-sessions.md
+          added: 363
+          removed: 0
+      evidence:
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: markdownlint-cli2 docs/harness-sessions.md (0 issues / 252 files)
+          status: pass
+        - name: commit ae65b74 on feat/harness-sessions
+          status: pass
+      prose: |
+        Design doc docs/harness-sessions.md (DES-061) for harness-neutral
+        sessions. Problem statement is the harness-independence investigation
+        (8 findings F1-F8); the design turns its sketch into a buildable
+        contract.
+
+        Chosen approach: `ethos session start` as the one-call primitive (mints
+        a UUIDv4 — google/uuid already vendored, matches Claude Code's own
+        session_id shape; crypto/rand hex noted as zero-dep drop-in), prints an
+        eval-able `export ETHOS_SESSION=<id>`, idempotent under an existing
+        ETHOS_SESSION, with a symmetric `session end`. Resolution becomes one
+        ordered chain — --session > ETHOS_SESSION > process-walk (claude-only,
+        kept for zero-config, bypassed when an explicit ID is present) >
+        actionable error naming `session start`; no silent fallback. Every
+        consumer (iam, session, mission claim/log, audit attribution, MCP) is
+        tabulated against today's behavior. MCP gains ETHOS_SESSION + ETHOS_AGENT_ID
+        parity. Store schema and the Claude Code hook path are unchanged, so
+        migration is none.
+
+        Covered per the contract: ID mint + schema (unchanged), the resolution
+        chain and each consumer, the hidden `session create`'s fate (keep as
+        plumbing — recommended, with rationale), a Codex harness-adapter
+        snippet, migration (none, stated), test strategy (the detached
+        no-claude-ancestor harness from the investigation becomes the fixture,
+        8 cases), rejected alternatives (walker generalization now; auto-start
+        on iam — rejected as ambient magic; PID-in-ID; new pointer key), and
+        the audit/DES-058 attribution invariants (one ID, one zone;
+        current-pointer consistency; schema stability; Claude path unchanged).
+
+        R5 (non-PID primary staleness = existing 24h TTL) is documented as the
+        decided behavior rather than adding process-liveness for arbitrary
+        harnesses.
