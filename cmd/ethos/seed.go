@@ -51,7 +51,7 @@ func runSeed(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  skipped (exists): %s\n", s)
 	}
 	for _, rp := range result.Repaired {
-		fmt.Fprintf(os.Stderr, "  repaired (was empty): %s\n", rp)
+		fmt.Printf("  repaired (was empty): %s\n", rp)
 	}
 
 	fmt.Printf("\nSeeded %d files (%d skipped, %d repaired)\n",
