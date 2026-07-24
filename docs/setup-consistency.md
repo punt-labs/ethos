@@ -1,6 +1,7 @@
 # Setup/seed consistency design (ethos-5zwn, m-2026-07-24-003)
 
-Status: proposed. Fixes findings F1/F2/F3/F7 from the fresh-machine
+Status: Settled (DES-060; operator-delegated rulings R1-R4, 2026-07-24).
+Fixes findings F1/F2/F3/F7 from the fresh-machine
 bundle audit (`.tmp/investigations/bundle-consistency.md`). Companion
 beads — validation gate (ethos-hnxz) and content fixes (ethos-bljl) —
 are noted as siblings, not absorbed here.
