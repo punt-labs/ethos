@@ -383,21 +383,19 @@ func closeDelegationAborted(repoRoot, missionID, delegationID string) {
 // the CLI and the dispatch hook disagree and delegation is refused with
 // "resolving MISSION_ID not found" — the core ethos-yofr symptom (CR#1).
 //
-// Resolution order:
-//  1. ETHOS_REPO_ROOT env override (validated; see resolve.StoreRepoRoot)
-//  2. resolve.StoreRepoRoot (common-dir-aware walk)
-//  3. os.Getwd fallback (logs to stderr; downstream sites defend against an
-//     empty return)
+// It returns exactly what StoreRepoRoot returns, INCLUDING "" — it must NOT
+// bare-Getwd-fall-back the way tierBRepoRoot does. StoreRepoRoot returns ""
+// in two cases: no git repo at all, and (crucially) a set-but-invalid
+// ETHOS_REPO_ROOT, where F1's repoRootOverride deliberately returns "" so
+// the caller does not resolve some other tree. Substituting the raw cwd here
+// would, inside a worktree under a bad override, point the store at the
+// worktree's own tree — reintroducing ethos-yofr behind a bad override
+// (code-review round 2). On "", NewStoreWithRoots falls back to the global
+// tree (a warned, known state) for reads, and the write path
+// (AcquireMissionLock, WriteDelegationSkeleton) fails loud on the empty
+// repoRoot — never a silent worktree-local write.
 func tierBStoreRoot() string {
-	if root := resolve.StoreRepoRoot(); root != "" {
-		return root
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: pre-tool-use: getwd failed: %v\n", err)
-		return ""
-	}
-	return cwd
+	return resolve.StoreRepoRoot()
 }
 
 // tierBRepoRoot resolves the current work tree root for the per-checkout

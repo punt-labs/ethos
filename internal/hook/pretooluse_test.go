@@ -930,6 +930,94 @@ func TestTierBDispatch_FromWorktreeResolvesMainStore(t *testing.T) {
 		"skeleton must NOT be written under the worktree tree")
 }
 
+// TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree pins the
+// code-review round-2 finding: a set-but-invalid ETHOS_REPO_ROOT makes
+// StoreRepoRoot return "" (F1 fail-closed). tierBStoreRoot must NOT
+// substitute the raw worktree cwd — doing so would resolve the store into
+// the worktree's own tree, reintroducing ethos-yofr behind a bad override.
+// The mission is staged in the global tree so Load succeeds and the write
+// path is reached; the fix makes the lock fail loud on the empty repoRoot
+// rather than writing a skeleton into the worktree.
+func TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	gitAt := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = []string{
+			"HOME=" + home,
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_SYSTEM=/dev/null",
+			"PATH=" + os.Getenv("PATH"),
+		}
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(main, 0o755))
+	gitAt(main, "init")
+	gitAt(main, "config", "user.email", "t@example.com")
+	gitAt(main, "config", "user.name", "t")
+	gitAt(main, "commit", "--allow-empty", "-m", "init")
+	wt := filepath.Join(base, "wt")
+	gitAt(main, "worktree", "add", wt)
+
+	// Stage the mission in the GLOBAL tree so Load succeeds and the dispatch
+	// reaches the write path (the lock + skeleton), where the old Getwd
+	// fallback would have written into the worktree.
+	missionID := "m-2026-07-24-060"
+	require.NoError(t, mission.NewStore(globalRoot).Create(&mission.Contract{
+		MissionID: missionID,
+		Status:    mission.StatusOpen,
+		CreatedAt: "2026-07-24T00:00:00Z",
+		UpdatedAt: "2026-07-24T00:00:00Z",
+		Leader:    "claude",
+		Worker:    "bwk",
+		Evaluator: mission.Evaluator{Handle: "djb", PinnedAt: "2026-07-24T00:00:00Z"},
+		WriteSet:  []string{"internal/hook/"},
+		SuccessCriteria: []string{"make check passes"},
+		Budget:          mission.Budget{Rounds: 1, ReflectionAfterEach: true},
+		CurrentRound:    1,
+	}))
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	require.NoError(t, os.Chdir(wt))
+
+	// A bad override: an existing directory with no .punt-labs/ethos store.
+	// F1 makes StoreRepoRoot return ""; tierBStoreRoot must not fall back to
+	// the worktree cwd.
+	t.Setenv("ETHOS_REPO_ROOT", t.TempDir())
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("ETHOS_QUIET_ADVICE", "")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-bad"}`
+	var out bytes.Buffer
+	require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "deny", r.HookSpecificOutput.PermissionDecision,
+		"a bad override in a worktree must fail loud, not resolve worktree-local")
+
+	// The decisive assertion: no mission tree may be created under the
+	// worktree. The old Getwd fallback would have written the skeleton here.
+	_, statErr := os.Stat(filepath.Join(wt, ".punt-labs", "ethos", "missions", missionID))
+	assert.True(t, os.IsNotExist(statErr),
+		"dispatch must not create a mission tree in the worktree under a bad override")
+}
+
 // TestHandlePreToolUse_TierBDispatch_ConcurrentSharedLock asserts the
 // shared mission lock contract: two Tier B spawns under the same
 // mission must both succeed without blocking each other and write
