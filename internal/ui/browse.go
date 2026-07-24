@@ -284,7 +284,7 @@ func (s *Server) delegationAgent(missionID, delegationID string) string {
 		return ""
 	}
 	recordPath := filepath.Join(
-		s.repoRoot, ".punt-labs", "ethos", "missions",
+		s.storeRoot, ".punt-labs", "ethos", "missions",
 		missionID, "delegations", delegationID, "record.yaml",
 	)
 	d, err := loadDelegationYAML(recordPath)
@@ -312,7 +312,7 @@ func extractTicketIDs(subject string) []string {
 
 // firstDelegation returns the first delegation ID under a mission dir.
 func (s *Server) firstDelegation(missionID string) string {
-	dir := filepath.Join(s.repoRoot, ".punt-labs", "ethos", "missions", missionID, "delegations")
+	dir := filepath.Join(s.storeRoot, ".punt-labs", "ethos", "missions", missionID, "delegations")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return ""

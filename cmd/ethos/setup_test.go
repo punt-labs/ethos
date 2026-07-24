@@ -805,3 +805,112 @@ handle: plain-jane
 	assert.Empty(t, human.WritingStyle)
 }
 
+
+// TestSetup_FromWorktreeWritesConfigToStoreAgentsToCheckout pins the Bugbot
+// HIGH on PR #370: setup is a config WRITER + agent generator. Its config /
+// bundle / team writes must land in the shared store (where team activate and
+// sessions read them), while the generated .claude/agents go to the checkout.
+// From a linked worktree a single root wrote config into the checkout, where
+// the store-rooted readers never look.
+func TestSetup_FromWorktreeWritesConfigToStoreAgentsToCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	setupBundle = "foundation"
+	setupSolo = false
+	setupFile = ""
+	t.Cleanup(func() { setupBundle = "foundation"; setupSolo = false; setupFile = "" })
+
+	home := t.TempDir()
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(main, 0o755))
+
+	t.Setenv("HOME", home)
+	t.Setenv("USER", "test-user")
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = []string{
+			"HOME=" + home,
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_SYSTEM=/dev/null",
+			"PATH=" + os.Getenv("PATH"),
+		}
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+	}
+	git(main, "init")
+	git(main, "config", "user.email", "t@example.com")
+	git(main, "config", "user.name", "t")
+	git(main, "commit", "--allow-empty", "-m", "init")
+
+	// Seed global bundles (foundation) so bundle activation resolves.
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	skillsRoot := filepath.Join(home, ".claude", "skills")
+	_, err := seed.Seed(globalRoot, skillsRoot, false)
+	require.NoError(t, err, "seed failed")
+
+	// Run setup from a linked worktree.
+	wt := filepath.Join(base, "wt")
+	git(main, "worktree", "add", wt)
+	t.Chdir(wt)
+
+	cfgPath := filepath.Join(wt, "setup.yaml")
+	writeSetupFile(t, cfgPath, `
+name: Priya Chandran
+handle: priya-chandran
+writing_style: concise-quantified
+`)
+
+	stdout, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s\nstdout: %s", stderr, stdout)
+
+	// Config written to the MAIN store — the tree team activate + sessions read.
+	mainCfg := filepath.Join(main, ".punt-labs", "ethos.yaml")
+	require.FileExists(t, mainCfg)
+	data, err := os.ReadFile(mainCfg)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "agent: claude")
+	assert.Contains(t, string(data), "active_bundle: foundation")
+
+	// Config must NOT be written into the worktree.
+	_, statErr := os.Stat(filepath.Join(wt, ".punt-labs", "ethos.yaml"))
+	assert.True(t, os.IsNotExist(statErr),
+		"repo config must go to the store, not the worktree checkout")
+
+	// Agents generated into the WORKTREE checkout (where its Claude reads them).
+	entries, err := os.ReadDir(filepath.Join(wt, ".claude", "agents"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, entries, "agents must be generated into the worktree checkout")
+
+	// Agents must NOT be generated into the store/main tree.
+	_, statErr = os.Stat(filepath.Join(main, ".claude", "agents"))
+	assert.True(t, os.IsNotExist(statErr),
+		"agents must not be generated into the store tree")
+}
+
+// TestSetup_BadOverrideFailsLoudNotSilentSkip pins the Bugbot HIGH F-A on PR
+// #370: a set-but-refused ETHOS_REPO_ROOT (nonexistent) makes FindRepoRoot
+// return "" even though the cwd IS a real repo. setup must fail loud, not
+// silently create identities, skip repo config/bundle/team, and report success.
+func TestSetup_BadOverrideFailsLoudNotSilentSkip(t *testing.T) {
+	_, repo := setupTestEnv(t) // chdirs into a real git repo
+	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(repo, "does-not-exist"))
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `
+name: Priya Chandran
+handle: priya-chandran
+writing_style: concise-quantified
+`)
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err,
+		"a refused override must fail loud, not succeed with repo config skipped; stderr: %s", stderr)
+	assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT",
+		"the error must name the refused override")
+}

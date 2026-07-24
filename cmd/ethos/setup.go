@@ -204,6 +204,16 @@ func runSetup(cmd *cobra.Command) error {
 	// --- Repo config and bundle ---
 	repoRoot := resolve.FindRepoRoot()
 	if repoRoot == "" {
+		// Distinguish "genuinely not in a repo" from "a bad ETHOS_REPO_ROOT
+		// was refused." The latter must FAIL LOUD, not silently skip repo
+		// config and report success — a set-but-refused override while the cwd
+		// is a real repo/worktree would otherwise degrade setup to no-repo mode
+		// (#370 F-A). FindRepoRoot returns "" for a set override only when it
+		// was refused (a valid one resolves non-empty).
+		if override, set := resolve.RepoRootOverride(); set {
+			return fmt.Errorf("setup: ETHOS_REPO_ROOT=%q was refused (not an "+
+				"existing directory); unset it or point it at a repo", override)
+		}
 		fmt.Fprintln(errw, "ethos: setup: not in a git repository (identities created, skipping repo config and team)")
 		if result.Skipped == nil {
 			result.Skipped = []string{}
@@ -218,17 +228,32 @@ func runSetup(cmd *cobra.Command) error {
 		return nil
 	}
 
-	// Legacy submodule check.
-	if hasLegacySubmodule(repoRoot) {
+	// The repo config, bundle, team, and default-agent selection all resolve
+	// from the SHARED store (StoreRepoRoot) — the tree every reader uses (team
+	// activate, resolveBundleRoot, the SessionStart persona, doctor) — so
+	// setup's writes are visible to them. Only the "in a git repo" guard above
+	// and the .claude/agents destination below stay on the checkout (repoRoot).
+	// In a linked worktree these differ; on a plain checkout or first run they
+	// coincide, so this is a no-op there.
+	storeRoot := resolve.StoreRepoRoot()
+	if storeRoot == "" {
+		return fmt.Errorf("setup: cannot resolve the mission store root " +
+			"(ETHOS_REPO_ROOT was set but refused); unset it or point it at a repo " +
+			"with a .punt-labs/ethos store")
+	}
+
+	// Legacy submodule check (the shared .punt-labs/ethos submodule; the
+	// remedy `ethos team migrate` operates on the store).
+	if hasLegacySubmodule(storeRoot) {
 		fmt.Fprintln(errw, "ethos: setup: legacy submodule detected at .punt-labs/ethos/")
 		fmt.Fprintln(errw, `Run "ethos team migrate" to convert to the bundles layout.`)
 	}
 
-	// Write repo config, merging with any existing values.
-	configPath := filepath.Join(repoRoot, ".punt-labs", "ethos.yaml")
+	// Write repo config to the store, merging with any existing values.
+	configPath := filepath.Join(storeRoot, ".punt-labs", "ethos.yaml")
 	result.RepoConfig = ".punt-labs/ethos.yaml"
 
-	if err := mergeRepoConfig(repoRoot); err != nil {
+	if err := mergeRepoConfig(storeRoot); err != nil {
 		return fmt.Errorf("setup: writing repo config: %w", err)
 	}
 	fmt.Fprintf(errw, "wrote: %s\n", configPath)
@@ -249,7 +274,7 @@ func runSetup(cmd *cobra.Command) error {
 	}
 
 	// Validate the bundle exists.
-	bundles, err := bundle.List(repoRoot, globalRoot)
+	bundles, err := bundle.List(storeRoot, globalRoot)
 	if err != nil {
 		return fmt.Errorf("setup: listing bundles: %w", err)
 	}
@@ -269,11 +294,11 @@ func runSetup(cmd *cobra.Command) error {
 
 	// Check if already active. If --bundle wasn't explicit and a bundle
 	// is already active, keep the existing one.
-	current, err := resolve.ResolveActiveBundle(repoRoot)
+	current, err := resolve.ResolveActiveBundle(storeRoot)
 	if err != nil {
 		return fmt.Errorf("setup: reading active bundle: %w", err)
 	}
-	team, err := resolve.ResolveTeam(repoRoot)
+	team, err := resolve.ResolveTeam(storeRoot)
 	if err != nil {
 		return fmt.Errorf("setup: reading team: %w", err)
 	}
@@ -283,13 +308,13 @@ func runSetup(cmd *cobra.Command) error {
 		fmt.Fprintf(errw, "skipped: bundle %q already active (use --bundle to switch)\n", current)
 		result.Skipped = append(result.Skipped, "bundle")
 		cfg.Bundle = current
-		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
+		if err := ensureTeamKey(errw, storeRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
 			return err
 		}
 	case current == cfg.Bundle:
 		fmt.Fprintf(errw, "skipped: bundle %q already active\n", cfg.Bundle)
 		result.Skipped = append(result.Skipped, "bundle")
-		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
+		if err := ensureTeamKey(errw, storeRoot, cfg.Bundle, team, teamNamesBundle); err != nil {
 			return err
 		}
 	default:
@@ -297,10 +322,10 @@ func runSetup(cmd *cobra.Command) error {
 		// skip branches above key off — lands last. If the run is
 		// interrupted between the two writes, the next setup sees no
 		// active_bundle, takes this branch again, and self-heals.
-		if err := setConfigKey(repoRoot, "team", cfg.Bundle); err != nil {
+		if err := setConfigKey(storeRoot, "team", cfg.Bundle); err != nil {
 			return fmt.Errorf("setup: setting team: %w", err)
 		}
-		if err := setConfigKey(repoRoot, "active_bundle", cfg.Bundle); err != nil {
+		if err := setConfigKey(storeRoot, "active_bundle", cfg.Bundle); err != nil {
 			return fmt.Errorf("setup: activating bundle: %w", err)
 		}
 		fmt.Fprintf(errw, "activated: bundle %q\n", cfg.Bundle)
@@ -311,7 +336,9 @@ func runSetup(cmd *cobra.Command) error {
 	is := identityStore()
 	ts := layeredTeamStore(is)
 	rs := layeredRoleStore(is)
-	if err := hook.GenerateAgentFiles(repoRoot, is, ts, rs); err != nil {
+	// Config/team selection from the store; agent files into the checkout
+	// (.claude/agents is per-checkout, matching session_start + agent_installer).
+	if err := hook.GenerateAgentFilesTo(storeRoot, repoRoot, is, ts, rs); err != nil {
 		return fmt.Errorf("setup: generating agent files: %w", err)
 	}
 

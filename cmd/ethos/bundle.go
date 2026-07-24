@@ -21,7 +21,7 @@ import (
 // would hide the misconfiguration. The process exits with a diagnostic
 // on stderr. This matches how other fatal startup errors are handled.
 func resolveBundleRoot() string {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	globalRoot := defaultGlobalRoot()
 	b, err := bundle.ResolveActive(repoRoot, globalRoot)
 	if err != nil {

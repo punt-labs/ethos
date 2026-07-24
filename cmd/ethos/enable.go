@@ -37,7 +37,9 @@ func runEnable(cmd *cobra.Command) error {
 		fmt.Fprintln(cmd.ErrOrStderr(), "ethos: enable: not in a git repository")
 		return failClosed{}
 	}
-	rep, err := enable.Enable(repoRoot)
+	// Deposit (guide/marker/import/hooks) is per-checkout (repoRoot); the
+	// "has setup been run?" config read resolves the shared store (#370).
+	rep, err := enable.EnableTo(repoRoot, resolve.StoreRepoRoot())
 	if err != nil {
 		emitPartialReport(cmd, rep)
 		return err

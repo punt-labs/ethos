@@ -164,10 +164,13 @@ func resolveFromSession(ss *session.Store) sessionPersona {
 	return sessionPersona{handle: p.Persona, found: true}
 }
 
-// FindRepoEthosRoot returns the path to .punt-labs/ethos/ in the current
-// git repo, or empty string if not in a repo or the directory doesn't exist.
+// FindRepoEthosRoot returns the path to .punt-labs/ethos/ for the repo the
+// store should read and write, or empty string if not in a repo or the
+// directory doesn't exist. It resolves through StoreRepoRoot, so a linked
+// worktree finds the main work tree's store rather than its own empty
+// checkout (ethos-yofr).
 func FindRepoEthosRoot() string {
-	repoRoot := FindRepoRoot()
+	repoRoot := StoreRepoRoot()
 	if repoRoot == "" {
 		return ""
 	}
@@ -294,9 +297,62 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 	return cfg.ActiveBundle, nil
 }
 
-// FindRepoRoot walks from the current working directory upward looking
-// for a .git directory. Returns empty string if no .git is found.
+// RepoRootOverride reports the ETHOS_REPO_ROOT override (whitespace-trimmed)
+// and whether it is set, WITHOUT validating it or emitting any warning. It
+// lets a caller distinguish "no override, genuinely not in a repo" (set ==
+// false) from "an override was set but the resolver refused it" (set == true
+// while FindRepoRoot/StoreRepoRoot returned ""). setup uses it to fail loud on
+// a bad override instead of silently degrading to no-repo mode (#370 F-A).
+func RepoRootOverride() (value string, set bool) {
+	v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT"))
+	return v, v != ""
+}
+
+// repoRootOverride returns the ETHOS_REPO_ROOT override and whether it was
+// set. A set override is validated: it must name an existing directory, and
+// when requireStore is set it must also hold a .punt-labs/ethos store. A
+// set-but-invalid override is a loud error naming the bad root and what is
+// missing — an override that lies about the location silently writes to the
+// wrong tree, the exact ethos-yofr symptom (SFH F1). On an invalid override
+// it returns ("", true): "an override was set" so the caller does NOT fall
+// through to auto-resolution and quietly pick a different tree, and the bad
+// path is never returned — resolution reports "no repo," which surfaces the
+// global-fallback warning downstream.
+func repoRootOverride(requireStore bool) (root string, set bool) {
+	v, ok := RepoRootOverride()
+	if !ok {
+		return "", false
+	}
+	if info, err := os.Stat(v); err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it\n", v)
+		return "", true
+	}
+	if requireStore {
+		store := filepath.Join(v, ".punt-labs", "ethos")
+		if info, err := os.Stat(store); err != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q has no %s store; refusing to use it\n",
+				v, filepath.Join(".punt-labs", "ethos"))
+			return "", true
+		}
+	}
+	return v, true
+}
+
+// FindRepoRoot returns the current work tree root — the directory holding
+// the .git marker for the cwd's checkout — or empty string when the cwd is
+// not inside a repo. In a linked worktree it returns the WORKTREE root, not
+// the main one: per-checkout operations (enable/disable markers, generated
+// .claude/agents, audit chunks that must travel in this worktree's commit)
+// belong to the checkout, not the shared store. Store readers and writers
+// use StoreRepoRoot instead.
+//
+// ETHOS_REPO_ROOT (whitespace-trimmed) overrides the walk so an operator
+// can force the root when auto-resolution is wrong; it must name an existing
+// directory (see repoRootOverride).
 func FindRepoRoot() string {
+	if root, set := repoRootOverride(false); set {
+		return root
+	}
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
@@ -313,24 +369,171 @@ func FindRepoRoot() string {
 	}
 }
 
-// EnvRepoRoot is the canonical "what repo are we operating against?"
-// resolver used by every DES-054 hook, CLI command, and library that
-// needs to address an .ethos tree. Resolution order:
-//  1. ETHOS_REPO_ROOT env override (whitespace-trimmed)
-//  2. FindRepoRoot (walk for .git)
+// StoreRepoRoot returns the root of the repository whose .punt-labs/ethos
+// store the caller should read and write, or empty string when the cwd is
+// not inside a repo.
 //
-// Callers that want a Getwd fallback when both are empty must apply
-// it themselves — most hook paths take the empty return and route to
-// the legacy global tree; most CLI paths exit 2 with "must run inside
-// a repo." Centralizing the env+FindRepoRoot pair ensures every
-// caller sees the same repo when the operator sets the override
-// (Bugbot HIGH/MED across PR #328: previous split resolution let
-// audit-write and precondition-read disagree on which repo is
-// "this one").
-func EnvRepoRoot() string {
-	if v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT")); v != "" {
-		return v
+// It differs from FindRepoRoot only inside a linked worktree. Git keeps one
+// shared object store per repo; a linked worktree's .git is a file pointing
+// at the main work tree's .git, and — in the org-standard submodule layout —
+// the worktree's own .punt-labs/ethos is an empty, unpopulated checkout.
+// Resolving through the common dir means an agent working in
+// <repo>/.claude/worktrees/x reads and writes the store at
+// <repo>/.punt-labs/ethos rather than a different, empty tree that silently
+// degrades to the global store (ethos-yofr).
+//
+// Resolution order:
+//  1. ETHOS_REPO_ROOT env override (whitespace-trimmed) — validated to hold
+//     a .punt-labs/ethos store, else refused loudly (see repoRootOverride).
+//  2. Walk upward for a .git marker. A .git directory is the main work
+//     tree — the store lives here. A .git file is a linked worktree (or a
+//     submodule); resolve the owning repo through the common dir.
+func StoreRepoRoot() string {
+	if root, set := repoRootOverride(true); set {
+		return root
 	}
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		marker := filepath.Join(dir, ".git")
+		info, err := os.Stat(marker)
+		if err == nil {
+			if info.IsDir() {
+				return dir // main work tree — the store lives here
+			}
+			if root := worktreeStoreRoot(dir); root != "" {
+				return root
+			}
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// worktreeStoreRoot resolves the repository root that owns the store for a
+// directory whose .git is a file. A linked worktree's store lives in the
+// MAIN work tree, reached through the shared (common) git dir; a submodule's
+// store lives in its own work tree. It asks git first — `git rev-parse`
+// honors the real repository layout — then falls back to reading the .git
+// gitdir and its commondir by hand when git is absent, so a worktree still
+// resolves in a git-less environment. This mirrors the common-dir idiom in
+// internal/doctor and internal/githook.
+func worktreeStoreRoot(worktree string) string {
+	if root := gitStoreRoot(worktree); root != "" {
+		return root
+	}
+	return manualStoreRoot(worktree)
+}
+
+// gitStoreRoot returns git's own resolution of the owning repo root, or
+// empty when git cannot answer. A linked worktree has a per-worktree git
+// dir (<main>/.git/worktrees/<name>) distinct from the shared common dir
+// (<main>/.git); the main root is the common dir's parent. When the two
+// match (a submodule or a plain checkout), the store lives in this work
+// tree, so the worktree dir is returned as-is to preserve the caller's
+// symlink-form path.
+func gitStoreRoot(worktree string) string {
+	gitDir := gitRevParseAbs(worktree, "--git-dir")
+	common := gitRevParseAbs(worktree, "--git-common-dir")
+	if gitDir == "" || common == "" {
+		return ""
+	}
+	common = filepath.Clean(common)
+	if filepath.Clean(gitDir) == common {
+		return worktree // submodule or plain checkout
+	}
+	if filepath.Base(common) != ".git" {
+		// A non-standard common dir — e.g. a submodule's .git/modules/<name>,
+		// whose parent is inside .git, not a work tree (SFH F4). Keep the
+		// worktree rather than resolving a bogus root inside .git.
+		return worktree
+	}
+	return filepath.Dir(common)
+}
+
+// gitRevParseAbs runs `git -C dir rev-parse --path-format=absolute <arg>`
+// and returns the trimmed output, or empty on any error. The absolute
+// path format (git 2.31+) makes the result independent of cwd; an older
+// git that rejects the flag falls through to the manual resolver.
+func gitRevParseAbs(dir, arg string) string {
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--path-format=absolute", arg).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// manualStoreRoot resolves the owning repo root without git by reading the
+// .git gitdir pointer and its commondir file. For a linked worktree the
+// commondir resolves to <main>/.git, whose parent is the main work tree.
+// A submodule (commondir absent) keeps its store in this work tree, so the
+// worktree dir is returned.
+//
+// It distinguishes a clean submodule signal (commondir simply absent) from a
+// genuine read error — a stale worktree whose main repo moved or was
+// deleted, a corrupt gitdir, or a permission failure. The clean case is
+// silent; a genuine error warns to stderr naming the worktree fallback,
+// rather than silently returning an empty store (SFH F2).
+func manualStoreRoot(worktree string) string {
+	dotgit := filepath.Join(worktree, ".git")
+	data, err := os.ReadFile(dotgit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", dotgit, err, worktree)
+		return worktree
+	}
+	gd := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
+	if gd == "" {
+		fmt.Fprintf(os.Stderr, "ethos: warning: %s has no gitdir pointer; using the worktree store at %s\n", dotgit, worktree)
+		return worktree
+	}
+	if !filepath.IsAbs(gd) {
+		gd = filepath.Join(worktree, gd)
+	}
+	if _, err := os.Stat(gd); err != nil {
+		// The gitdir target is gone — a stale worktree (its main repo moved
+		// or was deleted), not a clean submodule. Do not silently treat it
+		// as one.
+		fmt.Fprintf(os.Stderr, "ethos: warning: worktree git dir %s is unreadable (%v); the main repo may have moved — using the worktree store at %s\n", gd, err, worktree)
+		return worktree
+	}
+	data, err = os.ReadFile(filepath.Join(gd, "commondir"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			// A present-but-unreadable commondir is a real error, not the
+			// clean submodule signal (which is commondir simply absent).
+			fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", filepath.Join(gd, "commondir"), err, worktree)
+		}
+		return worktree // absent commondir: a submodule keeps its own store
+	}
+	common := strings.TrimSpace(string(data))
+	if common == "" {
+		return worktree
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gd, common)
+	}
+	common = filepath.Clean(common)
+	if filepath.Base(common) == ".git" {
+		return filepath.Dir(common)
+	}
+	return worktree
+}
+
+// EnvRepoRoot is the canonical name several DES-054 hook and CLI call
+// sites use to address the repo tree for per-checkout state (audit chunks,
+// missions.jsonl trace). It resolves the current work tree, honoring
+// ETHOS_REPO_ROOT first — kept distinct from StoreRepoRoot because audit
+// and trace files must travel in the committing checkout, not the shared
+// store. Centralizing the env+walk pair keeps audit-write and
+// precondition-read resolving identically (Bugbot HIGH/MED across PR #328:
+// a previous split let them disagree on which repo is "this one").
+func EnvRepoRoot() string {
 	return FindRepoRoot()
 }
 

@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -599,6 +600,175 @@ func TestFindRepoRoot_NoGitDir(t *testing.T) {
 		_, err := os.Stat(filepath.Join(result, ".git"))
 		assert.NoError(t, err)
 	}
+}
+
+// TestStoreRepoRoot_LinkedWorktree pins the ethos-yofr fix: from inside a
+// linked git worktree, StoreRepoRoot (and FindRepoEthosRoot, which rides on
+// it) resolves the MAIN work tree that holds .punt-labs/ethos, while
+// FindRepoRoot keeps returning the worktree for per-checkout state.
+func TestStoreRepoRoot_LinkedWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	base := t.TempDir()
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(main, 0o755))
+
+	gitRepo(t, main)
+
+	// The repo-layer store the worktree must resolve to.
+	ethosRoot := filepath.Join(main, ".punt-labs", "ethos")
+	require.NoError(t, os.MkdirAll(ethosRoot, 0o755))
+
+	wt := filepath.Join(base, "wt")
+	runGit(t, main, "worktree", "add", wt)
+
+	chdir(t, wt)
+
+	assert.Equal(t, realpath(t, main), realpath(t, StoreRepoRoot()),
+		"the store must resolve to the main work tree that holds .punt-labs/ethos")
+	assert.Equal(t, realpath(t, ethosRoot), realpath(t, FindRepoEthosRoot()),
+		"FindRepoEthosRoot rides on StoreRepoRoot, so the repo store resolves from the worktree")
+	assert.Equal(t, realpath(t, wt), realpath(t, FindRepoRoot()),
+		"FindRepoRoot stays worktree-local for per-checkout state")
+}
+
+// TestRepoRoot_EnvOverrideValid pins that a well-formed ETHOS_REPO_ROOT
+// forces the root for every resolver: an existing directory holding a
+// .punt-labs/ethos store.
+func TestRepoRoot_EnvOverrideValid(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755))
+	t.Setenv("ETHOS_REPO_ROOT", dir)
+	assert.Equal(t, dir, FindRepoRoot())
+	assert.Equal(t, dir, StoreRepoRoot())
+	assert.Equal(t, dir, EnvRepoRoot())
+}
+
+// TestRepoRoot_EnvOverrideInvalid pins the SFH F1 fix: an override that
+// lies — a path that does not exist, or (for the store) one with no
+// .punt-labs/ethos — is refused loudly and never returned, so it cannot
+// silently redirect writes to the wrong tree.
+func TestRepoRoot_EnvOverrideInvalid(t *testing.T) {
+	t.Run("nonexistent path is refused", func(t *testing.T) {
+		bogus := filepath.Join(t.TempDir(), "does-not-exist")
+		t.Setenv("ETHOS_REPO_ROOT", bogus)
+		out := captureStderr(t, func() {
+			assert.Equal(t, "", StoreRepoRoot())
+			assert.Equal(t, "", FindRepoRoot())
+		})
+		assert.Contains(t, out, bogus)
+		assert.Contains(t, out, "refusing to use it")
+	})
+
+	t.Run("no store is refused by StoreRepoRoot but accepted by FindRepoRoot", func(t *testing.T) {
+		dir := t.TempDir() // exists, but has no .punt-labs/ethos
+		t.Setenv("ETHOS_REPO_ROOT", dir)
+		out := captureStderr(t, func() {
+			assert.Equal(t, "", StoreRepoRoot(),
+				"StoreRepoRoot requires a .punt-labs/ethos store")
+			assert.Equal(t, dir, FindRepoRoot(),
+				"FindRepoRoot only requires the directory to exist (per-checkout state)")
+		})
+		assert.Contains(t, out, dir)
+		assert.Contains(t, out, ".punt-labs")
+	})
+}
+
+// TestStoreRepoRoot_StaleWorktreeWarns pins the SFH F2 fix: when a
+// worktree's git dir is gone (the main repo moved or was deleted), the
+// resolver warns and falls back to the worktree store rather than silently
+// treating the stale pointer as a clean submodule.
+func TestStoreRepoRoot_StaleWorktreeWarns(t *testing.T) {
+	dir := t.TempDir()
+	// A .git file pointing at a git dir that does not exist — the shape of a
+	// worktree whose main repo has moved. manualStoreRoot handles this
+	// directly; call it so the test does not depend on git's own behavior.
+	gone := filepath.Join(t.TempDir(), "gone", ".git", "worktrees", "wt")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
+		[]byte("gitdir: "+gone+"\n"), 0o644))
+
+	out := captureStderr(t, func() {
+		assert.Equal(t, realpath(t, dir), realpath(t, manualStoreRoot(dir)),
+			"a stale worktree falls back to its own store")
+	})
+	assert.Contains(t, out, "may have moved")
+	assert.Contains(t, out, gone)
+}
+
+// TestStoreRepoRoot_SubmoduleWorktreeStaysOut pins the SFH F4 fix: a common
+// dir that is not a .git directory (e.g. a submodule's .git/modules/<name>)
+// must not resolve to a bogus root inside .git — gitStoreRoot keeps the
+// worktree.
+func TestStoreRepoRoot_SubmoduleWorktreeStaysOut(t *testing.T) {
+	// gitStoreRoot's decision hinges on filepath.Base(common). A common dir
+	// under .git/modules has a basename that is the module name, not ".git",
+	// so the resolver must decline to take its parent. manualStoreRoot
+	// applies the same guard; exercise it with a commondir that resolves to
+	// a modules dir.
+	dir := t.TempDir()
+	// The module admin dir lives under a super-repo's .git/modules, not under
+	// the worktree — the worktree's .git is a file pointing at it.
+	admin := filepath.Join(t.TempDir(), "super", ".git", "modules", "sub")
+	require.NoError(t, os.MkdirAll(admin, 0o755))
+	// commondir points at the module admin dir itself (basename "sub").
+	require.NoError(t, os.WriteFile(filepath.Join(admin, "commondir"), []byte(".\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git"),
+		[]byte("gitdir: "+admin+"\n"), 0o644))
+
+	got := manualStoreRoot(dir)
+	assert.Equal(t, realpath(t, dir), realpath(t, got),
+		"a non-.git common dir must not resolve into .git/modules")
+	assert.NotContains(t, got, ".git",
+		"the resolved root must not sit inside a .git path")
+}
+
+// realpath resolves symlinks so a comparison holds on macOS, where
+// t.TempDir() lives under /var → /private/var and git reports the resolved
+// form while os.Getwd preserves the symlink.
+func realpath(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return p
+	}
+	return r
+}
+
+// gitRepo initializes a git repo in dir with a first commit, so worktree
+// and common-dir resolution have something to resolve.
+func gitRepo(t *testing.T, dir string) {
+	t.Helper()
+	runGit(t, dir, "init")
+	runGit(t, dir, "config", "user.email", "t@example.com")
+	runGit(t, dir, "config", "user.name", "t")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "init")
+}
+
+// chdir changes to dir and restores the cwd at test end.
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	require.NoError(t, os.Chdir(dir))
+}
+
+// captureStderr redirects os.Stderr for the duration of fn and returns what
+// was written, so a test can assert on the loud warnings the resolvers emit.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	w.Close()
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(r)
+	require.NoError(t, err)
+	return buf.String()
 }
 
 // --- GitConfig tests ---

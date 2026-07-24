@@ -34,7 +34,11 @@ const sessionlessID = "no-session"
 // post-upgrade event sorts strictly after frozen history. A sessionless append
 // lands under the reserved sessionlessID.
 func (s *Store) appendLiveEventLocked(missionID string, e Event) error {
-	repoRoot := s.repoRoot
+	// The live zone, floor sources, and sealed chunks are the per-checkout
+	// audit concern — the seal that consumes them runs in the committing
+	// checkout — so resolve them under auditRoot (the work tree), not the
+	// shared store root (Bugbot HIGH on PR #370).
+	repoRoot := s.auditRoot()
 	sessionID := s.resolveSessionID()
 	if sessionID == "" {
 		sessionID = sessionlessID
@@ -71,7 +75,9 @@ func (s *Store) appendLiveEventLocked(missionID string, e Event) error {
 // Used only in two-tree mode; the legacy single-tree read path stays on
 // LoadEvents' tracked-log walk.
 func (s *Store) loadLiveUnionEvents(missionID string) ([]Event, []string, error) {
-	repoRoot := s.repoRoot
+	// Read the audit union from the per-checkout root so a reader sees the
+	// events the append + seal wrote there (Bugbot HIGH on PR #370).
+	repoRoot := s.auditRoot()
 	sealedDir := audit.SealedMissionDir(repoRoot, missionID)
 
 	sc, err := audit.ScanSealedDir(sealedDir, audit.MissionNS, "")
@@ -218,7 +224,7 @@ func (s *Store) listLiveMissionSessions(missionID string, chunks []audit.ChunkNa
 	for _, c := range chunks {
 		add(c.Session)
 	}
-	liveDir := filepath.Join(audit.LiveMissionsDir(s.repoRoot), filepath.Base(missionID))
+	liveDir := filepath.Join(audit.LiveMissionsDir(s.auditRoot()), filepath.Base(missionID))
 	names, err := audit.ListLiveLogSessions(liveDir)
 	if err != nil {
 		return nil, err

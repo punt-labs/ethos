@@ -115,7 +115,7 @@ func BuildTeamSection(teams *team.LayeredStore, roles *role.LayeredStore, identi
 		return ""
 	}
 
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	teamName, err := resolve.ResolveTeam(repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: pre-compact: %v\n", err)

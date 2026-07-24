@@ -535,7 +535,7 @@ func TestSubagentStart_VerifierDriftedPersonalityRefusesSpawn(t *testing.T) {
 // TestSubagentStart_HashRefusalClosesSkeletonAborted is the DES-054
 // phase 2d round 2 anchor: when the verifier hash gate refuses a Tier B
 // verifier spawn AND the dispatch path has already written a delegation
-// skeleton (MISSION_ID + DELEGATION_ID both set in env, RepoRoot wired
+// skeleton (MISSION_ID + DELEGATION_ID both set in env, StoreRoot wired
 // in deps), the subagent-start hook finalizes the skeleton record with
 // verdict=aborted before returning the refusal error.
 //
@@ -588,7 +588,11 @@ func TestSubagentStart_HashRefusalClosesSkeletonAborted(t *testing.T) {
 			Sessions:   sessions,
 			Missions:   missions,
 			Hash:       hash,
-			RepoRoot:   repoRoot,
+			// StoreRoot backs the skeleton close (the store write); RepoRoot
+			// backs the write-set walk. The skeleton was staged under
+			// repoRoot, so both point there in this single-tree fixture.
+			RepoRoot:  repoRoot,
+			StoreRoot: repoRoot,
 		})
 	require.Error(t, hookErr, "drifted hash must refuse the spawn")
 

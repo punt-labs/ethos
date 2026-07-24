@@ -559,11 +559,14 @@ func TestReadsContain(t *testing.T) {
 }
 
 // TestEnvRepoRoot_PrefersEnvVar pins that ETHOS_REPO_ROOT takes
-// precedence over the fallback.
+// precedence over the fallback. The override must name an existing
+// directory — a nonexistent one is refused (ethos-yofr SFH F1) — so the
+// test points it at a real temp dir.
 func TestEnvRepoRoot_PrefersEnvVar(t *testing.T) {
-	t.Setenv("ETHOS_REPO_ROOT", "/explicit/root")
+	dir := t.TempDir()
+	t.Setenv("ETHOS_REPO_ROOT", dir)
 	got := envRepoRoot()
-	assert.Equal(t, "/explicit/root", got)
+	assert.Equal(t, dir, got)
 }
 
 // TestEnvRepoRoot_FallbackUsedWhenEnvUnset confirms the helper

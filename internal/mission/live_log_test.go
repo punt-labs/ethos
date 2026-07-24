@@ -51,6 +51,39 @@ func TestMissionLiveLog_WriteLandsInLocalZone(t *testing.T) {
 		"tracked log.jsonl must not be written in the live path: %v", statErr)
 }
 
+// TestMissionLiveLog_CheckoutRootSplitsAuditFromRecord pins the Bugbot HIGH
+// on PR #370: the mission RECORD (contract) resolves to the store root, while
+// the DES-058 AUDIT concern (live zone + the reader) resolves to the
+// per-checkout root. A single root would land the live events in the store
+// (main) tree that the worktree's pre-commit seal never seals.
+func TestMissionLiveLog_CheckoutRootSplitsAuditFromRecord(t *testing.T) {
+	storeRoot := t.TempDir()
+	checkoutRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(storeRoot, globalRoot).
+		WithCheckoutRoot(checkoutRoot).
+		WithSessionID("sess1")
+	id := "m-2026-07-24-070"
+	require.NoError(t, s.Create(newContract(id)))
+
+	// Record → store root.
+	assert.FileExists(t, filepath.Join(RepoStatePath(storeRoot, "missions", id), "contract.yaml"))
+
+	// Audit live log → checkout root, and NOT the store root.
+	assert.FileExists(t, audit.LiveMissionLogPath(checkoutRoot, id, "sess1"),
+		"the create event's live log must land under the checkout root")
+	_, statErr := os.Stat(audit.LiveMissionLogPath(storeRoot, id, "sess1"))
+	assert.True(t, os.IsNotExist(statErr),
+		"the live log must not land under the store root (that tree's seal never runs from the worktree)")
+
+	// The reader resolves the audit union under the checkout root too, so the
+	// event is still visible.
+	events, _, err := s.LoadEvents(id)
+	require.NoError(t, err)
+	require.NotEmpty(t, events)
+	assert.Equal(t, "create", events[0].Event)
+}
+
 // TestMissionLiveLog_SessionlessAppendRoutesToLiveZone is B4(b): a sessionless
 // in-repo append (ad-hoc CLI, no resolvable session) must land in the reserved
 // live log under the local zone, never the tracked log.jsonl, and must not hide

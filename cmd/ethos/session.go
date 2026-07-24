@@ -471,7 +471,7 @@ func runSessionStart(cmd *cobra.Command) error {
 		primaryID = os.Getenv("ETHOS_AGENT_ID")
 	}
 	if primaryID == "" {
-		agent, aerr := resolve.ResolveAgent(resolve.FindRepoRoot())
+		agent, aerr := resolve.ResolveAgent(resolve.StoreRepoRoot())
 		if aerr != nil {
 			return fmt.Errorf("session start: resolving agent: %w", aerr)
 		}

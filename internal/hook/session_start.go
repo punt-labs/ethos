@@ -59,7 +59,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// The shell wrapper's `|| true` keeps Claude Code session startup
 	// fail-open (cli.md §Hook Architecture); the non-zero exit code is
 	// the signal for direct CLI invocation and `ethos doctor`.
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	agentPersona, err := resolve.ResolveAgent(repoRoot)
 	if err != nil {
 		return fmt.Errorf("resolving agent: %w", err)
@@ -91,8 +91,16 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// so a broken config does not brick sessions, but `ethos hook
 	// session-start` invoked directly exits non-zero — useful for
 	// `ethos doctor` and manual debugging.
-	if repoRoot != "" && deps.Teams != nil && deps.Roles != nil {
-		if genErr := GenerateAgentFiles(repoRoot, store, deps.Teams, deps.Roles); genErr != nil {
+	//
+	// Two roots: the config/team selection resolves from the shared store
+	// (repoRoot = StoreRepoRoot), while the agent files are written to the
+	// CURRENT checkout (EnvRepoRoot) — the tree the worktree's Claude reads
+	// and where InstallAgentDefinitions writes. A single root would generate
+	// a worktree's agents into the main tree, invisible to that worktree
+	// (Bugbot HIGH on PR #370).
+	checkoutRoot := resolve.EnvRepoRoot()
+	if repoRoot != "" && checkoutRoot != "" && deps.Teams != nil && deps.Roles != nil {
+		if genErr := GenerateAgentFilesTo(repoRoot, checkoutRoot, store, deps.Teams, deps.Roles); genErr != nil {
 			return fmt.Errorf("generating agents: %w", genErr)
 		}
 	}

@@ -37,14 +37,27 @@ func (r Result) Passed() bool {
 }
 
 // RunAll executes every standard health check and returns the results.
-func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, teams *team.LayeredStore) []Result {
+//
+// repoRoot is the current work tree (FindRepoRoot) — the checkout whose
+// .claude/agents and seal hook the checks inspect. storeRoot is the shared
+// mission/config store (StoreRepoRoot); it differs from repoRoot only inside
+// a linked worktree, and only the team-config read in CheckOrphanedAgentFiles
+// needs it (Bugbot #370 class: resolving the active team from the worktree
+// while activation wrote it to the store produced false orphan reports).
+func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot string, teams *team.LayeredStore) []Result {
 	checks := []struct {
 		name string
 		fn   func(identity.IdentityStore, *session.Store) (string, bool)
 	}{
 		{"Identity directory", CheckIdentityDir},
 		{"Human identity", CheckHumanIdentity},
-		{"Default agent", CheckDefaultAgent},
+		// Default agent reads the agent: key from the shared store (storeRoot),
+		// matching session_start/resolveLeader/resolve-agent; the "in a repo"
+		// guard stays on the checkout (repoRoot). Wrapped so it fits the
+		// slice's (store, session) shape while carrying both roots (#370).
+		{"Default agent", func(identity.IdentityStore, *session.Store) (string, bool) {
+			return CheckDefaultAgent(repoRoot, storeRoot)
+		}},
 		{"Duplicate fields", CheckDuplicateFields},
 	}
 
@@ -58,7 +71,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot string, teams 
 		results = append(results, Result{Name: c.name, Status: status, Detail: detail})
 	}
 
-	results = append(results, CheckOrphanedAgentFiles(repoRoot, teams))
+	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams))
 	results = append(results, CheckSealHook(repoRoot))
 	return results
 }
@@ -114,7 +127,17 @@ func PassedCount(results []Result) int {
 
 // CheckOrphanedAgentFiles flags agent files in .claude/agents/ whose
 // handle is not a member of any configured team.
-func CheckOrphanedAgentFiles(repoRoot string, teams *team.LayeredStore) Result {
+//
+// The two roots differ inside a linked worktree. repoRoot is the checkout:
+// .claude/agents/ is per-checkout state (session_start and agent_installer
+// write it there), so the glob is checkout-rooted. storeRoot is the shared
+// store: the active team lives in .punt-labs/ethos.yaml resolved via
+// StoreRepoRoot by every other reader and the writer (team activate), so the
+// team read must use it too — resolving the team from the worktree while
+// activation wrote it to the store would compute "expected" agents from the
+// wrong team and flag valid agents as orphaned (Bugbot #370 class). They
+// coincide outside a worktree.
+func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStore) Result {
 	name := "Orphaned agent files"
 
 	if repoRoot == "" {
@@ -130,7 +153,7 @@ func CheckOrphanedAgentFiles(repoRoot string, teams *team.LayeredStore) Result {
 		return Result{Name: name, Status: "PASS", Detail: "no agent files"}
 	}
 
-	teamName, err := resolve.ResolveTeam(repoRoot)
+	teamName, err := resolve.ResolveTeam(storeRoot)
 	if err != nil {
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not load repo config: %s", err)}
 	}
@@ -350,12 +373,18 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) (string, bo
 // see. The detail string is the raw error text with no "error: " prefix
 // — doctor's output already prints a FAIL status column derived from
 // the returned bool, so prepending "error: " would double-label.
-func CheckDefaultAgent(s identity.IdentityStore, _ *session.Store) (string, bool) {
-	repoRoot := resolve.FindRepoRoot()
+//
+// repoRoot is the checkout, used only for the "in a git repo" guard.
+// storeRoot is the shared store: the agent: key resolves via StoreRepoRoot
+// in every other consumer (session_start's persona, resolveLeader, ethos
+// resolve-agent), so this health check must read it from the same tree — or
+// from a worktree it would report a default agent that disagrees with the
+// one the session and dispatch actually use (Bugbot #370 class).
+func CheckDefaultAgent(repoRoot, storeRoot string) (string, bool) {
 	if repoRoot == "" {
 		return "not in a git repo", true
 	}
-	handle, err := resolve.ResolveAgent(repoRoot)
+	handle, err := resolve.ResolveAgent(storeRoot)
 	if err != nil {
 		return err.Error(), false
 	}

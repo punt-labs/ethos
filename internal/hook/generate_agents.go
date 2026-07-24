@@ -39,12 +39,29 @@ func projectFilePatterns(repoRoot string) string {
 // identity, personality, writing-style, and role data. Skips the main
 // agent (from repo config) and human identities. Writes are idempotent:
 // files are only written when content differs.
+//
+// Single-root form: config and output resolve under the same root. Callers
+// in a linked worktree, where the config lives in the shared store but the
+// agent files belong to the checkout, use GenerateAgentFilesTo.
 func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) error {
+	return GenerateAgentFilesTo(repoRoot, repoRoot, identities, teams, roles)
+}
+
+// GenerateAgentFilesTo is GenerateAgentFiles with the config-read root and
+// the output root split. configRoot resolves the repo config and thus the
+// team/agent selection — the shared store (StoreRepoRoot), matching the
+// team/role data the stores already resolve from main. destRoot is where the
+// .claude/agents/ files are written and the project file-pattern detection
+// runs — the current checkout (FindRepoRoot/EnvRepoRoot), so a worktree
+// generates agents into its OWN tree, where its Claude reads them and
+// InstallAgentDefinitions writes (Bugbot HIGH on PR #370). They coincide
+// outside a linked worktree.
+func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) error {
 	if teams == nil || roles == nil {
 		return nil // not configured — nothing to generate
 	}
 
-	cfg, err := resolve.LoadRepoConfig(repoRoot)
+	cfg, err := resolve.LoadRepoConfig(configRoot)
 	if err != nil {
 		return fmt.Errorf("generate agents: %w", err)
 	}
@@ -63,7 +80,7 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 		return fmt.Errorf("loading team %q: %w", teamName, err)
 	}
 
-	destDir := filepath.Join(repoRoot, ".claude", "agents")
+	destDir := filepath.Join(destRoot, ".claude", "agents")
 
 	var expected, generated int
 	// failedMembers records identity handles whose write path failed
@@ -107,7 +124,7 @@ func GenerateAgentFiles(repoRoot string, identities identity.IdentityStore, team
 		expected++
 
 		antiResps := deriveAntiResponsibilities(m.Role, t.Collaborations, roles)
-		filePatterns := projectFilePatterns(repoRoot)
+		filePatterns := projectFilePatterns(destRoot)
 		content := buildAgentFile(id, r, antiResps, filePatterns)
 
 		destPath := filepath.Join(destDir, id.Handle+".md")
