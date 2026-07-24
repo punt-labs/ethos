@@ -1,0 +1,15 @@
+You are the worker on ethos mission m-2026-07-24-004 (implement archetype). Working directory <repo>, branch feat/setup-consistency (checked out; carries the design commits). Run `ethos mission show m-2026-07-24-004`, claim it.
+
+TASK: implement docs/setup-consistency.md exactly (final at ca4f5eb — operator-delegated leader rulings R1-R4 are in its rulings section and are contract). Fixes bead ethos-5zwn. Problem statement: .tmp/investigations/bundle-consistency.md (F1/F2/F3; F7 resolved by design as no-agent-files). Evaluation trail: .tmp/missions/results/m-2026-07-24-003-eval-rsc.md.
+
+DELIVERABLES (design part → code):
+A. internal/identity/layered.go — attrChain's default/global branch becomes the uniform repo → active-bundle → global chain for personality, writing_style, talents (the complete bundle-blind set per rsc's verification). Do not touch roles/attribute-store/ext threading (already correct or global-by-design).
+B. internal/seed — embed and deploy personalities + writing-styles to global: vendor the three setup-referenced slugs (principal-engineer, concise-quantified, engineering) from the team submodule content into the seed sidecar tree; sweep the ~13 dead never-embedded sidecars (sprint-*, product-thinker, *-prose) per the design's R4-exception scope. Seed stays no-clobber (skips existing files — verify that's the current semantic and keep it).
+C. cmd/ethos/setup.go — drop saveIdentityNoRefs (:410-435, call sites :148/:171) for the ref-validating Save; when validation fails because seed hasn't run, the error names the remedy ("run `ethos seed` first" shape per the design). Validation is against the global layer only, per the design.
+D. NO agent-file generation for main agent/human (R3 as ratified — the generator's skip at generate_agents.go:80-82 is a deliberate invariant; leave it).
+
+ACCEPTANCE (the bead's criterion — prove it in your dogfood): fresh scratch HOME → `ethos seed` → scratch repo `ethos setup --bundle foundation` (non-interactive via --file) → `ethos show` on EVERY identity prints ZERO warnings; repeat with --bundle gstack; repeat with --solo (no bundle — global seed carries it). `ethos doctor` clean in each. Paste actual output.
+
+Tests: fresh-HOME table tests per the design's test strategy (foundation/gstack/no-bundle × zero-warnings), attrChain unit tests for the three types × three layers (repo shadows bundle shadows global), setup hard-validation failure path (bad slug → actionable error, nothing written dangling), seed no-clobber + dead-file absence. RULES: write-set is cmd/ethos, internal, install.sh, README.md, AGENTS.md (tests beside packages); the contract's write_set is a single space-joined string (known defect ethos-t2lb) so submit your result with files_changed: [] and the enumeration in prose prefixed with the standard citation. Commit incrementally — one commit per logical step; each passes `make check` (full -race). No suppressions. Do not accumulate more than 30 minutes of uncommitted changes. Fixtures in /tmp or t.TempDir(), NEVER inside the repo.
+
+When done: submit the mission result, reply "written — <tip sha>" + per-deliverable summary + dogfood evidence.
