@@ -45,6 +45,7 @@ func setGitConfig(t *testing.T, name, email string) {
 func TestResolve_IamDeclaration(t *testing.T) {
 	setGitConfig(t, "unknown", "")
 	t.Setenv("USER", "nobody")
+	t.Setenv("ETHOS_SESSION", "") // exercise the PID walk, not an ambient env
 
 	s := testStoreWithIdentity(t, &identity.Identity{
 		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
@@ -67,6 +68,87 @@ func TestResolve_IamDeclaration(t *testing.T) {
 	handle, err := Resolve(s, ss)
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
+}
+
+func TestResolve_SessionFromEnv(t *testing.T) {
+	// No current-pointer is written; discovery is via ETHOS_SESSION alone
+	// (the Codex / plain-terminal path). whoami must still reflect the
+	// declared persona (REC-1).
+	setGitConfig(t, "unknown", "")
+	t.Setenv("USER", "nobody")
+	s := testStoreWithIdentity(t, &identity.Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
+	})
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	pid := process.FindClaudePID()
+	sessionID := "harness-env-session"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: pid, Persona: "mal", Parent: "root"},
+		"", "",
+	))
+	t.Setenv("ETHOS_SESSION", sessionID)
+
+	handle, err := Resolve(s, ss)
+	require.NoError(t, err)
+	assert.Equal(t, "mal", handle, "whoami must resolve the persona via ETHOS_SESSION, no PID pointer")
+}
+
+func TestResolve_SessionAgentIDParity(t *testing.T) {
+	// A Codex user who exports ETHOS_AGENT_ID: iam keys the participant on
+	// that value, and whoami must look it up by the same key (REC-3),
+	// even though FindClaudePID would not match.
+	setGitConfig(t, "unknown", "")
+	t.Setenv("USER", "nobody")
+	s := testStoreWithIdentity(t, &identity.Identity{
+		Name: "Brian K", Handle: "bwk", Kind: "agent",
+	})
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	sessionID := "harness-agentid-session"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: "bwk-codex", Persona: "bwk", Parent: "root"},
+		"", "",
+	))
+	t.Setenv("ETHOS_SESSION", sessionID)
+	t.Setenv("ETHOS_AGENT_ID", "bwk-codex")
+
+	handle, err := Resolve(s, ss)
+	require.NoError(t, err)
+	assert.Equal(t, "bwk", handle, "participant lookup must honor ETHOS_AGENT_ID")
+}
+
+func TestSessionID(t *testing.T) {
+	root := t.TempDir()
+	ss := session.NewStore(root)
+
+	t.Run("env wins over walk", func(t *testing.T) {
+		t.Setenv("ETHOS_SESSION", "env-session")
+		sid, source := SessionID(ss)
+		assert.Equal(t, "env-session", sid)
+		assert.Equal(t, SessionSourceEnv, source)
+	})
+
+	t.Run("walk fallback", func(t *testing.T) {
+		t.Setenv("ETHOS_SESSION", "")
+		pid := process.FindClaudePID()
+		require.NoError(t, ss.WriteCurrentSession(pid, "walk-session"))
+		sid, source := SessionID(ss)
+		assert.Equal(t, "walk-session", sid)
+		assert.Equal(t, "walk", source)
+	})
+
+	t.Run("neither resolves", func(t *testing.T) {
+		t.Setenv("ETHOS_SESSION", "")
+		empty := session.NewStore(t.TempDir())
+		sid, source := SessionID(empty)
+		assert.Empty(t, sid)
+		assert.Empty(t, source)
+	})
 }
 
 func TestResolve_GitNameMatchesGitHub(t *testing.T) {
