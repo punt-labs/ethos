@@ -51,7 +51,13 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	}{
 		{"Identity directory", CheckIdentityDir},
 		{"Human identity", CheckHumanIdentity},
-		{"Default agent", CheckDefaultAgent},
+		// Default agent reads the agent: key from the shared store (storeRoot),
+		// matching session_start/resolveLeader/resolve-agent; the "in a repo"
+		// guard stays on the checkout (repoRoot). Wrapped so it fits the
+		// slice's (store, session) shape while carrying both roots (#370).
+		{"Default agent", func(identity.IdentityStore, *session.Store) (string, bool) {
+			return CheckDefaultAgent(repoRoot, storeRoot)
+		}},
 		{"Duplicate fields", CheckDuplicateFields},
 	}
 
@@ -367,12 +373,18 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) (string, bo
 // see. The detail string is the raw error text with no "error: " prefix
 // — doctor's output already prints a FAIL status column derived from
 // the returned bool, so prepending "error: " would double-label.
-func CheckDefaultAgent(s identity.IdentityStore, _ *session.Store) (string, bool) {
-	repoRoot := resolve.FindRepoRoot()
+//
+// repoRoot is the checkout, used only for the "in a git repo" guard.
+// storeRoot is the shared store: the agent: key resolves via StoreRepoRoot
+// in every other consumer (session_start's persona, resolveLeader, ethos
+// resolve-agent), so this health check must read it from the same tree — or
+// from a worktree it would report a default agent that disagrees with the
+// one the session and dispatch actually use (Bugbot #370 class).
+func CheckDefaultAgent(repoRoot, storeRoot string) (string, bool) {
 	if repoRoot == "" {
 		return "not in a git repo", true
 	}
-	handle, err := resolve.ResolveAgent(repoRoot)
+	handle, err := resolve.ResolveAgent(storeRoot)
 	if err != nil {
 		return err.Error(), false
 	}

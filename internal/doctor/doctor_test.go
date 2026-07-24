@@ -135,54 +135,62 @@ func TestCheckHumanIdentity(t *testing.T) {
 }
 
 func TestCheckDefaultAgent(t *testing.T) {
-	s, ss, _ := newFixture(t)
+	// CheckDefaultAgent takes the roots explicitly now: repoRoot guards
+	// "in a repo", storeRoot resolves the agent: key. In these single-tree
+	// cases both are the fixture dir.
+	writeAgentConfig := func(t *testing.T, body string) string {
+		t.Helper()
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs"), 0o700))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(dir, ".punt-labs", "ethos.yaml"), []byte(body), 0o600))
+		return dir
+	}
 
 	t.Run("not in a repo", func(t *testing.T) {
-		// t.TempDir honors $TMPDIR which is set to .tmp inside the
-		// ethos repo by .envrc. Walking up from that path would find
-		// the real repo's .git and its .punt-labs/ethos.yaml. Use
-		// /tmp directly so FindRepoRoot walks up to / without
-		// finding any .git.
-		dir := outsideRepoTempDir(t)
-		t.Chdir(dir)
-		detail, ok := CheckDefaultAgent(s, ss)
+		detail, ok := CheckDefaultAgent("", "")
 		assert.True(t, ok)
 		assert.Equal(t, "not in a git repo", detail)
 	})
 
 	t.Run("repo without config", func(t *testing.T) {
 		dir := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o700))
-		t.Chdir(dir)
-		detail, ok := CheckDefaultAgent(s, ss)
+		detail, ok := CheckDefaultAgent(dir, dir)
 		assert.True(t, ok)
 		assert.Equal(t, "not configured", detail)
 	})
 
 	t.Run("repo with agent configured", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o700))
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs"), 0o700))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(dir, ".punt-labs", "ethos.yaml"),
-			[]byte("agent: claude\n"), 0o600))
-		t.Chdir(dir)
-		detail, ok := CheckDefaultAgent(s, ss)
+		dir := writeAgentConfig(t, "agent: claude\n")
+		detail, ok := CheckDefaultAgent(dir, dir)
 		assert.True(t, ok)
 		assert.Equal(t, "claude", detail)
 	})
 
 	t.Run("malformed config", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o700))
-		require.NoError(t, os.MkdirAll(filepath.Join(dir, ".punt-labs"), 0o700))
-		require.NoError(t, os.WriteFile(
-			filepath.Join(dir, ".punt-labs", "ethos.yaml"),
-			[]byte("agent: [not a string"), 0o600))
-		t.Chdir(dir)
-		detail, ok := CheckDefaultAgent(s, ss)
+		dir := writeAgentConfig(t, "agent: [not a string")
+		detail, ok := CheckDefaultAgent(dir, dir)
 		assert.False(t, ok)
 		assert.NotEmpty(t, detail)
+	})
+
+	// The #370 split: repoRoot guards "in a repo", but the agent resolves
+	// from storeRoot. A worktree whose ethos.yaml names a different agent
+	// than the store must report the STORE's agent — the one SessionStart
+	// and dispatch actually use.
+	t.Run("resolves agent from store root not checkout", func(t *testing.T) {
+		checkoutRoot := writeAgentConfig(t, "agent: mdm\n")
+		storeRoot := writeAgentConfig(t, "agent: bwk\n")
+
+		detail, ok := CheckDefaultAgent(checkoutRoot, storeRoot)
+		assert.True(t, ok)
+		assert.Equal(t, "bwk", detail,
+			"must report the store's agent (what SessionStart/dispatch use)")
+
+		// Regression guard: resolving from the checkout reports the wrong
+		// agent — the bug this split fixes.
+		buggy, _ := CheckDefaultAgent(checkoutRoot, checkoutRoot)
+		assert.Equal(t, "mdm", buggy)
 	})
 }
 
