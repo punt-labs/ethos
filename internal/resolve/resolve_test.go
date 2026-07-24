@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/identity"
@@ -673,6 +674,21 @@ func TestRepoRoot_EnvOverrideInvalid(t *testing.T) {
 		assert.Contains(t, out, dir)
 		assert.Contains(t, out, ".punt-labs")
 	})
+}
+
+// TestRepoRootOverride_RefusalDedupesPerProcess pins the leader's SFH F1
+// follow-up: a bad override resolved several times per command (StoreRepoRoot
+// + FindRepoRoot + ...) prints the refusal once, not once per resolution.
+func TestRepoRootOverride_RefusalDedupesPerProcess(t *testing.T) {
+	bogus := filepath.Join(t.TempDir(), "missing-dedupe-probe")
+	t.Setenv("ETHOS_REPO_ROOT", bogus)
+	out := captureStderr(t, func() {
+		StoreRepoRoot()
+		StoreRepoRoot()
+		FindRepoRoot()
+	})
+	assert.Equal(t, 1, strings.Count(out, "refusing to use it"),
+		"the override refusal must print at most once per process")
 }
 
 // TestStoreRepoRoot_StaleWorktreeWarns pins the SFH F2 fix: when a

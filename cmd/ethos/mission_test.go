@@ -3650,6 +3650,11 @@ func captureStderrFn(t *testing.T, fn func()) string {
 // no repo store is in scope, the warning names the global store and the
 // ETHOS_REPO_ROOT override; with a repo root it stays quiet.
 func TestWarnIfGlobalFallback(t *testing.T) {
+	// A distinct HOME gives this test a distinct global-root message so the
+	// process-scoped WarnOnce dedupe does not swallow it when another test
+	// in the same binary already warned about the real HOME's root.
+	t.Setenv("HOME", t.TempDir())
+
 	out := captureStderrFn(t, func() { warnIfGlobalFallback("") })
 	assert.Contains(t, out, "no git repository found")
 	assert.Contains(t, out, "global mission store")
@@ -3659,12 +3664,30 @@ func TestWarnIfGlobalFallback(t *testing.T) {
 	assert.Empty(t, quiet)
 }
 
+// TestWarnIfGlobalFallback_DedupesPerProcess pins that a repeated global
+// fallback for the same root prints once — a command that builds the store
+// more than once must not spam the same line (leader ruling on the SFH F3
+// follow-up).
+func TestWarnIfGlobalFallback_DedupesPerProcess(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out := captureStderrFn(t, func() {
+		warnIfGlobalFallback("")
+		warnIfGlobalFallback("")
+		warnIfGlobalFallback("")
+	})
+	assert.Equal(t, 1, strings.Count(out, "no git repository found"),
+		"the global-fallback warning must print at most once per process")
+}
+
 // TestMissionStore_ReadWarnsOnGlobalFallback pins SFH F3: a READ path
 // (missionStore, used by show/list/log and the mutators) warns when it
 // falls back to the global store — the operator's report was "list/show
 // sees a different store," so reads must not be silent.
 func TestMissionStore_ReadWarnsOnGlobalFallback(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", "")
+	// A distinct HOME gives a distinct global-root message so the
+	// process-scoped WarnOnce dedupe does not swallow it.
+	t.Setenv("HOME", t.TempDir())
 	// /tmp has no .git ancestor, so StoreRepoRoot resolves empty.
 	nonRepo, err := os.MkdirTemp("/tmp", "ethos-mission-norepo-*")
 	require.NoError(t, err)
