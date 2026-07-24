@@ -86,6 +86,9 @@ func TestCLI_SetupJourney_Foundation(t *testing.T) {
 	stdout, stderr, code = runCLI(t, se, "setup", "--file", answers, "--bundle", "foundation")
 	require.Equal(t, 0, code, "setup should exit 0; stderr=%s", stderr)
 	assert.Contains(t, stderr, `activated: bundle "foundation"`)
+	// The stdout summary table names the created identity and the bundle.
+	assert.Contains(t, stdout, "tester", "setup summary should name the human identity")
+	assert.Contains(t, stdout, "foundation", "setup summary should name the activated bundle")
 
 	// Step 3: every identity resolves with zero warnings. The default
 	// agent and the human are global-stored; the bundle agents are
