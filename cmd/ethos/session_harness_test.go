@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,6 +108,49 @@ func TestCLI_SessionStart_Idempotent(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, rosters, "idempotent start must not mint a second roster")
+}
+
+// TestCLI_SessionStart_IdempotentPersonaJoins pins the gate defect: a
+// re-run with --persona on the idempotent branch (live ETHOS_SESSION) must
+// upsert-join the persona, not just advertise it — otherwise whoami keys on
+// a participant that does not exist and falls back to git/OS. Re-running the
+// same persona stays a single participant.
+func TestCLI_SessionStart_IdempotentPersonaJoins(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	// A persona distinct from the roster's existing participants.
+	idsDir := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+	require.NoError(t, os.WriteFile(filepath.Join(idsDir, "bwk.yaml"),
+		[]byte("name: Brian K\nhandle: bwk\nkind: agent\n"), 0o644))
+
+	id := startedSessionID(t, se) // fresh start, no persona
+	env := withEnv(se, "ETHOS_SESSION="+id)
+
+	// Idempotent re-run WITH --persona must join bwk.
+	stdout, stderr, code := runCLI(t, env, "session", "start", "--persona", "bwk")
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+	assert.Contains(t, stdout, "export ETHOS_AGENT_ID=bwk")
+
+	// whoami under the eval'd env reflects bwk; USER=nobody so only the
+	// session path can produce it.
+	who, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+id, "ETHOS_AGENT_ID=bwk", "USER=nobody"), "whoami")
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+	assert.Contains(t, who, "bwk", "idempotent --persona must join bwk so whoami reflects it")
+
+	// Re-running the same persona stays a single bwk participant.
+	_, stderr, code = runCLI(t, env, "session", "start", "--persona", "bwk")
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+	roster, err := session.NewStore(filepath.Join(se.home, ".punt-labs", "ethos")).Load(id)
+	require.NoError(t, err)
+	var bwkCount int
+	for _, p := range roster.Participants {
+		if p.AgentID == "bwk" {
+			bwkCount++
+		}
+	}
+	assert.Equal(t, 1, bwkCount, "re-running the same persona must not duplicate the participant")
 }
 
 // TestCLI_SessionStart_PersonaSelfConsistent pins REQ-1: with --persona,

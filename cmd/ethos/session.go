@@ -391,8 +391,21 @@ func runSessionStart(cmd *cobra.Command) error {
 	ss := sessionStore()
 
 	// 1. Idempotency: an existing ETHOS_SESSION that names a live roster.
+	//    A re-run with --persona still folds the iam — upsert-join the
+	//    persona so the advertised ETHOS_AGENT_ID names a real participant
+	//    (Join is idempotent: same persona twice stays one participant).
 	if envID := os.Getenv("ETHOS_SESSION"); envID != "" {
 		if _, err := ss.Load(envID); err == nil {
+			if sessionStartPersona != "" {
+				human, herr := resolve.Resolve(identityStore(), ss)
+				if herr != nil {
+					return fmt.Errorf("session start: resolving identity: %w", herr)
+				}
+				p := session.Participant{AgentID: sessionStartPersona, Persona: sessionStartPersona, Parent: human}
+				if jerr := ss.Join(envID, p); jerr != nil {
+					return fmt.Errorf("session start: joining persona: %w", jerr)
+				}
+			}
 			printSessionStart(cmd, envID, sessionStartPersona, false)
 			return nil
 		}

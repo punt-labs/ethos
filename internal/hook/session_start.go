@@ -224,7 +224,7 @@ func emitAgentContext(agentID *identity.Identity, agentPersona string, store ide
 func ResolveRepo() string {
 	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: could not resolve repo from git remote: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: could not resolve repo from git remote: %v\n", err)
 		return ""
 	}
 	return audit.ParseGitRemote(string(out))
@@ -236,7 +236,7 @@ func ResolveRepo() string {
 func ResolveHost() string {
 	name, err := os.Hostname()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: could not resolve hostname: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: could not resolve hostname: %v\n", err)
 		return ""
 	}
 	if i := strings.IndexByte(name, '.'); i >= 0 {
