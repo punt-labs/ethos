@@ -95,24 +95,27 @@ Behavior:
    that loads, print that ID and its `export` line and exit 0 — do not
    mint a second session. This makes `eval "$(ethos session start)"` safe
    to run repeatedly in a shell rc or a harness init.
-2. **Mint the ID (R1, F7).** Generate a UUIDv4 with `github.com/google/uuid`
-   (already a vendored dependency; promote from indirect to direct). This
-   matches Claude Code's own `session_id` shape, so every harness produces
-   the same kind of ID and no downstream consumer needs to branch on
-   origin. A zero-dependency alternative — 16 bytes from `crypto/rand`,
-   hex-encoded — is noted under [Rejected alternatives](#rejected-alternatives)
-   and is a drop-in if the team prefers no direct UUID dependency.
+2. **Mint the ID (R1, F7).** Generate 16 bytes from `crypto/rand` and
+   hex-encode them to a 32-character string. `crypto/rand` is stdlib and
+   already used in the tree (`internal/mission/pipeline.go`), so this adds
+   no dependency. The 32-hex shape is filesystem-safe and fixed-length,
+   which is all the store and audit layers require: F7 established the ID
+   is an opaque `filepath.Base`, and audit keys on that base with a
+   per-ID fixed length, so a 32-hex string drops in with no shape
+   constraint violated. UUIDv4 was considered and rejected on
+   supply-chain grounds — see [Rejected alternatives](#rejected-alternatives).
 3. **Resolve the identities.** Root is the human, resolved via the whoami
    chain (`resolve.Resolve`: session → git name → git email → `$USER`).
    Primary is the agent: `ETHOS_AGENT_ID` if set, else the repo's default
    agent (`resolve.ResolveAgent`), else the resolved human. `--persona`
    overrides the primary's persona and folds the first `iam` into the same
    call.
-4. **Create the roster and current-pointer.** Call the same
-   `session.Store.Create` the hook uses (R6), then `WriteCurrentSession`
-   keyed by a stable key (see [Current-pointer key](#current-pointer-key)).
-   Repo and host are resolved exactly as the hook resolves them
-   (`resolveRepo`, `resolveHost`).
+4. **Create the roster.** Call the same `session.Store.Create` the hook
+   uses (R6). Repo and host are resolved exactly as the hook resolves them
+   (`resolveRepo`, `resolveHost`). `start` does **not** write a
+   current-pointer — that is Claude-path only (see
+   [Current-pointer key](#current-pointer-key)); the caller discovers the
+   session through the `ETHOS_SESSION` line printed in step 5.
 5. **Print the contract.** On success, stdout is:
 
    ```text
@@ -133,7 +136,7 @@ It shares that code path so hook and CLI cannot drift.
 The store schema is **unchanged**. The roster YAML, the `sessions/<id>.yaml`
 layout, the `sessions/current/<key>` pointer, and the participant model all
 stay as they are. F7 established that the ID is an opaque filename base, so a
-UUID drops in with no migration. The only new code is the mint and the
+32-hex string drops in with no migration. The only new code is the mint and the
 resolver; the storage contract is untouched. This is deliberate — the
 smallest change that removes the coupling.
 
@@ -141,23 +144,21 @@ smallest change that removes the coupling.
 
 Today `WriteCurrentSession` is keyed by the claude PID
 (`internal/hook/session_start.go:160`), and every reader recomputes that key
-with `FindClaudePID()`. That is the coupling. The design keeps the PID key
-for the Claude Code path (R6) and makes the key **strategy-derived** for the
-general path:
+with `FindClaudePID()`. That is the coupling. The ratified boundary is:
+**the PID current-pointer is Claude-path only.** The SessionStart hook
+writes it, the process walk reads it — that is the whole of its use, kept
+byte-identical for zero-config Claude Code (R6).
 
-- When a session is resolved from `ETHOS_SESSION` or `--session`, the ID is
-  already in hand — no current-pointer lookup is needed, so the key does not
-  matter.
-- When `session start` runs outside Claude Code, it writes the pointer keyed
-  by `FindClaudePID()` (which returns the parent shell PID as fallback) **and**
-  the primary path for later reads is `ETHOS_SESSION`, which `start` printed
-  for the caller to export. The pointer is a convenience for descendants that
-  did not inherit the env, not the primary channel.
-
-The pointer therefore never becomes the sole discovery channel outside Claude
-Code; `ETHOS_SESSION` is. This avoids inventing a new cross-invocation key
-(which would be its own design problem) while keeping the zero-config Claude
-path byte-identical.
+Outside Claude Code, `session start` does **not** write a current-pointer.
+The discovery channel there is `ETHOS_SESSION`, which `start` prints for the
+caller to export; a session resolved from `ETHOS_SESSION` or `--session`
+already has its ID in hand, so no pointer lookup ever happens on that path.
+Writing a pointer keyed by the fallback parent-shell PID would be a
+convenience for descendants that did not inherit the env, but it invites a
+new cross-invocation keying problem (which PID does a later, unrelated
+invocation recompute?) for no real gain — the env var already covers the
+descendant case. So the design deliberately does not write it, and inventing
+a new harness-neutral pointer key is explicitly left out of scope.
 
 ### The resolution chain and its consumers (R2, R4)
 
@@ -172,24 +173,49 @@ Resolution is unified behind one ordered strategy, applied everywhere:
 
 This is the shape `resolveSessionContext` already half-implements
 (`cmd/ethos/iam.go:43-76`); the change is to make it the single authority,
-add the step-4 error text, and route every consumer through it. Each
-consumer today:
+add the step-4 error text, and route every consumer through it.
+
+**Consequence — env wins, by design.** Because `ETHOS_SESSION` (step 2)
+precedes the process walk (step 3), a stale `ETHOS_SESSION` exported in a
+nested shell shadows the live Claude Code session the walk would find. This
+is intentional: explicit beats ambient, the same principle that makes
+`--session` beat the env. The mitigations are `start`'s idempotency (it
+reports the existing session rather than minting a rival) and
+`ethos session show`, which surfaces exactly which session is in effect so a
+stale export is visible and correctable.
+
+Each consumer today:
 
 | Consumer | Today | Under this design |
 |----------|-------|-------------------|
 | `iam` (CLI) | 3-step chain, then `Join`; error "no session in process tree" | same chain + step-4 error naming `session start` |
 | `session show` | `ETHOS_SESSION` then PID walk; "No active session." | routed through the chain; unchanged output |
 | `session join`/`leave` | `resolveSessionContext` or `--session` | routed through the chain |
-| `mission claim`/`log` | `currentSessionIDBestEffort`: `ETHOS_SESSION` then PID walk (`cmd/ethos/mission.go:60-70`) | routed through the chain; step-4 stays best-effort ("" — the legacy tracked-log append, correct for ad-hoc CLI) |
+| `whoami` | `resolveFromSession`: bare PID walk, ignores `ETHOS_SESSION` (`internal/resolve/resolve.go:109-129`) | soft consumer: run the chain for session lookup, then fall through to the existing git → email → `$USER` chain when no session resolves — standalone virtue preserved (REC-1) |
+| `mission claim`/`release` | `resolveSessionContext`; you cannot claim without a session | the HARD chain + step-4 error — claim/release require a session |
+| `mission log`/`result`/live-append | `currentSessionIDBestEffort`: `ETHOS_SESSION` then PID walk (`cmd/ethos/mission.go:60-70`) | the chain with step-4 returning "" — the legacy tracked-log append, correct for ad-hoc CLI outside a session |
 | audit attribution | live/sealed zone keyed by session ID (DES-058) | the resolved ID is the same ID `start` minted and audit writes under — one ID, one zone |
 | MCP `session`/`iam` | `session_id` arg then PID walk; no env; `iam` uses `FindClaudePID` (F5/F6) | add `ETHOS_SESSION` after the arg; `iam` honors `ETHOS_AGENT_ID` then `FindClaudePID` — parity with CLI (R4) |
 
-`mission claim`/`log` keeps its best-effort tail: outside a session the
-right behavior is the legacy tracked-log append, not an error, so its step 4
-returns "" rather than failing. Every interactive, session-required command
-(`iam`, `session join`/`leave`) takes the hard step-4 error. This split is
-intentional and stated so a future reader does not "fix" the best-effort
-path into a failure.
+The chain has two failure modes, split by consumer. **Session-required**
+commands take the hard step-4 error: `iam`, `session join`/`leave`, and
+`mission claim`/`release` (you cannot claim a mission without a session).
+**Best-effort** consumers return "" at step 4 rather than failing:
+`mission log`/`result`/live-append, whose right behavior outside a session
+is the legacy tracked-log append, not an error. This split is intentional
+and stated so a future reader does not "fix" the best-effort path into a
+failure — nor harden the mission claim path into a best-effort one.
+
+`whoami` is a **soft** consumer: it runs the chain for the session lookup
+first (so a persona declared by `iam` under Codex is reflected), then falls
+through to its existing git → email → `$USER` chain when no session
+resolves. Persona reflection is the point of `iam`: under Codex, `ethos iam
+bwk` followed by `ethos whoami` must report `bwk`, not the git fallback
+identity. Today `resolveFromSession` does a bare PID walk and ignores
+`ETHOS_SESSION` (`internal/resolve/resolve.go:109-129`), so it never sees a
+Codex session; joining it to the chain is the fix, and its standalone
+virtue (git/OS fallback with no session) is preserved unchanged. The
+implementation touch point is `resolveFromSession` in `internal/resolve`.
 
 ### Agent-ID parity (R4, F6)
 
@@ -282,8 +308,8 @@ process reparents to launchd with no `claude` in its ancestry, run under a
 scratch `HOME`) becomes the standalone test fixture. Cases:
 
 1. **`session start` standalone** — detached, clean `HOME`, inside a repo.
-   Assert exit 0, that stdout is a single `export ETHOS_SESSION=<uuid>`
-   line, that the roster file exists, and that the ID parses as a UUID.
+   Assert exit 0, that stdout is a single `export ETHOS_SESSION=<id>` line,
+   that the roster file exists, and that the ID is 32 hex characters.
 2. **`iam` after `start`** — `eval` the start output, run `ethos iam bwk`,
    assert exit 0 and that the roster records persona `bwk` for the resolved
    agent. This is the end-to-end proof the investigation ran by hand,
@@ -297,15 +323,22 @@ scratch `HOME`) becomes the standalone test fixture. Cases:
    walk is bypassed when an explicit ID is present (R3) by pointing
    `--session` at a real roster while `FindClaudePID` would resolve a
    different one.
-5. **`session end`** — after `start`, `end` removes the roster and the
-   current-pointer; a second `end` is a no-op (exit 0).
-6. **MCP parity (R4)** — unit test the MCP `iam` handler: with
+5. **`whoami` reflects the declared persona (REC-1)** — detached, clean
+   `HOME`, with a git identity configured so the fallback would resolve a
+   *different* handle. `eval` the start output, `ethos iam bwk`, then
+   `ethos whoami`; assert it reports `bwk` (the session persona), not the
+   git-fallback identity. A second assertion with no session set confirms
+   the git/OS fallback still works — the standalone virtue is preserved.
+6. **`session end`** — after `start`, `end` deletes the roster; a second
+   `end` is a no-op (exit 0). Under the Claude path it also removes the PID
+   current-pointer.
+7. **MCP parity (R4)** — unit test the MCP `iam` handler: with
    `ETHOS_AGENT_ID` set it keys the participant on that value, not
    `FindClaudePID()`; with `ETHOS_SESSION` set and no `session_id` arg,
    `resolveSessionID` returns it.
-7. **Staleness (R5)** — a roster with a non-numeric primary is not stale
+8. **Staleness (R5)** — a roster with a non-numeric primary is not stale
    before 24h and is stale after; assert `purge` reclaims it past the TTL.
-8. **Claude Code no-regression (R6)** — the existing `session_start_test.go`
+9. **Claude Code no-regression (R6)** — the existing `session_start_test.go`
    cases (`{"session_id":"s1"}` …) still pass unchanged, proving the hook
    path is byte-identical.
 
@@ -329,18 +362,22 @@ green.
   deliberately with `session start`; `iam` only ever joins.
 - **Encode a PID or hostname into the minted ID.** Rejected: F7 says the ID
   is opaque, and embedding process identity re-couples the ID to the process
-  model this work removes. A UUID carries no such coupling.
-- **Zero-dependency `crypto/rand` hex ID instead of UUIDv4.** Not rejected
-  on merit — it is a valid drop-in and avoids promoting `google/uuid` to a
-  direct dependency. UUIDv4 is chosen only because the dependency is already
-  vendored and the format matches Claude Code's own `session_id`, keeping
-  IDs visually uniform across harnesses. If the team prefers no direct UUID
-  dependency, swap the mint function; nothing else changes.
+  model this work removes. A random 32-hex string carries no such coupling.
+- **UUIDv4 via `github.com/google/uuid` instead of `crypto/rand` hex.**
+  Rejected on supply-chain grounds. `google/uuid` is only an indirect
+  dependency today; choosing it would promote it to a direct dependency and
+  widen the supply-chain surface for a primitive `crypto/rand` already
+  provides. `crypto/rand` is stdlib and already imported in the tree
+  (`internal/mission/pipeline.go`), so hex-encoding 16 random bytes yields a
+  collision-resistant, filesystem-safe, fixed-length ID with zero new
+  dependency. The only thing UUIDv4 bought was visual similarity to Claude
+  Code's `session_id`, which no consumer depends on — the ID is opaque (F7).
 - **New cross-invocation current-pointer key** (e.g. a fixed per-repo file
   instead of the PID key). Rejected as unnecessary scope: `ETHOS_SESSION` is
-  the primary discovery channel outside Claude Code, so the pointer stays a
-  convenience keyed as today. Inventing a new key is a separate problem this
-  design does not need to solve.
+  the discovery channel outside Claude Code, and `session start` writes no
+  pointer there (see [Current-pointer key](#current-pointer-key)). Inventing
+  a harness-neutral pointer key is a separate problem this design does not
+  need to solve.
 
 ## Invariants that must hold
 
@@ -348,13 +385,15 @@ green.
   same ID audit appends write under and the same ID the resolution chain
   returns to every consumer. Audit live/sealed zones and DES-058 tombstones
   key on it (`internal/session/store.go` tombstone fields); nothing keys on
-  the ID's *shape*, so a UUID is safe, but the ID must be stable for the
-  session's life — `start` sets it once and never re-mints under an existing
-  `ETHOS_SESSION` (R1).
-- **Current-pointer consistency.** Whenever a roster is created, its
-  current-pointer is written in the same operation (hook and `start` both do
-  this), and `session end`/SessionEnd remove both together — no half state
-  where a pointer outlives its roster or vice versa.
+  the ID's *shape*, so a 32-hex string is safe, but the ID must be stable for
+  the session's life — `start` sets it once and never re-mints under an
+  existing `ETHOS_SESSION` (R1).
+- **Current-pointer consistency (Claude path).** On the Claude Code path the
+  hook writes the PID current-pointer in the same operation that creates the
+  roster, and SessionEnd removes both together — no half state where a
+  pointer outlives its roster or vice versa. Outside Claude Code no pointer
+  is written (discovery is `ETHOS_SESSION`), so there is no pointer to keep
+  consistent; the invariant is vacuously held there.
 - **Schema stability.** No field is added or removed from the roster or
   participant model; the storage contract other tools read is unchanged.
 - **Claude Code path unchanged (R6).** The hook still calls
