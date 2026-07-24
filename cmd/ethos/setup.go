@@ -128,6 +128,11 @@ func runSetup(cmd *cobra.Command) error {
 	// matches git user.email against the identity's email field. Without it, a
 	// fresh setup yields an identity nothing can resolve, and whoami and
 	// session start fail on a clean machine.
+	//
+	// Trim first so the guard is authoritative: a whitespace-only email from
+	// --file is non-empty but unresolvable — it must fall to the git default
+	// (then the hard-fail), not persist blank.
+	cfg.Email = strings.TrimSpace(cfg.Email)
 	if cfg.Email == "" {
 		cfg.Email = resolve.GitConfig("user.email")
 	}

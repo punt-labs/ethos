@@ -546,6 +546,42 @@ func TestSetup_EmailDefaultsFromGit(t *testing.T) {
 	assert.Equal(t, "git-default", handle, "created identity must resolve by git email")
 }
 
+// TestSetup_WhitespaceEmailFallsToGitDefault proves a whitespace-only email
+// in --file is not treated as a supplied value: it is trimmed to empty and
+// falls to the git user.email default, never persisted blank.
+func TestSetup_WhitespaceEmailFallsToGitDefault(t *testing.T) {
+	home, repo := setupTestEnv(t) // gitInitDir set user.email = test-user@example.com
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Blank Email\nhandle: blank-email\nemail: \"   \"\n")
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr)
+
+	store := identity.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
+	human, err := store.Load("blank-email", identity.Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "test-user@example.com", human.Email, "whitespace email must fall to git default, not persist blank")
+}
+
+// TestSetup_MalformedEmailRejected proves a syntactically invalid email in
+// --file is rejected by identity.Validate with the value named, and nothing
+// is written.
+func TestSetup_MalformedEmailRejected(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Bad Email\nhandle: bad-email\nemail: not-an-email\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "is not a valid address")
+	assert.Contains(t, err.Error(), "not-an-email", "error must name the bad value")
+
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "bad-email.yaml"))
+	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "claude.yaml"))
+}
+
 // TestSetup_HardFailNoEmail proves setup fails hard with an actionable remedy
 // when no email is given and git user.email is unset, and writes nothing.
 func TestSetup_HardFailNoEmail(t *testing.T) {

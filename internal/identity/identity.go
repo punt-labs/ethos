@@ -1,7 +1,11 @@
 // Package identity provides the core identity model and CRUD operations.
 package identity
 
-import "regexp"
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
 
 var validHandle = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
@@ -49,6 +53,16 @@ func (id *Identity) Validate() error {
 	}
 	if id.Kind != "human" && id.Kind != "agent" {
 		return &ValidationError{Field: "kind", Message: "must be 'human' or 'agent'"}
+	}
+	// Email is optional (an agent identity carries none), but when present it
+	// must be a plausible address: resolution matches it verbatim against git
+	// user.email, so a malformed value silently fails to resolve at a distant
+	// call site. Enforce presence elsewhere (setup's human path); here we only
+	// reject a non-empty value that cannot be an address.
+	if id.Email != "" {
+		if !strings.ContainsRune(id.Email, '@') || strings.ContainsAny(id.Email, " \t\r\n") {
+			return &ValidationError{Field: "email", Message: fmt.Sprintf("%q is not a valid address", id.Email)}
+		}
 	}
 	return nil
 }
