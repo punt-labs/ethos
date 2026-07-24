@@ -60,6 +60,22 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dest, "talents", "api-design.md"))
 	assert.FileExists(t, filepath.Join(dest, "talents", "cli-design.md"))
 
+	// Should have deployed the conventional attributes that setup-created
+	// identities reference, so a fresh machine resolves them from global
+	// even with no bundle active.
+	assert.FileExists(t, filepath.Join(dest, "personalities", "principal-engineer.md"))
+	assert.FileExists(t, filepath.Join(dest, "writing-styles", "concise-quantified.md"))
+	assert.FileExists(t, filepath.Join(dest, "talents", "engineering.md"))
+
+	// The previously-dead sidecar files now deploy as live starter content.
+	assert.FileExists(t, filepath.Join(dest, "personalities", "sprint-architect.md"))
+	assert.FileExists(t, filepath.Join(dest, "personalities", "product-thinker.md"))
+	assert.FileExists(t, filepath.Join(dest, "writing-styles", "reviewer-prose.md"))
+
+	// README.md must deploy only via seedReadmes, never as attribute content.
+	assert.FileExists(t, filepath.Join(dest, "personalities", "README.md"))
+	assert.FileExists(t, filepath.Join(dest, "writing-styles", "README.md"))
+
 	// Should have deployed skills
 	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
 	assert.FileExists(t, filepath.Join(skills, "mission", "SKILL.md"))

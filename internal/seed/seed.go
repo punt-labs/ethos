@@ -29,6 +29,12 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 	// Talents (skip README.md — handled separately)
 	seedFS(Talents, "sidecar/talents", filepath.Join(destRoot, "talents"), ".md", force, r)
 
+	// Personalities and writing-styles: the conventional attributes that
+	// setup-created identities reference, plus starter sidecar content.
+	// A fresh machine resolves these from global when no bundle is active.
+	seedFS(Personalities, "sidecar/personalities", filepath.Join(destRoot, "personalities"), ".md", force, r)
+	seedFS(WritingStyles, "sidecar/writing-styles", filepath.Join(destRoot, "writing-styles"), ".md", force, r)
+
 	// Archetypes
 	seedFS(Archetypes, "sidecar/archetypes", filepath.Join(destRoot, "archetypes"), ".yaml", force, r)
 

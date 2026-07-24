@@ -8,6 +8,12 @@ var Roles embed.FS
 //go:embed sidecar/talents/*.md
 var Talents embed.FS
 
+//go:embed sidecar/personalities/*.md
+var Personalities embed.FS
+
+//go:embed sidecar/writing-styles/*.md
+var WritingStyles embed.FS
+
 //go:embed sidecar/archetypes/*.yaml
 var Archetypes embed.FS
 
