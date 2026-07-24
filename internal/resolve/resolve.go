@@ -297,6 +297,36 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 	return cfg.ActiveBundle, nil
 }
 
+// repoRootOverride returns the ETHOS_REPO_ROOT override and whether it was
+// set. A set override is validated: it must name an existing directory, and
+// when requireStore is set it must also hold a .punt-labs/ethos store. A
+// set-but-invalid override is a loud error naming the bad root and what is
+// missing — an override that lies about the location silently writes to the
+// wrong tree, the exact ethos-yofr symptom (SFH F1). On an invalid override
+// it returns ("", true): "an override was set" so the caller does NOT fall
+// through to auto-resolution and quietly pick a different tree, and the bad
+// path is never returned — resolution reports "no repo," which surfaces the
+// global-fallback warning downstream.
+func repoRootOverride(requireStore bool) (root string, set bool) {
+	v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT"))
+	if v == "" {
+		return "", false
+	}
+	if info, err := os.Stat(v); err != nil || !info.IsDir() {
+		fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q is not an existing directory; refusing to use it\n", v)
+		return "", true
+	}
+	if requireStore {
+		store := filepath.Join(v, ".punt-labs", "ethos")
+		if info, err := os.Stat(store); err != nil || !info.IsDir() {
+			fmt.Fprintf(os.Stderr, "ethos: ETHOS_REPO_ROOT=%q has no %s store; refusing to use it\n",
+				v, filepath.Join(".punt-labs", "ethos"))
+			return "", true
+		}
+	}
+	return v, true
+}
+
 // FindRepoRoot returns the current work tree root — the directory holding
 // the .git marker for the cwd's checkout — or empty string when the cwd is
 // not inside a repo. In a linked worktree it returns the WORKTREE root, not
@@ -306,10 +336,11 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 // use StoreRepoRoot instead.
 //
 // ETHOS_REPO_ROOT (whitespace-trimmed) overrides the walk so an operator
-// can force the root when auto-resolution is wrong.
+// can force the root when auto-resolution is wrong; it must name an existing
+// directory (see repoRootOverride).
 func FindRepoRoot() string {
-	if v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT")); v != "" {
-		return v
+	if root, set := repoRootOverride(false); set {
+		return root
 	}
 	dir, err := os.Getwd()
 	if err != nil {
@@ -341,13 +372,14 @@ func FindRepoRoot() string {
 // degrades to the global store (ethos-yofr).
 //
 // Resolution order:
-//  1. ETHOS_REPO_ROOT env override (whitespace-trimmed).
+//  1. ETHOS_REPO_ROOT env override (whitespace-trimmed) — validated to hold
+//     a .punt-labs/ethos store, else refused loudly (see repoRootOverride).
 //  2. Walk upward for a .git marker. A .git directory is the main work
 //     tree — the store lives here. A .git file is a linked worktree (or a
 //     submodule); resolve the owning repo through the common dir.
 func StoreRepoRoot() string {
-	if v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT")); v != "" {
-		return v
+	if root, set := repoRootOverride(true); set {
+		return root
 	}
 	dir, err := os.Getwd()
 	if err != nil {
@@ -401,7 +433,14 @@ func gitStoreRoot(worktree string) string {
 	if gitDir == "" || common == "" {
 		return ""
 	}
-	if filepath.Clean(gitDir) == filepath.Clean(common) {
+	common = filepath.Clean(common)
+	if filepath.Clean(gitDir) == common {
+		return worktree // submodule or plain checkout
+	}
+	if filepath.Base(common) != ".git" {
+		// A non-standard common dir — e.g. a submodule's .git/modules/<name>,
+		// whose parent is inside .git, not a work tree (SFH F4). Keep the
+		// worktree rather than resolving a bogus root inside .git.
 		return worktree
 	}
 	return filepath.Dir(common)
@@ -422,23 +461,44 @@ func gitRevParseAbs(dir, arg string) string {
 // manualStoreRoot resolves the owning repo root without git by reading the
 // .git gitdir pointer and its commondir file. For a linked worktree the
 // commondir resolves to <main>/.git, whose parent is the main work tree.
-// A submodule (no commondir, or a commondir that does not name a .git dir)
-// keeps its store in this work tree, so the worktree dir is returned.
+// A submodule (commondir absent) keeps its store in this work tree, so the
+// worktree dir is returned.
+//
+// It distinguishes a clean submodule signal (commondir simply absent) from a
+// genuine read error — a stale worktree whose main repo moved or was
+// deleted, a corrupt gitdir, or a permission failure. The clean case is
+// silent; a genuine error warns to stderr naming the worktree fallback,
+// rather than silently returning an empty store (SFH F2).
 func manualStoreRoot(worktree string) string {
-	data, err := os.ReadFile(filepath.Join(worktree, ".git"))
+	dotgit := filepath.Join(worktree, ".git")
+	data, err := os.ReadFile(dotgit)
 	if err != nil {
-		return ""
+		fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", dotgit, err, worktree)
+		return worktree
 	}
 	gd := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(data)), "gitdir:"))
 	if gd == "" {
-		return ""
+		fmt.Fprintf(os.Stderr, "ethos: warning: %s has no gitdir pointer; using the worktree store at %s\n", dotgit, worktree)
+		return worktree
 	}
 	if !filepath.IsAbs(gd) {
 		gd = filepath.Join(worktree, gd)
 	}
+	if _, err := os.Stat(gd); err != nil {
+		// The gitdir target is gone — a stale worktree (its main repo moved
+		// or was deleted), not a clean submodule. Do not silently treat it
+		// as one.
+		fmt.Fprintf(os.Stderr, "ethos: warning: worktree git dir %s is unreadable (%v); the main repo may have moved — using the worktree store at %s\n", gd, err, worktree)
+		return worktree
+	}
 	data, err = os.ReadFile(filepath.Join(gd, "commondir"))
 	if err != nil {
-		return worktree
+		if !os.IsNotExist(err) {
+			// A present-but-unreadable commondir is a real error, not the
+			// clean submodule signal (which is commondir simply absent).
+			fmt.Fprintf(os.Stderr, "ethos: warning: cannot read %s (%v); using the worktree store at %s\n", filepath.Join(gd, "commondir"), err, worktree)
+		}
+		return worktree // absent commondir: a submodule keeps its own store
 	}
 	common := strings.TrimSpace(string(data))
 	if common == "" {
