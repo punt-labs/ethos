@@ -931,11 +931,11 @@ Each layer holds the same subdirectories (`identities/`,
 When no `active_bundle` is set, layer 2 is skipped.
 
 Attribute content (personalities, writing styles, talents) resolves
-starting from the layer where the identity was found, then falls
-through to lower-precedence layers. A bundle-sourced identity looks
-up its personality in the bundle first, then global — not repo-local.
-To override attributes for a bundle identity, override the identity
-itself in repo-local.
+through the full repo → bundle → global chain, regardless of which
+layer the identity record itself came from (DES-051). A repo-local
+attribute file shadows the bundle's, which shadows global. So a
+bundle-sourced — or even a global-sourced — identity picks up a
+repo-local personality override when one is present.
 
 Three ways to provide team data:
 

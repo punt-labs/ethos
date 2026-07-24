@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -111,15 +110,14 @@ func runSetup(cmd *cobra.Command) error {
 		}
 	}
 
-	// Validate.
+	// Fast-fail on the required name before any I/O. Handle format and
+	// kind are validated by identity.Validate at Save time (below), the
+	// single source of structural validation shared with `ethos create`.
 	if cfg.Name == "" {
 		return fmt.Errorf("setup: name is required")
 	}
 	if cfg.Handle == "" {
 		cfg.Handle = slugify(cfg.Name)
-	}
-	if !validSetupHandle(cfg.Handle) {
-		return fmt.Errorf("setup: handle %q must be lowercase alphanumeric with hyphens", cfg.Handle)
 	}
 
 	home, err := os.UserHomeDir()
@@ -146,6 +144,9 @@ func runSetup(cmd *cobra.Command) error {
 			WritingStyle: cfg.WritingStyle,
 			Personality:  "principal-engineer",
 		}
+		if err := human.Validate(); err != nil {
+			return fmt.Errorf("setup: creating human identity: %w", err)
+		}
 		if err := store.Save(human); err != nil {
 			return setupSaveError("human", human, globalRoot, err)
 		}
@@ -168,6 +169,9 @@ func runSetup(cmd *cobra.Command) error {
 			WritingStyle: agentStyle,
 			Personality:  "principal-engineer",
 			Talents:      []string{"engineering"},
+		}
+		if err := agent.Validate(); err != nil {
+			return fmt.Errorf("setup: creating agent identity: %w", err)
 		}
 		if err := store.Save(agent); err != nil {
 			return setupSaveError("agent", agent, globalRoot, err)
@@ -357,15 +361,6 @@ func resolveStyleChoice(choice string, attrs []*attribute.Attribute) string {
 	}
 	// Treat as slug.
 	return choice
-}
-
-// setupHandleRe matches the same pattern as identity.validHandle:
-// lowercase alphanumeric, internal hyphens only, no leading or trailing hyphen.
-var setupHandleRe = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
-
-// validSetupHandle checks the handle matches the identity package's pattern.
-func validSetupHandle(h string) bool {
-	return setupHandleRe.MatchString(h)
 }
 
 // mergeRepoConfig writes .punt-labs/ethos.yaml, merging with any existing

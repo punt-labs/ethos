@@ -37,9 +37,10 @@ func NewLayeredStoreWithBundle(repo, bundle, global *Store) *LayeredStore {
 	return &LayeredStore{repo: repo, bundle: bundle, global: global}
 }
 
-// Load reads an identity by handle, checking repo first then global.
-// Extensions always come from global. Attribute resolution falls back
-// to global when repo attributes are missing.
+// Load reads an identity by handle, checking repo, then bundle, then
+// global. Extensions always come from global. Attribute content resolves
+// through the full repo → bundle → global chain (DES-051), regardless of
+// which layer the identity record itself came from.
 func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, error) {
 	var cfg loadConfig
 	for _, o := range opts {

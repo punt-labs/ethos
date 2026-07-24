@@ -381,6 +381,35 @@ func TestSetup_HardValidation_BadStyle(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "typo-user.yaml"))
 }
 
+// TestSetup_ValidateCallIsLive proves setup's structural validation runs
+// through identity.Validate at Save time. A malformed handle is caught by
+// human.Validate() — the error carries the "creating human identity"
+// context only that branch produces, and no identity file is written. If
+// the Validate() call were dropped, the bad handle would fall through to
+// Store.Save (which validates refs, not structure) and a file named for
+// the bad handle would be written, failing this test.
+func TestSetup_ValidateCallIsLive(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Bad Handle User\nhandle: Bad Handle\n")
+
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creating human identity",
+		"a malformed handle must be rejected by human.Validate(), not an inline check")
+	assert.Contains(t, err.Error(), "must be lowercase alphanumeric")
+
+	// Nothing dangling: no identity file for the malformed handle.
+	entries, readErr := os.ReadDir(filepath.Join(home, ".punt-labs", "ethos", "identities"))
+	if readErr == nil {
+		for _, e := range entries {
+			assert.NotContains(t, e.Name(), "Bad Handle",
+				"no identity file should be written for a rejected handle")
+		}
+	}
+}
+
 func TestSetup_NameRequired(t *testing.T) {
 	_, repo := setupTestEnv(t)
 
