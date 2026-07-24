@@ -14,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -3677,4 +3678,25 @@ func TestMissionStore_ReadWarnsOnGlobalFallback(t *testing.T) {
 	out := captureStderrFn(t, func() { _ = missionStore() })
 	assert.Contains(t, out, "no git repository found")
 	assert.Contains(t, out, "global mission store")
+}
+
+// TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect pins the Bugbot MED
+// on PR #370: when ETHOS_REPO_ROOT is set-but-invalid, StoreRepoRoot refuses
+// it (records fall back to global), but EnvRepoRoot re-accepts the bad path.
+// The mission store's audit checkout root must follow the refused store to
+// empty — not the resurrected override — so records and live/seal stay in one
+// tree instead of splitting contract(global) from audit(<refused>).
+func TestMissionCheckoutRoot_RefusedOverrideDoesNotResurrect(t *testing.T) {
+	dir := t.TempDir() // exists, but has no .punt-labs/ethos store
+	t.Setenv("ETHOS_REPO_ROOT", dir)
+
+	// StoreRepoRoot fail-closed refuses the override; EnvRepoRoot re-accepts it.
+	require.Equal(t, "", resolve.StoreRepoRoot(),
+		"StoreRepoRoot must refuse an override with no .punt-labs/ethos store")
+	require.Equal(t, dir, resolve.EnvRepoRoot(),
+		"EnvRepoRoot accepts the same path (requireStore=false) — the resurrection risk")
+
+	// The checkout root follows the (refused → "") store, not the bad path.
+	assert.Equal(t, "", missionCheckoutRoot(resolve.StoreRepoRoot()),
+		"a refused override must not leak into the audit checkout root")
 }

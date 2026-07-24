@@ -52,8 +52,25 @@ func missionStore() *mission.Store {
 	// audit concern (live zone + sealed chunks) resolves to the checkout so
 	// it agrees with the pre-commit seal that runs there (Bugbot HIGH #370).
 	return mission.NewStoreWithRoots(repoRoot, root).
-		WithCheckoutRoot(resolve.EnvRepoRoot()).
+		WithCheckoutRoot(missionCheckoutRoot(repoRoot)).
 		WithSessionResolver(currentSessionIDBestEffort)
+}
+
+// missionCheckoutRoot returns the per-checkout root for the DES-058 audit
+// zone of a mission store whose record root is storeRoot. When storeRoot is
+// "" — no repo, or a set-but-invalid ETHOS_REPO_ROOT that StoreRepoRoot
+// fail-closed refused — it returns "" so the audit zone falls back to the
+// global tree WITH the records, instead of honoring the refused override:
+// EnvRepoRoot (FindRepoRoot, requireStore=false) re-accepts the bad path,
+// which would split the contract (global) from the live events/seal (under
+// the refused path). Same fail-closed principle as runUI (Bugbot MED #370).
+// In the legitimate worktree case storeRoot is the main tree (non-empty) and
+// this returns EnvRepoRoot (the worktree), keeping audit per-checkout.
+func missionCheckoutRoot(storeRoot string) string {
+	if storeRoot == "" {
+		return ""
+	}
+	return resolve.EnvRepoRoot()
 }
 
 // warnIfGlobalFallback warns loudly when no repo store is in scope, so an
@@ -133,7 +150,7 @@ func missionStoreForCreate() *mission.Store {
 	// Record → store root; DES-058 audit (live + sealed chunks) → checkout
 	// root, matching the pre-commit seal (Bugbot HIGH #370).
 	ms := mission.NewStoreWithRoots(storeRoot, root).
-		WithCheckoutRoot(resolve.EnvRepoRoot()).
+		WithCheckoutRoot(missionCheckoutRoot(storeRoot)).
 		WithSessionResolver(currentSessionIDBestEffort)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
