@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -108,6 +109,36 @@ func TestCLI_SessionStart_Idempotent(t *testing.T) {
 		}
 	}
 	assert.Equal(t, 1, rosters, "idempotent start must not mint a second roster")
+}
+
+// TestSessionEnd_KeepsForeignPointer pins H1: ending a DIFFERENT session
+// must not delete the caller's current-pointer. Run in-process so the test
+// and handler share one FindClaudePID value.
+func TestSessionEnd_KeepsForeignPointer(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setInProcessEnv(t, se)
+	sessionEndSession = ""
+	t.Cleanup(func() { sessionEndSession = "" })
+
+	ss := sessionStore()
+	root := session.Participant{AgentID: "jim", Persona: "jim"}
+	require.NoError(t, ss.Create("s1live", root, session.Participant{AgentID: "a", Persona: "a", Parent: "jim"}, "", ""))
+	require.NoError(t, ss.Create("s2end", root, session.Participant{AgentID: "b", Persona: "b", Parent: "jim"}, "", ""))
+
+	pid := process.FindClaudePID()
+	require.NoError(t, ss.WriteCurrentSession(pid, "s1live"))
+
+	_, _, err := execHandler(t, "session", "end", "--session", "s2end")
+	require.NoError(t, err)
+
+	// The ended session is gone; the live session and its pointer survive.
+	_, err = ss.Load("s2end")
+	require.Error(t, err, "the named session must be deleted")
+	_, err = ss.Load("s1live")
+	require.NoError(t, err, "the live session's roster must survive")
+	cur, err := ss.ReadCurrentSession(pid)
+	require.NoError(t, err, "the live session's pointer must survive")
+	assert.Equal(t, "s1live", cur)
 }
 
 // TestCLI_SessionStart_IdempotentPersonaJoins pins the gate defect: a

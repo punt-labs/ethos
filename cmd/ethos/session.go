@@ -494,10 +494,11 @@ func mintSessionID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// runSessionEnd tears down the resolved session, symmetric with the
-// SessionEnd hook: delete the roster, then remove the Claude-path PID
-// current-pointer. Outside Claude there is no pointer and
-// DeleteCurrentSession no-ops on a missing key, so end cannot fail there.
+// runSessionEnd tears down the resolved session: delete the roster, then
+// remove the Claude-path PID current-pointer — but only when that pointer
+// actually names the session we ended. Ending a stale or other session
+// (--session or a nested ETHOS_SESSION) must not sever the caller's live
+// Claude session's discovery channel.
 func runSessionEnd(cmd *cobra.Command) error {
 	ss := sessionStore()
 	sid, _, err := resolveHardSession(sessionEndSession)
@@ -507,8 +508,14 @@ func runSessionEnd(cmd *cobra.Command) error {
 	if err := ss.Delete(sid); err != nil {
 		return err
 	}
-	if derr := ss.DeleteCurrentSession(process.FindClaudePID()); derr != nil {
-		return fmt.Errorf("session end: %w", derr)
+	// Only remove the current-pointer if it points at the session we ended;
+	// otherwise a stale-session teardown from inside a live Claude session
+	// would silently orphan that live session.
+	claudePID := process.FindClaudePID()
+	if cur, rerr := ss.ReadCurrentSession(claudePID); rerr == nil && cur == sid {
+		if derr := ss.DeleteCurrentSession(claudePID); derr != nil {
+			return fmt.Errorf("session end: %w", derr)
+		}
 	}
 	if jsonOutput {
 		return writeJSON(cmd.OutOrStdout(), map[string]string{"ended": sid})
