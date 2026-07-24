@@ -136,6 +136,9 @@ func TestTeamActivate_Success(t *testing.T) {
 
 	body := readRepoConfigFile(t, env.repo)
 	assert.Contains(t, body, "active_bundle: gstack")
+	// The team key must be written alongside active_bundle so a bundle
+	// switch never leaves SessionStart injecting a stale or empty team.
+	assert.Contains(t, body, "team: gstack")
 }
 
 func TestTeamActivate_NonExistent(t *testing.T) {

@@ -251,19 +251,34 @@ func runSetup(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("setup: reading active bundle: %w", err)
 	}
-	if current != "" && !cmd.Flags().Changed("bundle") {
+	team, err := resolve.ResolveTeam(repoRoot)
+	if err != nil {
+		return fmt.Errorf("setup: reading team: %w", err)
+	}
+	switch {
+	case current != "" && !cmd.Flags().Changed("bundle"):
 		fmt.Fprintf(errw, "skipped: bundle %q already active (use --bundle to switch)\n", current)
 		result.Skipped = append(result.Skipped, "bundle")
 		cfg.Bundle = current
-	} else if current == cfg.Bundle {
+		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team); err != nil {
+			return err
+		}
+	case current == cfg.Bundle:
 		fmt.Fprintf(errw, "skipped: bundle %q already active\n", cfg.Bundle)
 		result.Skipped = append(result.Skipped, "bundle")
-	} else {
-		if err := setConfigKey(repoRoot, "active_bundle", cfg.Bundle); err != nil {
-			return fmt.Errorf("setup: activating bundle: %w", err)
+		if err := ensureTeamKey(errw, repoRoot, cfg.Bundle, team); err != nil {
+			return err
 		}
+	default:
+		// Write team FIRST so active_bundle — the idempotency sentinel the
+		// skip branches above key off — lands last. If the run is
+		// interrupted between the two writes, the next setup sees no
+		// active_bundle, takes this branch again, and self-heals.
 		if err := setConfigKey(repoRoot, "team", cfg.Bundle); err != nil {
 			return fmt.Errorf("setup: setting team: %w", err)
+		}
+		if err := setConfigKey(repoRoot, "active_bundle", cfg.Bundle); err != nil {
+			return fmt.Errorf("setup: activating bundle: %w", err)
 		}
 		fmt.Fprintf(errw, "activated: bundle %q\n", cfg.Bundle)
 	}
@@ -395,6 +410,22 @@ func mergeRepoConfig(repoRoot string) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// ensureTeamKey repairs a missing or stale team key. active_bundle is the
+// idempotency sentinel setup keys off, but an interrupted activation or an
+// `ethos team bundle use` (which writes only active_bundle) can leave the
+// team key absent — SessionStart then injects no team context with no other
+// signal. Whenever a bundle is active, the team key must match it.
+func ensureTeamKey(errw io.Writer, repoRoot, bundle, currentTeam string) error {
+	if bundle == "" || currentTeam == bundle {
+		return nil
+	}
+	if err := setConfigKey(repoRoot, "team", bundle); err != nil {
+		return fmt.Errorf("setup: repairing team key: %w", err)
+	}
+	fmt.Fprintf(errw, "repaired: team %q (was missing or stale)\n", bundle)
 	return nil
 }
 

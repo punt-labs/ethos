@@ -12,6 +12,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -363,6 +364,36 @@ func TestSetup_HardValidation_UnseededFails(t *testing.T) {
 	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
 	require.NoError(t, err, "stderr: %s", stderr)
 	assert.FileExists(t, filepath.Join(home, ".punt-labs", "ethos", "identities", "unseeded-user.yaml"))
+}
+
+// TestSetup_RepairsMissingTeamKey pins the S1 fix: an interrupted
+// activation (or `ethos team bundle use`) can leave active_bundle set with
+// no team key. A later setup that hits the "already active" skip branch
+// must repair the team key rather than reporting success and leaving
+// SessionStart with no team context.
+func TestSetup_RepairsMissingTeamKey(t *testing.T) {
+	_, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, "name: Interrupted User\nhandle: interrupted-user\n")
+
+	// First setup activates foundation fully.
+	_, _, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err)
+
+	// Simulate an interrupted activation: active_bundle written, team lost.
+	writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\n")
+	team, err := resolve.ResolveTeam(repo)
+	require.NoError(t, err)
+	require.Empty(t, team, "precondition: team key must be missing")
+
+	// Re-run setup (no --bundle change → the skip branch). It must self-heal.
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr)
+
+	team, err = resolve.ResolveTeam(repo)
+	require.NoError(t, err)
+	assert.Equal(t, "foundation", team, "missing team key must be repaired on re-run")
 }
 
 // TestSetup_HardValidation_BadStyle proves a writing_style slug that is

@@ -211,6 +211,13 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return nil
 	}
 
+	// Write team before active_bundle (the sentinel) so an interrupted run
+	// self-heals, and keep the two keys consistent: a bundle switch that
+	// left team pointing at the old bundle would inject the wrong team at
+	// SessionStart with no signal.
+	if err := setConfigKey(repoRoot, "team", name); err != nil {
+		return fmt.Errorf("writing team: %w", err)
+	}
 	if err := setConfigKey(repoRoot, "active_bundle", name); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}
