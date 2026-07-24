@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -158,11 +159,35 @@ func TestTeamActivate_InvalidSlug(t *testing.T) {
 func TestTeamActivate_AlreadyActive(t *testing.T) {
 	env := setupBundleTestEnv(t)
 	mkBundleDir(t, filepath.Join(env.globalRoot, "bundles"), "gstack", true)
-	writeRepoConfigFile(t, env.repo, "active_bundle: gstack\n")
+	// A genuinely clean state: active_bundle and team agree.
+	writeRepoConfigFile(t, env.repo, "active_bundle: gstack\nteam: gstack\n")
 
 	stdout, _, err := execHandler(t, "team", "activate", "gstack")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "already active")
+
+	// The clean state is untouched.
+	team, err := resolve.ResolveTeam(env.repo)
+	require.NoError(t, err)
+	assert.Equal(t, "gstack", team)
+}
+
+// TestTeamActivate_AlreadyActive_RepairsDivergentTeam pins the N5 fix:
+// explicitly activating the already-active bundle converges a divergent (or
+// absent) team key — otherwise the remedy setup suggests for a team/bundle
+// mismatch would be a no-op in exactly the state where it is suggested.
+func TestTeamActivate_AlreadyActive_RepairsDivergentTeam(t *testing.T) {
+	env := setupBundleTestEnv(t)
+	mkBundleDir(t, filepath.Join(env.globalRoot, "bundles"), "gstack", true)
+	writeRepoConfigFile(t, env.repo, "active_bundle: gstack\nteam: custom-team\n")
+
+	stdout, _, err := execHandler(t, "team", "activate", "gstack")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, `team repaired to "gstack"`)
+
+	team, err := resolve.ResolveTeam(env.repo)
+	require.NoError(t, err)
+	assert.Equal(t, "gstack", team, "explicit activate must converge the team key")
 }
 
 // --- team active ---

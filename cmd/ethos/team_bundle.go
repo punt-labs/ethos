@@ -204,6 +204,24 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	}
 	out := cmd.OutOrStdout()
 	if current == name {
+		// Explicitly running activate commands convergence. If the team key
+		// diverged (or is absent), repair it here — otherwise the remedy
+		// setup suggests ("run ethos team activate <bundle>") is a no-op in
+		// exactly the state where it is suggested.
+		team, err := resolve.ResolveTeam(repoRoot)
+		if err != nil {
+			return fmt.Errorf("reading team: %w", err)
+		}
+		if team != name {
+			if err := setConfigKey(repoRoot, "team", name); err != nil {
+				return fmt.Errorf("writing team: %w", err)
+			}
+			if jsonOutput {
+				return writeJSON(out, map[string]string{"name": name, "status": "team-repaired"})
+			}
+			fmt.Fprintf(out, "team repaired to %q\n", name)
+			return nil
+		}
 		if jsonOutput {
 			return writeJSON(out, map[string]string{"name": name, "status": "already-active"})
 		}
