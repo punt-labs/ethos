@@ -57,7 +57,20 @@ func missionStore() *mission.Store {
 // legacy tracked-log append, which is the right behavior outside a session
 // (ad-hoc CLI, tests).
 func currentSessionIDBestEffort() string {
-	sid, _ := resolve.SessionID(sessionStore())
+	ss := sessionStore()
+	sid, source := resolve.SessionID(ss)
+	if sid == "" {
+		return ""
+	}
+	// A non-empty ETHOS_SESSION that names no loadable roster would
+	// misattribute audit/mission live-log lines to a session no roster ever
+	// described. Fall back to the legacy tracked-log append ("") instead.
+	if source == resolve.SessionSourceEnv {
+		if _, err := ss.Load(sid); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: warning: ETHOS_SESSION %q names no loadable roster; using the tracked log\n", sid)
+			return ""
+		}
+	}
 	return sid
 }
 

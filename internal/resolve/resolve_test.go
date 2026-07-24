@@ -128,25 +128,26 @@ func TestSessionID(t *testing.T) {
 
 	t.Run("env wins over walk", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "env-session")
-		sid, ok := SessionID(ss)
-		require.True(t, ok)
+		sid, source := SessionID(ss)
 		assert.Equal(t, "env-session", sid)
+		assert.Equal(t, SessionSourceEnv, source)
 	})
 
 	t.Run("walk fallback", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "")
 		pid := process.FindClaudePID()
 		require.NoError(t, ss.WriteCurrentSession(pid, "walk-session"))
-		sid, ok := SessionID(ss)
-		require.True(t, ok)
+		sid, source := SessionID(ss)
 		assert.Equal(t, "walk-session", sid)
+		assert.Equal(t, "walk", source)
 	})
 
 	t.Run("neither resolves", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "")
 		empty := session.NewStore(t.TempDir())
-		_, ok := SessionID(empty)
-		assert.False(t, ok)
+		sid, source := SessionID(empty)
+		assert.Empty(t, sid)
+		assert.Empty(t, source)
 	})
 }
 

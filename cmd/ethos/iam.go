@@ -68,7 +68,17 @@ func resolveHardSession(explicit string) (sessionID, agentID string, err error) 
 	}
 
 	if sessionID == "" {
-		if sid, ok := resolve.SessionID(ss); ok {
+		sid, source := resolve.SessionID(ss)
+		if sid != "" {
+			// An explicit ETHOS_SESSION must name a real roster — same
+			// contract as --session (validated above). Without this a stale
+			// env sails through the hard chain and stages a phantom binding
+			// (mission claim/release) or a teardown of nothing.
+			if source == resolve.SessionSourceEnv {
+				if _, lerr := ss.Load(sid); lerr != nil {
+					return "", "", fmt.Errorf("ETHOS_SESSION %q: %w", sid, lerr)
+				}
+			}
 			sessionID = sid
 		}
 	}

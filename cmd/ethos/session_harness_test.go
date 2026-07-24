@@ -216,8 +216,9 @@ func TestCLI_SessionStart_PersonaSelfConsistent(t *testing.T) {
 	assert.Contains(t, out, "test-agent", "eval-then-whoami must reflect the --persona identity")
 }
 
-// TestCLI_SessionEnd covers acceptance case 6: end deletes the roster, and a
-// second end under the same env is a no-op (exit 0).
+// TestCLI_SessionEnd: end deletes the roster. A second end under the same
+// (now-stale) ETHOS_SESSION fails loud rather than silently "ending nothing"
+// — the H2 contract that a stale env must not sail through the hard chain.
 func TestCLI_SessionEnd(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -232,9 +233,10 @@ func TestCLI_SessionEnd(t *testing.T) {
 	require.Equal(t, 0, code, "stderr=%s", stderr)
 	assert.NoFileExists(t, rosterPath, "end must delete the roster")
 
-	// Second end is a safe no-op.
+	// The env now names a deleted roster: a second end refuses loudly.
 	_, stderr2, code2 := runCLI(t, env, "session", "end")
-	assert.Equal(t, 0, code2, "second end must be a no-op; stderr=%s", stderr2)
+	require.NotEqual(t, 0, code2, "a stale ETHOS_SESSION must not silently succeed; stderr=%s", stderr2)
+	assert.Contains(t, stderr2, "ETHOS_SESSION")
 }
 
 // TestCLI_Whoami_ReflectsPersona covers acceptance case 5 (REC-1/REC-3):
@@ -265,4 +267,58 @@ func TestCLI_Whoami_ReflectsPersona(t *testing.T) {
 	stdout, stderr, code = runCLI(t, se, "whoami")
 	require.Equal(t, 0, code, "whoami with no session should exit 0; stderr=%s", stderr)
 	assert.Contains(t, stdout, "test-agent", "no-session whoami must use the git/OS fallback")
+}
+
+// TestCLI_MissionClaim_StaleEnvErrors pins H2: a stale ETHOS_SESSION must
+// not sail through the hard chain and stage a phantom binding — claim
+// refuses loudly, naming ETHOS_SESSION as the source.
+func TestCLI_MissionClaim_StaleEnvErrors(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	env := withEnv(se, "ETHOS_SESSION=deadbeefdeadbeefdeadbeefdeadbeef")
+
+	_, stderr, code := runCLI(t, env, "mission", "claim", "m-2026-05-23-001")
+	require.NotEqual(t, 0, code, "claim under a stale session must refuse; stderr=%s", stderr)
+	assert.Contains(t, stderr, "ETHOS_SESSION", "the refusal must name the stale source")
+}
+
+// TestCLI_Whoami_WarnsOnCorruptRoster pins M6: an ETHOS_SESSION that names
+// an existing-but-unparseable roster warns on stderr rather than silently
+// answering with the git/OS identity; whoami still falls back so it does
+// not brick.
+func TestCLI_Whoami_WarnsOnCorruptRoster(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	badID := "corruptaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	rosterPath := filepath.Join(se.home, ".punt-labs", "ethos", "sessions", badID+".yaml")
+	require.NoError(t, os.WriteFile(rosterPath, []byte("not a roster mapping\n"), 0o644))
+
+	out, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+badID), "whoami")
+	require.Equal(t, 0, code, "whoami must fall back, not brick; stderr=%s", stderr)
+	assert.Contains(t, stderr, "unreadable roster", "a corrupt named roster must warn")
+	assert.Contains(t, out, "test-agent", "whoami falls back to the git/OS identity")
+}
+
+// TestCurrentSessionIDBestEffort_EnvVerification pins M5: a non-empty
+// ETHOS_SESSION that names no loadable roster falls back to "" (the legacy
+// tracked-log append) so a dead ID never enters the audit namespace; a live
+// session's ID passes through.
+func TestCurrentSessionIDBestEffort_EnvVerification(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setInProcessEnv(t, se)
+
+	t.Setenv("ETHOS_SESSION", "deadbeefdeadbeefdeadbeefdeadbeef")
+	assert.Empty(t, currentSessionIDBestEffort(), "a dead env id must fall back to the tracked log")
+
+	ss := sessionStore()
+	require.NoError(t, ss.Create("liveaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		session.Participant{AgentID: "jim", Persona: "jim"},
+		session.Participant{AgentID: "a", Persona: "a", Parent: "jim"}, "", ""))
+	t.Setenv("ETHOS_SESSION", "liveaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	assert.Equal(t, "liveaaaaaaaaaaaaaaaaaaaaaaaaaaaa", currentSessionIDBestEffort(),
+		"a live env id passes through")
 }

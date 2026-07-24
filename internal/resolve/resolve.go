@@ -101,21 +101,27 @@ type sessionPersona struct {
 	found  bool   // true if a session participant was found
 }
 
-// SessionID resolves the active session ID using the harness-neutral
-// chain: ETHOS_SESSION, then the Claude process-tree current-pointer. It
-// returns ("", false) when neither yields one. Callers that accept an
-// explicit session (a --session flag or an MCP session_id arg) check that
-// first and bypass this; SessionID covers the env + walk steps every
-// consumer shares (DES-061).
-func SessionID(ss *session.Store) (string, bool) {
+// SessionSourceEnv is the source SessionID reports when the ID came from
+// ETHOS_SESSION (an explicit, caller-supplied anchor that consumers verify),
+// as opposed to the Claude process-tree walk.
+const SessionSourceEnv = "env"
+
+// SessionID resolves the active session ID using the harness-neutral chain:
+// ETHOS_SESSION, then the Claude process-tree current-pointer. It returns
+// ("", "") when neither yields one, otherwise the ID and its source
+// (SessionSourceEnv or "walk"). The source lets a caller apply the
+// verification an explicit env anchor warrants without re-reading the
+// environment. Callers that accept an explicit session (a --session flag or
+// an MCP session_id arg) check that first and bypass this (DES-061).
+func SessionID(ss *session.Store) (id, source string) {
 	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
-		return sid, true
+		return sid, SessionSourceEnv
 	}
 	sid, err := ss.ReadCurrentSession(process.FindClaudePID())
 	if err != nil {
-		return "", false
+		return "", ""
 	}
-	return sid, true
+	return sid, "walk"
 }
 
 // resolveFromSession resolves the session via the harness-neutral chain
@@ -127,12 +133,19 @@ func SessionID(ss *session.Store) (string, bool) {
 // if the participant exists but has no persona configured — callers must
 // not fall through to git/OS.
 func resolveFromSession(ss *session.Store) sessionPersona {
-	sessionID, ok := SessionID(ss)
-	if !ok {
+	sessionID, source := SessionID(ss)
+	if sessionID == "" {
 		return sessionPersona{}
 	}
 	roster, err := ss.Load(sessionID)
 	if err != nil {
+		// A roster named explicitly by ETHOS_SESSION that exists but fails
+		// to parse is a real error — warn rather than silently answering
+		// with the git/OS identity. A not-found session is the soft
+		// no-session contract and stays silent.
+		if source == SessionSourceEnv && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "ethos: warning: ETHOS_SESSION %q names an unreadable roster: %v\n", sessionID, err)
+		}
 		return sessionPersona{}
 	}
 	agentID := os.Getenv("ETHOS_AGENT_ID")

@@ -308,8 +308,8 @@ func init() {
 
 func runSessionShow(cmd *cobra.Command) error {
 	ss := sessionStore()
-	sessionID, ok := resolve.SessionID(ss)
-	if !ok {
+	sessionID, _ := resolve.SessionID(ss)
+	if sessionID == "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "No active session.")
 		return nil
 	}
