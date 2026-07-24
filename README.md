@@ -52,7 +52,7 @@ configuration is reusable, measurable, and improvable.
 ## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/e5ad393/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c370da3/install.sh | sh
 ethos setup
 ```
 
