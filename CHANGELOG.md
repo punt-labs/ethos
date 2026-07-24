@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Documentation: worktree-aware store resolution.** `DESIGN.md` gains
+  DES-062 (store root vs checkout root, the `ETHOS_REPO_ROOT` override, and
+  the bundle-config-is-shared ruling), and the architecture and
+  filesystem-integration docs describe the git-common-dir resolution that
+  lets a linked worktree reach the main checkout's store. Documents behavior
+  shipped in 4.4.0; no code change (bead `ethos-yofr`).
+
 ## [4.4.0] - 2026-07-24
 
 ### Added
