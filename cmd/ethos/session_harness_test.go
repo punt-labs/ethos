@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -32,7 +33,7 @@ func startedSessionID(t *testing.T, se *cliSubprocessEnv) string {
 	t.Helper()
 	stdout, stderr, code := runCLI(t, se, "session", "start")
 	require.Equal(t, 0, code, "session start should exit 0; stderr=%s", stderr)
-	id := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(stdout), "export ETHOS_SESSION="))
+	id := strings.Trim(strings.TrimPrefix(strings.TrimSpace(stdout), "export ETHOS_SESSION="), "'")
 	require.Regexp(t, hex32, id, "start must print a 32-hex export line; stdout=%q", stdout)
 	return id
 }
@@ -51,9 +52,9 @@ func TestCLI_SessionStart_MintsAndExports(t *testing.T) {
 
 	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
 	require.Len(t, lines, 1, "stdout must be exactly the export line; got %q", stdout)
-	id := strings.TrimPrefix(lines[0], "export ETHOS_SESSION=")
+	id := strings.Trim(strings.TrimPrefix(lines[0], "export ETHOS_SESSION="), "'")
 	assert.Regexp(t, hex32, id)
-	assert.Regexp(t, `^export ETHOS_SESSION=`, lines[0])
+	assert.Regexp(t, `^export ETHOS_SESSION='[0-9a-f]{32}'$`, lines[0], "the export value must be single-quoted")
 
 	rosterPath := filepath.Join(se.home, ".punt-labs", "ethos", "sessions", id+".yaml")
 	assert.FileExists(t, rosterPath, "roster must exist for the minted id")
@@ -97,7 +98,7 @@ func TestCLI_SessionStart_Idempotent(t *testing.T) {
 
 	stdout, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+id), "session", "start")
 	require.Equal(t, 0, code, "stderr=%s", stderr)
-	assert.Contains(t, stdout, "export ETHOS_SESSION="+id, "start must report the existing id")
+	assert.Contains(t, stdout, "export ETHOS_SESSION='"+id+"'", "start must report the existing id")
 
 	// Exactly one roster exists.
 	entries, err := os.ReadDir(filepath.Join(se.home, ".punt-labs", "ethos", "sessions"))
@@ -194,7 +195,7 @@ func TestCLI_SessionStart_IdempotentPersonaJoins(t *testing.T) {
 	// Idempotent re-run WITH --persona must join bwk.
 	stdout, stderr, code := runCLI(t, env, "session", "start", "--persona", "bwk")
 	require.Equal(t, 0, code, "stderr=%s", stderr)
-	assert.Contains(t, stdout, "export ETHOS_AGENT_ID=bwk")
+	assert.Contains(t, stdout, "export ETHOS_AGENT_ID='bwk'")
 
 	// whoami under the eval'd env reflects bwk; USER=nobody so only the
 	// session path can produce it.
@@ -302,7 +303,7 @@ func TestCLI_SessionStart_CorruptRosterFails(t *testing.T) {
 	// A not-found env is stale — start mints a fresh session (by design).
 	stdout, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION=doesnotexistdoesnotexistdoesnot"), "session", "start")
 	require.Equal(t, 0, code, "not-found env must mint a fresh session; stderr=%s", stderr)
-	newID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(stdout), "export ETHOS_SESSION="))
+	newID := strings.Trim(strings.TrimPrefix(strings.TrimSpace(stdout), "export ETHOS_SESSION="), "'")
 	assert.NotEqual(t, "doesnotexistdoesnotexistdoesnot", newID, "must not reuse the stale env id")
 	assert.Regexp(t, hex32, newID)
 }
@@ -319,13 +320,13 @@ func TestCLI_SessionStart_PersonaSelfConsistent(t *testing.T) {
 
 	stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", "test-agent")
 	require.Equal(t, 0, code, "stderr=%s", stderr)
-	assert.Contains(t, stdout, "export ETHOS_AGENT_ID=test-agent",
+	assert.Contains(t, stdout, "export ETHOS_AGENT_ID='test-agent'",
 		"--persona must emit the agent-id export; stdout=%q", stdout)
 
 	var id string
 	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
 		if strings.HasPrefix(line, "export ETHOS_SESSION=") {
-			id = strings.TrimPrefix(line, "export ETHOS_SESSION=")
+			id = strings.Trim(strings.TrimPrefix(line, "export ETHOS_SESSION="), "'")
 		}
 	}
 	require.Regexp(t, hex32, id)
@@ -337,6 +338,44 @@ func TestCLI_SessionStart_PersonaSelfConsistent(t *testing.T) {
 	out, stderr, code := runCLI(t, env, "whoami")
 	require.Equal(t, 0, code, "whoami should exit 0; stderr=%s", stderr)
 	assert.Contains(t, out, "test-agent", "eval-then-whoami must reflect the --persona identity")
+}
+
+// TestCLI_SessionStart_RejectsUnsafePersona pins B1: a --persona with a
+// space, quote, or shell metacharacter is rejected up front with an
+// actionable error and never emitted into stdout (so eval cannot inject).
+func TestCLI_SessionStart_RejectsUnsafePersona(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+
+	for _, bad := range []string{"a b", "a;rm -rf /", "a'b", "a$(id)", "UPPER"} {
+		stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", bad)
+		require.NotEqual(t, 0, code, "unsafe persona %q must be rejected; stdout=%q", bad, stdout)
+		assert.Contains(t, stderr, "valid handle", "the rejection must be actionable")
+		assert.NotContains(t, stdout, "export ETHOS_AGENT_ID", "an unsafe persona must never reach stdout")
+	}
+}
+
+// TestCLI_SessionStart_ExportsEvalCleanly pins B1: the export lines survive
+// an actual `eval` in a POSIX shell and set the variables intact.
+func TestCLI_SessionStart_ExportsEvalCleanly(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+
+	stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", "test-agent")
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+
+	// Round-trip the exports through a real shell eval.
+	script := stdout + "\nprintf '%s|%s\\n' \"$ETHOS_SESSION\" \"$ETHOS_AGENT_ID\"\n"
+	shOut, err := exec.Command("sh", "-c", script).Output()
+	require.NoError(t, err, "the export lines must eval cleanly")
+	parts := strings.SplitN(strings.TrimSpace(string(shOut)), "|", 2)
+	require.Len(t, parts, 2)
+	assert.Regexp(t, hex32, parts[0], "ETHOS_SESSION must round-trip intact")
+	assert.Equal(t, "test-agent", parts[1], "ETHOS_AGENT_ID must round-trip intact")
 }
 
 // TestCLI_SessionEnd: end deletes the roster; a second end under the same

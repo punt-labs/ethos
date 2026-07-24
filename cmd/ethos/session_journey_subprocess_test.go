@@ -31,8 +31,9 @@ import (
 // walked session.
 
 var (
-	sessionExportRe = regexp.MustCompile(`export ETHOS_SESSION=([0-9a-f]{32})`)
-	agentExportRe   = regexp.MustCompile(`export ETHOS_AGENT_ID=(\S+)`)
+	// The export values are POSIX single-quoted; the captures skip the quotes.
+	sessionExportRe = regexp.MustCompile(`export ETHOS_SESSION='([0-9a-f]{32})'`)
+	agentExportRe   = regexp.MustCompile(`export ETHOS_AGENT_ID='([a-z0-9-]+)'`)
 )
 
 // seededSessionEnv builds a scratch HOME + git repo, seeds starter

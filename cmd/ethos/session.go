@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/process"
@@ -391,6 +393,17 @@ func inferRole(index int, parent string) string {
 func runSessionStart(cmd *cobra.Command) error {
 	ss := sessionStore()
 
+	// 0. Validate --persona up front against the identity handle charset
+	//    (lowercase alphanumeric with hyphens). This rejects any value with
+	//    a shell metacharacter before it can be interpolated into the
+	//    eval-able export lines, and aligns with persona resolving to a real
+	//    identity. Rejected values never reach stdout.
+	if sessionStartPersona != "" {
+		if err := attribute.ValidateSlug(sessionStartPersona); err != nil {
+			return fmt.Errorf("session start: --persona %q must be a valid handle (lowercase alphanumeric with hyphens)", sessionStartPersona)
+		}
+	}
+
 	// 1. Idempotency: an existing ETHOS_SESSION. A live roster re-attaches;
 	//    a not-found env is stale and mints a fresh session (by design). An
 	//    exists-but-unparseable roster is a crash artifact that most likely
@@ -412,9 +425,13 @@ func runSessionStart(cmd *cobra.Command) error {
 				if len(roster.Participants) > 0 {
 					parent = roster.Participants[0].AgentID
 				}
-				p := session.Participant{AgentID: sessionStartPersona, Persona: sessionStartPersona, Parent: parent}
-				if jerr := ss.Join(envID, p); jerr != nil {
-					return fmt.Errorf("session start: joining persona: %w", jerr)
+				// Skip the join when the persona IS the root — joining it
+				// would set root's Parent to itself (unique-AgentID upsert).
+				if sessionStartPersona != parent {
+					p := session.Participant{AgentID: sessionStartPersona, Persona: sessionStartPersona, Parent: parent}
+					if jerr := ss.Join(envID, p); jerr != nil {
+						return fmt.Errorf("session start: joining persona: %w", jerr)
+					}
 				}
 			}
 			return printSessionStart(cmd, envID, sessionStartPersona, false)
@@ -430,13 +447,15 @@ func runSessionStart(cmd *cobra.Command) error {
 		return fmt.Errorf("session start: %w", err)
 	}
 
-	// 3. Resolve identities: root is the human (whoami chain); primary is
-	//    the agent. --persona folds the first iam: it keys the primary so a
-	//    matching ETHOS_AGENT_ID export (step 5) makes eval-then-whoami
-	//    reflect the persona via the REC-3 lookup. Otherwise the key is
-	//    ETHOS_AGENT_ID, else the repo default agent, else the human.
+	// 3. Resolve identities. Root is the human, resolved via the IDENTITY
+	//    chain only (git/OS) — passing nil for the session store skips the
+	//    ambient-session walk, so minting inside a live Claude session does
+	//    NOT take that session's primary persona as the new root. Primary is
+	//    the agent: --persona (folds the first iam and keys the primary so a
+	//    matching ETHOS_AGENT_ID export reflects it), else ETHOS_AGENT_ID,
+	//    else the repo default agent, else the human.
 	store := identityStore()
-	human, err := resolve.Resolve(store, ss)
+	human, err := resolve.Resolve(store, nil)
 	if err != nil {
 		return fmt.Errorf("session start: resolving identity: %w", err)
 	}
@@ -485,9 +504,9 @@ func printSessionStart(cmd *cobra.Command, id, persona string, created bool) err
 		}
 		return writeJSON(cmd.OutOrStdout(), out)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_SESSION=%s\n", id)
+	fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_SESSION=%s\n", shellQuote(id))
 	if persona != "" {
-		fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_AGENT_ID=%s\n", persona)
+		fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_AGENT_ID=%s\n", shellQuote(persona))
 	}
 	if created {
 		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: started session %s\n", id)
@@ -495,6 +514,14 @@ func printSessionStart(cmd *cobra.Command, id, persona string, created bool) err
 		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s already active\n", id)
 	}
 	return nil
+}
+
+// shellQuote wraps s in single quotes with POSIX-safe escaping (embedded '
+// becomes '\'') so an eval'd export line cannot break out of the assignment
+// or inject a command. Values are already handle-validated, so this is
+// defense in depth — belt and suspenders on the eval contract.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // mintSessionID returns 16 bytes of crypto/rand hex-encoded to a

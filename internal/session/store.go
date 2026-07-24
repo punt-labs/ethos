@@ -58,12 +58,23 @@ func (s *Store) Create(sessionID string, root, primary Participant, repo, host s
 		primary.Joined = now
 	}
 
+	// Collapse to one participant when the caller resolves the same agent
+	// for both root and primary (a solo session where the agent is the
+	// human). Two rows with the same AgentID would break the unique-key
+	// invariant lookup/leave/primary-discovery rely on. The Claude hook
+	// always passes distinct IDs (OS user vs PID), so its rosters are
+	// unchanged.
+	participants := []Participant{root}
+	if primary.AgentID != root.AgentID {
+		participants = append(participants, primary)
+	}
+
 	roster := &Roster{
 		Session:      sessionID,
 		Started:      now,
 		Repo:         repo,
 		Host:         host,
-		Participants: []Participant{root, primary},
+		Participants: participants,
 	}
 
 	return s.withLock(sessionID, func() error {
