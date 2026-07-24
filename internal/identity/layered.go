@@ -46,7 +46,7 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 		o(&cfg)
 	}
 
-	id, source, err := ls.loadRaw(handle)
+	id, _, err := ls.loadRaw(handle)
 	if err != nil {
 		return nil, fmt.Errorf("identity %q: %w", handle, err)
 	}
@@ -55,9 +55,10 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 	extData, extWarnings := ls.global.loadExtensions(handle)
 	id.Ext = extData
 
-	// Attribute resolution: try repo first, fall back to global.
+	// Attribute resolution walks the full layer chain regardless of
+	// which layer the identity record came from.
 	if !cfg.reference {
-		id.Warnings = ls.resolveAttributesLayered(id, source)
+		id.Warnings = ls.resolveAttributesLayered(id)
 	}
 	id.Warnings = append(id.Warnings, extWarnings...)
 
@@ -143,12 +144,13 @@ func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 	return ls.repo.rewriteRaw(path, raw)
 }
 
-// resolveAttributesLayered resolves attribute content, trying the source
-// layer first and falling through to any remaining layers for missing
-// attributes. The chain is: start from source; then the layers of
-// lower precedence (repo → bundle → global).
-func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []string {
-	chain := ls.attrChain(source)
+// resolveAttributesLayered resolves attribute content, walking the layer
+// chain repo → bundle → global (skipping absent layers) and taking the
+// first match. The chain does not depend on which layer the identity
+// record came from: a globally-stored identity still resolves attribute
+// content from the active bundle, honoring DES-051.
+func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
+	chain := ls.attrChain()
 
 	var warnings []string
 	resolve := func(kind attribute.Kind, slug string) (string, error) {
@@ -196,28 +198,19 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity, source string) []
 	return warnings
 }
 
-// attrChain returns the ordered list of stores to consult when
-// resolving attribute content, starting from the identity's source
-// layer and falling through to lower-precedence layers.
-func (ls *LayeredStore) attrChain(source string) []*Store {
+// attrChain returns the ordered list of stores to consult when resolving
+// attribute content: repo, then bundle, then global, skipping any layer
+// that is absent. Global is always last. The chain is the same for every
+// identity regardless of its source layer (DES-051).
+func (ls *LayeredStore) attrChain() []*Store {
 	var chain []*Store
-	switch source {
-	case "repo":
-		if ls.repo != nil {
-			chain = append(chain, ls.repo)
-		}
-		if ls.bundle != nil {
-			chain = append(chain, ls.bundle)
-		}
-		chain = append(chain, ls.global)
-	case "bundle":
-		if ls.bundle != nil {
-			chain = append(chain, ls.bundle)
-		}
-		chain = append(chain, ls.global)
-	default:
-		chain = append(chain, ls.global)
+	if ls.repo != nil {
+		chain = append(chain, ls.repo)
 	}
+	if ls.bundle != nil {
+		chain = append(chain, ls.bundle)
+	}
+	chain = append(chain, ls.global)
 	return chain
 }
 
