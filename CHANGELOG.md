@@ -7,8 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Harness-neutral sessions: `ethos session start` and `ethos session end`.**
+  A session can now be opened from any harness — Codex, a plain terminal,
+  or a script — not only inside Claude Code. `ethos session start` mints an
+  opaque session ID and prints an eval-able export line, so
+  `eval "$(ethos session start)"` sets `ETHOS_SESSION` in the calling shell;
+  `--persona <handle>` additionally exports `ETHOS_AGENT_ID` and folds the
+  first `iam` into the same call. Start is idempotent: a live `ETHOS_SESSION`
+  is reported and re-attached, not re-minted. `ethos session end` tears the
+  session down. Inside Claude Code the SessionStart hook still creates the
+  session for you, unchanged. Full design in `docs/harness-sessions.md`
+  (bead `ethos-leh7`).
+- **One session-resolution chain across every consumer.** Session lookup now
+  follows a single documented order everywhere: `--session` flag >
+  `ETHOS_SESSION` env > the Claude process-tree walk > an actionable error
+  naming `ethos session start`. `iam`, `session`, `whoami`, and the mission
+  commands all resolve through it, and the MCP server honors the same chain
+  and the same `ETHOS_AGENT_ID` agent key — so a session declared on the CLI
+  and one seen over MCP agree. `whoami` reflects a persona declared by `iam`
+  under any harness, falling back to git/OS identity only when no session
+  resolves.
+
 ### Fixed
 
+- **`ethos iam` can now bootstrap a session outside Claude Code.** Previously
+  a roster was created only by the SessionStart hook, which fires only inside
+  Claude Code, so `iam` from Codex or a plain terminal failed with "no
+  session found" and no way forward. `ethos session start` creates the
+  roster the chain needs; the failure now names that remedy.
+- **A stale `ETHOS_SESSION` can no longer stage a phantom mission binding.**
+  State-writing consumers (`iam`, `mission claim`/`release`) verify that an
+  env-sourced session ID names a real roster before acting; a leftover export
+  pointing at a deleted session fails with a clear error instead of binding
+  work to a session that is gone.
+- **`ethos session end` no longer severs a live Claude session's discovery
+  pointer.** Teardown removes the process-tree current-pointer only when it
+  actually names the session being ended, so ending a stale or explicitly
+  named session from inside a live Claude Code session leaves that live
+  session's discovery channel intact.
+- **`ethos session start`/`end` refuse to act on a corrupt roster instead of
+  destroying it.** A roster file that exists but cannot be parsed is a crash
+  artifact that most likely holds unsealed audit lines; start and end now
+  refuse it with a remedy (`ethos session purge` / `ethos audit quarantine`)
+  rather than silently minting over or deleting it.
+- **Best-effort session attribution no longer admits a dead session ID.**
+  Identity and audit-attribution reads that consult `ETHOS_SESSION` now warn
+  on a roster that exists but is unreadable, rather than treating a stale or
+  corrupt session ID as valid context.
 - **Fresh-machine setup no longer produces identities with unresolvable
   attributes.** `ethos seed` now deploys personalities and writing-styles
   to the global layer — including the conventional attributes `ethos setup`
@@ -41,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`ethos setup` never overwrites a deliberately different team key.** When
   the repo config already names a team that differs from the bundle, setup
   warns and leaves it, rather than guessing and clobbering it.
+- **`ethos session end` is idempotent (`rm -f` semantics).** Ending a session
+  that is already gone is a no-op with a note, not an error, so a trap
+  handler or rc-cleanup teardown with a stale `ETHOS_SESSION` exits cleanly.
+  The env var outlives the roster it named, so `ethos session` after an end
+  may report that session as not found until the export is cleared — run
+  `ethos session` to see exactly which session is in effect.
 
 ## [4.2.0] - 2026-07-22
 

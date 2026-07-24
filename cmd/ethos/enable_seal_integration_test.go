@@ -164,11 +164,6 @@ func appendFile(t *testing.T, path, s string) {
 	}
 }
 
-// shellQuote single-quotes s for safe embedding in a POSIX sh script.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // itoa renders a single-digit int; the fixtures use only 1–9.
 func itoa(n int) string {
 	return string(rune('0' + n))

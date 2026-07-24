@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/adr"
@@ -200,8 +201,13 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 		return mcplib.NewToolResultError("persona is required for iam"), nil
 	}
 
-	// Use the Claude PID as the agent ID for iam declarations.
-	agentID := process.FindClaudePID()
+	// Key the participant on ETHOS_AGENT_ID then the Claude PID — parity
+	// with the CLI so the same declaration records the same agent key on
+	// both surfaces (DES-061 R4).
+	agentID := os.Getenv("ETHOS_AGENT_ID")
+	if agentID == "" {
+		agentID = process.FindClaudePID()
+	}
 
 	if err := h.sessionStore.Join(sessionID, session.Participant{
 		AgentID: agentID,
@@ -425,8 +431,9 @@ func (h *Handler) sessionTool() mcplib.Tool {
 	)
 }
 
-// resolveSessionID auto-discovers the session ID from the process tree
-// when not explicitly provided.
+// resolveSessionID discovers the session ID: the session_id arg, then the
+// shared harness-neutral chain (ETHOS_SESSION, then the Claude PID walk) —
+// parity with the CLI (DES-061 R4).
 func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	sessionID := stringArg(req, "session_id", "")
 	if sessionID != "" {
@@ -435,12 +442,10 @@ func (h *Handler) resolveSessionID(req mcplib.CallToolRequest) (string, error) {
 	if h.sessionStore == nil {
 		return "", fmt.Errorf("session store not configured")
 	}
-	claudePID := process.FindClaudePID()
-	sid, err := h.sessionStore.ReadCurrentSession(claudePID)
-	if err != nil {
-		return "", fmt.Errorf("no active session (could not discover from PID %s): %v", claudePID, err)
+	if sid, _ := resolve.SessionID(h.sessionStore); sid != "" {
+		return sid, nil
 	}
-	return sid, nil
+	return "", fmt.Errorf("no active session; run `ethos session start` or pass session_id")
 }
 
 func (h *Handler) handleSession(ctx context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {

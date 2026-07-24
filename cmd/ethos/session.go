@@ -1,10 +1,16 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
+	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/process"
@@ -20,6 +26,41 @@ var sessionCmd = &cobra.Command{
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSessionShow(cmd)
+	},
+}
+
+// --- session start ---
+
+var sessionStartPersona string
+
+var sessionStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start (or re-attach to) a harness-neutral session",
+	Long: `Start a session from any harness (Codex, a plain terminal, or Claude Code).
+
+Mints a session, creates the roster from your resolved identity, and prints
+an eval-able export line so the rest of ethos can find it:
+
+    eval "$(ethos session start)"
+
+If ETHOS_SESSION already names a live session, that one is reported rather
+than minting a second, so re-running it in a subshell or rc file is safe.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionStart(cmd)
+	},
+}
+
+// --- session end ---
+
+var sessionEndSession string
+
+var sessionEndCmd = &cobra.Command{
+	Use:   "end",
+	Short: "End the active session (delete its roster)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionEnd(cmd)
 	},
 }
 
@@ -201,6 +242,10 @@ loss record.`,
 }
 
 func init() {
+	// session start / end flags
+	sessionStartCmd.Flags().StringVar(&sessionStartPersona, "persona", "", "Persona for the primary agent (folds the first iam)")
+	sessionEndCmd.Flags().StringVar(&sessionEndSession, "session", "", "Session ID (full or prefix; auto-detected if omitted)")
+
 	// session create flags
 	sessionCreateCmd.Flags().StringVar(&sessionCreateSession, "session", "", "Session ID (required)")
 	sessionCreateCmd.Flags().StringVar(&sessionCreateRootID, "root-id", "", "Root agent ID (required)")
@@ -248,6 +293,8 @@ func init() {
 	_ = sessionDeleteCurrentCmd.MarkFlagRequired("pid")
 
 	sessionCmd.AddCommand(
+		sessionStartCmd,
+		sessionEndCmd,
 		sessionCreateCmd,
 		sessionDeleteCmd,
 		sessionJoinCmd,
@@ -264,15 +311,8 @@ func init() {
 }
 
 func runSessionShow(cmd *cobra.Command) error {
-	sessionID := os.Getenv("ETHOS_SESSION")
 	ss := sessionStore()
-	if sessionID == "" {
-		claudePID := process.FindClaudePID()
-		sid, err := ss.ReadCurrentSession(claudePID)
-		if err == nil {
-			sessionID = sid
-		}
-	}
+	sessionID, _ := resolve.SessionID(ss)
 	if sessionID == "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "No active session.")
 		return nil
@@ -344,6 +384,228 @@ func inferRole(index int, parent string) string {
 		return "-"
 	}
 	return "teammate"
+}
+
+// runSessionStart mints a session (or re-attaches to the one named by
+// ETHOS_SESSION) and prints an eval-able export line. It bottoms out in the
+// same Store.Create the SessionStart hook and `session create` use, and
+// writes no current-pointer — outside Claude Code the discovery channel is
+// ETHOS_SESSION (DES-061 R1).
+func runSessionStart(cmd *cobra.Command) error {
+	ss := sessionStore()
+
+	// 0. Validate --persona up front against the identity handle charset
+	//    (lowercase alphanumeric with hyphens). This rejects any value with
+	//    a shell metacharacter before it can be interpolated into the
+	//    eval-able export lines, and aligns with persona resolving to a real
+	//    identity. Rejected values never reach stdout.
+	if sessionStartPersona != "" {
+		if err := attribute.ValidateSlug(sessionStartPersona); err != nil {
+			return fmt.Errorf("session start: --persona %q must be a valid handle (lowercase alphanumeric with hyphens)", sessionStartPersona)
+		}
+	}
+
+	// 1. Idempotency: an existing ETHOS_SESSION. A live roster re-attaches;
+	//    a not-found env is stale and mints a fresh session (by design). An
+	//    exists-but-unparseable roster is a crash artifact that most likely
+	//    holds unsealed audit lines — do NOT silently mint over it (which
+	//    would repoint the env anchor away from it), fail with a remedy.
+	if envID := os.Getenv("ETHOS_SESSION"); envID != "" {
+		switch roster, lerr := ss.Load(envID); {
+		case lerr == nil:
+			// Refuse to re-attach to a loadable roster whose ID has unsafe
+			// characters — before any roster mutation — so a control-char
+			// ETHOS_SESSION can neither be echoed nor mutate the roster.
+			if !safeSessionID.MatchString(envID) {
+				return fmt.Errorf("session start: refusing to re-attach to ETHOS_SESSION %q — contains unsafe characters", envID)
+			}
+			// A re-run with --persona still folds the iam — upsert-join the
+			// persona so the advertised ETHOS_AGENT_ID names a real
+			// participant (Join is idempotent: same persona stays one).
+			// Parent is the root recorded at mint, read from the roster —
+			// NOT re-resolved: a prior run may have exported
+			// ETHOS_AGENT_ID=<persona>, which would make resolve.Resolve
+			// return the persona itself and self-parent it, silently
+			// breaking post-compaction primary-agent discovery (Parent==root).
+			if sessionStartPersona != "" {
+				parent := ""
+				if len(roster.Participants) > 0 {
+					parent = roster.Participants[0].AgentID
+				}
+				// Skip the join when the persona IS the root — joining it
+				// would set root's Parent to itself (unique-AgentID upsert).
+				if sessionStartPersona != parent {
+					p := session.Participant{AgentID: sessionStartPersona, Persona: sessionStartPersona, Parent: parent}
+					if jerr := ss.Join(envID, p); jerr != nil {
+						return fmt.Errorf("session start: joining persona: %w", jerr)
+					}
+				}
+			}
+			return printSessionStart(cmd, envID, sessionStartPersona, false)
+		case !errors.Is(lerr, os.ErrNotExist):
+			return fmt.Errorf("session start: ETHOS_SESSION %q names an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", envID, lerr)
+		}
+		// not-found: fall through to mint a fresh session (by design).
+	}
+
+	// 2. Mint an opaque 32-hex ID (16 bytes of crypto/rand).
+	id, err := mintSessionID()
+	if err != nil {
+		return fmt.Errorf("session start: %w", err)
+	}
+
+	// 3. Resolve identities. Root is the human, resolved via the IDENTITY
+	//    chain only (git/OS) — passing nil for the session store skips the
+	//    ambient-session walk, so minting inside a live Claude session does
+	//    NOT take that session's primary persona as the new root. Primary is
+	//    the agent: --persona (folds the first iam and keys the primary so a
+	//    matching ETHOS_AGENT_ID export reflects it), else ETHOS_AGENT_ID,
+	//    else the repo default agent, else the human.
+	store := identityStore()
+	human, err := resolve.Resolve(store, nil)
+	if err != nil {
+		return fmt.Errorf("session start: resolving identity: %w", err)
+	}
+	primaryID := sessionStartPersona
+	if primaryID == "" {
+		primaryID = os.Getenv("ETHOS_AGENT_ID")
+	}
+	if primaryID == "" {
+		agent, aerr := resolve.ResolveAgent(resolve.FindRepoRoot())
+		if aerr != nil {
+			return fmt.Errorf("session start: resolving agent: %w", aerr)
+		}
+		primaryID = agent
+	}
+	if primaryID == "" {
+		primaryID = human
+	}
+	primaryPersona := sessionStartPersona
+	if primaryPersona == "" {
+		primaryPersona = primaryID
+	}
+
+	// 4. Create the roster via the shared Store.Create (repo/host resolved
+	//    exactly as the hook resolves them — R6 convergence).
+	root := session.Participant{AgentID: human, Persona: human}
+	primary := session.Participant{AgentID: primaryID, Persona: primaryPersona, Parent: human}
+	if err := ss.Create(id, root, primary, hook.ResolveRepo(), hook.ResolveHost()); err != nil {
+		return fmt.Errorf("session start: creating roster: %w", err)
+	}
+
+	return printSessionStart(cmd, id, sessionStartPersona, true)
+}
+
+// printSessionStart writes the eval-able export line(s) to stdout and a
+// human-readable confirmation to stderr, so eval "$(ethos session start)"
+// captures only the exports. When persona is non-empty (--persona folded
+// the first iam), a second export sets ETHOS_AGENT_ID to it so the eval'd
+// shell resolves that persona — the primary participant is keyed on it. The
+// export line IS the contract, so a failed --json stdout write propagates
+// to a non-zero exit rather than exiting 0 having emitted nothing.
+// safeSessionID admits any opaque session ID (our 32-hex mints, Claude
+// Code's UUID session_ids, any sane identifier) while rejecting whitespace,
+// control characters, and shell metacharacters. Echoing is gated on it so a
+// user-supplied ETHOS_SESSION carrying a newline or `;`/`$()` cannot make
+// the eval-able export multi-line or inject — without over-constraining the
+// opaque-ID contract (DES-061 R1/F7) to the mint shape.
+var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func printSessionStart(cmd *cobra.Command, id, persona string, created bool) error {
+	if !safeSessionID.MatchString(id) {
+		return fmt.Errorf("session start: refusing to echo a session id with unsafe characters: %q", id)
+	}
+	if jsonOutput {
+		out := map[string]any{"session": id, "created": created}
+		if persona != "" {
+			out["agent_id"] = persona
+		}
+		return writeJSON(cmd.OutOrStdout(), out)
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_SESSION=%s\n", shellQuote(id))
+	if persona != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_AGENT_ID=%s\n", shellQuote(persona))
+	}
+	if created {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: started session %s\n", id)
+	} else {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s already active\n", id)
+	}
+	return nil
+}
+
+// shellQuote wraps s in single quotes with POSIX-safe escaping (embedded '
+// becomes '\'') so an eval'd export line cannot break out of the assignment
+// or inject a command. Values are already handle-validated, so this is
+// defense in depth — belt and suspenders on the eval contract.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// mintSessionID returns 16 bytes of crypto/rand hex-encoded to a
+// 32-character string — opaque, filesystem-safe, fixed-length, zero new
+// dependency (DES-061).
+func mintSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("minting session id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// runSessionEnd tears down the resolved session: delete the roster, then
+// remove the Claude-path PID current-pointer — but only when that pointer
+// actually names the session we ended. Ending a stale or other session
+// (--session or a nested ETHOS_SESSION) must not sever the caller's live
+// Claude session's discovery channel.
+func runSessionEnd(cmd *cobra.Command) error {
+	ss := sessionStore()
+	// Teardown does NOT hard-verify an env-sourced ID: "already gone" is
+	// success (the rm -f norm), so a re-run in a trap handler or rc cleanup
+	// with a stale ETHOS_SESSION is a no-op with a note, not an error.
+	sid, _, err := resolveSession(sessionEndSession, false)
+	if err != nil {
+		// No session context at all is the same "nothing to tear down"
+		// state as an already-gone roster — end is idempotent across the
+		// board (the sole teardown exception; state-writers still hard-fail).
+		if errors.Is(err, errNoSession) {
+			fmt.Fprintln(cmd.ErrOrStderr(), "ethos: no active session; nothing to end")
+			return nil
+		}
+		return err
+	}
+	if _, lerr := ss.Load(sid); lerr != nil {
+		// not-found is a clean no-op (rm -f); an exists-but-unparseable
+		// roster is a crash artifact most likely holding unsealed audit
+		// lines — refuse rather than os.Remove it out from under the seal.
+		if errors.Is(lerr, os.ErrNotExist) {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s not found; nothing to end\n", sid)
+			return nil
+		}
+		return fmt.Errorf("session end: session %q has an unreadable roster (%v); repair or clear it — see `ethos session purge` / `ethos audit quarantine`", sid, lerr)
+	}
+	if err := ss.Delete(sid); err != nil {
+		return err
+	}
+	// Only remove the current-pointer if it points at the session we ended;
+	// otherwise a stale-session teardown from inside a live Claude session
+	// would silently orphan that live session.
+	claudePID := process.FindClaudePID()
+	switch cur, rerr := ss.ReadCurrentSession(claudePID); {
+	case rerr == nil && cur == sid:
+		if derr := ss.DeleteCurrentSession(claudePID); derr != nil {
+			return fmt.Errorf("session end: %w", derr)
+		}
+	case rerr != nil && !errors.Is(rerr, os.ErrNotExist):
+		// Never delete on an unverifiable read — but a dangling pointer that
+		// now names a deleted session would confuse walk consumers, so say so.
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: current-pointer could not be verified and was left in place: %v\n", rerr)
+	}
+	if jsonOutput {
+		return writeJSON(cmd.OutOrStdout(), map[string]string{"ended": sid})
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "ended session %s\n", sid)
+	return nil
 }
 
 func runSessionCreate(cmd *cobra.Command) error {

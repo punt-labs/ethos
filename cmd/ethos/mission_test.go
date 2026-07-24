@@ -14,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -3506,11 +3507,23 @@ func seedMissionForClaim(t *testing.T) string {
 	return ids[0]
 }
 
+// seedRosterForSession creates a minimal roster so the session resolves —
+// claim/release require a real session (DES-061 H2), not a bare env value.
+func seedRosterForSession(t *testing.T, sessionID string) {
+	t.Helper()
+	require.NoError(t, sessionStore().Create(sessionID,
+		session.Participant{AgentID: "jim", Persona: "jim"},
+		session.Participant{AgentID: "claude", Persona: "claude", Parent: "jim"},
+		"", "",
+	))
+}
+
 func TestMissionClaim_WritesSidecar(t *testing.T) {
 	home := missionTestEnv(t)
 	id := seedMissionForClaim(t)
 
 	t.Setenv("ETHOS_SESSION", "sess-claim-1")
+	seedRosterForSession(t, "sess-claim-1")
 	require.NoError(t, runMissionClaim(id))
 
 	// Read the sidecar directly to assert layout.
@@ -3528,6 +3541,7 @@ func TestMissionClaim_WritesSidecar(t *testing.T) {
 func TestMissionClaim_RefusesUnknownMission(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-claim-2")
+	seedRosterForSession(t, "sess-claim-2")
 
 	err := runMissionClaim("m-2026-05-23-999")
 	require.Error(t, err, "claim on an unknown mission must refuse")
@@ -3547,6 +3561,7 @@ func TestMissionClaim_PrefixMatch(t *testing.T) {
 	prefix := id[:10]
 
 	t.Setenv("ETHOS_SESSION", "sess-prefix")
+	seedRosterForSession(t, "sess-prefix")
 	require.NoError(t, runMissionClaim(prefix))
 
 	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
@@ -3561,6 +3576,7 @@ func TestMissionRelease_RemovesSidecar(t *testing.T) {
 	home := missionTestEnv(t)
 	id := seedMissionForClaim(t)
 	t.Setenv("ETHOS_SESSION", "sess-release")
+	seedRosterForSession(t, "sess-release")
 
 	require.NoError(t, runMissionClaim(id))
 	require.NoError(t, runMissionRelease())
@@ -3575,6 +3591,7 @@ func TestMissionRelease_RemovesSidecar(t *testing.T) {
 func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-never-claimed")
+	seedRosterForSession(t, "sess-never-claimed")
 
 	// No prior claim — release is still a no-op.
 	require.NoError(t, runMissionRelease())
@@ -3607,5 +3624,7 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
 	require.Error(t, err, "claim without a session must refuse")
-	assert.Contains(t, stderrBuf.String(), "no session found")
+	assert.Contains(t, stderrBuf.String(), "no active session")
+	assert.Contains(t, stderrBuf.String(), "ethos session start",
+		"the refusal must name the remedy (DES-061 step-4 error)")
 }

@@ -152,8 +152,8 @@ func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identi
 	root := session.Participant{AgentID: userID, Persona: userPersona}
 	primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
 
-	repo := resolveRepo()
-	host := resolveHost()
+	repo := ResolveRepo()
+	host := ResolveHost()
 
 	if err := ss.Create(sessionID, root, primary, repo, host); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", err)
@@ -217,21 +217,26 @@ func emitAgentContext(agentID *identity.Identity, agentPersona string, store ide
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
-// resolveRepo extracts org/name from the git remote of the working directory.
-func resolveRepo() string {
+// ResolveRepo extracts org/name from the git remote of the working
+// directory — the same value the SessionStart hook records for a roster.
+// Exported so `ethos session start` resolves repo identically. Empty when
+// unresolvable.
+func ResolveRepo() string {
 	out, err := exec.Command("git", "remote", "get-url", "origin").Output()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: could not resolve repo from git remote: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: could not resolve repo from git remote: %v\n", err)
 		return ""
 	}
 	return audit.ParseGitRemote(string(out))
 }
 
-// resolveHost returns the short hostname (no domain).
-func resolveHost() string {
+// ResolveHost returns the short hostname (no domain) — the same value the
+// SessionStart hook records for a roster. Exported so `ethos session start`
+// resolves host identically.
+func ResolveHost() string {
 	name, err := os.Hostname()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: session-start: could not resolve hostname: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ethos: could not resolve hostname: %v\n", err)
 		return ""
 	}
 	if i := strings.IndexByte(name, '.'); i >= 0 {

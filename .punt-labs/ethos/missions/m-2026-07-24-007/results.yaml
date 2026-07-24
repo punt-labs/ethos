@@ -1,0 +1,46 @@
+results:
+    - mission: m-2026-07-24-007
+      round: 1
+      created_at: "2026-07-24T07:18:32Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.95
+      files_changed: []
+      evidence:
+        - name: make check (markdownlint + full suite)
+          status: pass
+      prose: |
+        Per write-set defect ethos-t2lb, files enumerated here instead of in
+        files_changed. Docs only, one commit 9623dbf. Three files:
+
+        1. CHANGELOG.md — under ## [Unreleased], new Fixed and Changed sections
+           (rsc REQ-1). Fixed: fresh-machine setup no longer yields unresolvable
+           attributes (seed deploys personalities/writing-styles incl. the
+           conventional slugs; global identities resolve through the active
+           bundle per DES-051); read-error fall-through now warns naming the
+           layer; interrupted bundle activation can't strand a missing team key;
+           a kill during seed can't bless a truncated file (atomic writes,
+           0-byte repair). Changed: setup hard-validates and fails before seed
+           with an actionable error; team activate repairs a divergent team key
+           as explicit convergence; setup warns instead of overwriting a
+           deliberately different team key.
+
+        2. README.md — Quick start now states the seed-first precondition
+           (rsc REC-1): the installer runs `ethos seed` so the quick start
+           works, but a source build or unseeded machine must run `ethos seed`
+           before `ethos setup`, which otherwise fails with a remedy naming the
+           missing attribute.
+
+        3. DESIGN.md — new DES-060 (SETTLED, bead ethos-5zwn), appended after
+           DES-059. Summarizes the F1/F3 contradiction and its
+           belt-and-suspenders resolution (uniform DES-051 chain + seeded
+           conventional attrs), the blast-radius decision (global-identity
+           persona content is bundle-dependent by design; the global seed is
+           load-bearing only on the no-bundle path), the two gate rulings (never
+           overwrite divergent team config on a guess; convergence is an
+           explicit command), and three rejected alternatives (setup-writes-to-
+           repo-layer; bundle-only without global seed; SessionStart-style
+           auto-repair). Cites docs/setup-consistency.md as the full design.
+
+        make check green (markdownlint clean on all three; full -race suite and
+        validate-content pass).
