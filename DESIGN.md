@@ -6210,3 +6210,98 @@ ships the same slug). See `docs/setup-consistency.md` for the full analysis.
   the same reason DES-059 rejected SessionStart auto-migration — repair is
   an explicit, reviewable operator action (`ethos seed`, `ethos team
   activate`), not a silent hook side effect.
+
+## DES-061: Harness-neutral sessions — CLI-first session start/end (SETTLED)
+
+**Status**: Settled. Bead `ethos-leh7`. Full design in
+`docs/harness-sessions.md`.
+
+### Problem
+
+`ethos iam` and the session flow worked only inside Claude Code. The only
+thing that created a session roster in normal use was the SessionStart
+hook, which fires only inside Claude Code and takes its session ID from a
+Claude-supplied stdin payload. `iam` could join a roster but never create
+one, so from Codex or a plain terminal it failed with "no session found"
+and no path forward. Session discovery keyed on a process-tree walk for a
+command named exactly `claude`, which matched no other harness. The org
+intent is CLI-first: ethos must work for any harness. `whoami` was the one
+path that already worked standalone, because it falls through to git config
+and `$USER` — the model the rest of the design copies.
+
+### Decision
+
+A CLI-first primitive creates a session without a hook and without a Claude
+process, and one resolution chain serves every consumer.
+
+- **`ethos session start` / `end`.** `start` mints an opaque session ID and
+  prints an eval-able `export ETHOS_SESSION=<id>` line;
+  `eval "$(ethos session start)"` sets it in the calling shell. `--persona`
+  additionally exports `ETHOS_AGENT_ID` and folds the first `iam`. Start is
+  idempotent under a live `ETHOS_SESSION` (reported, re-attached, not
+  re-minted). `end` is the teardown. All three entry points — the hook,
+  `start`, and the hidden `session create` plumbing — bottom out in one
+  `session.Store.Create`; the store schema is unchanged.
+- **One resolution chain (R2).** `--session` flag > `ETHOS_SESSION` env >
+  the Claude process-tree walk (kept for zero-config Claude Code) > an
+  actionable error naming `ethos session start`. No silent global fallback.
+  An explicit ID bypasses the walk entirely (R3).
+- **State-writer-scoped verification.** Consumers that write to a session
+  (`iam`, `mission claim`/`release`) verify that an env-sourced ID names a
+  real roster, so a stale `ETHOS_SESSION` cannot stage a phantom binding.
+  Teardown and best-effort readers do not hard-verify: "already gone" is
+  success for `end` (`rm -f` semantics), and mission log/append outside a
+  session correctly falls back to the legacy tracked-log path.
+- **MCP parity (R4).** The MCP server honors the same chain and keys the
+  agent on `ETHOS_AGENT_ID` then the Claude PID — so a session declared on
+  the CLI and one seen over MCP agree.
+
+### Rulings
+
+Six ratified rulings (R1-R6) plus four gate decisions surfaced during
+implementation:
+
+- **R1** — `session start`/`end` as the one-call primitive with opaque IDs
+  and eval-able exports; idempotent under a live env.
+- **R2** — the explicit resolution chain above, no silent fallback.
+- **R3** — the walker stays `claude`-only for now; bypassed when an explicit
+  ID is present.
+- **R4** — MCP honors the same chain and `ETHOS_AGENT_ID` parity.
+- **R5** — a non-PID primary ages out by the existing 24h TTL; no new
+  liveness machinery this round, documented as decided.
+- **R6** — the Claude Code hooks keep creating sessions exactly as today;
+  the PID current-pointer is Claude-path only, and `start` writes no pointer
+  outside Claude (discovery there is `ETHOS_SESSION`).
+- **`whoami` in scope.** `whoami` joins the chain: under any harness, `iam`
+  then `whoami` reflects the declared persona, falling back to git/OS only
+  when no session resolves — persona reflection is the point of `iam`.
+- **crypto/rand over UUID.** The ID is 16 bytes of `crypto/rand`
+  hex-encoded to 32 characters — stdlib, already imported, filesystem-safe,
+  fixed-length. No new dependency.
+- **State-writer-scoped hard verification.** Env verification applies to
+  state-writers, not to teardown or best-effort reads (see Decision).
+- **Corrupt-roster refusal parity.** Both `start` and `end` refuse a roster
+  that exists but cannot be parsed — a crash artifact likely holding
+  unsealed audit lines — with a remedy (`ethos session purge` /
+  `ethos audit quarantine`) rather than minting over or deleting it.
+- **Fix the code for `--persona`.** A re-run with `--persona` reads the
+  parent from the existing roster rather than re-resolving it, so a prior
+  `ETHOS_AGENT_ID=<persona>` export cannot make the primary self-parent and
+  break post-compaction primary-agent discovery.
+
+### Rejected alternatives
+
+- **Generalize the walker to match `codex`/`cursor`/`node` now.** Speculative
+  (R3): each harness names its process differently and some share a generic
+  name that would false-match. The `ETHOS_SESSION` path serves every
+  non-Claude harness with no guessing; adding a specific name later is a
+  one-line follow-up.
+- **Auto-start a session on `iam` when none exists.** Ambient magic: an
+  `iam` typo would silently spawn a session, sessions would accumulate
+  invisibly, and the audit trail would gain sessions no one opened. The user
+  opens a session deliberately with `session start`; `iam` only joins.
+- **UUIDv4 via `github.com/google/uuid`.** Rejected on supply-chain grounds:
+  it is only an indirect dependency today, and `crypto/rand` gives a
+  collision-resistant, filesystem-safe ID with nothing new to vendor. The
+  ID is opaque (nothing depends on its shape), so UUID's only advantage —
+  visual similarity to Claude Code's `session_id` — bought nothing.

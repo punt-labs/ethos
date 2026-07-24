@@ -101,22 +101,58 @@ type sessionPersona struct {
 	found  bool   // true if a session participant was found
 }
 
-// resolveFromSession uses FindClaudePID to locate the session via the
-// PID-keyed current file, then returns the caller's persona from the
-// roster. Returns found=false if no session or no matching participant.
-// Returns found=true with empty handle if the participant exists but
-// has no persona configured — callers must not fall through to git/OS.
-func resolveFromSession(ss *session.Store) sessionPersona {
-	pid := process.FindClaudePID()
-	sessionID, err := ss.ReadCurrentSession(pid)
+// SessionSourceEnv is the source SessionID reports when the ID came from
+// ETHOS_SESSION (an explicit, caller-supplied anchor that consumers verify),
+// as opposed to the Claude process-tree walk.
+const SessionSourceEnv = "env"
+
+// SessionID resolves the active session ID using the harness-neutral chain:
+// ETHOS_SESSION, then the Claude process-tree current-pointer. It returns
+// ("", "") when neither yields one, otherwise the ID and its source
+// (SessionSourceEnv or "walk"). The source lets a caller apply the
+// verification an explicit env anchor warrants without re-reading the
+// environment. Callers that accept an explicit session (a --session flag or
+// an MCP session_id arg) check that first and bypass this (DES-061).
+func SessionID(ss *session.Store) (id, source string) {
+	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
+		return sid, SessionSourceEnv
+	}
+	sid, err := ss.ReadCurrentSession(process.FindClaudePID())
 	if err != nil {
+		return "", ""
+	}
+	return sid, "walk"
+}
+
+// resolveFromSession resolves the session via the harness-neutral chain
+// (ETHOS_SESSION, then the Claude PID walk), then returns the caller's
+// persona from the roster. The caller's participant is keyed on
+// ETHOS_AGENT_ID when set — matching how iam records it on both the CLI
+// and MCP surfaces — else on the Claude PID. Returns found=false if no
+// session or no matching participant. Returns found=true with empty handle
+// if the participant exists but has no persona configured — callers must
+// not fall through to git/OS.
+func resolveFromSession(ss *session.Store) sessionPersona {
+	sessionID, source := SessionID(ss)
+	if sessionID == "" {
 		return sessionPersona{}
 	}
 	roster, err := ss.Load(sessionID)
 	if err != nil {
+		// A roster named explicitly by ETHOS_SESSION that exists but fails
+		// to parse is a real error — warn rather than silently answering
+		// with the git/OS identity. A not-found session is the soft
+		// no-session contract and stays silent.
+		if source == SessionSourceEnv && !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "ethos: warning: ETHOS_SESSION %q names an unreadable roster: %v\n", sessionID, err)
+		}
 		return sessionPersona{}
 	}
-	p := roster.FindParticipant(pid)
+	agentID := os.Getenv("ETHOS_AGENT_ID")
+	if agentID == "" {
+		agentID = process.FindClaudePID()
+	}
+	p := roster.FindParticipant(agentID)
 	if p == nil {
 		return sessionPersona{}
 	}
