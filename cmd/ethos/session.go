@@ -413,11 +413,11 @@ func runSessionStart(cmd *cobra.Command) error {
 	if envID := os.Getenv("ETHOS_SESSION"); envID != "" {
 		switch roster, lerr := ss.Load(envID); {
 		case lerr == nil:
-			// Refuse to re-attach to a loadable roster whose ID is not the
-			// minted shape — before any roster mutation — so a control-char
+			// Refuse to re-attach to a loadable roster whose ID has unsafe
+			// characters — before any roster mutation — so a control-char
 			// ETHOS_SESSION can neither be echoed nor mutate the roster.
-			if !sessionIDShape.MatchString(envID) {
-				return fmt.Errorf("session start: refusing to re-attach to ETHOS_SESSION %q — not a 32-hex session id", envID)
+			if !safeSessionID.MatchString(envID) {
+				return fmt.Errorf("session start: refusing to re-attach to ETHOS_SESSION %q — contains unsafe characters", envID)
 			}
 			// A re-run with --persona still folds the iam — upsert-join the
 			// persona so the advertised ETHOS_AGENT_ID names a real
@@ -503,16 +503,17 @@ func runSessionStart(cmd *cobra.Command) error {
 // shell resolves that persona — the primary participant is keyed on it. The
 // export line IS the contract, so a failed --json stdout write propagates
 // to a non-zero exit rather than exiting 0 having emitted nothing.
-// sessionIDShape is the minted session-ID shape (mintSessionID output):
-// exactly 32 lowercase hex characters. Echoing is gated on it so a
-// user-supplied ETHOS_SESSION carrying a newline or other control char
-// (which would make the eval-able export multi-line) can never be emitted —
-// a hex check closes the injection class more decisively than escaping.
-var sessionIDShape = regexp.MustCompile(`^[0-9a-f]{32}$`)
+// safeSessionID admits any opaque session ID (our 32-hex mints, Claude
+// Code's UUID session_ids, any sane identifier) while rejecting whitespace,
+// control characters, and shell metacharacters. Echoing is gated on it so a
+// user-supplied ETHOS_SESSION carrying a newline or `;`/`$()` cannot make
+// the eval-able export multi-line or inject — without over-constraining the
+// opaque-ID contract (DES-061 R1/F7) to the mint shape.
+var safeSessionID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 func printSessionStart(cmd *cobra.Command, id, persona string, created bool) error {
-	if !sessionIDShape.MatchString(id) {
-		return fmt.Errorf("session start: refusing to echo a session id that is not 32 hex characters: %q", id)
+	if !safeSessionID.MatchString(id) {
+		return fmt.Errorf("session start: refusing to echo a session id with unsafe characters: %q", id)
 	}
 	if jsonOutput {
 		out := map[string]any{"session": id, "created": created}

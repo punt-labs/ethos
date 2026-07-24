@@ -357,11 +357,33 @@ func TestCLI_SessionStart_RejectsUnsafePersona(t *testing.T) {
 	}
 }
 
-// TestCLI_SessionStart_RejectsNonHexReattach pins the Copilot hardening: an
-// ETHOS_SESSION that names a loadable roster but is NOT the minted 32-hex
-// shape (e.g. carrying a newline/control char) is refused — never echoed,
-// no roster mutation — so it cannot become a multi-line eval surface.
-func TestCLI_SessionStart_RejectsNonHexReattach(t *testing.T) {
+// TestCLI_SessionStart_ReattachAcceptsOpaqueID pins the corrected hardening:
+// re-attach admits any safe-charset opaque ID (e.g. a Claude UUID
+// session_id), not only the 32-hex mint shape — the opaque-ID contract
+// (DES-061 F7). It re-echoes the ID intact.
+func TestCLI_SessionStart_ReattachAcceptsOpaqueID(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	sdir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	require.NoError(t, os.MkdirAll(sdir, 0o700))
+
+	// A Claude-hook-shaped id (UUID: hex + hyphens), not our 32-hex mint.
+	uuid := "b3f1c2d4-5a6b-7c8d-9e0f-1a2b3c4d5e6f"
+	roster := "session: \"" + uuid + "\"\nparticipants:\n  - agent_id: jim\n    persona: jim\n"
+	require.NoError(t, os.WriteFile(filepath.Join(sdir, uuid+".yaml"), []byte(roster), 0o644))
+
+	stdout, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+uuid), "session", "start")
+	require.Equal(t, 0, code, "an opaque UUID ETHOS_SESSION must re-attach; stderr=%s", stderr)
+	assert.Contains(t, stdout, "export ETHOS_SESSION='"+uuid+"'", "the opaque id re-echoes intact")
+}
+
+// TestCLI_SessionStart_RejectsUnsafeReattach pins the Copilot hardening: an
+// ETHOS_SESSION that names a loadable roster but carries whitespace/control/
+// shell metacharacters is refused — never echoed, no roster mutation — so it
+// cannot become a multi-line eval or injection surface.
+func TestCLI_SessionStart_RejectsUnsafeReattach(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
 	}
@@ -376,8 +398,8 @@ func TestCLI_SessionStart_RejectsNonHexReattach(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(sdir, badID+".yaml"), []byte(roster), 0o644))
 
 	stdout, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+badID), "session", "start")
-	require.NotEqual(t, 0, code, "a non-hex loadable ETHOS_SESSION must be refused; stdout=%q", stdout)
-	assert.Contains(t, stderr, "32-hex")
+	require.NotEqual(t, 0, code, "an unsafe loadable ETHOS_SESSION must be refused; stdout=%q", stdout)
+	assert.Contains(t, stderr, "unsafe characters")
 	assert.NotContains(t, stdout, "export ETHOS_SESSION", "the bad id must never be echoed")
 	assert.NotContains(t, stdout, "pwned")
 }
