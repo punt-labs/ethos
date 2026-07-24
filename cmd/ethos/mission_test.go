@@ -3607,5 +3607,7 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	cmd.Stderr = &stderrBuf
 	err := cmd.Run()
 	require.Error(t, err, "claim without a session must refuse")
-	assert.Contains(t, stderrBuf.String(), "no session found")
+	assert.Contains(t, stderrBuf.String(), "no active session")
+	assert.Contains(t, stderrBuf.String(), "ethos session start",
+		"the refusal must name the remedy (DES-061 step-4 error)")
 }

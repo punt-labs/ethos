@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +22,41 @@ var sessionCmd = &cobra.Command{
 	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runSessionShow(cmd)
+	},
+}
+
+// --- session start ---
+
+var sessionStartPersona string
+
+var sessionStartCmd = &cobra.Command{
+	Use:   "start",
+	Short: "Start (or re-attach to) a harness-neutral session",
+	Long: `Start a session from any harness (Codex, a plain terminal, or Claude Code).
+
+Mints a session, creates the roster from your resolved identity, and prints
+an eval-able export line so the rest of ethos can find it:
+
+    eval "$(ethos session start)"
+
+If ETHOS_SESSION already names a live session, that one is reported rather
+than minting a second, so re-running it in a subshell or rc file is safe.`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionStart(cmd)
+	},
+}
+
+// --- session end ---
+
+var sessionEndSession string
+
+var sessionEndCmd = &cobra.Command{
+	Use:   "end",
+	Short: "End the active session (delete its roster)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runSessionEnd(cmd)
 	},
 }
 
@@ -201,6 +238,10 @@ loss record.`,
 }
 
 func init() {
+	// session start / end flags
+	sessionStartCmd.Flags().StringVar(&sessionStartPersona, "persona", "", "Persona for the primary agent (folds the first iam)")
+	sessionEndCmd.Flags().StringVar(&sessionEndSession, "session", "", "Session ID (full or prefix; auto-detected if omitted)")
+
 	// session create flags
 	sessionCreateCmd.Flags().StringVar(&sessionCreateSession, "session", "", "Session ID (required)")
 	sessionCreateCmd.Flags().StringVar(&sessionCreateRootID, "root-id", "", "Root agent ID (required)")
@@ -248,6 +289,8 @@ func init() {
 	_ = sessionDeleteCurrentCmd.MarkFlagRequired("pid")
 
 	sessionCmd.AddCommand(
+		sessionStartCmd,
+		sessionEndCmd,
 		sessionCreateCmd,
 		sessionDeleteCmd,
 		sessionJoinCmd,
@@ -344,6 +387,113 @@ func inferRole(index int, parent string) string {
 		return "-"
 	}
 	return "teammate"
+}
+
+// runSessionStart mints a session (or re-attaches to the one named by
+// ETHOS_SESSION) and prints an eval-able export line. It bottoms out in the
+// same Store.Create the SessionStart hook and `session create` use, and
+// writes no current-pointer — outside Claude Code the discovery channel is
+// ETHOS_SESSION (DES-061 R1).
+func runSessionStart(cmd *cobra.Command) error {
+	ss := sessionStore()
+
+	// 1. Idempotency: an existing ETHOS_SESSION that names a live roster.
+	if envID := os.Getenv("ETHOS_SESSION"); envID != "" {
+		if _, err := ss.Load(envID); err == nil {
+			printSessionStart(cmd, envID, false)
+			return nil
+		}
+	}
+
+	// 2. Mint an opaque 32-hex ID (16 bytes of crypto/rand).
+	id, err := mintSessionID()
+	if err != nil {
+		return fmt.Errorf("session start: %w", err)
+	}
+
+	// 3. Resolve identities: root is the human (whoami chain); primary is
+	//    the agent (ETHOS_AGENT_ID, else the repo default, else the human).
+	store := identityStore()
+	human, err := resolve.Resolve(store, ss)
+	if err != nil {
+		return fmt.Errorf("session start: resolving identity: %w", err)
+	}
+	primaryID := os.Getenv("ETHOS_AGENT_ID")
+	if primaryID == "" {
+		agent, aerr := resolve.ResolveAgent(resolve.FindRepoRoot())
+		if aerr != nil {
+			return fmt.Errorf("session start: resolving agent: %w", aerr)
+		}
+		primaryID = agent
+	}
+	if primaryID == "" {
+		primaryID = human
+	}
+	primaryPersona := sessionStartPersona
+	if primaryPersona == "" {
+		primaryPersona = primaryID
+	}
+
+	// 4. Create the roster via the shared Store.Create (repo/host resolved
+	//    exactly as the hook resolves them — R6 convergence).
+	root := session.Participant{AgentID: human, Persona: human}
+	primary := session.Participant{AgentID: primaryID, Persona: primaryPersona, Parent: human}
+	if err := ss.Create(id, root, primary, hook.ResolveRepo(), hook.ResolveHost()); err != nil {
+		return fmt.Errorf("session start: creating roster: %w", err)
+	}
+
+	printSessionStart(cmd, id, true)
+	return nil
+}
+
+// printSessionStart writes the eval-able export line to stdout and a
+// human-readable confirmation to stderr, so eval "$(ethos session start)"
+// captures only the export.
+func printSessionStart(cmd *cobra.Command, id string, created bool) {
+	if jsonOutput {
+		_ = writeJSON(cmd.OutOrStdout(), map[string]any{"session": id, "created": created})
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_SESSION=%s\n", id)
+	if created {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: started session %s\n", id)
+	} else {
+		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: session %s already active\n", id)
+	}
+}
+
+// mintSessionID returns 16 bytes of crypto/rand hex-encoded to a
+// 32-character string — opaque, filesystem-safe, fixed-length, zero new
+// dependency (DES-061).
+func mintSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("minting session id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// runSessionEnd tears down the resolved session, symmetric with the
+// SessionEnd hook: delete the roster, then remove the Claude-path PID
+// current-pointer. Outside Claude there is no pointer and
+// DeleteCurrentSession no-ops on a missing key, so end cannot fail there.
+func runSessionEnd(cmd *cobra.Command) error {
+	ss := sessionStore()
+	sid, _, err := resolveHardSession(sessionEndSession)
+	if err != nil {
+		return err
+	}
+	if err := ss.Delete(sid); err != nil {
+		return err
+	}
+	if derr := ss.DeleteCurrentSession(process.FindClaudePID()); derr != nil {
+		return fmt.Errorf("session end: %w", derr)
+	}
+	if jsonOutput {
+		return writeJSON(cmd.OutOrStdout(), map[string]string{"ended": sid})
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "ended session %s\n", sid)
+	return nil
 }
 
 func runSessionCreate(cmd *cobra.Command) error {
