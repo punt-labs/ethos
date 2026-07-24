@@ -320,6 +320,62 @@ func setupLayeredWithBundle(t *testing.T) (*LayeredStore, *Store, *Store, *Store
 	return ls, repo, bundle, global
 }
 
+// corruptAttribute puts a directory where an attribute's .md file belongs,
+// so reading it fails with a non-not-found error (EISDIR).
+func corruptAttribute(t *testing.T, root string, kind attribute.Kind, slug string) {
+	t.Helper()
+	p, err := attribute.NewStore(root, kind).Path(slug)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(p, 0o700))
+}
+
+// TestLayered_UnreadableHigherLayerWarnsAndFallsThrough pins the S2 fix: a
+// higher-layer attribute that exists but cannot be read must not silently
+// lose to a lower layer. Resolution still returns the lower layer's content
+// (best effort), but a warning names the unreadable higher layer.
+func TestLayered_UnreadableHigherLayerWarnsAndFallsThrough(t *testing.T) {
+	ls, _, bundle, global := setupLayeredWithBundle(t)
+
+	corruptAttribute(t, bundle.Root(), attribute.Personalities, "p")
+	createTestAttribute(t, global.Root(), attribute.Personalities, "p", "# global-personality\n")
+
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: p\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Contains(t, id.PersonalityContent, "global-personality",
+		"content falls through to the readable lower layer")
+	require.NotEmpty(t, id.Warnings, "the unreadable bundle copy must produce a warning")
+	assert.Contains(t, id.Warnings[0], "bundle", "warning must name the unreadable layer")
+	assert.Contains(t, id.Warnings[0], "unreadable")
+}
+
+// TestLayered_UnreadableLayerAllFailNamesRealError pins the second half of
+// S2: when a higher layer is unreadable and no lower layer has the slug, the
+// warning must name the real error on the layer that holds the file, not
+// only the lowest layer's not-found.
+func TestLayered_UnreadableLayerAllFailNamesRealError(t *testing.T) {
+	ls, _, bundle, _ := setupLayeredWithBundle(t)
+
+	corruptAttribute(t, bundle.Root(), attribute.Talents, "t")
+
+	writeIdentityYAML(t, bundle, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\ntalents:\n  - t\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Empty(t, id.TalentContents[0], "no layer supplies readable content")
+
+	var named bool
+	for _, w := range id.Warnings {
+		if strings.Contains(w, "bundle") && strings.Contains(w, "unreadable") {
+			named = true
+		}
+	}
+	assert.True(t, named, "a warning must name the unreadable bundle layer; got %v", id.Warnings)
+}
+
 // TestLayered_GlobalIdentityResolvesFromBundle pins the F3 fix: an
 // identity stored in the global layer resolves attribute content from the
 // active bundle, not just from global.

@@ -154,32 +154,37 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
 	chain := ls.attrChain()
 
 	var warnings []string
-	resolve := func(kind attribute.Kind, slug string) (string, error) {
+	// resolve walks the chain and returns the first layer's content. It
+	// falls through to a lower layer only when the slug is absent there;
+	// a real read error (permission, a directory in place of the file) is
+	// surfaced as a warning naming the layer, even when a lower layer then
+	// supplies content — a silent fall-through would mask a precedence
+	// inversion (DES-051's higher layer skipped without a word).
+	resolve := func(field string, kind attribute.Kind, slug string) (string, bool) {
 		var lastErr error
-		for _, s := range chain {
-			content, err := loadAttribute(s, kind, slug)
+		for _, l := range chain {
+			content, err := loadAttribute(l.store, kind, slug)
 			if err == nil {
-				return content, nil
+				return content, true
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				warnings = append(warnings,
+					fmt.Sprintf("%s %q unreadable in %s layer: %v", field, slug, l.name, err))
 			}
 			lastErr = err
 		}
-		return "", lastErr
+		warnings = append(warnings, fmt.Sprintf("%s %q: %v", field, slug, lastErr))
+		return "", false
 	}
 
 	if id.Personality != "" {
-		content, err := resolve(attribute.Personalities, id.Personality)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("personality %q: %v", id.Personality, err))
-		} else {
+		if content, ok := resolve("personality", attribute.Personalities, id.Personality); ok {
 			id.PersonalityContent = content
 		}
 	}
 
 	if id.WritingStyle != "" {
-		content, err := resolve(attribute.WritingStyles, id.WritingStyle)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("writing_style %q: %v", id.WritingStyle, err))
-		} else {
+		if content, ok := resolve("writing_style", attribute.WritingStyles, id.WritingStyle); ok {
 			id.WritingStyleContent = content
 		}
 	}
@@ -187,10 +192,7 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
 	if len(id.Talents) > 0 {
 		id.TalentContents = make([]string, len(id.Talents))
 		for i, slug := range id.Talents {
-			content, err := resolve(attribute.Talents, slug)
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("talent %q: %v", slug, err))
-			} else {
+			if content, ok := resolve("talent", attribute.Talents, slug); ok {
 				id.TalentContents[i] = content
 			}
 		}
@@ -199,19 +201,25 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
 	return warnings
 }
 
-// attrChain returns the ordered list of stores to consult when resolving
+// attrLayer pairs a store with its layer name for diagnostics.
+type attrLayer struct {
+	store *Store
+	name  string
+}
+
+// attrChain returns the ordered list of layers to consult when resolving
 // attribute content: repo, then bundle, then global, skipping any layer
 // that is absent. Global is always last. The chain is the same for every
 // identity regardless of its source layer (DES-051).
-func (ls *LayeredStore) attrChain() []*Store {
-	var chain []*Store
+func (ls *LayeredStore) attrChain() []attrLayer {
+	var chain []attrLayer
 	if ls.repo != nil {
-		chain = append(chain, ls.repo)
+		chain = append(chain, attrLayer{ls.repo, "repo"})
 	}
 	if ls.bundle != nil {
-		chain = append(chain, ls.bundle)
+		chain = append(chain, attrLayer{ls.bundle, "bundle"})
 	}
-	chain = append(chain, ls.global)
+	chain = append(chain, attrLayer{ls.global, "global"})
 	return chain
 }
 
