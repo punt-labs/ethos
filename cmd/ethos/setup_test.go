@@ -892,3 +892,25 @@ writing_style: concise-quantified
 	assert.True(t, os.IsNotExist(statErr),
 		"agents must not be generated into the store tree")
 }
+
+// TestSetup_BadOverrideFailsLoudNotSilentSkip pins the Bugbot HIGH F-A on PR
+// #370: a set-but-refused ETHOS_REPO_ROOT (nonexistent) makes FindRepoRoot
+// return "" even though the cwd IS a real repo. setup must fail loud, not
+// silently create identities, skip repo config/bundle/team, and report success.
+func TestSetup_BadOverrideFailsLoudNotSilentSkip(t *testing.T) {
+	_, repo := setupTestEnv(t) // chdirs into a real git repo
+	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(repo, "does-not-exist"))
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `
+name: Priya Chandran
+handle: priya-chandran
+writing_style: concise-quantified
+`)
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err,
+		"a refused override must fail loud, not succeed with repo config skipped; stderr: %s", stderr)
+	assert.Contains(t, err.Error(), "ETHOS_REPO_ROOT",
+		"the error must name the refused override")
+}

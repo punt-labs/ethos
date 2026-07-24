@@ -297,6 +297,17 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 	return cfg.ActiveBundle, nil
 }
 
+// RepoRootOverride reports the ETHOS_REPO_ROOT override (whitespace-trimmed)
+// and whether it is set, WITHOUT validating it or emitting any warning. It
+// lets a caller distinguish "no override, genuinely not in a repo" (set ==
+// false) from "an override was set but the resolver refused it" (set == true
+// while FindRepoRoot/StoreRepoRoot returned ""). setup uses it to fail loud on
+// a bad override instead of silently degrading to no-repo mode (#370 F-A).
+func RepoRootOverride() (value string, set bool) {
+	v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT"))
+	return v, v != ""
+}
+
 // repoRootOverride returns the ETHOS_REPO_ROOT override and whether it was
 // set. A set override is validated: it must name an existing directory, and
 // when requireStore is set it must also hold a .punt-labs/ethos store. A
@@ -308,8 +319,8 @@ func ResolveActiveBundle(repoRoot string) (string, error) {
 // path is never returned — resolution reports "no repo," which surfaces the
 // global-fallback warning downstream.
 func repoRootOverride(requireStore bool) (root string, set bool) {
-	v := strings.TrimSpace(os.Getenv("ETHOS_REPO_ROOT"))
-	if v == "" {
+	v, ok := RepoRootOverride()
+	if !ok {
 		return "", false
 	}
 	if info, err := os.Stat(v); err != nil || !info.IsDir() {
