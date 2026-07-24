@@ -75,7 +75,15 @@ GitHub, voice, agent definition).  Identity data lives in two
 layers: repo-local (git-tracked via the \fpath{.punt-labs/ethos/}
 submodule) and user-global (\fpath{\~{}/.punt-labs/ethos/}).  Repo
 takes priority for identity, attribute, role, and team lookup;
-extensions always resolve from the global layer.
+extensions always resolve from the global layer.  The repo layer is
+located through the git \emph{common} directory
+(\cmd{git rev-parse --git-common-dir}), so a linked worktree resolves
+the shared store in the main work tree rather than falling back to
+global; genuinely per-checkout state (the enable marker, the DES-058
+audit live-zone and its seal, generated \fpath{.claude/agents/}) stays
+worktree-local.  \cmd{ETHOS\_REPO\_ROOT} overrides the store root
+and is validated; a refused override fails store writes loudly rather
+than writing to the wrong tree (DES-062).
 
 \paragraph{Pillar 2 --- Workflow.} The mission primitive turns
 delegation from free-form prose into a typed runtime contract per
