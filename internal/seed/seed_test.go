@@ -1,6 +1,7 @@
 package seed
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -191,6 +192,47 @@ func TestSeedRepairsZeroByteFile(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, custom, got, "non-empty existing file must not be clobbered")
+}
+
+// TestLinkInstall_FreshCreate pins the atomic create path: a fresh dest is
+// written with 0644 perms and the exact content, leaving no temp file.
+func TestLinkInstall_FreshCreate(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "attr.md")
+	require.NoError(t, linkInstall(dest, []byte("# content\n")))
+
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, "# content\n", string(got))
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "temp file must be cleaned up")
+}
+
+// TestLinkInstall_FailsOnExisting pins the TOCTOU close: os.Link refuses to
+// clobber an existing dest, surfacing os.ErrExist atomically. That signal is
+// what installNoClobber keys off to re-decide (skip or repair) rather than
+// replacing a file that raced in after the Stat.
+func TestLinkInstall_FailsOnExisting(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "attr.md")
+	require.NoError(t, os.WriteFile(dest, []byte("user content\n"), 0o644))
+
+	err := linkInstall(dest, []byte("seed content\n"))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, os.ErrExist), "link to an existing dest must report ErrExist; got %v", err)
+
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, "user content\n", string(got), "existing file must not be clobbered")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "temp file must be cleaned up even on link failure")
 }
 
 func TestSeedForce(t *testing.T) {
