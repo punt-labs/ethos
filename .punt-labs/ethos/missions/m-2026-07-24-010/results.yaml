@@ -1,0 +1,70 @@
+results:
+    - mission: m-2026-07-24-010
+      round: 1
+      created_at: "2026-07-24T09:24:28Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.9
+      files_changed: []
+      evidence:
+        - name: go test -race ./cmd/ethos (11 new subprocess tests)
+          status: pass
+        - name: make check
+          status: pass
+        - name: staticcheck ./cmd/ethos/...
+          status: pass
+        - name: coverage no-decrease (resolve 82.9%, session 78.3%, cmd/ethos 65.7% before and after)
+          status: pass
+      open_questions:
+        - 'Subprocess tests do not move go-test statement coverage (child process not instrumented): all three packages identical before/after. No decrease — criterion met.'
+        - 'Walk-defeat: the test binary DOES have a claude ancestor locally (lead''s no-ancestor assumption is false); the walk is instead defeated by scratch-HOME isolation (no current-pointer for any PID). Asserted directly in the journey (step 0).'
+      prose: |
+        Per ethos-t2lb, files enumerated here, not in files_changed. Tests only,
+        three commits. Three new files under cmd/ethos:
+
+        1. cmd/ethos/session_journey_subprocess_test.go (76cb957) —
+           TestCLI_CodexJourney: the README onboarding flow as one subprocess
+           sequence in a detached-equivalent env. Step 0 proves the walk is
+           defeated (session show with no env → "No active session." despite a
+           real claude ancestor, because the scratch HOME has no current-pointer);
+           then session start --persona claude (asserts a freshly minted 32-hex id
+           + the paired ETHOS_AGENT_ID export), eval, iam, whoami (reflects the
+           persona, not the git/OS user), session show, a mission claim that fails
+           PAST session resolution (hard chain), and session end (roster deleted).
+
+        2. cmd/ethos/session_adversarial_test.go (4e55a68) —
+           - NonexistentRoster: ETHOS_SESSION at a 32-hex-but-absent id → session
+             show and iam fail visibly ("not found"), iam writes no roster, and
+             whoami soft-falls to the USER identity (exit 0, not a crash).
+           - MalformedID_NoTraversal: ../x, absolute /tmp/x, and a/b/x shapes —
+             session show (read) and iam (write) both fail safely, and a HOME-wide
+             walk confirms every id-derived artifact is contained under the
+             sessions dir (filepath.Base defense in store.go). Absolute target is
+             asserted absent.
+           - EmptyEnv_TreatedAsUnset: ETHOS_SESSION="" → treated as unset, falls
+             to the walk, session show reports no session (exit 0). Semantic
+             pinned in a comment.
+
+        3. cmd/ethos/session_concurrency_test.go (56c0420) —
+           - ConcurrentSessionStart_DistinctIDs: 4 racing starts mint 4 distinct
+             32-hex ids, every roster loads.
+           - ConcurrentIam_FlockNoLoss: 5 racing iam joins (distinct
+             ETHOS_AGENT_ID) against one session — all 5 survive in the final
+             roster, proving flock serializes the read-modify-write with no lost
+             update.
+           - DoubleSessionEnd_NoOp: a second end with the env still set exits 0.
+           - IamAfterEnd_NoResurrection: iam after end fails at load and does NOT
+             recreate the roster (env set); with the env unset it returns the
+             step-4 no-active-session error.
+
+        No production bug found — every behavior matches the design (env-wins,
+        hard vs soft chain, traversal containment, flock, no-resurrection).
+
+        Coverage (go test -cover, -count=1, measured with the three files moved
+        aside for the baseline): internal/resolve 82.9% → 82.9%; internal/session
+        78.3% → 78.3%; cmd/ethos 65.7% → 65.7%. No decrease. Flat because
+        subprocess tests exercise a child process the parent binary's cover
+        instrumentation does not measure.
+
+        Per-commit: full `make check` (-race) + direct `staticcheck ./cmd/ethos/...`
+        green on each of 76cb957, 4e55a68, 56c0420.

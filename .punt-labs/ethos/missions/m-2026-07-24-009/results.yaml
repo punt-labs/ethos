@@ -1,0 +1,87 @@
+results:
+    - mission: m-2026-07-24-009
+      round: 1
+      created_at: "2026-07-24T08:34:33Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed: []
+      evidence:
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: staticcheck ./... run DIRECTLY (not via make; ethos-cmmu)
+          status: pass
+        - name: go test -race ./internal/resolve/ (SessionID chain, env + agent-id parity)
+          status: pass
+        - name: go test -race ./cmd/ethos/ (session start/end, hard chain, whoami reflection)
+          status: pass
+        - name: go test -race ./internal/mcp/ (resolveSessionID env, handleIam agent-id)
+          status: pass
+        - name: detached-process dogfood (ppid=1, no claude ancestor, clean HOME) — full acceptance
+          status: pass
+      prose: |
+        ethos-t2lb note: the contract write_set is a single space-joined string
+        ("cmd/ethos internal hooks README.md AGENTS.md"), so files_changed is []
+        and the enumeration is in prose. All edits fall inside the intended
+        write-set (cmd/ethos, internal, README.md, AGENTS.md; hooks were touched
+        only to EXPORT ResolveRepo/ResolveHost, behavior byte-identical — R6).
+
+        Files changed (tip 597c1b6):
+        - internal/resolve/resolve.go — added resolve.SessionID (env ETHOS_SESSION
+          then Claude PID walk), the shared env+walk step. resolveFromSession now
+          runs it (whoami reflects a Codex iam persona) and keys the caller's
+          participant on ETHOS_AGENT_ID then the Claude PID (REC-3). git/OS
+          fallback for the no-session case unchanged (REC-1 standalone virtue).
+        - internal/resolve/resolve_test.go — SessionID (env-wins/walk/neither),
+          whoami reflects env session, ETHOS_AGENT_ID participant parity; made the
+          iam-declaration test hermetic against an ambient ETHOS_SESSION.
+        - cmd/ethos/iam.go — resolveSessionContext -> resolveHardSession(explicit):
+          --session/arg > ETHOS_SESSION > walk > errNoSession naming
+          `ethos session start`. iam, session join/leave/end, mission
+          claim/release inherit it.
+        - cmd/ethos/session.go — new `session start` (mint 16-byte crypto/rand ->
+          32-hex, Store.Create with root=human/primary=agent, prints
+          `export ETHOS_SESSION=<id>`, idempotent under a live ETHOS_SESSION, no
+          current-pointer outside Claude) and `session end` (resolve via hard
+          chain, Delete roster, DeleteCurrentSession no-ops on a missing pointer —
+          NIT-2). Both bottom out in the same Store.Create as the hook and the
+          hidden `session create` (R6: three entry points, one storage path).
+        - cmd/ethos/session_harness_test.go — real-binary subprocess acceptance:
+          start mints+exports+writes roster, start->iam, no-session iam errors
+          with the remedy (not the walker text), idempotency (one roster),
+          end+second-end no-op, whoami reflects persona under ETHOS_AGENT_ID with
+          the no-session git/OS fallback also asserted.
+        - cmd/ethos/mission_test.go — updated the claim-without-session subprocess
+          assertion to the new step-4 remedy text.
+        - internal/hook/session_start.go — exported ResolveRepo/ResolveHost
+          (rename + internal caller update; behavior identical) so `session start`
+          resolves repo/host exactly as the hook does. No hook flow change (R6).
+        - internal/mcp/tools.go — resolveSessionID falls back to resolve.SessionID
+          (ETHOS_SESSION then walk) after the session_id arg; handleIam keys the
+          participant on ETHOS_AGENT_ID then the Claude PID (R4 / F5-F6 parity).
+        - internal/mcp/tools_test.go — resolveSessionID honors ETHOS_SESSION;
+          handleIam keys on ETHOS_AGENT_ID.
+        - README.md, AGENTS.md — session start/end + iam verbs, the Codex snippet
+          (eval "$(ethos session start)"), and the resolution order.
+
+        Schema unchanged; migration none (Store.Create signature untouched).
+        Hooks untouched except the two exported helpers (R6).
+
+        Dogfood evidence (built .tmp/ethos; .tmp/harness/detached_run.py for the
+        no-claude-ancestor cases; clean HOME + scratch repo; identities jim/bwk,
+        repo agent=bwk):
+          1. DETACHED (meta: pid=61626 ppid=1) session start -> exit 0, stdout
+             "export ETHOS_SESSION=cbf1ba7d4f3de16e348ea804540940ca" (32 hex),
+             roster present.
+          2. DETACHED iam with no session -> "ethos: no active session; run
+             `ethos session start` (or pass --session)", exit 1 (not the old
+             "process tree" walker error).
+          3. ETHOS_SESSION set -> iam bwk ok; whoami reports "Brian K (bwk)";
+             session roster lists jim(root), bwk(primary), and the iam
+             participant with persona bwk.
+          4. mission claim with ETHOS_SESSION -> gets past resolution ("no mission
+             matching prefix"), proving the hard chain resolved the session;
+             without any session -> the step-4 remedy error.
+          5. session end -> roster deleted; second end -> exit 0 no-op.
+        Claude Code zero-config path unchanged: the existing session_start_test.go
+        cases (R6 no-regression) pass untouched.
