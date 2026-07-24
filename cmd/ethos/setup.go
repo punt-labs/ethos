@@ -443,19 +443,26 @@ func mergeRepoConfig(repoRoot string) error {
 	return nil
 }
 
-// ensureTeamKey repairs a missing or stale team key. active_bundle is the
+// ensureTeamKey repairs an ABSENT team key. active_bundle is the
 // idempotency sentinel setup keys off, but an interrupted activation or an
-// `ethos team bundle use` (which writes only active_bundle) can leave the
-// team key absent — SessionStart then injects no team context with no other
-// signal. Whenever a bundle is active, the team key must match it.
+// `ethos team bundle use` can leave the team key absent — SessionStart then
+// injects no team context with no other signal. A team key that merely
+// DIFFERS from the active bundle is left untouched: no schema requires
+// team == active_bundle, so a repo-local team may diverge deliberately. A
+// mismatch is surfaced as a warning naming both values, not overwritten.
 func ensureTeamKey(errw io.Writer, repoRoot, bundle, currentTeam string) error {
-	if bundle == "" || currentTeam == bundle {
+	switch {
+	case bundle == "" || currentTeam == bundle:
 		return nil
+	case currentTeam == "":
+		if err := setConfigKey(repoRoot, "team", bundle); err != nil {
+			return fmt.Errorf("setup: repairing team key: %w", err)
+		}
+		fmt.Fprintf(errw, "repaired: team %q (was missing)\n", bundle)
+	default:
+		fmt.Fprintf(errw, "ethos: warning: team %q differs from active bundle %q — if this is unintended, run \"ethos team activate %s\"\n",
+			currentTeam, bundle, bundle)
 	}
-	if err := setConfigKey(repoRoot, "team", bundle); err != nil {
-		return fmt.Errorf("setup: repairing team key: %w", err)
-	}
-	fmt.Fprintf(errw, "repaired: team %q (was missing or stale)\n", bundle)
 	return nil
 }
 

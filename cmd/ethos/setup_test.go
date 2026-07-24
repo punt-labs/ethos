@@ -397,6 +397,45 @@ func TestSetup_RepairsMissingTeamKey(t *testing.T) {
 	assert.Equal(t, "foundation", team, "missing team key must be repaired on re-run")
 }
 
+// TestEnsureTeamKey pins the N1 ruling: an absent team key is repaired, but
+// a team key that merely DIFFERS from the active bundle is a legitimate
+// repo-local choice — warn, but never overwrite. (Driven at the unit level
+// because a divergent team that names a non-existent team would fail the
+// later agent-file generation, which is unrelated to this behavior.)
+func TestEnsureTeamKey(t *testing.T) {
+	t.Run("absent repairs", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\n")
+		var buf bytes.Buffer
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", ""))
+		assert.Contains(t, buf.String(), `repaired: team "foundation"`)
+		team, err := resolve.ResolveTeam(repo)
+		require.NoError(t, err)
+		assert.Equal(t, "foundation", team)
+	})
+
+	t.Run("mismatch warns without touching", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: custom-team\n")
+		var buf bytes.Buffer
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "custom-team"))
+		assert.Contains(t, buf.String(), "warning:")
+		assert.Contains(t, buf.String(), `team "custom-team"`)
+		assert.Contains(t, buf.String(), `active bundle "foundation"`)
+		team, err := resolve.ResolveTeam(repo)
+		require.NoError(t, err)
+		assert.Equal(t, "custom-team", team, "a divergent team key must not be overwritten")
+	})
+
+	t.Run("match is a no-op", func(t *testing.T) {
+		repo := t.TempDir()
+		writeRepoConfigFile(t, repo, "agent: claude\nactive_bundle: foundation\nteam: foundation\n")
+		var buf bytes.Buffer
+		require.NoError(t, ensureTeamKey(&buf, repo, "foundation", "foundation"))
+		assert.Empty(t, buf.String(), "a matching team key produces no output")
+	})
+}
+
 // TestSetup_HardValidation_BadStyle proves a writing_style slug that is
 // not installed fails hard rather than writing a dangling reference.
 func TestSetup_HardValidation_BadStyle(t *testing.T) {
