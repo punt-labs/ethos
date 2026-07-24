@@ -50,6 +50,28 @@ func missionStore() *mission.Store {
 		WithSessionResolver(currentSessionIDBestEffort)
 }
 
+// warnIfGlobalFallback warns loudly when no git repository is in scope,
+// so an operator sees that a write or claim is about to operate on the
+// global store (~/.punt-labs/ethos) rather than a repo-local one. A
+// mission created or claimed there is invisible from any repo checkout,
+// which reads as "the mission was never created" (ethos-yofr). Silent
+// degradation is the failure mode; a warning that names the resolved root
+// is the fix. Read-only queries stay quiet.
+func warnIfGlobalFallback(op string) {
+	if resolve.FindRepoRoot() != "" {
+		return
+	}
+	root := "~/.punt-labs/ethos"
+	if home, err := os.UserHomeDir(); err == nil {
+		root = filepath.Join(home, ".punt-labs", "ethos")
+	}
+	fmt.Fprintf(os.Stderr,
+		"ethos: mission %s: no git repository found for the current directory; "+
+			"operating on the global store at %s. A mission here is not visible from "+
+			"any repo checkout — set ETHOS_REPO_ROOT to force a repo store.\n",
+		op, root)
+}
+
 // currentSessionIDBestEffort resolves the current session id from
 // ETHOS_SESSION or the Claude process tree, returning "" when neither is
 // available. DES-058 routes mission event appends to the per-(mission,
@@ -793,6 +815,7 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 // Uses missionStoreForCreate so the Phase 3.5 role-overlap gate
 // fires; read-only subcommands use the bare missionStore.
 func runMissionCreate() error {
+	warnIfGlobalFallback("create")
 	ms := missionStoreForCreate()
 
 	data, err := os.ReadFile(missionCreateFile)
@@ -1514,6 +1537,7 @@ func runMissionDispatch() error {
 		Budget:          mission.Budget{Rounds: dispatchBudget, ReflectionAfterEach: true},
 	}
 
+	warnIfGlobalFallback("dispatch")
 	ms := missionStoreForCreate()
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
@@ -1547,6 +1571,7 @@ func runMissionClaim(idOrPrefix string) error {
 	if err != nil {
 		return fmt.Errorf("mission claim: %w", err)
 	}
+	warnIfGlobalFallback("claim")
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
