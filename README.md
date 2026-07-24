@@ -212,7 +212,7 @@ hooks. Anywhere else, open one explicitly — one line at shell or harness
 init:
 
 ```bash
-eval "$(ethos session start --persona bwk)"   # exports ETHOS_SESSION
+eval "$(ethos session start --persona bwk)"   # exports ETHOS_SESSION + ETHOS_AGENT_ID
 ethos whoami                                   # reports the declared persona
 ethos session                                  # shows the roster
 ethos session end                              # teardown
