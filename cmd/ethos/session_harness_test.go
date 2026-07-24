@@ -426,6 +426,26 @@ func TestCLI_SessionEnd(t *testing.T) {
 	assert.Contains(t, stderr2, "nothing to end")
 }
 
+// TestCLI_SessionEnd_NoSessionContextIsNoOp pins the teardown ergonomics:
+// end with zero session context (no --session, no ETHOS_SESSION, no pointer)
+// is a clean no-op with a note — the same "nothing to tear down" state as an
+// already-gone roster — so a trap/rc cleanup never errors.
+func TestCLI_SessionEnd_NoSessionContextIsNoOp(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t) // clean HOME, no ETHOS_SESSION set
+
+	_, stderr, code := runCLI(t, se, "session", "end")
+	assert.Equal(t, 0, code, "end with no session context must be a clean no-op; stderr=%s", stderr)
+	assert.Contains(t, stderr, "nothing to end")
+
+	// The state-writer contract is unchanged: iam still hard-fails.
+	_, stderr, code = runCLI(t, se, "iam", "test-agent")
+	require.NotEqual(t, 0, code, "iam with no session must still error")
+	assert.Contains(t, stderr, "ethos session start")
+}
+
 // TestCLI_Whoami_ReflectsPersona covers acceptance case 5 (REC-1/REC-3):
 // after iam under a stable ETHOS_AGENT_ID, whoami reports the session
 // persona even when $USER would not resolve — proving it read the session,

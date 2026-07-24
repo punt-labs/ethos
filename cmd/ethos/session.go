@@ -564,6 +564,13 @@ func runSessionEnd(cmd *cobra.Command) error {
 	// with a stale ETHOS_SESSION is a no-op with a note, not an error.
 	sid, _, err := resolveSession(sessionEndSession, false)
 	if err != nil {
+		// No session context at all is the same "nothing to tear down"
+		// state as an already-gone roster — end is idempotent across the
+		// board (the sole teardown exception; state-writers still hard-fail).
+		if errors.Is(err, errNoSession) {
+			fmt.Fprintln(cmd.ErrOrStderr(), "ethos: no active session; nothing to end")
+			return nil
+		}
 		return err
 	}
 	if _, lerr := ss.Load(sid); lerr != nil {
