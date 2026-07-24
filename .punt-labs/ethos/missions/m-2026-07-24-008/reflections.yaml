@@ -1,0 +1,11 @@
+reflections:
+    - round: 1
+      created_at: "2026-07-24T08:05:27Z"
+      author: claude
+      converging: true
+      signals:
+        - 'design delivered by the harness-audit investigator (context reuse); rsc round-1 REVISE (2 REQ: crypto/rand ruling inverted in the body; mission consumer row miscategorized claim as best-effort) + 2 REC + NIT — all five applied in 485efd7, verified closed round-2, three ''more strongly than recommended'''
+        - 'leader rulings under overnight delegation, recorded in the design: session start primitive with opaque crypto/rand-hex IDs; resolution chain explicit>env>walk>error with no silent fallback; walker stays claude-only; MCP env parity; TTL for non-PID staleness; hooks unchanged; whoami IN scope (iam-then-whoami must reflect the persona under Codex); env-wins-over-walk by design'
+        - 'rsc round-2 APPROVE with two implementation-time residuals folded into the m-009 brief: whoami participant lookup honors ETHOS_AGENT_ID (F5/F6 symmetry) + test variant; session-end pointer wording + missing-pointer no-op assertion'
+      recommendation: stop
+      reason: Design settled (DES-061 candidate). Implementation (m-2026-07-24-009) dispatches against 485efd7 with the residuals in its criteria.

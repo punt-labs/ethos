@@ -1,0 +1,59 @@
+results:
+    - mission: m-2026-07-24-015
+      round: 1
+      created_at: "2026-07-24T10:35:49Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: CHANGELOG.md
+          added: 53
+          removed: 0
+        - path: DESIGN.md
+          added: 95
+          removed: 0
+        - path: README.md
+          added: 1
+          removed: 1
+      evidence:
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: README Codex snippet verified against built binary (.tmp/ethos-doccheck, ran the full sequence)
+          status: pass
+        - name: CHANGELOG Fixed/Added claims cross-checked against implemented code at 75f5ab4
+          status: pass
+      prose: |
+        Document stage for harness-neutral sessions (bead ethos-leh7, DES-061).
+
+        CHANGELOG ## [Unreleased]: new Added section for `ethos session
+        start`/`end` and the one resolution chain across every consumer incl.
+        MCP parity and whoami; five Fixed bullets (iam could not bootstrap
+        outside Claude Code; stale ETHOS_SESSION phantom mission bindings;
+        session end severing a live Claude discovery pointer; start/end
+        refusing a corrupt roster with the purge/quarantine remedy;
+        best-effort attribution no longer admitting a dead session ID); one
+        Changed bullet (end idempotent, rm -f, with the env-outlives-roster
+        visibility note).
+
+        README: verified the Codex snippet by building .tmp/ethos-doccheck and
+        RUNNING the full sequence (start --persona → whoami → session →
+        re-run → end → end-again). Found one stale item: `session start
+        --persona bwk` exports BOTH ETHOS_SESSION and ETHOS_AGENT_ID, but the
+        comment said only ETHOS_SESSION — fixed. whoami reports "Brian K
+        (bwk)", idempotent re-run reports "already active", end is a no-op the
+        second time (exit 0) — all matched the prose.
+
+        DESIGN.md: DES-061 entry after DES-060 — the hook-only-roster coupling
+        problem, the chain design, all six rulings R1-R6 plus the four
+        implementation-surfaced gate decisions (whoami in scope, crypto/rand
+        over uuid, state-writer-scoped verification, corrupt-roster refusal
+        parity, fix-the-code for --persona self-parent), and rejected
+        alternatives (walker generalization now; auto-start-on-iam as ambient
+        magic; uuid dependency promotion). Cites docs/harness-sessions.md and
+        ethos-leh7.
+
+        make check green. All CHANGELOG/DESIGN behavioral claims were verified
+        against the implemented code (iam.go resolveHardSession verifyEnv,
+        session.go runSessionEnd pointer guard + corrupt-roster refusal,
+        resolve.go SessionID chain, mcp/tools.go ETHOS_AGENT_ID parity), not
+        taken from the mission brief on faith.

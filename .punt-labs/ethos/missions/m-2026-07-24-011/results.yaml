@@ -1,0 +1,29 @@
+results:
+    - mission: m-2026-07-24-011
+      round: 1
+      created_at: "2026-07-24T10:29:08Z"
+      author: claude
+      verdict: pass
+      confidence: 0.95
+      files_changed: []
+      evidence:
+        - name: 'code review rounds 1-3 (.tmp/review-harness-sessions-code.md): idempotent --persona no-join (matrix-gap, transcript-confirmed), self-parenting re-join (load-bearing Parent field, breaks post-compaction persona injection), corrupt-roster deletion in end — all fixed and re-verified by transcript; round 3 zero blocking findings'
+          status: pass
+        - name: 'silent-failure rounds 1-3 (.tmp/review-harness-sessions-sfh.md): 8 findings incl. 2 HIGH (end steals the caller''s live Claude pointer; unverified ETHOS_SESSION through the hard chain staging phantom mission bindings) — all closed, each with a regression test; round 3 zero open findings'
+          status: pass
+        - name: 'leader rulings recorded mid-gate: H2 verification scoped to state-writers (teardown keeps rm -f no-op semantics with a visibility note); corrupt rosters refused everywhere (start/end mirror purge''s DES-058 posture); fix-the-code over soften-the-doc for the --persona contract'
+          status: pass
+        - name: make check -race + direct staticcheck green on every commit; both reviewers verified by rebuilt-binary transcripts, not diff reading
+          status: pass
+      prose: |-
+        files_changed intentionally empty: the contract write_set names a single
+        report file while the gate produced two (-code.md, -sfh.md) — the
+        ethos-t2lb instantiate limitation; this prose is the authoritative
+        enumeration, authorized by leader reflection.
+
+        The gate found 11 distinct defects the two mission evaluations missed —
+        including two HIGHs on cross-session operations (pointer theft, phantom
+        bindings under stale env) and two second-order defects in fix code
+        (self-parenting join; corrupt-roster deletion) — all fixed at 75f5ab4
+        with regression tests. Convergent discovery: both reviewers found the
+        corrupt-roster-end defect independently.
