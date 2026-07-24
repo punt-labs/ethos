@@ -56,6 +56,8 @@ func init() {
 type setupConfig struct {
 	Name         string `yaml:"name"`
 	Handle       string `yaml:"handle"`
+	Email        string `yaml:"email"`
+	GitHub       string `yaml:"github"`
 	WritingStyle string `yaml:"writing_style"`
 	Bundle       string `yaml:"bundle"`
 	Solo         bool   `yaml:"solo"`
@@ -121,6 +123,23 @@ func runSetup(cmd *cobra.Command) error {
 		cfg.Handle = slugify(cfg.Name)
 	}
 
+	// Default the human's email to git user.email when unspecified. This is
+	// what makes the created identity resolvable out of the box: resolve.Resolve
+	// matches git user.email against the identity's email field. Without it, a
+	// fresh setup yields an identity nothing can resolve, and whoami and
+	// session start fail on a clean machine.
+	//
+	// Trim first so the guard is authoritative: a whitespace-only email from
+	// --file is non-empty but unresolvable — it must fall to the git default
+	// (then the hard-fail), not persist blank.
+	cfg.Email = strings.TrimSpace(cfg.Email)
+	if cfg.Email == "" {
+		cfg.Email = resolve.GitConfig("user.email")
+	}
+	if cfg.Email == "" {
+		return fmt.Errorf("setup: no email — set git user.email or pass email: in --file")
+	}
+
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("setup: %w", err)
@@ -142,6 +161,8 @@ func runSetup(cmd *cobra.Command) error {
 			Name:         cfg.Name,
 			Handle:       cfg.Handle,
 			Kind:         "human",
+			Email:        cfg.Email,
+			GitHub:       cfg.GitHub,
 			WritingStyle: cfg.WritingStyle,
 			Personality:  "principal-engineer",
 		}
@@ -323,8 +344,8 @@ func runSetup(cmd *cobra.Command) error {
 	return nil
 }
 
-// setupInteractive runs the 3-question wizard, reading from stdin and
-// writing prompts to stderr.
+// setupInteractive runs the wizard, reading from stdin and writing prompts
+// to stderr.
 func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 	reader := bufio.NewReader(os.Stdin)
 	errw := cmd.ErrOrStderr()
@@ -349,7 +370,28 @@ func setupInteractive(cmd *cobra.Command) (setupConfig, error) {
 	}
 	cfg.Handle = handle
 
-	// Prompt 3: Working style (from global store).
+	// Prompt 3: Email (default: git user.email). The created identity must
+	// carry an email so it resolves by git email; runSetup hard-fails if this
+	// stays empty and git user.email is unset.
+	defaultEmail := resolve.GitConfig("user.email")
+	if defaultEmail != "" {
+		fmt.Fprintf(errw, "Email [%s]: ", defaultEmail)
+	} else {
+		fmt.Fprint(errw, "Email: ")
+	}
+	email, _ := reader.ReadString('\n')
+	email = strings.TrimSpace(email)
+	if email == "" {
+		email = defaultEmail
+	}
+	cfg.Email = email
+
+	// Prompt 4: GitHub handle (optional).
+	fmt.Fprint(errw, "GitHub handle (optional): ")
+	gh, _ := reader.ReadString('\n')
+	cfg.GitHub = strings.TrimSpace(gh)
+
+	// Prompt 5: Working style (from global store).
 	styles := writingStyleMenu(errw)
 	if len(styles) > 0 {
 		fmt.Fprintln(errw, "Working style:")

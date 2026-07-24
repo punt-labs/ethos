@@ -58,11 +58,27 @@ ethos setup
 
 The installer places the `ethos` binary in `~/.local/bin` and,
 when `claude` and `git` are available, registers the Claude Code
-plugin. `ethos setup` asks 3 questions
-(name, handle, working style), then creates your identity, a paired
-agent, repo config, a 4-agent team, and agent definition files.
-Start Claude Code — the agent knows who it is, who you are, and how
-to delegate. See [Onboarding](docs/onboarding.md) for the full walkthrough.
+plugin. `ethos setup` asks for your name, handle, email, GitHub
+handle (optional), and working style, then creates your identity, a
+paired agent, repo config, a 4-agent team, and agent definition
+files. The email prompt defaults to your `git config user.email`;
+your identity carries that email so ethos can resolve you by it. Start
+Claude Code — the agent knows who it is, who you are, and how to
+delegate. See [Onboarding](docs/onboarding.md) for the full walkthrough.
+
+Non-interactive setup reads the same fields from a YAML file:
+
+```yaml
+name: Mal Reynolds
+handle: mal
+email: mal@serenity.ship   # optional; defaults to git config user.email
+github: mal                # optional
+writing_style: concise-quantified
+```
+
+Run `ethos setup --file config.yaml`. When `email` is omitted, setup
+uses `git config user.email`; if that is also unset, setup fails with
+a remedy rather than creating an identity nothing can resolve.
 
 `ethos setup` requires starter content to be seeded first. The
 installer runs `ethos seed` for you, so the quick start above just

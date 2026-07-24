@@ -30,7 +30,7 @@ TTY.
 
 One new command: `ethos setup`. One new embedded bundle: foundation.
 
-`ethos setup` asks 3 questions, creates 2 identities (human +
+`ethos setup` asks 5 questions, creates 2 identities (human +
 agent), writes the repo config, activates a bundle, and generates
 agent files. The new Quick Start becomes:
 
@@ -86,7 +86,31 @@ stripped). Validation: matches `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
 (same as `identity.validHandle` — no trailing hyphens, single-char
 handles allowed).
 
-#### Prompt 3: Working style
+#### Prompt 3: Email
+
+```text
+Email [priya@example.com]:
+```
+
+Default: `git config user.email`. The created identity carries this
+email so `ethos whoami` resolves the caller by git email (resolution
+chain step 3) and `ethos session start` can seat the roster root on a
+fresh machine. Required: if the prompt is left blank and
+`git config user.email` is unset, setup fails with a remedy and writes
+nothing — an identity with no resolvable email is never persisted. The
+same rule applies to `--file`: an absent `email` key defaults from git,
+and an unresolvable email hard-fails.
+
+#### Prompt 4: GitHub handle
+
+```text
+GitHub handle (optional):
+```
+
+No default. Optional: left empty when not supplied. Persisted on the
+human identity when given (the `github` key in `--file`).
+
+#### Prompt 5: Working style
 
 ```text
 Working style:
@@ -122,6 +146,7 @@ Created at `~/.punt-labs/ethos/identities/priya-chandran.yaml`:
 name: Priya Chandran
 handle: priya-chandran
 kind: human
+email: priya@example.com   # defaulted from git config user.email
 writing_style: concise-quantified
 personality: principal-engineer
 ```
@@ -636,7 +661,7 @@ different scopes and different lifecycles.
 
 The existing `identity create` asks 8 prompts. Users do not have
 opinions about personalities and talents during first use. The
-wizard asks 3 questions, applies sane defaults, and gets out of
+wizard asks 5 questions, applies sane defaults, and gets out of
 the way. Users who care use `identity update` after they understand
 the system.
 
