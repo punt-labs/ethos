@@ -6305,3 +6305,109 @@ implementation:
   collision-resistant, filesystem-safe ID with nothing new to vendor. The
   ID is opaque (nothing depends on its shape), so UUID's only advantage —
   visual similarity to Claude Code's `session_id` — bought nothing.
+
+## DES-062: Worktree-aware store resolution — store root vs checkout root (SETTLED)
+
+**Status**: Settled. Bead `ethos-yofr`. Shipped v4.4.0 (PR #370).
+
+### Problem
+
+Git worktrees are the org-standard agent-isolation mechanism, and ethos
+resolved its repo layer from the current directory. Inside a linked
+worktree, `.git` is a file (not a directory), so the cwd-walk that located
+`.punt-labs/ethos/` stopped at the worktree root — whose store is empty or
+absent, because the `.punt-labs/ethos/` submodule is checked out only in the
+main work tree — and every store silently fell back to the global store at
+`~/.punt-labs/ethos/`. The reported symptoms (missions created in a worktree
+invisible to the main checkout and vice versa; `mission create` warning about
+talents that exist in the repo store) were the surface. The load-bearing bug
+was in Tier B delegation dispatch: the CLI and the dispatch hook resolved the
+store differently, so a leader working in a worktree created a mission the CLI
+could see but the dispatch hook could not find, and the spawn was refused.
+Silent global fallback made all of it invisible until a worker concluded its
+mission "was never created."
+
+### Decision
+
+There are two distinct roots, and conflating them is the bug. Every consumer
+resolves each operation against the correct one.
+
+- **Store root (`resolve.StoreRepoRoot`).** Follows
+  `git rev-parse --git-common-dir` to the repo that *owns* the shared store —
+  identities, missions, bundles, teams, and the `.punt-labs/ethos.yaml`
+  config. In a linked worktree this resolves to the main work tree (the only
+  checkout where the submodule is populated), with a manual gitdir/commondir
+  fallback when `git` is absent (the same idiom `doctor` and the git-hook
+  resolver already use).
+- **Checkout root (`resolve.FindRepoRoot` / `EnvRepoRoot`).** Stays
+  worktree-local for genuine per-checkout state: the enable/disable marker,
+  the DES-058 audit live-zone and its pre-commit seal, generated
+  `.claude/agents/` files, the write-set verifier walk, and any git-index
+  mutation (which must land in the committing checkout).
+- **A consumer that does both a store op and a per-checkout op carries both
+  roots** — the field is split, not reclassified. The mission `Store` routes
+  records to the store root and its audit zone to the checkout root;
+  `session start` reads config from the store and writes agent files to the
+  checkout; `doctor` reads team/agent config from the store while globbing
+  `.claude/agents` and checking the seal hook on the checkout; the traceability
+  UI reads missions/delegations from the store and audit/file-browse from the
+  checkout; SubagentStart closes the delegation skeleton on the store while
+  walking the write-set on the checkout.
+- **`ETHOS_REPO_ROOT` override.** Forces the store root when auto-resolution
+  is wrong or absent, reaching every store call site. It is validated: a
+  nonexistent path, or an existing path with no `.punt-labs/ethos`, is refused
+  loudly and never returned.
+- **Loud, never silent.** A genuine fallback to the global store warns,
+  naming the root. A *refused* override hard-errors on every store **write**
+  (`setup`, `mission create`/`dispatch`/`claim`) rather than writing to the
+  wrong tree; a genuine no-repo keeps the legitimate global mode. Reads warn
+  and proceed.
+
+### Rulings
+
+- **Bundle and team config are shared-store.** `active_bundle` and `team` in
+  `.punt-labs/ethos.yaml` are read *and* written via the store root, and
+  bundle content installs (as submodules) under the main store where every
+  resolver looks. Writer and every selector-reader agree, so activation from
+  a worktree does not silently no-op. The consequence — a worktree uses the
+  main checkout's active bundle, not its own — is consistent with the store
+  itself living in main, and is accepted, not a defect.
+- **The DES-058 audit live-zone stays per-checkout.** Live-append, close-time
+  seal, and the pre-commit `audit seal` all resolve the checkout root, so a
+  mission's events land where the seal that commits them runs; only the
+  contract/results/reflections record resolves the store root.
+- **`enable`'s deposit stays per-checkout.** The vendored guide, `enabled`
+  marker, `@`-import line, and chained hooks are one cohesive unit: Claude
+  Code resolves the `@.punt-labs/ethos/CLAUDE.md` import relative to the
+  checkout's `CLAUDE.md`, so the guide cannot move to the main store without
+  breaking persona injection in the worktree. Only `enable`'s "has setup run?"
+  config *read* resolves the store root.
+- **Override refusal is uniform across writes.** `setup` and the three mission
+  write entry points share one `RepoRootOverride()` distinguisher: override
+  set but store-root empty ⇒ refused ⇒ hard error; override unset ⇒ genuine
+  no-repo ⇒ warn and use global.
+
+### Rejected alternatives
+
+- **Change `FindRepoRoot` wholesale to follow the common dir.** Reintroduces
+  the bug from the other side: the enable/disable marker and the audit
+  live-zone are legitimately per-checkout, and a worktree must be able to seal
+  its own audit trail. Splitting the roots preserves both.
+- **Resolve everything, including per-checkout state, to the store root.**
+  Breaks the per-checkout seal path (events land in main but the worktree's
+  pre-commit seal never sees them), the enable marker, agent-file generation,
+  and git-index mutations — each surfaced as a separate defect during review.
+- **Per-worktree bundles (all bundle ops on the checkout root).** A bundle
+  added in the main checkout is a submodule populated only there; a fresh
+  worktree would resolve an empty bundle directory — yofr reintroduced for
+  bundle content. The shared-store model is the only one where bundle content
+  is resolvable from every checkout.
+- **Process-global warning dedup (`sync.Once`).** Tempting for the cosmetic
+  2–4× repeat of a refusal warning per command, but in the long-lived
+  `ethos serve` MCP process a process-scoped guard silences every later
+  command's warning for the life of the process — under-warning, the exact
+  failure direction this work eliminates. The double-print is beaded
+  (`ethos-3xxx`) for a resolve-once-per-command fix instead.
+- **Silent global fallback (status quo).** The reported bug: a wrong-store
+  read or write that gives no signal is indistinguishable from success until a
+  downstream operation fails inexplicably.

@@ -116,6 +116,12 @@ Repo-local overrides global. If your tool only needs global
 identities (the common case for personal preferences), read from
 `~/.punt-labs/ethos/` only.
 
+The repo-local layer is located via the git *common* directory, not the
+current working directory, so a tool running inside a linked git worktree
+reads the shared `.punt-labs/ethos/` in the main work tree rather than
+falling back to global. Set `ETHOS_REPO_ROOT` to force the repo-local root
+when auto-resolution is wrong.
+
 ## Degradation
 
 Always degrade gracefully:
