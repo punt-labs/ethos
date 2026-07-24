@@ -109,6 +109,38 @@ func TestCLI_SessionStart_Idempotent(t *testing.T) {
 	assert.Equal(t, 1, rosters, "idempotent start must not mint a second roster")
 }
 
+// TestCLI_SessionStart_PersonaSelfConsistent pins REQ-1: with --persona,
+// start emits a second `export ETHOS_AGENT_ID=<persona>` line and keys the
+// primary on it, so the eval-then-whoami flow the README promises reflects
+// the persona — even when $USER would resolve someone else.
+func TestCLI_SessionStart_PersonaSelfConsistent(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+
+	stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", "test-agent")
+	require.Equal(t, 0, code, "stderr=%s", stderr)
+	assert.Contains(t, stdout, "export ETHOS_AGENT_ID=test-agent",
+		"--persona must emit the agent-id export; stdout=%q", stdout)
+
+	var id string
+	for _, line := range strings.Split(strings.TrimSpace(stdout), "\n") {
+		if strings.HasPrefix(line, "export ETHOS_SESSION=") {
+			id = strings.TrimPrefix(line, "export ETHOS_SESSION=")
+		}
+	}
+	require.Regexp(t, hex32, id)
+
+	// eval would export both; simulate that and confirm whoami reflects the
+	// persona with $USER pointed at a non-identity so only the session path
+	// can produce it.
+	env := withEnv(se, "ETHOS_SESSION="+id, "ETHOS_AGENT_ID=test-agent", "USER=nobody")
+	out, stderr, code := runCLI(t, env, "whoami")
+	require.Equal(t, 0, code, "whoami should exit 0; stderr=%s", stderr)
+	assert.Contains(t, out, "test-agent", "eval-then-whoami must reflect the --persona identity")
+}
+
 // TestCLI_SessionEnd covers acceptance case 6: end deletes the roster, and a
 // second end under the same env is a no-op (exit 0).
 func TestCLI_SessionEnd(t *testing.T) {

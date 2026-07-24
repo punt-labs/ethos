@@ -307,16 +307,9 @@ func init() {
 }
 
 func runSessionShow(cmd *cobra.Command) error {
-	sessionID := os.Getenv("ETHOS_SESSION")
 	ss := sessionStore()
-	if sessionID == "" {
-		claudePID := process.FindClaudePID()
-		sid, err := ss.ReadCurrentSession(claudePID)
-		if err == nil {
-			sessionID = sid
-		}
-	}
-	if sessionID == "" {
+	sessionID, ok := resolve.SessionID(ss)
+	if !ok {
 		fmt.Fprintln(cmd.OutOrStdout(), "No active session.")
 		return nil
 	}
@@ -400,7 +393,7 @@ func runSessionStart(cmd *cobra.Command) error {
 	// 1. Idempotency: an existing ETHOS_SESSION that names a live roster.
 	if envID := os.Getenv("ETHOS_SESSION"); envID != "" {
 		if _, err := ss.Load(envID); err == nil {
-			printSessionStart(cmd, envID, false)
+			printSessionStart(cmd, envID, sessionStartPersona, false)
 			return nil
 		}
 	}
@@ -412,13 +405,19 @@ func runSessionStart(cmd *cobra.Command) error {
 	}
 
 	// 3. Resolve identities: root is the human (whoami chain); primary is
-	//    the agent (ETHOS_AGENT_ID, else the repo default, else the human).
+	//    the agent. --persona folds the first iam: it keys the primary so a
+	//    matching ETHOS_AGENT_ID export (step 5) makes eval-then-whoami
+	//    reflect the persona via the REC-3 lookup. Otherwise the key is
+	//    ETHOS_AGENT_ID, else the repo default agent, else the human.
 	store := identityStore()
 	human, err := resolve.Resolve(store, ss)
 	if err != nil {
 		return fmt.Errorf("session start: resolving identity: %w", err)
 	}
-	primaryID := os.Getenv("ETHOS_AGENT_ID")
+	primaryID := sessionStartPersona
+	if primaryID == "" {
+		primaryID = os.Getenv("ETHOS_AGENT_ID")
+	}
 	if primaryID == "" {
 		agent, aerr := resolve.ResolveAgent(resolve.FindRepoRoot())
 		if aerr != nil {
@@ -442,19 +441,28 @@ func runSessionStart(cmd *cobra.Command) error {
 		return fmt.Errorf("session start: creating roster: %w", err)
 	}
 
-	printSessionStart(cmd, id, true)
+	printSessionStart(cmd, id, sessionStartPersona, true)
 	return nil
 }
 
-// printSessionStart writes the eval-able export line to stdout and a
+// printSessionStart writes the eval-able export line(s) to stdout and a
 // human-readable confirmation to stderr, so eval "$(ethos session start)"
-// captures only the export.
-func printSessionStart(cmd *cobra.Command, id string, created bool) {
+// captures only the exports. When persona is non-empty (--persona folded
+// the first iam), a second export sets ETHOS_AGENT_ID to it so the eval'd
+// shell resolves that persona — the primary participant is keyed on it.
+func printSessionStart(cmd *cobra.Command, id, persona string, created bool) {
 	if jsonOutput {
-		_ = writeJSON(cmd.OutOrStdout(), map[string]any{"session": id, "created": created})
+		out := map[string]any{"session": id, "created": created}
+		if persona != "" {
+			out["agent_id"] = persona
+		}
+		_ = writeJSON(cmd.OutOrStdout(), out)
 		return
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_SESSION=%s\n", id)
+	if persona != "" {
+		fmt.Fprintf(cmd.OutOrStdout(), "export ETHOS_AGENT_ID=%s\n", persona)
+	}
 	if created {
 		fmt.Fprintf(cmd.ErrOrStderr(), "ethos: started session %s\n", id)
 	} else {

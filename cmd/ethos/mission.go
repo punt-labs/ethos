@@ -13,7 +13,6 @@ import (
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
-	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -58,14 +57,7 @@ func missionStore() *mission.Store {
 // legacy tracked-log append, which is the right behavior outside a session
 // (ad-hoc CLI, tests).
 func currentSessionIDBestEffort() string {
-	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
-		return sid
-	}
-	ss := sessionStore()
-	sid, err := ss.ReadCurrentSession(process.FindClaudePID())
-	if err != nil {
-		return ""
-	}
+	sid, _ := resolve.SessionID(sessionStore())
 	return sid
 }
 
