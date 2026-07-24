@@ -16,7 +16,7 @@ layer:
   reference `personality: principal-engineer`, `writing_style:
   concise-quantified`, and `talent: engineering`. `cmd/ethos/setup.go`
   hardcodes these at `:146`, `:157`, `:168-169` and deliberately bypasses
-  referential validation (`saveIdentityNoRefs`, `:405-409`, comment:
+  referential validation (`saveIdentityNoRefs`, `:410-435`, comment:
   "principal-engineer is a convention, not a seeded file").
 - **F2** — `ethos seed` deploys none of those slugs to the global layer.
   `internal/seed/embed.go:23` embeds only the *README* of the
@@ -117,6 +117,24 @@ bundle-blind. Everything else (identity lookup, attribute store, role,
 team) already threads the bundle layer via
 `NewLayeredStoreWithBundle`.
 
+**Blast radius — decided behavior, not a defect.** The fix changes *what
+content a global identity resolves*, not just whether it resolves. A
+global `claude` with `talent: engineering` now reads foundation's
+`engineering.md` text in a foundation repo, gstack's in a gstack repo,
+and the global-seed copy (Part B) only when no bundle is active. The
+three `engineering.md` copies differ substantively today
+(foundation: "general engineering discipline"; gstack: "gstack builder
+framework"; the submodule/seed copy: "systems design in Go and Python"),
+so a global identity's persona content is now **bundle-dependent**. This
+is precisely the property F3 flagged as questionable ("a global identity
+shouldn't shift persona with whatever bundle a repo activates"), and R1a
+ratifies overriding it — so it is decided, not accidental. A consequence:
+**Part B's global-seed copies are shadowed whenever an active bundle
+ships the same slug**, so the global seed is load-bearing only on the
+no-bundle path. A future reader must not mistake the global seed for the
+authoritative content. Today's affected set is the `engineering` talent
+on `claude`/human under both shipped bundles.
+
 ### Part B — seed the conventional attributes (F1/F2, R1b)
 
 `ethos seed` must deploy to the global layer the attributes `setup`
@@ -130,6 +148,18 @@ registry (`.punt-labs/ethos/` in the live repo). Vendoring copies into
 - `internal/seed/sidecar/personalities/principal-engineer.md`
 - `internal/seed/sidecar/writing-styles/concise-quantified.md`
 - `internal/seed/sidecar/talents/engineering.md`
+
+**Two copies, no auto-sync.** After vendoring, the same slug exists in
+both `internal/seed/sidecar/` and the team submodule. They serve
+different masters: the embedded sidecar is authoritative for `ethos seed`
+(what a fresh machine gets), the submodule is authoritative for the team
+registry (what a repo's identities resolve against). Nothing keeps them
+in sync — the sidecar copy is a point-in-time snapshot that can drift
+from the submodule silently. This is the same latent risk as the
+per-bundle content divergence in [Part A](#part-a--attrchain-conformance-f3-r1a):
+acceptable under R4, and the divergence that matters is caught by the
+sibling validation gate (ethos-hnxz) and content-consistency work
+(ethos-bljl), not by this design.
 
 **Embed manifest** (`internal/seed/embed.go`). Add content globs for the
 two kinds that today embed only their README:
@@ -177,10 +207,20 @@ because the alternative (write to the repo layer) is a real option that
 this design rejects (see [Rejected alternatives](#rejected-alternatives)).
 
 **Remove the bypass.** Delete `saveIdentityNoRefs`
-(`cmd/ethos/setup.go:405-433`) and its two call sites; use
-`identity.Store.Save`, which already calls `ValidateRefs`
+(`cmd/ethos/setup.go:410-435`) and its two call sites (`:148`, `:171`);
+use `identity.Store.Save`, which already calls `ValidateRefs`
 (`store.go:331-332`). After Part B, `ValidateRefs` against the global root
 finds all three slugs and passes.
+
+**Validation is against the global layer only.** `Save` runs
+`ValidateRefs` on the global store, not the full repo → bundle → global
+chain. This is deliberate and correct: a global identity must be
+self-sufficient at the layer it lives in — resolvable in any repo
+regardless of which bundle is active. It also changes the interactive
+wizard's typo path: a user who types a `writing_style` slug the wizard
+does not recognize (`resolveStyleChoice` accepts an arbitrary typed slug,
+`setup.go:341-343`) now gets the actionable hard failure above instead of
+a silently-written dangling ref. That is R2-correct — fail visibly.
 
 **Ordering contract.** `Save` now fails hard if the referenced attributes
 are absent — i.e. if `setup` runs before `seed`. The normal install path
@@ -211,7 +251,7 @@ R3 additionally asks for agent files for the **default agent** and the
 below. The design's chosen behavior:
 
 - **Default agent (`claude`)**: no sub-agent file. `GenerateAgentFiles`
-  skips the main agent by design (`generate_agents.go:79-81`,
+  skips the main agent by design (`generate_agents.go:80-82`,
   `if m.Identity == mainAgent { continue }`) because the main agent *is*
   the running Claude Code session, not a spawnable sub-agent. Generating
   a `claude.md` sub-agent would misrepresent it. The real F7 concern for
@@ -233,7 +273,11 @@ repair:
 2. Re-run `ethos seed`. It is no-clobber (`seed.go`, `writeFile` skips
    existing files unless `--force`), and the three new slugs are absent
    on affected machines, so they deploy on the first re-run — no `--force`
-   needed.
+   needed. The first re-seed also lands the ~13 previously-dead sidecars
+   (`sprint-*`, `product-thinker`, `*-prose`; see Part B) into the global
+   `personalities/` and `writing-styles/` dirs. This is benign — additive
+   starter content, no-clobber — but it is a visible delta an operator
+   will see on the machine.
 3. `ethos show` is now clean; identities need no rewrite because their
    refs were always correct, merely unresolvable.
 
@@ -313,7 +357,7 @@ blocks Parts A–C.
 2. **R3 vs. generator invariants (decision recommended).** R3 asks
    `setup` to generate agent files for the default agent and the human.
    The generator deliberately (a) skips the main agent
-   (`generate_agents.go:79-81`) because it is the session, not a
+   (`generate_agents.go:80-82`) because it is the session, not a
    sub-agent, and (b) emits only for `kind == "agent"`
    (`:89-91`), so a human is ineligible. Generating either would either
    misrepresent `claude` as a spawnable sub-agent or produce a nonsensical
