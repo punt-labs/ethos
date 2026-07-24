@@ -376,6 +376,25 @@ func TestLayered_UnreadableLayerAllFailNamesRealError(t *testing.T) {
 	assert.True(t, named, "a warning must name the unreadable bundle layer; got %v", id.Warnings)
 }
 
+// TestLayered_UnreadableGlobalWarnsOnce pins the N2 dedupe: an unreadable
+// last (global) layer must produce a single warning, not a duplicate pair
+// (the per-layer "unreadable" line plus a redundant "unresolved" summary).
+func TestLayered_UnreadableGlobalWarnsOnce(t *testing.T) {
+	ls, _, _, global := setupLayeredWithBundle(t)
+
+	corruptAttribute(t, global.Root(), attribute.Personalities, "p")
+
+	writeIdentityYAML(t, global, "claude",
+		"name: Claude\nhandle: claude\nkind: agent\npersonality: p\n")
+
+	id, err := ls.Load("claude")
+	require.NoError(t, err)
+	assert.Empty(t, id.PersonalityContent)
+	require.Len(t, id.Warnings, 1, "one layer failure must warn once, not twice: %v", id.Warnings)
+	assert.Contains(t, id.Warnings[0], "global")
+	assert.Contains(t, id.Warnings[0], "unreadable")
+}
+
 // TestLayered_GlobalIdentityResolvesFromBundle pins the F3 fix: an
 // identity stored in the global layer resolves attribute content from the
 // active bundle, not just from global.

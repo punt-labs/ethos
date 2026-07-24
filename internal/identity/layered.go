@@ -173,7 +173,12 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
 			}
 			lastErr = err
 		}
-		warnings = append(warnings, fmt.Sprintf("%s %q: %v", field, slug, lastErr))
+		// A real read error on the last layer was already warned in the
+		// loop; only the not-found tail needs the "unresolved" summary, so
+		// an unreadable global layer produces one warning, not two.
+		if errors.Is(lastErr, os.ErrNotExist) {
+			warnings = append(warnings, fmt.Sprintf("%s %q: %v", field, slug, lastErr))
+		}
 		return "", false
 	}
 
