@@ -601,11 +601,11 @@ func TestFindRepoRoot_NoGitDir(t *testing.T) {
 	}
 }
 
-// TestFindRepoRoot_LinkedWorktree pins the ethos-yofr fix: from inside a
-// linked git worktree, FindRepoRoot resolves the MAIN work tree that holds
-// .punt-labs/ethos, not the worktree cwd (which would silently fall back to
-// the global store).
-func TestFindRepoRoot_LinkedWorktree(t *testing.T) {
+// TestStoreRepoRoot_LinkedWorktree pins the ethos-yofr fix: from inside a
+// linked git worktree, StoreRepoRoot (and FindRepoEthosRoot, which rides on
+// it) resolves the MAIN work tree that holds .punt-labs/ethos, while
+// FindRepoRoot keeps returning the worktree for per-checkout state.
+func TestStoreRepoRoot_LinkedWorktree(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed")
 	}
@@ -637,18 +637,21 @@ func TestFindRepoRoot_LinkedWorktree(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(origDir) })
 	require.NoError(t, os.Chdir(wt))
 
-	assert.Equal(t, realpath(t, main), realpath(t, FindRepoRoot()),
-		"worktree must resolve to the main work tree that holds .punt-labs/ethos")
+	assert.Equal(t, realpath(t, main), realpath(t, StoreRepoRoot()),
+		"the store must resolve to the main work tree that holds .punt-labs/ethos")
 	assert.Equal(t, realpath(t, ethosRoot), realpath(t, FindRepoEthosRoot()),
-		"FindRepoEthosRoot rides on FindRepoRoot, so the repo store resolves from the worktree")
+		"FindRepoEthosRoot rides on StoreRepoRoot, so the repo store resolves from the worktree")
+	assert.Equal(t, realpath(t, wt), realpath(t, FindRepoRoot()),
+		"FindRepoRoot stays worktree-local for per-checkout state")
 }
 
-// TestFindRepoRoot_EnvOverride pins that ETHOS_REPO_ROOT forces the repo
-// root for both FindRepoRoot and EnvRepoRoot, so an operator can override
-// auto-resolution when it is wrong.
-func TestFindRepoRoot_EnvOverride(t *testing.T) {
+// TestRepoRoot_EnvOverride pins that ETHOS_REPO_ROOT forces the root for
+// every resolver, so an operator can override auto-resolution when it is
+// wrong.
+func TestRepoRoot_EnvOverride(t *testing.T) {
 	t.Setenv("ETHOS_REPO_ROOT", "/forced/root")
 	assert.Equal(t, "/forced/root", FindRepoRoot())
+	assert.Equal(t, "/forced/root", StoreRepoRoot())
 	assert.Equal(t, "/forced/root", EnvRepoRoot())
 }
 

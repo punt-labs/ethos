@@ -75,7 +75,7 @@ func init() {
 // runFindMissions reads missions.jsonl, applies filters, and writes
 // the result to out in the requested format.
 func runFindMissions(out, errOut io.Writer) error {
-	repoRoot := resolve.EnvRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	if repoRoot == "" {
 		fmt.Fprintln(errOut, "ethos: find missions must run inside a repo")
 		return usageError{}

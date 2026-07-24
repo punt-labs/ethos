@@ -208,6 +208,12 @@ is `--session` > `ETHOS_SESSION` > the Claude process-tree walk; outside a
 session, `iam` and `mission claim` fail with an error naming
 `ethos session start`.
 
+The repo store (`<repo>/.punt-labs/ethos/`) resolves through the git common
+dir, so a linked worktree addresses the main work tree's store — a mission
+is visible from either checkout. `mission create`, `dispatch`, and `claim`
+warn when no repo is in scope and they fall back to the global store. Set
+`ETHOS_REPO_ROOT` to force the store root when auto-resolution is wrong.
+
 ### CLI
 
 ```bash

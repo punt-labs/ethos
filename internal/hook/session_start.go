@@ -59,7 +59,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	// The shell wrapper's `|| true` keeps Claude Code session startup
 	// fail-open (cli.md §Hook Architecture); the non-zero exit code is
 	// the signal for direct CLI invocation and `ethos doctor`.
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	agentPersona, err := resolve.ResolveAgent(repoRoot)
 	if err != nil {
 		return fmt.Errorf("resolving agent: %w", err)

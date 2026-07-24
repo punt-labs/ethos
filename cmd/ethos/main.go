@@ -277,7 +277,7 @@ func runWhoami(cmd *cobra.Command) error {
 }
 
 func runResolveAgent(cmd *cobra.Command) error {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	handle, err := resolve.ResolveAgent(repoRoot)
 	if err != nil {
 		return err

@@ -239,6 +239,23 @@ re-minted), and resolution is `--session` > `ETHOS_SESSION` > the Claude
 process walk. Outside a session, `iam` and `mission claim` fail with an
 error naming `ethos session start`.
 
+### Git worktrees and the store root
+
+The repo-layer store lives at `<repo>/.punt-labs/ethos/`. Ethos resolves it
+through the git common dir, so an agent working in a linked worktree
+(`<repo>/.claude/worktrees/x`) still addresses the store in the main work
+tree — a mission created from either checkout is visible from the other.
+When no git repository is in scope, `mission create`, `dispatch`, and
+`claim` warn to stderr that they are operating on the global store
+(`~/.punt-labs/ethos/`) rather than silently switching.
+
+Set `ETHOS_REPO_ROOT` to force the store location when auto-resolution is
+wrong. It overrides the git walk for every command and hook:
+
+```bash
+ETHOS_REPO_ROOT=/path/to/repo ethos mission list
+```
+
 ### enable / disable
 
 `install.sh` is machine scope only — it installs the binary, registers the

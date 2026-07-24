@@ -46,7 +46,7 @@ func missionStore() *mission.Store {
 		os.Exit(1)
 	}
 	root := filepath.Join(home, ".punt-labs", "ethos")
-	return mission.NewStoreWithRoots(resolve.FindRepoRoot(), root).
+	return mission.NewStoreWithRoots(resolve.StoreRepoRoot(), root).
 		WithSessionResolver(currentSessionIDBestEffort)
 }
 
@@ -58,7 +58,7 @@ func missionStore() *mission.Store {
 // degradation is the failure mode; a warning that names the resolved root
 // is the fix. Read-only queries stay quiet.
 func warnIfGlobalFallback(op string) {
-	if resolve.FindRepoRoot() != "" {
+	if resolve.StoreRepoRoot() != "" {
 		return
 	}
 	root := "~/.punt-labs/ethos"
@@ -121,7 +121,7 @@ func missionStoreForCreate() *mission.Store {
 	// fallback. NewStore + WithRepoRoot would only wire the trace
 	// summary and leave per-mission storage on the global tree
 	// (m-2026-05-23-004 escalation).
-	ms := mission.NewStoreWithRoots(resolve.FindRepoRoot(), root).
+	ms := mission.NewStoreWithRoots(resolve.StoreRepoRoot(), root).
 		WithSessionResolver(currentSessionIDBestEffort)
 	is := identityStore()
 	sources, err := mission.NewLiveHashSources(is, layeredRoleStore(is), layeredTeamStore(is))
@@ -777,7 +777,7 @@ func runMissionMigrate(missionID string, out, errOut io.Writer) error {
 	if !missionMigrateToRepo {
 		return fmt.Errorf("mission migrate: only --to-repo is supported")
 	}
-	repoRoot := resolve.EnvRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	if repoRoot == "" {
 		fmt.Fprintln(errOut, "ethos: mission migrate must run inside a repo")
 		return usageError{}
@@ -1101,7 +1101,7 @@ func runMissionClose(idOrPrefix, status string) error {
 	// immediately follows. A seal failure must not lose the close (the
 	// contract is already closed on disk); surface it on stderr and carry
 	// on — the pre-commit seal is the clean-tree backstop.
-	if repoRoot := resolve.FindRepoRoot(); repoRoot != "" {
+	if repoRoot := resolve.StoreRepoRoot(); repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
 		}
@@ -1631,7 +1631,7 @@ func runMissionRelease() error {
 // configured — the common case for dispatch is a leader session inside
 // a repo, but dispatch should not fail when run outside one.
 func resolveLeader() string {
-	repoRoot := resolve.FindRepoRoot()
+	repoRoot := resolve.StoreRepoRoot()
 	agent, err := resolve.ResolveAgent(repoRoot)
 	if err == nil && agent != "" {
 		return agent
