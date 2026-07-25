@@ -69,3 +69,6 @@ ethos-*.jsonl
 
 # Generated research cache
 research/
+
+# ethos runtime (never track) — DES-058 live zone + mission locks
+.punt-labs/ethos/missions/**/*.lock
