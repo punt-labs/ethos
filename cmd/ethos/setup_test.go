@@ -16,6 +16,7 @@ import (
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -158,6 +159,127 @@ handle: solo-dev
 	// No agent files generated.
 	_, err = os.ReadDir(filepath.Join(repo, ".claude", "agents"))
 	assert.True(t, os.IsNotExist(err), "agents dir should not exist in solo mode")
+}
+
+// memberIdentity returns the identity bound to role on t, or "" if the
+// role is not filled.
+func memberIdentity(t *team.Team, role string) string {
+	for _, m := range t.Members {
+		if m.Role == role {
+			return m.Identity
+		}
+	}
+	return ""
+}
+
+// TestSetup_AssignsLeadershipTeam pins the default org shape: after setup
+// the repo-local team binds the human to the ceo seat and claude to the
+// coo seat, the bundle's placeholder seats do not survive, and a second
+// setup is a no-op.
+func TestSetup_AssignsLeadershipTeam(t *testing.T) {
+	_, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `name: Ada Byron
+handle: ada-byron
+`)
+
+	stdout, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s\nstdout: %s", stderr, stdout)
+
+	ethosRoot := filepath.Join(repo, ".punt-labs", "ethos")
+	tm, err := team.NewStore(ethosRoot).Load("foundation")
+	require.NoError(t, err, "repo-local team should exist after setup")
+
+	assert.Equal(t, "ada-byron", memberIdentity(tm, "ceo"), "human bound to ceo seat")
+	assert.Equal(t, "claude", memberIdentity(tm, "coo"), "claude bound to coo seat")
+	for _, m := range tm.Members {
+		assert.NotEqual(t, "foundation-ceo", m.Identity, "placeholder ceo seat must be rebound")
+		assert.NotEqual(t, "foundation-coo", m.Identity, "placeholder coo seat must be rebound")
+	}
+
+	// Second run is idempotent: reports the team already assigned and leaves
+	// the seats untouched.
+	_, stderr2, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "stderr: %s", stderr2)
+	assert.Contains(t, stderr2, "already assigned")
+
+	tm2, err := team.NewStore(ethosRoot).Load("foundation")
+	require.NoError(t, err)
+	assert.Equal(t, "ada-byron", memberIdentity(tm2, "ceo"))
+	assert.Equal(t, "claude", memberIdentity(tm2, "coo"))
+}
+
+// TestSetup_LeadershipHandleCollision pins guard (b): a human handle equal
+// to the coo seat identity (claude) fails loudly rather than collapsing
+// CEO and COO onto one identity.
+func TestSetup_LeadershipHandleCollision(t *testing.T) {
+	_, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `name: Claude
+handle: claude
+`)
+
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.Error(t, err, "human handle 'claude' must fail; stderr: %s", stderr)
+	assert.Contains(t, err.Error(), "collides with the COO seat")
+}
+
+// TestRebindLeadershipSeats exercises the pure rebind + guard logic across
+// every shape: the happy pair, a team with no leadership seats, each
+// incomplete pair, and the human/coo handle collision.
+func TestRebindLeadershipSeats(t *testing.T) {
+	specialist := team.Member{Identity: "foundation-architect", Role: "architect"}
+
+	t.Run("happy path rebinds both seats", func(t *testing.T) {
+		tm := &team.Team{Name: "foundation", Members: []team.Member{
+			{Identity: "foundation-ceo", Role: "ceo"},
+			{Identity: "foundation-coo", Role: "coo"},
+			specialist,
+		}}
+		rebound, err := rebindLeadershipSeats(tm, "ada", "claude")
+		require.NoError(t, err)
+		assert.True(t, rebound)
+		assert.Equal(t, "ada", memberIdentity(tm, "ceo"))
+		assert.Equal(t, "claude", memberIdentity(tm, "coo"))
+		assert.Equal(t, "foundation-architect", memberIdentity(tm, "architect"), "specialist seat untouched")
+	})
+
+	t.Run("no leadership seats is a no-op", func(t *testing.T) {
+		tm := &team.Team{Name: "custom", Members: []team.Member{specialist}}
+		rebound, err := rebindLeadershipSeats(tm, "ada", "claude")
+		require.NoError(t, err)
+		assert.False(t, rebound)
+	})
+
+	t.Run("ceo without coo fails", func(t *testing.T) {
+		tm := &team.Team{Name: "half", Members: []team.Member{
+			{Identity: "x", Role: "ceo"}, specialist,
+		}}
+		_, err := rebindLeadershipSeats(tm, "ada", "claude")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "incomplete leadership pair")
+	})
+
+	t.Run("coo without ceo fails", func(t *testing.T) {
+		tm := &team.Team{Name: "half", Members: []team.Member{
+			{Identity: "x", Role: "coo"}, specialist,
+		}}
+		_, err := rebindLeadershipSeats(tm, "ada", "claude")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "incomplete leadership pair")
+	})
+
+	t.Run("human handle colliding with coo fails", func(t *testing.T) {
+		tm := &team.Team{Name: "foundation", Members: []team.Member{
+			{Identity: "foundation-ceo", Role: "ceo"},
+			{Identity: "foundation-coo", Role: "coo"},
+		}}
+		_, err := rebindLeadershipSeats(tm, "claude", "claude")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "collides with the COO seat")
+	})
 }
 
 func TestSetup_BundleFlag_Valid(t *testing.T) {

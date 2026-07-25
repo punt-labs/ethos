@@ -414,16 +414,9 @@ func assignLeadershipTeam(errw io.Writer, storeRoot, bundleName, humanHandle str
 		return nil
 	}
 
-	rebound := false
-	for i := range src.Members {
-		switch src.Members[i].Role {
-		case "ceo":
-			src.Members[i].Identity = humanHandle
-			rebound = true
-		case "coo":
-			src.Members[i].Identity = "claude"
-			rebound = true
-		}
+	rebound, err := rebindLeadershipSeats(src, humanHandle, cooIdentity)
+	if err != nil {
+		return err
 	}
 	if !rebound {
 		return nil // bundle team has no leadership seats to rebind
@@ -432,8 +425,49 @@ func assignLeadershipTeam(errw io.Writer, storeRoot, bundleName, humanHandle str
 	if err := repoStore.Save(src, identityExistsFunc(), roleExistsFunc()); err != nil {
 		return fmt.Errorf("writing team %q: %w", bundleName, err)
 	}
-	fmt.Fprintf(errw, "assigned: %s=ceo, claude=coo on team %q\n", humanHandle, bundleName)
+	fmt.Fprintf(errw, "assigned: %s=ceo, %s=coo on team %q\n", humanHandle, cooIdentity, bundleName)
 	return nil
+}
+
+// cooIdentity is the agent handle setup always binds to the coo seat — the
+// operational lead is claude org-wide.
+const cooIdentity = "claude"
+
+// rebindLeadershipSeats rebinds t's ceo seat to humanHandle and its coo
+// seat to cooHandle in place, and reports whether t carried any leadership
+// seat to rebind. Two degenerate shapes fail loudly rather than producing a
+// silently broken team: a team with only one of the two seats (the graph
+// promises a ceo↔coo pair), and a humanHandle equal to cooHandle (CEO and
+// COO would collapse onto one identity). Neither occurs with the shipped
+// foundation/gstack bundles, but a custom bundle could trip either.
+func rebindLeadershipSeats(t *team.Team, humanHandle, cooHandle string) (bool, error) {
+	hasCeo, hasCoo := false, false
+	for _, m := range t.Members {
+		switch m.Role {
+		case "ceo":
+			hasCeo = true
+		case "coo":
+			hasCoo = true
+		}
+	}
+	if !hasCeo && !hasCoo {
+		return false, nil // no leadership seats — nothing to rebind
+	}
+	if hasCeo != hasCoo {
+		return false, fmt.Errorf("team %q has an incomplete leadership pair (ceo=%t, coo=%t); a CEO/COO team needs both seats", t.Name, hasCeo, hasCoo)
+	}
+	if humanHandle == cooHandle {
+		return false, fmt.Errorf("human handle %q collides with the COO seat; CEO and COO must be distinct identities", humanHandle)
+	}
+	for i := range t.Members {
+		switch t.Members[i].Role {
+		case "ceo":
+			t.Members[i].Identity = humanHandle
+		case "coo":
+			t.Members[i].Identity = cooHandle
+		}
+	}
+	return true, nil
 }
 
 // setupInteractive runs the wizard, reading from stdin and writing prompts
