@@ -1,7 +1,8 @@
 // Package enable turns ethos on and off in a repo per the
 // tool-enable-disable standard: it deposits the vendored guide and its §7
 // manifest, writes the enabled marker, adds the canonical @-import line to
-// the repo CLAUDE.md, and chains the two git hooks — and reverses all four
+// the repo CLAUDE.md, chains the two git hooks, and ensures the repo
+// .gitignore covers ethos's runtime zones — and reverses the reversible parts
 // non-destructively on disable. It composes internal/claudemd (the import
 // line) and internal/githook (the hook chaining); it never reads, merges, or
 // overwrites repo config or seal-managed data.
@@ -117,6 +118,12 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	if err := chainHooks(repoRoot, rep); err != nil {
 		return rep, err
 	}
+
+	action, detail, err := ensureGitignore(repoRoot)
+	if err != nil {
+		return rep, err
+	}
+	rep.step("gitignore", action, detail)
 
 	hint, warning := configStatus(storeRoot)
 	if warning != "" {
