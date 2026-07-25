@@ -1,0 +1,29 @@
+mission_id: m-2026-07-25-029
+status: failed
+type: implement
+created_at: "2026-07-25T21:18:57Z"
+updated_at: "2026-07-25T21:59:23Z"
+closed_at: "2026-07-25T21:59:23Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: dna
+    pinned_at: "2026-07-25T21:18:57Z"
+    hash: cb11878588752bbead4291066dda546629287cd9360d0be4fd857654e7c21208
+inputs: {}
+write_set:
+    - internal/seed
+    - cmd/ethos/setup.go
+    - internal/role
+    - internal/doctor
+success_criteria:
+    - 'Default org shape all bundles+setups: human=CEO apex, claude=COO, specialists report to COO not architect (foundation+gstack)'
+    - ceo+coo roles added (seed+bundles); architect a peer under COO
+    - 'both bundle team graphs rewired: specialists reports_to coo, coo reports_to ceo; no everyone->architect edges'
+    - ethos setup assigns human=ceo, claude=coo by default (--file+interactive), in the activated team; --solo works
+    - internal/role/sidecar_test.go guard updated (output_format scoped to worker roles); internal/doctor CheckIdentityDir falls back to global identities so a teams-only repo does not FAIL
+    - validate-content passes; container dogfood shows CEO->COO->specialists (asserted); make check green; commit incrementally
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
