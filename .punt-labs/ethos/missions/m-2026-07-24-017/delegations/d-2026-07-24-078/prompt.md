@@ -1,0 +1,19 @@
+You are the worker on ethos mission m-2026-07-24-026 (DESIGN stage). Working directory <repo>, main branch. Run `ethos mission show m-2026-07-24-026`, then `ethos mission claim m-2026-07-24-026`.
+
+DESIGN ONLY — no install.sh or code changes. Produce docs/install-cli-only.md.
+
+FEATURE: an install.sh flag that installs everything EXCEPT the Claude Code plugin/marketplace registration — the binary, ~/.local/bin PATH setup, identity dir, and hooks all still run; only the marketplace-register + plugin-install steps are skipped. Two audiences: (a) Codex and other non-Claude harnesses (no plugin surface at all), and (b) Claude Code users whose ENTERPRISE POLICY blocks plugin installation but who use ethos fine via the CLI. This design graduates into a punt-kit standard for every punt tool's install.sh.
+
+READ FIRST (this is the framing, not the whole design): install.sh — note it ALREADY has an internal SKIP_PLUGIN var (Step 1) that auto-sets to 1 when the `claude` CLI is absent or `git` is missing, and Steps 4 (register marketplace), 5 (SSH fallback), 6 (install plugin) are already gated on `[ "$SKIP_PLUGIN" = "0" ]`. So the claude-absent case is already handled; the GAP is an EXPLICIT operator-driven skip for when claude IS present but plugins are blocked, plus curl|sh arg passing (install.sh is run as `curl … | sh`, which today parses no args). Also read DESIGN.md DES-059 (enable/disable), DES-060 (setup consistency), DES-061 (harness-neutral sessions) so the CLI-only success path (how a user proceeds without the plugin) is accurate.
+
+The design doc must resolve each of these as a DECISION with a clear RECOMMENDATION (the operator will ratify):
+1. Flag name + semantics — --no-plugin vs --cli-only vs --skip-plugin (pick one, justify; McIlroy/Plan9 clarity). Skip ONLY the plugin; everything else runs.
+2. curl|sh argument passing — the `sh -s -- <flag>` form; show exactly how the README/website install one-liner changes, and confirm POSIX sh arg parsing in a piped script.
+3. Env-var equivalent — e.g. ETHOS_NO_PLUGIN=1 — for arg-hostile contexts (CI, some curl|sh setups). Precedence vs the flag.
+4. Auto-detect vs explicit — should install.sh try to detect the enterprise-blocked case (claude present but `claude plugin` fails/forbidden) and skip gracefully, or require the explicit flag? And should the existing claude-absent auto-skip print a clearer "ethos CLI installed (CLI-only mode)" success message?
+5. Skip messaging — exactly what the user is told on skip: CLI is installed and works, and how to proceed WITHOUT the plugin (setup / enable / `eval "$(ethos session start …)"` per DES-061). Accuracy matters.
+6. Interaction with `ethos enable` / `ethos setup` — enable deposits the vendored guide + @-import + chained hooks; setup writes config + generates .claude/agents. In CLI-only mode, which of these still make sense, and do enable/setup need a parallel skip/mode? Recommend.
+
+Then a PUNT-KIT STANDARD DRAFT section: the canonical flag name, env var, `sh -s --` invocation, skip semantics, and success messaging that EVERY punt tool's install.sh must implement identically — written so it can be lifted verbatim into punt-kit/standards/ (match the tone/structure of the existing punt-kit CLI and shell standards). Include a short conformance checklist.
+
+Include REJECTED ALTERNATIVES (e.g. a separate install-cli.sh script; a post-install `ethos plugin remove`; making CLI-only the default). Do NOT edit DESIGN.md (the COO authors the ADR) or install.sh. Commit the doc (write-set is `docs`), pass `make docs` (markdownlint). Submit the mission result normally. Reply "written — <sha>" + the design doc path + a numbered decision list, each with your recommendation, for operator ratification.

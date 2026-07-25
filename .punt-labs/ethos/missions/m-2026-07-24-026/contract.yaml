@@ -1,0 +1,32 @@
+mission_id: m-2026-07-24-026
+status: closed
+type: implement
+created_at: "2026-07-24T23:56:39Z"
+updated_at: "2026-07-25T04:41:08Z"
+closed_at: "2026-07-25T04:41:08Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-24T23:56:39Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - docs
+success_criteria:
+    - 'DESIGN ONLY — no install.sh or code changes this mission. Produce docs/install-cli-only.md: the design for an install.sh flag that installs everything EXCEPT the Claude Code plugin/marketplace registration (binary'
+    - PATH
+    - identity dir
+    - hooks all still run)
+    - for (a) Codex/non-Claude harnesses and (b) Claude Code users whose enterprise policy blocks plugins but who use ethos via CLI. Build on the EXISTING install.sh SKIP_PLUGIN logic (it already auto-skips when the claude CLI or git is absent — read Steps 1/4/5/6). The new work is an EXPLICIT operator-driven skip for when claude IS present but plugins are blocked. Cover
+    - 'each as a decision with a RECOMMENDATION for operator ratification: (1) flag name (e.g. --no-plugin vs --cli-only vs --skip-plugin) and semantics — skip ONLY the plugin'
+    - everything else runs; (2) curl|sh argument passing (sh -s -- <flag>) and how the README/docs curl one-liner changes; (3) an env-var equivalent (e.g. ETHOS_NO_PLUGIN=1) for arg-hostile contexts/CI; (4) whether to auto-detect the enterprise-blocked case vs require the explicit flag
+    - 'and whether the existing claude-absent auto-skip should emit a clearer CLI-only success message; (5) messaging on skip — what the user is told (CLI works; how to proceed without the plugin: setup/enable/session start per DES-059/DES-060/DES-061); (6) interaction with ethos enable/setup (do they need a parallel skip? enable deposits the guide+@-import+hooks — is that wanted in CLI-only mode?). Then a section drafting the PUNT-KIT STANDARD this graduates into: the canonical flag name'
+    - env var
+    - sh -s -- invocation
+    - skip semantics
+    - and success messaging that EVERY punt tool's install.sh (vox/beadle/biff/quarry/…) must implement uniformly — written so it can be lifted into punt-kit/standards/. Include rejected alternatives. Do NOT edit DESIGN.md (COO authors the ADR) or install.sh. Reply with the design doc path + a crisp decision list (each with your recommendation) for operator ratification.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

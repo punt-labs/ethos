@@ -1,0 +1,22 @@
+results:
+    - mission: m-2026-07-24-026
+      round: 1
+      created_at: "2026-07-25T00:01:06Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/install-cli-only.md
+          added: 375
+          removed: 0
+      evidence:
+        - name: make docs (markdownlint)
+          status: pass
+        - name: read install.sh SKIP_PLUGIN gating (Steps 1/4/5/6)
+          status: pass
+        - name: read DESIGN.md DES-059/060/061 for CLI-only success path
+          status: pass
+      open_questions:
+        - For a pure non-Claude harness (Codex), ethos enable's @-import targets CLAUDE.md but Codex reads AGENTS.md. Flagged in D6 as out-of-scope follow-up; recommend a separate bead for harness-aware enable.
+      prose: |
+        Design doc for install.sh --no-plugin. Six decisions, each with a recommendation for operator ratification: (1) flag name --no-plugin; (2) sh -s -- --no-plugin argument passing; (3) ETHOS_NO_PLUGIN=1 env var with OR precedence; (4) require explicit flag, no policy auto-detection, unify skip messaging; (5) CLI-only success block grounded in DES-059/060/061; (6) no parallel skip on enable/setup. Includes a punt-kit standard draft (canonical flag, env var, sh -s -- invocation, skip semantics, success messaging, conformance checklist) and six rejected alternatives. DESIGN ONLY — install.sh and DESIGN.md untouched per contract.
