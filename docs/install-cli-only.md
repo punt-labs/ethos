@@ -314,8 +314,8 @@ OR a required capability (`claude`, `git`) is absent. There is no
 counter-flag to force the plugin on; you cannot install a plugin without
 `claude`.
 
-**Skip semantics.** Skipping is scoped to marketplace-register + plugin
--install. It MUST NOT skip the binary, PATH edits, directories, seed, or
+**Skip semantics.** Skipping is scoped to marketplace-register +
+plugin-install. It MUST NOT skip the binary, PATH edits, directories, seed, or
 per-repo enablement. A tool's per-repo `enable`/`setup` verbs are
 unaffected and gain no parallel flag — the plugin flag lives only on
 `install.sh`.
