@@ -19,12 +19,17 @@ func sidecarRoot(t *testing.T) string {
 func TestSidecarRolesLoad(t *testing.T) {
 	store := NewStore(sidecarRoot(t))
 
-	expected := []string{
+	// Worker roles produce a structured FINDINGS handoff; leadership
+	// roles (ceo, coo) direct and delegate, so they carry no
+	// output_format template.
+	worker := []string{
 		"architect", "implementer", "researcher",
 		"reviewer", "security-reviewer", "test-engineer",
 	}
+	leadership := []string{"ceo", "coo"}
+	expected := append(append([]string{}, worker...), leadership...)
 
-	for _, name := range expected {
+	for _, name := range worker {
 		t.Run(name, func(t *testing.T) {
 			r, err := store.Load(name)
 			require.NoError(t, err)
@@ -33,12 +38,24 @@ func TestSidecarRolesLoad(t *testing.T) {
 			assert.NotEmpty(t, r.Tools)
 			assert.NotEmpty(t, r.Model, "sidecar role %q should have a model", name)
 			assert.NoError(t, ValidateModel(r.Model), "role %q has invalid model", name)
-			// Every shipped sidecar role carries a structured-handoff
+			// Every shipped worker role carries a structured-handoff
 			// template. A future edit that strips output_format from
 			// one role surfaces as a per-subtest failure naming the
 			// role, not a single aggregate error.
 			assert.NotEmpty(t, r.OutputFormat,
 				"sidecar role %q must ship with an output_format template", name)
+		})
+	}
+
+	for _, name := range leadership {
+		t.Run(name, func(t *testing.T) {
+			r, err := store.Load(name)
+			require.NoError(t, err)
+			assert.Equal(t, name, r.Name)
+			assert.NotEmpty(t, r.Responsibilities)
+			assert.NotEmpty(t, r.Tools)
+			assert.NotEmpty(t, r.Model, "sidecar role %q should have a model", name)
+			assert.NoError(t, ValidateModel(r.Model), "role %q has invalid model", name)
 		})
 	}
 
