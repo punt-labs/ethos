@@ -6411,3 +6411,91 @@ resolves each operation against the correct one.
 - **Silent global fallback (status quo).** The reported bug: a wrong-store
   read or write that gives no signal is indistinguishable from success until a
   downstream operation fails inexplicably.
+
+## DES-063: CLI-only install — `install.sh --no-plugin` (SETTLED)
+
+**Status**: Settled. Operator-ratified 2026-07-25. Full design in
+`docs/install-cli-only.md`. Graduated to the punt-kit `install-cli-only`
+standard (punt-kit#236).
+
+### Problem
+
+`install.sh` does two jobs in one run: it installs the **ethos CLI** (binary,
+`~/.local/bin` on PATH, identity dir, seed, per-repo `enable`, `doctor`) and it
+registers the **Claude Code plugin** (marketplace add/update, plugin install).
+The CLI is harness-neutral; the plugin is Claude-Code-only. Two audiences want
+the first job without the second: **(a) non-Claude harnesses** (Codex, a plain
+terminal) that have no plugin surface, and **(b) enterprise Claude users** whose
+org policy blocks plugin/marketplace installation but who use ethos via the CLI.
+The installer already auto-skips the plugin when `claude` or `git` is absent
+(audience (a) with no `claude` on PATH), but there was no way to say "install the
+CLI, skip the plugin, on purpose" for audience (b) — `claude` is present, so the
+auto-skip never fires and the installer proceeds to `claude plugin install` and
+fails on the policy block. And a `curl … | sh` install parses no arguments, so
+there was nowhere to put a flag.
+
+### Decision
+
+An explicit, operator-driven plugin skip, scoped to the plugin/marketplace steps
+only; everything else (binary, PATH, dirs, seed, `enable`, `doctor`) runs
+unchanged.
+
+- **`--no-plugin` flag.** The GNU/POSIX `--no-<feature>` idiom for a default-on
+  installer feature. It names the action (skip the plugin), not the audience
+  (`--cli-only` would overclaim — hooks, dirs, PATH, and `enable` still run). A
+  POSIX arg-parse loop runs before any work; `-h`/`--help` prints usage; an
+  unknown option is a usage error (exit 2) — a piped installer must not silently
+  ignore a misspelled `--no-plguin` and install the plugin the user asked to skip.
+- **`ETHOS_NO_PLUGIN=1` env var.** For argument-hostile contexts (CI, proxies,
+  config systems). Honored equally with the flag; skips only when the value is
+  exactly `1`, matching the internal `0/1` convention — no truthy-string guessing.
+- **Single OR resolution.** `SKIP_PLUGIN = 1` if `--no-plugin` present OR
+  `ETHOS_NO_PLUGIN=1` OR `claude` absent OR `git` absent. The flag and env fold
+  into the variable Step 1 already owns; the existing capability-absence auto-skip
+  is preserved. There is deliberately **no** counter-flag to force the plugin on —
+  you cannot install a plugin without `claude`.
+- **Message gated on the skip, not the cause.** When `SKIP_PLUGIN=1` for any
+  reason, the installer prints a CLI-only success block (the CLI works via
+  CLI/MCP/filesystem; next steps `ethos setup` and
+  `eval "$(ethos session start --persona <handle>)"` per DES-061; re-run without
+  `--no-plugin` to add the plugin later) and never the "Restart Claude Code to
+  activate the plugin" line. This also fixes the pre-existing bug where the
+  capability-absent auto-skip still printed the plugin-activation text.
+- **`enable`/`setup` unchanged.** The flag lives solely on `install.sh`. `enable`
+  still deposits the guide + `@`-import and chains the DES-058/DES-054 hooks (the
+  audit backbone is harness-neutral and must run in CLI-only mode); `setup` still
+  writes config and generates `.claude/agents/` (inert for non-Claude, needed for
+  enterprise Claude). Neither installs the plugin, so neither gains a parallel
+  flag.
+
+### Rulings
+
+- **Require the explicit flag; do not auto-detect the policy block.** A
+  `claude plugin` error is indistinguishable from a transient/network/auth
+  failure; auto-skipping on it would mask real failures — the DES-059
+  silent-absence anti-pattern. Capability-absence (`command -v`) stays the only
+  auto-skip signal; a policy block requires the explicit flag/env.
+- **Graduates to a punt-kit standard.** The canonical `--no-plugin` flag,
+  `<TOOL>_NO_PLUGIN` env, `sh -s -- --no-plugin` invocation, skip semantics,
+  success messaging, and a conformance checklist are filed as the punt-kit
+  `install-cli-only` standard so every punt tool's installer behaves identically;
+  ethos `install.sh` is the reference implementation.
+- **Codex `@`-import targeting is out of scope.** For a pure non-Claude harness,
+  `enable`'s `@`-import targets `CLAUDE.md`, which Codex ignores (it reads
+  `AGENTS.md`). Harness-aware `enable` is a separate concern beaded independently;
+  `--no-plugin` fully serves audience (b) and installs a working CLI for audience
+  (a).
+
+### Rejected alternatives
+
+- **A separate `install-cli.sh`.** Two scripts sharing ~90% of their logic drift
+  (the DES-059 "two copies drift" lesson). One script with a boolean flag has one
+  code path to test.
+- **Post-install `plugin remove`.** Requires `claude plugin install` to succeed
+  first — exactly what fails for the enterprise-blocked audience — and leaves the
+  marketplace registered.
+- **CLI-only by default.** Breaks the happy path for the Claude-plugin majority;
+  opting out is the minority action, so it takes the flag.
+- **`--cli-only` as the name.** Overclaims; hooks/dirs/PATH/`enable` still run.
+- **A truthy env parser** (`true`/`yes`/non-empty). Locale-dependent and
+  inconsistent with the installer's `0/1` convention; one accepted value (`1`).

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`install.sh --no-plugin` (CLI-only install).** Installs the ethos CLI —
+  binary, PATH, identity dir, seed, per-repo `enable`, health check — and skips
+  only the Claude Code marketplace/plugin steps. For non-Claude harnesses
+  (Codex, a plain terminal) and for Claude Code users whose enterprise policy
+  blocks plugin installation. Pass it through the piped installer with
+  `curl … | sh -s -- --no-plugin`, or set `ETHOS_NO_PLUGIN=1` for
+  argument-hostile contexts. On skip, the installer prints a CLI-only success
+  message (no "restart Claude Code" line) and points to `ethos setup` and
+  `ethos session start`. An unknown flag is a usage error (exit 2). Design in
+  DES-063 / `docs/install-cli-only.md`; codified as the punt-kit
+  `install-cli-only` standard.
+
 ## [4.4.1] - 2026-07-24
 
 ### Changed
