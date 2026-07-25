@@ -64,7 +64,8 @@ const (
 //     Every extract_into entry runs through the same per-entry
 //     check (the same helper that validates write_set entries).
 //  12. budget.rounds is in [1, 10]
-//  13. success_criteria has at least one entry
+//  13. success_criteria has at least one entry, and no entry is empty
+//      or whitespace-only
 //  14. current_round is in [1, budget.rounds] (3.4 round-tracking
 //     invariant; zero is rewritten to 1 by Store.Create so a
 //     pre-3.4 contract loaded in-place still parses)

@@ -568,7 +568,8 @@ ethos mission dispatch \
   --evaluator djb \
   --write-set "internal/session/store.go,internal/session/store_test.go" \
   --extract-into "internal/session/" \
-  --criteria "purge removes stale entries,test covers TTL edge case" \
+  --criteria "purge removes stale entries" \
+  --criteria "test covers TTL edge case" \
   --context "Follow-up from PR #280" \
   --ticket ethos-7al \
   --type implement \
@@ -576,6 +577,8 @@ ethos mission dispatch \
 ```
 
 Required flags: `--worker`, `--evaluator`, `--write-set`, `--criteria`.
+`--criteria` is **repeatable** — pass it once per success criterion (commas
+are preserved within a criterion, not treated as separators).
 Optional: `--extract-into`, `--context`, `--ticket`, `--type`
 (default: implement), `--budget` (default: 2). Leader is resolved from
 the repo's configured `agent:` value; if unset or outside a repo,
