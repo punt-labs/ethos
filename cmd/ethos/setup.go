@@ -14,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -332,6 +333,15 @@ func runSetup(cmd *cobra.Command) error {
 	}
 	result.Bundle = cfg.Bundle
 
+	// --- Assign CEO/COO leadership ---
+	// The default org shape is human=CEO (apex), claude=COO; specialists
+	// report to the COO. The bundle team ships the graph with placeholder
+	// ceo/coo seats — bind them to the real identities so the activated
+	// team resolves against real members.
+	if err := assignLeadershipTeam(errw, storeRoot, cfg.Bundle, cfg.Handle); err != nil {
+		return fmt.Errorf("setup: assigning CEO/COO team: %w", err)
+	}
+
 	// --- Generate agent files ---
 	is := identityStore()
 	ts := layeredTeamStore(is)
@@ -368,6 +378,61 @@ func runSetup(cmd *cobra.Command) error {
 	} else {
 		printSetupTable(cmd.OutOrStdout(), result)
 	}
+	return nil
+}
+
+// assignLeadershipTeam writes a repo-local team that binds the human
+// identity to the ceo seat and the claude agent to the coo seat. The
+// collaboration graph — every specialist reporting to the coo, the coo
+// reporting to the ceo — comes straight from the active bundle's team;
+// setup only rebinds the two leadership seats from the bundle's
+// placeholders to the real identities. The repo-local team wins over the
+// bundle layer, so `ethos team show` and the persona hooks resolve
+// human=ceo, claude=coo.
+//
+// Idempotent: a second run finds the team already present and leaves it
+// untouched. A bundle whose team ships no ceo or coo seat is left as-is —
+// nothing is rebound and no repo team is written.
+func assignLeadershipTeam(errw io.Writer, storeRoot, bundleName, humanHandle string) error {
+	bundleRoot := resolveBundleRoot()
+	if bundleRoot == "" {
+		return nil // legacy or no bundle — nothing to bind
+	}
+
+	src, err := team.NewStore(bundleRoot).Load(bundleName)
+	if err != nil {
+		if errors.Is(err, team.ErrNotFound) {
+			return nil // bundle ships no team — nothing to bind
+		}
+		return fmt.Errorf("loading bundle team %q: %w", bundleName, err)
+	}
+
+	ethosRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
+	repoStore := team.NewStore(ethosRoot)
+	if repoStore.Exists(bundleName) {
+		fmt.Fprintf(errw, "skipped: team %q already assigned\n", bundleName)
+		return nil
+	}
+
+	rebound := false
+	for i := range src.Members {
+		switch src.Members[i].Role {
+		case "ceo":
+			src.Members[i].Identity = humanHandle
+			rebound = true
+		case "coo":
+			src.Members[i].Identity = "claude"
+			rebound = true
+		}
+	}
+	if !rebound {
+		return nil // bundle team has no leadership seats to rebind
+	}
+
+	if err := repoStore.Save(src, identityExistsFunc(), roleExistsFunc()); err != nil {
+		return fmt.Errorf("writing team %q: %w", bundleName, err)
+	}
+	fmt.Fprintf(errw, "assigned: %s=ceo, claude=coo on team %q\n", humanHandle, bundleName)
 	return nil
 }
 

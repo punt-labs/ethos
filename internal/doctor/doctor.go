@@ -345,15 +345,27 @@ func stripInlineComment(line string) string {
 }
 
 // CheckIdentityDir verifies the identity directory exists.
+//
+// A layered store reports its repo-local identities dir as primary. That
+// dir is legitimately absent when a repo carries only a repo-local team
+// under .punt-labs/ethos/ and its identities live in the active bundle or
+// the global store — the default shape after `ethos setup`. In that case
+// the check falls back to the global identities dir before reporting a
+// fault, so a healthy setup does not FAIL.
 func CheckIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool) {
 	dir := s.IdentitiesDir()
-	if _, err := os.Stat(dir); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Sprintf("not found: %s", dir), false
-		}
+	if _, err := os.Stat(dir); err == nil {
+		return dir, true
+	} else if !os.IsNotExist(err) {
 		return fmt.Sprintf("error: %v", err), false
 	}
-	return dir, true
+	if ls, ok := s.(*identity.LayeredStore); ok {
+		gdir := identity.NewStore(ls.GlobalRoot()).IdentitiesDir()
+		if _, err := os.Stat(gdir); err == nil {
+			return gdir, true
+		}
+	}
+	return fmt.Sprintf("not found: %s", dir), false
 }
 
 // CheckHumanIdentity resolves and loads the current human identity. When
