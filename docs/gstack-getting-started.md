@@ -1,8 +1,8 @@
 # Gstack Starter Team
 
-A ready-made team of 6 agents ported from the gstack builder
-framework. Ships with ethos as an embedded team bundle; no submodule
-required.
+A ready-made team of a CEO/COO leadership pair plus 6 specialists
+ported from the gstack builder framework. Ships with ethos as an
+embedded team bundle; no submodule required.
 
 ## Philosophy
 
@@ -19,6 +19,8 @@ Three principles from gstack's ETHOS.md:
 
 | Handle | Role | Description |
 |--------|------|-------------|
+| `gstack-ceo` | ceo | Owner and apex; sets direction, approves major decisions (human) |
+| `gstack-coo` | coo | Operational lead; runs execution, specialists report here |
 | `gstack-architect` | architect | System design, architecture lock, component diagrams |
 | `gstack-implementer` | implementer | Code generation, bug fixes, feature implementation |
 | `gstack-reviewer` | reviewer | Code review with severity levels, pre-landing checks |
@@ -26,8 +28,11 @@ Three principles from gstack's ETHOS.md:
 | `gstack-security` | security-reviewer | OWASP Top 10, STRIDE analysis, secrets audit |
 | `gstack-product` | product-lead | Scope review, 10-star vision, opportunity cost analysis |
 
-The architect is the hub -- implementer, reviewer, qa, and security
-report to architect. Product collaborates with architect.
+The COO is the hub -- architect, implementer, reviewer, qa,
+security, and product all report to the COO, and the COO reports to
+the CEO (DES-064). The bundle ships placeholder `gstack-ceo` /
+`gstack-coo` seats; `ethos setup` and a human-driven `ethos team
+activate` rebind them to the real human (CEO) and `claude` (COO).
 
 ## Pipelines
 
@@ -56,7 +61,11 @@ cd my-project
 ethos team activate gstack
 ```
 
-This writes `active_bundle: gstack` to `.punt-labs/ethos.yaml`.
+This writes `active_bundle: gstack` to `.punt-labs/ethos.yaml`. Run
+by a human, it also rebinds the `ceo` seat to you and the `coo` seat
+to `claude` as a repo-local team (DES-064). Run by an agent, it
+skips the rebind with a warning and leaves the human's `ethos setup`
+leadership intact — an agent is the COO, not the CEO.
 
 ### 3. Verify
 
@@ -70,7 +79,7 @@ ethos team show gstack           # shows members
 
 ```bash
 ethos mission pipeline instantiate gstack-debug \
-  --leader gstack-architect \
+  --leader gstack-coo \
   --worker gstack-implementer \
   --evaluator gstack-reviewer \
   --var target=internal/session/

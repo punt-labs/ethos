@@ -186,6 +186,20 @@ exists, missing keys are added; existing keys are not overwritten.
 Sets `active_bundle: foundation` in the repo config (same as
 `ethos team activate foundation`).
 
+#### Leadership binding
+
+Setup binds the human handle to the `ceo` seat and `claude` to the
+`coo` seat, written as a repo-local team (the repo layer wins over
+the bundle's placeholder `foundation-ceo`/`foundation-coo` seats).
+Every specialist reports to the COO; the COO reports to the CEO
+(DES-064). Leadership validation runs before any write — an
+incomplete ceo/coo pair, or a human handle colliding with the
+reserved `coo` seat (`handle: claude`), fails clean with nothing
+persisted. A human-driven `ethos team activate` applies the same
+rebind; an agent-driven activate skips it with a warning (the agent
+is the COO, not the CEO) and leaves the human's setup leadership
+intact.
+
 #### Agent files
 
 Generated at `.claude/agents/*.md` by calling
@@ -202,6 +216,7 @@ derived from the team graph.
 | `~/.punt-labs/ethos/identities/<handle>.yaml` | global | yes | no |
 | `~/.punt-labs/ethos/identities/claude.yaml` | global | yes | no |
 | `.punt-labs/ethos.yaml` | repo | yes (merge) | no (merge) |
+| `.punt-labs/ethos/teams/<bundle>.yaml` | repo | yes (leadership rebind) | yes (rebind) |
 | `.claude/agents/*.md` | repo | yes | yes (idempotent) |
 
 ### TTY Detection
@@ -342,6 +357,8 @@ ethos_min_version: "3.7.0"
 bundles/foundation/
   bundle.yaml
   identities/
+    foundation-ceo.yaml
+    foundation-coo.yaml
     foundation-architect.yaml
     foundation-implementer.yaml
     foundation-reviewer.yaml
@@ -355,6 +372,8 @@ bundles/foundation/
     foundation-clear.md
     foundation-reviewer.md
   roles/
+    ceo.yaml
+    coo.yaml
     architect.yaml
     implementer.yaml
     reviewer.yaml
@@ -373,6 +392,31 @@ deployed by `ethos seed`. This is a structural difference from
 gstack, which ships its own pipeline variants.
 
 ### Identities
+
+The bundle ships placeholder leadership seats (`foundation-ceo`,
+`foundation-coo`) so the team validates and resolves standalone.
+`ethos setup` and a human-driven `ethos team activate` rebind them
+to the real human (CEO) and `claude` (COO) — see DES-064.
+
+`foundation-ceo.yaml`:
+
+```yaml
+name: Owner
+handle: foundation-ceo
+kind: human
+```
+
+`foundation-coo.yaml`:
+
+```yaml
+name: Operations Lead
+handle: foundation-coo
+kind: agent
+personality: foundation-architect
+writing_style: foundation-clear
+talents:
+  - engineering
+```
 
 `foundation-architect.yaml`:
 
@@ -430,7 +474,37 @@ Naming convention: `foundation-<role>`. Matches gstack's pattern
 
 ### Roles
 
-Four roles, reusing the same names as gstack where applicable.
+Six roles: two leadership roles plus four specialists, reusing the
+same names as gstack where applicable. Leadership roles carry no
+`output_format` — they direct and delegate, they do not emit
+FINDINGS (DES-064).
+
+`ceo.yaml`:
+
+```yaml
+name: ceo
+responsibilities:
+  - set direction and own outcomes
+  - approve major decisions and resolve escalations
+tools:
+  - Read
+  - Grep
+  - Glob
+```
+
+`coo.yaml`:
+
+```yaml
+name: coo
+responsibilities:
+  - run execution and delegate to specialists
+  - review specialist output and report to the ceo
+tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash
+```
 
 `architect.yaml`:
 
@@ -514,6 +588,10 @@ for running scanning tools.
 ```yaml
 name: foundation
 members:
+  - identity: foundation-ceo
+    role: ceo
+  - identity: foundation-coo
+    role: coo
   - identity: foundation-architect
     role: architect
   - identity: foundation-implementer
@@ -523,20 +601,27 @@ members:
   - identity: foundation-security
     role: security-reviewer
 collaborations:
+  - from: coo
+    to: ceo
+    type: reports_to
+  - from: architect
+    to: coo
+    type: reports_to
   - from: implementer
-    to: architect
+    to: coo
     type: reports_to
   - from: reviewer
-    to: architect
+    to: coo
     type: reports_to
   - from: security-reviewer
-    to: architect
+    to: coo
     type: reports_to
 ```
 
-Architect is the hub. Implementer, reviewer, and security all
-report to architect. No product lead, no QA engineer. Four agents,
-three edges.
+The COO is the hub. The CEO (human owner) is the apex; the COO
+(`claude`) runs execution, and architect, implementer, reviewer, and
+security all report to the COO (DES-064). No product lead, no QA
+engineer. Six seats, five edges.
 
 ### Personalities
 

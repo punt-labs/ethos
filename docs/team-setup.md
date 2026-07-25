@@ -220,6 +220,15 @@ Referential integrity is enforced: every member must reference a valid
 identity handle and role name. Every team must have at least one member.
 Collaboration roles must be filled by team members.
 
+The example above is a flat custom shape (a `tech-lead` hub). The
+seeded bundles and `ethos setup` default to a leadership shape instead:
+**human = CEO (apex), `claude` = COO, and every specialist reports to
+the COO** (DES-064). To model that in your own team, add `ceo` and
+`coo` members, point each specialist's `reports_to` at `coo`, and add a
+`coo → ceo` edge. `ethos setup` (and a human-driven `ethos team
+activate`) bind those two seats to the real human and `claude`
+automatically.
+
 ## Step 5: Configure the Repo
 
 Create `.punt-labs/ethos.yaml` at the repo root:
