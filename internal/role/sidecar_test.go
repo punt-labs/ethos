@@ -56,6 +56,12 @@ func TestSidecarRolesLoad(t *testing.T) {
 			assert.NotEmpty(t, r.Tools)
 			assert.NotEmpty(t, r.Model, "sidecar role %q should have a model", name)
 			assert.NoError(t, ValidateModel(r.Model), "role %q has invalid model", name)
+			// Leadership roles direct and delegate — they carry no
+			// structured-handoff template. Assert the exemption so an
+			// accidental output_format (which would change generated agent
+			// files) fails here rather than slipping through.
+			assert.Empty(t, r.OutputFormat,
+				"leadership role %q must not carry an output_format template", name)
 		})
 	}
 
