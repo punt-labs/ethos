@@ -216,7 +216,7 @@ derived from the team graph.
 | `~/.punt-labs/ethos/identities/<handle>.yaml` | global | yes | no |
 | `~/.punt-labs/ethos/identities/claude.yaml` | global | yes | no |
 | `.punt-labs/ethos.yaml` | repo | yes (merge) | no (merge) |
-| `.punt-labs/ethos/teams/<bundle>.yaml` | repo | yes (leadership rebind) | yes (rebind) |
+| `.punt-labs/ethos/teams/<bundle>.yaml` | repo | yes (leadership rebind) | no (idempotent — skipped if present) |
 | `.claude/agents/*.md` | repo | yes | yes (idempotent) |
 
 ### TTY Detection
