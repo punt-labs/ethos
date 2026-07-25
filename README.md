@@ -56,6 +56,21 @@ curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c370da3/install.sh 
 ethos setup
 ```
 
+To install the CLI without the Claude Code plugin — for a non-Claude
+harness, or a Claude install where org policy blocks plugins — pass
+`--no-plugin` (or set `ETHOS_NO_PLUGIN=1` where arguments cannot pass
+through the pipe):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c370da3/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c370da3/install.sh | ETHOS_NO_PLUGIN=1 sh
+```
+
+`--no-plugin` skips only the marketplace-register and plugin-install
+steps; the binary, PATH setup, directories, seed content, per-repo
+`ethos enable`, and health check all still run. Re-run the installer
+without the flag to add the plugin later.
+
 The installer places the `ethos` binary in `~/.local/bin` and,
 when `claude` and `git` are available, registers the Claude Code
 plugin. `ethos setup` asks for your name, handle, email, GitHub
