@@ -6499,3 +6499,81 @@ unchanged.
 - **`--cli-only` as the name.** Overclaims; hooks/dirs/PATH/`enable` still run.
 - **A truthy env parser** (`true`/`yes`/non-empty). Locale-dependent and
   inconsistent with the installer's `0/1` convention; one accepted value (`1`).
+
+## DES-064: Default team shape — human = CEO, claude = COO (SETTLED)
+
+**Status**: Settled. Operator-ratified 2026-07-25. Applies to every seeded
+bundle (`foundation`, `gstack`), the `sprint` seed team, `ethos setup`, and
+`ethos team activate`.
+
+### Problem
+
+Out of the box, every seeded team made the **architect** the apex: `foundation`
+and `gstack` both wired every specialist (implementer, reviewer, qa,
+security-reviewer, and — in gstack — product-lead) to `reports_to: architect`
+(product-lead via `collaborates_with`), and the global `sprint` team did the
+same. There was no leadership layer. A real org is a human owner directing an
+agent that runs execution; the architect is a specialist role, not the org head.
+New users hit this immediately — activating `gstack` produced an org where they
+had to hand-edit `.punt-labs/ethos/teams/` to put themselves (CEO) and `claude`
+(COO) on top and re-point every collaboration edge. The default modeled the
+wrong mental model (Norman: the system's structure should match the user's).
+
+### Decision
+
+The default org shape is **human = CEO (apex), `claude` = COO (operational
+lead), and every specialist reports to the COO.** The architect becomes a peer
+specialist under the COO, not the apex.
+
+- **New `ceo` and `coo` leadership roles** in the seed and in each bundle. `ceo`
+  is the accountable owner who sets direction; `coo` runs execution and is who
+  specialists report to. Unlike specialist roles, leadership roles carry **no
+  `output_format`** — they direct and delegate, they do not emit FINDINGS — and
+  the `sidecar` role-set guard asserts that exemption so an accidental addition
+  is caught.
+- **Every bundle/seed team graph rewired**: each specialist `reports_to: coo`,
+  `coo reports_to: ceo`, and no `to: architect` edges remain anywhere in seed.
+- **`ethos setup` binds the seats to real identities**: the human handle to the
+  `ceo` seat, `claude` to the `coo` seat, written as a repo-local team (repo
+  layer wins over the bundle layer). Bundles ship placeholder `<bundle>-ceo` /
+  `<bundle>-coo` seat identities so they validate and resolve standalone; setup
+  rebinds them. Leadership validation (an incomplete ceo/coo pair; a human handle
+  colliding with the reserved `coo` seat, e.g. `handle: claude`) runs **before**
+  any identity or config write, so a bad configuration fails clean with nothing
+  persisted.
+- **`ethos team activate` applies the same default when run by a human**: it
+  binds the `ceo` seat to the resolved caller only when the caller's `kind` is
+  `human`. When run by an **agent** (the common case — an agent that has run
+  `ethos iam claude`), it **skips the rebind with a loud warning** and still
+  activates (exit 0), leaving the human's `ethos setup` leadership intact — the
+  agent is not the CEO, and an agent-driven activate cannot determine the human.
+  The rebind decision runs before the `team`/`active_bundle` config write, so a
+  skip or validation failure never leaves a persisted-switch-reported-as-failure
+  partial state.
+
+### Rulings
+
+- **Applies to all surfaces, out of box** (operator ruling): every bundle, the
+  sprint seed team, `ethos setup`, and `ethos team activate` — not just the
+  primary setup path.
+- **Non-breaking.** Only *new* setups/activations get the new default; existing
+  repo-local teams are not rewritten. So this is a minor, not a breaking, change.
+- **Coupled `doctor` fix.** Writing a repo-local team makes a repo that carries
+  a team but no repo-local `identities/` legitimate. `CheckIdentityDir` now falls
+  back to the global identities store, but **only when a repo-local team exists** —
+  a repo missing its identities with no repo-local team (e.g. an uninitialized
+  submodule checkout) still FAILs loudly, so the fallback never masks a genuinely
+  broken checkout.
+
+### Rejected alternatives
+
+- **Keep architect as the apex.** Models the wrong org: an architect is a
+  specialist, not the owner/operator. Forced every new user to hand-edit.
+- **Label the architect "COO".** Same structural problem with a misleading name;
+  the human owner still has no seat.
+- **Rebind leadership on `team activate` for an agent caller too** (bind the
+  agent as CEO). Wrong — the agent is the COO; the CEO is the human. Skipping
+  with a warning and preserving the human's `ethos setup` leadership is correct.
+- **CEO/COO as a special apex mechanism** rather than roles. Roles compose with
+  the existing team/collaboration model and validation; a bespoke mechanism would
+  not.
