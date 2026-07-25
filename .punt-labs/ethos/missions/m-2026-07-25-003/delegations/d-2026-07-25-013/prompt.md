@@ -1,0 +1,10 @@
+Pre-PR local review of branch feat/install-no-plugin in <repo> (diff: git diff main...feat/install-no-plugin, tip 31484ec). Feature: an install.sh --no-plugin flag (+ ETHOS_NO_PLUGIN=1 env) that installs the ethos CLI but skips the Claude Code marketplace/plugin steps. Ratified design: docs/install-cli-only.md (DES-063). The change is in install.sh (POSIX sh), README.md, and a shell test test/install_no_plugin_test.sh; DESIGN.md/CHANGELOG are the COO's ADR (don't review those for style).
+
+Focus your review on the shell correctness that matters for a `curl … | sh` installer:
+1. POSIX arg-parse correctness — the `case` loop over "$@" must work identically in dash, bash --posix, and BusyBox sh (no bashisms: no [[ ]], no arrays, no `local` misuse). `sh -s -- --no-plugin` must land --no-plugin in "$@".
+2. SKIP_PLUGIN resolution — must be a correct OR of (--no-plugin flag | ETHOS_NO_PLUGIN=1 | claude absent | git absent). Verify ETHOS_NO_PLUGIN is honored ONLY when exactly "1" (not "0"/"true"/empty), and that the existing capability-absence auto-skip is preserved unchanged.
+3. Unknown flag → exit 2 with usage to stderr; --help → exit 0. A misspelled --no-plguin must NOT silently proceed to install the plugin.
+4. Success message gated on SKIP_PLUGIN (the boolean), NOT on the cause — when SKIP_PLUGIN=1 for ANY reason (flag/env/auto), it must NOT print "Restart Claude Code…"; the default plugin path message is unchanged.
+5. NO regression to the default install path (no flag, claude+git present): binary, PATH, dirs, seed, enable, doctor, marketplace+plugin all still run exactly as before.
+6. The test (test/install_no_plugin_test.sh) — is it real (exercises the four cases with claude/git stubbed) or vacuous? shellcheck-clean?
+Report only high-confidence findings with file:line and a concrete fix. Write .tmp/review-noplugin-code.md (numbered, or "zero findings"), reply exactly "written".
