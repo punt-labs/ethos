@@ -3546,6 +3546,42 @@ func TestMissionDispatch_ProseCriterionNotShredded(t *testing.T) {
 	})
 }
 
+// TestMissionDispatch_BlankCriterionRejected guards the regression the
+// repeatable flag opened: an empty or whitespace-only criterion must
+// fail loudly, not persist silently. The length-only required check
+// admits [""], so the per-entry Validate rule is what catches it. Each
+// case asserts an error and that no mission was created.
+func TestMissionDispatch_BlankCriterionRejected(t *testing.T) {
+	cases := []struct {
+		name     string
+		criteria []string
+	}{
+		{"empty string", []string{""}},
+		{"whitespace only", []string{"   "}},
+		{"valid then blank", []string{"make check passes", ""}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			missionTestEnv(t)
+			dispatchWorker = "bwk"
+			dispatchEvaluator = "djb"
+			dispatchWriteSet = "internal/alpha/store.go"
+			dispatchCriteria = tc.criteria
+			dispatchType = "implement"
+			dispatchBudget = 2
+
+			err := runMissionDispatch()
+			require.Error(t, err, "a blank criterion must be rejected")
+			assert.Contains(t, err.Error(), "success_criteria")
+
+			ms := missionStore()
+			ids, err := ms.List()
+			require.NoError(t, err)
+			assert.Empty(t, ids, "no mission may be created when a criterion is blank")
+		})
+	}
+}
+
 // --- Phase 4: active-mission sidecar (ethos-620t) ---
 //
 // `ethos mission claim <id>` writes the sidecar at

@@ -1591,7 +1591,7 @@ func runMissionDispatch() error {
 		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
 		WriteSet:        splitCSV(dispatchWriteSet),
 		ExtractInto:     splitCSV(dispatchExtractInto),
-		SuccessCriteria: dispatchCriteria,
+		SuccessCriteria: append([]string{}, dispatchCriteria...),
 		Context:         dispatchContext,
 		Type:            dispatchType,
 		Inputs:          mission.Inputs{Ticket: dispatchTicket},

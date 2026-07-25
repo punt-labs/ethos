@@ -212,9 +212,14 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		return fmt.Errorf("budget.rounds %d out of range [%d, %d]", c.Budget.Rounds, minRounds, maxRounds)
 	}
 
-	// success_criteria non-empty
+	// success_criteria non-empty, and no entry blank or whitespace-only.
 	if len(c.SuccessCriteria) == 0 {
 		return fmt.Errorf("success_criteria must contain at least one entry")
+	}
+	for i, entry := range c.SuccessCriteria {
+		if strings.TrimSpace(entry) == "" {
+			return fmt.Errorf("success_criteria[%d]: must not be empty or whitespace-only", i)
+		}
 	}
 
 	// current_round in [1, budget.rounds]. Pre-3.4 contracts loaded
