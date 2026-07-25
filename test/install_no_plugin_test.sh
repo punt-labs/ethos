@@ -26,7 +26,7 @@ assert_absent()   { case "$OUT" in *"$2"*) failed "$1 (unexpected: $2)" ;; *) pa
 
 # Fresh sandbox with stub commands and a fake ethos binary. Sets SANDBOX, BIN.
 make_sandbox() {
-  SANDBOX=$(mktemp -d)
+  SANDBOX=$(mktemp -d "${TMPDIR:-/tmp}/ethos-noplugin-test.XXXXXX")
   BIN="$SANDBOX/bin"
   mkdir -p "$BIN"
 
@@ -115,6 +115,7 @@ assert_contains "ETHOS_NO_PLUGIN=1: skip announced" "plugin install skipped by r
 assert_contains "ETHOS_NO_PLUGIN=1: CLI-only message" "CLI-only mode"
 assert_absent   "ETHOS_NO_PLUGIN=1: no plugin restart line" "Restart Claude Code"
 assert_contains "ETHOS_NO_PLUGIN=1: requested remediation" "Re-run the installer without --no-plugin"
+assert_contains "ETHOS_NO_PLUGIN=1: remediation names env var" "ETHOS_NO_PLUGIN"
 rm -rf "$SANDBOX"
 
 # --- Case: claude absent, no flag -> auto-skip names the real blocker ---

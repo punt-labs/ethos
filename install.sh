@@ -150,7 +150,7 @@ if [ "$INSTALLED" = "0" ]; then
   fi
   warn "Pre-built binary not available, building from source..."
   ORIG_DIR=$(pwd)
-  TMPDIR_BUILD=$(mktemp -d)
+  TMPDIR_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/${BINARY}-build.XXXXXX")
   cleanup_build() { rm -rf "$TMPDIR_BUILD"; }
   trap cleanup_build EXIT
   if ! git clone --depth 1 --branch "v${VERSION}" "https://github.com/${REPO}.git" "$TMPDIR_BUILD"; then
@@ -338,7 +338,10 @@ if "$INSTALL_DIR/$BINARY" doctor && [ "$ENABLE_FAILED" = "0" ]; then
         printf 'plugin). Install git, then re-run the installer to add the plugin.\n\n'
         ;;
       *)
-        printf 'Re-run the installer without --no-plugin to add the plugin later.\n\n'
+        # Requested skip: either input keeps SKIP_PLUGIN set, so name both —
+        # dropping --no-plugin alone still skips while ETHOS_NO_PLUGIN=1 is set.
+        printf 'Re-run the installer without --no-plugin and with ETHOS_NO_PLUGIN\n'
+        printf 'unset to add the plugin later.\n\n'
         ;;
     esac
   else
