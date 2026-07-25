@@ -1,0 +1,28 @@
+results:
+    - mission: m-2026-07-25-030
+      round: 1
+      created_at: "2026-07-25T23:13:17Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/seed
+          added: 200
+          removed: 40
+        - path: cmd/ethos/setup.go
+          added: 90
+          removed: 20
+        - path: cmd/ethos/team_bundle.go
+          added: 80
+          removed: 10
+        - path: internal/doctor/doctor.go
+          added: 30
+          removed: 8
+      evidence:
+        - name: make check + validate-content
+          status: pass
+        - name: Phase-5 gate (cr+sfh, 4 rounds — 4 real bugs caught+fixed)
+          status: pass
+        - name: 'container dogfood: CEO->COO->specialists after setup AND team activate'
+          status: pass
+      prose: 'Default team shape human=CEO/claude=COO across foundation, gstack, sprint, ethos setup, and ethos team activate. Merged as PR #390.'

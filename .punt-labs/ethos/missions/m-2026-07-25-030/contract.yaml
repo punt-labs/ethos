@@ -1,0 +1,31 @@
+mission_id: m-2026-07-25-030
+status: closed
+type: implement
+created_at: "2026-07-25T21:59:37Z"
+updated_at: "2026-07-25T23:13:17Z"
+closed_at: "2026-07-25T23:13:17Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: dna
+    pinned_at: "2026-07-25T21:59:37Z"
+    hash: cb11878588752bbead4291066dda546629287cd9360d0be4fd857654e7c21208
+inputs: {}
+write_set:
+    - internal/seed
+    - cmd/ethos
+    - internal/role
+    - internal/doctor
+success_criteria:
+    - 'Default org shape for ALL bundles + setups + seed teams: human=CEO apex, claude=COO, specialists report to COO not architect. Covers foundation, gstack, AND the global sprint seed team.'
+    - 'ceo+coo roles resolve; foundation + gstack + internal/seed/sidecar/teams/sprint.yaml all rewired: specialists reports_to coo, coo reports_to ceo, NO everyone->architect edges anywhere in seed.'
+    - ethos setup assigns human=ceo/claude=coo by default (--file + interactive), in the activated team; --solo no-op; fail loud if a bundle has ceo seat but no coo seat, and if the human handle collides with the coo seat.
+    - ethos team activate <bundle> ALSO rebinds ceo->human and coo->claude (share the setup rebind logic), so the CEO/COO default applies on the activate path too, not just ethos setup.
+    - doctor CheckIdentityDir global fallback is gated on a repo-local TEAM existing (legitimately teams-only passes; a repo missing identities with NO repo-local team still FAILs); fix the misleading fallback comment.
+    - sidecar_test.go output_format invariant stays on worker roles only (ceo/coo exempt); coo placeholder identities get personality+writing_style parity with sibling seats.
+    - 'Tests: assignLeadershipTeam (ceo->human, coo->claude, idempotent), the doctor teams-only-pass vs missing-no-team-FAIL, and team-activate rebind. make check + validate-content green; no suppressions.'
+    - 'Dogfood in .tmp/clean-machine: assert CEO->COO->specialists after BOTH ethos setup AND ethos team activate; paste output. Commit incrementally.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
