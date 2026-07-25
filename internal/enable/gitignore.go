@@ -83,10 +83,43 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		out = buf.String()
 	}
 
-	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
-		return "", "", fmt.Errorf("writing .gitignore: %w", err)
+	if err := writeGitignore(path, []byte(out)); err != nil {
+		return "", "", err
 	}
 	return "added", "ignored " + strings.Join(missing, ", "), nil
+}
+
+// writeGitignore replaces path atomically: it writes to a temp file in the same
+// directory and renames over the target, so a crash mid-update never leaves a
+// partially written .gitignore — the operator's file is either the old content
+// or the new, never a truncated hybrid. An existing file's mode is preserved; a
+// new file gets 0o644.
+func writeGitignore(path string, data []byte) error {
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".gitignore.*")
+	if err != nil {
+		return fmt.Errorf("creating temp .gitignore in %s: %w", dir, err)
+	}
+	name := tmp.Name()
+	defer func() { _ = os.Remove(name) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("writing %s: %w", name, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("closing %s: %w", name, err)
+	}
+	if err := os.Chmod(name, mode); err != nil {
+		return fmt.Errorf("setting mode on %s: %w", name, err)
+	}
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("renaming %s to .gitignore: %w", name, err)
+	}
+	return nil
 }
 
 // trackedRuntimeFiles returns the repo-relative paths git already tracks that
@@ -119,10 +152,23 @@ func trackedRuntimeFiles(repoRoot string) ([]string, error) {
 }
 
 // trackedRuntimeWarning is the loud remedy line for files that are already
-// tracked despite the .gitignore. It names the count, the files, and the exact
-// command; enable does not run the removal itself.
+// tracked despite the .gitignore. It names the count, the files, and a
+// copy-pasteable command; enable does not run the removal itself. The command
+// uses the -- separator and shell-quotes each path, so paths with spaces or
+// special characters survive the copy-paste.
 func trackedRuntimeWarning(files []string) string {
+	quoted := make([]string, len(files))
+	for i, f := range files {
+		quoted[i] = shellQuote(f)
+	}
 	return fmt.Sprintf(
-		"%d ethos runtime file(s) are already git-tracked (%s); the .gitignore does not untrack them — run: git rm -r --cached %s  and commit",
-		len(files), strings.Join(files, ", "), strings.Join(files, " "))
+		"%d ethos runtime file(s) are already git-tracked (%s); the .gitignore does not untrack them — run: git rm -r --cached -- %s  then commit",
+		len(files), strings.Join(files, ", "), strings.Join(quoted, " "))
+}
+
+// shellQuote wraps s in single quotes for POSIX shells, escaping any embedded
+// single quote as '\''. The result is a single shell word safe to paste into a
+// command line regardless of spaces or metacharacters.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

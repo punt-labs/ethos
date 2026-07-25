@@ -80,8 +80,35 @@ func TestEnableWarnsOnAlreadyTrackedRuntimeFiles(t *testing.T) {
 	if !strings.Contains(warn, rel) {
 		t.Errorf("warning does not name the tracked file %q: %s", rel, warn)
 	}
-	if !strings.Contains(warn, "git rm -r --cached") {
-		t.Errorf("warning does not include the remedy: %s", warn)
+	// The remedy must be copy-pasteable: the -- separator and the shell-quoted
+	// path guard against paths with spaces or special characters.
+	if !strings.Contains(warn, "git rm -r --cached -- '"+rel+"'") {
+		t.Errorf("warning remedy is not shell-safe (missing -- or quoting): %s", warn)
+	}
+}
+
+func TestEnableGitignorePreservesMode(t *testing.T) {
+	dir := gitRepo(t)
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte("*.log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Errorf("mode = %o, want 600 (existing mode preserved)", got)
+	}
+	got := readFile(t, path)
+	if !strings.HasPrefix(got, "*.log\n") {
+		t.Errorf("existing content not preserved; got:\n%s", got)
+	}
+	if !strings.Contains(got, liveZonePattern) || !strings.Contains(got, missionLockPat) {
+		t.Errorf("runtime patterns not appended; got:\n%s", got)
 	}
 }
 
