@@ -50,6 +50,36 @@ func TestEnableGitignoreIdempotent(t *testing.T) {
 	}
 }
 
+func TestEnableGitignoreIndentedNearDuplicateNotCoverage(t *testing.T) {
+	dir := gitRepo(t)
+	// Leading whitespace is significant in .gitignore: these indented lines
+	// match indented paths, not the real runtime files. The presence check must
+	// not treat them as coverage.
+	initial := "  " + liveZonePattern + "\n  " + missionLockPat + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	got := readFile(t, filepath.Join(dir, ".gitignore"))
+	for _, want := range []string{liveZonePattern, missionLockPat} {
+		if !hasExactLine(got, want) {
+			t.Errorf("unindented runtime pattern %q not appended; got:\n%s", want, got)
+		}
+	}
+}
+
+// hasExactLine reports whether s contains want as a complete line.
+func hasExactLine(s, want string) bool {
+	for _, line := range strings.Split(s, "\n") {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEnableWarnsOnAlreadyTrackedRuntimeFiles(t *testing.T) {
 	dir := gitRepo(t)
 	rel := ".punt-labs/local/ethos/sessions/s1.audit.jsonl"

@@ -36,13 +36,16 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		return "", "", fmt.Errorf("reading .gitignore: %w", err)
 	}
 
+	// Match lines exactly: leading whitespace is significant in .gitignore, so
+	// an indented "  .punt-labs/**/local/**" is a different pattern (it matches
+	// indented paths) and must not count as coverage — treating it as present
+	// would silently leave the real zone unignored.
 	lines := strings.Split(string(data), "\n")
 	present := make(map[string]bool, len(lines))
 	markerIdx := -1
 	for i, line := range lines {
-		t := strings.TrimSpace(line)
-		present[t] = true
-		if markerIdx < 0 && t == gitignoreMarker {
+		present[line] = true
+		if markerIdx < 0 && line == gitignoreMarker {
 			markerIdx = i
 		}
 	}
