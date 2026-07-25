@@ -1,0 +1,14 @@
+results:
+    - mission: m-2026-07-25-028
+      round: 1
+      created_at: "2026-07-25T21:18:57Z"
+      author: bwk
+      verdict: escalate
+      confidence: 0
+      files_changed: []
+      evidence:
+        - name: write-set scope
+          status: skip
+      open_questions:
+        - CEO/COO setup writes a repo-local team, creating a repo .punt-labs/ethos/ dir, which exposed a latent doctor bug (CheckIdentityDir faulted on a teams-only repo). Fix needs internal/doctor, outside write-set. Re-dispatch with internal/doctor added.
+      prose: Scope correction — add internal/doctor for the coupled doctor CheckIdentityDir fix.

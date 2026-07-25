@@ -1,0 +1,14 @@
+results:
+    - mission: m-2026-07-25-029
+      round: 1
+      created_at: "2026-07-25T21:59:23Z"
+      author: bwk
+      verdict: escalate
+      confidence: 0
+      files_changed: []
+      evidence:
+        - name: scope expansion (operator)
+          status: skip
+      open_questions:
+        - 'Operator expanded scope to cover all three surfaces: add team-activate rebind (cmd/ethos/team_bundle.go, outside write-set) + rewire global sprint seed team. Broadening write-set to cmd/ethos (covers setup.go, team_bundle.go, tests). Re-dispatch.'
+      prose: Operator-ruled scope expansion — re-dispatch with cmd/ethos (whole dir) for team-activate rebind + setup tests.
