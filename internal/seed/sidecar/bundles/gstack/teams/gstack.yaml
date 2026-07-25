@@ -1,5 +1,9 @@
 name: gstack
 members:
+  - identity: gstack-ceo
+    role: ceo
+  - identity: gstack-coo
+    role: coo
   - identity: gstack-architect
     role: architect
   - identity: gstack-implementer
@@ -13,18 +17,24 @@ members:
   - identity: gstack-product
     role: product-lead
 collaborations:
+  - from: coo
+    to: ceo
+    type: reports_to
+  - from: architect
+    to: coo
+    type: reports_to
   - from: implementer
-    to: architect
+    to: coo
     type: reports_to
   - from: reviewer
-    to: architect
+    to: coo
     type: reports_to
   - from: qa-engineer
-    to: architect
+    to: coo
     type: reports_to
   - from: security-reviewer
-    to: architect
+    to: coo
     type: reports_to
   - from: product-lead
-    to: architect
-    type: collaborates_with
+    to: coo
+    type: reports_to
