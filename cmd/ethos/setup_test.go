@@ -226,6 +226,33 @@ handle: claude
 	assert.Contains(t, err.Error(), "collides with the COO seat")
 }
 
+// TestTeamActivate_AppliesLeadership pins that `ethos team activate` applies
+// the same CEO/COO default as setup: switching to a new bundle writes a
+// repo-local team with the caller bound to ceo and claude to coo. The
+// caller resolves via USER=test-user (setupTestEnv) → the created handle.
+func TestTeamActivate_AppliesLeadership(t *testing.T) {
+	_, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `name: Test User
+handle: test-user
+email: test-user@example.com
+`)
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "setup stderr: %s", stderr)
+
+	// Switch bundles; activate must apply the CEO/COO default to gstack too.
+	_, stderr, err = execHandler(t, "team", "activate", "gstack")
+	require.NoError(t, err, "activate stderr: %s", stderr)
+
+	ethosRoot := filepath.Join(repo, ".punt-labs", "ethos")
+	tm, err := team.NewStore(ethosRoot).Load("gstack")
+	require.NoError(t, err, "activate should write a repo-local gstack team")
+	assert.Equal(t, "test-user", memberIdentity(tm, "ceo"), "caller bound to ceo seat on activate")
+	assert.Equal(t, "claude", memberIdentity(tm, "coo"), "claude bound to coo seat on activate")
+	assert.Equal(t, "gstack-product", memberIdentity(tm, "product-lead"), "specialist seats intact")
+}
+
 // TestRebindLeadershipSeats exercises the pure rebind + guard logic across
 // every shape: the happy pair, a team with no leadership seats, each
 // incomplete pair, and the human/coo handle collision.
