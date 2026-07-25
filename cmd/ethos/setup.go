@@ -14,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
@@ -138,6 +139,15 @@ func runSetup(cmd *cobra.Command) error {
 	}
 	if cfg.Email == "" {
 		return fmt.Errorf("setup: no email — set git user.email or pass email: in --file")
+	}
+
+	// Validate the leadership assignment BEFORE any write, so a bad handle or
+	// a malformed bundle team fails with nothing persisted (no identity, no
+	// repo config, no bundle activation). The handle-collision check is cheap
+	// and unconditional — "claude" is reserved for the COO agent. The
+	// incomplete-pair check is a read-only load of the target bundle's team.
+	if err := precheckLeadership(&cfg); err != nil {
+		return fmt.Errorf("setup: %w", err)
 	}
 
 	home, err := os.UserHomeDir()
@@ -332,6 +342,15 @@ func runSetup(cmd *cobra.Command) error {
 	}
 	result.Bundle = cfg.Bundle
 
+	// --- Assign CEO/COO leadership ---
+	// The default org shape is human=CEO (apex), claude=COO; specialists
+	// report to the COO. The bundle team ships the graph with placeholder
+	// ceo/coo seats — bind them to the real identities so the activated
+	// team resolves against real members.
+	if err := assignLeadershipTeam(errw, storeRoot, resolveBundleRoot(), cfg.Bundle, cfg.Handle); err != nil {
+		return fmt.Errorf("setup: assigning CEO/COO team: %w", err)
+	}
+
 	// --- Generate agent files ---
 	is := identityStore()
 	ts := layeredTeamStore(is)
@@ -369,6 +388,156 @@ func runSetup(cmd *cobra.Command) error {
 		printSetupTable(cmd.OutOrStdout(), result)
 	}
 	return nil
+}
+
+// assignLeadershipTeam writes a repo-local team that binds the human
+// identity to the ceo seat and the claude agent to the coo seat. The
+// collaboration graph — every specialist reporting to the coo, the coo
+// reporting to the ceo — comes straight from the active bundle's team;
+// setup only rebinds the two leadership seats from the bundle's
+// placeholders to the real identities. The repo-local team wins over the
+// bundle layer, so `ethos team show` and the persona hooks resolve
+// human=ceo, claude=coo.
+//
+// Idempotent: a second run finds the team already present and leaves it
+// untouched. A bundle whose team ships no ceo or coo seat is left as-is —
+// nothing is rebound and no repo team is written. bundleRoot is the active
+// bundle's path (empty for legacy/no-bundle, in which case this is a no-op).
+func assignLeadershipTeam(errw io.Writer, storeRoot, bundleRoot, bundleName, humanHandle string) error {
+	if bundleRoot == "" {
+		return nil // legacy or no bundle — nothing to bind
+	}
+
+	src, err := team.NewStore(bundleRoot).Load(bundleName)
+	if err != nil {
+		if errors.Is(err, team.ErrNotFound) {
+			return nil // bundle ships no team — nothing to bind
+		}
+		return fmt.Errorf("loading bundle team %q: %w", bundleName, err)
+	}
+
+	ethosRoot := filepath.Join(storeRoot, ".punt-labs", "ethos")
+	repoStore := team.NewStore(ethosRoot)
+	if repoStore.Exists(bundleName) {
+		fmt.Fprintf(errw, "skipped: team %q already assigned\n", bundleName)
+		return nil
+	}
+
+	rebound, err := rebindLeadershipSeats(src, humanHandle, cooIdentity)
+	if err != nil {
+		return err
+	}
+	if !rebound {
+		return nil // bundle team has no leadership seats to rebind
+	}
+
+	if err := repoStore.Save(src, identityExistsFunc(), roleExistsFunc()); err != nil {
+		return fmt.Errorf("writing team %q: %w", bundleName, err)
+	}
+	fmt.Fprintf(errw, "assigned: %s=ceo, %s=coo on team %q\n", humanHandle, cooIdentity, bundleName)
+	return nil
+}
+
+// cooIdentity is the agent handle setup always binds to the coo seat — the
+// operational lead is claude org-wide.
+const cooIdentity = "claude"
+
+// precheckLeadership validates the CEO/COO assignment before setup writes
+// anything, so an illegal rebind fails with nothing persisted. It rejects a
+// handle reserved for the COO agent (unconditional and cheap), and — for a
+// non-solo setup whose target bundle team loads read-only — an incomplete
+// leadership pair. Bundle-not-found and team-load issues are left to the
+// authoritative activation path; this fails only on a definitively illegal
+// rebind.
+func precheckLeadership(cfg *setupConfig) error {
+	if cfg.Handle == cooIdentity {
+		return fmt.Errorf("handle %q is reserved for the COO agent; choose a different handle", cfg.Handle)
+	}
+	if cfg.Solo {
+		return nil
+	}
+	bundleRoot := bundleRootByName(resolve.StoreRepoRoot(), defaultGlobalRoot(), cfg.Bundle)
+	if bundleRoot == "" {
+		return nil // not in a repo, or bundle unresolved — validated later
+	}
+	src, err := team.NewStore(bundleRoot).Load(cfg.Bundle)
+	if err != nil {
+		return nil // team-load issues surface on the activation path
+	}
+	_, err = validateLeadership(src, cfg.Handle, cooIdentity)
+	return err
+}
+
+// bundleRootByName resolves the filesystem path of the non-legacy bundle
+// named name, or "" if none matches (or bundles cannot be listed). It is a
+// read-only lookup used to validate a bundle's leadership team before any
+// write; the authoritative not-found error is raised on the activation path.
+func bundleRootByName(storeRoot, globalRoot, name string) string {
+	if storeRoot == "" || name == "" {
+		return ""
+	}
+	bundles, err := bundle.List(storeRoot, globalRoot)
+	if err != nil {
+		return ""
+	}
+	for i := range bundles {
+		if bundles[i].Source == bundle.SourceLegacy {
+			continue
+		}
+		if bundles[i].Name == name {
+			return bundles[i].Path
+		}
+	}
+	return ""
+}
+
+// validateLeadership reports whether t carries a leadership pair that can be
+// rebound to humanHandle/cooHandle, without mutating t. Two degenerate shapes
+// are errors: a team with only one of the two seats (the graph promises a
+// ceo↔coo pair), and a humanHandle equal to cooHandle (CEO and COO would
+// collapse onto one identity). hasSeats is false when the team carries no
+// leadership seats at all — a legitimate no-op, not an error. Callers use
+// this to fail before any write when the rebind is illegal.
+func validateLeadership(t *team.Team, humanHandle, cooHandle string) (hasSeats bool, err error) {
+	hasCeo, hasCoo := false, false
+	for _, m := range t.Members {
+		switch m.Role {
+		case "ceo":
+			hasCeo = true
+		case "coo":
+			hasCoo = true
+		}
+	}
+	if !hasCeo && !hasCoo {
+		return false, nil
+	}
+	if hasCeo != hasCoo {
+		return false, fmt.Errorf("team %q has an incomplete leadership pair (ceo=%t, coo=%t); a CEO/COO team needs both seats", t.Name, hasCeo, hasCoo)
+	}
+	if humanHandle == cooHandle {
+		return false, fmt.Errorf("human handle %q collides with the COO seat; CEO and COO must be distinct identities", humanHandle)
+	}
+	return true, nil
+}
+
+// rebindLeadershipSeats rebinds t's ceo seat to humanHandle and its coo seat
+// to cooHandle in place, and reports whether t carried a leadership pair to
+// rebind. It validates via validateLeadership first, so an incomplete pair or
+// a handle collision is rejected before any mutation.
+func rebindLeadershipSeats(t *team.Team, humanHandle, cooHandle string) (bool, error) {
+	hasSeats, err := validateLeadership(t, humanHandle, cooHandle)
+	if err != nil || !hasSeats {
+		return false, err
+	}
+	for i := range t.Members {
+		switch t.Members[i].Role {
+		case "ceo":
+			t.Members[i].Identity = humanHandle
+		case "coo":
+			t.Members[i].Identity = cooHandle
+		}
+	}
+	return true, nil
 }
 
 // setupInteractive runs the wizard, reading from stdin and writing prompts

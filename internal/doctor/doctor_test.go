@@ -82,7 +82,7 @@ func TestPassedCountExcludesWarn(t *testing.T) {
 func TestCheckIdentityDir(t *testing.T) {
 	t.Run("exists", func(t *testing.T) {
 		s, ss, _ := newFixture(t)
-		detail, ok := CheckIdentityDir(s, ss)
+		detail, ok := CheckIdentityDir(s, ss, false)
 		assert.True(t, ok)
 		assert.Equal(t, s.IdentitiesDir(), detail)
 	})
@@ -90,9 +90,59 @@ func TestCheckIdentityDir(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		s, ss, root := newFixture(t)
 		require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
-		detail, ok := CheckIdentityDir(s, ss)
+		detail, ok := CheckIdentityDir(s, ss, false)
 		assert.False(t, ok)
 		assert.Contains(t, detail, "not found")
+	})
+
+	// A layered repo whose repo-local identities dir is absent is healthy
+	// ONLY when the repo is teams-only (hasRepoTeam) and the global store
+	// holds identities: the fallback resolves to the global dir. With no
+	// repo-local team the same absent dir must still FAIL, so an
+	// uninitialized submodule checkout is not masked by a populated global
+	// store.
+	t.Run("layered teams-only falls back to global", func(t *testing.T) {
+		repoRoot := t.TempDir()   // no identities/ subdir
+		globalRoot := t.TempDir() // has identities/
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
+		ss := session.NewStore(globalRoot)
+
+		detail, ok := CheckIdentityDir(ls, ss, true)
+		assert.True(t, ok, "teams-only repo should pass via the global fallback")
+		assert.Equal(t, identity.NewStore(globalRoot).IdentitiesDir(), detail)
+	})
+
+	t.Run("layered no repo team still fails", func(t *testing.T) {
+		repoRoot := t.TempDir()   // no identities/ subdir
+		globalRoot := t.TempDir() // has identities/
+		require.NoError(t, os.MkdirAll(filepath.Join(globalRoot, "identities"), 0o700))
+		ls := identity.NewLayeredStore(identity.NewStore(repoRoot), identity.NewStore(globalRoot))
+		ss := session.NewStore(globalRoot)
+
+		detail, ok := CheckIdentityDir(ls, ss, false)
+		assert.False(t, ok, "no repo-local team: absent identities must FAIL, not fall back")
+		assert.Contains(t, detail, "not found")
+	})
+}
+
+func TestHasRepoLocalTeam(t *testing.T) {
+	t.Run("empty storeRoot", func(t *testing.T) {
+		assert.False(t, hasRepoLocalTeam(""))
+	})
+
+	t.Run("no team dir", func(t *testing.T) {
+		assert.False(t, hasRepoLocalTeam(t.TempDir()))
+	})
+
+	t.Run("repo-local team present", func(t *testing.T) {
+		storeRoot := t.TempDir()
+		teamsDir := filepath.Join(storeRoot, ".punt-labs", "ethos", "teams")
+		require.NoError(t, os.MkdirAll(teamsDir, 0o700))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(teamsDir, "foundation.yaml"),
+			[]byte("name: foundation\n"), 0o600))
+		assert.True(t, hasRepoLocalTeam(storeRoot))
 	})
 }
 

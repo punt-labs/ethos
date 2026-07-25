@@ -24,6 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinct **WARN** state: a not-set-up repo (zero identities) shows
   "no identity yet — run `ethos setup`" and does not fail the run, while a real
   misconfiguration (identities present but none match) still FAILs loudly.
+- **`ethos doctor` no longer FAILs a legitimately teams-only repo.** The
+  identity-dir check falls back to the global identities store, but only when a
+  repo-local team exists — a repo missing its identities with no repo-local team
+  (e.g. an uninitialized submodule checkout) still FAILs loudly.
+
+### Changed
+
+- **Default team shape is now human = CEO, claude = COO.** Every bundle
+  (`foundation`, `gstack`), the `sprint` seed team, `ethos setup`, and
+  `ethos team activate` now produce an org where the human is CEO (apex),
+  `claude` is COO, and every specialist reports to the COO — replacing the
+  previous shape where all specialists reported to the architect. `ethos setup`
+  binds the CEO seat to the human and the COO seat to `claude`; `ethos team
+  activate` does the same when run by a human, and skips the rebind with a
+  warning (leaving the human's `ethos setup` leadership intact) when run by an
+  agent.
 
 ## [4.5.0] - 2026-07-25
 

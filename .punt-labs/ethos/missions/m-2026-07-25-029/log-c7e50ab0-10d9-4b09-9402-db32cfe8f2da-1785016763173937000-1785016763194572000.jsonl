@@ -1,0 +1,2 @@
+{"ts":"2026-07-25T21:59:23.173937Z","event":"result","actor":"bwk","details":{"confidence":0,"evidence_entries":1,"files_changed":0,"round":1,"verdict":"escalate"}}
+{"ts":"2026-07-25T21:59:23.194572Z","event":"close","actor":"claude","details":{"round":1,"status":"failed","verdict":"escalate"}}

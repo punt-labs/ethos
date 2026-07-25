@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/punt-labs/ethos/internal/bundle"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/team"
 )
 
 // --- flags ---
@@ -203,6 +205,15 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("reading active bundle: %w", err)
 	}
 	out := cmd.OutOrStdout()
+
+	// Resolve the human CEO to bind BEFORE any config write, so a caller who
+	// cannot supply one (an agent persona such as claude, or no resolvable
+	// identity) skips the rebind cleanly rather than failing after the switch
+	// has already persisted. The ceo seat is the human; an agent caller can't
+	// determine the human, so leadership from the human's earlier `ethos
+	// setup` is left intact.
+	ceoHandle, bindCEO := resolveActivateCEO(cmd.ErrOrStderr())
+
 	if current == name {
 		// Explicitly running activate commands convergence. If the team key
 		// diverged (or is absent), repair it here — otherwise the remedy
@@ -213,6 +224,9 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			return fmt.Errorf("reading team: %w", err)
 		}
 		if team != name {
+			if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
+				return err
+			}
 			if err := setConfigKey(repoRoot, "team", name); err != nil {
 				return fmt.Errorf("writing team: %w", err)
 			}
@@ -222,11 +236,25 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			fmt.Fprintf(out, "team repaired to %q\n", name)
 			return nil
 		}
+		if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
+			return err
+		}
 		if jsonOutput {
 			return writeJSON(out, map[string]string{"name": name, "status": "already-active"})
 		}
 		fmt.Fprintf(out, "bundle %q is already active\n", name)
 		return nil
+	}
+
+	// Validate the leadership rebind against the target bundle's team BEFORE
+	// touching config, so a malformed team or illegal rebind fails with no
+	// bundle switch persisted. The actual write happens after activation
+	// (below): the repo-team Save validates member existence against the
+	// ACTIVE bundle, so the new bundle's specialists only resolve once
+	// active_bundle points at it. This split leaves only a genuine I/O Save
+	// error as a post-switch failure.
+	if err := precheckActivateLeadership(match.Path, name, ceoHandle, bindCEO); err != nil {
+		return err
 	}
 
 	// Write team before active_bundle (the sentinel) so an interrupted run
@@ -240,6 +268,10 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
+	if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
+		return err
+	}
+
 	if jsonOutput {
 		return writeJSON(out, availableRow{
 			Name:   match.Name,
@@ -250,6 +282,66 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	}
 	fmt.Fprintf(out, "activated: %s (source: %s, path: %s)\n", match.Name, match.Source, match.Path)
 	return nil
+}
+
+// resolveActivateCEO resolves the human identity to bind to the ceo seat on
+// activation, and reports whether one was found. The ceo is the human, so an
+// agent caller (claude via `ethos iam`) or an unresolvable/absent caller
+// yields ok=false with a loud skip warning — activation still succeeds and
+// the leadership from the human's earlier `ethos setup` stays intact. This
+// runs before any config write so the skip decision never leaves a persisted
+// switch reported as a failure.
+func resolveActivateCEO(errw io.Writer) (handle string, ok bool) {
+	is := identityStore()
+	h, err := resolve.Resolve(is, sessionStore())
+	if err != nil {
+		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — no caller identity resolved (%v); run \"ethos setup\" first\n", err)
+		return "", false
+	}
+	id, err := is.Load(h)
+	if err != nil {
+		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — cannot load caller %q (%v)\n", h, err)
+		return "", false
+	}
+	if id.Kind != "human" {
+		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — caller %q is an agent, not the human CEO; leadership from \"ethos setup\" is left intact\n", h)
+		return "", false
+	}
+	return h, true
+}
+
+// applyLeadershipOnActivate rebinds the target bundle's ceo/coo seats to the
+// resolved human and claude, so `ethos team activate` yields the same default
+// org shape as `ethos setup` (shared assignLeadershipTeam logic). bundleRoot
+// is the target bundle's path (match.Path), so this resolves the correct team
+// even before active_bundle is written — callers invoke it before the config
+// write to keep activation atomic. bindCEO gates the rebind: when false (agent
+// or no human caller) it is a no-op — resolveActivateCEO explained the skip.
+func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleRoot, bundleName, ceoHandle string, bindCEO bool) error {
+	if !bindCEO {
+		return nil
+	}
+	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleRoot, bundleName, ceoHandle)
+}
+
+// precheckActivateLeadership validates the target bundle's leadership rebind
+// (loaded read-only from bundleRoot) before the caller writes any config, so
+// an incomplete pair or a handle collision fails the activation with nothing
+// persisted. It is a no-op when the rebind is skipped (bindCEO false) or the
+// bundle ships no team; ErrNotFound is not an error here.
+func precheckActivateLeadership(bundleRoot, bundleName, ceoHandle string, bindCEO bool) error {
+	if !bindCEO || bundleRoot == "" {
+		return nil
+	}
+	src, err := team.NewStore(bundleRoot).Load(bundleName)
+	if err != nil {
+		if errors.Is(err, team.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("loading bundle team %q: %w", bundleName, err)
+	}
+	_, err = validateLeadership(src, ceoHandle, cooIdentity)
+	return err
 }
 
 // listBundleNames formats bundle names with their source for error output.
