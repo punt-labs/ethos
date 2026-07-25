@@ -347,7 +347,7 @@ When run outside a git repository:
 ```yaml
 name: foundation
 version: 1
-description: "General-purpose 4-agent team for any codebase"
+description: "General-purpose CEO/COO starter team for any codebase"
 ethos_min_version: "3.7.0"
 ```
 
