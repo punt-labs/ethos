@@ -24,6 +24,10 @@ backup/
 export-state.json
 last-touched
 .local_version
+# Local dolt sql-server runtime (per-machine; rewritten on every start)
+dolt-server.lock
+dolt-server.pid
+dolt-server.port
 
 # Legacy SQLite cache files
 db.sqlite
