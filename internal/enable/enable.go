@@ -1,7 +1,8 @@
 // Package enable turns ethos on and off in a repo per the
 // tool-enable-disable standard: it deposits the vendored guide and its §7
 // manifest, writes the enabled marker, adds the canonical @-import line to
-// the repo CLAUDE.md, and chains the two git hooks — and reverses all four
+// the repo CLAUDE.md, chains the two git hooks, and ensures the repo
+// .gitignore covers ethos's runtime zones — and reverses the reversible parts
 // non-destructively on disable. It composes internal/claudemd (the import
 // line) and internal/githook (the hook chaining); it never reads, merges, or
 // overwrites repo config or seal-managed data.
@@ -97,8 +98,27 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 	rep.Warnings = append(rep.Warnings, depositWarns...)
 	rep.step("vendored", "done", "deposited "+guideRel+" and "+manifestRel)
 
-	// Marker-last: written only after the deposit completes, so a marker
-	// present always implies a complete vendored zone.
+	// Protect before marking enabled, so "enabled implies protected" holds: a
+	// rare .gitignore write error must not leave an enabled-but-unprotected
+	// checkout.
+	action, detail, err := ensureGitignore(repoRoot)
+	if err != nil {
+		return rep, err
+	}
+	rep.step("gitignore", action, detail)
+
+	// The .gitignore only stops future tracking; warn (loudly) when runtime
+	// files are already committed — the exact state this guard targets.
+	if tracked, err := trackedRuntimeFiles(repoRoot); err != nil {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf("checking for already-tracked runtime files: %v", err))
+	} else if len(tracked) > 0 {
+		rep.step("gitignore", "tracked", fmt.Sprintf("%d runtime file(s) already git-tracked — see warning", len(tracked)))
+		rep.Warnings = append(rep.Warnings, trackedRuntimeWarning(tracked))
+	}
+
+	// Marker-last: written only after the deposit and protection complete, so a
+	// marker present always implies a complete vendored zone and a protected
+	// checkout.
 	if err := writeMarker(repoRoot); err != nil {
 		return rep, err
 	}

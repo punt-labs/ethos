@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   success criteria. `--write-set`/`--extract-into` keep comma semantics.
   Empty/whitespace-only criteria are now rejected by `Contract.Validate` (closing
   the same hole on the `--file` and MCP paths, not just the flag).
+- **`ethos enable` now gitignores the DES-058 live zone and mission locks.**
+  enable never ensured the consumer repo's `.gitignore` covered ethos's runtime
+  write zones, so a live session's `.punt-labs/local/ethos/sessions/*.audit.jsonl`
+  and `*.lock` were trackable — they got committed into release PRs and deadlocked
+  `git checkout`/`pull` while a session was live (blocking releases org-wide).
+  enable now idempotently adds `.punt-labs/**/local/**` and
+  `.punt-labs/ethos/missions/**/*.lock`, creating `.gitignore` if absent, and
+  warns (with the `git rm --cached` remedy) when such files are already tracked.
 
 ## [4.4.1] - 2026-07-24
 
