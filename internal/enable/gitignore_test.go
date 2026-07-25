@@ -50,6 +50,61 @@ func TestEnableGitignoreIdempotent(t *testing.T) {
 	}
 }
 
+func TestEnableWarnsOnAlreadyTrackedRuntimeFiles(t *testing.T) {
+	dir := gitRepo(t)
+	rel := ".punt-labs/local/ethos/sessions/s1.audit.jsonl"
+	if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(rel)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, rel), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The repo committed the runtime file before enabling — the exact state the
+	// guard targets. The .gitignore cannot untrack it.
+	gitRun(t, dir, "add", rel)
+	gitRun(t, dir, "commit", "-q", "-m", "runtime file tracked before enable")
+
+	rep, err := Enable(dir)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	var warn string
+	for _, w := range rep.Warnings {
+		if strings.Contains(w, "already git-tracked") {
+			warn = w
+		}
+	}
+	if warn == "" {
+		t.Fatalf("expected an already-tracked warning; warnings=%v", rep.Warnings)
+	}
+	if !strings.Contains(warn, rel) {
+		t.Errorf("warning does not name the tracked file %q: %s", rel, warn)
+	}
+	if !strings.Contains(warn, "git rm -r --cached") {
+		t.Errorf("warning does not include the remedy: %s", warn)
+	}
+}
+
+func TestEnableGitignoreSingleMarkerBlock(t *testing.T) {
+	dir := gitRepo(t)
+	// A prior enable's block with one pattern removed but the marker kept. The
+	// missing pattern must go under the SAME marker, not a second block.
+	initial := gitignoreMarker + "\n" + missionLockPat + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	got := readFile(t, filepath.Join(dir, ".gitignore"))
+	if n := strings.Count(got, gitignoreMarker); n != 1 {
+		t.Errorf("marker comment appears %d times, want 1 (single block); got:\n%s", n, got)
+	}
+	if !strings.Contains(got, liveZonePattern) {
+		t.Errorf("missing pattern not added under existing marker; got:\n%s", got)
+	}
+}
+
 func TestEnableCreatesGitignoreWhenMissing(t *testing.T) {
 	dir := gitRepo(t)
 	if exists(filepath.Join(dir, ".gitignore")) {

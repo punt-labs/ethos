@@ -1,8 +1,10 @@
 package enable
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -21,10 +23,11 @@ var gitignorePatterns = []string{
 }
 
 // ensureGitignore makes the repo .gitignore cover ethos's runtime zones. It
-// appends a marked block with only the patterns not already present, so
-// re-enable adds nothing (idempotent) and the operator's existing .gitignore is
-// never rewritten or reordered — the block is appended, existing lines are left
-// untouched. A missing .gitignore is created. It returns the step action
+// adds only the patterns not already present, so re-enable adds nothing
+// (idempotent). When the ethos block already exists the missing patterns are
+// inserted under that one marker — never a second marker block; otherwise a
+// fresh marked block is appended. Existing lines are left in place and never
+// reordered. A missing .gitignore is created. It returns the step action
 // ("added" or "already") and a detail line for the report.
 func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	path := filepath.Join(repoRoot, ".gitignore")
@@ -33,9 +36,15 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		return "", "", fmt.Errorf("reading .gitignore: %w", err)
 	}
 
-	present := make(map[string]bool)
-	for _, line := range strings.Split(string(data), "\n") {
-		present[strings.TrimSpace(line)] = true
+	lines := strings.Split(string(data), "\n")
+	present := make(map[string]bool, len(lines))
+	markerIdx := -1
+	for i, line := range lines {
+		t := strings.TrimSpace(line)
+		present[t] = true
+		if markerIdx < 0 && t == gitignoreMarker {
+			markerIdx = i
+		}
 	}
 	var missing []string
 	for _, p := range gitignorePatterns {
@@ -47,23 +56,73 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		return "already", ".gitignore already ignores ethos runtime zones", nil
 	}
 
-	var buf strings.Builder
-	buf.Write(data)
-	// Separate the appended block from existing content with a blank line, and
-	// terminate an existing final line that lacks its newline.
-	if len(data) > 0 {
-		if !strings.HasSuffix(string(data), "\n") {
+	var out string
+	if markerIdx >= 0 {
+		// Add the missing patterns under the existing marker — one block, no
+		// duplicate comment.
+		merged := make([]string, 0, len(lines)+len(missing))
+		merged = append(merged, lines[:markerIdx+1]...)
+		merged = append(merged, missing...)
+		merged = append(merged, lines[markerIdx+1:]...)
+		out = strings.Join(merged, "\n")
+	} else {
+		var buf strings.Builder
+		buf.Write(data)
+		// Separate the appended block from existing content with a blank line,
+		// and terminate an existing final line that lacks its newline.
+		if len(data) > 0 {
+			if !strings.HasSuffix(string(data), "\n") {
+				buf.WriteByte('\n')
+			}
 			buf.WriteByte('\n')
 		}
+		buf.WriteString(gitignoreMarker)
 		buf.WriteByte('\n')
+		buf.WriteString(strings.Join(missing, "\n"))
+		buf.WriteByte('\n')
+		out = buf.String()
 	}
-	buf.WriteString(gitignoreMarker)
-	buf.WriteByte('\n')
-	buf.WriteString(strings.Join(missing, "\n"))
-	buf.WriteByte('\n')
 
-	if err := os.WriteFile(path, []byte(buf.String()), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
 		return "", "", fmt.Errorf("writing .gitignore: %w", err)
 	}
 	return "added", "ignored " + strings.Join(missing, ", "), nil
+}
+
+// trackedRuntimeFiles returns the repo-relative paths git already tracks that
+// fall in ethos's runtime zones. The .gitignore only stops FUTURE tracking; a
+// repo that committed these files before enabling still tracks them, and the
+// live seal hook rewriting them keeps deadlocking git checkout/pull with no
+// operator signal. The :(glob) pathspec magic makes git evaluate the same
+// globs the .gitignore uses. Untracking (git rm --cached) is the operator's
+// call, so the caller only warns.
+func trackedRuntimeFiles(repoRoot string) ([]string, error) {
+	args := []string{"-C", repoRoot, "ls-files", "-z", "--"}
+	for _, p := range gitignorePatterns {
+		args = append(args, ":(glob)"+p)
+	}
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("git ls-files: %w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+		return nil, fmt.Errorf("git ls-files: %w", err)
+	}
+	var files []string
+	for _, f := range strings.Split(string(out), "\x00") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	return files, nil
+}
+
+// trackedRuntimeWarning is the loud remedy line for files that are already
+// tracked despite the .gitignore. It names the count, the files, and the exact
+// command; enable does not run the removal itself.
+func trackedRuntimeWarning(files []string) string {
+	return fmt.Sprintf(
+		"%d ethos runtime file(s) are already git-tracked (%s); the .gitignore does not untrack them — run: git rm -r --cached %s  and commit",
+		len(files), strings.Join(files, ", "), strings.Join(files, " "))
 }
