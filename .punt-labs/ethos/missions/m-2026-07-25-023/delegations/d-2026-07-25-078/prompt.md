@@ -1,0 +1,11 @@
+In the Go repo at <repo>, I need to verify a few facts about internal/identity package, specifically the List() method used by internal/doctor/doctor.go's CheckHumanIdentity (branch fix/fresh-install-identity-ux, see the function at doctor.go:371-386).
+
+Please read internal/identity/*.go (particularly wherever IdentityStore.List() and its return type are defined — look for a Warnings field and Identities field) and internal/resolve/resolve.go's Resolve function, then answer precisely:
+
+1. What is the return type of List()? Confirm it has fields `Identities` (slice) and `Warnings` (slice or similar) as used in doctor.go: `list.Identities` and `list.Warnings`.
+2. Under what conditions does List() populate Warnings — specifically, does a malformed/unreadable YAML identity file (e.g. "not: [valid: yaml") get skipped and added to Warnings rather than to Identities? Confirm with file:line.
+3. Does List() ever return a non-nil error itself (listErr), and under what circumstances? Is "store directory doesn't exist" one of them, or does that return an empty Identities list with no error?
+4. In resolve.Resolve(s, ss), when the store is completely empty (zero identity files) vs when the store has identities but none match the current git/OS user, do both paths return a non-nil error from the SAME code path, or different errors? I want to confirm CheckHumanIdentity's logic — which calls s.List() again after resolve.Resolve fails, and checks `len(list.Identities) == 0 && len(list.Warnings) == 0` to decide WARN (fresh install) vs FAIL (misconfiguration) — is semantically correct, i.e., it can't produce a false WARN when an identity file exists but is corrupt (since a corrupt file should land in Warnings, making len(Warnings) != 0, forcing FAIL not WARN).
+5. Is there any race or double-computation concern calling s.List() a second time (once inside resolve.Resolve internally if it uses List, and once explicitly in CheckHumanIdentity)? Is this an efficiency concern worth flagging, or negligible (test/CLI invocation, not a hot path)?
+
+Report each answer with file:line citations. Keep it under 300 words, structured by question number.

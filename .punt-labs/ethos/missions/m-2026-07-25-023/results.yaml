@@ -1,0 +1,25 @@
+results:
+    - mission: m-2026-07-25-023
+      round: 1
+      created_at: "2026-07-25T20:01:31Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/doctor/doctor.go
+          added: 30
+          removed: 6
+        - path: cmd/ethos/handlers_test.go
+          added: 12
+          removed: 4
+        - path: install.sh
+          added: 30
+          removed: 2
+      evidence:
+        - name: make check
+          status: pass
+        - name: Phase-5 gate (cr+sfh)
+          status: pass
+        - name: 'clean-machine dogfood: fresh install shows WARN + ethos setup, no red FAIL'
+          status: pass
+      prose: 'Fresh install shows doctor WARN (run ethos setup) not a red FAIL; real mismatch still FAILs. ETHOS_LOCAL_BINARY added (guarded, portable). Merged as PR #388.'

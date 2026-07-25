@@ -1,0 +1,28 @@
+mission_id: m-2026-07-25-023
+status: closed
+type: implement
+created_at: "2026-07-25T19:13:56Z"
+updated_at: "2026-07-25T20:01:31Z"
+closed_at: "2026-07-25T20:01:31Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: mdm
+    pinned_at: "2026-07-25T19:13:56Z"
+    hash: ef40d0badfbd1d014e269ed88a0bbd9dc7060d8180ed9a681eea8a5b93f1807a
+inputs: {}
+write_set:
+    - internal/doctor
+    - install.sh
+    - cmd/ethos/handlers_test.go
+success_criteria:
+    - CheckHumanIdentity distinguishes a fresh install (ZERO ethos identities) from a real misconfiguration (identities exist but none match the caller); fresh -> actionable 'run ethos setup' non-FAIL (WARN) state, misconfig -> still loud FAIL
+    - install.sh verify + final messaging on a fresh install routes to 'ethos setup' and does NOT print the alarming 'installed but doctor found issues' for the no-identity-yet state
+    - cmd/ethos/handlers_test.go TestRunDoctor_Failure and TestRunDoctor_FailureJSON assert FAIL via a NON-matching identity (real misconfig) since empty-store is now WARN — fixtures only, no production edits in cmd/ethos
+    - doctor overall exit code still non-zero for genuine problems
+    - 'dogfood .tmp/clean-machine container against LOCAL install.sh (COPY in, do not curl released): fresh --no-plugin install completes with a setup nudge and NO red identity FAIL; paste output'
+    - make check green; no suppressions; commit incrementally
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
