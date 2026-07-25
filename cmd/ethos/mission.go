@@ -547,7 +547,7 @@ var (
 	dispatchEvaluator   string
 	dispatchWriteSet    string
 	dispatchExtractInto string
-	dispatchCriteria    string
+	dispatchCriteria    []string
 	dispatchContext     string
 	dispatchTicket      string
 	dispatchType        string
@@ -572,6 +572,10 @@ paths (and creation of files within listed directories). --extract-into
 authorizes only the creation of new files under listed directories — it
 never grants modify rights on existing files. See DES-052 in DESIGN.md
 for the asymmetric semantics.
+
+--criteria is repeatable: pass it once per success criterion. Each
+occurrence becomes one criterion with commas preserved, so a prose
+clause like "add tests, then update docs" stays a single entry.
 
 Uses the same creation path as "ethos mission create --file", including
 the write-set overlap check, evaluator pinning, and archetype
@@ -777,7 +781,7 @@ func init() {
 	missionDispatchCmd.Flags().StringVar(&dispatchEvaluator, "evaluator", "", "Evaluator handle (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchWriteSet, "write-set", "", "Comma-separated file/dir paths authorized for modify and create (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchExtractInto, "extract-into", "", "Comma-separated directories authorized for new-file creation only (DES-052)")
-	missionDispatchCmd.Flags().StringVar(&dispatchCriteria, "criteria", "", "Comma-separated success criteria (required)")
+	missionDispatchCmd.Flags().StringArrayVar(&dispatchCriteria, "criteria", nil, "Success criterion (repeatable; pass once per criterion, commas preserved) (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchContext, "context", "", "Free-text context")
 	missionDispatchCmd.Flags().StringVar(&dispatchTicket, "ticket", "", "Ticket/bead ID")
 	missionDispatchCmd.Flags().StringVar(&dispatchType, "type", "implement", "Archetype type")
@@ -1577,7 +1581,7 @@ func runMissionDispatch() error {
 	if dispatchWriteSet == "" {
 		return fmt.Errorf("mission dispatch: --write-set is required")
 	}
-	if dispatchCriteria == "" {
+	if len(dispatchCriteria) == 0 {
 		return fmt.Errorf("mission dispatch: --criteria is required")
 	}
 
@@ -1587,7 +1591,7 @@ func runMissionDispatch() error {
 		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
 		WriteSet:        splitCSV(dispatchWriteSet),
 		ExtractInto:     splitCSV(dispatchExtractInto),
-		SuccessCriteria: splitCSV(dispatchCriteria),
+		SuccessCriteria: dispatchCriteria,
 		Context:         dispatchContext,
 		Type:            dispatchType,
 		Inputs:          mission.Inputs{Ticket: dispatchTicket},
