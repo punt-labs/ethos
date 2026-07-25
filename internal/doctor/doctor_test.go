@@ -108,29 +108,44 @@ func TestCheckHumanIdentity(t *testing.T) {
 		writeIdentity(t, root, "mal",
 			"name: Mal\nhandle: mal\nkind: human\n")
 		t.Setenv("USER", "mal")
-		detail, ok := CheckHumanIdentity(s, ss)
-		assert.True(t, ok, "detail: %s", detail)
-		assert.Contains(t, detail, "mal")
+		r := CheckHumanIdentity(s, ss)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "mal")
 	})
 
-	t.Run("no match", func(t *testing.T) {
+	t.Run("fresh install — no identities", func(t *testing.T) {
+		// An empty store is the expected first-run state, not a fault: WARN
+		// and point the user at `ethos setup`.
 		s, ss, _ := newFixture(t)
 		t.Setenv("USER", "ghost")
-		detail, ok := CheckHumanIdentity(s, ss)
-		assert.False(t, ok)
-		assert.Contains(t, detail, "no match")
+		r := CheckHumanIdentity(s, ss)
+		assert.Equal(t, "WARN", r.Status)
+		assert.True(t, r.Passed(), "fresh install must not gate doctor's exit")
+		assert.Contains(t, r.Detail, "ethos setup")
+	})
+
+	t.Run("no match — identities exist but none match", func(t *testing.T) {
+		// A real misconfiguration: identities are present but none match the
+		// caller. This still FAILs loudly.
+		s, ss, root := newFixture(t)
+		writeIdentity(t, root, "mal",
+			"name: Mal\nhandle: mal\nkind: human\n")
+		t.Setenv("USER", "ghost")
+		r := CheckHumanIdentity(s, ss)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "no match")
 	})
 
 	t.Run("malformed file", func(t *testing.T) {
+		// A file that matches $USER by name but is malformed YAML is skipped
+		// during resolution, so lookup fails with no match. A broken file is
+		// a misconfiguration, not a fresh install, so it FAILs.
 		s, ss, root := newFixture(t)
-		// Write a file that matches $USER by name, but malformed YAML is
-		// skipped during resolution, so lookup fails with no match before
-		// any direct load is attempted.
 		writeIdentity(t, root, "bad", "not: [valid: yaml")
 		t.Setenv("USER", "bad")
-		detail, ok := CheckHumanIdentity(s, ss)
-		assert.False(t, ok)
-		assert.Contains(t, detail, "no match")
+		r := CheckHumanIdentity(s, ss)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "no match")
 	})
 }
 
