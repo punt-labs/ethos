@@ -311,9 +311,13 @@ reproduction:
    the slug (R2). Then `seed` and re-run; assert success.
 4. **doctor test** — configure a git user/email in the test env, run
    `doctor`, assert exit 0. Note: the audit's sandbox showed "Human
-   identity FAIL — no match" purely because the scratch env had no git
-   config; that is a harness artifact, not a product failure. The test
-   must set git identity so the human-match check passes.
+   identity FAIL — no match" purely because the scratch env had a
+   populated store but no matching git config; that is a harness
+   artifact, not a product failure. The test must set git identity so
+   the human-match check passes. Since DES-064, a truly *empty* store
+   (a fresh install with no identities yet) is instead a WARN pointing
+   at `ethos setup` — exit 0 — so only a populated-but-unmatched store
+   FAILs.
 
 `make check` (go vet, staticcheck, `go test -race`, validate-content) must
 stay green.
