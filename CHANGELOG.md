@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   DES-063 / `docs/install-cli-only.md`; codified as the punt-kit
   `install-cli-only` standard.
 
+### Fixed
+
+- **`ethos mission dispatch --criteria` no longer comma-shreds prose criteria.**
+  `--criteria` was a single comma-separated value, so a criterion written in
+  prose ("Design the flag, add tests, and update docs") was split into fragments
+  in the stored contract. It is now a **repeatable** flag — pass `--criteria`
+  once per criterion, commas preserved — matching how `--file` contracts author
+  success criteria. `--write-set`/`--extract-into` keep comma semantics.
+  Empty/whitespace-only criteria are now rejected by `Contract.Validate` (closing
+  the same hole on the `--file` and MCP paths, not just the flag).
+
 ## [4.4.1] - 2026-07-24
 
 ### Changed

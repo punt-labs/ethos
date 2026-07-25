@@ -88,7 +88,8 @@ ethos mission dispatch \
   --worker gstack-implementer \
   --evaluator gstack-reviewer \
   --write-set "internal/session/store.go,internal/session/store_test.go" \
-  --criteria "session purge removes stale entries,test covers TTL edge case"
+  --criteria "session purge removes stale entries" \
+  --criteria "test covers TTL edge case"
 ```
 
 ### 6. List and track

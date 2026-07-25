@@ -209,6 +209,21 @@ func TestValidate(t *testing.T) {
 			mutate:  func(c *Contract) { c.SuccessCriteria = nil },
 			wantErr: "success_criteria must contain at least one entry",
 		},
+		{
+			name:    "rule 10: blank success_criteria entry",
+			mutate:  func(c *Contract) { c.SuccessCriteria = []string{""} },
+			wantErr: "success_criteria[0]: must not be empty",
+		},
+		{
+			name:    "rule 10: whitespace-only success_criteria entry",
+			mutate:  func(c *Contract) { c.SuccessCriteria = []string{"   "} },
+			wantErr: "success_criteria[0]: must not be empty",
+		},
+		{
+			name:    "rule 10: valid then blank success_criteria entry",
+			mutate:  func(c *Contract) { c.SuccessCriteria = []string{"make check passes", ""} },
+			wantErr: "success_criteria[1]: must not be empty",
+		},
 
 		// Rule 14: current_round in [1, budget.rounds]. Store.Create
 		// and Store.loadLocked rewrite CurrentRound == 0 to 1 before
