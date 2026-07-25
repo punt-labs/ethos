@@ -135,13 +135,18 @@ INSTALLED=0
 # test install (the clean-machine dogfood uses this to exercise the working
 # tree's install.sh against a working-tree binary).
 if [ -n "${ETHOS_LOCAL_BINARY:-}" ]; then
-  if [ -r "$ETHOS_LOCAL_BINARY" ]; then
-    install -m 0755 "$ETHOS_LOCAL_BINARY" "${INSTALL_DIR}/${BINARY}"
-    ok "Installed local binary from $ETHOS_LOCAL_BINARY"
-    INSTALLED=1
-  else
+  if [ ! -r "$ETHOS_LOCAL_BINARY" ]; then
     fail "ETHOS_LOCAL_BINARY set but not readable: $ETHOS_LOCAL_BINARY"
   fi
+  # A zero-byte file is readable but installs as an empty shell script:
+  # "ethos version" would exit 0 with empty output and slip verification.
+  # Reject it here so the failure is loud, not silent.
+  if [ ! -s "$ETHOS_LOCAL_BINARY" ]; then
+    fail "ETHOS_LOCAL_BINARY is empty: $ETHOS_LOCAL_BINARY"
+  fi
+  install -m 0755 "$ETHOS_LOCAL_BINARY" "${INSTALL_DIR}/${BINARY}"
+  ok "Installed local binary from $ETHOS_LOCAL_BINARY"
+  INSTALLED=1
 fi
 
 # Try downloading pre-built binary first (atomic: temp file then mv)
