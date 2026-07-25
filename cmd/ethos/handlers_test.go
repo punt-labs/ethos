@@ -112,13 +112,19 @@ func TestRunDoctor_AllPass(t *testing.T) {
 }
 
 func TestRunDoctor_Failure(t *testing.T) {
-	// Fixture that forces CheckHumanIdentity to fail: global store has
-	// no identity matching USER. Git-init the cwd so FindRepoRoot does
-	// not walk up into a real git ancestor.
+	// Fixture that forces CheckHumanIdentity to FAIL via a real
+	// misconfiguration: the store holds an identity, but none matches the
+	// caller (USER=nobody). An empty store is a fresh-install WARN, not a
+	// FAIL, so a non-matching identity must be present. Git-init the cwd so
+	// FindRepoRoot does not walk up into a real git ancestor.
 	home := t.TempDir()
 	globalIDs := filepath.Join(home, ".punt-labs", "ethos", "identities")
 	require.NoError(t, os.MkdirAll(globalIDs, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".punt-labs", "ethos", "sessions"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(globalIDs, "mal.yaml"),
+		[]byte("name: Mal\nhandle: mal\nkind: human\n"),
+		0o644))
 
 	repo := t.TempDir()
 	gitInitDir(t, repo, home)
@@ -327,10 +333,16 @@ func TestRunWhoami_Reference(t *testing.T) {
 
 func TestRunDoctor_FailureJSON(t *testing.T) {
 	// Doctor failure with --json: writes JSON array before returning error.
+	// A non-matching identity forces a real misconfiguration FAIL; an empty
+	// store is a fresh-install WARN and would exit 0.
 	home := t.TempDir()
 	globalIDs := filepath.Join(home, ".punt-labs", "ethos", "identities")
 	require.NoError(t, os.MkdirAll(globalIDs, 0o755))
 	require.NoError(t, os.MkdirAll(filepath.Join(home, ".punt-labs", "ethos", "sessions"), 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(globalIDs, "mal.yaml"),
+		[]byte("name: Mal\nhandle: mal\nkind: human\n"),
+		0o644))
 
 	repo := t.TempDir()
 	gitInitDir(t, repo, home)
