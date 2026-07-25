@@ -127,8 +127,22 @@ esac
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}-${OS}-${ARCH}"
 INSTALLED=0
 
+# A locally-built binary takes precedence over the download: set
+# ETHOS_LOCAL_BINARY to its path for an offline, air-gapped, or pre-release
+# test install (the clean-machine dogfood uses this to exercise the working
+# tree's install.sh against a working-tree binary).
+if [ -n "${ETHOS_LOCAL_BINARY:-}" ]; then
+  if [ -r "$ETHOS_LOCAL_BINARY" ]; then
+    install -m 0755 "$ETHOS_LOCAL_BINARY" "${INSTALL_DIR}/${BINARY}"
+    ok "Installed local binary from $ETHOS_LOCAL_BINARY"
+    INSTALLED=1
+  else
+    fail "ETHOS_LOCAL_BINARY set but not readable: $ETHOS_LOCAL_BINARY"
+  fi
+fi
+
 # Try downloading pre-built binary first (atomic: temp file then mv)
-if [ -n "$OS" ] && [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
+if [ "$INSTALLED" = "0" ] && [ -n "$OS" ] && [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
   TMPBIN="$(mktemp "${INSTALL_DIR}/${BINARY}.tmp.XXXXXX")"
   if curl -fsSL -o "$TMPBIN" "$DOWNLOAD_URL"; then
     chmod +x "$TMPBIN"
