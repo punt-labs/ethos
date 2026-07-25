@@ -35,7 +35,10 @@ usage() {
     '' \
     'Environment:' \
     '  ETHOS_NO_PLUGIN=1   Same as --no-plugin, for argument-hostile contexts:' \
-    '                      curl -fsSL .../install.sh | ETHOS_NO_PLUGIN=1 sh'
+    '                      curl -fsSL .../install.sh | ETHOS_NO_PLUGIN=1 sh' \
+    '  ETHOS_LOCAL_BINARY=/path/to/binary' \
+    '                      Install a local binary instead of downloading' \
+    '                      (offline / air-gapped / testing).'
 }
 
 # --- Argument parsing ---
@@ -127,8 +130,41 @@ esac
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${BINARY}-${OS}-${ARCH}"
 INSTALLED=0
 
+# A locally-built binary takes precedence over the download: set
+# ETHOS_LOCAL_BINARY to its path for an offline, air-gapped, or pre-release
+# test install (the clean-machine dogfood uses this to exercise the working
+# tree's install.sh against a working-tree binary).
+if [ -n "${ETHOS_LOCAL_BINARY:-}" ]; then
+  if [ ! -r "$ETHOS_LOCAL_BINARY" ]; then
+    fail "ETHOS_LOCAL_BINARY set but not readable: $ETHOS_LOCAL_BINARY"
+  fi
+  # A directory is readable and has size; it would fail confusingly at the
+  # copy step. Require a regular file.
+  if [ ! -f "$ETHOS_LOCAL_BINARY" ]; then
+    fail "ETHOS_LOCAL_BINARY is not a regular file: $ETHOS_LOCAL_BINARY"
+  fi
+  # A zero-byte file is readable but installs as an empty shell script:
+  # "ethos version" would exit 0 with empty output and slip verification.
+  # Reject it here so the failure is loud, not silent.
+  if [ ! -s "$ETHOS_LOCAL_BINARY" ]; then
+    fail "ETHOS_LOCAL_BINARY is empty: $ETHOS_LOCAL_BINARY"
+  fi
+  # Portable atomic install (temp file then mv), matching the download path.
+  # Avoid the non-POSIX "install" utility, absent on minimal/busybox systems —
+  # the very air-gapped case this feature targets.
+  TMPBIN="$(mktemp "${INSTALL_DIR}/${BINARY}.tmp.XXXXXX")"
+  if cp "$ETHOS_LOCAL_BINARY" "$TMPBIN" && chmod 0755 "$TMPBIN"; then
+    mv "$TMPBIN" "${INSTALL_DIR}/${BINARY}"
+  else
+    rm -f "$TMPBIN"
+    fail "failed to install local binary from $ETHOS_LOCAL_BINARY"
+  fi
+  ok "Installed local binary from $ETHOS_LOCAL_BINARY"
+  INSTALLED=1
+fi
+
 # Try downloading pre-built binary first (atomic: temp file then mv)
-if [ -n "$OS" ] && [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
+if [ "$INSTALLED" = "0" ] && [ -n "$OS" ] && [ -n "$ARCH" ] && command -v curl >/dev/null 2>&1; then
   TMPBIN="$(mktemp "${INSTALL_DIR}/${BINARY}.tmp.XXXXXX")"
   if curl -fsSL -o "$TMPBIN" "$DOWNLOAD_URL"; then
     chmod +x "$TMPBIN"

@@ -26,12 +26,14 @@ type Result struct {
 }
 
 // Passed reports whether the check did not fail. It is explicit about the
-// three valid statuses: PASS and WARN return true (WARN is advisory — the
-// gated-but-unenabled state), FAIL returns false. Any other value (empty or a
-// typo like "PAS") returns false, so a malformed status surfaces as a failure
-// in summaries rather than being silently counted as passed. Only AnyFailed
-// gates a non-zero exit; callers that want to surface WARN distinctly read
-// Status, which renders verbatim in the CLI table and the MCP summary.
+// three valid statuses: PASS and WARN return true (WARN is advisory — an
+// expected state that needs attention but is not a fault, such as a
+// gated-but-unenabled repo or a fresh install with no identity yet), FAIL
+// returns false. Any other value (empty or a typo like "PAS") returns false,
+// so a malformed status surfaces as a failure in summaries rather than being
+// silently counted as passed. Only AnyFailed gates a non-zero exit; callers
+// that want to surface WARN distinctly read Status, which renders verbatim in
+// the CLI table and the MCP summary.
 func (r Result) Passed() bool {
 	return r.Status == "PASS" || r.Status == "WARN"
 }
@@ -45,35 +47,37 @@ func (r Result) Passed() bool {
 // needs it (Bugbot #370 class: resolving the active team from the worktree
 // while activation wrote it to the store produced false orphan reports).
 func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot string, teams *team.LayeredStore) []Result {
-	checks := []struct {
-		name string
-		fn   func(identity.IdentityStore, *session.Store) (string, bool)
-	}{
-		{"Identity directory", CheckIdentityDir},
-		{"Human identity", CheckHumanIdentity},
-		// Default agent reads the agent: key from the shared store (storeRoot),
-		// matching session_start/resolveLeader/resolve-agent; the "in a repo"
-		// guard stays on the checkout (repoRoot). Wrapped so it fits the
-		// slice's (store, session) shape while carrying both roots (#370).
-		{"Default agent", func(identity.IdentityStore, *session.Store) (string, bool) {
-			return CheckDefaultAgent(repoRoot, storeRoot)
-		}},
-		{"Duplicate fields", CheckDuplicateFields},
-	}
+	results := make([]Result, 0, 6)
 
-	results := make([]Result, 0, len(checks)+1)
-	for _, c := range checks {
-		detail, ok := c.fn(s, ss)
-		status := "PASS"
-		if !ok {
-			status = "FAIL"
-		}
-		results = append(results, Result{Name: c.name, Status: status, Detail: detail})
-	}
+	dir, ok := CheckIdentityDir(s, ss)
+	results = append(results, passFail("Identity directory", dir, ok))
+
+	// Human identity carries its own status: a fresh install (no identity
+	// yet) is a WARN pointing at `ethos setup`, not a FAIL.
+	results = append(results, CheckHumanIdentity(s, ss))
+
+	// Default agent reads the agent: key from the shared store (storeRoot),
+	// matching session_start/resolveLeader/resolve-agent; the "in a repo"
+	// guard stays on the checkout (repoRoot) (#370).
+	agent, ok := CheckDefaultAgent(repoRoot, storeRoot)
+	results = append(results, passFail("Default agent", agent, ok))
+
+	dup, ok := CheckDuplicateFields(s, ss)
+	results = append(results, passFail("Duplicate fields", dup, ok))
 
 	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams))
 	results = append(results, CheckSealHook(repoRoot))
 	return results
+}
+
+// passFail builds a Result from a boolean check outcome: true is PASS, false
+// is FAIL. Checks that need the advisory WARN state return a Result directly.
+func passFail(name, detail string, ok bool) Result {
+	status := "PASS"
+	if !ok {
+		status = "FAIL"
+	}
+	return Result{Name: name, Status: status, Detail: detail}
 }
 
 // AllPassed returns true when every result passed.
@@ -352,17 +356,33 @@ func CheckIdentityDir(s identity.IdentityStore, _ *session.Store) (string, bool)
 	return dir, true
 }
 
-// CheckHumanIdentity resolves and loads the current human identity.
-func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) (string, bool) {
+// CheckHumanIdentity resolves and loads the current human identity. When
+// resolution fails it separates two cases:
+//
+//   - Fresh install: the store holds no identities at all. This is the
+//     expected first-run state, not a fault — WARN and point at `ethos setup`
+//     rather than FAIL with circular "fix it, then re-run doctor" guidance.
+//   - Misconfiguration: identities exist but none match the caller's git or OS
+//     user. This is a real fault — FAIL loudly, unchanged.
+//
+// An unreadable identity file (a Warning from List) counts as "not fresh": a
+// broken file is a misconfiguration, so it FAILs rather than masquerading as a
+// clean first run.
+func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) Result {
+	name := "Human identity"
 	handle, err := resolve.Resolve(s, ss)
 	if err != nil {
-		return fmt.Sprintf("no match — %v", err), false
+		if list, listErr := s.List(); listErr == nil &&
+			len(list.Identities) == 0 && len(list.Warnings) == 0 {
+			return Result{Name: name, Status: "WARN", Detail: "no identity yet — run `ethos setup` to create yours"}
+		}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("no match — %v", err)}
 	}
 	id, err := s.Load(handle, identity.Reference(true))
 	if err != nil {
-		return fmt.Sprintf("handle %q not loadable: %v", handle, err), false
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("handle %q not loadable: %v", handle, err)}
 	}
-	return fmt.Sprintf("%s (%s)", id.Name, id.Handle), true
+	return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("%s (%s)", id.Name, id.Handle)}
 }
 
 // CheckDefaultAgent checks whether a default agent is configured for the

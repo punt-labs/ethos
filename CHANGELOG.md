@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ETHOS_LOCAL_BINARY` — install a local binary instead of downloading.**
+  `install.sh` honors `ETHOS_LOCAL_BINARY=/path/to/binary` to install a
+  working-tree or pre-built binary instead of fetching from the GitHub release —
+  for offline/air-gapped installs and for testing a local `install.sh`. Guarded
+  and fail-loud: an unreadable or empty path aborts the install.
+
+### Fixed
+
+- **A fresh install no longer greets new users with a red identity FAIL.**
+  On a machine with no ethos identity yet (e.g. git not configured), `ethos
+  doctor` reported `Human identity FAIL — no match` and the installer printed a
+  circular "fix the issues, then run doctor". The human-identity check now has a
+  distinct **WARN** state: a not-set-up repo (zero identities) shows
+  "no identity yet — run `ethos setup`" and does not fail the run, while a real
+  misconfiguration (identities present but none match) still FAILs loudly.
+
 ## [4.5.0] - 2026-07-25
 
 ### Added
