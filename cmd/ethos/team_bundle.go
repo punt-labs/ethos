@@ -216,11 +216,17 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			if err := setConfigKey(repoRoot, "team", name); err != nil {
 				return fmt.Errorf("writing team: %w", err)
 			}
+			if err := applyLeadershipOnActivate(cmd, repoRoot, name); err != nil {
+				return err
+			}
 			if jsonOutput {
 				return writeJSON(out, map[string]string{"name": name, "status": "team-repaired"})
 			}
 			fmt.Fprintf(out, "team repaired to %q\n", name)
 			return nil
+		}
+		if err := applyLeadershipOnActivate(cmd, repoRoot, name); err != nil {
+			return err
 		}
 		if jsonOutput {
 			return writeJSON(out, map[string]string{"name": name, "status": "already-active"})
@@ -240,6 +246,10 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
+	if err := applyLeadershipOnActivate(cmd, repoRoot, name); err != nil {
+		return err
+	}
+
 	if jsonOutput {
 		return writeJSON(out, availableRow{
 			Name:   match.Name,
@@ -250,6 +260,22 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	}
 	fmt.Fprintf(out, "activated: %s (source: %s, path: %s)\n", match.Name, match.Source, match.Path)
 	return nil
+}
+
+// applyLeadershipOnActivate rebinds the activated bundle's ceo/coo seats to
+// the real human and claude, so `ethos team activate` yields the same
+// default org shape as `ethos setup` (shared assignLeadershipTeam logic).
+// The human is resolved from the caller's identity; when none resolves the
+// rebind is skipped with a warning rather than failing the activation — the
+// bundle switch itself has already succeeded.
+func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleName string) error {
+	handle, err := resolve.Resolve(identityStore(), sessionStore())
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(),
+			"ethos: team activate: skipping CEO/COO assignment — no caller identity resolved (%v); run \"ethos setup\" first\n", err)
+		return nil
+	}
+	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleName, handle)
 }
 
 // listBundleNames formats bundle names with their source for error output.

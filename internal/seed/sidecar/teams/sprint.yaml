@@ -1,6 +1,10 @@
 name: sprint
 repositories: []
 members:
+  - identity: sprint-ceo
+    role: ceo
+  - identity: sprint-coo
+    role: coo
   - identity: sprint-architect
     role: architect
   - identity: sprint-implementer
@@ -12,15 +16,21 @@ members:
   - identity: sprint-security
     role: security-reviewer
 collaborations:
+  - from: coo
+    to: ceo
+    type: reports_to
+  - from: architect
+    to: coo
+    type: reports_to
   - from: implementer
-    to: architect
+    to: coo
     type: reports_to
   - from: reviewer
-    to: architect
+    to: coo
     type: reports_to
   - from: test-engineer
-    to: architect
+    to: coo
     type: reports_to
   - from: security-reviewer
-    to: architect
+    to: coo
     type: reports_to

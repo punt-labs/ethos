@@ -1,0 +1,5 @@
+name: Sprint Operations
+handle: sprint-coo
+kind: agent
+personality: sprint-architect
+writing_style: architect-prose
