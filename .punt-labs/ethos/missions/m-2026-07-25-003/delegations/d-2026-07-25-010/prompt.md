@@ -1,0 +1,11 @@
+RESUME ethos mission m-2026-07-25-003 (implement --no-plugin). Working dir <repo>, branch feat/install-no-plugin (already checked out). Run `ethos mission show m-2026-07-25-003` then `ethos mission claim m-2026-07-25-003` (re-claim; a prior run of you died on an org spend limit — now raised).
+
+IMPORTANT: your prior edits to install.sh SURVIVED and are UNCOMMITTED in the working tree (git diff install.sh shows ~58 insertions). They look complete: usage()+--help, the arg-parse case loop (--no-plugin, unknown→exit 2), NO_PLUGIN_REQUESTED + ETHOS_NO_PLUGIN=1 → SKIP_PLUGIN=1, preserved claude/git auto-skip, plugin steps gated on SKIP_PLUGIN=0, and the CLI-only success block gated on SKIP_PLUGIN=1. Do NOT redo from scratch — review what's there, confirm it matches the ratified design (docs/install-cli-only.md, all 6 decisions), fix any gap, then finish the remaining work.
+
+Steps to complete:
+1. Review + finalize install.sh (the edits are there). Confirm: unknown flag exits 2; ETHOS_NO_PLUGIN honored only when exactly "1"; SKIP_PLUGIN is a single OR of (flag | env=1 | claude absent | git absent); the success block is gated on SKIP_PLUGIN (never prints "Restart Claude Code…" when SKIP_PLUGIN=1); default plugin path unchanged. Commit install.sh (one commit, or split arg-parse / skip-resolution / message if you prefer — each passes shellcheck).
+2. README.md — document both one-liners (default `curl … | sh` and CLI-only `curl … | sh -s -- --no-plugin`) plus the `ETHOS_NO_PLUGIN=1 sh` env form. Commit.
+3. Add a POSIX shell test under test/ (shellcheck-clean) exercising: --no-plugin → SKIP_PLUGIN=1/plugin steps skipped/exit 0; ETHOS_NO_PLUGIN=1 → same; unknown flag → exit 2; default (claude+git stubbed present) → SKIP_PLUGIN=0. If a full harness is disproportionate, hand-run install.sh for the four cases with `claude`/`git` stubbed on PATH and PASTE actual output. Commit.
+4. `make check` (shellcheck install.sh) clean + direct `shellcheck install.sh`.
+
+Do NOT edit DESIGN.md or CHANGELOG (the COO authors DES-063 + changelog on this branch after you). Do NOT touch enable.go/setup.go. Submit the mission result (list write-set). Reply "written — <sha>" + the actual output of the four verification runs.

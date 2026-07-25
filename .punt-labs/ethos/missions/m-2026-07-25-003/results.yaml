@@ -1,0 +1,50 @@
+results:
+    - mission: m-2026-07-25-003
+      round: 1
+      created_at: "2026-07-25T04:58:33Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: install.sh
+          added: 58
+          removed: 9
+        - path: README.md
+          added: 15
+          removed: 0
+        - path: test/install_no_plugin_test.sh
+          added: 154
+          removed: 0
+      evidence:
+        - name: shellcheck install.sh
+          status: pass
+        - name: shellcheck test/install_no_plugin_test.sh
+          status: pass
+        - name: sh test/install_no_plugin_test.sh (20 assertions, 6 cases)
+          status: pass
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: hand-run install.sh --no-plugin (SKIP_PLUGIN=1, CLI-only message, no restart line, exit 0)
+          status: pass
+        - name: hand-run ETHOS_NO_PLUGIN=1 sh install.sh (same as flag, exit 0)
+          status: pass
+        - name: hand-run install.sh --no-plguin (unknown flag, usage to stderr, exit 2)
+          status: pass
+        - name: hand-run install.sh default (claude+git stubbed, plugin installed, "is ready!" + restart line, exit 0)
+          status: pass
+      prose: |
+        Implemented docs/install-cli-only.md, all 6 ratified decisions:
+
+        D1 --no-plugin flag sets SKIP_PLUGIN=1; unknown flags exit 2 with usage.
+        D2 POSIX case loop parses "$@" before Step 1; sh -s -- --no-plugin works.
+        D3 ETHOS_NO_PLUGIN honored only when exactly "1"; single OR of
+           (flag | env=1 | claude absent | git absent) sets SKIP_PLUGIN.
+        D4 No policy auto-detection added; capability-absence stays the only auto-skip.
+        D5 Distinct CLI-only success block gated on SKIP_PLUGIN, never on the cause;
+           no "Restart Claude Code" on any skip path. Default plugin block unchanged.
+        D6 No parallel flag on enable/setup; Steps 6b/6c run unchanged.
+
+        Four verification runs hand-executed against a sandbox HOME with stubbed
+        curl/claude/ssh; actual output matched expected for all four. COO owns
+        DESIGN.md (DES-063) and CHANGELOG on this branch — not touched. enable.go
+        and setup.go not touched.
