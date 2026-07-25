@@ -138,13 +138,27 @@ if [ -n "${ETHOS_LOCAL_BINARY:-}" ]; then
   if [ ! -r "$ETHOS_LOCAL_BINARY" ]; then
     fail "ETHOS_LOCAL_BINARY set but not readable: $ETHOS_LOCAL_BINARY"
   fi
+  # A directory is readable and has size; it would fail confusingly at the
+  # copy step. Require a regular file.
+  if [ ! -f "$ETHOS_LOCAL_BINARY" ]; then
+    fail "ETHOS_LOCAL_BINARY is not a regular file: $ETHOS_LOCAL_BINARY"
+  fi
   # A zero-byte file is readable but installs as an empty shell script:
   # "ethos version" would exit 0 with empty output and slip verification.
   # Reject it here so the failure is loud, not silent.
   if [ ! -s "$ETHOS_LOCAL_BINARY" ]; then
     fail "ETHOS_LOCAL_BINARY is empty: $ETHOS_LOCAL_BINARY"
   fi
-  install -m 0755 "$ETHOS_LOCAL_BINARY" "${INSTALL_DIR}/${BINARY}"
+  # Portable atomic install (temp file then mv), matching the download path.
+  # Avoid the non-POSIX "install" utility, absent on minimal/busybox systems —
+  # the very air-gapped case this feature targets.
+  TMPBIN="$(mktemp "${INSTALL_DIR}/${BINARY}.tmp.XXXXXX")"
+  if cp "$ETHOS_LOCAL_BINARY" "$TMPBIN" && chmod 0755 "$TMPBIN"; then
+    mv "$TMPBIN" "${INSTALL_DIR}/${BINARY}"
+  else
+    rm -f "$TMPBIN"
+    fail "failed to install local binary from $ETHOS_LOCAL_BINARY"
+  fi
   ok "Installed local binary from $ETHOS_LOCAL_BINARY"
   INSTALLED=1
 fi
