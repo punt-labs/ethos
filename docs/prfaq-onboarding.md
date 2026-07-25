@@ -17,11 +17,13 @@ up the repo config, and activates the team. The next time Claude Code
 starts, the agent knows who it is, who you are, and how to delegate.
 
 Ethos ships a new **foundation** bundle alongside gstack. Foundation
-is a 4-agent general-purpose team (foundation-architect,
-foundation-implementer, foundation-reviewer, foundation-security).
-It uses the global pipeline templates (standard, quick, product) and
-works for any codebase. Gstack remains available for the full 6-agent
-startup builder philosophy.
+is a general-purpose team of 4 specialists (foundation-architect,
+foundation-implementer, foundation-reviewer, foundation-security)
+under a leadership pair: setup makes **you the CEO and `claude` the
+COO**, and every specialist reports to the COO (DES-064). It uses the
+global pipeline templates (standard, quick, product) and works for any
+codebase. Gstack remains available for the full startup builder
+philosophy with 6 specialists under the same CEO/COO leadership.
 
 "I installed ethos, ran `ethos setup`, and had structured delegation
 working on my Rails project in under a minute," said Priya Chandran,
@@ -45,17 +47,22 @@ It runs an interactive wizard that:
 3. Creates a paired agent identity (defaults to `claude`)
 4. Writes `.punt-labs/ethos.yaml` in your current repo with `agent: claude`
 5. Activates the **foundation** team bundle (or gstack, if you choose it)
-6. Generates `.claude/agents/*.md` files for your team
+6. Binds you to the CEO seat and `claude` to the COO seat, with every
+   specialist reporting to the COO (DES-064)
+7. Generates `.claude/agents/*.md` files for your team
 
 One command. No YAML editing. No reading docs first.
 
 ### 2. What is the foundation bundle? How is it different from gstack?
 
-**Foundation** is a 4-agent general-purpose team designed to work on
-any codebase:
+**Foundation** is a general-purpose team designed to work on any
+codebase: you (CEO) and `claude` (COO) lead 4 specialists, each
+reporting to the COO (DES-064):
 
 | Agent | Role | What it does |
 |-------|------|-------------|
+| you | ceo | Owns direction and outcomes (the human) |
+| claude | coo | Runs execution; specialists report here |
 | architect | architect | Reviews designs, evaluates tradeoffs |
 | implementer | implementer | Writes code, runs tests |
 | reviewer | reviewer | Reviews code, reports findings |
@@ -146,15 +153,16 @@ gets installed.
 
 Gstack embeds a specific philosophy (Boil the Lake, Search Before
 Building, User Sovereignty) and a startup-shaped team structure with
-6 agents. A solo developer working on a Django app does not need a
+6 specialists. A solo developer working on a Django app does not need a
 product lead or a QA engineer with gstack's opinionated review
 pipeline. Shipping gstack as the default tells most users "this
 product is not for you" within the first minute.
 
-Foundation is the 80% team: 4 agents that cover the universal
-delegation patterns (design, build, review, secure). The pipeline
-templates map to how most developers already work. Users who want
-more activate gstack or build their own bundle.
+Foundation is the 80% team: 4 specialists that cover the universal
+delegation patterns (design, build, review, secure) under the same
+CEO/COO leadership. The pipeline templates map to how most developers
+already work. Users who want more activate gstack or build their own
+bundle.
 
 ### 3. How do we measure whether this worked?
 
