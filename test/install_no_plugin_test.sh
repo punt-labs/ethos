@@ -103,6 +103,8 @@ assert_rc       "--no-plugin: exit 0" 0
 assert_contains "--no-plugin: skip announced" "plugin install skipped by request"
 assert_contains "--no-plugin: CLI-only message" "CLI-only mode"
 assert_absent   "--no-plugin: no plugin restart line" "Restart Claude Code"
+assert_contains "--no-plugin: requested remediation" "Re-run the installer without --no-plugin"
+assert_absent   "--no-plugin: no claude-absent remedy" "claude CLI was not found"
 rm -rf "$SANDBOX"
 
 # --- Case: ETHOS_NO_PLUGIN=1 env ---
@@ -112,6 +114,18 @@ assert_rc       "ETHOS_NO_PLUGIN=1: exit 0" 0
 assert_contains "ETHOS_NO_PLUGIN=1: skip announced" "plugin install skipped by request"
 assert_contains "ETHOS_NO_PLUGIN=1: CLI-only message" "CLI-only mode"
 assert_absent   "ETHOS_NO_PLUGIN=1: no plugin restart line" "Restart Claude Code"
+assert_contains "ETHOS_NO_PLUGIN=1: requested remediation" "Re-run the installer without --no-plugin"
+rm -rf "$SANDBOX"
+
+# --- Case: claude absent, no flag -> auto-skip names the real blocker ---
+make_sandbox
+rm -f "$BIN/claude"
+run --
+assert_rc       "auto-skip: exit 0" 0
+assert_contains "auto-skip: CLI-only message" "CLI-only mode"
+assert_absent   "auto-skip: no plugin restart line" "Restart Claude Code"
+assert_contains "auto-skip: names missing claude" "claude CLI was not found"
+assert_absent   "auto-skip: no requested remedy" "Re-run the installer without --no-plugin"
 rm -rf "$SANDBOX"
 
 # --- Case: ETHOS_NO_PLUGIN=0 is ignored (only =1 skips) ---

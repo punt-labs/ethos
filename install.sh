@@ -73,11 +73,15 @@ fi
 
 # Skip the plugin when explicitly requested (--no-plugin / ETHOS_NO_PLUGIN=1)
 # OR when a required capability (claude, git) is absent. A single boolean gates
-# Steps 4/5/6; the final message is gated on it too, not on the cause.
+# Steps 4/5/6. SKIP_REASON records the cause so the final message can name the
+# real fix: an auto-skip user never passed --no-plugin, so "re-run without it"
+# is the wrong remedy — their blocker is a missing claude/git.
 SKIP_PLUGIN=0
+SKIP_REASON=""
 if [ "$NO_PLUGIN_REQUESTED" = "1" ] || [ "${ETHOS_NO_PLUGIN:-}" = "1" ]; then
   ok "plugin install skipped by request (--no-plugin / ETHOS_NO_PLUGIN=1)"
   SKIP_PLUGIN=1
+  SKIP_REASON="requested"
 fi
 
 if [ "$SKIP_PLUGIN" = "0" ]; then
@@ -87,6 +91,7 @@ if [ "$SKIP_PLUGIN" = "0" ]; then
     warn "claude CLI not found — skipping plugin install"
     warn "Install from: https://docs.anthropic.com/en/docs/claude-code"
     SKIP_PLUGIN=1
+    SKIP_REASON="no-claude"
   fi
 fi
 
@@ -94,6 +99,7 @@ fi
 if [ "$SKIP_PLUGIN" = "0" ] && ! command -v git >/dev/null 2>&1; then
   warn "git not found — skipping plugin install (required for clone)"
   SKIP_PLUGIN=1
+  SKIP_REASON="no-git"
 fi
 
 # --- Step 2: Install binary ---
@@ -318,7 +324,23 @@ if "$INSTALL_DIR/$BINARY" doctor && [ "$ENABLE_FAILED" = "0" ]; then
     # shellcheck disable=SC2016 # literal instruction text; must not expand
     printf '  eval "$(ethos session start --persona <handle>)"   # open a session (any harness)\n'
     printf '  ethos whoami                                        # confirm your identity\n\n'
-    printf 'Re-run the installer without --no-plugin to add the plugin later.\n\n'
+    # The remediation branches on cause: an explicit skip re-runs without the
+    # flag; an auto-skip names the missing tool, since re-running alone changes
+    # nothing until claude/git is installed.
+    case "$SKIP_REASON" in
+      no-claude)
+        printf 'The plugin was skipped because the claude CLI was not found. Install it\n'
+        printf '(https://docs.anthropic.com/en/docs/claude-code), then re-run the\n'
+        printf 'installer to add the plugin.\n\n'
+        ;;
+      no-git)
+        printf 'The plugin was skipped because git was not found (required to clone the\n'
+        printf 'plugin). Install git, then re-run the installer to add the plugin.\n\n'
+        ;;
+      *)
+        printf 'Re-run the installer without --no-plugin to add the plugin later.\n\n'
+        ;;
+    esac
   else
     printf '\n%b%b%s is ready!%b\n\n' "$GREEN" "$BOLD" "$BINARY" "$NC"
     printf 'Run "ethos setup" in your project directory to get started.\n'
