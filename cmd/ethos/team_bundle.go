@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/punt-labs/ethos/internal/bundle"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/team"
 )
 
 // --- flags ---
@@ -222,11 +224,11 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			return fmt.Errorf("reading team: %w", err)
 		}
 		if team != name {
+			if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
+				return err
+			}
 			if err := setConfigKey(repoRoot, "team", name); err != nil {
 				return fmt.Errorf("writing team: %w", err)
-			}
-			if err := applyLeadershipOnActivate(cmd, repoRoot, name, ceoHandle, bindCEO); err != nil {
-				return err
 			}
 			if jsonOutput {
 				return writeJSON(out, map[string]string{"name": name, "status": "team-repaired"})
@@ -234,7 +236,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			fmt.Fprintf(out, "team repaired to %q\n", name)
 			return nil
 		}
-		if err := applyLeadershipOnActivate(cmd, repoRoot, name, ceoHandle, bindCEO); err != nil {
+		if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
 			return err
 		}
 		if jsonOutput {
@@ -242,6 +244,17 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		}
 		fmt.Fprintf(out, "bundle %q is already active\n", name)
 		return nil
+	}
+
+	// Validate the leadership rebind against the target bundle's team BEFORE
+	// touching config, so a malformed team or illegal rebind fails with no
+	// bundle switch persisted. The actual write happens after activation
+	// (below): the repo-team Save validates member existence against the
+	// ACTIVE bundle, so the new bundle's specialists only resolve once
+	// active_bundle points at it. This split leaves only a genuine I/O Save
+	// error as a post-switch failure.
+	if err := precheckActivateLeadership(match.Path, name, ceoHandle, bindCEO); err != nil {
+		return err
 	}
 
 	// Write team before active_bundle (the sentinel) so an interrupted run
@@ -255,7 +268,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	if err := applyLeadershipOnActivate(cmd, repoRoot, name, ceoHandle, bindCEO); err != nil {
+	if err := applyLeadershipOnActivate(cmd, repoRoot, match.Path, name, ceoHandle, bindCEO); err != nil {
 		return err
 	}
 
@@ -297,16 +310,38 @@ func resolveActivateCEO(errw io.Writer) (handle string, ok bool) {
 	return h, true
 }
 
-// applyLeadershipOnActivate rebinds the activated bundle's ceo/coo seats to
-// the resolved human and claude, so `ethos team activate` yields the same
-// default org shape as `ethos setup` (shared assignLeadershipTeam logic).
-// bindCEO gates the rebind: when false (agent or no human caller) it is a
-// no-op — resolveActivateCEO has already explained the skip.
-func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleName, ceoHandle string, bindCEO bool) error {
+// applyLeadershipOnActivate rebinds the target bundle's ceo/coo seats to the
+// resolved human and claude, so `ethos team activate` yields the same default
+// org shape as `ethos setup` (shared assignLeadershipTeam logic). bundleRoot
+// is the target bundle's path (match.Path), so this resolves the correct team
+// even before active_bundle is written — callers invoke it before the config
+// write to keep activation atomic. bindCEO gates the rebind: when false (agent
+// or no human caller) it is a no-op — resolveActivateCEO explained the skip.
+func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleRoot, bundleName, ceoHandle string, bindCEO bool) error {
 	if !bindCEO {
 		return nil
 	}
-	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleName, ceoHandle)
+	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleRoot, bundleName, ceoHandle)
+}
+
+// precheckActivateLeadership validates the target bundle's leadership rebind
+// (loaded read-only from bundleRoot) before the caller writes any config, so
+// an incomplete pair or a handle collision fails the activation with nothing
+// persisted. It is a no-op when the rebind is skipped (bindCEO false) or the
+// bundle ships no team; ErrNotFound is not an error here.
+func precheckActivateLeadership(bundleRoot, bundleName, ceoHandle string, bindCEO bool) error {
+	if !bindCEO || bundleRoot == "" {
+		return nil
+	}
+	src, err := team.NewStore(bundleRoot).Load(bundleName)
+	if err != nil {
+		if errors.Is(err, team.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("loading bundle team %q: %w", bundleName, err)
+	}
+	_, err = validateLeadership(src, ceoHandle, cooIdentity)
+	return err
 }
 
 // listBundleNames formats bundle names with their source for error output.
