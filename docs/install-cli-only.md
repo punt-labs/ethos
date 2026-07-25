@@ -25,10 +25,9 @@ Two audiences want the first job without the second:
   use ethos fine via the CLI.
 
 `install.sh` already handles the **capability-absent** case. Step 1 sets
-an internal `SKIP_PLUGIN=1` when the `claude` CLI is missing
-(`install.sh:47-53`) or when `git` is missing (`:56-59`); Steps 4
-(marketplace register), 5 (SSH fallback), and 6 (plugin install) are
-gated on `[ "$SKIP_PLUGIN" = "0" ]` (`:163`, `:234`). So audience (a)
+an internal `SKIP_PLUGIN=1` when the `claude` CLI is missing or when
+`git` is missing; the marketplace-register, SSH-fallback, and
+plugin-install steps are gated on `[ "$SKIP_PLUGIN" = "0" ]`. So audience (a)
 with no `claude` on PATH is already covered.
 
 The gap is two-fold:
@@ -38,12 +37,12 @@ The gap is two-fold:
    proceeds to `claude plugin install` and fails on the policy block.
    There is no way to say "install the CLI, skip the plugin, on purpose."
 2. **No argument passing through `curl … | sh`.** The documented install
-   is `curl -fsSL …/install.sh | sh` (`README.md:55`). A piped script
-   parses no arguments today — there is nowhere to put a flag.
+   is `curl -fsSL …/install.sh | sh` (see the README quick-start). A piped
+   script parses no arguments today — there is nowhere to put a flag.
 
 A third, smaller gap: when the auto-skip *does* fire, the final message
 still says `ethos is ready!` and `Restart Claude Code twice to activate
-the plugin` (`install.sh:275-277`) — inaccurate when no plugin was
+the plugin` — inaccurate when no plugin was
 installed.
 
 ## Scope
@@ -133,7 +132,7 @@ done
 ```
 
 The loop sets a *request* flag; Step 1 folds it into `SKIP_PLUGIN`
-(D3 defines precedence). README (`:52-67`) documents both one-liners; the
+(D3 defines precedence). The README quick-start documents both one-liners; the
 website install snippet gains the CLI-only variant beside the default.
 
 ### D3 — Environment-variable equivalent
@@ -149,7 +148,7 @@ curl -fsSL …/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 Value semantics: skip when `ETHOS_NO_PLUGIN` equals exactly `1`. This
-matches the internal `SKIP_PLUGIN=0/1` convention (`install.sh:46`) — one
+matches the internal `SKIP_PLUGIN=0/1` convention — one
 true value, no truthy-string guessing, no locale surprises. Any other
 value (including empty, `0`, `true`, `yes`) does **not** skip; document
 `=1` as the only accepted form.
@@ -197,7 +196,7 @@ for *any* reason (explicit or auto), the installer must not print the
 plugin-centric success text. Unify the final message on the
 `SKIP_PLUGIN` flag, not on the specific cause (D5). Today the
 claude-absent path still prints `Restart Claude Code twice to activate
-the plugin` (`:277`), which is wrong; that line is emitted only when a
+the plugin`, which is wrong; that line is emitted only when a
 plugin was actually installed.
 
 ### D5 — Skip messaging
