@@ -1,6 +1,7 @@
 package enable
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -36,16 +37,19 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		return "", "", fmt.Errorf("reading .gitignore: %w", err)
 	}
 
-	// Match lines exactly: leading whitespace is significant in .gitignore, so
-	// an indented "  .punt-labs/**/local/**" is a different pattern (it matches
-	// indented paths) and must not count as coverage — treating it as present
-	// would silently leave the real zone unignored.
+	// Match lines exactly, but for the comparison only: leading whitespace is
+	// significant in .gitignore, so an indented "  .punt-labs/**/local/**" is a
+	// different pattern — it matches paths that start with spaces, not the real
+	// files — and must not count as coverage, or the real zone stays unignored.
+	// A trailing \r (CRLF file) is stripped for the comparison so a CRLF repo
+	// stays idempotent; leading whitespace is left intact.
 	lines := strings.Split(string(data), "\n")
 	present := make(map[string]bool, len(lines))
 	markerIdx := -1
 	for i, line := range lines {
-		present[line] = true
-		if markerIdx < 0 && line == gitignoreMarker {
+		key := strings.TrimRight(line, "\r")
+		present[key] = true
+		if markerIdx < 0 && key == gitignoreMarker {
 			markerIdx = i
 		}
 	}
@@ -59,13 +63,24 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		return "already", ".gitignore already ignores ethos runtime zones", nil
 	}
 
+	// Preserve the file's existing line ending so the block we add matches.
+	eol := "\n"
+	if bytes.Contains(data, []byte("\r\n")) {
+		eol = "\r\n"
+	}
+	ins := make([]string, len(missing))
+	for i, m := range missing {
+		ins[i] = m + strings.TrimSuffix(eol, "\n")
+	}
+
 	var out string
 	if markerIdx >= 0 {
 		// Add the missing patterns under the existing marker — one block, no
-		// duplicate comment.
-		merged := make([]string, 0, len(lines)+len(missing))
+		// duplicate comment. Existing lines keep their \r; joining on \n
+		// reproduces the file's original line endings.
+		merged := make([]string, 0, len(lines)+len(ins))
 		merged = append(merged, lines[:markerIdx+1]...)
-		merged = append(merged, missing...)
+		merged = append(merged, ins...)
 		merged = append(merged, lines[markerIdx+1:]...)
 		out = strings.Join(merged, "\n")
 	} else {
@@ -74,15 +89,16 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		// Separate the appended block from existing content with a blank line,
 		// and terminate an existing final line that lacks its newline.
 		if len(data) > 0 {
-			if !strings.HasSuffix(string(data), "\n") {
-				buf.WriteByte('\n')
+			if !bytes.HasSuffix(data, []byte("\n")) {
+				buf.WriteString(eol)
 			}
-			buf.WriteByte('\n')
+			buf.WriteString(eol)
 		}
-		buf.WriteString(gitignoreMarker)
-		buf.WriteByte('\n')
-		buf.WriteString(strings.Join(missing, "\n"))
-		buf.WriteByte('\n')
+		buf.WriteString(gitignoreMarker + strings.TrimSuffix(eol, "\n"))
+		for _, line := range ins {
+			buf.WriteString("\n" + line)
+		}
+		buf.WriteString("\n")
 		out = buf.String()
 	}
 
@@ -92,35 +108,60 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	return "added", "ignored " + strings.Join(missing, ", "), nil
 }
 
-// writeGitignore replaces path atomically: it writes to a temp file in the same
-// directory and renames over the target, so a crash mid-update never leaves a
-// partially written .gitignore — the operator's file is either the old content
-// or the new, never a truncated hybrid. An existing file's mode is preserved; a
-// new file gets 0o644.
+// writeGitignore replaces the .gitignore at path atomically and durably: it
+// writes to a temp file in the target's directory, fsyncs it, and renames over
+// the target, so a crash or power loss leaves the operator's file as either the
+// old content or the new — never a truncated hybrid. A symlinked .gitignore (a
+// dotfile manager like stow or chezmoi) is resolved so the real target is
+// rewritten and the symlink itself preserved. An existing file's mode is kept;
+// a new file gets 0o644.
 func writeGitignore(path string, data []byte) error {
+	target := path
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolving .gitignore symlink: %w", err)
+		}
+		target = resolved
+	}
+
 	mode := os.FileMode(0o644)
-	if fi, err := os.Stat(path); err == nil {
+	if fi, err := os.Stat(target); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	dir := filepath.Dir(path)
+
+	dir := filepath.Dir(target)
 	tmp, err := os.CreateTemp(dir, ".gitignore.*")
 	if err != nil {
 		return fmt.Errorf("creating temp .gitignore in %s: %w", dir, err)
 	}
 	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-	if _, err := tmp.Write(data); err != nil {
+	if n, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
+		_ = os.Remove(name)
 		return fmt.Errorf("writing %s: %w", name, err)
+	} else if n < len(data) {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return fmt.Errorf("short write to %s: %d of %d bytes", name, n, len(data))
 	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("closing %s: %w", name, err)
-	}
-	if err := os.Chmod(name, mode); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
 		return fmt.Errorf("setting mode on %s: %w", name, err)
 	}
-	if err := os.Rename(name, path); err != nil {
-		return fmt.Errorf("renaming %s to .gitignore: %w", name, err)
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(name)
+		return fmt.Errorf("syncing %s: %w", name, err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return fmt.Errorf("closing %s: %w", name, err)
+	}
+	if err := os.Rename(name, target); err != nil {
+		_ = os.Remove(name)
+		return fmt.Errorf("renaming %s to %s: %w", name, target, err)
 	}
 	return nil
 }

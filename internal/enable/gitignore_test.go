@@ -180,3 +180,74 @@ func TestEnableCreatesGitignoreWhenMissing(t *testing.T) {
 		}
 	}
 }
+
+func TestEnableGitignoreSymlinkPreserved(t *testing.T) {
+	dir := gitRepo(t)
+	// A dotfile manager symlinks .gitignore to a file it owns elsewhere. enable
+	// must update the real target and leave the symlink in place.
+	realDir := t.TempDir()
+	realPath := filepath.Join(realDir, "shared.gitignore")
+	if err := os.WriteFile(realPath, []byte("*.log\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, ".gitignore")
+	if err := os.Symlink(realPath, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Error(".gitignore symlink was replaced with a regular file")
+	}
+	got := readFile(t, realPath)
+	if !strings.HasPrefix(got, "*.log\n") {
+		t.Errorf("real target content not preserved; got:\n%s", got)
+	}
+	if !hasExactLine(got, liveZonePattern) || !hasExactLine(got, missionLockPat) {
+		t.Errorf("runtime patterns not written to the real target; got:\n%s", got)
+	}
+}
+
+func TestEnableGitignoreCRLFIdempotent(t *testing.T) {
+	dir := gitRepo(t)
+	// A CRLF .gitignore already covering the zones must be a no-op on enable —
+	// the trailing \r must not defeat the presence check and cause a duplicate.
+	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n"
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	got := readFile(t, path)
+	if got != initial {
+		t.Errorf("CRLF .gitignore was modified though already covered:\nwant:\n%q\ngot:\n%q", initial, got)
+	}
+}
+
+func TestEnableGitignoreCRLFAppendsCRLF(t *testing.T) {
+	dir := gitRepo(t)
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte("*.log\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	got := readFile(t, path)
+	// The appended block must use the file's CRLF endings, not bare LF.
+	for _, want := range []string{gitignoreMarker + "\r\n", liveZonePattern + "\r\n", missionLockPat + "\r\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("appended block not CRLF-terminated (%q missing); got:\n%q", want, got)
+		}
+	}
+	if strings.Contains(got, liveZonePattern+"\n") && !strings.Contains(got, liveZonePattern+"\r\n") {
+		t.Errorf("bare LF appended to a CRLF file; got:\n%q", got)
+	}
+}
