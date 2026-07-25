@@ -35,6 +35,8 @@ collaborations:
   - from: security-reviewer
     to: coo
     type: reports_to
+  # product-lead reports_to coo (was collaborates_with architect): deliberate
+  # per the operator ruling that every specialist reports to the COO.
   - from: product-lead
     to: coo
     type: reports_to

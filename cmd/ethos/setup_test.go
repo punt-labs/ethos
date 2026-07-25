@@ -253,6 +253,53 @@ email: test-user@example.com
 	assert.Equal(t, "gstack-product", memberIdentity(tm, "product-lead"), "specialist seats intact")
 }
 
+// TestTeamActivate_AgentCallerSkipsLeadership pins the fix for the collision
+// bug: an agent persona (claude, via `ethos iam`) running `ethos team
+// activate` must SUCCEED — the caller resolves to "claude", which must not
+// be bound as the CEO (that would collide with the COO seat and hard-fail).
+// The bundle switch persists, leadership is skipped with a warning, and no
+// repo-local team is written for the new bundle.
+func TestTeamActivate_AgentCallerSkipsLeadership(t *testing.T) {
+	home, repo := setupTestEnv(t)
+
+	cfgPath := filepath.Join(repo, "setup.yaml")
+	writeSetupFile(t, cfgPath, `name: Test User
+handle: test-user
+email: test-user@example.com
+`)
+	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
+	require.NoError(t, err, "setup stderr: %s", stderr)
+
+	// Act as the claude agent persona. resolve.Resolve tries git email
+	// (Step 3) before USER (Step 4); repoint git email to a non-identity
+	// address so resolution falls through to USER→handle="claude" (the agent
+	// identity setup created).
+	gitEnv := []string{
+		"HOME=" + home,
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+		"PATH=" + os.Getenv("PATH"),
+	}
+	cfg := exec.Command("git", "-C", repo, "config", "user.email", "nobody@example.invalid")
+	cfg.Env = gitEnv
+	require.NoError(t, cfg.Run(), "repointing git email")
+	t.Setenv("USER", "claude")
+
+	_, stderr, err = execHandler(t, "team", "activate", "gstack")
+	require.NoError(t, err, "activate as an agent must exit 0; stderr: %s", stderr)
+	assert.Contains(t, stderr, "skipping CEO/COO assignment")
+	assert.Contains(t, stderr, "agent")
+
+	// The bundle switch persisted (activation itself succeeded)...
+	body := readRepoConfigFile(t, repo)
+	assert.Contains(t, body, "active_bundle: gstack")
+	// ...but no leadership team was written for gstack — the agent can't
+	// determine the human, so it leaves leadership to a human-driven setup.
+	ethosRoot := filepath.Join(repo, ".punt-labs", "ethos")
+	assert.False(t, team.NewStore(ethosRoot).Exists("gstack"),
+		"agent-driven activate must not write a gstack leadership team")
+}
+
 // TestRebindLeadershipSeats exercises the pure rebind + guard logic across
 // every shape: the happy pair, a team with no leadership seats, each
 // incomplete pair, and the human/coo handle collision.

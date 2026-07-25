@@ -203,6 +203,15 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("reading active bundle: %w", err)
 	}
 	out := cmd.OutOrStdout()
+
+	// Resolve the human CEO to bind BEFORE any config write, so a caller who
+	// cannot supply one (an agent persona such as claude, or no resolvable
+	// identity) skips the rebind cleanly rather than failing after the switch
+	// has already persisted. The ceo seat is the human; an agent caller can't
+	// determine the human, so leadership from the human's earlier `ethos
+	// setup` is left intact.
+	ceoHandle, bindCEO := resolveActivateCEO(cmd.ErrOrStderr())
+
 	if current == name {
 		// Explicitly running activate commands convergence. If the team key
 		// diverged (or is absent), repair it here — otherwise the remedy
@@ -216,7 +225,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			if err := setConfigKey(repoRoot, "team", name); err != nil {
 				return fmt.Errorf("writing team: %w", err)
 			}
-			if err := applyLeadershipOnActivate(cmd, repoRoot, name); err != nil {
+			if err := applyLeadershipOnActivate(cmd, repoRoot, name, ceoHandle, bindCEO); err != nil {
 				return err
 			}
 			if jsonOutput {
@@ -225,7 +234,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 			fmt.Fprintf(out, "team repaired to %q\n", name)
 			return nil
 		}
-		if err := applyLeadershipOnActivate(cmd, repoRoot, name); err != nil {
+		if err := applyLeadershipOnActivate(cmd, repoRoot, name, ceoHandle, bindCEO); err != nil {
 			return err
 		}
 		if jsonOutput {
@@ -246,7 +255,7 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 		return fmt.Errorf("writing config: %w", err)
 	}
 
-	if err := applyLeadershipOnActivate(cmd, repoRoot, name); err != nil {
+	if err := applyLeadershipOnActivate(cmd, repoRoot, name, ceoHandle, bindCEO); err != nil {
 		return err
 	}
 
@@ -262,20 +271,42 @@ func runTeamActivate(cmd *cobra.Command, name string) error {
 	return nil
 }
 
-// applyLeadershipOnActivate rebinds the activated bundle's ceo/coo seats to
-// the real human and claude, so `ethos team activate` yields the same
-// default org shape as `ethos setup` (shared assignLeadershipTeam logic).
-// The human is resolved from the caller's identity; when none resolves the
-// rebind is skipped with a warning rather than failing the activation — the
-// bundle switch itself has already succeeded.
-func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleName string) error {
-	handle, err := resolve.Resolve(identityStore(), sessionStore())
+// resolveActivateCEO resolves the human identity to bind to the ceo seat on
+// activation, and reports whether one was found. The ceo is the human, so an
+// agent caller (claude via `ethos iam`) or an unresolvable/absent caller
+// yields ok=false with a loud skip warning — activation still succeeds and
+// the leadership from the human's earlier `ethos setup` stays intact. This
+// runs before any config write so the skip decision never leaves a persisted
+// switch reported as a failure.
+func resolveActivateCEO(errw io.Writer) (handle string, ok bool) {
+	is := identityStore()
+	h, err := resolve.Resolve(is, sessionStore())
 	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(),
-			"ethos: team activate: skipping CEO/COO assignment — no caller identity resolved (%v); run \"ethos setup\" first\n", err)
+		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — no caller identity resolved (%v); run \"ethos setup\" first\n", err)
+		return "", false
+	}
+	id, err := is.Load(h)
+	if err != nil {
+		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — cannot load caller %q (%v)\n", h, err)
+		return "", false
+	}
+	if id.Kind != "human" {
+		fmt.Fprintf(errw, "ethos: team activate: skipping CEO/COO assignment — caller %q is an agent, not the human CEO; leadership from \"ethos setup\" is left intact\n", h)
+		return "", false
+	}
+	return h, true
+}
+
+// applyLeadershipOnActivate rebinds the activated bundle's ceo/coo seats to
+// the resolved human and claude, so `ethos team activate` yields the same
+// default org shape as `ethos setup` (shared assignLeadershipTeam logic).
+// bindCEO gates the rebind: when false (agent or no human caller) it is a
+// no-op — resolveActivateCEO has already explained the skip.
+func applyLeadershipOnActivate(cmd *cobra.Command, repoRoot, bundleName, ceoHandle string, bindCEO bool) error {
+	if !bindCEO {
 		return nil
 	}
-	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleName, handle)
+	return assignLeadershipTeam(cmd.ErrOrStderr(), repoRoot, bundleName, ceoHandle)
 }
 
 // listBundleNames formats bundle names with their source for error output.
