@@ -116,7 +116,7 @@ func resetDispatchFlags() {
 	dispatchEvaluator = ""
 	dispatchWriteSet = ""
 	dispatchExtractInto = ""
-	dispatchCriteria = ""
+	dispatchCriteria = nil
 	dispatchContext = ""
 	dispatchTicket = ""
 	dispatchType = "implement"
@@ -3426,7 +3426,7 @@ func TestMissionDispatch_ExtractInto(t *testing.T) {
 		dispatchWorker = "bwk"
 		dispatchEvaluator = "djb"
 		dispatchWriteSet = "internal/alpha/store.go"
-		dispatchCriteria = "make check passes"
+		dispatchCriteria = []string{"make check passes"}
 		dispatchType = "implement"
 		dispatchBudget = 2
 
@@ -3447,7 +3447,7 @@ func TestMissionDispatch_ExtractInto(t *testing.T) {
 		dispatchEvaluator = "djb"
 		dispatchWriteSet = "internal/beta/store.go"
 		dispatchExtractInto = "internal/foo/,internal/bar/"
-		dispatchCriteria = "make check passes"
+		dispatchCriteria = []string{"make check passes"}
 		dispatchType = "implement"
 		dispatchBudget = 2
 
@@ -3468,7 +3468,7 @@ func TestMissionDispatch_ExtractInto(t *testing.T) {
 		dispatchEvaluator = "djb"
 		dispatchWriteSet = "internal/gamma/store.go"
 		dispatchExtractInto = "bad.go"
-		dispatchCriteria = "make check passes"
+		dispatchCriteria = []string{"make check passes"}
 		dispatchType = "implement"
 		dispatchBudget = 2
 
@@ -3482,6 +3482,104 @@ func TestMissionDispatch_ExtractInto(t *testing.T) {
 		assert.Contains(t, msg, "extract_into")
 		assert.Contains(t, msg, "extension")
 	})
+}
+
+// TestMissionDispatch_ProseCriterionNotShredded pins the intended
+// contract for the repeatable --criteria flag. Two cases:
+//
+//   - one prose criterion with commas is stored as ONE SuccessCriteria
+//     entry, verbatim — dispatch no longer runs the value through
+//     splitCSV, so a comma-bearing clause is not shredded into a
+//     fragment per comma.
+//   - two --criteria occurrences produce two entries, each verbatim,
+//     proving the flag repeats.
+func TestMissionDispatch_ProseCriterionNotShredded(t *testing.T) {
+	t.Run("one prose criterion stays one entry", func(t *testing.T) {
+		missionTestEnv(t)
+		dispatchWorker = "bwk"
+		dispatchEvaluator = "djb"
+		dispatchWriteSet = "internal/alpha/store.go"
+		dispatchCriteria = []string{"Design the flag, add tests, and update docs"}
+		dispatchType = "implement"
+		dispatchBudget = 2
+
+		captureStdoutE(t, func() error { return runMissionDispatch() })
+
+		ms := missionStore()
+		ids, err := ms.List()
+		require.NoError(t, err)
+		require.Len(t, ids, 1)
+		c, err := ms.Load(ids[0])
+		require.NoError(t, err)
+
+		require.Len(t, c.SuccessCriteria, 1,
+			"one prose criterion must be stored as one entry, not shredded at each comma")
+		assert.Equal(t, "Design the flag, add tests, and update docs", c.SuccessCriteria[0],
+			"prose criterion text must be preserved verbatim")
+	})
+
+	t.Run("two occurrences produce two entries", func(t *testing.T) {
+		missionTestEnv(t)
+		dispatchWorker = "bwk"
+		dispatchEvaluator = "djb"
+		dispatchWriteSet = "internal/beta/store.go"
+		dispatchCriteria = []string{
+			"Design the flag, add tests, and update docs",
+			"make check green, staticcheck clean",
+		}
+		dispatchType = "implement"
+		dispatchBudget = 2
+
+		captureStdoutE(t, func() error { return runMissionDispatch() })
+
+		ms := missionStore()
+		ids, err := ms.List()
+		require.NoError(t, err)
+		require.Len(t, ids, 1)
+		c, err := ms.Load(ids[0])
+		require.NoError(t, err)
+
+		require.Len(t, c.SuccessCriteria, 2,
+			"each --criteria occurrence must produce one entry")
+		assert.Equal(t, "Design the flag, add tests, and update docs", c.SuccessCriteria[0])
+		assert.Equal(t, "make check green, staticcheck clean", c.SuccessCriteria[1])
+	})
+}
+
+// TestMissionDispatch_BlankCriterionRejected guards the regression the
+// repeatable flag opened: an empty or whitespace-only criterion must
+// fail loudly, not persist silently. The length-only required check
+// admits [""], so the per-entry Validate rule is what catches it. Each
+// case asserts an error and that no mission was created.
+func TestMissionDispatch_BlankCriterionRejected(t *testing.T) {
+	cases := []struct {
+		name     string
+		criteria []string
+	}{
+		{"empty string", []string{""}},
+		{"whitespace only", []string{"   "}},
+		{"valid then blank", []string{"make check passes", ""}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			missionTestEnv(t)
+			dispatchWorker = "bwk"
+			dispatchEvaluator = "djb"
+			dispatchWriteSet = "internal/alpha/store.go"
+			dispatchCriteria = tc.criteria
+			dispatchType = "implement"
+			dispatchBudget = 2
+
+			err := runMissionDispatch()
+			require.Error(t, err, "a blank criterion must be rejected")
+			assert.Contains(t, err.Error(), "success_criteria")
+
+			ms := missionStore()
+			ids, err := ms.List()
+			require.NoError(t, err)
+			assert.Empty(t, ids, "no mission may be created when a criterion is blank")
+		})
+	}
 }
 
 // --- Phase 4: active-mission sidecar (ethos-620t) ---

@@ -64,7 +64,8 @@ const (
 //     Every extract_into entry runs through the same per-entry
 //     check (the same helper that validates write_set entries).
 //  12. budget.rounds is in [1, 10]
-//  13. success_criteria has at least one entry
+//  13. success_criteria has at least one entry, and no entry is empty
+//      or whitespace-only
 //  14. current_round is in [1, budget.rounds] (3.4 round-tracking
 //     invariant; zero is rewritten to 1 by Store.Create so a
 //     pre-3.4 contract loaded in-place still parses)
@@ -212,9 +213,14 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		return fmt.Errorf("budget.rounds %d out of range [%d, %d]", c.Budget.Rounds, minRounds, maxRounds)
 	}
 
-	// success_criteria non-empty
+	// success_criteria non-empty, and no entry blank or whitespace-only.
 	if len(c.SuccessCriteria) == 0 {
 		return fmt.Errorf("success_criteria must contain at least one entry")
+	}
+	for i, entry := range c.SuccessCriteria {
+		if strings.TrimSpace(entry) == "" {
+			return fmt.Errorf("success_criteria[%d]: must not be empty or whitespace-only", i)
+		}
 	}
 
 	// current_round in [1, budget.rounds]. Pre-3.4 contracts loaded
