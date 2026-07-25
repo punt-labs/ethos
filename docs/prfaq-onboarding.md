@@ -72,9 +72,10 @@ It ships with 3 pipelines: `standard` (design-implement-test-review-
 document), `quick` (implement-review), and `product` (prfaq-design-
 implement-test-review-document).
 
-**Gstack** is a 6-agent team with an opinionated startup builder
-philosophy ("Boil the Lake", "Search Before Building"). It adds a
-QA engineer and product lead, and ships 5 custom pipelines for
+**Gstack** is a team of 6 specialists under the same CEO/COO
+leadership, with an opinionated startup builder philosophy ("Boil
+the Lake", "Search Before Building"). It adds a QA engineer and
+product lead, and ships 5 custom pipelines for
 planning, shipping, debugging, design, and multi-perspective review.
 
 Pick foundation unless your team already follows the gstack workflow.
