@@ -35,7 +35,10 @@ usage() {
     '' \
     'Environment:' \
     '  ETHOS_NO_PLUGIN=1   Same as --no-plugin, for argument-hostile contexts:' \
-    '                      curl -fsSL .../install.sh | ETHOS_NO_PLUGIN=1 sh'
+    '                      curl -fsSL .../install.sh | ETHOS_NO_PLUGIN=1 sh' \
+    '  ETHOS_LOCAL_BINARY=/path/to/binary' \
+    '                      Install a local binary instead of downloading' \
+    '                      (offline / air-gapped / testing).'
 }
 
 # --- Argument parsing ---
