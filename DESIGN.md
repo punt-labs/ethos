@@ -6577,3 +6577,84 @@ specialist under the COO, not the apex.
 - **CEO/COO as a special apex mechanism** rather than roles. Roles compose with
   the existing team/collaboration model and validation; a bespoke mechanism would
   not.
+
+## DES-065: Manifest-aware seed — propagate shipped content without clobbering edits (SETTLED)
+
+**Status**: Settled. Operator-ratified 2026-07-26. Ships v4.7.0. Full design in
+`docs/seed-content-upgrade.md`.
+
+### Problem
+
+`ethos seed` deploys embedded library content (roles, talents, personalities,
+writing-styles, archetypes, pipelines, bundles, skills, READMEs — never user
+identities, which `ethos setup` owns). Its no-clobber guard skips any existing
+non-empty file (`internal/seed/seed.go:221-224`; printed at
+`cmd/ethos/seed.go:50-52`), so a released improvement to a shipped file never
+reaches a returning user — a live 4.6.0 re-install skipped 111 existing files.
+The only override, `--force` (`internal/seed/seed.go:170-176`), overwrites
+everything blindly and cannot tell an unmodified shipped file from a hand-edited
+one, so it is unsafe as the upgrade path. The installer runs plain `ethos seed`
+(`install.sh:321`), upgrading nothing.
+
+### Decision
+
+Make plain seed **upgrade tracked shipped files and preserve proven user edits**,
+decided by content hash. New behavior activates only for a file the manifest
+already tracks; an untracked file keeps today's no-clobber skip.
+
+- **Current shipped hash (`cur`)** is computed at runtime from the embedded bytes
+  — no build step, no drift.
+- **A local install manifest** (`~/.punt-labs/ethos/.seed-manifest.json`) records,
+  per seeded path, the hash seed last wrote (`mf`) plus provenance — one hash per
+  path, overwritten each write, so nothing grows.
+- **Decision:** absent → deploy + record. `local == cur` → unchanged (record if
+  untracked, to adopt). Tracked and `local == mf` and `cur != mf` → upgrade +
+  record. Tracked and `local != mf` → skip + warn (user edit; `--force` remedy).
+  **Untracked and `local != cur` → today's no-clobber skip, unchanged.** Zero-byte
+  partials are repaired to `cur` regardless.
+- **No pre-feature migration in the software.** The few existing machines are
+  hand-cleaned once with `ethos seed --force`, which overwrites to `cur` and
+  records every entry; thereafter they auto-upgrade.
+- **`--force`** overwrites every path to `cur` and records all entries — the
+  escape hatch and the one-time hand-clean tool.
+- **Installer unchanged except messaging** — still plain `ethos seed`, now
+  upgrade-capable; no `--force`.
+- **Output** gains `deployed` / `updated` / `unchanged` / `skipped (exists)` /
+  `skipped (local edit)` lines and a `--force` remedy hint (CLI standard; seed has
+  no MCP surface, so no DES-020 formatter is added). `Result.Skipped` keeps its
+  meaning; a new `Edited` field carries the tracked-edit case, so no output
+  consumer breaks.
+
+### Rulings
+
+- **No pre-feature migration** (operator). Few machines; a migration branch is
+  clutter and debt. The software keeps the existing no-clobber skip for untracked
+  files; the affected computers are hand-cleaned with a one-time `--force`.
+- **Content hash, not mtime or in-band version stamps.** mtimes are unreliable
+  across clone/tar/package managers; stamps pollute content and are forgeable by
+  an edit that keeps the stamp.
+- **The manifest carries one hash per path.** No per-release history, no unbounded
+  growth.
+- **Scope: library content only.** The machinery never reads, writes, or hashes
+  `~/.punt-labs/ethos/identities/` — `ethos setup` owns identities.
+- **Skip is safe and recoverable.** A skipped file is preserved, not lost;
+  `--force` is the documented remedy.
+
+### Rejected alternatives
+
+- **A bootstrap-upgrade branch for untracked files.** Operator ruled no
+  pre-feature migration — few users, hand-clean the affected machines. The
+  no-clobber skip stays for untracked files.
+- **Legacy hash catalog + history-walking generator.** Fragile generation (the
+  sidecar layout has moved across releases; risks silent under-population),
+  unbounded generation risk, guards the ruled-out pre-feature case.
+- **`.seed-backup/` safety net.** Softens a mis-upgrade of a pre-feature file —
+  the ruled-out case; adds state for no benefit.
+- **Installer `--force`** (clobbers edits and re-clobbers hand-cleaned machines
+  every re-install).
+- **mtime comparison** (unreliable, content-blind).
+- **Per-file version stamps** (pollute content, forgeable).
+- **Interactive per-file prompt** (hangs the piped installer).
+- **Three-way merge** (unwarranted for content nobody hand-edits).
+- **A separate `ethos seed --upgrade` command** (splits the mental model; plain
+  seed should do the right thing by default).

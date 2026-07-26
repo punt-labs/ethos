@@ -390,11 +390,12 @@ func TestSeed_Idempotent(t *testing.T) {
 	_, err := execSeed(t, "seed")
 	require.NoError(t, err)
 
-	// Second run: all files should be skipped.
+	// Second run: every file is already at the shipped content, so all are
+	// reported as unchanged.
 	stdout, err := execSeed(t, "seed")
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "Seeded 0 files")
-	assert.Contains(t, stdout, "skipped")
+	assert.Contains(t, stdout, "unchanged")
 }
 
 // TestSeed_RepairedLineOnStdout pins the stream fix: repaired lines ride
@@ -443,10 +444,11 @@ func TestSeed_Force(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(targetFile, []byte("modified"), 0o644))
 
-	// Run seed --force: the file should be overwritten.
+	// Run seed --force: the file should be overwritten. A force overwrite of
+	// an existing file is reported as an update, not a fresh deploy.
 	stdout, err := execSeed(t, "seed", "--force")
 	require.NoError(t, err)
-	assert.Contains(t, stdout, "deployed:")
+	assert.Contains(t, stdout, "updated:")
 
 	restored, err := os.ReadFile(targetFile)
 	require.NoError(t, err)

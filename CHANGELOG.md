@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos seed` upgrades shipped content on re-seed while preserving local
+  edits.** Seed now records an install manifest
+  (`~/.punt-labs/ethos/.seed-manifest.json`) of the content hash it wrote for
+  each file. A later seed upgrades a file the release has revved when the file
+  is unchanged since seed last wrote it, leaves a file you have edited untouched
+  (reported as `skipped (local edit)`), and reports files already current as
+  `unchanged`. Previously any existing file was skipped, so a released
+  improvement never reached a returning user. `ethos seed --force` still
+  overwrites every file with the shipped content — now the way to discard a
+  local edit. The installer runs plain `ethos seed` (no `--force`) and surfaces
+  the `--force` hint when it skips a locally edited file. See DES-065.
+
 ## [4.6.0] - 2026-07-25
 
 ### Added
