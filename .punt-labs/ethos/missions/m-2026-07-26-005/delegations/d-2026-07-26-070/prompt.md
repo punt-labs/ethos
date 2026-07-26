@@ -1,0 +1,10 @@
+Design mission m-2026-07-26-013 in <repo>. Run `ethos mission show m-2026-07-26-013` then `ethos mission claim m-2026-07-26-013`. DESIGN ONLY — write-set is `docs`, no Go code. Branch: `git checkout main && git pull --ff-only && git checkout -b design/entity-schema-command`.
+
+Deliverable: docs/entity-schema-command.md + a DES ADR draft block (match the DES-063/064/065 format in DESIGN.md; the leader lands it). See `ethos mission show` for the full criteria. Summary:
+
+- Add a `schema` subcommand to the three TYPED entities — `ethos identity schema`, `ethos role schema`, `ethos team schema` — sitting next to their existing create/list/show verbs. Operator explicitly confirmed the per-entity subcommand shape, NOT a top-level `ethos schema`. Attributes (personality/talent/writing-style) are markdown title+prose — EXCLUDED.
+- Default output: human field table (field, required, type/enum, description). `--json`: JSON Schema. Ground every field in the real Go structs — read internal/identity, internal/role, internal/team and cite them (team = members[{identity,role}] + collaborations[{from,to,type-enum reports_to|collaborates_with|delegates_to}]).
+- CORE: single source of truth. Design a schema registry derived from the Go structs so the CLI table, --json JSON Schema, the MCP inputSchema (hand-written today in internal/mcp/tools.go + team_tools.go), validate-content, and the seeded per-category READMEs ALL render from one place and cannot drift. Spec how each consumer reads it. Explain how team schema is exposed via `ethos team schema` (teams have no seeded category dir / README today).
+- Each typed entity --help gets a one-line pointer to its schema subcommand. Rejected alternatives (top-level `ethos schema`, --schema flag, enrich create --help, hand-maintained READMEs) with reasons. Open questions for the leader.
+
+markdownlint clean; commit the doc. Reply "written — <sha>" + a 4-6 line summary of the registry mechanism + the identity/role/team field lists.

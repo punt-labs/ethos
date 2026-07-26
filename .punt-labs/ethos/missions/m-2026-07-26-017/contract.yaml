@@ -1,0 +1,37 @@
+mission_id: m-2026-07-26-017
+status: closed
+type: implement
+created_at: "2026-07-26T15:46:52Z"
+updated_at: "2026-07-26T17:11:54Z"
+closed_at: "2026-07-26T17:11:54Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-26T15:46:52Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - internal/schema
+    - internal/identity
+    - internal/role
+    - internal/team
+    - internal/mcp
+    - cmd/ethos
+    - cmd/validate-content
+    - internal/seed/sidecar/identities
+    - internal/seed/sidecar/roles
+    - internal/seed/sidecar/teams
+    - CHANGELOG.md
+success_criteria:
+    - 'Implement DES-066 per docs/entity-schema-command.md on branch design/entity-schema-command (design + DES-066 already landed there). New internal/schema package uses reflect-plus-overlay: field name + required read live from the Go structs by reflection (required = YAML tag lacks omitempty); registry Overlay supplies only Type, Enum, Pattern, Description keyed by wire name. Render methods Table(), JSONSchema() (draft 2020-12), MarkdownTable().'
+    - 'Add a schema subcommand to each typed entity: ethos identity schema, ethos role schema, ethos team schema. Default = human field table via hook.FormatTable (columns FIELD, REQUIRED, TYPE, DESCRIPTION); --json = JSON Schema. role.model emits anyOf of {enum opus/sonnet/haiku/inherit} and {pattern ^claude-}, NOT a closed enum. Each entity group --help gains one line pointing at its schema subcommand.'
+    - 'MCP handler fix (do this FIRST so the generated schema only advertises fields the handlers read): extend handleCreateRole to read all seven role fields (model validated via role.ValidateModel; safety_constraints parsed like parseMembersArg); extend handleCreateTeam to accept a collaborations array in create (keep the add_collab method). THEN generate each tool''s inputSchema by looping the registry fields. safety_constraints/members/collaborations advertise as an array with an object-shape description string (matching the existing members treatment) — approved by leader.'
+    - 'Export the inline enums as package slices: identity.KindValues, role.ModelAliases, team.CollaborationTypes. The guard test asserts the registry closed-enums equal these slices.'
+    - 'Anti-drift guard test in internal/schema: reflect over each struct and assert every persisted field (yaml tag present, not ''-'') has a registry overlay entry with non-empty Type + Description; no phantom overlay entries; closed-enum equality against the exported slices. Names/required come from reflection (not asserted-as-copy). Document plainly that description prose is authored + unguarded.'
+    - 'Seeded READMEs generated-and-compared: identities/README.md fields table becomes schema.Identity.MarkdownTable(); add a fields table to roles/README.md; add a new internal/seed/sidecar/teams/README.md from schema.Team.MarkdownTable(). validate-content gains a check that each seeded README fields block equals the registry MarkdownTable() (compare, not generate — fail CI on drift).'
+    - 'make check green before EVERY commit (read full output). Commit incrementally, one logical step per commit. Table-driven tests for each render method + the guard test. Dogfood (built binary): `ethos role schema` shows all 7 fields; `ethos role schema --json` is valid JSON Schema; `ethos team schema` shows members + collaborations; an MCP role create round-trips all 7 fields (no silent drop). CHANGELOG [Unreleased] Added entry. Do NOT edit DESIGN.md or README.md (leader owns; DES-066 already landed).'
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 1

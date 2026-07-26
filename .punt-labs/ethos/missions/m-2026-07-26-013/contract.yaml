@@ -1,0 +1,23 @@
+mission_id: m-2026-07-26-013
+status: open
+type: implement
+created_at: "2026-07-26T15:09:01Z"
+updated_at: "2026-07-26T15:09:01Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-26T15:09:01Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - docs
+success_criteria:
+    - 'DESIGN ONLY (write-set is docs). Produce docs/entity-schema-command.md plus a DES ADR draft for a schema subcommand added to the three typed entities: identity, role, team. It sits alongside their existing create/list/show verbs (operator confirmed the per-entity subcommand shape, e.g. ethos team schema, NOT a top-level ethos schema command). Attributes (personality, talent, writing-style) are markdown title-plus-prose and are explicitly EXCLUDED.'
+    - 'Behavior: default output is a human-readable field table (columns: field, required, type/enum, description); the --json flag emits a JSON Schema. Ground every field in the real Go structs (internal/identity, internal/role, internal/team) and cite them. Team includes members (list of identity+role) and collaborations (list of from, to, and a type enum: reports_to, collaborates_with, delegates_to).'
+    - 'CORE REQUIREMENT — single source of truth. Design a schema registry derived from the Go structs so ALL schema representations render from ONE place and cannot drift: the CLI table, the --json JSON Schema, the MCP tool inputSchema (currently hand-written WithString descriptions in internal/mcp/tools.go and team_tools.go), the validate-content rules, and the seeded per-category READMEs. Specify how each consumer reads from the registry. Explain how the team schema is exposed via its schema subcommand, since teams have no seeded category directory and therefore no README today.'
+    - Each typed entity --help gains a one-line pointer to its schema subcommand. Keep --help about usage and schema about shape. List rejected alternatives (a top-level ethos schema command; a --schema flag; enriching create --help; hand-maintained per-dir READMEs) with reasons. Include open questions for the leader. Commit the design doc; markdownlint clean.
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 1
