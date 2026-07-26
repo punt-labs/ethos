@@ -52,7 +52,7 @@ configuration is reusable, measurable, and improvable.
 ## Quick start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/75f91e0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/b783024/install.sh | sh
 ethos setup
 ```
 
@@ -62,8 +62,8 @@ harness, or a Claude install where org policy blocks plugins — pass
 through the pipe):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/75f91e0/install.sh | sh -s -- --no-plugin
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/75f91e0/install.sh | ETHOS_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/b783024/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/b783024/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 `--no-plugin` skips only the marketplace-register and plugin-install
