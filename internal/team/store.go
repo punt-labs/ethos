@@ -285,7 +285,7 @@ func (s *Store) AddCollaboration(teamName string, c Collaboration) error {
 	if c.From == c.To {
 		return fmt.Errorf("self-collaboration not allowed (%s)", c.From)
 	}
-	if !validCollabTypes[c.Type] {
+	if !validCollabType(c.Type) {
 		return fmt.Errorf("invalid type %q", c.Type)
 	}
 

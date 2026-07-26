@@ -9,6 +9,10 @@ import (
 
 var validHandle = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
+// KindValues are the legal values of the kind field. Validate and the
+// schema registry read this one slice, so the enum has a single source.
+var KindValues = []string{"human", "agent"}
+
 // Identity represents a human or agent identity with channel bindings.
 type Identity struct {
 	Name         string   `yaml:"name" json:"name"`
@@ -51,7 +55,7 @@ func (id *Identity) Validate() error {
 	if !validHandle.MatchString(id.Handle) {
 		return &ValidationError{Field: "handle", Message: "must be lowercase alphanumeric with hyphens"}
 	}
-	if id.Kind != "human" && id.Kind != "agent" {
+	if !validKind(id.Kind) {
 		return &ValidationError{Field: "kind", Message: "must be 'human' or 'agent'"}
 	}
 	// Email is optional (an agent identity carries none), but when present it
@@ -65,6 +69,16 @@ func (id *Identity) Validate() error {
 		}
 	}
 	return nil
+}
+
+// validKind reports whether kind is one of KindValues.
+func validKind(kind string) bool {
+	for _, k := range KindValues {
+		if kind == k {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidationError represents a field-level validation failure.

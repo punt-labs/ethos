@@ -5,24 +5,22 @@ import (
 	"fmt"
 
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/schema"
 	"github.com/punt-labs/ethos/internal/team"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
 
 func (h *Handler) teamTool() mcplib.Tool {
-	return mcplib.NewTool("team",
+	// method and the per-method mutation args (identity, role, from, to,
+	// collab_type, repo) are dispatch-level. The team fields (name,
+	// repositories, members, collaborations) are generated from the schema
+	// registry, so create advertises exactly what the handler reads.
+	fixed := []mcplib.ToolOption{
 		mcplib.WithDescription("Manage teams. Methods: create, list, show, delete, add_member, remove_member, add_collab, for_repo."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("create", "list", "show", "delete", "add_member", "remove_member", "add_collab", "for_repo"),
 			mcplib.Description("Operation to perform."),
-		),
-		mcplib.WithString("name",
-			mcplib.Description("Team name (lowercase alphanumeric with hyphens). Required for create, show, delete, add_member, remove_member, add_collab."),
-		),
-		mcplib.WithArray("repositories",
-			mcplib.Description("List of repository paths. For create."),
-			mcplib.WithStringItems(),
 		),
 		mcplib.WithString("identity",
 			mcplib.Description("Identity handle. Required for add_member, remove_member."),
@@ -39,13 +37,11 @@ func (h *Handler) teamTool() mcplib.Tool {
 		mcplib.WithString("collab_type",
 			mcplib.Description("Collaboration type: reports_to, collaborates_with, delegates_to. Required for add_collab."),
 		),
-		mcplib.WithArray("members",
-			mcplib.Description("List of {identity, role} objects. Required for create."),
-		),
 		mcplib.WithString("repo",
 			mcplib.Description("Repository name (org/repo). Required for for_repo. Defaults to current repo."),
 		),
-	)
+	}
+	return mcplib.NewTool("team", withOptions(fixed, schema.Team)...)
 }
 
 func (h *Handler) handleTeam(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -73,14 +69,21 @@ func (h *Handler) handleTeam(_ context.Context, req mcplib.CallToolRequest) (*mc
 }
 
 func (h *Handler) handleCreateTeam(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	name := stringArg(req, "name", "")
+	name, err := stringArgStrict(req, "name")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	if name == "" {
 		return mcplib.NewToolResultError("name is required for create"), nil
 	}
 
+	repositories, err := stringListArg(req, "repositories")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	t := &team.Team{
 		Name:         name,
-		Repositories: stringArrayArg(req, "repositories"),
+		Repositories: repositories,
 	}
 
 	// Parse members from the raw arguments.
@@ -92,6 +95,15 @@ func (h *Handler) handleCreateTeam(req mcplib.CallToolRequest) (*mcplib.CallTool
 		return mcplib.NewToolResultError("at least one member is required for create"), nil
 	}
 	t.Members = members
+
+	// Collaborations may be supplied at create time; add_collab remains for
+	// adding one to an existing team. Save runs Validate, which enforces
+	// collaboration referential integrity either way.
+	collabs, err := parseCollaborationsArg(req)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("invalid collaborations: %v", err)), nil
+	}
+	t.Collaborations = collabs
 
 	identityExists := func(handle string) bool { return h.store.Exists(handle) }
 	roleExists := func(name string) bool { return h.roles != nil && h.roles.Exists(name) }
@@ -241,9 +253,38 @@ func parseMembersArg(req mcplib.CallToolRequest) ([]team.Member, error) {
 		ident, _ := m["identity"].(string)
 		role, _ := m["role"].(string)
 		if ident == "" || role == "" {
-			return nil, fmt.Errorf("member %d: identity and role are required", i)
+			return nil, fmt.Errorf("member %d: identity and role must be non-empty strings", i)
 		}
 		members = append(members, team.Member{Identity: ident, Role: role})
 	}
 	return members, nil
+}
+
+// parseCollaborationsArg extracts collaborations from the raw
+// "collaborations" argument: an array of objects with "from", "to", and
+// "type" string fields, mirroring parseMembersArg.
+func parseCollaborationsArg(req mcplib.CallToolRequest) ([]team.Collaboration, error) {
+	rawVal, exists := req.GetArguments()["collaborations"]
+	if !exists {
+		return nil, nil
+	}
+	raw, ok := rawVal.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("collaborations must be an array, got %T", rawVal)
+	}
+	var out []team.Collaboration
+	for i, v := range raw {
+		m, ok := v.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("collaboration %d: expected object", i)
+		}
+		from, _ := m["from"].(string)
+		to, _ := m["to"].(string)
+		ct, _ := m["type"].(string)
+		if from == "" || to == "" || ct == "" {
+			return nil, fmt.Errorf("collaboration %d: from, to, and type must be non-empty strings", i)
+		}
+		out = append(out, team.Collaboration{From: from, To: to, Type: ct})
+	}
+	return out, nil
 }

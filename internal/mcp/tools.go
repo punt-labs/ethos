@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/schema"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
 
@@ -154,27 +155,20 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 // --- Tool Definitions ---
 
 func (h *Handler) identityTool() mcplib.Tool {
-	return mcplib.NewTool("identity",
+	// method and reference are dispatch-level, not identity fields; the rest
+	// (name, handle, kind, email, github, agent, writing_style, personality,
+	// talents) are generated from the schema registry.
+	fixed := []mcplib.ToolOption{
 		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("whoami", "list", "get", "create"),
 			mcplib.Description("Operation to perform."),
 		),
-		mcplib.WithString("handle",
-			mcplib.Description("Identity handle. Required for get, create."),
-		),
 		mcplib.WithBoolean("reference",
 			mcplib.Description("If true, return attribute slugs only without resolving .md content. For whoami, get."),
 		),
-		mcplib.WithString("name", mcplib.Description("Display name. Required for create.")),
-		mcplib.WithString("kind", mcplib.Description("Either 'human' or 'agent'. Required for create.")),
-		mcplib.WithString("email", mcplib.Description("Email address (beadle binding). For create.")),
-		mcplib.WithString("github", mcplib.Description("GitHub username (biff binding). For create.")),
-		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file. For create.")),
-		mcplib.WithString("writing_style", mcplib.Description("Writing style slug. For create.")),
-		mcplib.WithString("personality", mcplib.Description("Personality slug. For create.")),
-		mcplib.WithArray("talents", mcplib.Description("List of talent slugs. For create."), mcplib.WithStringItems()),
-	)
+	}
+	return mcplib.NewTool("identity", withOptions(fixed, schema.Identity)...)
 }
 
 // --- Tool Handlers ---
@@ -285,29 +279,38 @@ func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolReques
 }
 
 func (h *Handler) handleCreateIdentity(_ context.Context, req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	name := stringArg(req, "name", "")
-	if name == "" {
-		return mcplib.NewToolResultError("name is required for create"), nil
+	// Read every field strictly: a wrong-typed value must fail loud, not
+	// coerce to "" (silently dropping an optional field) or to a bare
+	// "required" error that hides the real cause. Same silent-drop class as
+	// the role and team create paths.
+	fields := map[string]string{}
+	for _, key := range []string{"name", "handle", "kind", "email", "github", "agent", "writing_style", "personality"} {
+		v, err := stringArgStrict(req, key)
+		if err != nil {
+			return mcplib.NewToolResultError(err.Error()), nil
+		}
+		fields[key] = v
 	}
-	handle := stringArg(req, "handle", "")
-	if handle == "" {
-		return mcplib.NewToolResultError("handle is required for create"), nil
+	for _, key := range []string{"name", "handle", "kind"} {
+		if fields[key] == "" {
+			return mcplib.NewToolResultError(fmt.Sprintf("%s is required for create", key)), nil
+		}
 	}
-	kind := stringArg(req, "kind", "")
-	if kind == "" {
-		return mcplib.NewToolResultError("kind is required for create"), nil
+	talents, err := stringListArg(req, "talents")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
 	}
 
 	id := &identity.Identity{
-		Name:         name,
-		Handle:       handle,
-		Kind:         kind,
-		Email:        stringArg(req, "email", ""),
-		GitHub:       stringArg(req, "github", ""),
-		Agent:        stringArg(req, "agent", ""),
-		WritingStyle: stringArg(req, "writing_style", ""),
-		Personality:  stringArg(req, "personality", ""),
-		Talents:      stringArrayArg(req, "talents"),
+		Name:         fields["name"],
+		Handle:       fields["handle"],
+		Kind:         fields["kind"],
+		Email:        fields["email"],
+		GitHub:       fields["github"],
+		Agent:        fields["agent"],
+		WritingStyle: fields["writing_style"],
+		Personality:  fields["personality"],
+		Talents:      talents,
 	}
 
 	if err := id.Validate(); err != nil {
@@ -550,19 +553,46 @@ func boolArg(req mcplib.CallToolRequest, key string, fallback bool) bool {
 	return fallback
 }
 
-func stringArrayArg(req mcplib.CallToolRequest, key string) []string {
-	args := req.GetArguments()
-	raw, ok := args[key].([]interface{})
+// stringArgStrict reads a string argument, erroring when the key is present
+// but not a string. Unlike stringArg it does not coerce a wrong-typed value
+// to a fallback, which would let a malformed field slip through create as if
+// omitted — the silent-drop class DES-066 exists to close. An absent key
+// returns the empty string, so a required-field caller still checks for "".
+func stringArgStrict(req mcplib.CallToolRequest, key string) (string, error) {
+	v, ok := req.GetArguments()[key]
 	if !ok {
-		return nil
+		return "", nil
 	}
-	var result []string
-	for _, v := range raw {
-		if s, ok := v.(string); ok {
-			result = append(result, s)
+	s, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string, got %T", key, v)
+	}
+	return s, nil
+}
+
+// stringListArg reads a list-of-string argument, erroring when the key is
+// present but is not an array or holds a non-string element. It never
+// silently drops a malformed value or element — the silent-drop class
+// DES-066 exists to close. An absent key returns nil, matching an omitted
+// optional list.
+func stringListArg(req mcplib.CallToolRequest, key string) ([]string, error) {
+	rawVal, ok := req.GetArguments()[key]
+	if !ok {
+		return nil, nil
+	}
+	raw, ok := rawVal.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%s must be an array, got %T", key, rawVal)
+	}
+	var out []string
+	for i, v := range raw {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s[%d] must be a string, got %T", key, i, v)
 		}
+		out = append(out, s)
 	}
-	return result
+	return out, nil
 }
 
 func jsonResult(v any) (*mcplib.CallToolResult, error) {
