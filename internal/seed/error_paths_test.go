@@ -27,23 +27,28 @@ var emptyFS embed.FS
 //go:embed testdata/mixed
 var mixedFS embed.FS
 
-// TestWriteFile_ForceCreateTempFails exercises the writeFile branch
-// where os.MkdirAll(filepath.Dir(dest)) succeeds but os.CreateTemp in
-// that directory fails. It does so by pre-creating the destination
-// directory without write permission, so the directory already exists
-// for MkdirAll but cannot accept a new tempfile.
+// testSeeder builds a seeder with an empty manifest for unit-testing the
+// per-file placement branches directly.
+func testSeeder(destRoot, skillsRoot string, force bool) *seeder {
+	return &seeder{
+		destRoot:   destRoot,
+		skillsRoot: skillsRoot,
+		force:      force,
+		mf:         &Manifest{Schema: manifestSchema, Entries: map[string]Entry{}},
+		r:          &Result{},
+	}
+}
+
+// TestPlace_ForceCreateTempFails exercises the place branch where
+// os.MkdirAll(filepath.Dir(dest)) succeeds but the atomic create in that
+// directory fails. It does so by pre-creating the destination directory
+// without write permission, so the directory already exists for MkdirAll but
+// cannot accept a new tempfile.
 //
-// This test is skipped when running as root because root may still be
-// able to create files in a permission-restricted directory, making
-// the intended CreateTemp failure unreliable.
-func TestWriteFile_ForceCreateTempFails(t *testing.T) {
+// Skipped as root, which may still create files in a permission-restricted
+// directory, making the intended failure unreliable.
+func TestPlace_ForceCreateTempFails(t *testing.T) {
 	parent := t.TempDir()
-	// dest's parent is a regular file, not a directory. os.MkdirAll
-	// called on a path whose parent is a file returns an error
-	// immediately, which is the mkdir error branch. To hit the
-	// CreateTemp error branch we need MkdirAll to succeed and
-	// CreateTemp to fail — which happens when the destination
-	// directory exists but has no write permission.
 	dir := filepath.Join(parent, "ro")
 	require.NoError(t, os.MkdirAll(dir, 0o500))
 	t.Cleanup(func() { os.Chmod(dir, 0o700) })
@@ -51,15 +56,15 @@ func TestWriteFile_ForceCreateTempFails(t *testing.T) {
 		t.Skip("running as root; cannot simulate write-denied directory")
 	}
 
-	r := &Result{}
-	writeFile(filepath.Join(dir, "out.txt"), []byte("x"), true, r)
-	require.NotEmpty(t, r.Errors)
-	assert.Contains(t, r.Errors[0], "writing")
+	s := testSeeder(parent, "", true)
+	s.place(scopeEthos, filepath.Join(dir, "out.txt"), []byte("x"))
+	require.NotEmpty(t, s.r.Errors)
+	assert.Contains(t, s.r.Errors[0], "writing")
 }
 
-// TestWriteFile_NonForceOpenFails covers the non-force OpenFile error
-// branch with an error other than ErrExist (permission denied).
-func TestWriteFile_NonForceOpenFails(t *testing.T) {
+// TestPlace_NonForceCreateFails covers the non-force create error branch with
+// an error other than ErrExist (permission denied).
+func TestPlace_NonForceCreateFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root; cannot simulate write-denied directory")
 	}
@@ -68,61 +73,72 @@ func TestWriteFile_NonForceOpenFails(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o500))
 	t.Cleanup(func() { os.Chmod(dir, 0o700) })
 
-	r := &Result{}
-	writeFile(filepath.Join(dir, "out.txt"), []byte("x"), false, r)
-	require.NotEmpty(t, r.Errors)
+	s := testSeeder(parent, "", false)
+	s.place(scopeEthos, filepath.Join(dir, "out.txt"), []byte("x"))
+	require.NotEmpty(t, s.r.Errors)
 }
 
-// TestWriteFile_MkdirFails makes the parent of dest a regular file,
-// so MkdirAll fails with ENOTDIR.
-func TestWriteFile_MkdirFails(t *testing.T) {
+// TestPlace_MkdirFails makes the parent of dest a regular file, so MkdirAll
+// fails with ENOTDIR.
+func TestPlace_MkdirFails(t *testing.T) {
 	parent := t.TempDir()
-	// A regular file where a directory is expected.
 	blocker := filepath.Join(parent, "blocker")
 	require.NoError(t, os.WriteFile(blocker, []byte("not a dir"), 0o600))
 
-	r := &Result{}
-	writeFile(filepath.Join(blocker, "child", "out.txt"), []byte("x"), false, r)
-	require.NotEmpty(t, r.Errors)
-	assert.Contains(t, r.Errors[0], "mkdir")
+	s := testSeeder(parent, "", false)
+	s.place(scopeEthos, filepath.Join(blocker, "child", "out.txt"), []byte("x"))
+	require.NotEmpty(t, s.r.Errors)
+	assert.Contains(t, s.r.Errors[0], "mkdir")
 }
 
-// TestWriteFile_NonForceSuccess and TestWriteFile_ForceSuccess exercise
-// the happy paths directly, pinning the count of deployed files.
-func TestWriteFile_NonForceSuccess(t *testing.T) {
+// TestPlace_FreshDeploy exercises the happy create path, pinning that a fresh
+// file is deployed and recorded.
+func TestPlace_FreshDeploy(t *testing.T) {
 	dir := t.TempDir()
-	r := &Result{}
+	s := testSeeder(dir, "", false)
 	dest := filepath.Join(dir, "out.txt")
-	writeFile(dest, []byte("hello"), false, r)
-	require.Empty(t, r.Errors)
-	assert.Contains(t, r.Deployed, dest)
+	s.place(scopeEthos, dest, []byte("hello"))
+	require.Empty(t, s.r.Errors)
+	assert.Contains(t, s.r.Deployed, dest)
 
 	data, err := os.ReadFile(dest)
 	require.NoError(t, err)
 	assert.Equal(t, "hello", string(data))
+
+	// A fresh deploy is recorded in the manifest.
+	entry, ok := s.mf.Entries[s.key(scopeEthos, dest)]
+	require.True(t, ok, "deployed file must be recorded")
+	assert.Equal(t, hashBytes([]byte("hello")), entry.Hash)
 }
 
-func TestWriteFile_NonForceSkipExisting(t *testing.T) {
+// TestPlace_UntrackedDifferingFileSkips pins the no-clobber rule: a file that
+// exists, differs from the shipped content, and has no manifest entry is left
+// untouched and reported as skipped — never overwritten, never recorded.
+func TestPlace_UntrackedDifferingFileSkips(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "out.txt")
 	require.NoError(t, os.WriteFile(dest, []byte("preexisting"), 0o600))
 
-	r := &Result{}
-	writeFile(dest, []byte("new"), false, r)
-	require.Empty(t, r.Errors)
-	assert.Contains(t, r.Skipped, dest)
+	s := testSeeder(dir, "", false)
+	s.place(scopeEthos, dest, []byte("new"))
+	require.Empty(t, s.r.Errors)
+	assert.Contains(t, s.r.Skipped, dest)
 
-	// Preexisting content is preserved.
 	data, err := os.ReadFile(dest)
 	require.NoError(t, err)
-	assert.Equal(t, "preexisting", string(data))
+	assert.Equal(t, "preexisting", string(data),
+		"an untracked differing file must not be clobbered")
+
+	// It is not recorded — it has not entered the manifest era.
+	_, ok := s.mf.Entries[s.key(scopeEthos, dest)]
+	assert.False(t, ok, "an untracked skip must not create a manifest entry")
 }
 
 func TestSeedFS_SkipsDirAndWrongExtension(t *testing.T) {
 	dest := t.TempDir()
-	r := &Result{}
-	seedFS(mixedFS, "testdata/mixed", dest, ".md", false, r)
-	require.Empty(t, r.Errors)
+	s := testSeeder(dest, "", false)
+	s.seedFS(mixedFS, "testdata/mixed", dest, ".md")
+	require.Empty(t, s.r.Errors)
 	// keep.md was deployed.
 	assert.FileExists(t, filepath.Join(dest, "keep.md"))
 	// skip.txt and sub/ were skipped.
@@ -133,19 +149,20 @@ func TestSeedFS_SkipsDirAndWrongExtension(t *testing.T) {
 }
 
 func TestSeedFS_ReadDirError(t *testing.T) {
-	r := &Result{}
-	seedFS(emptyFS, "nonexistent", t.TempDir(), ".yaml", false, r)
-	require.NotEmpty(t, r.Errors)
-	assert.Contains(t, r.Errors[0], "reading")
-	assert.Contains(t, r.Errors[0], "nonexistent")
+	dir := t.TempDir()
+	s := testSeeder(dir, "", false)
+	s.seedFS(emptyFS, "nonexistent", dir, ".yaml")
+	require.NotEmpty(t, s.r.Errors)
+	assert.Contains(t, s.r.Errors[0], "reading")
+	assert.Contains(t, s.r.Errors[0], "nonexistent")
 }
 
 func TestSeedFile_ReadError(t *testing.T) {
-	r := &Result{}
-	seedFile(emptyFS, "nonexistent/file.md",
-		filepath.Join(t.TempDir(), "out.md"), false, r)
-	require.NotEmpty(t, r.Errors)
-	assert.Contains(t, r.Errors[0], "reading")
+	dir := t.TempDir()
+	s := testSeeder(dir, dir, false)
+	s.seedFile(emptyFS, "nonexistent/file.md", filepath.Join(dir, "out.md"))
+	require.NotEmpty(t, s.r.Errors)
+	assert.Contains(t, s.r.Errors[0], "reading")
 }
 
 func TestSeedReadmes_WalkError(t *testing.T) {
@@ -154,25 +171,23 @@ func TestSeedReadmes_WalkError(t *testing.T) {
 	// then returns nil. The callback's walkErr branch records the
 	// error as "walking sidecar: ..." — the outer `if err != nil`
 	// block is not reached.
-	r := &Result{}
-	seedReadmes(emptyFS, t.TempDir(), false, r)
-	require.NotEmpty(t, r.Errors)
+	dir := t.TempDir()
+	s := testSeeder(dir, "", false)
+	s.seedReadmes(emptyFS, dir)
+	require.NotEmpty(t, s.r.Errors)
 	var found bool
-	for _, e := range r.Errors {
+	for _, e := range s.r.Errors {
 		if strings.Contains(e, "walking") {
 			found = true
 		}
 	}
-	assert.True(t, found, "errors: %v", r.Errors)
+	assert.True(t, found, "errors: %v", s.r.Errors)
 }
 
 // TestSeed_MkdirError makes the dest root a regular file so every
-// os.MkdirAll inside writeFile fails with ENOTDIR. Every file-level
-// write records an error, Seed returns a non-nil error, and the errors
-// surface for every category (roles, talents, skills, readmes).
+// os.MkdirAll inside place fails with ENOTDIR. Every file-level write records
+// an error, Seed returns a non-nil error, and the errors surface.
 func TestSeed_MkdirError(t *testing.T) {
-	// dest is a file, not a directory. MkdirAll(filepath.Dir(dest/...))
-	// will try to create subdirs under the file and fail.
 	parent := t.TempDir()
 	dest := filepath.Join(parent, "blocked")
 	require.NoError(t, os.WriteFile(dest, []byte("not a dir"), 0o600))
@@ -200,8 +215,8 @@ func TestSeed_ReadOnlyDest(t *testing.T) {
 	skills := t.TempDir()
 
 	// Pre-create roles as a read-only directory. MkdirAll on an
-	// existing directory is a no-op, so writeFile proceeds to
-	// OpenFile which fails with EACCES.
+	// existing directory is a no-op, so place proceeds to the atomic
+	// create, which fails with EACCES.
 	rolesDir := filepath.Join(dest, "roles")
 	require.NoError(t, os.MkdirAll(rolesDir, 0o500))
 	t.Cleanup(func() { os.Chmod(rolesDir, 0o700) })
@@ -219,10 +234,9 @@ func TestSeed_ReadOnlyDest(t *testing.T) {
 	assert.True(t, sawRolesError, "errors: %v", result.Errors)
 }
 
-// TestSeed_ForceReadOnlyDest exercises the force branch's rename error
-// path. The force path opens a tempfile in filepath.Dir(dest); when
-// that directory is not writable, CreateTemp fails and the error is
-// recorded via the r.Errors slice.
+// TestSeed_ForceReadOnlyDest exercises the force branch's create error path.
+// The atomic create opens a tempfile in filepath.Dir(dest); when that
+// directory is not writable, the create fails and the error is recorded.
 func TestSeed_ForceReadOnlyDest(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root; cannot simulate write-denied directory")
@@ -241,8 +255,7 @@ func TestSeed_ForceReadOnlyDest(t *testing.T) {
 
 // TestSeed_SkillsPathBlocked exercises the seedFile error surface by
 // making the skills destination unwritable. seedFile reads from the
-// embedded FS successfully, then writeFile fails to mkdir under a
-// file.
+// embedded FS successfully, then place fails to mkdir under a file.
 func TestSeed_SkillsPathBlocked(t *testing.T) {
 	dest := t.TempDir()
 	parent := t.TempDir()
@@ -251,9 +264,9 @@ func TestSeed_SkillsPathBlocked(t *testing.T) {
 
 	result, err := Seed(dest, skills, false)
 	require.Error(t, err)
-	// seedFile reads the embedded SKILL.md, then writeFile's MkdirAll
-	// fails with ENOTDIR because the skills destination is a regular
-	// file, not a directory. The wrapper in writeFile prefixes "mkdir".
+	// seedFile reads the embedded SKILL.md, then place's MkdirAll fails
+	// with ENOTDIR because the skills destination is a regular file, not
+	// a directory. The wrapper in place prefixes "mkdir".
 	var sawMkdirError bool
 	for _, e := range result.Errors {
 		if strings.Contains(e, "mkdir") &&
@@ -264,16 +277,14 @@ func TestSeed_SkillsPathBlocked(t *testing.T) {
 	assert.True(t, sawMkdirError, "errors: %v", result.Errors)
 }
 
-// TestSeed_ForceRenameFails exercises the Rename error branch in the
-// force path by making the destination an existing non-empty directory
-// at the path where the file should land. Rename then returns
-// ENOTDIR (or ISDIR) and writeFile records the error.
-func TestSeed_ForceRenameFails(t *testing.T) {
+// TestSeed_DirAtForceDest pins that a directory at a file dest is a hard
+// error even under force: the guard fires before any write.
+func TestSeed_DirAtForceDest(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
 
 	// Pre-create a directory at the exact path where implementer.yaml
-	// should be written. os.Rename onto a non-empty directory fails.
+	// should be written.
 	roleDir := filepath.Join(dest, "roles", "implementer.yaml")
 	require.NoError(t, os.MkdirAll(roleDir, 0o700))
 	require.NoError(t, os.WriteFile(
@@ -282,19 +293,19 @@ func TestSeed_ForceRenameFails(t *testing.T) {
 	result, err := Seed(dest, skills, true)
 	require.Error(t, err)
 
-	var sawRename bool
+	var named bool
 	for _, e := range result.Errors {
-		if strings.Contains(e, "renaming") ||
-			strings.Contains(e, "implementer.yaml") {
-			sawRename = true
+		if strings.Contains(e, "implementer.yaml") &&
+			strings.Contains(e, "directory") {
+			named = true
 		}
 	}
-	assert.True(t, sawRename, "errors: %v", result.Errors)
+	assert.True(t, named, "errors: %v", result.Errors)
 }
 
-// TestSeed_NonForceWriteFails exercises writeFile's non-force error
-// path where OpenFile fails with something other than ErrExist.
-// Setting the parent directory to 0o500 triggers EACCES on O_CREATE.
+// TestSeed_NonForceWriteFails exercises the create error path where the
+// atomic create fails with something other than ErrExist. Setting the
+// parent directory to 0o500 triggers EACCES.
 func TestSeed_NonForceWriteFails(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root; cannot simulate write-denied directory")
@@ -303,7 +314,7 @@ func TestSeed_NonForceWriteFails(t *testing.T) {
 	skills := t.TempDir()
 
 	// Create the existing talents dir with non-writable permissions so
-	// MkdirAll is a no-op and the file-level OpenFile is what fails.
+	// MkdirAll is a no-op and the file-level create is what fails.
 	talentsDir := filepath.Join(dest, "talents")
 	require.NoError(t, os.MkdirAll(talentsDir, 0o500))
 	t.Cleanup(func() { os.Chmod(talentsDir, 0o700) })
@@ -319,29 +330,33 @@ func TestSeed_NonForceWriteFails(t *testing.T) {
 	assert.True(t, sawTalentError, "errors: %v", result.Errors)
 }
 
-// TestSeed_ForceOverwrite exercises the full force=true rename path
-// (CreateTemp + Write + Close + Chmod + Rename) for several files at
-// once. The baseline TestSeedForce already covers one file; doing
-// multiple categories here ensures the rename success path is taken
-// for talents, roles, and readmes in the same run.
-func TestSeed_ForceOverwriteAllCategories(t *testing.T) {
+// TestSeed_ForceOverwritesEdit exercises the full force overwrite path: a
+// tracked file the user has edited is rewritten to the shipped content and
+// reported as updated, with 0o644 perms and an empty skipped list.
+func TestSeed_ForceOverwritesEdit(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
 
-	// Seed once with defaults.
+	// Seed once so implementer.yaml is tracked.
 	_, err := Seed(dest, skills, false)
 	require.NoError(t, err)
 
-	// Seed again with force — every file should be rewritten via the
-	// tempfile+rename path.
+	// Edit the tracked file.
+	rolePath := filepath.Join(dest, "roles", "implementer.yaml")
+	require.NoError(t, os.WriteFile(rolePath, []byte("edited"), 0o644))
+
+	// Force re-seed overwrites the edit.
 	result, err := Seed(dest, skills, true)
 	require.NoError(t, err)
 	assert.Empty(t, result.Skipped)
 	assert.Empty(t, result.Errors)
-	assert.NotEmpty(t, result.Deployed)
+	assert.Contains(t, result.Updated, rolePath)
 
-	// Spot check a force-rewritten file has 0o644 perms.
-	info, err := os.Stat(filepath.Join(dest, "roles", "implementer.yaml"))
+	data, err := os.ReadFile(rolePath)
+	require.NoError(t, err)
+	assert.NotEqual(t, "edited", string(data), "force must overwrite the edit")
+
+	info, err := os.Stat(rolePath)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o644), info.Mode().Perm())
 }
