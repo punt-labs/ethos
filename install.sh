@@ -318,9 +318,18 @@ fi
 # --- Step 6b: Seed starter content ---
 
 info "Seeding starter content..."
-if "$INSTALL_DIR/$BINARY" seed; then
-  ok "Starter roles, talents, and skills deployed"
+# Plain `ethos seed` is manifest-aware: it deploys new files, updates shipped
+# content the release has revved, and leaves locally edited files untouched.
+# No --force here — that would clobber a user's edits on every re-install.
+if seed_out="$("$INSTALL_DIR/$BINARY" seed 2>&1)"; then
+  printf '%s\n' "$seed_out"
+  ok "Starter content deployed (existing files updated where the release is newer)"
+  if printf '%s\n' "$seed_out" | grep -q "skipped (local edit)"; then
+    warn "Some starter files look locally edited and were left unchanged."
+    warn "Run 'ethos seed --force' to overwrite them with the shipped versions."
+  fi
 else
+  printf '%s\n' "$seed_out"
   warn "Could not seed starter content — run 'ethos seed' manually"
 fi
 
