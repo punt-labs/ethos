@@ -1,0 +1,30 @@
+mission_id: m-2026-07-26-004
+status: failed
+type: implement
+created_at: "2026-07-26T03:50:52Z"
+updated_at: "2026-07-26T04:23:43Z"
+closed_at: "2026-07-26T04:23:43Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-26T03:50:52Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - internal/seed
+    - cmd/ethos/seed.go
+    - cmd/ethos/seed_test.go
+    - install.sh
+    - CHANGELOG.md
+success_criteria:
+    - 'Implement DES-065 manifest-aware seed per docs/seed-content-upgrade.md (branch design/seed-content-upgrade, already carries the design + ADR). Rule: write cur UNLESS (a) local==cur, or (b) a manifest entry exists AND local!=mf (proven user edit → skip+warn, --force remedy). No manifest entry & local!=cur → upgrade+record (self-heals; no legacy/bootstrap/backup code). Zero-byte partials repaired to cur as today.'
+    - 'Manifest: ~/.punt-labs/ethos/.seed-manifest.json, schema per the design (entries keyed by logical seed path, scope field for ethos|skills roots, hash + ethos_version + written provenance), written atomically (reuse atomicWrite at internal/seed/seed.go:271). cur = sha256 of the embedded bytes seed already reads, computed at runtime. Never read/write/hash ~/.punt-labs/ethos/identities/.'
+    - Result struct gains Deployed/Updated/Unchanged/Skipped/Repaired/Errors. cmd/ethos/seed.go prints one line per file (deployed:/updated:/unchanged:/skipped (local edit):) + a summary; the --force remedy line prints ONLY when len(Skipped)>0. --force overwrites every path to cur + records. install.sh stays plain 'ethos seed' — messaging only (surface the --force hint if seed reports skipped local edits).
+    - 'Tests (table-driven): the full decision matrix (absent/==cur/!=cur&&==mf/!=cur&&!=mf/zero-byte × entry present|absent); manifest schema round-trip; the invariant that after a normal seed EVERY seeded path has a manifest entry whose hash matches the file on disk; --force overwrites edits. All via go test -race.'
+    - 'Dogfood in .tmp against a scratch HOME (built binary, not just units): ship-v1 marker → install → hand-edit a second file → ship-v2 (bump marker) → re-seed plain: assert the untouched file printed under updated: and now has v2, the edited file printed under skipped (local edit): and is preserved, then ''ethos seed --force'' overwrites it. Paste actual output in the mission result.'
+    - CHANGELOG [Unreleased] Added entry (manifest-aware seed upgrades shipped content on re-seed while preserving local edits; --force to overwrite edits). make check green before every commit; commit incrementally one logical step at a time; write-set enforced. Do NOT edit DESIGN.md/README (leader owns; DES-065 already landed).
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
