@@ -8,6 +8,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/schema"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -30,6 +31,7 @@ func layeredRoleStore(is identity.IdentityStore) *role.LayeredStore {
 var roleCmd = &cobra.Command{
 	Use:     "role",
 	Short:   "Manage roles (create, list, show, delete)",
+	Long:    "Manage roles (create, list, show, delete).\n\nRun 'ethos role schema' for the role field reference.",
 	GroupID: "identity",
 }
 
@@ -73,7 +75,7 @@ var roleDeleteCmd = &cobra.Command{
 
 func init() {
 	roleCreateCmd.Flags().StringVarP(&roleCreateFile, "file", "f", "", "Read role definition from YAML file")
-	roleCmd.AddCommand(roleCreateCmd, roleListCmd, roleShowCmd, roleDeleteCmd)
+	roleCmd.AddCommand(roleCreateCmd, roleListCmd, roleShowCmd, roleDeleteCmd, newSchemaCmd(schema.Role))
 	rootCmd.AddCommand(roleCmd)
 }
 

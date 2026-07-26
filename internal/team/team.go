@@ -39,11 +39,18 @@ func ValidateName(name string) error {
 	return attribute.ValidateSlug(name)
 }
 
-// validCollabTypes enumerates the allowed collaboration types.
-var validCollabTypes = map[string]bool{
-	"reports_to":        true,
-	"collaborates_with": true,
-	"delegates_to":      true,
+// CollaborationTypes enumerates the allowed collaboration types. The schema
+// registry reads this slice, so the enum has a single source.
+var CollaborationTypes = []string{"reports_to", "collaborates_with", "delegates_to"}
+
+// validCollabType reports whether t is one of CollaborationTypes.
+func validCollabType(t string) bool {
+	for _, ct := range CollaborationTypes {
+		if t == ct {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateStructural checks every invariant on a team that does not
@@ -99,11 +106,8 @@ func ValidateStructural(t *Team) error {
 		if c.From == c.To {
 			return fmt.Errorf("collaboration %d: self-collaboration not allowed (%s)", i, c.From)
 		}
-		if !validCollabTypes[c.Type] {
-			types := make([]string, 0, len(validCollabTypes))
-			for k := range validCollabTypes {
-				types = append(types, k)
-			}
+		if !validCollabType(c.Type) {
+			types := append([]string(nil), CollaborationTypes...)
 			sort.Strings(types)
 			return fmt.Errorf("collaboration %d (%s -> %s): invalid type %q: valid types are %s", i, c.From, c.To, c.Type, strings.Join(types, ", "))
 		}

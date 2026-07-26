@@ -6658,3 +6658,79 @@ already tracks; an untracked file keeps today's no-clobber skip.
 - **Three-way merge** (unwarranted for content nobody hand-edits).
 - **A separate `ethos seed --upgrade` command** (splits the mental model; plain
   seed should do the right thing by default).
+
+## DES-066: Entity schema command — reflect-plus-overlay registry (SETTLED)
+
+**Status**: Settled. Operator-ratified 2026-07-26. Full design in
+`docs/entity-schema-command.md`.
+
+### Problem
+
+The shape of each typed entity (identity, role, team) is described in several
+hand-maintained places that already disagree: the Go structs
+(`internal/identity/identity.go:13`, `internal/role/role.go:28`,
+`internal/team/team.go:30`), the MCP `inputSchema` blocks
+(`internal/mcp/tools.go:156`, `role_tools.go:12`, `team_tools.go:13`), the
+`validate-content` checks, the inline enums, and the seeded per-category READMEs
+(only `identities/README.md` has a fields table; roles have none; teams have no
+directory). The gap is worse than a stale table: the role MCP `create` handler
+reads three of seven fields (`role_tools.go:49`) and the team `create` handler
+never reads `collaborations` (`team_tools.go:75`), so the tools silently drop
+input. There is no command an agent can run to learn an entity's fields,
+required-ness, or legal values.
+
+### Decision
+
+Add a `schema` subcommand to each typed entity — `ethos identity schema`,
+`ethos role schema`, `ethos team schema` — beside their `create`/`list`/`show`
+verbs (per-entity, not a top-level `ethos schema`). Default output is a human
+field table (`FIELD`, `REQUIRED`, `TYPE`, `DESCRIPTION`) via `hook.FormatTable`;
+`--json` emits a JSON Schema (draft 2020-12). Attributes (personality, talent,
+writing-style) are excluded — they are title-plus-prose markdown with no field
+set.
+
+A new `internal/schema` package uses **reflect-plus-overlay**: field names and
+required-ness are read live from the Go structs by reflection (so they cannot
+drift and are never copied), and the registry overlays only what tags cannot
+carry — descriptions, enums, human type labels, and patterns. Render methods
+(`Table`, `JSONSchema`, `MarkdownTable`) drive every consumer: the CLI table,
+the `--json` schema, the MCP `inputSchema`, the `validate-content` enum check,
+and the seeded READMEs (compared against `MarkdownTable()` — a role table is
+added and a new `teams/README.md` is seeded, both checked).
+
+**The MCP handlers change first and the schema advertises only what they read**:
+`handleCreateRole` gains all seven fields; `handleCreateTeam` accepts a
+`collaborations` array (`add_collab` retained); then both tool builders generate
+their options from the registry. `internal/mcp` is in the write-set.
+
+### Rulings
+
+- **No deferral** (operator). The MCP handler fix ships in this feature, not a
+  follow-up — deferring known-real work just splits one job and adds babysitting.
+- **Drift guarantees stated plainly.** Field names, required-ness, and
+  closed-enum membership are guarded (names/required by live reflection; enums by
+  a test against exported slices `identity.KindValues`, `role.ModelAliases`,
+  `team.CollaborationTypes`); description prose is authored and unguarded (the
+  test proves a description exists, not that it is correct).
+- **`role.model` is a partial enum.** JSON Schema emits
+  `anyOf[{enum:[aliases]},{pattern:"^claude-.+"}]` per `ValidateModel`; only the
+  alias slice is guarded.
+- **`--help` stays about usage, `schema` about shape.** Each entity's `--help`
+  gains one line pointing at its schema subcommand.
+
+### Rejected alternatives
+
+- **Top-level `ethos schema`** — operator ruled per-entity; hides schema from the
+  entity's own `--help`.
+- **`--schema` flag on show/create** — overloads verbs; schema is a property of
+  the type, not an instance.
+- **Enrich `create --help`** — conflates usage with shape; no machine-readable
+  form; drift survives.
+- **Hand-maintained READMEs (status quo)** — the observed failure mode (the role
+  handler drifted to four fewer fields than the struct).
+- **Pure reflection, no overlay** — tags lack descriptions and enums; adopted in
+  part (reflection for the field set) but not alone.
+- **Fully authored registry restating the field set** — pure duplication of what
+  reflection already knows; reflect-plus-overlay deletes the copy.
+- **`go generate` for READMEs** — adds a generated artifact and a CI step; a
+  comparison check needs neither.

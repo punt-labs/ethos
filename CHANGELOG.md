@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos identity|role|team schema` — the field reference for each typed
+  entity.** Each entity group gains a `schema` subcommand. The default output
+  is a human table (`FIELD`, `REQUIRED`, `TYPE`, `DESCRIPTION`); `--json` emits
+  a JSON Schema (draft 2020-12) suitable for a validator or an editor's schema
+  store. A new `internal/schema` package is the single source: field names and
+  required-ness are read live from the Go structs by reflection, and the
+  registry overlays only descriptions, enums, type labels, and patterns. The
+  CLI tables, the MCP `inputSchema`, and the seeded READMEs all render from it.
+  Each entity's `--help` now points at its schema subcommand. See DES-066.
+
+### Fixed
+
+- **The role and team MCP `create` tools no longer silently drop input.**
+  `role create` read only `name`, `responsibilities`, and `permissions`,
+  discarding `model`, `tools`, `safety_constraints`, and `output_format` even
+  when a caller sent them; it now reads all seven fields and validates `model`.
+  `team create` never read `collaborations` — they arrived only via
+  `add_collab`; `create` now accepts a `collaborations` array (and `add_collab`
+  is retained). Each tool's `inputSchema` is generated from the schema
+  registry, so it can no longer advertise a field its handler ignores. The
+  seeded per-category READMEs (identities, roles, and a new teams README) carry
+  a fields table checked against the registry by `validate-content`, so a stale
+  table fails CI. See DES-066.
+
 ## [4.7.0] - 2026-07-26
 
 ### Added

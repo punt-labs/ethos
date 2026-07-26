@@ -7,6 +7,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/schema"
 	"github.com/punt-labs/ethos/internal/team"
 
 	"github.com/spf13/cobra"
@@ -43,6 +44,7 @@ var teamCreateFile string
 var teamCmd = &cobra.Command{
 	Use:     "team",
 	Short:   "Manage teams (create, list, show, delete, add-member, remove-member, add-collab)",
+	Long:    "Manage teams (create, list, show, delete, add-member, remove-member, add-collab).\n\nRun 'ethos team schema' for the team field reference.",
 	GroupID: "identity",
 }
 
@@ -125,7 +127,8 @@ var teamForRepoCmd = &cobra.Command{
 func init() {
 	teamCreateCmd.Flags().StringVarP(&teamCreateFile, "file", "f", "", "Read team definition from YAML file")
 	teamCmd.AddCommand(teamCreateCmd, teamListCmd, teamShowCmd, teamDeleteCmd,
-		teamAddMemberCmd, teamRemoveMemberCmd, teamAddCollabCmd, teamForRepoCmd)
+		teamAddMemberCmd, teamRemoveMemberCmd, teamAddCollabCmd, teamForRepoCmd,
+		newSchemaCmd(schema.Team))
 	rootCmd.AddCommand(teamCmd)
 }
 

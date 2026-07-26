@@ -35,6 +35,11 @@ type Role struct {
 	OutputFormat      string             `yaml:"output_format,omitempty" json:"output_format,omitempty"`
 }
 
+// ModelAliases are the short model names ValidateModel accepts, apart from
+// any full claude-* identifier. The schema registry reads this slice for the
+// alias half of the model enum, so the aliases have a single source.
+var ModelAliases = []string{"opus", "sonnet", "haiku", "inherit"}
+
 // ValidateName checks that a role name follows the same slug rules as attributes.
 func ValidateName(name string) error {
 	return attribute.ValidateSlug(name)
@@ -46,11 +51,10 @@ func ValidateModel(model string) error {
 	if model == "" {
 		return nil // empty means inherit
 	}
-	shortAliases := map[string]bool{
-		"opus": true, "sonnet": true, "haiku": true, "inherit": true,
-	}
-	if shortAliases[model] {
-		return nil
+	for _, alias := range ModelAliases {
+		if model == alias {
+			return nil
+		}
 	}
 	if strings.HasPrefix(model, "claude-") && len(model) > len("claude-") {
 		return nil

@@ -252,6 +252,37 @@ func TestHandleIdentity_Create_ValidationError(t *testing.T) {
 	assert.True(t, result.IsError)
 }
 
+func TestHandleIdentity_Create_TalentsWrongType(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method":  "create",
+		"name":    "Alice",
+		"handle":  "alice",
+		"kind":    "human",
+		"talents": "go", // string, not array
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "talents must be an array")
+	// The bad create must not have persisted an identity.
+	_, loadErr := h.store.Load("alice")
+	assert.Error(t, loadErr)
+}
+
+func TestHandleIdentity_Create_OptionalFieldWrongType(t *testing.T) {
+	h := testHandler(t)
+	result, err := h.handleIdentity(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "Alice",
+		"handle": "alice",
+		"kind":   "human",
+		"email":  42, // wrong type; must not coerce to "" and drop
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "email must be a string")
+}
+
 func TestHandleIdentity_Create_WithSkills(t *testing.T) {
 	h := testHandler(t)
 
@@ -716,14 +747,6 @@ func TestStringArg(t *testing.T) {
 	assert.Equal(t, "", stringArg(req, "missing", ""))
 }
 
-func TestStringArrayArg(t *testing.T) {
-	req := callTool(map[string]interface{}{
-		"talents": []interface{}{"go", "testing"},
-	})
-	assert.Equal(t, []string{"go", "testing"}, stringArrayArg(req, "talents"))
-	assert.Nil(t, stringArrayArg(req, "missing"))
-}
-
 // --- Role Tool Tests ---
 
 func testHandlerWithRoles(t *testing.T) *Handler {
@@ -763,6 +786,115 @@ func TestHandleRole_CreateAndShow(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "approve-merges")
+}
+
+func TestHandleRole_CreateAllFields(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method":           "create",
+		"name":             "coo",
+		"model":            "opus",
+		"responsibilities": []interface{}{"execution quality"},
+		"permissions":      []interface{}{"approve-merges"},
+		"tools":            []interface{}{"Bash", "Edit"},
+		"safety_constraints": []interface{}{
+			map[string]interface{}{"tool": "Bash", "message": "no rm -rf"},
+		},
+		"output_format": "## Handoff\n\nReport the SHA.",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	// Reload and confirm every field round-tripped, not just the three the
+	// old handler read.
+	show, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "show", "name": "coo",
+	}))
+	require.NoError(t, err)
+	var loaded role.Role
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, show)), &loaded))
+	assert.Equal(t, "opus", loaded.Model)
+	assert.Equal(t, []string{"Bash", "Edit"}, loaded.Tools)
+	require.Len(t, loaded.SafetyConstraints, 1)
+	assert.Equal(t, "Bash", loaded.SafetyConstraints[0].Tool)
+	assert.Equal(t, "no rm -rf", loaded.SafetyConstraints[0].Message)
+	assert.Contains(t, loaded.OutputFormat, "Handoff")
+}
+
+func TestHandleRole_CreateInvalidModel(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "coo",
+		"model":  "gpt-4",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unrecognized model")
+}
+
+func TestHandleRole_CreateBadSafetyConstraint(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "coo",
+		"safety_constraints": []interface{}{
+			map[string]interface{}{"tool": "Bash"}, // missing message
+		},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "safety_constraints")
+}
+
+func TestHandleRole_CreateScalarListWrongType(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	// A non-array value for a scalar list must fail loud, not create a role
+	// with the field dropped.
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "coo",
+		"tools":  "Bash", // string, not array
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "tools must be an array")
+
+	// The bad create must not have persisted a role.
+	list, err := h.handleRole(context.Background(), callTool(map[string]interface{}{"method": "list"}))
+	require.NoError(t, err)
+	assert.NotContains(t, resultText(t, list), "coo")
+}
+
+func TestHandleRole_CreateScalarListBadElement(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method":           "create",
+		"name":             "coo",
+		"responsibilities": []interface{}{"execution quality", 42}, // non-string element
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "responsibilities[1] must be a string")
+}
+
+func TestHandleRole_CreateModelWrongType(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	// A wrong-typed model must not coerce to "" (silently "inherit").
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "coo",
+		"model":  123,
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "model must be a string")
 }
 
 func TestHandleRole_ListAndDelete(t *testing.T) {
