@@ -87,13 +87,17 @@ func fieldSchema(f Field) map[string]any {
 
 	switch {
 	case len(f.Enum) > 0 && f.Pattern != "":
-		// Partial enum: closed aliases OR a pattern (role.model).
-		return withDescription(map[string]any{
-			"anyOf": []any{
-				map[string]any{"enum": enumAny(f.Enum)},
-				map[string]any{"type": "string", "pattern": f.Pattern},
-			},
-		}, f.Description)
+		// Partial enum: closed aliases OR a pattern (role.model). When empty
+		// is a distinct legal value (inherit), add a const "" branch so the
+		// published schema accepts exactly what ValidateModel does.
+		branches := []any{
+			map[string]any{"enum": enumAny(f.Enum)},
+			map[string]any{"type": "string", "pattern": f.Pattern},
+		}
+		if f.AllowEmpty {
+			branches = append(branches, map[string]any{"const": ""})
+		}
+		return withDescription(map[string]any{"anyOf": branches}, f.Description)
 	case len(f.Enum) > 0:
 		return withDescription(map[string]any{"type": "string", "enum": enumAny(f.Enum)}, f.Description)
 	case f.Pattern != "":
@@ -114,7 +118,7 @@ func objectSchema(fields []Field) map[string]any {
 			required = append(required, f.Name)
 		}
 	}
-	obj := map[string]any{"type": "object", "properties": props}
+	obj := map[string]any{"type": "object", "additionalProperties": false, "properties": props}
 	if len(required) > 0 {
 		obj["required"] = required
 	}

@@ -20,6 +20,7 @@ type Overlay struct {
 	Enum        []string           // closed-enum values, when the field is a closed enum
 	Pattern     string             // regexp for slug/handle fields
 	Description string             // one sentence, human-facing
+	AllowEmpty  bool               // empty string is a distinct legal value (role.model: inherit)
 	Fields      map[string]Overlay // nested-object overlays (Member, Collaboration, SafetyConstraint)
 }
 
@@ -44,6 +45,7 @@ type Field struct {
 	Description string
 	Required    bool
 	List        bool     // the Go field is a slice
+	AllowEmpty  bool     // empty string is a distinct legal value (role.model: inherit)
 	Enum        []string // closed-enum values, when applicable
 	Fields      []Field  // nested-object fields (when the element is a struct)
 }
@@ -72,6 +74,7 @@ func reflectFields(t reflect.Type, overlays map[string]Overlay) []Field {
 			Pattern:     ov.Pattern,
 			Description: ov.Description,
 			Required:    isRequired(sf),
+			AllowEmpty:  ov.AllowEmpty,
 			Enum:        ov.Enum,
 		}
 

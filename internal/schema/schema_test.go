@@ -193,16 +193,26 @@ func TestJSONSchemaRoleModelPartialEnum(t *testing.T) {
 	props := Role.JSONSchema()["properties"].(map[string]any)
 	model := props["model"].(map[string]any)
 	anyOf, ok := model["anyOf"].([]any)
-	if !ok || len(anyOf) != 2 {
-		t.Fatalf("model should be anyOf of two branches, got %v", model)
+	// aliases OR claude-* pattern OR empty (inherit) — three legal shapes,
+	// matching ValidateModel which accepts "".
+	if !ok || len(anyOf) != 3 {
+		t.Fatalf("model should be anyOf of three branches, got %v", model)
 	}
-	enumBranch := anyOf[0].(map[string]any)
-	if _, ok := enumBranch["enum"]; !ok {
-		t.Errorf("first anyOf branch should be an enum: %v", enumBranch)
+	var hasEnum, hasPattern, hasEmpty bool
+	for _, b := range anyOf {
+		m := b.(map[string]any)
+		if _, ok := m["enum"]; ok {
+			hasEnum = true
+		}
+		if m["pattern"] == "^claude-" {
+			hasPattern = true
+		}
+		if c, ok := m["const"]; ok && c == "" {
+			hasEmpty = true
+		}
 	}
-	patternBranch := anyOf[1].(map[string]any)
-	if patternBranch["pattern"] != "^claude-" {
-		t.Errorf("second anyOf branch should carry the claude- pattern: %v", patternBranch)
+	if !hasEnum || !hasPattern || !hasEmpty {
+		t.Errorf("model anyOf missing a branch: enum=%v pattern=%v empty=%v (%v)", hasEnum, hasPattern, hasEmpty, anyOf)
 	}
 }
 
@@ -216,8 +226,37 @@ func TestJSONSchemaNestedObjectArray(t *testing.T) {
 	if items["type"] != "object" {
 		t.Fatalf("members items should be an object: %v", items)
 	}
+	if items["additionalProperties"] != false {
+		t.Errorf("nested object should set additionalProperties:false: %v", items)
+	}
 	req := items["required"].([]string)
 	if !reflect.DeepEqual(req, []string{"identity", "role"}) {
 		t.Errorf("member required = %v, want [identity role]", req)
+	}
+}
+
+// TestRoleModelSchemaMatchesValidator proves the published model schema
+// accepts exactly the values ValidateModel accepts: the aliases, any
+// claude-* id, and the empty string (inherit) — the drift-match promise
+// the registry makes to its consumers.
+func TestRoleModelSchemaMatchesValidator(t *testing.T) {
+	accepted := []string{"", "opus", "sonnet", "haiku", "inherit", "claude-opus-4-8"}
+	for _, v := range accepted {
+		if err := role.ValidateModel(v); err != nil {
+			t.Fatalf("ValidateModel(%q) unexpectedly rejected: %v", v, err)
+		}
+	}
+	// The schema's model field must offer a branch for the empty string, or a
+	// valid `model: ""` would fail the published schema while passing the
+	// validator.
+	model := Role.JSONSchema()["properties"].(map[string]any)["model"].(map[string]any)
+	var hasEmpty bool
+	for _, b := range model["anyOf"].([]any) {
+		if c, ok := b.(map[string]any)["const"]; ok && c == "" {
+			hasEmpty = true
+		}
+	}
+	if !hasEmpty {
+		t.Errorf("model schema rejects the empty string but ValidateModel accepts it")
 	}
 }
