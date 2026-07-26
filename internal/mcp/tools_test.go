@@ -765,6 +765,68 @@ func TestHandleRole_CreateAndShow(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "approve-merges")
 }
 
+func TestHandleRole_CreateAllFields(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method":           "create",
+		"name":             "coo",
+		"model":            "opus",
+		"responsibilities": []interface{}{"execution quality"},
+		"permissions":      []interface{}{"approve-merges"},
+		"tools":            []interface{}{"Bash", "Edit"},
+		"safety_constraints": []interface{}{
+			map[string]interface{}{"tool": "Bash", "message": "no rm -rf"},
+		},
+		"output_format": "## Handoff\n\nReport the SHA.",
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	// Reload and confirm every field round-tripped, not just the three the
+	// old handler read.
+	show, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "show", "name": "coo",
+	}))
+	require.NoError(t, err)
+	var loaded role.Role
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, show)), &loaded))
+	assert.Equal(t, "opus", loaded.Model)
+	assert.Equal(t, []string{"Bash", "Edit"}, loaded.Tools)
+	require.Len(t, loaded.SafetyConstraints, 1)
+	assert.Equal(t, "Bash", loaded.SafetyConstraints[0].Tool)
+	assert.Equal(t, "no rm -rf", loaded.SafetyConstraints[0].Message)
+	assert.Contains(t, loaded.OutputFormat, "Handoff")
+}
+
+func TestHandleRole_CreateInvalidModel(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "coo",
+		"model":  "gpt-4",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "unrecognized model")
+}
+
+func TestHandleRole_CreateBadSafetyConstraint(t *testing.T) {
+	h := testHandlerWithRoles(t)
+
+	result, err := h.handleRole(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "coo",
+		"safety_constraints": []interface{}{
+			map[string]interface{}{"tool": "Bash"}, // missing message
+		},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "safety_constraints")
+}
+
 func TestHandleRole_ListAndDelete(t *testing.T) {
 	h := testHandlerWithRoles(t)
 

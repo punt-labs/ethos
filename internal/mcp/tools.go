@@ -17,6 +17,7 @@ import (
 	"github.com/punt-labs/ethos/internal/process"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/schema"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
 
@@ -154,27 +155,20 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 // --- Tool Definitions ---
 
 func (h *Handler) identityTool() mcplib.Tool {
-	return mcplib.NewTool("identity",
+	// method and reference are dispatch-level, not identity fields; the rest
+	// (name, handle, kind, email, github, agent, writing_style, personality,
+	// talents) are generated from the schema registry.
+	fixed := []mcplib.ToolOption{
 		mcplib.WithDescription("Manage identities. Methods: whoami, list, get, create."),
 		mcplib.WithString("method", mcplib.Required(),
 			mcplib.Enum("whoami", "list", "get", "create"),
 			mcplib.Description("Operation to perform."),
 		),
-		mcplib.WithString("handle",
-			mcplib.Description("Identity handle. Required for get, create."),
-		),
 		mcplib.WithBoolean("reference",
 			mcplib.Description("If true, return attribute slugs only without resolving .md content. For whoami, get."),
 		),
-		mcplib.WithString("name", mcplib.Description("Display name. Required for create.")),
-		mcplib.WithString("kind", mcplib.Description("Either 'human' or 'agent'. Required for create.")),
-		mcplib.WithString("email", mcplib.Description("Email address (beadle binding). For create.")),
-		mcplib.WithString("github", mcplib.Description("GitHub username (biff binding). For create.")),
-		mcplib.WithString("agent", mcplib.Description("Path to Claude Code agent .md file. For create.")),
-		mcplib.WithString("writing_style", mcplib.Description("Writing style slug. For create.")),
-		mcplib.WithString("personality", mcplib.Description("Personality slug. For create.")),
-		mcplib.WithArray("talents", mcplib.Description("List of talent slugs. For create."), mcplib.WithStringItems()),
-	)
+	}
+	return mcplib.NewTool("identity", withOptions(fixed, schema.Identity)...)
 }
 
 // --- Tool Handlers ---

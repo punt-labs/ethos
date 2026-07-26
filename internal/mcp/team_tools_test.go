@@ -69,6 +69,52 @@ func TestHandleTeam_CreateAndShow(t *testing.T) {
 	assert.Contains(t, resultText(t, result), "punt-labs/ethos")
 }
 
+func TestHandleTeam_CreateWithCollaborations(t *testing.T) {
+	h := testHandlerWithTeams(t)
+
+	result, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "eng",
+		"members": []interface{}{
+			map[string]interface{}{"identity": "alice", "role": "dev"},
+			map[string]interface{}{"identity": "bob", "role": "lead"},
+		},
+		"collaborations": []interface{}{
+			map[string]interface{}{"from": "dev", "to": "lead", "type": "reports_to"},
+		},
+	}))
+	require.NoError(t, err)
+	assert.False(t, result.IsError)
+
+	// The create path must persist collaborations, not drop them.
+	show, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method": "show", "name": "eng",
+	}))
+	require.NoError(t, err)
+	var loaded team.Team
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, show)), &loaded))
+	require.Len(t, loaded.Collaborations, 1)
+	assert.Equal(t, "reports_to", loaded.Collaborations[0].Type)
+}
+
+func TestHandleTeam_CreateBadCollaboration(t *testing.T) {
+	h := testHandlerWithTeams(t)
+
+	// A collaboration referencing an unfilled role fails validation at Save.
+	result, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method": "create",
+		"name":   "eng",
+		"members": []interface{}{
+			map[string]interface{}{"identity": "alice", "role": "dev"},
+		},
+		"collaborations": []interface{}{
+			map[string]interface{}{"from": "dev", "to": "lead", "type": "reports_to"},
+		},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+}
+
 func TestHandleTeam_List(t *testing.T) {
 	h := testHandlerWithTeams(t)
 
