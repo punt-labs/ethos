@@ -37,7 +37,7 @@ var Role = Entity{
 	Struct: role.Role{},
 	Overlay: map[string]Overlay{
 		"name":             {Type: "string (slug)", Pattern: slugPattern, Description: "Role name; lowercase alphanumeric with hyphens."},
-		"model":            {Type: "enum + pattern", Enum: role.ModelAliases, Pattern: "^claude-", AllowEmpty: true, Description: "Claude model: opus, sonnet, haiku, inherit, or any claude-* ID. Empty inherits."},
+		"model":            {Type: "enum + pattern", Enum: role.ModelAliases, Pattern: "^claude-.+", AllowEmpty: true, Description: "Claude model: opus, sonnet, haiku, inherit, or any claude-* ID. Empty inherits."},
 		"responsibilities": {Type: "list of string", Description: "What the role is accountable for."},
 		"permissions":      {Type: "list of string", Description: "Permission grants for the role."},
 		"tools":            {Type: "list of string", Description: "Tool names available to the role."},

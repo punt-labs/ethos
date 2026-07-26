@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -204,7 +205,7 @@ func TestJSONSchemaRoleModelPartialEnum(t *testing.T) {
 		if _, ok := m["enum"]; ok {
 			hasEnum = true
 		}
-		if m["pattern"] == "^claude-" {
+		if m["pattern"] == "^claude-.+" {
 			hasPattern = true
 		}
 		if c, ok := m["const"]; ok && c == "" {
@@ -258,5 +259,21 @@ func TestRoleModelSchemaMatchesValidator(t *testing.T) {
 	}
 	if !hasEmpty {
 		t.Errorf("model schema rejects the empty string but ValidateModel accepts it")
+	}
+
+	// The bare prefix "claude-" is invalid: ValidateModel requires at least one
+	// character after it, and the schema pattern must too — a looser schema
+	// pattern would accept an input the validator rejects.
+	if role.ValidateModel("claude-") == nil {
+		t.Fatal("ValidateModel(\"claude-\") should reject the bare prefix")
+	}
+	var pattern string
+	for _, b := range model["anyOf"].([]any) {
+		if p, ok := b.(map[string]any)["pattern"].(string); ok {
+			pattern = p
+		}
+	}
+	if regexp.MustCompile(pattern).MatchString("claude-") {
+		t.Errorf("schema pattern %q matches the bare prefix \"claude-\" that ValidateModel rejects", pattern)
 	}
 }
