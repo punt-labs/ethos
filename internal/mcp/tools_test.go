@@ -747,14 +747,6 @@ func TestStringArg(t *testing.T) {
 	assert.Equal(t, "", stringArg(req, "missing", ""))
 }
 
-func TestStringArrayArg(t *testing.T) {
-	req := callTool(map[string]interface{}{
-		"talents": []interface{}{"go", "testing"},
-	})
-	assert.Equal(t, []string{"go", "testing"}, stringArrayArg(req, "talents"))
-	assert.Nil(t, stringArrayArg(req, "missing"))
-}
-
 // --- Role Tool Tests ---
 
 func testHandlerWithRoles(t *testing.T) *Handler {

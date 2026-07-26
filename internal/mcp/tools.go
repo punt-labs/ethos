@@ -553,21 +553,6 @@ func boolArg(req mcplib.CallToolRequest, key string, fallback bool) bool {
 	return fallback
 }
 
-func stringArrayArg(req mcplib.CallToolRequest, key string) []string {
-	args := req.GetArguments()
-	raw, ok := args[key].([]interface{})
-	if !ok {
-		return nil
-	}
-	var result []string
-	for _, v := range raw {
-		if s, ok := v.(string); ok {
-			result = append(result, s)
-		}
-	}
-	return result
-}
-
 // stringArgStrict reads a string argument, erroring when the key is present
 // but not a string. Unlike stringArg it does not coerce a wrong-typed value
 // to a fallback, which would let a malformed field slip through create as if
@@ -586,9 +571,10 @@ func stringArgStrict(req mcplib.CallToolRequest, key string) (string, error) {
 }
 
 // stringListArg reads a list-of-string argument, erroring when the key is
-// present but is not an array or holds a non-string element. Unlike
-// stringArrayArg it never silently drops a malformed value or element. An
-// absent key returns nil, matching an omitted optional list.
+// present but is not an array or holds a non-string element. It never
+// silently drops a malformed value or element — the silent-drop class
+// DES-066 exists to close. An absent key returns nil, matching an omitted
+// optional list.
 func stringListArg(req mcplib.CallToolRequest, key string) ([]string, error) {
 	rawVal, ok := req.GetArguments()[key]
 	if !ok {
