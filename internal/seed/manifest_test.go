@@ -123,6 +123,59 @@ func TestSeed_CorruptManifestNotClobbered(t *testing.T) {
 		"seed must not deploy new files when the manifest is unreadable")
 }
 
+// TestLoadManifest_UnsupportedSchemaErrors pins fail-closed behavior: a
+// manifest written by a newer ethos (schema above what this binary supports) is
+// a hard error, not silently adopted and rewritten at the old schema (which
+// would drop fields this binary does not understand).
+func TestLoadManifest_UnsupportedSchemaErrors(t *testing.T) {
+	root := t.TempDir()
+	mfPath := filepath.Join(root, ManifestName)
+	future := []byte(`{"schema":999,"entries":{"roles/x.yaml":{"scope":"ethos","hash":"sha256:ab"}}}`)
+	require.NoError(t, os.WriteFile(mfPath, future, 0o644))
+
+	_, err := loadManifest(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported schema")
+
+	// The file is not rewritten by a failed load.
+	got, rerr := os.ReadFile(mfPath)
+	require.NoError(t, rerr)
+	assert.Equal(t, future, got, "an unsupported-schema manifest must not be rewritten")
+}
+
+// TestSeed_UnsupportedSchemaNotClobbered pins that a future-schema manifest
+// stops seed before it writes or overwrites anything.
+func TestSeed_UnsupportedSchemaNotClobbered(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	mfPath := filepath.Join(dest, ManifestName)
+	future := []byte(`{"schema":999,"entries":{}}`)
+	require.NoError(t, os.WriteFile(mfPath, future, 0o644))
+
+	result, err := Seed(dest, skills, false)
+	require.Error(t, err)
+	require.NotNil(t, result)
+	assert.NotEmpty(t, result.Errors)
+
+	got, rerr := os.ReadFile(mfPath)
+	require.NoError(t, rerr)
+	assert.Equal(t, future, got, "seed must not rewrite a future-schema manifest")
+	assert.NoDirExists(t, filepath.Join(dest, "roles"),
+		"seed must write nothing when the manifest schema is unsupported")
+}
+
+// TestSeederKey_EscapingDestUsesFullPath pins the collision-safe fallback: a
+// dest not under its root (Rel yields a "../" path) is keyed by its full cleaned
+// path, never by a relative path that could collide with a real key.
+func TestSeederKey_EscapingDestUsesFullPath(t *testing.T) {
+	s := &seeder{destRoot: "/a/b", skillsRoot: "/a/b"}
+	assert.Equal(t, "/a/c/x.yaml", s.key(scopeEthos, "/a/c/x.yaml"),
+		"an escaping dest must use its full cleaned path")
+	assert.Equal(t, "roles/x.yaml", s.key(scopeEthos, "/a/b/roles/x.yaml"),
+		"a dest under the root still keys relative")
+}
+
 // TestSeed_PostSeedInvariant pins the coverage invariant rsc asked for: after
 // a normal seed of a fresh destination, every seeded file has a manifest entry
 // whose recorded hash matches the file's content on disk.

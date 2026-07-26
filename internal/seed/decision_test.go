@@ -56,6 +56,12 @@ func TestPlace_DecisionMatrix(t *testing.T) {
 			wantRecorded: true, wantHash: cur,
 		},
 		{
+			name:   "matches current with a stale entry refreshes to cur",
+			onDisk: shipped, tracked: true, entryHash: hashBytes([]byte("stale\n")),
+			want: unchanged, wantContent: shipped,
+			wantRecorded: true, wantHash: cur,
+		},
+		{
 			name:   "tracked and unmodified upgrades",
 			onDisk: "old shipped\n", tracked: true, entryHash: hashBytes([]byte("old shipped\n")),
 			want: updated, wantContent: shipped,

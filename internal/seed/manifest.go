@@ -62,9 +62,18 @@ func loadManifest(root string) (*Manifest, error) {
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("parsing seed manifest in %q: %w", root, err)
 	}
+	if m.Schema > manifestSchema {
+		// A newer ethos wrote this manifest. Fail closed rather than adopt it
+		// and rewrite at the old schema, which would drop fields this binary
+		// does not understand.
+		return nil, fmt.Errorf(
+			"seed manifest in %q has unsupported schema %d (this ethos supports %d) — upgrade ethos",
+			root, m.Schema, manifestSchema)
+	}
 	if m.Entries == nil {
 		m.Entries = map[string]Entry{}
 	}
+	// A missing or zero schema on a v1-era file defaults to the current schema.
 	m.Schema = manifestSchema
 	return &m, nil
 }

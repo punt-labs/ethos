@@ -293,11 +293,13 @@ func (s *seeder) decide(scope, dest string, data []byte, cur string) {
 	key := s.key(scope, dest)
 
 	if local == cur {
-		// Already this release's content. Adopt an untracked file so a later
-		// edit becomes detectable.
-		if _, ok := s.mf.Entries[key]; !ok {
-			s.record(scope, dest, cur)
-		}
+		// The file already holds this release's content, so its entry must be
+		// cur. Always record — this adopts an untracked file and self-corrects a
+		// stale entry left when a prior seed wrote the file but crashed before
+		// saving the manifest. Without the refresh, the next release would see
+		// local(unchanged shipped) != cur and entry != local, misread it as a
+		// user edit, and silently drop the upgrade.
+		s.record(scope, dest, cur)
 		s.r.Unchanged = append(s.r.Unchanged, dest)
 		return
 	}
@@ -352,15 +354,22 @@ func (s *seeder) record(scope, dest, cur string) {
 // could share and silently collide on.
 func (s *seeder) key(scope, dest string) string {
 	if scope == scopeSkills {
-		if rel, err := filepath.Rel(s.skillsRoot, dest); err == nil {
+		if rel, err := filepath.Rel(s.skillsRoot, dest); err == nil && !escapes(rel) {
 			return "skills/" + filepath.ToSlash(rel)
 		}
 		return filepath.ToSlash(filepath.Clean(dest))
 	}
-	if rel, err := filepath.Rel(s.destRoot, dest); err == nil {
+	if rel, err := filepath.Rel(s.destRoot, dest); err == nil && !escapes(rel) {
 		return filepath.ToSlash(rel)
 	}
 	return filepath.ToSlash(filepath.Clean(dest))
+}
+
+// escapes reports whether a relative path climbs out of its base ("..") — a
+// dest not actually under the root, whose relative key could collide with a
+// genuine key. Such a dest uses the full cleaned path instead.
+func escapes(rel string) bool {
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // linkInstall writes data to a temp file in dest's directory, then hard-links
