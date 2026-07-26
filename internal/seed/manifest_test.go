@@ -68,6 +68,61 @@ func TestLoadManifest_CorruptErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "parsing seed manifest")
 }
 
+// TestLoadManifest_UnreadableErrors pins that a present-but-unreadable manifest
+// is a hard error, not a silent empty. Treating it as empty would reclassify
+// tracked files as untracked and drop their upgrades.
+func TestLoadManifest_UnreadableErrors(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; cannot simulate an unreadable file")
+	}
+	root := t.TempDir()
+	mfPath := filepath.Join(root, ManifestName)
+	require.NoError(t, os.WriteFile(mfPath, []byte(`{"schema":1,"entries":{}}`), 0o000))
+	t.Cleanup(func() { os.Chmod(mfPath, 0o600) })
+
+	_, err := loadManifest(root)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading seed manifest")
+}
+
+// TestSeed_CorruptManifestNotClobbered pins the durability guarantee behind the
+// hard error: when the manifest is unreadable, seed writes nothing — it neither
+// overwrites the manifest with a fresh one nor touches library files, so the
+// tracking is recoverable once the manifest is fixed.
+func TestSeed_CorruptManifestNotClobbered(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// A pre-existing library file that must not be touched.
+	rolesDir := filepath.Join(dest, "roles")
+	require.NoError(t, os.MkdirAll(rolesDir, 0o755))
+	rolePath := filepath.Join(rolesDir, "implementer.yaml")
+	require.NoError(t, os.WriteFile(rolePath, []byte("user content\n"), 0o644))
+
+	// A corrupt manifest.
+	mfPath := filepath.Join(dest, ManifestName)
+	corrupt := []byte("{ this is not json")
+	require.NoError(t, os.WriteFile(mfPath, corrupt, 0o644))
+
+	result, err := Seed(dest, skills, false)
+	require.Error(t, err)
+	require.NotNil(t, result)
+	assert.NotEmpty(t, result.Errors)
+
+	// The corrupt manifest is left intact — not overwritten with a fresh one.
+	got, rerr := os.ReadFile(mfPath)
+	require.NoError(t, rerr)
+	assert.Equal(t, corrupt, got, "a corrupt manifest must not be clobbered by save()")
+
+	// No library file was written — seed never proceeded.
+	role, rerr := os.ReadFile(rolePath)
+	require.NoError(t, rerr)
+	assert.Equal(t, "user content\n", string(role),
+		"seed must write nothing when the manifest is unreadable")
+	assert.NoFileExists(t, filepath.Join(rolesDir, "reviewer.yaml"),
+		"seed must not deploy new files when the manifest is unreadable")
+}
+
 // TestSeed_PostSeedInvariant pins the coverage invariant rsc asked for: after
 // a normal seed of a fresh destination, every seeded file has a manifest entry
 // whose recorded hash matches the file's content on disk.

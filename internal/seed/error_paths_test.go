@@ -184,9 +184,10 @@ func TestSeedReadmes_WalkError(t *testing.T) {
 	assert.True(t, found, "errors: %v", s.r.Errors)
 }
 
-// TestSeed_MkdirError makes the dest root a regular file so every
-// os.MkdirAll inside place fails with ENOTDIR. Every file-level write records
-// an error, Seed returns a non-nil error, and the errors surface.
+// TestSeed_MkdirError makes the dest root a regular file. No manifest can live
+// under it, so loadManifest starts empty and seed proceeds; every os.MkdirAll
+// inside place then fails with ENOTDIR, and the manifest save at the end fails
+// too. Seed returns a non-nil error with the per-file failures surfaced.
 func TestSeed_MkdirError(t *testing.T) {
 	parent := t.TempDir()
 	dest := filepath.Join(parent, "blocked")

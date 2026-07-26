@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -32,19 +34,29 @@ type Manifest struct {
 	Entries map[string]Entry `json:"entries"`
 }
 
-// loadManifest reads the manifest at root. An unreadable manifest — missing,
-// or under a destRoot that does not yet exist — yields an empty manifest, the
-// state of a machine that has never run a manifest-aware seed; the seed then
-// proceeds and any real problem surfaces as a placement or save error. Only a
-// present-but-corrupt manifest is a hard error: garbage must not be silently
-// discarded.
+// loadManifest reads the manifest at root. When root is not an existing
+// directory — a fresh machine whose root does not exist yet, or a root blocked
+// by a non-directory — no manifest can be present, so it yields an empty one and
+// lets seed itself report any blockage per file. When root is a directory, a
+// missing manifest is empty too, but a present-but-unreadable manifest (bad
+// perms, a directory, an I/O fault) or a corrupt body is a HARD error: silently
+// treating it as empty would reclassify every tracked file as untracked, drop
+// its upgrade as a no-clobber skip, and — once save() rewrites a fresh
+// manifest — make that tracking loss durable. The caller must not seed or save
+// on this error.
 func loadManifest(root string) (*Manifest, error) {
-	empty := func() *Manifest {
-		return &Manifest{Schema: manifestSchema, Entries: map[string]Entry{}}
+	empty := &Manifest{Schema: manifestSchema, Entries: map[string]Entry{}}
+
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return empty, nil
 	}
+
 	data, err := os.ReadFile(filepath.Join(root, ManifestName))
+	if errors.Is(err, fs.ErrNotExist) {
+		return empty, nil
+	}
 	if err != nil {
-		return empty(), nil
+		return nil, fmt.Errorf("reading seed manifest in %q: %w", root, err)
 	}
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {

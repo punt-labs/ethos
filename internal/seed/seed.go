@@ -51,7 +51,11 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 func SeedVersion(destRoot, skillsRoot, version string, force bool) (*Result, error) {
 	mf, err := loadManifest(destRoot)
 	if err != nil {
-		return nil, err
+		// A present-but-unreadable or corrupt manifest must not be treated as a
+		// fresh machine: seeding would drop tracked-file upgrades and save()
+		// would overwrite the manifest, making the loss durable. Fail before any
+		// write, surfacing the cause in Result.Errors.
+		return &Result{Errors: []string{err.Error()}}, err
 	}
 	s := &seeder{
 		destRoot:   destRoot,
@@ -342,20 +346,21 @@ func (s *seeder) record(scope, dest, cur string) {
 }
 
 // key returns the manifest key for dest: dest-relative under the ethos root, or
-// "skills/…" under the skills root.
+// "skills/…" under the skills root. If dest cannot be made relative to its root
+// (it should always be — every dest is built by joining onto the root), the
+// full cleaned path is used rather than a basename, which two different dests
+// could share and silently collide on.
 func (s *seeder) key(scope, dest string) string {
 	if scope == scopeSkills {
-		rel, err := filepath.Rel(s.skillsRoot, dest)
-		if err != nil {
-			rel = filepath.Base(dest)
+		if rel, err := filepath.Rel(s.skillsRoot, dest); err == nil {
+			return "skills/" + filepath.ToSlash(rel)
 		}
-		return "skills/" + filepath.ToSlash(rel)
+		return filepath.ToSlash(filepath.Clean(dest))
 	}
-	rel, err := filepath.Rel(s.destRoot, dest)
-	if err != nil {
-		rel = filepath.Base(dest)
+	if rel, err := filepath.Rel(s.destRoot, dest); err == nil {
+		return filepath.ToSlash(rel)
 	}
-	return filepath.ToSlash(rel)
+	return filepath.ToSlash(filepath.Clean(dest))
 }
 
 // linkInstall writes data to a temp file in dest's directory, then hard-links
