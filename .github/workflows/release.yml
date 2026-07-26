@@ -17,11 +17,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # make lint runs golangci-lint (bundles staticcheck); install it to the
-      # GOBIN path the Makefile resolves. Keep the version in sync with
-      # GOLANGCI_LINT_VERSION in the Makefile and test.yml.
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+      # make lint runs golangci-lint (bundles staticcheck); `make tools`
+      # installs it from the Makefile's pinned GOLANGCI_LINT_VERSION to the
+      # GOBIN path make lint resolves — single source for the version.
+      - name: Install tools
+        run: make tools
 
       - name: Run quality gates
         run: make lint test
