@@ -24,14 +24,13 @@ jobs:
         with:
           node-version: 22
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@2026.1
-
-      - name: Staticcheck
-        run: staticcheck ./...
+      # golangci-lint is the Go lint gate (Go Report Card successor). It
+      # bundles govet + staticcheck + gofmt; keep the version in sync with
+      # the GOLANGCI_LINT_VERSION pin in the Makefile so local and CI agree.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.12.2
 
       - name: ShellCheck
         run: shellcheck hooks/*.sh install.sh

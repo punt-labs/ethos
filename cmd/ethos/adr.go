@@ -34,7 +34,7 @@ var adrCmd = &cobra.Command{
 
 var (
 	adrCreateTitle     string
-	adrCreateContext    string
+	adrCreateContext   string
 	adrCreateDecision  string
 	adrCreateStatus    string
 	adrCreateAuthor    string

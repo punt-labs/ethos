@@ -65,10 +65,10 @@ func TestMigrateMission_CopiesAllArtifacts(t *testing.T) {
 	id := "m-2026-05-22-001"
 
 	legacyMissionFiles(t, globalRoot, id, map[string][]byte{
-		".yaml":              []byte("mission_id: m-2026-05-22-001\nstatus: open\n"),
-		".jsonl":             []byte(`{"type":"create","ts":"2026-05-22T10:00:00Z"}` + "\n"),
-		".results.yaml":      []byte("- round: 1\n  verdict: pass\n"),
-		".reflections.yaml":  []byte("- round: 1\n  recommendation: stop\n"),
+		".yaml":             []byte("mission_id: m-2026-05-22-001\nstatus: open\n"),
+		".jsonl":            []byte(`{"type":"create","ts":"2026-05-22T10:00:00Z"}` + "\n"),
+		".results.yaml":     []byte("- round: 1\n  verdict: pass\n"),
+		".reflections.yaml": []byte("- round: 1\n  recommendation: stop\n"),
 	})
 	repoAuditWithMission(t, repoRoot, "sess-1", id)
 
@@ -270,10 +270,10 @@ func TestRepoMissionIDs_SkipsMalformedLines(t *testing.T) {
 	// Order matters only for diagnostics. The scanner is line-oriented
 	// so each line is independent.
 	body := strings.Join([]string{
-		`{not json at all`,                                 // SyntaxError on a token
-		`{"contract_id": 12345}`,                           // UnmarshalTypeError (number for string)
+		`{not json at all`,       // SyntaxError on a token
+		`{"contract_id": 12345}`, // UnmarshalTypeError (number for string)
 		`{"ts":"2026-05-22T10:00:00Z","contract_id":"m-OK"}`, // well-formed
-		`{"contract_id":"m-trunc"`,                         // truncated trailing fragment
+		`{"contract_id":"m-trunc"`,                           // truncated trailing fragment
 	}, "\n") + "\n"
 	require.NoError(t, os.WriteFile(
 		filepath.Join(sessionDir, "audit.jsonl"),

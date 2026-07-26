@@ -1128,7 +1128,6 @@ func runMissionList(status, pipeline string) error {
 	return nil
 }
 
-
 func runMissionClose(idOrPrefix, status string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)

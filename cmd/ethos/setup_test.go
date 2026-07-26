@@ -1046,7 +1046,6 @@ handle: plain-jane
 	assert.Empty(t, human.WritingStyle)
 }
 
-
 // TestSetup_FromWorktreeWritesConfigToStoreAgentsToCheckout pins the Bugbot
 // HIGH on PR #370: setup is a config WRITER + agent generator. Its config /
 // bundle / team writes must land in the shared store (where team activate and

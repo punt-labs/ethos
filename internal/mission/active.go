@@ -114,8 +114,8 @@ func WriteActiveMission(globalRoot, sessionID, missionID string) error {
 // additional_env from PreToolUse does NOT persist into hook script
 // processes, so the binding sidecar is the bridge.
 type DelegationBinding struct {
-	DelegationID string
-	MissionID    string
+	DelegationID  string
+	MissionID     string
 	ParentSession string
 }
 
