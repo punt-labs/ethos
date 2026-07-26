@@ -15,6 +15,11 @@ ethos seed                     # deploys bundles + starter attributes to global
 ethos team activate gstack     # writes active_bundle: gstack
 ```
 
+Run by an agent, `ethos team activate` skips the CEO/COO leadership
+rebind with a warning and still activates (exit 0) — an agent is the
+COO, not the CEO, and cannot determine the human. The human's earlier
+`ethos setup` leadership stays intact (DES-064).
+
 Or add your own bundle:
 
 ```bash
@@ -478,15 +483,23 @@ repositories:
   - punt-labs/ethos
   - punt-labs/biff
 members:
+  - identity: mal
+    role: ceo
   - identity: claude
     role: coo
   - identity: bwk
     role: go-specialist
 collaborations:
+  - from: coo
+    to: ceo
+    type: reports_to
   - from: go-specialist
     to: coo
     type: reports_to
 ```
+
+The default team shape is human = CEO (apex), `claude` = COO, and
+every specialist reports to the COO (DES-064).
 
 ### Role Schema
 
@@ -886,7 +899,7 @@ ethos mission pipeline show gstack-debug --json
 ```bash
 ethos mission pipeline instantiate gstack-debug \
   --var target=internal/session/ \
-  --leader gstack-architect \
+  --leader gstack-coo \
   --worker gstack-implementer \
   --evaluator gstack-reviewer
 ```
@@ -947,19 +960,21 @@ extraction to `docs/**`; `investigate` permits `docs/**` and
 
 ## Gstack Starter Team
 
-Ethos ships with a gstack starter team: 6 agents (architect,
-implementer, reviewer, qa, security, product) with personalities
-ported from the gstack builder framework's principles -- Boil the
-Lake, Search Before Building, User Sovereignty. 5 pipeline templates
-(gstack-plan, gstack-ship, gstack-design, gstack-debug,
-gstack-review) and 3 archetypes (investigate, audit, orchestrate)
-support the team's workflows.
+Ethos ships with a gstack starter team: a CEO/COO leadership pair
+plus 6 specialists (architect, implementer, reviewer, qa, security,
+product) with personalities ported from the gstack builder
+framework's principles -- Boil the Lake, Search Before Building, User
+Sovereignty. The COO is the hub — every specialist reports to it, and
+it reports to the CEO (DES-064). 5 pipeline templates (gstack-plan,
+gstack-ship, gstack-design, gstack-debug, gstack-review) and 3
+archetypes (investigate, audit, orchestrate) support the team's
+workflows.
 
 Configure your repo to use the gstack team:
 
 ```yaml
 # .punt-labs/ethos.yaml
-agent: gstack-architect
+agent: claude
 team: gstack
 ```
 

@@ -74,9 +74,12 @@ without the flag to add the plugin later.
 The installer places the `ethos` binary in `~/.local/bin` and,
 when `claude` and `git` are available, registers the Claude Code
 plugin. `ethos setup` asks for your name, handle, email, GitHub
-handle (optional), and working style, then creates your identity, a
-paired agent, repo config, a 4-agent team, and agent definition
-files. The email prompt defaults to your `git config user.email`;
+handle (optional), and working style, then creates your identity as
+**CEO**, a paired **COO** agent (`claude`), repo config, and a
+specialist team (architect, implementer, reviewer, security) that
+reports to the COO, plus agent definition files. Out of the box the
+org is you (CEO) → `claude` (COO) → specialists — see
+[DESIGN.md](DESIGN.md) DES-064. The email prompt defaults to your `git config user.email`;
 your identity carries that email so ethos can resolve you by it. Start
 Claude Code — the agent knows who it is, who you are, and how to
 delegate. See [Onboarding](docs/onboarding.md) for the full walkthrough.
