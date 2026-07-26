@@ -69,14 +69,21 @@ func (h *Handler) handleTeam(_ context.Context, req mcplib.CallToolRequest) (*mc
 }
 
 func (h *Handler) handleCreateTeam(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	name := stringArg(req, "name", "")
+	name, err := stringArgStrict(req, "name")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	if name == "" {
 		return mcplib.NewToolResultError("name is required for create"), nil
 	}
 
+	repositories, err := stringListArg(req, "repositories")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	t := &team.Team{
 		Name:         name,
-		Repositories: stringArrayArg(req, "repositories"),
+		Repositories: repositories,
 	}
 
 	// Parse members from the raw arguments.
@@ -246,7 +253,7 @@ func parseMembersArg(req mcplib.CallToolRequest) ([]team.Member, error) {
 		ident, _ := m["identity"].(string)
 		role, _ := m["role"].(string)
 		if ident == "" || role == "" {
-			return nil, fmt.Errorf("member %d: identity and role are required", i)
+			return nil, fmt.Errorf("member %d: identity and role must be non-empty strings", i)
 		}
 		members = append(members, team.Member{Identity: ident, Role: role})
 	}
@@ -275,7 +282,7 @@ func parseCollaborationsArg(req mcplib.CallToolRequest) ([]team.Collaboration, e
 		to, _ := m["to"].(string)
 		ct, _ := m["type"].(string)
 		if from == "" || to == "" || ct == "" {
-			return nil, fmt.Errorf("collaboration %d: from, to, and type are required", i)
+			return nil, fmt.Errorf("collaboration %d: from, to, and type must be non-empty strings", i)
 		}
 		out = append(out, team.Collaboration{From: from, To: to, Type: ct})
 	}

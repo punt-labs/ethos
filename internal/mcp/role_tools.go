@@ -41,28 +41,51 @@ func (h *Handler) handleRole(_ context.Context, req mcplib.CallToolRequest) (*mc
 }
 
 func (h *Handler) handleCreateRole(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
-	name := stringArg(req, "name", "")
+	name, err := stringArgStrict(req, "name")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	if name == "" {
 		return mcplib.NewToolResultError("name is required for create"), nil
 	}
 
-	model := stringArg(req, "model", "")
+	model, err := stringArgStrict(req, "model")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 	if err := role.ValidateModel(model); err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+
+	responsibilities, err := stringListArg(req, "responsibilities")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	permissions, err := stringListArg(req, "permissions")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	tools, err := stringListArg(req, "tools")
+	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
 	}
 	constraints, err := parseSafetyConstraintsArg(req)
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("invalid safety_constraints: %v", err)), nil
 	}
+	outputFormat, err := stringArgStrict(req, "output_format")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
 
 	r := &role.Role{
 		Name:              name,
 		Model:             model,
-		Responsibilities:  stringArrayArg(req, "responsibilities"),
-		Permissions:       stringArrayArg(req, "permissions"),
-		Tools:             stringArrayArg(req, "tools"),
+		Responsibilities:  responsibilities,
+		Permissions:       permissions,
+		Tools:             tools,
 		SafetyConstraints: constraints,
-		OutputFormat:      stringArg(req, "output_format", ""),
+		OutputFormat:      outputFormat,
 	}
 
 	if err := h.roles.Save(r); err != nil {
@@ -92,7 +115,7 @@ func parseSafetyConstraintsArg(req mcplib.CallToolRequest) ([]role.SafetyConstra
 		tool, _ := m["tool"].(string)
 		msg, _ := m["message"].(string)
 		if tool == "" || msg == "" {
-			return nil, fmt.Errorf("constraint %d: tool and message are required", i)
+			return nil, fmt.Errorf("constraint %d: tool and message must be non-empty strings", i)
 		}
 		out = append(out, role.SafetyConstraint{Tool: tool, Message: msg})
 	}

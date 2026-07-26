@@ -115,6 +115,22 @@ func TestHandleTeam_CreateBadCollaboration(t *testing.T) {
 	assert.True(t, result.IsError)
 }
 
+func TestHandleTeam_CreateRepositoriesWrongType(t *testing.T) {
+	h := testHandlerWithTeams(t)
+
+	result, err := h.handleTeam(context.Background(), callTool(map[string]interface{}{
+		"method":       "create",
+		"name":         "eng",
+		"repositories": "punt-labs/ethos", // string, not array
+		"members": []interface{}{
+			map[string]interface{}{"identity": "alice", "role": "dev"},
+		},
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "repositories must be an array")
+}
+
 func TestHandleTeam_List(t *testing.T) {
 	h := testHandlerWithTeams(t)
 
