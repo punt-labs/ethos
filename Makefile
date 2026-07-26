@@ -4,24 +4,20 @@ LDFLAGS := -X main.version=$(VERSION)
 PLUGIN_CACHE := $(HOME)/.claude/plugins/cache/punt-labs/ethos
 PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
 
-.PHONY: help lint fmt-check docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral
+# golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
+# local and CI run the same analyzer versions; keep in sync with
+# .github/workflows/test.yml. Config lives in .golangci.yml.
+GOLANGCI_LINT_VERSION := v2.12.2
+GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
+
+.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-lint: fmt-check ## Lint (gofmt + go vet + staticcheck + shellcheck)
-	go vet ./...
-	$(shell go env GOPATH)/bin/staticcheck ./... || echo "warning: staticcheck failed (toolchain mismatch?), continuing"
+lint: ## Lint (golangci-lint + shellcheck)
+	$(GOLANGCI_LINT) run ./...
 	shellcheck hooks/*.sh install.sh
-
-fmt-check: ## Fail if any tracked .go file is not gofmt-clean
-	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
-	if [ -n "$$unformatted" ]; then \
-		echo "gofmt needs to be run on the following files:"; \
-		echo "$$unformatted"; \
-		echo "run 'make format' to fix"; \
-		exit 1; \
-	fi
 
 docs: ## Lint markdown
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
@@ -37,8 +33,8 @@ test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY an
 
 check: lint docs test validate-content ## Run all quality gates
 
-format: ## Format code
-	gofmt -w .
+format: ## Format code (applies the formatters golangci-lint gates)
+	$(GOLANGCI_LINT) fmt
 
 build: ## Build binary
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o ethos ./cmd/ethos/
@@ -74,7 +70,7 @@ dist: clean ## Cross-compile for all platforms
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w $(LDFLAGS)" -o dist/ethos-linux-amd64  ./cmd/ethos/
 
 tools: ## Install development tools
-	go install honnef.co/go/tools/cmd/staticcheck@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 doctor: build ## Run ethos doctor
 	./ethos doctor

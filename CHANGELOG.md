@@ -21,9 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **gofmt-clean the tree and gate gofmt in `make check`.** Reformatted 21
-  drifted `.go` files and added a `fmt-check` target (wired into `lint`) that
-  fails if any tracked `.go` file is not gofmt-clean, so the drift cannot recur.
+- **Adopt golangci-lint as the Go lint gate (Go Report Card successor).**
+  `goreportcard.com` is sunset as of 2026-07-01; golangci-lint bundles the
+  checks it ran (gofmt, govet, ineffassign, misspell, gocyclo) plus
+  staticcheck/unused, with pinned analyzer versions so local and CI agree.
+  Added `.golangci.yml` (conservative set: gofmt, govet, staticcheck, unused —
+  the set the tree passes clean; errcheck/ineffassign/misspell/gocyclo deferred
+  to a follow-up cleanup), wired `golangci-lint run` into `make check` and the
+  CI workflow (pinned to v2.12.2), and gofmt-cleaned the 21 drifted `.go`
+  files. Removed the retired Go Report Card badge from the README.
 - **The role and team MCP `create` tools no longer silently drop input.**
   `role create` read only `name`, `responsibilities`, and `permissions`,
   discarding `model`, `tools`, `safety_constraints`, and `output_format` even
