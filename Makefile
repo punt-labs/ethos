@@ -4,15 +4,24 @@ LDFLAGS := -X main.version=$(VERSION)
 PLUGIN_CACHE := $(HOME)/.claude/plugins/cache/punt-labs/ethos
 PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' | sort -V | tail -1)
 
-.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral
+.PHONY: help lint fmt-check docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-lint: ## Lint (go vet + staticcheck + shellcheck)
+lint: fmt-check ## Lint (gofmt + go vet + staticcheck + shellcheck)
 	go vet ./...
 	$(shell go env GOPATH)/bin/staticcheck ./... || echo "warning: staticcheck failed (toolchain mismatch?), continuing"
 	shellcheck hooks/*.sh install.sh
+
+fmt-check: ## Fail if any tracked .go file is not gofmt-clean
+	@unformatted=$$(gofmt -l $$(git ls-files '*.go')); \
+	if [ -n "$$unformatted" ]; then \
+		echo "gofmt needs to be run on the following files:"; \
+		echo "$$unformatted"; \
+		echo "run 'make format' to fix"; \
+		exit 1; \
+	fi
 
 docs: ## Lint markdown
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"

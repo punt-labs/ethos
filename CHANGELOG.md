@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **gofmt-clean the tree and gate gofmt in `make check`.** Reformatted 21
+  drifted `.go` files and added a `fmt-check` target (wired into `lint`) that
+  fails if any tracked `.go` file is not gofmt-clean, so the drift cannot recur.
 - **The role and team MCP `create` tools no longer silently drop input.**
   `role create` read only `name`, `responsibilities`, and `permissions`,
   discarding `model`, `tools`, `safety_constraints`, and `output_format` even
