@@ -14,6 +14,8 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/schema"
+	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/punt-labs/ethos/internal/team"
 )
 
@@ -27,6 +29,37 @@ type result struct {
 func pass(label string) result { return result{pass: true, label: label} }
 func fail(label, detail string) result {
 	return result{pass: false, label: label, detail: detail}
+}
+
+// checkReadmeTable compares the fields table embedded in a seeded README
+// against the registry's MarkdownTable for that entity. It reads the
+// embedded content — the bytes that actually ship — so the check cannot be
+// fooled by an on-disk copy that differs from the build.
+func checkReadmeTable(path string, e schema.Entity) result {
+	label := fmt.Sprintf("readme: %s fields table", e.Wire)
+	data, err := seed.Readmes.ReadFile(path)
+	if err != nil {
+		return fail(label, fmt.Sprintf("reading %s: %v", path, err))
+	}
+	got := tableBlock(string(data))
+	want := strings.TrimRight(e.MarkdownTable(), "\n")
+	if got != want {
+		return fail(label, fmt.Sprintf("%s drifted from schema.%s.MarkdownTable(); update the README table to match the registry in internal/schema", path, e.Name))
+	}
+	return pass(label)
+}
+
+// tableBlock returns the contiguous run of markdown table rows in s: every
+// line whose first non-space rune is a pipe. The seeded READMEs carry one
+// such table (the fields block), so the run is unambiguous.
+func tableBlock(s string) string {
+	var rows []string
+	for _, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "|") {
+			rows = append(rows, line)
+		}
+	}
+	return strings.Join(rows, "\n")
 }
 
 func main() {
@@ -213,6 +246,21 @@ func main() {
 	}
 	if teamFails == 0 {
 		results = append(results, pass(fmt.Sprintf("teams: structural validation (%d teams)", nTeams)))
+	}
+
+	// Seeded README fields tables must equal the registry MarkdownTable().
+	// This is a comparison, not a generation: a stale committed README fails
+	// the build the instant the registry changes.
+	readmeChecks := []struct {
+		path   string
+		entity schema.Entity
+	}{
+		{"sidecar/identities/README.md", schema.Identity},
+		{"sidecar/roles/README.md", schema.Role},
+		{"sidecar/teams/README.md", schema.Team},
+	}
+	for _, rc := range readmeChecks {
+		results = append(results, checkReadmeTable(rc.path, rc.entity))
 	}
 
 	// Print all results.

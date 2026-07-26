@@ -22,9 +22,9 @@ var Identity = Entity{
 		"email":         {Type: "string", Description: "Email address; must contain @ and no whitespace. Beadle binding."},
 		"github":        {Type: "string", Description: "GitHub handle. Biff binding."},
 		"agent":         {Type: "string (path)", Description: "Path to the Claude Code agent .md file."},
-		"writing_style": {Type: "string (slug)", Description: "References writing-styles/<slug>.md."},
-		"personality":   {Type: "string (slug)", Description: "References personalities/<slug>.md."},
-		"talents":       {Type: "list of string (slug)", Description: "Each references talents/<slug>.md."},
+		"writing_style": {Type: "string (slug)", Description: "Slug referencing writing-styles/; e.g. concise-quantified."},
+		"personality":   {Type: "string (slug)", Description: "Slug referencing personalities/; e.g. principal-engineer."},
+		"talents":       {Type: "list of string (slug)", Description: "Slugs referencing talents/; e.g. engineering."},
 	},
 }
 

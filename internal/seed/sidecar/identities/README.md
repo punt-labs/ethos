@@ -14,14 +14,17 @@ ethos create -f mal.yaml  # from file
 
 ## Fields
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Display name |
-| `handle` | Yes | Lowercase alphanumeric with hyphens |
-| `kind` | Yes | `human` or `agent` |
-| `email` | No | Email address (Beadle binding) |
-| `github` | No | GitHub handle (Biff binding) |
-| `agent` | No | Path to Claude Code agent `.md` file |
-| `writing_style` | No | Slug referencing `writing-styles/<slug>.md` (e.g., `concise-quantified`) |
-| `personality` | No | Slug referencing `personalities/<slug>.md` (e.g., `principal-engineer`) |
-| `talents` | No | List of slugs referencing `talents/<slug>.md` (e.g., `engineering`) |
+This table is generated from the schema registry and checked by
+validate-content. Edit `internal/schema` and rebuild — do not hand-edit.
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `name` | yes | string | Display name. |
+| `handle` | yes | string (slug) | Stable key; lowercase alphanumeric with hyphens. |
+| `kind` | yes | enum | Either human or agent. |
+| `email` | no | string | Email address; must contain @ and no whitespace. Beadle binding. |
+| `github` | no | string | GitHub handle. Biff binding. |
+| `agent` | no | string (path) | Path to the Claude Code agent .md file. |
+| `writing_style` | no | string (slug) | Slug referencing writing-styles/; e.g. concise-quantified. |
+| `personality` | no | string (slug) | Slug referencing personalities/; e.g. principal-engineer. |
+| `talents` | no | list of string (slug) | Slugs referencing talents/; e.g. engineering. |
