@@ -1,0 +1,63 @@
+results:
+    - mission: m-2026-07-26-005
+      round: 1
+      created_at: "2026-07-26T04:36:37Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/seed/manifest.go
+          added: 87
+          removed: 0
+        - path: internal/seed/seed.go
+          added: 209
+          removed: 93
+        - path: internal/seed/manifest_test.go
+          added: 113
+          removed: 0
+        - path: internal/seed/decision_test.go
+          added: 138
+          removed: 0
+        - path: internal/seed/seed_test.go
+          added: 57
+          removed: 16
+        - path: internal/seed/error_paths_test.go
+          added: 123
+          removed: 108
+        - path: cmd/ethos/seed.go
+          added: 18
+          removed: 4
+        - path: cmd/ethos/seed_test.go
+          added: 66
+          removed: 0
+        - path: cmd/ethos/handlers_critical_test.go
+          added: 6
+          removed: 4
+        - path: install.sh
+          added: 11
+          removed: 2
+        - path: CHANGELOG.md
+          added: 14
+          removed: 0
+      evidence:
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race, validate-content)
+          status: pass
+        - name: internal/seed decision matrix + manifest round-trip + post-seed invariant + force
+          status: pass
+        - name: clean-machine dogfood — plain re-seed upgrades tracked-unmodified, preserves tracked-edit, --force overwrites
+          status: pass
+        - name: clean-machine dogfood — untracked existing file skipped (exists), preserved, not recorded (B/no-migration)
+          status: pass
+      prose: |
+        Implemented DES-065 (conservative/no-migration, model B) per DESIGN.md
+        5e53ba2 + docs/seed-content-upgrade.md. Decision by content SHA-256 against
+        a per-machine install manifest (~/.punt-labs/ethos/.seed-manifest.json):
+        absent -> deploy+record; local==cur -> unchanged (adopt if untracked);
+        tracked & local==mf & cur!=mf -> upgrade+record; tracked & local!=mf ->
+        preserve (Edited); untracked & local!=cur -> today's no-clobber skip
+        (Skipped, no write, no entry); zero-byte -> repair. --force overwrites all
+        and records all. cur is hashed at runtime from the embedded bytes (no build
+        step, no drift). Never touches ~/.punt-labs/ethos/identities/. Result gains
+        Updated/Unchanged/Edited; Skipped keeps its meaning. Installer stays plain
+        `ethos seed`, surfaces the --force hint on a local edit. Two commits:
+        ab22376 (code+tests), 388ac75 (installer+CHANGELOG).

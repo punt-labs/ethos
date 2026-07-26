@@ -1,0 +1,28 @@
+mission_id: m-2026-07-26-005
+status: closed
+type: implement
+created_at: "2026-07-26T04:23:56Z"
+updated_at: "2026-07-26T05:15:57Z"
+closed_at: "2026-07-26T05:15:57Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-26T04:23:56Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - internal/seed
+    - cmd/ethos/seed.go
+    - cmd/ethos/seed_test.go
+    - cmd/ethos/handlers_critical_test.go
+    - install.sh
+    - CHANGELOG.md
+success_criteria:
+    - 'Re-scope of m-2026-07-26-004 (manifest-aware seed, DES-065) — same work, write-set now includes cmd/ethos/handlers_critical_test.go. Commit the COMPLETED implementation you already built + tested + dogfooded. Sync the two stale seed-command assertions: handlers_critical_test.go ''skipped''->''unchanged'' (idempotent re-seed reports unchanged) + its stale comment, and ''deployed:''->''updated:'' (force overwrite of an existing file is an update).'
+    - 'Implement/commit the SELF-HEALING model as built: write cur unless local==cur or (tracked & local!=mf → skip+warn). Untracked & differs → upgrade+record. --force overwrites all. NOTE: an operator decision self-healing-vs-conservative is pending; commit self-healing now; if the operator rules conservative, a follow-up in this same write-set flips untracked+differs to no-clobber skip + adds an Edited result field — no new files.'
+    - make check green before EVERY commit (read full output). Commit incrementally, one logical step per commit. Do NOT touch DESIGN.md/README (leader owns; note the design doc currently describes the conservative variant — leader will sync it to the operator's ruling; do not edit it).
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

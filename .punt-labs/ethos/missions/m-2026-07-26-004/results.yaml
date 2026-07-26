@@ -1,0 +1,16 @@
+results:
+    - mission: m-2026-07-26-004
+      round: 1
+      created_at: "2026-07-26T04:23:43Z"
+      author: bwk
+      verdict: escalate
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: implementation + tests + dogfood complete and green (self-healing model)
+          status: pass
+        - name: 'blocked: write_set missing cmd/ethos/handlers_critical_test.go (2 stale seed-command output assertions)'
+          status: fail
+      open_questions:
+        - write_set must add cmd/ethos/handlers_critical_test.go to sync two stale seed-command assertions (skipped->unchanged, deployed:->updated:) to the manifest-aware output; re-scope needed.
+      prose: 'Manifest-aware seed implemented + dogfooded green. Re-scope: add cmd/ethos/handlers_critical_test.go to the write-set so the two stale seed-command output assertions can sync. Re-dispatched as m-2026-07-26-005.'
