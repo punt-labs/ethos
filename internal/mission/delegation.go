@@ -86,20 +86,20 @@ type DelegationTemplate struct {
 // `ethos mission` close, or the depth/hash-gate refusal path which
 // sets verdict=aborted before the worker ever runs.
 type Delegation struct {
-	ID               string    `yaml:"id" json:"id"`
-	Tier             string    `yaml:"tier" json:"tier"`
-	Mission          string    `yaml:"mission,omitempty" json:"mission,omitempty"`
-	ContractID       string    `yaml:"contract_id,omitempty" json:"contract_id,omitempty"`
-	ParentDelegation string    `yaml:"parent_delegation,omitempty" json:"parent_delegation,omitempty"`
-	ParentSession    string    `yaml:"parent_session,omitempty" json:"parent_session,omitempty"`
-	Session          string    `yaml:"session,omitempty" json:"session,omitempty"`
-	AgentType        string    `yaml:"agent_type" json:"agent_type"`
-	SpawnPattern     string    `yaml:"spawn_pattern,omitempty" json:"spawn_pattern,omitempty"`
-	CreatedAt        string    `yaml:"created_at" json:"created_at"`
-	ClosedAt         string    `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
-	Verdict          string    `yaml:"verdict" json:"verdict"`
-	PromptHash       string    `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty"`
-	Reason           string    `yaml:"reason,omitempty" json:"reason,omitempty"`
+	ID               string `yaml:"id" json:"id"`
+	Tier             string `yaml:"tier" json:"tier"`
+	Mission          string `yaml:"mission,omitempty" json:"mission,omitempty"`
+	ContractID       string `yaml:"contract_id,omitempty" json:"contract_id,omitempty"`
+	ParentDelegation string `yaml:"parent_delegation,omitempty" json:"parent_delegation,omitempty"`
+	ParentSession    string `yaml:"parent_session,omitempty" json:"parent_session,omitempty"`
+	Session          string `yaml:"session,omitempty" json:"session,omitempty"`
+	AgentType        string `yaml:"agent_type" json:"agent_type"`
+	SpawnPattern     string `yaml:"spawn_pattern,omitempty" json:"spawn_pattern,omitempty"`
+	CreatedAt        string `yaml:"created_at" json:"created_at"`
+	ClosedAt         string `yaml:"closed_at,omitempty" json:"closed_at,omitempty"`
+	Verdict          string `yaml:"verdict" json:"verdict"`
+	PromptHash       string `yaml:"prompt_hash,omitempty" json:"prompt_hash,omitempty"`
+	Reason           string `yaml:"reason,omitempty" json:"reason,omitempty"`
 }
 
 // MatchSpawnPattern reports whether agentType matches pattern. The

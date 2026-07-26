@@ -535,7 +535,7 @@ func printSessionStart(cmd *cobra.Command, id, persona string, created bool) err
 }
 
 // shellQuote wraps s in single quotes with POSIX-safe escaping (embedded '
-// becomes '\'') so an eval'd export line cannot break out of the assignment
+// becomes '\”) so an eval'd export line cannot break out of the assignment
 // or inject a command. Values are already handle-validated, so this is
 // defense in depth — belt and suspenders on the eval contract.
 func shellQuote(s string) string {

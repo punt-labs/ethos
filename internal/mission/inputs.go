@@ -93,4 +93,3 @@ func (in *Inputs) applyParsed(files []string, ticket, bead string, references []
 	}
 	return nil
 }
-

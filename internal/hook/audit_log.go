@@ -8,11 +8,11 @@
 // discipline:
 //
 //   - audit_entry.go   — auditEntry struct, toolInputPreview,
-//                        extractToolInput, hashToolInput
+//     extractToolInput, hashToolInput
 //   - audit_writer.go  — writeAuditEntry (open/write/fsync/close)
 //   - audit_reader.go  — readAuditEntries (partial-line tolerant)
 //   - audit_paths.go   — repo-tree session directory resolution +
-//                        legacy fallback for the read path
+//     legacy fallback for the read path
 //
 // KnownFields asymmetry (DES-054 phase 1): the contract YAML decoder
 // in internal/mission/store.go uses KnownFields(true) to refuse

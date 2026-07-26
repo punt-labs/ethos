@@ -211,7 +211,7 @@ func trackedRuntimeWarning(files []string) string {
 }
 
 // shellQuote wraps s in single quotes for POSIX shells, escaping any embedded
-// single quote as '\''. The result is a single shell word safe to paste into a
+// single quote as '\”. The result is a single shell word safe to paste into a
 // command line regardless of spaces or metacharacters.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
