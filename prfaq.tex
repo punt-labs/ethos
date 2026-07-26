@@ -176,7 +176,7 @@ The third problem is tool fragmentation. A messaging tool reinvents usernames. A
 
 Ethos is an agent harness---the shared layer that other tools compose with. It solves three problems with one design principle: agents are teammates, not computation endpoints.
 
-\textbf{Identity}: a developer runs {\small\texttt{ethos setup}} to create a working team in under 60 seconds. The wizard creates human and agent identities, activates a team bundle with specialist agents (architect, implementer, reviewer, security), and generates agent definition files. Hooks load identity automatically at session start, survive context compaction, and inject matched personas when sub-agents spawn. Roles define tool restrictions and responsibilities; the team graph derives anti-responsibilities from {\small\texttt{reports\_to}} edges (\featureref{feat:teams}).
+\textbf{Identity}: a developer runs {\small\texttt{ethos setup}} to create a working team in under 60 seconds. The wizard creates human and agent identities, activates a team bundle where the human is CEO and {\small\texttt{claude}} is COO over specialist agents (architect, implementer, reviewer, security) that report to the COO, and generates agent definition files. Hooks load identity automatically at session start, survive context compaction, and inject matched personas when sub-agents spawn. Roles define tool restrictions and responsibilities; the team graph derives anti-responsibilities from {\small\texttt{reports\_to}} edges (\featureref{feat:teams}).
 
 \textbf{Workflow}: the leader writes a typed mission contract---worker, write-set, success criteria, evaluator, round budget---and delegates. Pipeline templates chain missions into multi-stage workflows (design $\to$ implement $\to$ test $\to$ review $\to$ document). The store refuses overlapping write-sets, pins the evaluator's content hash at launch, and blocks close without a structured result. The leader controls the agency level through contract specificity, not a mode switch (\featureref{feat:missions}).
 
@@ -212,7 +212,7 @@ Two commands, under 60 seconds:
 {\small\texttt{curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/main/install.sh | sh}} \\
 {\small\texttt{ethos setup}}
 
-\noindent The installer places the binary, seeds starter content (roles, talents, pipelines, two team bundles), and registers the Claude Code plugin. {\small\texttt{ethos setup}} is an interactive wizard that asks three questions---name, handle, working style---then creates human and agent identities, writes the repo config, activates the \textbf{foundation} team bundle (4 specialist agents), and generates agent definition files. Start Claude Code. The agent knows who it is, who you are, and how to delegate.
+\noindent The installer places the binary, seeds starter content (roles, talents, pipelines, two team bundles), and registers the Claude Code plugin (pass {\small\texttt{--no-plugin}} for a CLI-only install on non-Claude harnesses or plugin-restricted environments). {\small\texttt{ethos setup}} is an interactive wizard that asks three questions---name, handle, working style---then creates human and agent identities, writes the repo config, activates the \textbf{foundation} team bundle (a CEO/COO leadership pair over 4 specialist agents---the human is CEO, {\small\texttt{claude}} is COO, and specialists report to the COO), and generates agent definition files. Start Claude Code. The agent knows who it is, who you are, and how to delegate.
 
 On day one, the team works with defaults. On day three, the developer runs their first pipeline ({\small\texttt{ethos mission pipeline instantiate standard}}). On day seven, they customize: override a personality, add a domain talent, create a custom pipeline for their review process. The progression is use the defaults, then make them yours.
 
@@ -252,7 +252,7 @@ Ethos is the only tool that combines human-agent parity (same schema for both), 
 \end{faqpair}
 
 \begin{faqpair}{How do I get started?}
-Install ({\small\texttt{curl -fsSL .../install.sh | sh}}), then run {\small\texttt{ethos setup}} in your project directory. The wizard asks three questions and creates a working team in under 60 seconds. No account, no cloud, no API key. For non-interactive environments, use {\small\texttt{ethos setup --file config.yaml}}.
+Install ({\small\texttt{curl -fsSL .../install.sh | sh}}), then run {\small\texttt{ethos setup}} in your project directory. The wizard asks three questions and creates a working team in under 60 seconds. No account, no cloud, no API key. For non-interactive environments, use {\small\texttt{ethos setup --file config.yaml}}. On non-Claude harnesses or plugin-restricted environments, install the CLI only with {\small\texttt{sh -s -- --no-plugin}} (or {\small\texttt{ETHOS\_NO\_PLUGIN=1}}).
 \end{faqpair}
 
 \begin{faqpair}{How much does it cost?}
@@ -395,7 +395,7 @@ None. Ethos is a standalone Go binary with zero runtime dependencies. It does no
 \begin{faqpair}{What is the development status?}
 v3.9.0 shipped. 24 KLOC production Go, 38 KLOC tests, A+ Go Report Card.
 
-\textbf{Shipped:} Identity, sessions, persona animation, teams, roles, anti-responsibilities, all~7 workflow primitives, safety constraints, audit logging, ADRs, archetypes, import\slash export, team bundles with three-layer resolution, foundation and gstack bundles, {\small\texttt{ethos setup}} wizard, 13 pipeline templates, mission dispatch one-liner, automatic mission traceability, PR/FAQ pipeline integration (LaTeX output, meeting personas, peer review).
+\textbf{Shipped:} Identity, sessions, persona animation, teams, roles, anti-responsibilities, all~7 workflow primitives, safety constraints, audit logging, ADRs, archetypes, import\slash export, team bundles with three-layer resolution, foundation and gstack bundles, the CEO/COO default team shape (human CEO, {\small\texttt{claude}} COO), {\small\texttt{ethos setup}} wizard, CLI-only install ({\small\texttt{--no-plugin}}), 13 pipeline templates, mission dispatch one-liner, automatic mission traceability, PR/FAQ pipeline integration (LaTeX output, meeting personas, peer review).
 
 \textbf{In progress:} Per-agent mission memory---quarry already supports agent-scoped {\small\texttt{remember}} and {\small\texttt{find}}. Remaining: ethos-side hooks for mission-close takeaways and mission-dispatch prior-work search (ethos-d17).
 
@@ -525,14 +525,14 @@ Three scenarios would cause ethos to fail:
   \featureitem{Extension model}{per-tool attributes under <handle>.ext/<tool>.yaml; any tool attaches config without schema changes}\label{feat:extensions}
   \featureitem{Starter content}{10 domain talents, 6 role archetypes, baseline-ops skill ship in the box}\label{feat:starter}
   \featureitem{Mission archetypes}{named contract conventions---implement (tight write-set, specific criteria, agent executes), design (broad write-set, open criteria, agent proposes and pushes back), review (read-only, findings with confidence), investigate (read-only, questions answered). Agency is expressed through contract specificity, not a mode switch}\label{feat:archetypes}
-  \featureitem{Sprint team template}{6 sprint personas (product-thinker, architect, implementer, reviewer, QA, security) with writing styles, roles with safety constraints, and a team collaboration graph}\label{feat:templates}
+  \featureitem{Sprint team template}{a CEO/COO leadership pair over sprint specialists (architect, implementer, reviewer, QA, security) with writing styles, roles with safety constraints, and a team collaboration graph where specialists report to the COO}\label{feat:templates}
   \featureitem{Lossy export}{{\small\texttt{ethos export --to soulspec|claude-md}} compiles identities to portable formats. Structural data drops---the loss signals what ethos adds}\label{feat:lossy-export}
   \featureitem{SoulSpec and CLAUDE.md ingestion}{{\small\texttt{ethos import --from soulspec}} reads SoulSpec files and creates a hardened ethos identity. LLM-assisted {\small\texttt{ethos create}} fine-tunes starter content from existing CLAUDE.md}\label{feat:importers}
   \featureitem{Typed ADRs}{Architecture Decision Records as ethos artifacts with schema validation, lifecycle status (proposed/settled/superseded), CLI, and MCP tool~\cite{promptpals2026adrsai}}\label{feat:typed-adrs}
   \featureitem{Git-tracked mission export}{{\small\texttt{ethos mission export}} copies contracts and results to the repo for version control. Lightweight alternative to Entire.io's checkpoint branch~\cite{entireio2026docs}}\label{feat:git-missions}
   \featureitem{Integration guides}{filesystem, CLI, and MCP guides with working examples for third-party tools}\label{feat:guides}
   \featureitem{Team bundles}{config-driven switchable starter teams. Three-layer resolution: repo-local $\to$ active bundle $\to$ global. {\small\texttt{ethos team activate/deactivate/available/migrate}}}\label{feat:bundles}
-  \featureitem{Foundation bundle}{4-agent general-purpose team (architect, implementer, reviewer, security) for any codebase. Language-agnostic. Ships embedded alongside gstack}\label{feat:foundation}
+  \featureitem{Foundation bundle}{general-purpose team for any codebase: a CEO/COO leadership pair (human CEO, {\small\texttt{claude}} COO) over 4 specialists (architect, implementer, reviewer, security) that report to the COO. Language-agnostic. Ships embedded alongside gstack}\label{feat:foundation}
   \featureitem{Setup wizard}{{\small\texttt{ethos setup}}---3-prompt interactive wizard creates human + agent identities, writes repo config, activates bundle, generates agent files. {\small\texttt{--solo}}, {\small\texttt{--bundle}}, {\small\texttt{--file}}, {\small\texttt{--json}} flags}\label{feat:setup}
   \featureitem{Pipeline templates}{multi-stage mission workflows: 8 global pipelines (standard, quick, product, full, formal, docs, coverage, coe) plus 5 gstack-specific templates (13 total). {\small\texttt{ethos mission pipeline instantiate}}}\label{feat:pipelines}
   \featureitem{Mission dispatch}{one-liner creation from CLI flags: {\small\texttt{--worker}}, {\small\texttt{--evaluator}}, {\small\texttt{--write-set}}, {\small\texttt{--criteria}}}\label{feat:dispatch}
