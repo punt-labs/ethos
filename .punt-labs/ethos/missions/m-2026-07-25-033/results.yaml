@@ -1,0 +1,25 @@
+results:
+    - mission: m-2026-07-25-033
+      round: 1
+      created_at: "2026-07-26T00:07:26Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs
+          added: 300
+          removed: 120
+        - path: AGENTS.md
+          added: 20
+          removed: 10
+        - path: prfaq.tex
+          added: 40
+          removed: 20
+      evidence:
+        - name: accuracy gate (cr-docs) — 2 findings fixed, re-verified
+          status: pass
+        - name: markdownlint + validate-content + prfaq recompile
+          status: pass
+        - name: 'Copilot #392 — 2 findings fixed (attribution + custom-team scope), threads resolved'
+          status: pass
+      prose: 'Docs-currency pass for the CEO/COO + install/doctor changes; merged as PR #392. No doc debt.'
