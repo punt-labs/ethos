@@ -1,12 +1,15 @@
 package main
 
 import (
+	"github.com/punt-labs/ethos/internal/schema"
+
 	"github.com/spf13/cobra"
 )
 
 var identityCmd = &cobra.Command{
 	Use:     "identity",
 	Short:   "Manage identities (whoami, list, show, create)",
+	Long:    "Manage identities (whoami, list, show, create).\n\nRun 'ethos identity schema' for the identity field reference.",
 	GroupID: "identity",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runWhoami(cmd)
@@ -77,6 +80,7 @@ func init() {
 		identityShowCmd,
 		identityGetCmd,
 		identityCreateCmd,
+		newSchemaCmd(schema.Identity),
 	)
 
 	rootCmd.AddCommand(identityCmd)
