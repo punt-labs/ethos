@@ -79,6 +79,11 @@ func TestPlace_DecisionMatrix(t *testing.T) {
 			wantRecorded: true, wantHash: cur,
 		},
 		{
+			name:   "untracked differing is overwritten and recorded under force",
+			onDisk: "stale\n", force: true, want: updated, wantContent: shipped,
+			wantRecorded: true, wantHash: cur,
+		},
+		{
 			name:   "zero-byte is repaired regardless of manifest",
 			onDisk: "", tracked: false, want: repaired, wantContent: shipped,
 			wantRecorded: true, wantHash: cur,
