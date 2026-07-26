@@ -7,8 +7,14 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
 # local and CI run the same analyzer versions; keep in sync with
 # .github/workflows/test.yml. Config lives in .golangci.yml.
+# Resolve the install dir the way `go install` does: GOBIN if set, else
+# GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
 GOLANGCI_LINT_VERSION := v2.12.2
-GOLANGCI_LINT := $(shell go env GOPATH)/bin/golangci-lint
+GOBIN := $(shell go env GOBIN)
+ifeq ($(GOBIN),)
+GOBIN := $(shell go env GOPATH)/bin
+endif
+GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
 .PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral
 
