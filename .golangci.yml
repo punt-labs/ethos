@@ -1,0 +1,41 @@
+# golangci-lint config — the Go lint gate for ethos.
+#
+# Adopted as the successor to Go Report Card (goreportcard.com is sunset as
+# of 2026-07-01). golangci-lint bundles the checks Go Report Card ran plus
+# staticcheck/unused, with its own pinned analyzer versions so local and CI
+# agree independent of the go.mod toolchain. Pinned to golangci-lint v2 (see
+# Makefile / .github/workflows/test.yml for the version).
+#
+# Conservative set: only linters the tree passes clean today are enabled, so
+# `make check` is green on first run. Deferred (each needs code changes, not
+# config — tracked for a follow-up cleanup): errcheck (~50 unchecked errors),
+# ineffassign (2), misspell (5, incl. intentional test-fixture typos),
+# gocyclo (3 functions over complexity 30).
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet # go vet analyzers (matches CI's `go vet`)
+    - staticcheck # staticcheck/gosimple/stylecheck (matches CI's staticcheck)
+    - unused # unused code
+  settings:
+    staticcheck:
+      # Parity with the standalone `staticcheck ./...` that CI passes today:
+      # golangci-lint's bundle enables the opinionated ST stylecheck checks
+      # and the QF "quickfix" category that standalone leaves off. Restate
+      # golangci-lint's own default ST exclusions and drop the QF category so
+      # this gate matches the passing CI baseline (no new findings on adopt).
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF*
+
+formatters:
+  enable:
+    - gofmt # gofmt-clean gate (successor to the bespoke fmt-check target)

@@ -192,7 +192,7 @@ type InstantiateOptions struct {
 	Evaluator  string            // Default evaluator handle. Stage.Evaluator overrides.
 	Worker     string            // Default worker handle. Stage.Worker overrides.
 	Now        time.Time         // Timestamp for ID generation and contract fields.
-	Archetypes *ArchetypeStore // Optional. When set, applies archetype budget defaults.
+	Archetypes *ArchetypeStore   // Optional. When set, applies archetype budget defaults.
 }
 
 // Instantiate produces one unsaved Contract per stage in the pipeline.

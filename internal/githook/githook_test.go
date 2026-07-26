@@ -774,4 +774,3 @@ func run(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, errb.String())
 	}
 }
-

@@ -49,10 +49,10 @@ func writeLegacyLine(t *testing.T, globalDir, sessionID, ts, tool string) string
 	t.Helper()
 	path := filepath.Join(globalDir, sessionID+".audit.jsonl")
 	line := map[string]any{
-		"ts":               ts,
-		"session":          sessionID,
-		"tool":             tool,
-		"tool_input_hash":  ts + "-" + tool,
+		"ts":                 ts,
+		"session":            sessionID,
+		"tool":               tool,
+		"tool_input_hash":    ts + "-" + tool,
 		"tool_input_preview": "preview",
 	}
 	data, err := json.Marshal(line)

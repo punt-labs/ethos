@@ -943,4 +943,3 @@ func TestEffectiveStrictPreconditions(t *testing.T) {
 		assert.False(t, c.EffectiveStrictPreconditions())
 	})
 }
-

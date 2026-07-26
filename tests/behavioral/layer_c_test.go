@@ -95,8 +95,8 @@ budget:
 	defer cancel()
 
 	result, err := JudgePersonaCompliance(ctx, JudgeOpts{
-		Persona: persona,
-		Task:    task,
+		Persona:     persona,
+		Task:        task,
 		AgentOutput: truncate(output, 8000),
 		APIKey:      apiKey,
 	})
@@ -189,8 +189,8 @@ budget:
 	defer cancel()
 
 	result, err := JudgePersonaCompliance(ctx, JudgeOpts{
-		Persona: persona,
-		Task:    task,
+		Persona:     persona,
+		Task:        task,
 		AgentOutput: truncate(output, 8000),
 		APIKey:      apiKey,
 	})

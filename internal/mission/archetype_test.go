@@ -75,10 +75,10 @@ func TestArchetypeStore_Load(t *testing.T) {
 			setupRepo: func(t *testing.T, dir string) {
 				writeArchetypeFile(t, dir, "design", designYAML)
 			},
-			setupGlob: func(t *testing.T, dir string) {},
-			loadName:  "design",
-			wantName:  "design",
-			wantDesc:  "Design mission",
+			setupGlob:  func(t *testing.T, dir string) {},
+			loadName:   "design",
+			wantName:   "design",
+			wantDesc:   "Design mission",
 			wantRounds: 2,
 		},
 		{
@@ -117,7 +117,7 @@ budget_default:
 			wantErr:  true,
 		},
 		{
-			name: "name defaults to filename",
+			name:      "name defaults to filename",
 			setupRepo: func(t *testing.T, dir string) {},
 			setupGlob: func(t *testing.T, dir string) {
 				writeArchetypeFile(t, dir, "review", `description: "Review mission"
@@ -132,7 +132,7 @@ budget_default:
 			wantRounds: 1,
 		},
 		{
-			name: "allow_empty_write_set true",
+			name:      "allow_empty_write_set true",
 			setupRepo: func(t *testing.T, dir string) {},
 			setupGlob: func(t *testing.T, dir string) {
 				writeArchetypeFile(t, dir, "inbox", inboxYAML)

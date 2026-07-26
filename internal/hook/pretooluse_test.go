@@ -45,9 +45,9 @@ func TestHandlePreToolUse_NoAllowlistWithExtractInto(t *testing.T) {
 	t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", "internal/foo/:docs/")
 
 	tests := []struct {
-		name    string
-		tool    string
-		path    string
+		name string
+		tool string
+		path string
 	}{
 		{"Write outside any directory", "Write", "/etc/passwd"},
 		{"Edit outside any directory", "Edit", "/tmp/anywhere.go"},
@@ -875,15 +875,15 @@ func TestTierBDispatch_FromWorktreeResolvesMainStore(t *testing.T) {
 	missionID := "m-2026-07-24-050"
 	store := mission.NewStoreWithRoots(main, globalRoot)
 	require.NoError(t, store.Create(&mission.Contract{
-		MissionID: missionID,
-		Status:    mission.StatusOpen,
-		CreatedAt: "2026-07-24T00:00:00Z",
-		UpdatedAt: "2026-07-24T00:00:00Z",
-		Leader:    "claude",
-		Worker:    "bwk",
-		Evaluator: mission.Evaluator{Handle: "djb", PinnedAt: "2026-07-24T00:00:00Z"},
-		WriteSet:  []string{"internal/hook/"},
-		Tools:     []string{"Read", "Write", "Edit"},
+		MissionID:       missionID,
+		Status:          mission.StatusOpen,
+		CreatedAt:       "2026-07-24T00:00:00Z",
+		UpdatedAt:       "2026-07-24T00:00:00Z",
+		Leader:          "claude",
+		Worker:          "bwk",
+		Evaluator:       mission.Evaluator{Handle: "djb", PinnedAt: "2026-07-24T00:00:00Z"},
+		WriteSet:        []string{"internal/hook/"},
+		Tools:           []string{"Read", "Write", "Edit"},
 		SuccessCriteria: []string{"make check passes"},
 		Budget:          mission.Budget{Rounds: 1, ReflectionAfterEach: true},
 		CurrentRound:    1,
@@ -975,14 +975,14 @@ func TestTierBDispatch_BadOverrideInWorktreeDoesNotWriteWorktree(t *testing.T) {
 	// fallback would have written into the worktree.
 	missionID := "m-2026-07-24-060"
 	require.NoError(t, mission.NewStore(globalRoot).Create(&mission.Contract{
-		MissionID: missionID,
-		Status:    mission.StatusOpen,
-		CreatedAt: "2026-07-24T00:00:00Z",
-		UpdatedAt: "2026-07-24T00:00:00Z",
-		Leader:    "claude",
-		Worker:    "bwk",
-		Evaluator: mission.Evaluator{Handle: "djb", PinnedAt: "2026-07-24T00:00:00Z"},
-		WriteSet:  []string{"internal/hook/"},
+		MissionID:       missionID,
+		Status:          mission.StatusOpen,
+		CreatedAt:       "2026-07-24T00:00:00Z",
+		UpdatedAt:       "2026-07-24T00:00:00Z",
+		Leader:          "claude",
+		Worker:          "bwk",
+		Evaluator:       mission.Evaluator{Handle: "djb", PinnedAt: "2026-07-24T00:00:00Z"},
+		WriteSet:        []string{"internal/hook/"},
 		SuccessCriteria: []string{"make check passes"},
 		Budget:          mission.Budget{Rounds: 1, ReflectionAfterEach: true},
 		CurrentRound:    1,

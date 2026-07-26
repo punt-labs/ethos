@@ -615,8 +615,8 @@ func TestEntryPairConflicts(t *testing.T) {
 			// both ways for ws-dir × anything when the directions agree
 			// on a directory entry. The dir is "cmd"; the file is
 			// "cmd/foo/bar.go" — dir is a prefix of file.
-			a: kind{path: "cmd/foo/bar.go"},
-			b: kind{path: "cmd", isDir: true},
+			a:    kind{path: "cmd/foo/bar.go"},
+			b:    kind{path: "cmd", isDir: true},
 			want: true,
 		},
 		// Row 3: ws-dir × ws-dir
