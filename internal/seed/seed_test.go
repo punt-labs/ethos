@@ -128,11 +128,15 @@ func TestSeedEmptyDir(t *testing.T) {
 	assert.Empty(t, result.Errors)
 }
 
+// TestSeedNoClobber pins the untracked no-clobber contract: a non-empty file
+// with no manifest entry is never overwritten by a plain seed, and is reported
+// as skipped.
 func TestSeedNoClobber(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
 
-	// Pre-create a role file with custom content
+	// Pre-create a role file with custom content, with no prior seed — so it
+	// has no manifest entry.
 	rolesDir := filepath.Join(dest, "roles")
 	require.NoError(t, os.MkdirAll(rolesDir, 0o755))
 	customContent := []byte("name: implementer\nmodel: opus\n")
@@ -141,22 +145,55 @@ func TestSeedNoClobber(t *testing.T) {
 	result, err := Seed(dest, skills, false)
 	require.NoError(t, err)
 
-	// Custom file should be preserved
+	// Custom file should be preserved.
 	data, err := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
 	require.NoError(t, err)
-	assert.Equal(t, customContent, data, "existing file should not be overwritten")
+	assert.Equal(t, customContent, data, "an untracked existing file must not be overwritten")
 
-	// implementer.yaml should be in skipped list
+	// implementer.yaml should be in the skipped list.
 	found := false
 	for _, s := range result.Skipped {
 		if filepath.Base(s) == "implementer.yaml" {
 			found = true
 		}
 	}
-	assert.True(t, found, "implementer.yaml should be in skipped list")
+	assert.True(t, found, "implementer.yaml should be in the skipped list")
 
-	// Other roles should still be deployed
+	// Other roles should still be deployed.
 	assert.FileExists(t, filepath.Join(rolesDir, "reviewer.yaml"))
+}
+
+// TestSeedPreservesTrackedEdit pins the new tracked-edit contract: a file
+// edited after seed has recorded its hash is a proven user edit — preserved and
+// reported under Edited, not overwritten.
+func TestSeedPreservesTrackedEdit(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	// First seed tracks every deployed file in the manifest.
+	_, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	// Edit a tracked role.
+	rolePath := filepath.Join(dest, "roles", "implementer.yaml")
+	custom := []byte("name: implementer\nmodel: opus\n")
+	require.NoError(t, os.WriteFile(rolePath, custom, 0o644))
+
+	// Re-seed: the edit differs from the recorded hash, so it is preserved.
+	result, err := Seed(dest, skills, false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(rolePath)
+	require.NoError(t, err)
+	assert.Equal(t, custom, data, "a tracked user edit must not be overwritten")
+
+	found := false
+	for _, e := range result.Edited {
+		if filepath.Base(e) == "implementer.yaml" {
+			found = true
+		}
+	}
+	assert.True(t, found, "edited implementer.yaml should be in the edited list")
 }
 
 // TestSeedRepairsZeroByteFile pins the S3 fix: a zero-byte file left by an
@@ -189,10 +226,10 @@ func TestSeedRepairsZeroByteFile(t *testing.T) {
 	assert.Contains(t, result.Repaired, zeroPath, "repaired file must be reported")
 	assert.NotContains(t, result.Skipped, zeroPath, "a zero-byte file is not a no-clobber skip")
 
-	// Non-empty user file untouched.
+	// Non-empty untracked user file untouched.
 	got, err := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
 	require.NoError(t, err)
-	assert.Equal(t, custom, got, "non-empty existing file must not be clobbered")
+	assert.Equal(t, custom, got, "an untracked non-empty file must not be clobbered")
 }
 
 // TestSeed_DirAtDestFailsLoud pins the B1 ruling: a directory occupying a
@@ -303,7 +340,7 @@ func TestSeedPartialState(t *testing.T) {
 	result, err := Seed(dest, skills, false)
 	require.NoError(t, err)
 
-	// Existing role preserved
+	// Untracked existing role preserved (no-clobber).
 	data, _ := os.ReadFile(filepath.Join(rolesDir, "implementer.yaml"))
 	assert.Equal(t, "custom", string(data))
 
@@ -413,8 +450,9 @@ func TestSeedIntegrationWithRoleStore(t *testing.T) {
 // TestSeedBundleNoClobber checks that a user's edits to a bundle
 // file are not overwritten by a second Seed. Bundles are shipped as
 // starter content; consumers may edit in place before migrating to a
-// writable layer, and the no-clobber contract must hold for the
-// whole bundle tree, not only the legacy flat directories.
+// writable layer, and the preserve contract must hold for the whole
+// bundle tree, not only the legacy flat directories. The first seed
+// tracks the file, so a later edit is reported under Edited.
 func TestSeedBundleNoClobber(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
@@ -434,13 +472,13 @@ func TestSeedBundleNoClobber(t *testing.T) {
 	assert.Equal(t, custom, data, "bundle file must not be overwritten without --force")
 
 	found := false
-	for _, s := range result.Skipped {
-		if s == manifest {
+	for _, e := range result.Edited {
+		if e == manifest {
 			found = true
 			break
 		}
 	}
-	assert.True(t, found, "bundle manifest should be in skipped list on second seed")
+	assert.True(t, found, "edited bundle manifest should be in the edited list on second seed")
 }
 
 func TestSeedIdempotent(t *testing.T) {
@@ -453,10 +491,13 @@ func TestSeedIdempotent(t *testing.T) {
 	assert.NotEmpty(t, r1.Deployed)
 	assert.Empty(t, r1.Skipped)
 
-	// Second seed — everything should be skipped
+	// Second seed — everything is already at the shipped content, so nothing
+	// is written and nothing is a user edit.
 	r2, err := Seed(dest, skills, false)
 	require.NoError(t, err)
 	assert.Empty(t, r2.Deployed)
-	assert.NotEmpty(t, r2.Skipped)
+	assert.Empty(t, r2.Updated)
+	assert.Empty(t, r2.Skipped)
+	assert.NotEmpty(t, r2.Unchanged)
 	assert.Empty(t, r2.Errors)
 }
