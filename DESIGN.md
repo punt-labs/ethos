@@ -6577,3 +6577,79 @@ specialist under the COO, not the apex.
 - **CEO/COO as a special apex mechanism** rather than roles. Roles compose with
   the existing team/collaboration model and validation; a bespoke mechanism would
   not.
+
+## DES-065: Manifest-aware seed — propagate shipped content without clobbering edits (SETTLED)
+
+**Status**: Settled. Operator-ratified 2026-07-26. Ships v4.7.0. Full design in
+`docs/seed-content-upgrade.md`.
+
+### Problem
+
+`ethos seed` deploys embedded library content (roles, talents, personalities,
+writing-styles, archetypes, pipelines, bundles, skills, READMEs — never user
+identities, which `ethos setup` owns). Its no-clobber guard skips any existing
+non-empty file (`internal/seed/seed.go:221-224`; printed at
+`cmd/ethos/seed.go:50-52`), so a released improvement to a shipped file never
+reaches a returning user — a live 4.6.0 re-install skipped 111 existing files.
+The only override, `--force` (`internal/seed/seed.go:170-176`), overwrites
+everything blindly and cannot tell an unmodified shipped file from a hand-edited
+one, so it is unsafe as the upgrade path. The installer runs plain `ethos seed`
+(`install.sh:321`), upgrading nothing.
+
+### Decision
+
+Make plain seed **upgrade shipped files and preserve proven user edits**, decided
+by content hash.
+
+- **Current shipped hash (`cur`)** is computed at runtime from the embedded bytes
+  — no build step, no drift.
+- **A local install manifest** (`~/.punt-labs/ethos/.seed-manifest.json`) records,
+  per seeded path, the hash seed last wrote (`mf`) plus provenance — exactly one
+  hash per path, overwritten each write, so nothing grows.
+- **The whole rule:** write `cur` **unless** (a) `local == cur` already, or (b) a
+  manifest entry exists and `local != mf` (a proven user edit → skip + warn,
+  `--force` remedy). A file with no manifest entry that differs from `cur` is
+  simply upgraded and recorded — the operator ruled pre-feature installs need
+  **no** migration or bootstrap, so this self-heals on first run.
+- **Zero-byte partials** are repaired to `cur` regardless of manifest state
+  (unchanged from today).
+- **`--force`** additionally overwrites the skipped (edited) files and records
+  `cur` for every path — the single escape hatch.
+- **Installer unchanged except messaging** — still plain `ethos seed`, now
+  upgrade-capable; no `--force`.
+- **Output** gains `deployed` / `updated` / `unchanged` / `skipped (local edit)`
+  lines and a `--force` remedy hint (CLI standard; seed has no MCP surface, so no
+  DES-020 formatter is added).
+
+### Rulings
+
+- **No pre-feature migration** (operator). Installs predating the manifest get no
+  legacy catalog, generator, or backup net; an unmodified pre-feature file is
+  upgraded on first run and enters the manifest era. Few users exist; the handful
+  of affected machines are cleaned by hand rather than carrying migration debt.
+- **Content hash, not mtime or in-band version stamps.** mtimes are unreliable
+  across clone/tar/package managers; stamps pollute content and are forgeable by
+  an edit that keeps the stamp.
+- **The manifest carries one hash per path.** No per-release history, no unbounded
+  growth.
+- **Scope: library content only.** The machinery never reads, writes, or hashes
+  `~/.punt-labs/ethos/identities/` — `ethos setup` owns identities.
+- **Skip is safe and recoverable.** A misclassified file is preserved, not lost;
+  `--force` is the documented remedy.
+
+### Rejected alternatives
+
+- **Legacy hash catalog + history-walking generator.** Fragile generation (the
+  sidecar layout has moved across releases; risks silent under-population), and it
+  guards a case the operator says does not occur — the operator ruled no
+  pre-feature migration. The one-line "no entry, `local != cur` → upgrade"
+  replaces it with zero generation code.
+- **`.seed-backup/` safety net.** Exists only to soften a mis-upgrade of a
+  pre-feature file — the ruled-out case; adds state for no benefit.
+- **Installer `--force`** (clobbers edits every re-install).
+- **mtime comparison** (unreliable, content-blind).
+- **Per-file version stamps** (pollute content, forgeable).
+- **Interactive per-file prompt** (hangs the piped installer).
+- **Three-way merge** (unwarranted for content nobody hand-edits).
+- **A separate `ethos seed --upgrade` command** (splits the mental model; plain
+  seed should do the right thing by default).
