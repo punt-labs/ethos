@@ -6713,7 +6713,7 @@ their options from the registry. `internal/mcp` is in the write-set.
   `team.CollaborationTypes`); description prose is authored and unguarded (the
   test proves a description exists, not that it is correct).
 - **`role.model` is a partial enum.** JSON Schema emits
-  `anyOf[{enum:[aliases]},{pattern:"^claude-"}]` per `ValidateModel`; only the
+  `anyOf[{enum:[aliases]},{pattern:"^claude-.+"}]` per `ValidateModel`; only the
   alias slice is guarded.
 - **`--help` stays about usage, `schema` about shape.** Each entity's `--help`
   gains one line pointing at its schema subcommand.

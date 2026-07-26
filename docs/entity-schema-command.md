@@ -100,7 +100,7 @@ $ ethos role schema --json
   "additionalProperties": false,
   "properties": {
     "name": {"type": "string", "description": "Role name; lowercase alphanumeric with hyphens.", "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"},
-    "model": {"description": "Claude model; empty inherits.", "anyOf": [{"enum": ["opus", "sonnet", "haiku", "inherit"]}, {"type": "string", "pattern": "^claude-"}]},
+    "model": {"description": "Claude model; empty inherits.", "anyOf": [{"enum": ["opus", "sonnet", "haiku", "inherit"]}, {"type": "string", "pattern": "^claude-.+"}]},
     "responsibilities": {"type": "array", "items": {"type": "string"}, "description": "..."},
     "permissions": {"type": "array", "items": {"type": "string"}, "description": "..."},
     "tools": {"type": "array", "items": {"type": "string"}, "description": "..."},
@@ -268,7 +268,7 @@ are drift-guarded; description prose is authored and unguarded.**
 The `role.model` case is deliberately partial: `ValidateModel`
 (`role.go:45`) accepts four aliases **or** any `claude-*` string, so the
 overlay `Enum` lists only the four aliases and the guard asserts only those.
-The pattern half (`^claude-`) is authored in the overlay `Pattern` and is
+The pattern half (`^claude-.+`) is authored in the overlay `Pattern` and is
 not enum-guarded — documented here as a known partial, not an oversight.
 
 ### How each consumer reads the registry
@@ -453,7 +453,7 @@ scope decisions:
    `validate-content` can assert against one authoritative set. In scope.
 
 4. **`role.model` is a partial enum.** JSON Schema emits
-   `anyOf[{enum:[opus,sonnet,haiku,inherit]},{pattern:"^claude-"}]`, not a
+   `anyOf[{enum:[opus,sonnet,haiku,inherit]},{pattern:"^claude-.+"}]`, not a
    closed enum, matching `ValidateModel` (`role.go:45`). The guard asserts
    only the alias slice; the pattern half is authored and documented as a
    known partial.
@@ -536,7 +536,7 @@ scope decisions:
 > `role.ModelAliases`, `team.CollaborationTypes`); description prose is
 > authored and unguarded (the test proves a description exists, not that it
 > is correct). `role.model` is a partial enum: JSON Schema emits
-> `anyOf[{enum:[aliases]},{pattern:"^claude-"}]` per `ValidateModel`
+> `anyOf[{enum:[aliases]},{pattern:"^claude-.+"}]` per `ValidateModel`
 > (`role.go:45`), and only the alias slice is guarded. Each entity's
 > `--help` gains one line pointing at its schema subcommand; `--help` stays
 > about usage, `schema` about shape.
