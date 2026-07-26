@@ -17,8 +17,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@2026.1
+      # make lint runs golangci-lint (bundles staticcheck); `make tools`
+      # installs it from the Makefile's pinned GOLANGCI_LINT_VERSION to the
+      # GOBIN path make lint resolves — single source for the version.
+      - name: Install tools
+        run: make tools
 
       - name: Run quality gates
         run: make lint test
