@@ -30,12 +30,13 @@ The installer calls plain `ethos seed` with no `--force`
 
 Content improvements must propagate to existing installs on the next seed,
 **without clobbering genuine user edits.** The operator notes: "no one
-hand-edits our files; only our releases rev them" — and further ruled that
-**installs predating this feature need no migration, bridge, or bootstrap
-machinery.** A pre-feature file may simply be upgraded on first run and
-thereafter enter the manifest era. This design honours both: from the point
-a machine first runs a manifest-aware seed, an edit it makes is preserved;
-before that point, there is nothing to preserve.
+hand-edits our files; only our releases rev them," and ruled that
+installs predating this feature get **no migration code at all** — few
+machines exist, migrations are clutter and debt for no reason, and the five
+affected computers will be brought current by hand. So the software carries
+**zero pre-feature reasoning**: the existing no-clobber skip stays exactly as
+it is today for any file the manifest does not yet track, and the new
+upgrade behavior activates only once a file has a manifest entry.
 
 ## Scope: seed manages library content, never user identities
 
@@ -77,39 +78,52 @@ Two facts let seed decide, per file, whether a write is safe:
    runtime from the embedded bytes seed already reads; no build step, no
    drift.
 2. **What we last wrote here** — recorded in a *local install manifest* on
-   the machine. Its recorded hash for a path is `mf`.
+   the machine. Its recorded hash for a path is `mf`, present only once seed
+   has written that path under the new model.
 
-The whole rule, stated once: **write `cur` unless (a) the file on disk
-already equals `cur`, or (b) a manifest entry exists and the file on disk
-differs from `mf` (a proven user edit).**
+The new upgrade behavior activates **only for a file the manifest tracks.**
+For a tracked file, the rule is: upgrade to `cur` when the file on disk is
+still exactly what we last wrote (`local == mf`) and the release ships
+something newer; otherwise, if the file differs from `mf`, it is a proven
+user edit and is skipped. For an **untracked** file the behavior is exactly
+today's no-clobber guard — deploy if absent, otherwise skip — with one
+addition: a file that already equals `cur` is recorded so it enters the
+tracked set for free.
 
-Everything below is that rule spelled out.
+Spelled out:
 
-- `local == cur` → already current → **unchanged**.
-- manifest entry exists and `local == mf` and `cur != mf` → untouched since
-  our last seed, newer release available → **upgrade** (write `cur`, record
-  `cur`).
-- manifest entry exists and `local != mf` → changed since we wrote it →
-  **user edit** → **skip + warn** (`--force` remedy).
 - absent → **deploy** `cur`, record `cur`.
-- no manifest entry and `local != cur` → **upgrade** (write `cur`, record
+- `local == cur` → **unchanged**; record `cur` if not already tracked
+  (adopt). No write.
+- tracked, `local == mf`, `cur != mf` → **upgrade** (write `cur`, record
   `cur`).
+- tracked, `local != mf` → **user edit** → **skip + warn** (`--force`
+  remedy).
+- untracked, `local != cur` → **skip** (today's no-clobber, unchanged). No
+  legacy lookup, no upgrade, no backup, no entry recorded.
 
-The last line is the entire treatment of a pre-feature file: with no entry
-to prove an edit, we upgrade to the current release and record the entry.
-From then on the machine is in the manifest era and its edits are
-preserved. This is self-healing and needs zero migration code — per the
-operator's ruling that pre-feature installs require no bootstrap.
+The last line is the whole treatment of a pre-feature file: leave it
+exactly as today's code leaves it. There is no bootstrap branch in the
+software.
+
+### Bringing the existing machines current
+
+The five machines that predate this feature are brought into the manifest
+era by a **one-time, hand-run `ethos seed --force`** (the operator runs it).
+`--force` overwrites every seeded path to `cur` and records an entry for
+each. Thereafter those machines are tracked and auto-upgrade on every
+release like a fresh install. No code models this — it is the existing
+`--force` path plus manifest recording.
 
 ### Why the manifest, and why it is bounded
 
-The manifest makes the decision **exact and bounded**. Once a path has an
-entry, the decision needs only two hashes — `mf` and `cur` — no matter how
-many releases the user skipped. `mf` is always the last thing we wrote; if
-the user never touched it (`local == mf`), it is safe to upgrade to `cur`
-however far apart the two releases are. There is no per-release history to
-store: the manifest carries exactly one hash per path, overwritten on each
-write. Nothing in this design grows without bound.
+The manifest makes the tracked-file decision **exact and bounded**. Once a
+path has an entry, the decision needs only two hashes — `mf` and `cur` — no
+matter how many releases the user skipped. `mf` is always the last thing we
+wrote; if the user never touched it (`local == mf`), it is safe to upgrade
+to `cur` however far apart the two releases are. The manifest carries
+exactly one hash per path, overwritten on each write — no per-release
+history, nothing that grows without bound.
 
 ### Data structures
 
@@ -151,50 +165,48 @@ target — so it can never be mistaken for user content.
 ### Decision table
 
 `cur` = current embedded hash. `local` = hash of file on disk. `mf` = hash
-recorded in the local manifest for this path (only when an entry exists).
+recorded in the local manifest for this path (defined only when an entry
+exists).
 
-The manifest is consulted **per path**: "manifest entry present" means this
-specific path has an entry, not merely that the manifest file exists.
+The manifest is consulted **per path**: "tracked" means this specific path
+has an entry, not merely that the manifest file exists.
 
-| `local` state | manifest entry present | manifest entry absent |
-|---------------|------------------------|-----------------------|
+| `local` state | tracked (entry present) | untracked (no entry) |
+|---------------|-------------------------|----------------------|
 | absent | deploy `cur`; record `cur` | deploy `cur`; record `cur` |
-| `== cur` | unchanged (no write); record `cur` | unchanged (no write); record `cur` |
-| `!= cur`, `== mf` | **upgrade** → write `cur`; record `cur` | n/a (no `mf` without an entry) |
-| `!= cur`, `!= mf` | **skip + warn** (user edit; `--force` remedy) | **upgrade** → write `cur`; record `cur` |
+| `== cur` | unchanged (no write) | unchanged (no write); record `cur` (adopt) |
+| `!= cur`, `== mf` | **upgrade** → write `cur`; record `cur` | n/a (`mf` undefined) |
+| `!= cur`, `!= mf` | **skip + warn** (user edit; `--force` remedy) | **skip** (today's no-clobber; no record) |
 | zero-byte file | repair → write `cur`; record `cur` | repair → write `cur`; record `cur` |
+
+The `untracked, != cur` cell is today's `classifyExisting` no-clobber skip
+(`internal/seed/seed.go:221-224`), left untouched — this is where the five
+pre-feature machines land until the operator's one-time `--force`.
 
 The zero-byte row preserves the current partial-write repair
 (`internal/seed/seed.go:225-237`): a zero-byte file is a partial from an
 interrupted seed and is rewritten to `cur` regardless of manifest state,
 then recorded. It is never treated as a user edit.
 
-The "manifest entry absent, `local != cur`" cell is the collapsed
-bootstrap: one upgrade, no lookup, no backup, no skip. We accept the
-operator's stated risk — nobody hand-edits our files — so a pre-feature
-file is upgraded on first run and enters the manifest era.
-
 ### `--force` under the new model
 
-Default seed now upgrades every *safe* file automatically. `--force`'s job
-shrinks to one thing: **also overwrite the files default seed skipped as
-user edits.** With `--force`, every seeded path is written to `cur`
-unconditionally and its manifest entry set to `cur` — the machine is forced
-to exactly this release's content, and any local edits are gone (which is
-what `--force` means). `--force` is the documented remedy printed next to
-every `skipped (local edit)` line.
+`--force` overwrites **every** seeded path to `cur` unconditionally and sets
+its manifest entry to `cur` — regardless of tracked/untracked state or local
+edits. It is both the escape hatch for a tracked file skipped as a user edit
+and the one-time tool that brings a pre-feature machine into the manifest
+era. `--force` is the documented remedy printed next to every skipped line.
 
 ### Installer change
 
 `install.sh:321` keeps calling plain `ethos seed` — **no `--force`.** Under
-the new model plain seed is already upgrade-capable and edit-safe, so the
-installer gets the upgrade behavior for free while never clobbering an edit.
-The only edits to `install.sh` are messaging: the success line should
-reflect that seed may now *update* content, and if seed reports skipped
-local edits, surface the `--force` remedy hint rather than a bare "deployed"
-(`install.sh:322-324`). Adding `--force` to the installer is explicitly
-rejected — it would clobber user edits on every re-install, the exact
-failure this design exists to avoid.
+the new model plain seed upgrades tracked files and never clobbers an edit,
+so the installer gets the upgrade behavior for free. The only edits to
+`install.sh` are messaging: the success line should reflect that seed may
+now *update* content, and if seed reports skipped files, surface the
+`--force` remedy hint rather than a bare "deployed" (`install.sh:322-324`).
+Adding `--force` to the installer is explicitly rejected — it would clobber
+user edits and re-clobber the pre-feature machines on every re-install, the
+exact failure this design exists to avoid.
 
 ### User-facing output
 
@@ -203,19 +215,25 @@ seed is a **CLI command, not an MCP tool** — there is no MCP handler for it
 in `format_output.go`" does not add a formatter here. The output follows
 the CLI standard: aligned, lowercase, actionable.
 
-The `Result` struct (`internal/seed/seed.go:14-19`) gains categories so the
-command can distinguish outcomes:
+The `Result` struct (`internal/seed/seed.go:14-19`) gains an `Updated`
+category and keeps `Skipped` with its existing meaning (a no-clobber skip of
+an untracked file), plus an `Edited` category for a tracked file that
+differs from `mf`:
 
 ```go
 type Result struct {
     Deployed  []string // new files written (were absent)
-    Updated   []string // shipped files upgraded to this release
+    Updated   []string // tracked files upgraded to this release
     Unchanged []string // already at this release's content
-    Skipped   []string // manifest-tracked and locally edited — differ from mf
+    Skipped   []string // untracked, differs from cur — today's no-clobber
+    Edited    []string // tracked and locally edited — differs from mf
     Repaired  []string // zero-byte partials overwritten
     Errors    []string
 }
 ```
+
+Keeping `Skipped` unchanged means no existing consumer of that field breaks;
+the new tracked-edit case gets its own field and label.
 
 Command output (`cmd/ethos/seed.go`), one line per file, then a summary:
 
@@ -223,37 +241,44 @@ Command output (`cmd/ethos/seed.go`), one line per file, then a summary:
   deployed:  roles/product-lead.yaml
   updated:   writing-styles/concise-quantified.md
   unchanged: roles/architect.yaml
+  skipped (exists): talents/go.md
   skipped (local edit): personalities/principal-engineer.md
 
-Seeded 42 files: 3 new, 5 updated, 33 unchanged, 1 local edit skipped.
-1 file looks locally edited; re-run 'ethos seed --force' to overwrite it.
+Seeded 42 files: 3 new, 5 updated, 31 unchanged, 2 skipped, 1 local edit.
+3 files were skipped; re-run 'ethos seed --force' to overwrite them.
 ```
 
-The remedy line prints only when `len(Skipped) > 0`. `updated` is the line
-that proves the feature works: it did not exist under the old model.
+The remedy line prints only when `len(Skipped)+len(Edited) > 0`. `updated`
+is the line that proves the feature works: it did not exist under the old
+model.
 
 ## Tests
 
 - **Manifest schema round-trip** (rsc's coverage ask). A Go test asserts
   that the manifest marshals and unmarshals to the documented schema, and
-  that after a seed **every** seeded path has a manifest entry whose `hash`
-  equals the content actually on disk. This guards the invariant that seed
-  and the manifest never drift — a seeded file without an entry, or an entry
-  whose hash mismatches the file, fails the test.
+  that after a seed of a **fresh** destination, every seeded path has a
+  manifest entry whose `hash` equals the content actually on disk. This
+  guards the invariant that a written file and its manifest entry never
+  drift.
+- **Untracked skip leaves no entry.** A pre-existing file that differs from
+  `cur` and has no entry is skipped and gains **no** entry (today's
+  behavior, asserted so a future change cannot silently record or upgrade
+  it).
 - **Decision-table coverage.** Table-driven test, one case per cell above:
-  absent, `== cur`, `!= cur && == mf`, `!= cur && != mf` (both manifest
-  states), and the zero-byte repair. Each case sets up disk + manifest
-  state, runs the decision, and asserts the action (deploy / unchanged /
-  upgrade / skip / repair) and the resulting manifest entry.
-- **`--force` overwrites all.** A file that default seed skips as a local
-  edit is overwritten to `cur` under `--force`, and its manifest entry
-  becomes `cur`.
+  absent, `== cur` (tracked and untracked), `!= cur && == mf`,
+  `!= cur && != mf` (tracked → edit-skip; untracked → no-clobber skip), and
+  the zero-byte repair. Each case sets up disk + manifest state, runs the
+  decision, and asserts the action and the resulting manifest entry.
+- **`--force` overwrites all and records all.** A tracked edited file and an
+  untracked differing file are both overwritten to `cur` under `--force`,
+  and both gain a manifest entry equal to `cur` — the one-time-migration
+  path the operator runs by hand.
 
 ## Dogfood plan (clean machine, ship v1 → install → ship v2 → re-seed)
 
-Proves the two required outcomes: an untouched file **updates**, a
-hand-edited file is **preserved**. Run against a throwaway `HOME` so no real
-install is touched.
+Proves the two required outcomes: an untracked file **updates** once
+tracked, a hand-edited tracked file is **preserved**. Run against a
+throwaway `HOME` so no real install is touched.
 
 1. **Build "v1"** (v4.7.0, the first manifest-aware release) from a branch
    whose sidecar carries a known marker in one file, e.g.
@@ -262,46 +287,55 @@ install is touched.
 2. **Install v1** into a scratch home: run the binary with `HOME=$TMP`
    (`.tmp/seed-dogfood/home`). Confirm `~/.punt-labs/ethos/…/concise-
    quantified.md` contains `MARK: v1` and a `.seed-manifest.json` records
-   its hash with `ethos_version` = v1.
+   its hash with `ethos_version` = v1. Every deployed file is tracked from
+   this first run.
 3. **Hand-edit a second file** in the scratch home, e.g. append `LOCAL
-   EDIT` to `personalities/principal-engineer.md`. This is the file that
-   must survive.
+   EDIT` to `personalities/principal-engineer.md`. This is the tracked file
+   that must survive.
 4. **Build "v2"**: bump the marker to `MARK: v2` in
    `concise-quantified.md`, rebuild. This is the shipped improvement.
 5. **Re-seed v2** into the same scratch home (plain `ethos seed`, no
    `--force`).
 6. **Assert:**
    - `concise-quantified.md` now contains `MARK: v2` → printed under
-     `updated:` (unmodified shipped file upgraded via `local == mf`).
+     `updated:` (tracked, `local == mf`, upgraded).
    - `principal-engineer.md` still contains `LOCAL EDIT` → printed under
      `skipped (local edit):`, and the `--force` remedy line appeared.
    - The manifest entry for `concise-quantified.md` now records the v2 hash
      and `ethos_version` = v2; `principal-engineer.md`'s entry is unchanged
      (still its v1 hash, so the edit stays detectable).
-7. **`--force` check:** re-run `ethos seed --force`; the previously skipped
-   `principal-engineer.md` is overwritten to `cur` and its manifest entry
-   becomes the v2 hash.
+7. **Pre-feature-machine check (untracked skip).** Delete the manifest and
+   re-seed v2. The unmodified `concise-quantified.md` (now untracked and
+   `!= cur`) is **skipped (exists)** — not upgraded, no entry recorded —
+   proving the software carries no bootstrap branch. Then run
+   `ethos seed --force`: it overwrites to `cur` and records entries for all,
+   simulating the operator's one-time hand-clean; a subsequent plain re-seed
+   now upgrades normally.
 
 This runs entirely from the built binary against a scratch `HOME` — the
 "dogfood before shipping" bar, not just unit tests.
 
 ## Rejected alternatives
 
+- **A bootstrap-upgrade branch for untracked files** ("no entry and
+  `local != cur` → upgrade"). Rejected by the operator: there are few
+  machines, a migration branch is clutter and debt, and the five affected
+  computers are hand-cleaned with a one-time `--force`. The software keeps
+  today's no-clobber skip for untracked files and carries zero pre-feature
+  reasoning.
 - **A legacy hash catalog + history-walking generator.** An earlier draft
   embedded a frozen catalog of every pre-feature shipped hash, generated by
-  walking git tags and hashing the sidecar at each. Rejected: the generator
-  is fragile (the sidecar layout has moved across releases, so it must
-  tolerate missing paths and could silently under-populate), it guards a
-  case the operator says does not occur (nobody hand-edits our files), and
-  the operator ruled explicitly that pre-feature installs get **no**
-  migration or bootstrap machinery. The one-line "no entry, `local != cur`
-  → upgrade" rule replaces all of it with zero generation risk.
+  walking git tags and hashing the sidecar at each. Rejected: fragile
+  generation (the sidecar layout has moved across releases, risking silent
+  under-population), unbounded generation risk, and it guards a case the
+  operator ruled out — no pre-feature migration.
 - **A `.seed-backup/` safety net** (copy the old file aside before an
-  upgrade). Rejected with the catalog: it exists only to soften a
-  mis-upgrade of a pre-feature file, the same case the operator ruled out.
-  It adds state to manage and clean up for no benefit under the ruling.
-- **Ship `--force` from the installer.** Overwrites user edits on every
-  re-install — the exact data loss this design prevents.
+  upgrade). Rejected with the catalog: it exists only to soften a mis-upgrade
+  of a pre-feature file, the ruled-out case; adds state to manage for no
+  benefit.
+- **Ship `--force` from the installer.** Overwrites user edits and
+  re-clobbers the hand-cleaned machines on every re-install — the exact data
+  loss this design prevents.
 - **Timestamp / mtime comparison** (upgrade if the shipped file is
   "newer"). File mtimes are unreliable across `git clone`, `tar`, and
   package managers, and say nothing about *content*. Hashes are exact.
@@ -322,18 +356,13 @@ This runs entirely from the built binary against a scratch `HOME` — the
 
 ## Open questions for the leader / operator
 
-1. **`Result.Skipped` semantics change.** The field name stays but its
-   meaning shifts from "already exists" to "manifest-tracked and locally
-   edited." Any consumer that parses seed output (does the installer grep
-   it?) must be checked. Recommend keeping the name for code continuity; the
-   printed label changes to `skipped (local edit):`.
-2. **Manifest as a doctor check.** Should `ethos doctor` verify the
-   manifest exists and is consistent (every managed file has an entry;
-   entries point at existing files)? Recommend a follow-up bead, not v1.
-3. **`--dry-run`.** Worth adding so a user can preview `updated` /
+1. **Manifest as a doctor check.** Should `ethos doctor` verify the
+   manifest exists and is consistent (tracked files point at existing files;
+   hashes match)? Recommend a follow-up bead, not v1.
+2. **`--dry-run`.** Worth adding so a user can preview `updated` /
    `skipped` before writing? Recommend yes as a fast follow; not required
    for v1.
-4. **Skills root scope.** Skills live under `~/.claude/skills/`, outside the
+3. **Skills root scope.** Skills live under `~/.claude/skills/`, outside the
    ethos root. Confirmed the single manifest with a `scope` field covers
    both; the alternative (a second manifest under the skills root) is
    rejected as split state. Confirm the single-manifest approach.
@@ -361,36 +390,41 @@ This runs entirely from the built binary against a scratch `HOME` — the
 >
 > ### Decision
 >
-> Make plain seed **upgrade shipped files and preserve proven user edits**,
-> decided by content hash.
+> Make plain seed **upgrade tracked shipped files and preserve proven user
+> edits**, decided by content hash. New behavior activates only for a file
+> the manifest already tracks; an untracked file keeps today's no-clobber
+> skip.
 >
 > - **Current shipped hash (`cur`)** is computed at runtime from the
 >   embedded bytes — no build step, no drift.
 > - **A local install manifest** (`~/.punt-labs/ethos/.seed-manifest.json`)
 >   records, per seeded path, the hash seed last wrote (`mf`) plus
->   provenance — exactly one hash per path, overwritten each write, so
->   nothing grows.
-> - **The whole rule:** write `cur` **unless** (a) `local == cur` already,
->   or (b) a manifest entry exists and `local != mf` (a proven user edit →
->   skip + warn, `--force` remedy). A file with no manifest entry that
->   differs from `cur` is simply upgraded and recorded — the operator ruled
->   pre-feature installs need **no** migration or bootstrap, so this
->   self-heals on first run.
-> - **Zero-byte partials** are repaired to `cur` regardless of manifest
->   state (unchanged from today).
-> - **`--force`** additionally overwrites the skipped (edited) files and
->   records `cur` for every path — the single escape hatch.
+>   provenance — one hash per path, overwritten each write, so nothing grows.
+> - **Decision:** absent → deploy + record. `local == cur` → unchanged
+>   (record if untracked, to adopt). Tracked and `local == mf` and
+>   `cur != mf` → upgrade + record. Tracked and `local != mf` → skip + warn
+>   (user edit; `--force` remedy). **Untracked and `local != cur` → today's
+>   no-clobber skip, unchanged.** Zero-byte partials are repaired to `cur`
+>   regardless.
+> - **No pre-feature migration in the software.** The five existing machines
+>   are hand-cleaned once with `ethos seed --force`, which overwrites to
+>   `cur` and records every entry; thereafter they auto-upgrade.
+> - **`--force`** overwrites every path to `cur` and records all entries —
+>   the escape hatch and the one-time hand-clean tool.
 > - **Installer unchanged except messaging** — still plain `ethos seed`, now
 >   upgrade-capable; no `--force`.
-> - **Output** gains `deployed` / `updated` / `unchanged` /
->   `skipped (local edit)` lines and a `--force` remedy hint (CLI standard;
->   seed has no MCP surface, so no DES-020 formatter is added).
+> - **Output** gains `deployed` / `updated` / `unchanged` / `skipped
+>   (exists)` / `skipped (local edit)` lines and a `--force` remedy hint
+>   (CLI standard; seed has no MCP surface, so no DES-020 formatter is
+>   added). `Result.Skipped` keeps its meaning; a new `Edited` field carries
+>   the tracked-edit case.
 >
 > ### Rulings
 >
-> - **No pre-feature migration** (operator). Installs predating the manifest
->   get no legacy catalog, generator, or backup net; an unmodified
->   pre-feature file is upgraded on first run and enters the manifest era.
+> - **No pre-feature migration** (operator). Few machines; a migration
+>   branch is clutter and debt. The software keeps the existing no-clobber
+>   skip for untracked files; the affected computers are hand-cleaned with a
+>   one-time `--force`.
 > - **Content hash, not mtime or in-band version stamps.** mtimes are
 >   unreliable across clone/tar/package managers; stamps pollute content and
 >   are forgeable by an edit that keeps the stamp.
@@ -398,20 +432,22 @@ This runs entirely from the built binary against a scratch `HOME` — the
 >   unbounded growth.
 > - **Scope: library content only.** The machinery never reads, writes, or
 >   hashes `~/.punt-labs/ethos/identities/` — `ethos setup` owns identities.
-> - **Skip is safe and recoverable.** A misclassified file is preserved, not
->   lost; `--force` is the documented remedy.
+> - **Skip is safe and recoverable.** A skipped file is preserved, not lost;
+>   `--force` is the documented remedy.
 >
 > ### Rejected alternatives
 >
+> - **A bootstrap-upgrade branch for untracked files.** Operator ruled no
+>   pre-feature migration — few users, hand-clean the affected machines. The
+>   no-clobber skip stays for untracked files.
 > - **Legacy hash catalog + history-walking generator.** Fragile generation
 >   (sidecar layout has moved across releases; risks silent
->   under-population), unbounded generation risk, and it guards a case the
->   operator says does not occur — the operator ruled no pre-feature
->   migration. The one-line "no entry, `local != cur` → upgrade" replaces it
->   with zero generation code.
-> - **`.seed-backup/` safety net.** Exists only to soften a mis-upgrade of a
->   pre-feature file — the ruled-out case; adds state for no benefit.
-> - **Installer `--force`** (clobbers edits every re-install).
+>   under-population), unbounded generation risk, guards the ruled-out
+>   pre-feature case.
+> - **`.seed-backup/` safety net.** Softens a mis-upgrade of a pre-feature
+>   file — the ruled-out case; adds state for no benefit.
+> - **Installer `--force`** (clobbers edits and re-clobbers hand-cleaned
+>   machines every re-install).
 > - **mtime comparison** (unreliable, content-blind).
 > - **Per-file version stamps** (pollute content, forgeable).
 > - **Interactive per-file prompt** (hangs the piped installer).
