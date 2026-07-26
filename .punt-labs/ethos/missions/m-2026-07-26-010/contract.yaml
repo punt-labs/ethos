@@ -1,0 +1,52 @@
+mission_id: m-2026-07-26-010
+status: failed
+type: implement
+created_at: "2026-07-26T15:07:10Z"
+updated_at: "2026-07-26T15:07:51Z"
+closed_at: "2026-07-26T15:07:51Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: rop
+    pinned_at: "2026-07-26T15:07:10Z"
+    hash: 6e1a3cdfadb9e663c7a9ff6b37cad82ad05a05e94bb6f458ca592d20d1e5839b
+inputs: {}
+write_set:
+    - docs
+success_criteria:
+    - 'DESIGN ONLY (write-set docs). Produce docs/entity-schema-command.md + a DES ADR draft for an  subcommand on the three typed entities: identity, role, team. Placed alongside their existing create/list/show verbs (operator confirmed per-entity subcommand, NOT a top-level ). Attributes (personality/talent/writing-style) are markdown title+prose — explicitly excluded.'
+    - 'Behavior: default output = human field table (name, required, description, type/enum); --json = JSON Schema. Ground the fields in the real Go structs (internal/identity, internal/role, internal/team) — cite them; team includes members[{identity,role}] + collaborations[{from,to,type-enum}].'
+    - |-
+      CORE: single source of truth. Design a schema registry derived from the Go structs so ALL representations render from one place and cannot drift: the CLI table, the --json JSON Schema, the MCP tool inputSchema (tools.go / team_tools.go currently hand-written WithString descriptions), validate-content rules, and the seeded per-category READMEs. Spec how each consumer reads it. Include how the teams schema is exposed (via Manage teams (create, list, show, delete, add-member, remove-member, add-collab)
+
+      Usage:
+        ethos team [command]
+
+      Available Commands:
+        activate      Set the active team bundle in repo config
+        active        Show the currently active team bundle
+        add-bundle    Scaffold a new team bundle from a git URL
+        add-collab    Add a collaboration to a team
+        add-member    Add a member to a team
+        available     List all discoverable team bundles
+        create        Create a new team
+        deactivate    Clear the active team bundle in repo config
+        delete        Delete a team
+        for-repo      Show team(s) for a repository
+        list          List all teams
+        migrate       Convert a legacy .punt-labs/ethos submodule to the bundles layout
+        remove-member Remove a member from a team
+        show          Show team details
+
+      Flags:
+        -h, --help   help for team
+
+      Global Flags:
+            --json   JSON output
+
+      Use "ethos team [command] --help" for more information about a command., since teams have no seeded category-dir README).
+    - 'Cross-link: each typed entity --help gains a one-line pointer to . Keep --help about usage, schema about shape. List rejected alternatives (top-level ; --schema flag; enrich create --help; hand-maintained READMEs) with reasons. Open questions for the leader. Commit the design doc; markdownlint clean.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

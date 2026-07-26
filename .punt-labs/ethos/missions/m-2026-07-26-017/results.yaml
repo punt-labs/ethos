@@ -1,0 +1,22 @@
+results:
+    - mission: m-2026-07-26-017
+      round: 1
+      created_at: "2026-07-26T17:11:54Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/schema
+          added: 400
+          removed: 0
+        - path: internal/mcp
+          added: 200
+          removed: 60
+      evidence:
+        - name: ethos identity|role|team schema + --json; reflect-plus-overlay registry + guard test
+          status: pass
+        - name: MCP create drift fixed (role 7 fields, team collaborations); local review 2 rounds + Copilot to zero
+          status: pass
+        - name: 'make check green incl 3 README-drift checks; merged PR #400'
+          status: pass
+      prose: 'Entity schema command (DES-066) shipped. Single registry drives CLI/MCP/validate/READMEs; fixed the MCP role/team silent field-drop. Merged #400.'
