@@ -292,16 +292,29 @@ func requireTool(t *testing.T, name string) {
 	}
 }
 
-// mkBaseDir returns a temp directory guaranteed to be free of a ".tmp" or
-// ".punt-labs/ethos" path segment, so edited-file paths built under it do
-// not trip the hook's scratch-path bypass. t.TempDir() cannot be used
-// because TMPDIR is the repo's .tmp directory. The directory is anchored
-// in the user's home and removed at test end.
+// mkBaseDir returns a temp directory whose path has no "/.tmp/" segment,
+// so edited-file paths built under it do not trip the hook's scratch-path
+// bypass (*/.tmp/*).
+//
+// It prefers t.TempDir(). In CI (GitHub Actions) TMPDIR is the runner's
+// own temp, so t.TempDir() is writable and clean — nothing more is needed.
+// Locally this repo's direnv sets TMPDIR to the repo's .tmp, so t.TempDir()
+// lands under a "/.tmp/" segment; only then does mkBaseDir fall back to a
+// home-anchored base, which is writable on a developer machine. CI never
+// takes the fallback, so a sandbox with a non-writable $HOME is not a
+// concern. The directory is removed at test end.
 func mkBaseDir(t *testing.T) string {
 	t.Helper()
+
+	base := t.TempDir()
+	if !strings.Contains(base, string(os.PathSeparator)+".tmp"+string(os.PathSeparator)) {
+		return base
+	}
+
+	// TMPDIR is the repo's .tmp; a path under it would hit the bypass.
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	base, err := os.MkdirTemp(home, ".n4tk-worktree-test-")
+	base, err = os.MkdirTemp(home, ".n4tk-worktree-test-")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(base) })
 	return base
