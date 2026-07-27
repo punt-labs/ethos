@@ -190,9 +190,10 @@ func TestPostToolUseHook_WorktreeResolution(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		editPath  string // absolute path of the edited file; empty => omit
-		wantTree  string // sentinel that must appear on stderr
-		otherTree string // sentinel that must NOT appear
+		editPath  string   // absolute path of the edited file; empty => omit
+		wantTree  string   // sentinel that must appear on stderr
+		otherTree string   // sentinel that must NOT appear
+		env       []string // extra environment for the hook process
 	}{
 		{
 			name:      "edit inside worktree runs make check in the worktree",
@@ -205,6 +206,20 @@ func TestPostToolUseHook_WorktreeResolution(t *testing.T) {
 			editPath:  "",
 			wantTree:  "MAIN_TREE",
 			otherTree: "WORKTREE_TREE",
+		},
+		{
+			// The exact ethos-n4tk regression line: a matched-extension
+			// file (.sh hits filePatterns) living OUTSIDE any git repo, so
+			// `git -C <dir> rev-parse --show-toplevel` errors and $_root is
+			// empty. The hook must fall back to $CLAUDE_PROJECT_DIR (the
+			// MAIN tree) rather than skip the gate. GIT_CEILING_DIRECTORIES
+			// stops git's upward walk at base, so the outcome does not
+			// depend on whether some ancestor of the home dir is a repo.
+			name:      "matched file outside any git repo falls back to CLAUDE_PROJECT_DIR",
+			editPath:  filepath.Join(base, "outside", "deploy.sh"),
+			wantTree:  "MAIN_TREE",
+			otherTree: "WORKTREE_TREE",
+			env:       []string{"GIT_CEILING_DIRECTORIES=" + base},
 		},
 	}
 
@@ -219,7 +234,7 @@ func TestPostToolUseHook_WorktreeResolution(t *testing.T) {
 				stdin = `{"tool_input":{}}`
 			}
 
-			code, stdout, stderr := runHookInProject(t, command, stdin, main)
+			code, stdout, stderr := runHookInProject(t, command, stdin, main, tt.env...)
 
 			assert.Equal(t, 2, code, "make check failure must block with exit 2")
 			assert.Contains(t, stderr, tt.wantTree,
@@ -232,14 +247,15 @@ func TestPostToolUseHook_WorktreeResolution(t *testing.T) {
 }
 
 // runHookInProject executes command under /bin/sh with CLAUDE_PROJECT_DIR
-// set to projectDir and stdin fed to the process. Unlike runHook it does
-// not stub make on PATH — the worktree test uses real make against the
-// sentinel Makefiles it writes into each tree.
-func runHookInProject(t *testing.T, command, stdin, projectDir string) (code int, stdout, stderr string) {
+// set to projectDir, extraEnv appended, and stdin fed to the process.
+// Unlike runHook it does not stub make on PATH — the worktree test uses
+// real make against the sentinel Makefiles it writes into each tree.
+func runHookInProject(t *testing.T, command, stdin, projectDir string, extraEnv ...string) (code int, stdout, stderr string) {
 	t.Helper()
 
 	cmd := exec.Command("/bin/sh", "-c", command)
 	cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+projectDir)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	cmd.Stdin = strings.NewReader(stdin)
 
 	var outBuf, errBuf bytes.Buffer
