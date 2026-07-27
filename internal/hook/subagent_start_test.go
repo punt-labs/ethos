@@ -407,8 +407,12 @@ func validVerifierContract(evaluator string) mission.Contract {
 }
 
 // runHookForVerifier captures HandleSubagentStartWithDeps's behavior
-// for a verifier spawn payload. Returns the handler's error and
-// whatever it wrote to stdout.
+// for a spawn payload. missionID is the MISSION_ID the spawn declares
+// (empty for an ad-hoc spawn with no mission). The gate binds by
+// (mission_id, role), so the declared mission is what decides whether
+// the spawn is a verifier — a handle scan is no longer enough
+// (ethos-z69l). Returns the handler's error and whatever it wrote to
+// stdout.
 func runHookForVerifier(
 	t *testing.T,
 	idStore *identity.Store,
@@ -416,8 +420,11 @@ func runHookForVerifier(
 	missions *mission.Store,
 	hash mission.HashSources,
 	agentType string,
+	missionID string,
 ) (string, error) {
 	t.Helper()
+
+	t.Setenv("MISSION_ID", missionID)
 
 	// Spawn a session so the join path has a target. The session
 	// store has no Exists method; Load with an os-not-exist error
@@ -477,7 +484,7 @@ func TestSubagentStart_VerifierMatchingHashAllowsSpawn(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
 
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err, "matching hash must allow the spawn")
 	// Phase 3.5 isolation block replaces the persona block for
 	// verifier spawns. The block identifies the mission and the
@@ -517,7 +524,7 @@ func TestSubagentStart_VerifierDriftedPersonalityRefusesSpawn(t *testing.T) {
 		0o600,
 	))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.Error(t, err, "drifted personality must refuse the spawn")
 	msg := err.Error()
 	assert.Contains(t, msg, c.MissionID, "error must name the mission")
@@ -609,18 +616,18 @@ func TestSubagentStart_HashRefusalClosesSkeletonAborted(t *testing.T) {
 		"hash refusal must stamp closed_at on the skeleton")
 }
 
-// TestSubagentStart_VerifierAggregatesMultipleDriftedMissions asserts
-// the H2 invariant: when the operator has edited one evaluator whose
-// content is shared by several open missions, the hook emits a single
-// aggregate error naming every drifted mission — not N separate
-// refusal cycles. Each round of mission create must see every
-// drifted mission at once so the operator can plan their recovery
-// in one pass.
-func TestSubagentStart_VerifierAggregatesMultipleDriftedMissions(t *testing.T) {
+// TestSubagentStart_VerifierDriftScopedToDeclaredMission asserts the
+// per-mission binding (ethos-z69l): when one evaluator's content is
+// shared by several open missions and the operator edits it, the
+// refusal names ONLY the mission the spawn declares — not an aggregate
+// of every mission that pins the same handle. A verifier spawn serves
+// exactly one mission, so its verdict integrity depends on that one
+// mission's pinned hash alone.
+func TestSubagentStart_VerifierDriftScopedToDeclaredMission(t *testing.T) {
 	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
 
-	// Three missions, each with a disjoint write_set so Phase 3.2's
-	// cross-mission conflict check does not collapse them.
+	// Two missions naming djb as evaluator, disjoint write_sets so
+	// Phase 3.2's cross-mission conflict check does not collapse them.
 	c1 := validVerifierContract("djb")
 	c1.WriteSet = []string{"internal/multi/a/"}
 	require.NoError(t, missions.ApplyServerFields(&c1, time.Now(), hash))
@@ -631,34 +638,80 @@ func TestSubagentStart_VerifierAggregatesMultipleDriftedMissions(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c2, time.Now(), hash))
 	require.NoError(t, missions.Create(&c2))
 
-	c3 := validVerifierContract("djb")
-	c3.WriteSet = []string{"internal/multi/c/"}
-	require.NoError(t, missions.ApplyServerFields(&c3, time.Now(), hash))
-	require.NoError(t, missions.Create(&c3))
-
-	// One edit to the evaluator's personality invalidates all three.
+	// One edit to the evaluator's personality drifts both pinned hashes.
 	personalityPath := filepath.Join(dir, "personalities", "bernstein.md")
 	require.NoError(t, os.WriteFile(
 		personalityPath,
-		[]byte("# Bernstein\n\nDrifted content across three missions.\n"),
+		[]byte("# Bernstein\n\nDrifted content across two missions.\n"),
 		0o600,
 	))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
-	require.Error(t, err, "drift must refuse the spawn")
+	// Spawn declaring c1: the refusal names c1 and nothing else.
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c1.MissionID)
+	require.Error(t, err, "drift on the declared mission must refuse the spawn")
 	msg := err.Error()
-	assert.Contains(t, msg, "3 open missions", "header must state the drifted mission count")
-	assert.Contains(t, msg, c1.MissionID, "error must name mission 1")
-	assert.Contains(t, msg, c2.MissionID, "error must name mission 2")
-	assert.Contains(t, msg, c3.MissionID, "error must name mission 3")
-	// Aggregate phrasing must offer the multi-mission recovery path.
-	assert.Contains(t, msg, "close the listed missions",
-		"aggregate error must use the plural recovery instruction")
-	assert.Contains(t, msg, "revert the edit",
-		"aggregate error must also offer the revert recovery path")
-	// The per-section listing is rendered once, not once per mission.
+	assert.Contains(t, msg, c1.MissionID, "error must name the declared mission")
+	assert.NotContains(t, msg, c2.MissionID,
+		"error must NOT name a different open mission the spawn does not serve")
+	assert.Contains(t, msg, "revert the edit", "error must offer the revert recovery path")
+	assert.Contains(t, msg, "relaunch", "error must offer the relaunch recovery path")
 	assert.Equal(t, 1, strings.Count(msg, "current content sections"),
 		"the content-sections block must appear exactly once")
+}
+
+// TestSubagentStart_WorkerSpawnNotMisboundAsOtherMissionVerifier is the
+// direct ethos-z69l regression: a handle that is worker on mission A
+// and evaluator on mission B, dispatched to WORK A (MISSION_ID=A), must
+// bind to A as a worker — it must NOT be treated as B's frozen
+// verifier and must NOT enforce B's write-set. Before the fix the hook
+// scanned all open missions by handle, so the worker spawn matched B's
+// evaluator and refused (or isolated) under the wrong contract.
+func TestSubagentStart_WorkerSpawnNotMisboundAsOtherMissionVerifier(t *testing.T) {
+	dir, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
+
+	// Seed a persona for mdm so the normal (worker) injection path has
+	// content to render. mdm is the overlapping handle.
+	require.NoError(t, attribute.NewStore(dir, attribute.Personalities).Save(&attribute.Attribute{
+		Slug:    "mcilroy",
+		Content: "# McIlroy\n\nDo one thing well.\n",
+	}))
+	require.NoError(t, idStore.Save(&identity.Identity{
+		Name:        "Doug M",
+		Handle:      "mdm",
+		Kind:        "agent",
+		Personality: "mcilroy",
+	}))
+
+	// Mission A: mdm is the WORKER, djb the evaluator.
+	a := validVerifierContract("djb")
+	a.Worker = "mdm"
+	a.WriteSet = []string{"internal/collide/a/"}
+	require.NoError(t, missions.ApplyServerFields(&a, time.Now(), hash))
+	require.NoError(t, missions.Create(&a))
+
+	// Mission B: mdm is the EVALUATOR.
+	b := validVerifierContract("mdm")
+	b.WriteSet = []string{"internal/collide/b/"}
+	require.NoError(t, missions.ApplyServerFields(&b, time.Now(), hash))
+	require.NoError(t, missions.Create(&b))
+
+	// Spawn mdm to WORK mission A. The declared MISSION_ID is A, where
+	// mdm is the worker — so no verifier gate, no B isolation block.
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "mdm", a.MissionID)
+	require.NoError(t, err,
+		"a worker spawn declaring its own mission must not be refused as another mission's verifier")
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.NotContains(t, ctx, "Verifier context",
+		"worker spawn must NOT receive mission B's verifier isolation block")
+	assert.NotContains(t, ctx, b.MissionID,
+		"worker spawn must NOT be bound to mission B")
+	assert.Contains(t, ctx, "Doug M",
+		"worker spawn must receive its normal persona block")
+	assert.Nil(t, result.Env,
+		"worker spawn must NOT carry the verifier allowlist env of another mission")
 }
 
 // TestSubagentStart_VerifierDriftedWritingStyleRefusesSpawn asserts
@@ -679,7 +732,7 @@ func TestSubagentStart_VerifierDriftedWritingStyleRefusesSpawn(t *testing.T) {
 		0o600,
 	))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.Error(t, err, "drifted writing style must refuse the spawn")
 	assert.Contains(t, err.Error(), c.MissionID)
 }
@@ -701,7 +754,7 @@ func TestSubagentStart_VerifierDriftedTalentRefusesSpawn(t *testing.T) {
 		0o600,
 	))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.Error(t, err, "drifted talent content must refuse the spawn")
 	assert.Contains(t, err.Error(), c.MissionID)
 }
@@ -718,7 +771,7 @@ func TestSubagentStart_VerifierGateNoOpForUnrelatedAgentType(t *testing.T) {
 	require.NoError(t, missions.Create(&c))
 
 	// Spawn a different agent type. The gate must not block.
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk")
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk", c.MissionID)
 	require.NoError(t, err)
 }
 
@@ -756,7 +809,7 @@ func TestSubagentStart_VerifierGateNoOpForClosedMission(t *testing.T) {
 		0o600,
 	))
 
-	_, err = runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	_, err = runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err, "closed mission must not block verifier spawn")
 }
 
@@ -782,7 +835,7 @@ func TestSubagentStart_VerifierGateLegacyMissionAllowsSpawn(t *testing.T) {
 	c.Evaluator.Hash = "" // pre-3.3 placeholder
 	require.NoError(t, missions.Create(&c))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err, "legacy missions with empty hash must not block spawn")
 }
 
@@ -826,7 +879,7 @@ func TestSubagentStart_VerifierGateLegacyMissionSkipsRecompute(t *testing.T) {
 	// the legacy mission short-circuits the loop before compute.
 	require.NoError(t, os.Remove(filepath.Join(dir, "personalities", "bernstein.md")))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err,
 		"legacy mission must skip recompute; a broken recompute on a pre-3.3 mission must not block the spawn")
 }
@@ -898,28 +951,25 @@ func TestSubagentStart_VerifierGateMisconfiguredHashIsFatal(t *testing.T) {
 }
 
 // TestSubagentStart_VerifierGateCorruptMissionIsFatal asserts that a
-// hand-corrupted mission file on disk blocks the spawn. Silently
+// spawn declaring a hand-corrupted mission file is blocked. Silently
 // skipping an unparseable contract would let an attacker bypass the
 // frozen-evaluator gate by truncating or mangling the YAML — so the
 // gate returns a fatal error that names the offending mission ID.
 func TestSubagentStart_VerifierGateCorruptMissionIsFatal(t *testing.T) {
 	_, idStore, missions, sessions, hash := setupVerifierTest(t, "djb")
 
-	// Seed one valid open mission so List walks at least one file
-	// through the normal code path.
-	c := validVerifierContract("djb")
-	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
-	require.NoError(t, missions.Create(&c))
-
 	// Write a corrupt YAML file directly into the missions directory
-	// with a mission_id-shaped filename. The List walker treats any
-	// non-dotfile .yaml file as a mission, so Load will be called
-	// on this file and fail to decode.
-	corruptPath := filepath.Join(missions.Root(), "missions", "m-2026-04-08-999.yaml")
+	// with a mission_id-shaped filename. The gate reads the DECLARED
+	// mission by id, so the spawn must name this file as its MISSION_ID
+	// to reach the decode-failure path.
+	const corruptID = "m-2026-04-08-999"
+	missionsDir := filepath.Join(missions.Root(), "missions")
+	require.NoError(t, os.MkdirAll(missionsDir, 0o700))
+	corruptPath := filepath.Join(missionsDir, corruptID+".yaml")
 	require.NoError(t, os.WriteFile(corruptPath, []byte("not valid yaml {[}\n"), 0o600))
 
-	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
-	require.Error(t, err, "corrupt mission file must refuse the spawn")
+	_, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", corruptID)
+	require.Error(t, err, "corrupt declared mission file must refuse the spawn")
 	msg := err.Error()
 	assert.Contains(t, msg, "failed to load mission",
 		"error must label the load failure so the operator knows which layer broke")
@@ -954,7 +1004,7 @@ func TestSubagentStart_VerifierIsolationBlockShape(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
 
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 
 	// Parse the JSON envelope.
@@ -1036,7 +1086,7 @@ func TestSubagentStart_VerifierIsolationContractBytesExactMatch(t *testing.T) {
 	contractBytes, err := os.ReadFile(cp)
 	require.NoError(t, err)
 
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 
 	var result SubagentStartResult
@@ -1067,7 +1117,7 @@ func TestSubagentStart_VerifierIsolationExcludesParentIdentity(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
 
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 
 	var result SubagentStartResult
@@ -1122,7 +1172,7 @@ func TestSubagentStart_VerifierIsolationSkippedForNonEvaluator(t *testing.T) {
 	// Now spawn a subagent as bwk — bwk is the worker, not the
 	// evaluator, so the isolation path does NOT fire and the normal
 	// persona block is emitted.
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk", c.MissionID)
 	require.NoError(t, err)
 
 	var result SubagentStartResult
@@ -1168,7 +1218,7 @@ func TestSubagentStart_VerifierIsolationNoOpForClosedMission(t *testing.T) {
 	// Spawning djb now should fall through to the normal persona
 	// path — the fixture seeds djb with a personality body.
 	_ = dir // silence unused warning on some refactor paths
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err, "closed mission must not block or isolate the spawn")
 
 	var result SubagentStartResult
@@ -1198,7 +1248,7 @@ func TestSubagentStart_VerifierIsolationWriteSetIsAllowlist(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
 
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 
 	var result SubagentStartResult
@@ -1282,7 +1332,7 @@ func TestSubagentStart_VerifierEmitsAllowlistEnv(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
 
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 
 	var result SubagentStartResult
@@ -1329,7 +1379,7 @@ func TestSubagentStart_NonVerifierOmitsAllowlistEnv(t *testing.T) {
 	require.NoError(t, missions.Create(&c))
 
 	// Spawn bwk — not the evaluator.
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "bwk", c.MissionID)
 	require.NoError(t, err)
 
 	var result SubagentStartResult
@@ -1408,7 +1458,7 @@ func TestSubagentStart_VerifierEmitsExtractIntoEnv(t *testing.T) {
 	require.NoError(t, missions.ApplyServerFields(&c, time.Now(), hash))
 	require.NoError(t, missions.Create(&c))
 
-	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb")
+	out, err := runHookForVerifier(t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 
 	var result SubagentStartResult
@@ -1435,7 +1485,7 @@ func TestSubagentStart_VerifierIsolationBlockExtractInto_Rendered(t *testing.T) 
 	require.NoError(t, missions.Create(&c))
 
 	out, err := runHookForVerifier(
-		t, idStore, sessions, missions, hash, "djb")
+		t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 	var result SubagentStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))
@@ -1464,7 +1514,7 @@ func TestSubagentStart_VerifierIsolationBlockExtractInto_Empty(t *testing.T) {
 	require.NoError(t, missions.Create(&c))
 
 	out, err := runHookForVerifier(
-		t, idStore, sessions, missions, hash, "djb")
+		t, idStore, sessions, missions, hash, "djb", c.MissionID)
 	require.NoError(t, err)
 	var result SubagentStartResult
 	require.NoError(t, json.Unmarshal([]byte(out), &result))

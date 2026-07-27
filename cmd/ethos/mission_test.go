@@ -367,6 +367,110 @@ func TestMissionCreate_RequiresFile(t *testing.T) {
 	assert.Contains(t, err.Error(), `required flag(s) "file"`)
 }
 
+// TestMissionCreate_WarnsOnHandleOverlap pins the ethos-z69l advisory:
+// creating a mission whose worker/evaluator handle overlaps an OPEN
+// mission's handles prints a non-fatal warning that names the colliding
+// mission and the shared handles — and still creates the mission. The
+// warning lets the leader catch a spawn-misbinding collision before
+// dispatch, without blocking the legitimate handle-reuse pattern.
+func TestMissionCreate_WarnsOnHandleOverlap(t *testing.T) {
+	missionTestEnv(t)
+
+	// First open mission: worker bwk, evaluator djb (the shared fixture
+	// handles). Disjoint write_set so the second create is not rejected
+	// by the Phase 3.2 cross-mission conflict check.
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/overlap-a/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	firstID := ids[0]
+
+	// Second mission reuses both handles; create must still succeed.
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/overlap-b/")
+	var stdout string
+	stderr := captureStderrFn(t, func() {
+		stdout = captureStdoutE(t, func() error { return runMissionCreate() })
+	})
+
+	assert.Contains(t, stdout, "created:", "overlap warning must not block the create")
+	ids, err = ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 2, "the second mission must be created despite the overlap")
+
+	assert.Contains(t, stderr, "handle overlap",
+		"stderr must carry the advisory warning")
+	assert.Contains(t, stderr, firstID,
+		"warning must name the colliding open mission")
+	assert.Contains(t, stderr, "bwk",
+		"warning must name the overlapping worker handle")
+	assert.Contains(t, stderr, "djb",
+		"warning must name the overlapping evaluator handle")
+}
+
+// TestMissionCreate_NoOverlapWarningWhenHandlesDisjoint pins the quiet
+// path: when the new contract shares no handle with any open mission,
+// no advisory is printed. A spurious warning on every unrelated create
+// would train operators to ignore it.
+func TestMissionCreate_NoOverlapWarningWhenHandlesDisjoint(t *testing.T) {
+	home := missionTestEnv(t)
+
+	// Seed a second evaluator ("rop") reusing the fixture attributes so
+	// its hash resolves at create time. It shares no handle with the
+	// first mission's bwk/djb.
+	root := filepath.Join(home, ".punt-labs", "ethos")
+	require.NoError(t, identity.NewStore(root).Save(&identity.Identity{
+		Name:         "Rob P",
+		Handle:       "rop",
+		Kind:         "agent",
+		Personality:  "bernstein",
+		WritingStyle: "bernstein-prose",
+		Talents:      []string{"security"},
+	}))
+
+	// First mission uses the default bwk/djb handles.
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/disjoint-a/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	// Second mission uses handles that do not appear in the first.
+	missionCreateFile = writeContractFileWithHandles(t,
+		"mdm", "rop", "tests/disjoint-b/")
+	stderr := captureStderrFn(t, func() {
+		captureStdoutE(t, func() error { return runMissionCreate() })
+	})
+
+	assert.NotContains(t, stderr, "handle overlap",
+		"disjoint handles must not trigger the overlap advisory")
+}
+
+// writeContractFileWithHandles writes a contract file with a custom
+// worker, evaluator, and write_set, returning the file path. Tests that
+// exercise the handle-overlap advisory need contracts whose handles
+// differ from the default bwk/djb fixture.
+func writeContractFileWithHandles(t *testing.T, worker, evaluator, writeSet string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "contract.yaml")
+	body := fmt.Sprintf(`leader: claude
+worker: %s
+evaluator:
+  handle: %s
+inputs:
+  bead: ethos-07m.5
+write_set:
+  - %s
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+  reflection_after_each: true
+`, worker, evaluator, writeSet)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
 // --- bare mission command ---
 
 func TestMissionBareShowsHelp(t *testing.T) {

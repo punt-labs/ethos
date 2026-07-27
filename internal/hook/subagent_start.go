@@ -88,10 +88,12 @@ func HandleSubagentStart(r io.Reader, store identity.IdentityStore, ss *session.
 
 // HandleSubagentStartWithDeps is the full subagent-start handler. In
 // addition to the persona block emission HandleSubagentStart provides,
-// it enforces DES-033's frozen-evaluator gate: when the spawning
-// subagent matches the evaluator handle of any open mission, the
-// hook recomputes the evaluator's current hash and refuses the spawn
-// if any open mission's pinned hash disagrees.
+// it enforces DES-033's frozen-evaluator gate. The gate is bound by
+// (mission_id, role): the spawn's declared MISSION_ID names the one
+// mission it serves, and the gate applies only when that mission is
+// open and names this subagent as its evaluator. A handle that is
+// merely the evaluator of some OTHER open mission is not treated as
+// that mission's verifier (ethos-z69l).
 //
 // The mismatch error names the offending mission, the pinned and
 // current hash prefixes, and the relaunch instruction the operator
@@ -117,12 +119,14 @@ func HandleSubagentStartWithDeps(r io.Reader, deps SubagentStartDeps) error {
 	// confusing post-join failure. The check is a no-op when the
 	// installation has no mission store wired in (legacy hook flow).
 	//
-	// Phase 3.5: the hash gate also returns the set of open missions
-	// that name this agentType as evaluator. A non-empty list is the
-	// single source of truth for "is this a verifier spawn?" — the
-	// context-isolation path below and the hash gate both consume it
-	// without re-scanning the mission store.
-	verifierMissions, err := checkVerifierHash(agentType, deps)
+	// The gate is keyed by the spawn's declared MISSION_ID (emitted by
+	// the Tier B dispatch into this subagent's env). That mission, and
+	// only that mission, decides whether this is a verifier spawn: the
+	// gate fires when the declared mission is open and names agentType
+	// as its evaluator. A verifier spawn yields a one-element slice
+	// that Phase 3.5's context-isolation path below consumes.
+	declaredMissionID := os.Getenv("MISSION_ID")
+	verifierMissions, err := checkVerifierHash(agentType, declaredMissionID, deps)
 	if err != nil {
 		// DES-054 phase 2d: when the refusal fires after PreToolUse-on-
 		// Agent wrote a delegation skeleton (MISSION_ID + DELEGATION_ID
@@ -541,44 +545,44 @@ func buildVerifierAllowlistEnv(missions []verifierMission, store *mission.Store)
 	return env
 }
 
-// checkVerifierHash recomputes the evaluator hash for every open
-// mission whose Evaluator.Handle matches agentType and returns a
-// single fatal error aggregating every mismatch.
+// checkVerifierHash enforces DES-033's frozen-evaluator gate for a
+// single spawn, bound by (mission_id, role). declaredMissionID is the
+// MISSION_ID the Tier B dispatch emitted into this spawn's env; it
+// names the one mission the spawn serves. The gate applies ONLY when
+// that mission is open and names agentType as its evaluator — i.e. the
+// spawn actually serves that mission as its verifier. A handle that is
+// merely the evaluator of some OTHER open mission is not that mission's
+// verifier when the spawn carries a different (or no) MISSION_ID; that
+// misbinding was ethos-z69l.
 //
-// The check is intentionally conservative: a single drifted mission
-// blocks the spawn even if other missions still match. This protects
-// the per-mission verdict integrity DES-033 was written to enforce —
-// silently allowing the spawn against a stale pinned hash would
-// invalidate the original mission's launch contract.
-//
-// Returns (nil, nil) and is a no-op when:
+// Returns (nil, nil) — no gate, normal persona path — when:
 //   - Missions is nil (legacy install, no mission store)
 //   - agentType is empty
-//   - No open mission names agentType as evaluator
+//   - declaredMissionID is empty: without a declared mission we cannot
+//     know which mission the spawn serves, so we never apply a verifier
+//     gate by handle alone
+//   - the declared mission is not open
+//   - the declared mission's evaluator handle is not agentType (the
+//     spawn serves the mission in another role, e.g. worker)
 //
-// Returns (matching open missions, nil) when every matching open
-// mission is either legacy (empty pinned hash) or has current content
-// matching its pinned hash. The returned slice is what Phase 3.5's
-// context-isolation path uses to build the verifier's injection
-// block — a non-empty slice is the single source of truth for "this
-// IS a verifier spawn".
+// Returns (a one-element slice, nil) when the spawn IS the declared
+// mission's verifier and the mission is either legacy (empty pinned
+// hash) or its current content matches the pinned hash. That slice is
+// Phase 3.5's single source of truth for "this IS a verifier spawn".
 //
 // Returns (nil, fatal error) when:
 //   - deps.Hash is misconfigured (Missions is non-nil but HashSources
 //     is incomplete). Silent skip would let stale evaluator content
 //     through under a configuration error.
-//   - A matching mission fails to load (corrupt or unparseable file).
-//   - The current hash recomputation itself fails.
-//   - Any matching open mission's pinned hash does not equal the
-//     recomputed current hash.
-//
-// On one or more real mismatches the error is a multi-line block
-// naming every drifted mission, the pinned and current rollup hash
-// prefixes, the per-section hashes of the CURRENT content so the
-// operator can cross-reference which file they edited, and two
-// recovery options (revert the edit to preserve the missions, or
-// close and relaunch to accept the new content).
-func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]verifierMission, error) {
+//   - the declared mission fails to load (missing, corrupt, or
+//     unparseable file).
+//   - the current hash recomputation fails.
+//   - the declared mission's pinned hash does not equal the recomputed
+//     current hash — the error is a multi-line block naming the mission,
+//     the pinned and current rollup hash prefixes, the per-section
+//     hashes of the CURRENT content so the operator can cross-reference
+//     which file they edited, and two recovery options.
+func checkVerifierHash(agentType, declaredMissionID string, deps SubagentStartDeps) ([]verifierMission, error) {
 	if deps.Missions == nil {
 		return nil, nil // legacy install: no mission store
 	}
@@ -592,179 +596,139 @@ func checkVerifierHash(agentType string, deps SubagentStartDeps) ([]verifierMiss
 	if strings.TrimSpace(agentType) == "" {
 		return nil, nil
 	}
+	declaredMissionID = strings.TrimSpace(declaredMissionID)
+	if declaredMissionID == "" {
+		// No declared mission: the spawn cannot be bound to a
+		// (mission_id, role). Applying the verifier gate by handle
+		// alone is exactly the misbinding ethos-z69l fixes.
+		return nil, nil
+	}
 
-	ids, err := deps.Missions.List()
+	c, raw, err := readGateContract(deps.Missions, declaredMissionID)
 	if err != nil {
-		return nil, fmt.Errorf("verifier hash gate: listing missions: %w", err)
+		return nil, fmt.Errorf("verifier hash gate: %w", err)
+	}
+	if c.Status != mission.StatusOpen {
+		// A closed, failed, or escalated mission is out of the gate's
+		// purview; the spawn falls through to the normal persona path.
+		return nil, nil
+	}
+	if c.Evaluator.Handle != agentType {
+		// The spawn serves the declared mission in another role (the
+		// worker, most commonly). It is not the mission's verifier, so
+		// the frozen-evaluator gate does not apply — THE ethos-z69l FIX.
+		return nil, nil
 	}
 
-	// Breakdown is computed at most once per checkVerifierHash call,
-	// lazily, on the first NON-LEGACY matching open mission. Legacy
-	// missions (empty pinned hash) must never trigger the compute:
-	// they cannot match any recomputed hash and the compute itself
-	// might fail (e.g. the evaluator's identity content was removed
-	// after the legacy mission was launched), which would wrongly
-	// block the spawn. The legacy check is therefore the first
-	// filter after status and handle match.
-	var (
-		breakdown        mission.EvaluatorHashBreakdown
-		breakdownLoaded  bool
-		mismatches       []driftedMission
-		verifierMissions []verifierMission
-	)
+	vm := verifierMission{Contract: c, RawYAML: raw}
+	if c.Evaluator.Hash == "" {
+		// Pre-3.3 mission with an empty pinned hash. Warn and allow;
+		// do not recompute the current hash. A legacy mission can never
+		// match a recomputed hash, and the recompute itself may fail
+		// against content valid at launch but no longer resolvable —
+		// which would wrongly refuse the spawn. The launch predates
+		// the gate.
+		fmt.Fprintf(os.Stderr,
+			"ethos: subagent-start: warning: mission %s has empty Evaluator.Hash (pre-3.3); skipping gate\n",
+			c.MissionID,
+		)
+		return []verifierMission{vm}, nil
+	}
 
-	for _, id := range ids {
-		// Single read: rejectSymlink + ReadFile + decode from the
-		// same bytes. Eliminates the TOCTOU window that two separate
-		// reads (Store.Load + os.ReadFile) would open.
-		// Inline symlink rejection — mirrors mission.rejectSymlink
-		// (unexported, different package). Same Lstat-before-Read
-		// TOCTOU gap as rejectSymlink; see ethos-jjm for context.
-		path, pErr := deps.Missions.ContractPath(id)
-		if pErr != nil {
-			return nil, fmt.Errorf(
-				"verifier hash gate: resolving contract path for %q: %w", id, pErr,
-			)
-		}
-		if info, lErr := os.Lstat(path); lErr == nil {
-			if info.Mode()&os.ModeSymlink != 0 {
-				return nil, fmt.Errorf(
-					"verifier hash gate: refusing to follow symlink: %s", path,
-				)
-			}
-		} else if !errors.Is(lErr, fs.ErrNotExist) {
-			return nil, fmt.Errorf(
-				"verifier hash gate: lstat %s: %w", path, lErr,
-			)
-		}
-		raw, readErr := os.ReadFile(path)
-		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				return nil, fmt.Errorf(
-					"verifier hash gate: mission %q not found", id,
-				)
-			}
-			return nil, fmt.Errorf(
-				"verifier hash gate: reading mission %q: %w", id, readErr,
-			)
-		}
-		c, decErr := mission.DecodeContractStrict(raw, id)
-		if decErr != nil {
-			return nil, fmt.Errorf(
-				"verifier hash gate: failed to load mission %q: %w",
-				id, decErr,
-			)
-		}
-		// Match Store.Load's default-fill for pre-3.4 contracts.
-		if c.CurrentRound == 0 {
-			c.CurrentRound = 1
-		}
-		if vErr := c.Validate(); vErr != nil {
-			return nil, fmt.Errorf(
-				"verifier hash gate: contract %q failed validation: %w",
-				id, vErr,
-			)
-		}
-		if c.MissionID != id {
-			return nil, fmt.Errorf(
-				"verifier hash gate: contract filename %q does not match mission_id %q",
-				id, c.MissionID,
-			)
-		}
-		if c.Status != mission.StatusOpen {
-			continue
-		}
-		if c.Evaluator.Handle != agentType {
-			continue
-		}
-		verifierMissions = append(verifierMissions, verifierMission{
-			Contract: c,
-			RawYAML:  raw,
-		})
-		if c.Evaluator.Hash == "" {
-			// Pre-3.3 mission with an empty pinned hash. Warn and
-			// continue; do not attempt to recompute the current
-			// hash. A legacy mission can never match a recomputed
-			// hash, and the recompute itself may fail against
-			// content that was valid at launch time but no longer
-			// resolves — which would wrongly refuse every spawn.
-			// The mission's launch predates the gate.
-			fmt.Fprintf(os.Stderr,
-				"ethos: subagent-start: warning: mission %s has empty Evaluator.Hash (pre-3.3); skipping gate\n",
-				c.MissionID,
-			)
-			continue
-		}
-		if !breakdownLoaded {
-			breakdown, err = mission.ComputeEvaluatorHashBreakdown(c.Evaluator.Handle, deps.Hash)
-			if err != nil {
-				return nil, fmt.Errorf(
-					"verifier hash gate: recomputing hash for evaluator %q: %w",
-					c.Evaluator.Handle, err,
-				)
-			}
-			breakdownLoaded = true
-		}
-		if c.Evaluator.Hash != breakdown.Rollup {
-			mismatches = append(mismatches, driftedMission{
-				ID:     c.MissionID,
-				Pinned: c.Evaluator.Hash,
-			})
-		}
+	breakdown, err := mission.ComputeEvaluatorHashBreakdown(c.Evaluator.Handle, deps.Hash)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"verifier hash gate: recomputing hash for evaluator %q: %w",
+			c.Evaluator.Handle, err,
+		)
 	}
-	if len(mismatches) == 0 {
-		return verifierMissions, nil
+	if c.Evaluator.Hash != breakdown.Rollup {
+		return nil, errors.New(formatDriftError(agentType, breakdown, driftedMission{
+			ID:     c.MissionID,
+			Pinned: c.Evaluator.Hash,
+		}))
 	}
-	return nil, errors.New(formatDriftError(agentType, breakdown, mismatches))
+	return []verifierMission{vm}, nil
 }
 
-// driftedMission is an internal record collected during checkVerifierHash
-// and consumed by formatDriftError. Pinned is the full hex the
-// formatter truncates; the mission ID is rendered verbatim.
+// readGateContract reads and validates one mission contract for the
+// verifier gate with a single TOCTOU-safe read: Lstat symlink check,
+// ReadFile, and strict decode from the same bytes. It returns the
+// parsed contract and the raw bytes so Phase 3.5 renders the exact
+// pinned YAML without a second read.
+//
+// The symlink rejection mirrors mission.rejectSymlink (unexported,
+// different package); the same Lstat-before-Read gap applies (ethos-jjm).
+func readGateContract(missions *mission.Store, id string) (*mission.Contract, []byte, error) {
+	path, err := missions.ContractPath(id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolving contract path for %q: %w", id, err)
+	}
+	if info, lErr := os.Lstat(path); lErr == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, nil, fmt.Errorf("refusing to follow symlink: %s", path)
+		}
+	} else if !errors.Is(lErr, fs.ErrNotExist) {
+		return nil, nil, fmt.Errorf("lstat %s: %w", path, lErr)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("mission %q not found", id)
+		}
+		return nil, nil, fmt.Errorf("reading mission %q: %w", id, err)
+	}
+	c, err := mission.DecodeContractStrict(raw, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load mission %q: %w", id, err)
+	}
+	// Match Store.Load's default-fill for pre-3.4 contracts.
+	if c.CurrentRound == 0 {
+		c.CurrentRound = 1
+	}
+	if err := c.Validate(); err != nil {
+		return nil, nil, fmt.Errorf("contract %q failed validation: %w", id, err)
+	}
+	if c.MissionID != id {
+		return nil, nil, fmt.Errorf(
+			"contract filename %q does not match mission_id %q", id, c.MissionID)
+	}
+	return c, raw, nil
+}
+
+// driftedMission is an internal record built by checkVerifierHash and
+// consumed by formatDriftError. Pinned is the full hex the formatter
+// truncates; the mission ID is rendered verbatim.
 type driftedMission struct {
 	ID     string
 	Pinned string
 }
 
 // formatDriftError renders the operator-facing multi-line block the
-// verifier gate emits when one or more open missions disagree with
-// the current evaluator content.
+// verifier gate emits when the declared mission's pinned evaluator
+// hash disagrees with the current evaluator content. Per-mission
+// binding (ethos-z69l) means a spawn serves exactly one mission, so
+// the block reports one mission — not an aggregate.
 //
 // The block has four parts:
-//  1. A summary line naming the evaluator and the mission count.
-//  2. One line per drifted mission showing pinned → current rollup.
-//  3. The per-section breakdown of the CURRENT content so the
-//     operator can cross-reference which source file they edited.
+//  1. A summary line naming the evaluator and the mission.
+//  2. One line showing pinned → current rollup.
+//  3. The per-section breakdown of the CURRENT content so the operator
+//     can cross-reference which source file they edited.
 //  4. Two recovery options — revert the edit, or close and relaunch.
-//
-// Mission lines are sorted by mission ID so two runs of the gate
-// against the same drifted set produce identical output.
 func formatDriftError(
 	evaluator string,
 	breakdown mission.EvaluatorHashBreakdown,
-	mismatches []driftedMission,
+	m driftedMission,
 ) string {
-	sort.Slice(mismatches, func(i, j int) bool {
-		return mismatches[i].ID < mismatches[j].ID
-	})
-
 	var b strings.Builder
-	if len(mismatches) == 1 {
-		fmt.Fprintf(&b,
-			"refusing verifier spawn: evaluator %q content has drifted since mission %s was launched\n",
-			evaluator, mismatches[0].ID,
-		)
-	} else {
-		fmt.Fprintf(&b,
-			"refusing verifier spawn: evaluator %q content has drifted since %d open missions were launched\n",
-			evaluator, len(mismatches),
-		)
-	}
-	for _, m := range mismatches {
-		fmt.Fprintf(&b, "  %s: pinned %s -> current %s\n",
-			m.ID, hashPrefix(m.Pinned), hashPrefix(breakdown.Rollup),
-		)
-	}
+	fmt.Fprintf(&b,
+		"refusing verifier spawn: evaluator %q content has drifted since mission %s was launched\n",
+		evaluator, m.ID,
+	)
+	fmt.Fprintf(&b, "  %s: pinned %s -> current %s\n",
+		m.ID, hashPrefix(m.Pinned), hashPrefix(breakdown.Rollup),
+	)
 	b.WriteString("  current content sections (check which you edited):\n")
 	fmt.Fprintf(&b, "    personality:       %s\n", hashPrefix(breakdown.Personality))
 	fmt.Fprintf(&b, "    writing_style:     %s\n", hashPrefix(breakdown.WritingStyle))
@@ -789,15 +753,11 @@ func formatDriftError(
 			fmt.Sprintf("%q:", name), hashPrefix(breakdown.Roles[name]),
 		)
 	}
-	b.WriteString("  to preserve these missions: revert the edit to the evaluator's identity content\n")
-	if len(mismatches) == 1 {
-		fmt.Fprintf(&b,
-			"  to accept the new content: close mission %s and relaunch it",
-			mismatches[0].ID,
-		)
-	} else {
-		b.WriteString("  to accept the new content: close the listed missions and relaunch them")
-	}
+	b.WriteString("  to preserve this mission: revert the edit to the evaluator's identity content\n")
+	fmt.Fprintf(&b,
+		"  to accept the new content: close mission %s and relaunch it",
+		m.ID,
+	)
 	return b.String()
 }
 
