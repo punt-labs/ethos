@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -901,6 +902,13 @@ func runMissionCreate() error {
 		return fmt.Errorf("mission create: %w", err)
 	}
 
+	// Advisory (non-fatal): flag handle overlap with an open mission
+	// before it can misbind a spawn. A handle that is worker on one open
+	// mission and evaluator on another can be bound to the wrong
+	// (mission_id, role) at SubagentStart (ethos-z69l). Handle reuse is a
+	// legitimate pattern, so this only warns — creation always proceeds.
+	warnHandleOverlap(ms, &c)
+
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
@@ -921,6 +929,88 @@ func runMissionCreate() error {
 	fmt.Printf("created: %s worker=%s evaluator=%s\n",
 		c.MissionID, c.Worker, c.Evaluator.Handle)
 	return nil
+}
+
+// warnHandleOverlap prints an advisory (non-fatal) stderr warning when
+// the new contract's worker or evaluator handle also appears as the
+// worker or evaluator of an OPEN mission. Overlap is the precondition
+// for the ethos-z69l misbinding class: a handle that is worker on one
+// open mission and evaluator on another can be spawned under an
+// ambiguous role, and the SubagentStart gate binds by the spawn's
+// declared MISSION_ID. Surfacing the collision at create time lets the
+// leader verify the intended (mission_id, role) before dispatching.
+//
+// The check never fails the create — handle reuse across missions is a
+// legitimate, common pattern (the same specialist as worker on A and
+// evaluator on B). Any error listing or loading a mission is reported
+// to stderr and skipped so a single unreadable file does not silence
+// the advisory for the rest.
+func warnHandleOverlap(ms *mission.Store, c *mission.Contract) {
+	ids, err := ms.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission create: overlap check: %v\n", err)
+		return
+	}
+
+	newHandles := map[string]struct{}{}
+	for _, h := range []string{c.Worker, c.Evaluator.Handle} {
+		if h != "" {
+			newHandles[h] = struct{}{}
+		}
+	}
+
+	type overlap struct {
+		mission string
+		handles []string
+	}
+	var overlaps []overlap
+	for _, id := range ids {
+		if id == c.MissionID {
+			continue
+		}
+		other, err := ms.Load(id)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission create: overlap check: %s: %v\n", id, err)
+			continue
+		}
+		if other.Status != mission.StatusOpen {
+			continue
+		}
+		seen := map[string]struct{}{}
+		var hits []string
+		for _, h := range []string{other.Worker, other.Evaluator.Handle} {
+			if h == "" {
+				continue
+			}
+			if _, ok := newHandles[h]; !ok {
+				continue
+			}
+			if _, dup := seen[h]; dup {
+				continue
+			}
+			seen[h] = struct{}{}
+			hits = append(hits, h)
+		}
+		if len(hits) > 0 {
+			sort.Strings(hits)
+			overlaps = append(overlaps, overlap{mission: id, handles: hits})
+		}
+	}
+	if len(overlaps) == 0 {
+		return
+	}
+	sort.Slice(overlaps, func(i, j int) bool {
+		return overlaps[i].mission < overlaps[j].mission
+	})
+
+	var b strings.Builder
+	b.WriteString("ethos: mission create: warning: handle overlap with open mission(s):\n")
+	for _, o := range overlaps {
+		fmt.Fprintf(&b, "  %s shares handle(s): %s\n", o.mission, strings.Join(o.handles, ", "))
+	}
+	b.WriteString("  a handle that is worker on one open mission and evaluator on another can misbind at\n")
+	b.WriteString("  spawn (ethos-z69l); verify the intended (mission_id, role) before dispatching.")
+	fmt.Fprintln(os.Stderr, b.String())
 }
 
 func runMissionShow(idOrPrefix string) error {
