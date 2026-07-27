@@ -345,9 +345,10 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		//      cwd-relative writes (`.tmp/*`) both match.
 		//
 		//   3. Project-type file extensions (from filePatterns) — run
-		//      make check with output-capture; on failure emit the
-		//      tail -n 60 truncation to stderr and exit 2, else exit 0.
-		//      Patterns are detected at generation time
+		//      resolve the repo root FROM THE EDITED FILE, then run
+		//      make check there with output-capture; on failure emit
+		//      the tail -n 60 truncation to stderr and exit 2, else
+		//      exit 0. Patterns are detected at generation time
 		//      by projectFilePatterns: go.mod → Go patterns, pyproject.toml
 		//      or setup.py → Python patterns, neither → generic fallback.
 		//
@@ -368,10 +369,19 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// direct paths (`internal/bar.go`), which fall through to the
 		// trigger clause.
 		//
-		// Pin cwd to the project root via $CLAUDE_PROJECT_DIR (exposed
-		// by Claude Code to hook commands) so `make check` resolves
-		// against the repo Makefile even if the sub-agent has cd'd
-		// into a subdirectory before the Write or Edit tool fires.
+		// In the trigger clause, resolve cwd from the EDITED FILE, not
+		// from $CLAUDE_PROJECT_DIR: dirname the path, then `git -C <dir>
+		// rev-parse --show-toplevel`, and cd to that root. An
+		// isolated-worktree sub-agent edits files in its own linked
+		// worktree while $CLAUDE_PROJECT_DIR still names the MAIN
+		// checkout — running make check there is blind to the agent's
+		// changes and blocks on unrelated failures (ethos-n4tk).
+		// Resolving from the file lands make check in the worktree that
+		// actually holds the edit. When git errors or the file is
+		// outside a repo (empty $_root), fall back to
+		// $CLAUDE_PROJECT_DIR. The two branches with no file path (jq
+		// missing; empty .tool_input.file_path) have nothing to resolve
+		// from and keep using $CLAUDE_PROJECT_DIR directly.
 		// Output is captured to a variable first. On failure the tail
 		// -n 60 truncation is written to stderr and the hook exits 2;
 		// tail (not head) keeps the LAST 60 lines, which hold the
@@ -385,7 +395,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// under /bin/sh, which is dash on Debian/Ubuntu): no `set -o
 		// pipefail`, no process substitution, no bash-isms in the case
 		// patterns.
-		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
+		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
 	}
 	b.WriteString("---\n")
 

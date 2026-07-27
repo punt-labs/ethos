@@ -230,7 +230,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n"+
+						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n"+
 						"---\n")
 
 				// Body checks.
@@ -411,7 +411,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 						"    - matcher: \"Write|Edit\"\n"+
 						"      hooks:\n"+
 						"        - type: command\n"+
-						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n")
+						"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n")
 
 				// Log the generated file so binary verification is visible
 				// in -v test output (spec success criterion 5).
@@ -440,7 +440,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -750,7 +750,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 					"    - matcher: \"Write|Edit\"\n" +
 					"      hooks:\n" +
 					"        - type: command\n" +
-					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
+					"          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; *.go|*go.mod|*go.sum|*go.work|*Makefile|*.sh|*.yaml|*.yml) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n" +
 					"---\n"
 				assert.Contains(t, content, want)
 			},
@@ -1486,6 +1486,40 @@ func TestYamlQuote(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestGenerateAgentFiles_WorktreeResolution pins the ethos-n4tk change at
+// the command-text level: the matched-path branch resolves the repo root
+// from the edited file via `git -C <dir> rev-parse --show-toplevel`, and
+// only the two no-path branches (jq missing; empty file_path) keep using
+// $CLAUDE_PROJECT_DIR directly. The behavioral proof lives in
+// TestPostToolUseHook_WorktreeResolution; this locks the string so a
+// refactor cannot quietly drop the resolution.
+func TestGenerateAgentFiles_WorktreeResolution(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
+
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
+	require.NoError(t, err)
+	content := string(data)
+
+	// The matched branch derives the file's directory and resolves the
+	// worktree root from it, keyed off $_path.
+	assert.Contains(t, content, `_dir=$(dirname \"$_path\")`,
+		"matched branch must take the edited file's directory")
+	assert.Contains(t, content, `git -C \"$_dir\" rev-parse --show-toplevel`,
+		"matched branch must resolve the repo root from the edited file")
+	// When git yields no root, fall back to $CLAUDE_PROJECT_DIR, then run
+	// make check in whichever root won.
+	assert.Contains(t, content, `if [ -z \"$_root\" ]; then _root=\"$CLAUDE_PROJECT_DIR\"; fi`,
+		"matched branch must fall back to CLAUDE_PROJECT_DIR when git fails")
+	assert.Contains(t, content, `_out=$(cd \"$_root\" && make check 2>&1)`,
+		"matched branch must run make check in the resolved root")
+
+	// The two no-path branches have nothing to resolve from and must run
+	// make check directly in $CLAUDE_PROJECT_DIR — exactly twice.
+	assert.Equal(t, 2, strings.Count(content, `_out=$(cd \"$CLAUDE_PROJECT_DIR\" && make check 2>&1)`),
+		"only the jq-missing and empty-path branches use CLAUDE_PROJECT_DIR directly")
 }
 
 // TestGenerateAgentFiles_MalformedConfig covers bug ethos-9ai.6: a

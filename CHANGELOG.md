@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Isolated-worktree sub-agents now run `make check` against their own
+  worktree, not the main checkout (ethos-n4tk).** The generated PostToolUse
+  `Write|Edit` hook ran `make check` in `$CLAUDE_PROJECT_DIR`, which always
+  names the main repo. A sub-agent spawned with `isolation=worktree` edits
+  files in its own linked worktree, so the gate ran blind to those edits and
+  blocked on unrelated failures in the main tree. When the edited file path is
+  known, the hook now resolves the repo root from the file
+  (`git -C <dir> rev-parse --show-toplevel`) and runs `make check` there;
+  it falls back to `$CLAUDE_PROJECT_DIR` only when git cannot resolve a root
+  or no file path is available.
+
 ## [4.8.0] - 2026-07-26
 
 ### Added
