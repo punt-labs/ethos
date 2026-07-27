@@ -140,3 +140,199 @@ func runHook(t *testing.T, command, binDir, stdin string) (code int, stdout, std
 	}
 	return code, outBuf.String(), errBuf.String()
 }
+
+// TestPostToolUseHook_WorktreeResolution proves ethos-n4tk behaviorally:
+// when a sub-agent edits a file inside a linked git worktree, the hook
+// runs make check in THAT worktree, not in $CLAUDE_PROJECT_DIR (the main
+// checkout). A logic error in the git-resolution branch — wrong dirname,
+// a fallback that fires when it should not, or a cd to the wrong root —
+// would still pass the command-text pin in TestGenerateAgentFiles but
+// fail here.
+//
+// The proof is a sentinel Makefile in each tree. Each check target echoes
+// a tree-unique word and exits 1, so the failing branch surfaces the word
+// on stderr and the assertion reads which tree's make check actually ran.
+// $CLAUDE_PROJECT_DIR points at the main tree in both cases, so a hook
+// that ignored the edited path would always print MAIN_TREE.
+func TestPostToolUseHook_WorktreeResolution(t *testing.T) {
+	requireTool(t, "git")
+	requireTool(t, "make")
+	// The matched-path and empty-path branches are only reached when jq
+	// is present; without it the hook takes the no-jq branch and runs
+	// make check in $CLAUDE_PROJECT_DIR unconditionally, so there is
+	// nothing to prove.
+	requireTool(t, "jq")
+
+	root, ids, teams, roles := setupTestRepo(t)
+	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
+	command := extractPostToolUseCommand(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
+
+	// Build the git trees under a base OFF the repo's .tmp directory.
+	// TMPDIR points at .tmp here, so a t.TempDir() edited-file path would
+	// contain a "/.tmp/" segment and hit the hook's scratch-path bypass
+	// (*/.tmp/*) — a test artifact, since real worktrees never live under
+	// .tmp. A home-anchored base avoids both bypass patterns.
+	base := mkBaseDir(t)
+	main := filepath.Join(base, "main")
+	require.NoError(t, os.MkdirAll(main, 0o755))
+	initGitRepo(t, main) // commits a README
+	writeFile(t, filepath.Join(main, "go.mod"), "module example.com/main\n")
+	// Sentinel Makefile per tree: the check target echoes a tree-unique
+	// word and exits 1, so the failing branch names the tree that ran.
+	// The Makefile need not be committed — make reads the working file.
+	writeFile(t, filepath.Join(main, "Makefile"), "check:\n\t@echo MAIN_TREE; exit 1\n")
+
+	// Linked worktree with its own sentinel Makefile. --detach avoids the
+	// branch-name derivation git otherwise does from the path basename.
+	wt := filepath.Join(base, "wt")
+	gitCmd(t, main, "worktree", "add", "--detach", wt)
+	writeFile(t, filepath.Join(wt, "Makefile"), "check:\n\t@echo WORKTREE_TREE; exit 1\n")
+
+	tests := []struct {
+		name      string
+		editPath  string   // file_path value; empty => omit the key
+		noCreate  bool     // pass editPath verbatim without creating a file
+		wantTree  string   // sentinel that must appear on stderr
+		otherTree string   // sentinel that must NOT appear
+		env       []string // extra environment for the hook process
+	}{
+		{
+			name:      "edit inside worktree runs make check in the worktree",
+			editPath:  filepath.Join(wt, "internal", "svc.go"),
+			wantTree:  "WORKTREE_TREE",
+			otherTree: "MAIN_TREE",
+		},
+		{
+			name:      "no file path falls back to CLAUDE_PROJECT_DIR",
+			editPath:  "",
+			wantTree:  "MAIN_TREE",
+			otherTree: "WORKTREE_TREE",
+		},
+		{
+			// The exact ethos-n4tk regression line: a matched-extension
+			// file (.sh hits filePatterns) living OUTSIDE any git repo, so
+			// `git -C <dir> rev-parse --show-toplevel` errors and $_root is
+			// empty. The hook must fall back to $CLAUDE_PROJECT_DIR (the
+			// MAIN tree) rather than skip the gate. GIT_CEILING_DIRECTORIES
+			// stops git's upward walk at base, so the outcome does not
+			// depend on whether some ancestor of the home dir is a repo.
+			name:      "matched file outside any git repo falls back to CLAUDE_PROJECT_DIR",
+			editPath:  filepath.Join(base, "outside", "deploy.sh"),
+			wantTree:  "MAIN_TREE",
+			otherTree: "WORKTREE_TREE",
+			env:       []string{"GIT_CEILING_DIRECTORIES=" + base},
+		},
+		{
+			// A RELATIVE matched path (.yaml hits filePatterns) must not
+			// reach git at all — the inner `case /*` guard sends it to the
+			// $CLAUDE_PROJECT_DIR default, because `git -C $(dirname)` on a
+			// relative path would resolve against the hook's own cwd. The
+			// file need not exist: the guard runs make check in the MAIN
+			// tree regardless of the path.
+			name:      "relative matched path falls back to CLAUDE_PROJECT_DIR",
+			editPath:  "internal/config.yaml",
+			noCreate:  true,
+			wantTree:  "MAIN_TREE",
+			otherTree: "WORKTREE_TREE",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdin string
+			switch {
+			case tt.editPath == "":
+				stdin = `{"tool_input":{}}`
+			case tt.noCreate:
+				stdin = `{"tool_input":{"file_path":"` + tt.editPath + `"}}`
+			default:
+				// The file's directory must exist so git -C can resolve.
+				writeFile(t, tt.editPath, "package internal\n")
+				stdin = `{"tool_input":{"file_path":"` + tt.editPath + `"}}`
+			}
+
+			code, stdout, stderr := runHookInProject(t, command, stdin, main, tt.env...)
+
+			assert.Equal(t, 2, code, "make check failure must block with exit 2")
+			assert.Contains(t, stderr, tt.wantTree,
+				"make check must run in the %s tree", tt.wantTree)
+			assert.NotContains(t, stderr, tt.otherTree,
+				"make check must not run in the %s tree", tt.otherTree)
+			assert.Empty(t, stdout, "nothing must go to stdout")
+		})
+	}
+}
+
+// runHookInProject executes command under /bin/sh with CLAUDE_PROJECT_DIR
+// set to projectDir, extraEnv appended, and stdin fed to the process.
+// Unlike runHook it does not stub make on PATH — the worktree test uses
+// real make against the sentinel Makefiles it writes into each tree.
+func runHookInProject(t *testing.T, command, stdin, projectDir string, extraEnv ...string) (code int, stdout, stderr string) {
+	t.Helper()
+
+	cmd := exec.Command("/bin/sh", "-c", command)
+	cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+projectDir)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	cmd.Stdin = strings.NewReader(stdin)
+
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+
+	err := cmd.Run()
+	if err != nil {
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr, "hook must exit cleanly, not fail to start")
+		code = exitErr.ExitCode()
+	}
+	return code, outBuf.String(), errBuf.String()
+}
+
+// gitCmd runs git in dir under the same isolated environment initGitRepo
+// uses (HOME pinned to dir, system/global config ignored, fixed identity),
+// failing the test on any git error.
+func gitCmd(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv(dir)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)
+}
+
+// requireTool skips the test when name is not on PATH, so the behavioral
+// test is a no-op on a host that lacks the runtime tooling the hook needs.
+func requireTool(t *testing.T, name string) {
+	t.Helper()
+	if _, err := exec.LookPath(name); err != nil {
+		t.Skipf("%s not found on PATH; skipping", name)
+	}
+}
+
+// mkBaseDir returns a temp directory whose path has no "/.tmp/" segment,
+// so edited-file paths built under it do not trip the hook's scratch-path
+// bypass (*/.tmp/*).
+//
+// It prefers t.TempDir(). In CI (GitHub Actions) TMPDIR is the runner's
+// own temp, so t.TempDir() is writable and clean — nothing more is needed.
+// Locally this repo's direnv sets TMPDIR to the repo's .tmp, so t.TempDir()
+// lands under a "/.tmp/" segment; only then does mkBaseDir fall back to a
+// home-anchored base, which is writable on a developer machine. CI never
+// takes the fallback, so a sandbox with a non-writable $HOME is not a
+// concern. The directory is removed at test end.
+func mkBaseDir(t *testing.T) string {
+	t.Helper()
+
+	base := t.TempDir()
+	if !strings.Contains(base, string(os.PathSeparator)+".tmp"+string(os.PathSeparator)) {
+		return base
+	}
+
+	// TMPDIR is the repo's .tmp; a path under it would hit the bypass.
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	base, err = os.MkdirTemp(home, ".n4tk-worktree-test-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	return base
+}
