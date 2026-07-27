@@ -190,7 +190,8 @@ func TestPostToolUseHook_WorktreeResolution(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		editPath  string   // absolute path of the edited file; empty => omit
+		editPath  string   // file_path value; empty => omit the key
+		noCreate  bool     // pass editPath verbatim without creating a file
 		wantTree  string   // sentinel that must appear on stderr
 		otherTree string   // sentinel that must NOT appear
 		env       []string // extra environment for the hook process
@@ -221,17 +222,33 @@ func TestPostToolUseHook_WorktreeResolution(t *testing.T) {
 			otherTree: "WORKTREE_TREE",
 			env:       []string{"GIT_CEILING_DIRECTORIES=" + base},
 		},
+		{
+			// A RELATIVE matched path (.yaml hits filePatterns) must not
+			// reach git at all — the inner `case /*` guard sends it to the
+			// $CLAUDE_PROJECT_DIR default, because `git -C $(dirname)` on a
+			// relative path would resolve against the hook's own cwd. The
+			// file need not exist: the guard runs make check in the MAIN
+			// tree regardless of the path.
+			name:      "relative matched path falls back to CLAUDE_PROJECT_DIR",
+			editPath:  "internal/config.yaml",
+			noCreate:  true,
+			wantTree:  "MAIN_TREE",
+			otherTree: "WORKTREE_TREE",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdin string
-			if tt.editPath != "" {
+			switch {
+			case tt.editPath == "":
+				stdin = `{"tool_input":{}}`
+			case tt.noCreate:
+				stdin = `{"tool_input":{"file_path":"` + tt.editPath + `"}}`
+			default:
 				// The file's directory must exist so git -C can resolve.
 				writeFile(t, tt.editPath, "package internal\n")
 				stdin = `{"tool_input":{"file_path":"` + tt.editPath + `"}}`
-			} else {
-				stdin = `{"tool_input":{}}`
 			}
 
 			code, stdout, stderr := runHookInProject(t, command, stdin, main, tt.env...)

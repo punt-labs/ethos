@@ -377,11 +377,16 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// checkout — running make check there is blind to the agent's
 		// changes and blocks on unrelated failures (ethos-n4tk).
 		// Resolving from the file lands make check in the worktree that
-		// actually holds the edit. When git errors or the file is
-		// outside a repo (empty $_root), fall back to
-		// $CLAUDE_PROJECT_DIR. The two branches with no file path (jq
-		// missing; empty .tool_input.file_path) have nothing to resolve
-		// from and keep using $CLAUDE_PROJECT_DIR directly.
+		// actually holds the edit. The resolution only runs for an
+		// ABSOLUTE $_path (case /*): a relative path would make `git -C
+		// $(dirname)` resolve against the hook's own cwd, which is
+		// ambiguous, so a relative path takes the prior-behavior default
+		// of $CLAUDE_PROJECT_DIR. Claude Code's tool input is absolute in
+		// practice; the guard makes the fallback provable. When git
+		// errors or the file is outside a repo (empty $_root), also fall
+		// back to $CLAUDE_PROJECT_DIR. The two branches with no file path
+		// (jq missing; empty .tool_input.file_path) have nothing to
+		// resolve from and keep using $CLAUDE_PROJECT_DIR directly.
 		// Output is captured to a variable first. On failure the tail
 		// -n 60 truncation is written to stderr and the hook exits 2;
 		// tail (not head) keeps the LAST 60 lines, which hold the
@@ -395,7 +400,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 		// under /bin/sh, which is dash on Debian/Ubuntu): no `set -o
 		// pipefail`, no process substitution, no bash-isms in the case
 		// patterns.
-		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
+		fmt.Fprintf(&b, "          command: \"if ! command -v jq >/dev/null 2>&1; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; _path=$(jq -r '.tool_input.file_path // empty' 2>/dev/null); if [ -z \\\"$_path\\\" ]; then _out=$(cd \\\"$CLAUDE_PROJECT_DIR\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0; fi; case \\\"$_path\\\" in */.tmp/*|*/.punt-labs/ethos/*|.tmp/*|.punt-labs/ethos/*) exit 0 ;; %s) case \\\"$_path\\\" in /*) _dir=$(dirname \\\"$_path\\\"); _root=$(git -C \\\"$_dir\\\" rev-parse --show-toplevel 2>/dev/null); if [ -z \\\"$_root\\\" ]; then _root=\\\"$CLAUDE_PROJECT_DIR\\\"; fi ;; *) _root=\\\"$CLAUDE_PROJECT_DIR\\\" ;; esac; _out=$(cd \\\"$_root\\\" && make check 2>&1); _rc=$?; if [ $_rc -ne 0 ]; then printf '%%s\\\\n' \\\"$_out\\\" | tail -n 60 >&2; exit 2; fi; exit 0 ;; *) exit 0 ;; esac\"\n", filePatterns)
 	}
 	b.WriteString("---\n")
 
