@@ -560,8 +560,16 @@ func TestSubprocess_VerifierIsolationBlock(t *testing.T) {
 	// global store.
 	missionID := seedVerifierMission(t, se, "test-agent")
 
+	// The gate binds by (mission_id, role): the spawn must declare the
+	// mission it serves via MISSION_ID, exactly as the Tier B dispatch
+	// emits it into the subagent's env (ethos-z69l). test-agent is the
+	// evaluator of this mission, so the declared mission drives the
+	// verifier path. worker-agent (the flip-side spawn below) is not the
+	// evaluator, so the same MISSION_ID leaves it on the persona path.
+	se.env = append(se.env, "MISSION_ID="+missionID)
+
 	// Spawn as the evaluator handle — the isolation block path MUST
-	// fire because an open mission names test-agent as evaluator.
+	// fire because the declared mission names test-agent as evaluator.
 	verifierPayload := fmt.Sprintf(
 		`{"session_id":%q,"agent_id":"sub-vi-001","agent_type":"test-agent"}`, sid)
 	stdout, stderr, err := runHookSubprocess(t, se, "subagent-start", verifierPayload)

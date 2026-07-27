@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SubagentStart binds the frozen-evaluator gate by `(mission_id, role)`,
+  not by an evaluator-handle scan (ethos-z69l).** The gate matched the
+  spawning subagent against the evaluator handle of *any* open mission, so a
+  handle that was worker on one open mission and evaluator on another got
+  bound as the other mission's frozen verifier whenever it was spawned — even
+  when it was dispatched (carrying its own `MISSION_ID`) to *work* its own
+  mission. The misbound spawn then enforced the wrong mission's write-set and
+  refused every file in its actual write-set. The hook now reads the spawn's
+  declared `MISSION_ID` and applies the gate only when that one mission is
+  open and names the subagent as its evaluator; a spawn serving the declared
+  mission in any other role takes the normal persona path. DES-033 is
+  preserved: a genuine verifier spawn on a drifted pinned hash still refuses.
+  `ethos mission create` now also prints a non-fatal advisory when a new
+  contract's worker/evaluator handle overlaps an open mission's handles,
+  naming the colliding mission and handles so the collision is visible before
+  a spawn can misbind.
 - **Isolated-worktree sub-agents now run `make check` against their own
   worktree, not the main checkout (ethos-n4tk).** The generated PostToolUse
   `Write|Edit` hook ran `make check` in `$CLAUDE_PROJECT_DIR`, which always
