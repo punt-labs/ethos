@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/punt-labs/ethos/internal/repomiss"
 )
 
 var validHandle = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
@@ -37,6 +39,14 @@ type Identity struct {
 	// Warnings from attribute resolution (e.g., missing .md files).
 	// Populated by Store.Load, never persisted.
 	Warnings []string `yaml:"-" json:"warnings,omitempty"`
+
+	// MissingExt lists extension base files the repo's .vendor.yaml says
+	// were vendored but that the source layer does not hold (DES-057).
+	// Load records the verdict without failing — a missing namespace must
+	// never brick a live session — and each surface decides what to do
+	// with it. Always empty in layered mode and when there is no
+	// manifest. Never persisted.
+	MissingExt []repomiss.MissingRef `yaml:"-" json:"missing_ext,omitempty"`
 
 	// Ext holds tool-scoped extension data, assembled on Load from
 	// <handle>.ext/<namespace>.yaml files. Never persisted to the

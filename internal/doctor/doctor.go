@@ -67,6 +67,14 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 
 	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams))
 	results = append(results, CheckSealHook(repoRoot))
+
+	// DES-057. The completeness gate reads the shared store (storeRoot),
+	// matching every other resolution consumer; the git-boundary check
+	// reads the checkout (repoRoot), because the index and .gitignore
+	// belong to the tree being committed.
+	results = append(results, CheckRepoSetComplete(s, storeRoot))
+	results = append(results, CheckLocalExtNotTracked(repoRoot))
+	results = append(results, CheckExtCredentialNames(s))
 	return results
 }
 

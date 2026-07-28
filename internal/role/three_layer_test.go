@@ -19,7 +19,7 @@ func setupThreeLayer(t *testing.T) (ls *LayeredStore, repo, bundle, global *Stor
 	repo = NewStore(repoRoot)
 	bundle = NewStore(bundleRoot)
 	global = NewStore(globalRoot)
-	ls = NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot)
+	ls = NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot, false)
 	return
 }
 

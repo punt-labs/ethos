@@ -23,7 +23,7 @@ func roleStore() *role.LayeredStore {
 // layeredRoleStore creates a layered role store from an identity store.
 func layeredRoleStore(is identity.IdentityStore) *role.LayeredStore {
 	if ls, ok := is.(*identity.LayeredStore); ok {
-		return role.NewLayeredStoreWithBundle(ls.RepoRoot(), ls.BundleRoot(), ls.GlobalRoot())
+		return role.NewLayeredStoreWithBundle(ls.RepoRoot(), ls.BundleRoot(), ls.GlobalRoot(), ls.RepoAuthoritative())
 	}
 	return role.NewLayeredStore("", is.Root())
 }

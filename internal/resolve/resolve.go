@@ -18,6 +18,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Resolution modes for the resolution field (DES-057 Part A).
+const (
+	// ResolutionLayered is the default: repo → bundle → global, where the
+	// global fallback catches anything the repo layer lacks.
+	ResolutionLayered = "layered"
+	// ResolutionRepoOnly drops the global tail, making the repo layer
+	// authoritative so a missing handle or attribute fails loud instead of
+	// silently resolving from the user's home.
+	ResolutionRepoOnly = "repo-only"
+)
+
 // RepoConfig holds the repo-local ethos configuration.
 //
 // MaxDelegationDepth bounds the parent_delegation chain length the
@@ -26,10 +37,14 @@ import (
 // the just-written skeleton. Zero means "use the package default"
 // (mission.MaxDelegationDepthDefault) so a repo with no override
 // gets a safe value rather than an unbounded chain.
+//
+// Resolution selects the layer chain (DES-057). Unset means layered —
+// byte-identical to the behavior before the field existed.
 type RepoConfig struct {
 	Agent              string `yaml:"agent,omitempty"`                // default agent identity handle
 	Team               string `yaml:"team,omitempty"`                 // team that owns this repo
 	ActiveBundle       string `yaml:"active_bundle,omitempty"`        // currently active team bundle name
+	Resolution         string `yaml:"resolution,omitempty"`           // DES-057 layer policy; "" == layered
 	MaxDelegationDepth int    `yaml:"max_delegation_depth,omitempty"` // DES-054 v5 depth ceiling; 0 == default
 }
 
@@ -92,7 +107,20 @@ func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no identity matches git user %q, email %q, or OS user %q", gitName, gitEmail, osUser)
+	return "", fmt.Errorf("no identity matches git user %q, email %q, or OS user %q%s",
+		gitName, gitEmail, osUser, repoOnlyHint(store))
+}
+
+// repoOnlyHint explains a no-match under DES-057 repo-only mode, or
+// returns "" in layered mode. Without it the terminal error is a generic
+// "no identity matches" that cannot say WHY the global store — which
+// holds the caller's identity — went unconsulted.
+func repoOnlyHint(store identity.IdentityStore) string {
+	ls, ok := store.(*identity.LayeredStore)
+	if !ok || !ls.RepoAuthoritative() {
+		return ""
+	}
+	return " — this repo sets resolution: repo-only, so the global identity store was not consulted; run `ethos vendor <handle>` to add your identity to this repo"
 }
 
 // sessionPersona is the result of resolveFromSession.
@@ -277,6 +305,34 @@ func ResolveMaxDelegationDepth(repoRoot string, defaultValue int) (int, error) {
 		)
 	}
 	return cfg.MaxDelegationDepth, nil
+}
+
+// ResolveResolution returns the repo's layer policy: ResolutionLayered or
+// ResolutionRepoOnly. An absent repo, an absent config, and an empty field
+// all mean layered — the behavior every repo had before the field existed.
+//
+// An unrecognized value is an error, not a silent fall-back to layered: a
+// typo like "repo_only" would otherwise leave the global fallback quietly
+// in place, which is precisely the state repo-only exists to eliminate.
+func ResolveResolution(repoRoot string) (string, error) {
+	if repoRoot == "" {
+		return ResolutionLayered, nil
+	}
+	cfg, err := LoadRepoConfig(repoRoot)
+	if err != nil {
+		return ResolutionLayered, fmt.Errorf("resolve resolution: %w", err)
+	}
+	if cfg == nil || cfg.Resolution == "" {
+		return ResolutionLayered, nil
+	}
+	switch cfg.Resolution {
+	case ResolutionLayered, ResolutionRepoOnly:
+		return cfg.Resolution, nil
+	default:
+		return ResolutionLayered, fmt.Errorf(
+			"resolve resolution: unknown resolution %q: must be %q or %q",
+			cfg.Resolution, ResolutionLayered, ResolutionRepoOnly)
+	}
 }
 
 // ResolveActiveBundle returns the configured active_bundle name for a

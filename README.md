@@ -228,6 +228,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos session start` / `end` | Open/close a session from any harness — `eval "$(ethos session start)"` |
 | `ethos iam <persona>` | Declare your persona in the active session |
 | `ethos doctor` | Check installation health |
+| `ethos vendor [handle...]` | Snapshot a complete, self-standing identity set into this repo (see below) |
 | `ethos mission create` / `dispatch` | Create a mission contract |
 | `ethos mission claim` / `release` | Bind session to mission for Tier B dispatch |
 | `ethos mission show <id>` | Show contract, results, reflections |
@@ -255,6 +256,60 @@ ethos session end                              # teardown
 re-minted), and resolution is `--session` > `ETHOS_SESSION` > the Claude
 process walk. Outside a session, `iam` and `mission claim` fail with an
 error naming `ethos session start`.
+
+### Self-standing repos: `vendor` and `resolution: repo-only`
+
+By default ethos resolves repo → active bundle → global, and the global
+fallback catches whatever the repo lacks. That is what you want on a
+developer's machine, and it is also why a repo that vendors a partial
+identity set does not know it is partial: the gaps resolve from
+`~/.punt-labs/ethos/` and nothing says so.
+
+`ethos vendor` produces a set that resolves on its own:
+
+```bash
+ethos vendor bwk                  # plan: shows the closure and its blast radius
+ethos vendor bwk --apply          # write into .punt-labs/ethos/
+ethos vendor --team engineering --apply --prune
+```
+
+It follows references to a fixed point — attributes, roles, the teams an
+identity belongs to, and *those* teams' other members. That last edge is
+what pulls in people reachable no other way, and without it a vendored
+team names members the set does not contain. It also means the closure is
+the connected component of the team graph: naming one handle in a dense
+org can vendor most of the roster. Vendor therefore plans by default and
+reports the gap between what you asked for and what it would write.
+
+Then make the repo layer authoritative, in `.punt-labs/ethos.yaml`:
+
+```yaml
+resolution: repo-only    # default is `layered`
+```
+
+The global layer now leaves every read, and a missing reference is a hard
+error naming each one and the file it should occupy — instead of silently
+resolving from a home directory a CI runner or a fresh clone does not
+have. `ethos doctor` is the gate:
+
+```text
+Repo-only completeness   PASS  29 identities resolve with no global fallback
+```
+
+Extensions come along, because a vendored agent without its memory wiring
+looks correct and behaves as if it had amnesia. Anything secret goes in
+`<handle>.ext/<namespace>.local.yaml`, which vendor never copies and
+`.gitignore` covers; `ethos ext set --local` writes it, and reads see base
+and `.local` merged. Vendor refuses (non-zero) to copy a key whose *name*
+reads as a credential — `api_token` blocks, `gpg_key_id` does not, values
+are never inspected — with `--allow-ext-key <ns>/<key>` as a per-key
+override and no blanket force.
+
+`.local` is a git-exclusion mechanism, not a vault: the merged view still
+reaches the model at runtime.
+
+`ethos export` is a different job — a lossy conversion of one identity
+into a foreign format — and is unchanged.
 
 ### Git worktrees and the store root
 

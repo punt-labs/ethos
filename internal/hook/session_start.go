@@ -12,6 +12,7 @@ import (
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/repomiss"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/session"
@@ -80,6 +81,15 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 	}
 	for _, w := range agentID.Warnings {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: agent identity %q: %s\n", agentPersona, w)
+	}
+	// DES-057's degrade: an extension the repo vendored but no longer
+	// holds is reported and the session continues. Failing here would
+	// brick a live session over agent memory wiring; saying nothing would
+	// hand the operator an agent that looks right and has quietly lost
+	// it. Doctor and agent generation are the surfaces that refuse.
+	if len(agentID.MissingExt) > 0 {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: %v\n",
+			repomiss.New(agentPersona, agentID.MissingExt))
 	}
 
 	installAgentDefs()

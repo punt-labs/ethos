@@ -201,6 +201,31 @@ func TestResolve_NoMatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "nobody")
 }
 
+// A no-match under repo-only must say WHY the global store — which does
+// hold the caller's identity — went unconsulted. Without the hint the
+// user sees a generic "no identity matches" and has no way to connect it
+// to the repo's resolution setting (DES-057 Part A).
+func TestResolve_NoMatchHintsRepoOnly(t *testing.T) {
+	setGitConfig(t, "unknown-user", "unknown@example.com")
+	t.Setenv("USER", "nobody")
+
+	repo, global := identity.NewStore(t.TempDir()), identity.NewStore(t.TempDir())
+	require.NoError(t, global.Save(&identity.Identity{
+		Name: "Mal Reynolds", Handle: "nobody", Kind: "human",
+	}))
+
+	layered := identity.NewLayeredStoreWithBundle(repo, nil, global, false)
+	handle, err := Resolve(layered, nil)
+	require.NoError(t, err, "layered still finds the global identity")
+	assert.Equal(t, "nobody", handle)
+
+	repoOnly := identity.NewLayeredStoreWithBundle(repo, nil, global, true)
+	_, err = Resolve(repoOnly, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolution: repo-only")
+	assert.Contains(t, err.Error(), "ethos vendor")
+}
+
 func TestResolve_PriorityOrder(t *testing.T) {
 	// git user.name should take priority over $USER.
 	setGitConfig(t, "mal-github", "")
@@ -567,6 +592,59 @@ func TestResolveActiveBundle_MalformedYAML(t *testing.T) {
 	assert.Equal(t, "", got)
 	assert.Contains(t, err.Error(), "resolve active bundle")
 	assert.Contains(t, err.Error(), "parsing repo config")
+}
+
+// --- ResolveResolution tests (DES-057) ---
+
+func TestResolveResolution(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset means layered", yaml: "agent: claude\n", want: ResolutionLayered},
+		{name: "explicit layered", yaml: "resolution: layered\n", want: ResolutionLayered},
+		{name: "repo-only", yaml: "resolution: repo-only\n", want: ResolutionRepoOnly},
+		{
+			name: "alongside other fields",
+			yaml: "agent: claude\nactive_bundle: punt-labs\nresolution: repo-only\n",
+			want: ResolutionRepoOnly,
+		},
+		// A typo must not degrade quietly to layered: leaving the global
+		// fallback in place is exactly what repo-only exists to remove.
+		{name: "typo is an error", yaml: "resolution: repo_only\n", want: ResolutionLayered, wantErr: true},
+		{name: "malformed yaml", yaml: "resolution: [unclosed\n", want: ResolutionLayered, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, ".punt-labs")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dir, "ethos.yaml"), []byte(tt.yaml), 0o644))
+
+			got, err := ResolveResolution(root)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "resolve resolution")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestResolveResolution_NoRepoOrConfig(t *testing.T) {
+	got, err := ResolveResolution("")
+	require.NoError(t, err)
+	assert.Equal(t, ResolutionLayered, got)
+
+	got, err = ResolveResolution(t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, ResolutionLayered, got)
 }
 
 // --- FindRepoRoot tests ---
