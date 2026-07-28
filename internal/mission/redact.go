@@ -34,20 +34,67 @@ type PathRedactor struct {
 // Both prefixes are replaced globally so one string embedding several
 // paths — a Bash command, a delegation prompt — gets every one
 // rewritten.
-//
-// The trailing-slash form is replaced first; the bare form is replaced
-// second so a path that ends exactly at the root (no trailing slash,
-// e.g. `cd <repoRoot>`) also gets the token.
 func (r PathRedactor) Text(s string) string {
-	if r.Repo != "" {
-		s = strings.ReplaceAll(s, r.Repo+"/", "<repo>/")
-		s = strings.ReplaceAll(s, r.Repo, "<repo>")
+	s = replacePrefix(s, r.Repo, "<repo>")
+	return replacePrefix(s, r.Home, "~")
+}
+
+// replacePrefix rewrites every occurrence of prefix in s to token,
+// skipping matches where the text continues the same path component.
+// A plain substring replacement turns /w/repo2/file into <repo>2/file
+// when the prefix is /w/repo — it corrupts a sibling directory and
+// hides which path was really named.
+//
+// A skipped repo match is not a leak: the home substitution runs
+// second over the same string, so /w/repo2/file still comes out as
+// ~/repo2/file when the repo sits under home, which is the case that
+// carries the username.
+func replacePrefix(s, prefix, token string) string {
+	if prefix == "" {
+		return s
 	}
-	if r.Home != "" {
-		s = strings.ReplaceAll(s, r.Home+"/", "~/")
-		s = strings.ReplaceAll(s, r.Home, "~")
+	var b strings.Builder
+	for {
+		i := strings.Index(s, prefix)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		end := i + len(prefix)
+		if continuesComponent(s[end:]) {
+			b.WriteString(s[:end])
+			s = s[end:]
+			continue
+		}
+		b.WriteString(s[:i])
+		b.WriteString(token)
+		s = s[end:]
 	}
-	return s
+}
+
+// continuesComponent reports whether rest extends the path component
+// a prefix match just ended on. Only characters that make the match a
+// different directory count: letters, digits, '-', '_', and any
+// non-ASCII byte, which in UTF-8 can only be part of a letter.
+//
+// A '.' terminates rather than continues, so a prompt ending "fix
+// /w/repo." is redacted. That over-redacts a sibling named
+// /w/repo.bak into <repo>.bak, which costs precision; treating '.' as
+// a continuation would instead leave a full absolute path with the
+// operator's username in prose, which is the defect this type exists
+// to prevent. Where the two directions conflict, redact.
+func continuesComponent(rest string) bool {
+	if rest == "" {
+		return false
+	}
+	switch c := rest[0]; {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '-', c == '_', c >= 0x80:
+		return true
+	default:
+		return false
+	}
 }
 
 // Body redacts a file body. Returns nil for nil so an absent optional

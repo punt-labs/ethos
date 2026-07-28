@@ -60,6 +60,36 @@ func TestPathRedactorText(t *testing.T) {
 			want: "/etc/hosts",
 		},
 		{
+			name: "a sibling sharing the repo prefix is not corrupted",
+			r:    PathRedactor{Home: home, Repo: repo},
+			in:   "/Users/jfreeman/Coding/punt-labs/ethos-docs/README.md",
+			want: "~/Coding/punt-labs/ethos-docs/README.md",
+		},
+		{
+			name: "a sibling sharing the home prefix keeps its own name",
+			r:    PathRedactor{Home: home},
+			in:   "/Users/jfreeman2/notes.md",
+			want: "/Users/jfreeman2/notes.md",
+		},
+		{
+			name: "a repo path ending a sentence is still redacted",
+			r:    PathRedactor{Home: home, Repo: repo},
+			in:   "fix /Users/jfreeman/Coding/punt-labs/ethos.",
+			want: "fix <repo>.",
+		},
+		{
+			name: "a quoted repo path is redacted",
+			r:    PathRedactor{Home: home, Repo: repo},
+			in:   `cd "/Users/jfreeman/Coding/punt-labs/ethos" && make`,
+			want: `cd "<repo>" && make`,
+		},
+		{
+			name: "one string mixing a match and a near-match",
+			r:    PathRedactor{Repo: "/w/repo"},
+			in:   "cp /w/repo2/a.txt /w/repo/b.txt",
+			want: "cp /w/repo2/a.txt <repo>/b.txt",
+		},
+		{
 			name: "empty prefixes disable substitution",
 			r:    PathRedactor{},
 			in:   "/Users/jfreeman/a.txt",

@@ -1,7 +1,9 @@
 package hook
 
 import (
+	"maps"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -157,8 +159,10 @@ func reduceToKeepList(input map[string]any, keep []string) (map[string]any, bool
 // sweep applies at every depth below, so an address nested in a
 // structured argument of a prompt is caught too.
 //
-// Returns the input value itself when nothing matched, so an untouched
-// line marshals to exactly the bytes it did before this policy existed.
+// A container is cloned only once the first match inside it is found,
+// so a line with nothing to redact is returned as the value that came
+// in — no copy, and it marshals to exactly the bytes it did before
+// this policy existed.
 func sweepPII(v any, inPrompt bool) (any, bool) {
 	switch x := v.(type) {
 	case string:
@@ -168,29 +172,31 @@ func sweepPII(v any, inPrompt bool) (any, bool) {
 		s := emailPattern.ReplaceAllString(x, redactedEmailToken)
 		return s, s != x
 	case map[string]any:
-		out := make(map[string]any, len(x))
-		changed := false
+		out, copied := x, false
 		for k, vv := range x {
 			swept, c := sweepPII(vv, inPrompt || promptBearingKeys[k])
+			if !c {
+				continue
+			}
+			if !copied {
+				out, copied = maps.Clone(x), true
+			}
 			out[k] = swept
-			changed = changed || c
 		}
-		if !changed {
-			return x, false
-		}
-		return out, true
+		return out, copied
 	case []any:
-		out := make([]any, len(x))
-		changed := false
+		out, copied := x, false
 		for i, vv := range x {
 			swept, c := sweepPII(vv, inPrompt)
+			if !c {
+				continue
+			}
+			if !copied {
+				out, copied = slices.Clone(x), true
+			}
 			out[i] = swept
-			changed = changed || c
 		}
-		if !changed {
-			return x, false
-		}
-		return out, true
+		return out, copied
 	default:
 		return v, false
 	}
