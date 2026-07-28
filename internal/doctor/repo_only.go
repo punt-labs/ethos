@@ -87,9 +87,13 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
 	}
 
+	// A git failure means the check did not run. PASS would report that
+	// `.local.yaml` tracking was verified when nothing was verified —
+	// a false all-clear on secret-bearing files is the one answer this
+	// check must never give.
 	tracked, err := trackedLocalExt(repoRoot)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: err.Error()}
+		return Result{Name: name, Status: "WARN", Detail: "could not verify: " + err.Error()}
 	}
 	if len(tracked) > 0 {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
@@ -99,7 +103,7 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 
 	ignored, err := gitignoreCovers(repoRoot)
 	if err != nil {
-		return Result{Name: name, Status: "PASS", Detail: err.Error()}
+		return Result{Name: name, Status: "WARN", Detail: "could not verify: " + err.Error()}
 	}
 	if !ignored {
 		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(

@@ -171,6 +171,18 @@ func TestCheckLocalExtNotTracked(t *testing.T) {
 	t.Run("no repo passes", func(t *testing.T) {
 		assert.Equal(t, "PASS", CheckLocalExtNotTracked("").Status)
 	})
+
+	// A git failure means the check did not run. PASS would report that
+	// tracking was verified when nothing was — a false all-clear on
+	// secret-bearing files (Copilot, PR #410).
+	// A directory git cannot even enter. (A temp dir would not do: `git -C`
+	// walks up, and TMPDIR here sits inside a real repo, so git would
+	// happily answer about the enclosing checkout.)
+	t.Run("unverifiable warns rather than passing", func(t *testing.T) {
+		r := CheckLocalExtNotTracked(filepath.Join(t.TempDir(), "does-not-exist"))
+		assert.Equal(t, "WARN", r.Status)
+		assert.Contains(t, r.Detail, "could not verify")
+	})
 }
 
 func TestCheckExtCredentialNames(t *testing.T) {
