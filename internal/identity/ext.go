@@ -211,10 +211,17 @@ func (s *Store) extSetDirect(handle, namespace, key, value string, opts ...ExtOp
 			m = make(map[string]string)
 		}
 	} else if os.IsNotExist(err) {
-		// New namespace — check namespace count limit (best-effort;
-		// concurrent writers may briefly exceed the limit).
-		if err := s.checkNamespaceLimit(handle); err != nil {
-			return err
+		// The TARGET FILE is new — but a namespace is two files, so that
+		// is not the same as a new namespace. Adding the .local companion
+		// to an existing base (or a base to a .local-only namespace)
+		// creates no namespace, and charging it against the limit would
+		// refuse the Part C secret split exactly when an identity is at
+		// capacity (Bugbot, PR #410). Best-effort: concurrent writers may
+		// briefly exceed the limit.
+		if !s.namespaceExists(handle, namespace) {
+			if err := s.checkNamespaceLimit(handle); err != nil {
+				return err
+			}
 		}
 		m = make(map[string]string)
 	} else {
@@ -357,6 +364,22 @@ func (s *Store) loadExtensions(handle string) (map[string]map[string]string, []s
 		ext[ns] = m
 	}
 	return ext, warnings
+}
+
+// namespaceExists reports whether either half of a namespace is already
+// on disk. It is the counterpart of ExtList's union: both must agree on
+// what "a namespace" is, or the limit and the listing disagree about how
+// many there are.
+func (s *Store) namespaceExists(handle, namespace string) bool {
+	for _, p := range []string{
+		s.extPath(handle, namespace),
+		s.extLocalPath(handle, namespace),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) checkNamespaceLimit(handle string) error {

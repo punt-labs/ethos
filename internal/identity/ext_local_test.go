@@ -2,6 +2,7 @@ package identity
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -186,6 +187,37 @@ func TestExtListNoPhantomLocalNamespace(t *testing.T) {
 	assert.ElementsMatch(t, []string{"beadle", "vox"}, ns)
 	assert.NotContains(t, ns, "vox.local")
 	assert.NotContains(t, ns, "beadle.local")
+}
+
+// A namespace is two files, so adding the .local half of one that
+// already exists creates no namespace. Charging it against the limit
+// refused the secret split exactly when an identity was at capacity —
+// the moment its config is most likely to hold something worth hiding
+// (Bugbot, PR #410).
+func TestExtSetLocalAtNamespaceCapacity(t *testing.T) {
+	s := setupExtTest(t)
+	for i := range MaxNamespacesPerID {
+		ns := fmt.Sprintf("ns%d", i)
+		require.NoError(t, s.ExtSet("test", ns, "k", "v"))
+	}
+	ns, err := s.ExtList("test")
+	require.NoError(t, err)
+	require.Len(t, ns, MaxNamespacesPerID, "at capacity")
+
+	// The companion of an existing namespace is allowed...
+	require.NoError(t, s.ExtSet("test", "ns0", "api_token", "s3cret", Local(true)))
+	m, err := s.ExtGet("test", "ns0", "api_token")
+	require.NoError(t, err)
+	assert.Equal(t, "s3cret", m["api_token"])
+
+	// ...and the count is unchanged, because no namespace was added.
+	ns, err = s.ExtList("test")
+	require.NoError(t, err)
+	assert.Len(t, ns, MaxNamespacesPerID)
+
+	// A genuinely new namespace is still refused, in either half.
+	require.Error(t, s.ExtSet("test", "brandnew", "k", "v"))
+	require.Error(t, s.ExtSet("test", "brandnew", "k", "v", Local(true)))
 }
 
 // readYAMLMap decodes a namespace file straight from disk, bypassing every
