@@ -482,31 +482,71 @@ the same target — the DES-052 Stat-Write race detector relies on it.
 Each line is `f.Sync()`'d. The reader is partial-line-tolerant: a
 truncated final line from a crashed writer is skipped, not fatal.
 
-### Path redaction
+### Redaction
 
-The audit log is git-tracked, so absolute paths in `tool_input` and
-`tool_input_preview` would leak the original operator's username and
-machine layout into shared history forever. Two substitutions fire
-before any line lands on disk:
+The audit log and the Tier B delegation records (`prompt.md`,
+`record.yaml`) are git-tracked, so anything in a `tool_input` or a
+captured prompt would leak into shared history forever. Two kinds of
+redaction fire before any line or record lands on disk: path redaction
+(always) and per-tool content redaction (for content-bearing tools).
+
+**Path redaction.** Absolute paths would leak the operator's username and
+machine layout:
 
 | Source | Becomes |
 |--------|---------|
 | `$HOME/X` | `~/X` |
 | `<repoRoot>/X` | `<repo>/X` |
 
-Redaction walks every string value in `tool_input` recursively
-(nested maps, nested slices). Bash `command` strings get rewritten
-the same way — no special case, the recursion handles them.
+Redaction walks every string value in `tool_input` recursively (nested
+maps, nested slices); Bash `command` strings are rewritten the same way,
+no special case. Prefix matching is anchored at a path-component
+boundary, so a sibling checkout (`/w/repo2` next to `/w/repo`) is not
+corrupted. One `mission.PathRedactor` runs at both call sites — the audit
+writer and the delegation-record writer (`prompt.md`, `record.yaml`, and
+the close-reason) — so a delegation prompt captured at spawn is redacted
+before it is written, not only the audit line.
 
-Order: build raw `tool_input` map → redact → compute
-`tool_input_hash` → truncate to `tool_input_preview`. The hash is
-computed over the redacted form so two machines making the same
-logical call produce the same `tool_input_hash`. This preserves
-the cross-machine collision-detection invariant the hash exists for.
+**Content redaction.** Path rewriting alone still leaves message *content*
+in the log: a `send_email` body and its recipient, an address inside a
+prompt. A per-tool keep-list (`sensitiveTools`) governs content-bearing
+tools — `send_email`, `reply_message`, `create_draft`, and any beadle
+tool that composes mail — keeping only an explicit safe set (`subject`)
+and replacing every other value with `[redacted]`. The keep-list is
+default-deny: a field added to a tool later (a `cc`, a `bcc`) is redacted
+because it is not named, not leaked because it is not blocked.
+Independently, a fixed set of structured recipient keys (`to`, `cc`,
+`bcc`, `recipient`) is stripped for *any* tool, so an address in a
+structured field never reaches the log even from an un-enrolled tool. A
+line that was actually reduced carries `redacted: true`; a line with
+nothing to redact is byte-identical, with no marker. Matching is on the
+bare tool name (the `mcp__<ns>__` prefix is stripped), so every namespace
+exposing a given tool inherits the policy.
 
-Redaction applies to new writes only. Audit lines already on disk
-keep whatever they had — operators who want fully clean history can
-use `git filter-repo` or accept the pre-fix lines as historical.
+Known limitation: the address sweep over free-text fields keys off an
+enumerated set of prose field names. A new tool carrying an address in a
+differently-named prose field is not swept until that key is added —
+structured recipients and enrolled mail tools are covered, but a novel
+prose field is a silent miss until the map is extended.
+
+**Fail-closed.** Redaction never fails open. If `$HOME` cannot be
+resolved, the delegation writer refuses the whole write (which the
+dispatch turns into a spawn refusal) and the audit path drops the payload
+— keeping only the timestamp, tool name, and delegation linkage — rather
+than write the raw content. Audit logging must not block a tool call, so
+failing closed there costs the content, not the call.
+
+**Order:** build raw `tool_input` → redact (path + content) → compute
+`tool_input_hash` → truncate to `tool_input_preview`. The hash is always
+computed over the redacted form, so two machines making the same logical
+call produce the same `tool_input_hash` and the raw form is never
+reconstructable from the hash. This preserves the cross-machine
+collision-detection invariant the hash exists for.
+
+Redaction applies to new writes only. Audit lines and delegation records
+already on disk keep whatever they had — operators who want fully clean
+history can use `git filter-repo` or accept the pre-fix lines as
+historical.
 
 ## Storage Layout
 

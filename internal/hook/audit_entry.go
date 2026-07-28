@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
+	"fmt"
+	"os"
+
+	"github.com/punt-labs/ethos/internal/mission"
 )
 
 // auditEntry is a single JSONL line in the session audit log.
@@ -18,6 +21,12 @@ import (
 // extract_into races (DES-052 Stat–Write residual) without re-reading
 // the full input. tool_input_preview is retained as a 200-char human
 // snippet for grep convenience.
+//
+// redacted marks a line whose tool_input lost content to the per-tool
+// policy in audit_content.go — an outbound email reduced to its
+// subject, or an address swept out of a prompt. It matches the marker
+// the hand-redacted public-website lines carry, so a reader can tell
+// "this call had no body" from "this body was removed".
 //
 // All new fields are `omitempty` so a v3.11.0 audit JSONL line
 // (carrying only ts/session/tool/tool_input_preview) decodes cleanly
@@ -44,6 +53,7 @@ type auditEntry struct {
 	ToolInput        map[string]any `json:"tool_input,omitempty"`
 	ToolInputHash    string         `json:"tool_input_hash,omitempty"`
 	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
+	Redacted         bool           `json:"redacted,omitempty"`
 }
 
 // previewLimit bounds the size of tool_input_preview. 200 chars is
@@ -129,63 +139,39 @@ func hashToolInput(input map[string]any) string {
 //
 // Empty homeDir or repoRoot disables that substitution. The function
 // never mutates the input map.
-func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[string]any {
-	if input == nil {
-		return nil
-	}
-	r := redactor{home: homeDir, repo: repoRoot}
-	out, _ := r.value(input).(map[string]any)
-	return out
-}
-
-// redactor carries the prefix table for a single redaction pass.
-// Held as a struct so the recursion does not thread three arguments
-// through every call.
-type redactor struct {
-	home string
-	repo string
-}
-
-// value redacts v recursively. Strings are rewritten via rewrite;
-// maps and slices recurse; other types pass through unchanged.
-func (r redactor) value(v any) any {
-	switch x := v.(type) {
-	case string:
-		return r.rewrite(x)
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			out[k] = r.value(vv)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, vv := range x {
-			out[i] = r.value(vv)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
-// rewrite replaces every occurrence of repo and home prefixes inside
-// s with their portable tokens. repo is checked first so a repo
-// nested inside home (the common case) is tagged <repo>/X, not
-// ~/<rel>/X. Both prefixes are replaced globally so a Bash command
-// embedding several paths gets every one rewritten.
 //
-// The trailing-slash form is replaced first; the bare form is
-// replaced second so a path that ends exactly at repoRoot (no
-// trailing slash, e.g. `cd <repoRoot>`) also gets the token.
-func (r redactor) rewrite(s string) string {
-	if r.repo != "" {
-		s = strings.ReplaceAll(s, r.repo+"/", "<repo>/")
-		s = strings.ReplaceAll(s, r.repo, "<repo>")
+// The substitution itself lives on mission.PathRedactor. The Tier B
+// delegation writer redacts prompt.md and record.yaml with the same
+// type (internal/mission/delegation.go), so the audit lines and the
+// delegation records cannot drift apart — one implementation, two
+// call sites (ethos-ersr, ethos-n4np).
+func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[string]any {
+	return mission.PathRedactor{Home: homeDir, Repo: repoRoot}.Map(input)
+}
+
+// redactToolInput produces the tool_input that lands on disk: absolute
+// paths rewritten to portable tokens, then the per-tool content policy
+// from audit_content.go. The bool reports whether content was removed,
+// which the caller stamps on the entry as the redacted marker.
+//
+// A usable home prefix is what makes path redaction possible; without
+// one there is no way to tell the operator's home path from any other
+// absolute path. mission.NewPathRedactor is the single arbiter of that
+// — the delegation writer resolves its prefix through the same call,
+// so the two write paths cannot disagree about what is redactable.
+//
+// That failure drops the input rather than storing it raw. The line
+// keeps its timestamp, tool name, and delegation linkage — everything
+// the audit trail is reconstructed from — and loses only the payload.
+// Audit logging must never block a tool call (HandleAuditLog returns
+// nil on every failure path), so failing closed here means dropping
+// content, not refusing the call.
+func redactToolInput(input map[string]any, toolName, repoRoot string) (map[string]any, bool) {
+	r, err := mission.NewPathRedactor(repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: audit-log: %v; storing tool=%s without its input\n", err, toolName)
+		return nil, true
 	}
-	if r.home != "" {
-		s = strings.ReplaceAll(s, r.home+"/", "~/")
-		s = strings.ReplaceAll(s, r.home, "~")
-	}
-	return s
+	return redactSensitiveContent(toolName, r.Map(extractToolInput(input)))
 }
