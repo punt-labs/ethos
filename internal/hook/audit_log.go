@@ -144,16 +144,20 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 // the orchestrator stays focused on the I/O concerns.
 //
 // Redaction order is load-bearing: extract the raw tool_input, redact
-// $HOME/X and repoRoot/X to portable tokens, THEN compute the hash
-// and the preview off the redacted form. The hash must be over the
-// redacted bytes so the same logical call from two machines produces
-// the same hash — that is the cross-machine collision-detection
-// invariant from DES-052. Redaction applies to new writes only;
-// existing audit.jsonl lines on disk are unchanged.
+// $HOME/X and repoRoot/X to portable tokens, apply the per-tool
+// content policy (audit_content.go — outbound email bodies and
+// addresses, ethos-ggtu), THEN compute the hash and the preview off
+// the result. The hash must be over the stored bytes so the same
+// logical call from two machines produces the same hash — that is the
+// cross-machine collision-detection invariant from DES-052, and a hash
+// over a form that never reaches disk cannot be checked against
+// anything. Redaction applies to new writes only; existing
+// audit.jsonl lines on disk are unchanged.
 func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.Time) auditEntry {
 	toolName, _ := input["tool_name"].(string)
 	home, _ := os.UserHomeDir()
 	redacted := redactAbsolutePaths(extractToolInput(input), home, repoRoot)
+	redacted, contentRedacted := redactSensitiveContent(toolName, redacted)
 	// Feed the redacted map through the existing hash and preview
 	// helpers under the same "tool_input" envelope they expect. When
 	// the tool call carried no tool_input (a rare scalar-input hook),
@@ -170,6 +174,7 @@ func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.
 		ToolInput:        redacted,
 		ToolInputHash:    hashToolInput(redactedEnv),
 		ToolInputPreview: toolInputPreview(redactedEnv),
+		Redacted:         contentRedacted,
 	}
 	// Optional enrichment fields. Each is `omitempty` on the struct
 	// so the absent value drops out of the JSONL line, preserving

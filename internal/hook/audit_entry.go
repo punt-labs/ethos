@@ -20,6 +20,12 @@ import (
 // the full input. tool_input_preview is retained as a 200-char human
 // snippet for grep convenience.
 //
+// redacted marks a line whose tool_input lost content to the per-tool
+// policy in audit_content.go — an outbound email reduced to its
+// subject, or an address swept out of a prompt. It matches the marker
+// the hand-redacted public-website lines carry, so a reader can tell
+// "this call had no body" from "this body was removed".
+//
 // All new fields are `omitempty` so a v3.11.0 audit JSONL line
 // (carrying only ts/session/tool/tool_input_preview) decodes cleanly
 // under v3.12.0 — the new fields stay zero-valued and a permissive
@@ -45,6 +51,7 @@ type auditEntry struct {
 	ToolInput        map[string]any `json:"tool_input,omitempty"`
 	ToolInputHash    string         `json:"tool_input_hash,omitempty"`
 	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
+	Redacted         bool           `json:"redacted,omitempty"`
 }
 
 // previewLimit bounds the size of tool_input_preview. 200 chars is
