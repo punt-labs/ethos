@@ -15,8 +15,8 @@ type IdentityStore interface {
 	Path(handle string) string
 	ExtDir(handle string) string
 	ExtGet(handle, namespace, key string) (map[string]string, error)
-	ExtSet(handle, namespace, key, value string) error
-	ExtDel(handle, namespace, key string) error
+	ExtSet(handle, namespace, key, value string, opts ...ExtOption) error
+	ExtDel(handle, namespace, key string, opts ...ExtOption) error
 	ExtList(handle string) ([]string, error)
 }
 

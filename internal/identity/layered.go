@@ -496,16 +496,16 @@ func (ls *LayeredStore) ExtGet(handle, namespace, key string) (map[string]string
 // ExtSet writes to the global store after checking handle existence
 // across both layers. Extensions always live in global, but the handle
 // may exist only in repo.
-func (ls *LayeredStore) ExtSet(handle, namespace, key, value string) error {
+func (ls *LayeredStore) ExtSet(handle, namespace, key, value string, opts ...ExtOption) error {
 	if !ls.Exists(handle) {
 		return fmt.Errorf("handle %q does not exist", handle)
 	}
-	return ls.global.extSetDirect(handle, namespace, key, value)
+	return ls.global.extSetDirect(handle, namespace, key, value, opts...)
 }
 
 // ExtDel delegates to the global store.
-func (ls *LayeredStore) ExtDel(handle, namespace, key string) error {
-	return ls.global.ExtDel(handle, namespace, key)
+func (ls *LayeredStore) ExtDel(handle, namespace, key string, opts ...ExtOption) error {
+	return ls.global.ExtDel(handle, namespace, key, opts...)
 }
 
 // ExtList delegates to the global store.

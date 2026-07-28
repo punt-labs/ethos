@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +22,11 @@ var extGetCmd = &cobra.Command{
 		return runExtGet(cmd, args)
 	},
 }
+
+// extLocal is set by --local on set and delete. It selects the
+// <ns>.local.yaml companion — the untracked half, for secret and
+// machine-specific values (DES-057 Part C).
+var extLocal bool
 
 var extSetCmd = &cobra.Command{
 	Use:   "set <handle> <namespace> <key> <value>...",
@@ -61,6 +67,10 @@ var extListCmd = &cobra.Command{
 }
 
 func init() {
+	const localUsage = "Target the untracked <namespace>.local.yaml companion instead of the base file"
+	extSetCmd.Flags().BoolVar(&extLocal, "local", false, localUsage)
+	extDeleteCmd.Flags().BoolVar(&extLocal, "local", false, localUsage)
+	extDelCmd.Flags().BoolVar(&extLocal, "local", false, localUsage)
 	extCmd.AddCommand(extGetCmd, extSetCmd, extDeleteCmd, extDelCmd, extListCmd)
 	rootCmd.AddCommand(extCmd)
 }
@@ -92,7 +102,7 @@ func runExtGet(cmd *cobra.Command, args []string) error {
 func runExtSet(cmd *cobra.Command, args []string) error {
 	s := identityStore()
 	value := strings.Join(args[3:], " ")
-	return s.ExtSet(args[0], args[1], args[2], value)
+	return s.ExtSet(args[0], args[1], args[2], value, identity.Local(extLocal))
 }
 
 func runExtDel(_ *cobra.Command, args []string) error {
@@ -101,7 +111,7 @@ func runExtDel(_ *cobra.Command, args []string) error {
 	if len(args) > 2 {
 		key = args[2]
 	}
-	return s.ExtDel(args[0], args[1], key)
+	return s.ExtDel(args[0], args[1], key, identity.Local(extLocal))
 }
 
 func runExtList(cmd *cobra.Command, args []string) error {
