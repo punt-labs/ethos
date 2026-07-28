@@ -74,13 +74,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   else, so a full outbound email body plus its recipient, and a recipient
   address inside a `CronCreate` prompt, passed through into the sealed
   git-tracked record and were pushed to a public repo. Two name-based passes
-  now run at the write path. Sensitive tools reduce to a keep-list —
-  `send_email` keeps its subject and everything else becomes `[redacted]` — so
-  a `cc` or `reply_to` added to the tool later is redacted the day it appears
-  rather than the day someone remembers to extend a list. Prompt-bearing
-  fields get an address sweep; structured fields such as a `file_path` or a
-  Bash `command` are untouched, so a line with nothing to redact keeps the
-  bytes it had before. Both passes run *before* `tool_input_hash`, so the hash
+  now run at the write path. Content-composing tools reduce to a keep-list —
+  `send_email` and `reply_message` keep their subject and nothing else; the
+  contact tools (`add_contact`, `remove_contact`), which compose nothing but
+  carry a person's name and address, keep nothing at all — so a `cc` or
+  `reply_to` added to a tool later is redacted the day it appears rather than
+  the day someone remembers to extend a list. A recipient-shaped field is
+  reduced whole once its value contains an address, so a display name does not
+  survive beside a redacted one. Prompt-bearing fields — including a
+  `find_contact` query — get an address sweep; structured fields such as a
+  `file_path` or a Bash `command`, and agent-name recipients that carry no
+  address (a biff `to`, a `SendMessage` `recipient`), are untouched, so a line
+  with nothing to redact keeps the bytes it had before. Both passes run *before* `tool_input_hash`, so the hash
   is over the stored form and the DES-052 cross-machine collision check still
   holds. A line that lost content carries `redacted: true`, matching the
   marker the hand-redacted lines already use.
