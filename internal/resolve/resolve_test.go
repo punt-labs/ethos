@@ -569,6 +569,59 @@ func TestResolveActiveBundle_MalformedYAML(t *testing.T) {
 	assert.Contains(t, err.Error(), "parsing repo config")
 }
 
+// --- ResolveResolution tests (DES-057) ---
+
+func TestResolveResolution(t *testing.T) {
+	tests := []struct {
+		name    string
+		yaml    string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset means layered", yaml: "agent: claude\n", want: ResolutionLayered},
+		{name: "explicit layered", yaml: "resolution: layered\n", want: ResolutionLayered},
+		{name: "repo-only", yaml: "resolution: repo-only\n", want: ResolutionRepoOnly},
+		{
+			name: "alongside other fields",
+			yaml: "agent: claude\nactive_bundle: punt-labs\nresolution: repo-only\n",
+			want: ResolutionRepoOnly,
+		},
+		// A typo must not degrade quietly to layered: leaving the global
+		// fallback in place is exactly what repo-only exists to remove.
+		{name: "typo is an error", yaml: "resolution: repo_only\n", want: ResolutionLayered, wantErr: true},
+		{name: "malformed yaml", yaml: "resolution: [unclosed\n", want: ResolutionLayered, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, ".punt-labs")
+			require.NoError(t, os.MkdirAll(dir, 0o755))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(dir, "ethos.yaml"), []byte(tt.yaml), 0o644))
+
+			got, err := ResolveResolution(root)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "resolve resolution")
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestResolveResolution_NoRepoOrConfig(t *testing.T) {
+	got, err := ResolveResolution("")
+	require.NoError(t, err)
+	assert.Equal(t, ResolutionLayered, got)
+
+	got, err = ResolveResolution(t.TempDir())
+	require.NoError(t, err)
+	assert.Equal(t, ResolutionLayered, got)
+}
+
 // --- FindRepoRoot tests ---
 
 func TestFindRepoRoot_FindsGitDir(t *testing.T) {

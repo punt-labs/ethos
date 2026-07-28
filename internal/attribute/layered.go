@@ -9,7 +9,7 @@ package attribute
 // Kept as a thin wrapper over NewLayeredStoreWithBundle for callers
 // that do not participate in bundle resolution.
 func NewLayeredStore(repoRoot, globalRoot string, kind Kind) *Store {
-	return NewLayeredStoreWithBundle(repoRoot, "", globalRoot, kind)
+	return NewLayeredStoreWithBundle(repoRoot, "", globalRoot, kind, false)
 }
 
 // NewLayeredStoreWithBundle creates a three-layer attribute store: repo
@@ -24,19 +24,38 @@ func NewLayeredStore(repoRoot, globalRoot string, kind Kind) *Store {
 //
 // Load on the returned store checks repo, then bundle, then global;
 // Exists does the same; List merges all three with repo > bundle > global.
-func NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot string, kind Kind) *Store {
+//
+// Under repoAuthoritative (`resolution: repo-only`, DES-057) the global
+// layer is left out of the chain entirely and writes are redirected to
+// the repo layer — a write to global would be invisible to every read.
+// The chain is built top-down from bundle instead of global, so the
+// write target and the read top are no longer the same store; writeTo
+// carries the split.
+func NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot string, kind Kind, repoAuthoritative bool) *Store {
 	if repoRoot == "" && bundleRoot == "" {
 		return NewStore(globalRoot, kind)
 	}
 
-	// Build the chain from the lowest-precedence end (global) upward.
-	// Each store's fallback is the higher-precedence layer.
+	// Build the chain from the lowest-precedence end upward. Each
+	// store's fallback is the higher-precedence layer.
 	var repo, bundle *Store
 	if repoRoot != "" {
 		repo = NewStore(repoRoot, kind)
 	}
 	if bundleRoot != "" {
 		bundle = &Store{root: bundleRoot, kind: kind, fallback: repo}
+	}
+
+	if repoAuthoritative {
+		if bundle == nil {
+			return repo // repo is the whole chain; it is also the write target
+		}
+		if repo == nil {
+			bundle.readOnly = true // nowhere legal to write
+		} else {
+			bundle.writeTo = repo
+		}
+		return bundle
 	}
 
 	top := &Store{root: globalRoot, kind: kind}

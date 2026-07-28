@@ -10,22 +10,27 @@ import (
 // Load and Exists check repo first, then bundle, then global. List merges
 // all three, deduplicating by name (repo wins, then bundle, then global).
 // Save and Delete always target the global store.
+//
+// Under repoAuthoritative (`resolution: repo-only`, DES-057) the global
+// layer is dropped from reads and writes route to the repo layer.
 type LayeredStore struct {
-	repo   *Store // may be nil when not in a repo
-	bundle *Store // may be nil when no bundle is active
-	global *Store
+	repo              *Store // may be nil when not in a repo
+	bundle            *Store // may be nil when no bundle is active
+	global            *Store
+	repoAuthoritative bool
 }
 
 // NewLayeredStore creates a two-layer role store (repo + global). Kept
 // as a thin wrapper over NewLayeredStoreWithBundle for callers that do
 // not participate in bundle resolution.
 func NewLayeredStore(repoRoot, globalRoot string) *LayeredStore {
-	return NewLayeredStoreWithBundle(repoRoot, "", globalRoot)
+	return NewLayeredStoreWithBundle(repoRoot, "", globalRoot, false)
 }
 
 // NewLayeredStoreWithBundle creates a three-layer role store. Any of
 // repoRoot or bundleRoot may be empty; globalRoot must be set.
-func NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot string) *LayeredStore {
+// repoAuthoritative selects DES-057's repo-only mode.
+func NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot string, repoAuthoritative bool) *LayeredStore {
 	var repo, bundle *Store
 	if repoRoot != "" {
 		repo = NewStore(repoRoot)
@@ -34,15 +39,33 @@ func NewLayeredStoreWithBundle(repoRoot, bundleRoot, globalRoot string) *Layered
 		bundle = NewStore(bundleRoot)
 	}
 	return &LayeredStore{
-		repo:   repo,
-		bundle: bundle,
-		global: NewStore(globalRoot),
+		repo:              repo,
+		bundle:            bundle,
+		global:            NewStore(globalRoot),
+		repoAuthoritative: repoAuthoritative,
 	}
 }
 
-// Save writes a role to the global store.
+// writeStore returns the layer Save and Delete target. Under repo-only,
+// writing to global would produce a record no read ever sees.
+func (ls *LayeredStore) writeStore() (*Store, error) {
+	if !ls.repoAuthoritative {
+		return ls.global, nil
+	}
+	if ls.repo != nil {
+		return ls.repo, nil
+	}
+	return nil, fmt.Errorf(
+		"resolution: repo-only has no repo-local role store to write to — roles are provided by the read-only bundle; edit the bundle directly")
+}
+
+// Save writes a role to the global store (the repo store under repo-only).
 func (ls *LayeredStore) Save(r *Role) error {
-	return ls.global.Save(r)
+	s, err := ls.writeStore()
+	if err != nil {
+		return err
+	}
+	return s.Save(r)
 }
 
 // Load reads a role, checking repo, then bundle, then global. Only
@@ -66,6 +89,9 @@ func (ls *LayeredStore) Load(name string) (*Role, error) {
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("bundle role layer: %w", err)
 		}
+	}
+	if ls.repoAuthoritative {
+		return nil, fmt.Errorf("role %q not found in the repo layer (resolution: repo-only): %w", name, os.ErrNotExist)
 	}
 	return ls.global.Load(name)
 }
@@ -102,6 +128,10 @@ func (ls *LayeredStore) List() ([]string, error) {
 			merged = append(merged, n)
 		}
 	}
+	if ls.repoAuthoritative {
+		return merged, nil
+	}
+
 	names, err := ls.global.List()
 	if err != nil {
 		return nil, err
@@ -116,9 +146,14 @@ func (ls *LayeredStore) List() ([]string, error) {
 	return merged, nil
 }
 
-// Delete removes a role from the global store.
+// Delete removes a role from the global store (the repo store under
+// repo-only).
 func (ls *LayeredStore) Delete(name string) error {
-	return ls.global.Delete(name)
+	s, err := ls.writeStore()
+	if err != nil {
+		return err
+	}
+	return s.Delete(name)
 }
 
 // Exists reports whether the role exists in any layer.
@@ -128,6 +163,9 @@ func (ls *LayeredStore) Exists(name string) bool {
 	}
 	if ls.bundle != nil && ls.bundle.Exists(name) {
 		return true
+	}
+	if ls.repoAuthoritative {
+		return false
 	}
 	return ls.global.Exists(name)
 }

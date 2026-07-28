@@ -21,17 +21,24 @@ import (
 // would hide the misconfiguration. The process exits with a diagnostic
 // on stderr. This matches how other fatal startup errors are handled.
 func resolveBundleRoot() string {
-	repoRoot := resolve.StoreRepoRoot()
-	globalRoot := defaultGlobalRoot()
-	b, err := bundle.ResolveActive(repoRoot, globalRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v\n", err)
-		os.Exit(1)
-	}
+	b := activeBundle()
 	if b == nil || b.Source == bundle.SourceLegacy {
 		return ""
 	}
 	return b.Path
+}
+
+// activeBundle resolves the repo's active bundle, or nil when none is
+// active. Shares resolveBundleRoot's fail-loud contract on a
+// configuration error. Callers that need the bundle's Source (the
+// DES-057 repo-only startup check) use this rather than the path.
+func activeBundle() *bundle.Bundle {
+	b, err := bundle.ResolveActive(resolve.StoreRepoRoot(), defaultGlobalRoot())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v\n", err)
+		os.Exit(1)
+	}
+	return b
 }
 
 // defaultGlobalRoot returns ~/.punt-labs/ethos, matching identity.DefaultStore.

@@ -21,7 +21,7 @@ func TestThreeLayer_RepoWins(t *testing.T) {
 	writeLayer(t, repo, "foo", "repo\n")
 	writeLayer(t, bundle, "foo", "bundle\n")
 
-	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents)
+	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents, false)
 	a, err := s.Load("foo")
 	require.NoError(t, err)
 	assert.Equal(t, "repo\n", a.Content)
@@ -35,7 +35,7 @@ func TestThreeLayer_BundleWins(t *testing.T) {
 	writeLayer(t, bundle, "foo", "bundle\n")
 	writeLayer(t, global, "foo", "global\n")
 
-	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents)
+	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents, false)
 	a, err := s.Load("foo")
 	require.NoError(t, err)
 	assert.Equal(t, "bundle\n", a.Content)
@@ -48,7 +48,7 @@ func TestThreeLayer_GlobalFallback(t *testing.T) {
 
 	writeLayer(t, global, "foo", "global\n")
 
-	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents)
+	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents, false)
 	a, err := s.Load("foo")
 	require.NoError(t, err)
 	assert.Equal(t, "global\n", a.Content)
@@ -66,7 +66,7 @@ func TestThreeLayer_ListDedupes(t *testing.T) {
 	writeLayer(t, global, "shared", "global\n")
 	writeLayer(t, global, "global-only", "g\n")
 
-	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents)
+	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents, false)
 	result, err := s.List()
 	require.NoError(t, err)
 	require.Len(t, result.Attributes, 4)
@@ -87,7 +87,7 @@ func TestThreeLayer_BundleReadOnly(t *testing.T) {
 	bundle := t.TempDir()
 	global := t.TempDir()
 
-	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents)
+	s := NewLayeredStoreWithBundle(repo, bundle, global, Talents, false)
 	require.NoError(t, s.Save(&Attribute{Slug: "new", Content: "x\n"}))
 
 	// Only the global layer should have the new file.
@@ -116,7 +116,7 @@ func TestThreeLayer_BundleOnly(t *testing.T) {
 
 	writeLayer(t, bundle, "foo", "bundle\n")
 
-	s := NewLayeredStoreWithBundle("", bundle, global, Talents)
+	s := NewLayeredStoreWithBundle("", bundle, global, Talents, false)
 	a, err := s.Load("foo")
 	require.NoError(t, err)
 	assert.Equal(t, "bundle\n", a.Content)

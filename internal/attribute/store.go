@@ -10,11 +10,20 @@ import (
 
 // Store provides CRUD for one category of attribute .md files.
 // When fallback is set (via NewLayeredStore), read operations check
-// the fallback store first, then this store. Writes go to this store.
+// the fallback store first, then this store. Writes go to this store
+// unless writeTo redirects them or readOnly refuses them.
 type Store struct {
 	root     string // ethos root, e.g. ~/.punt-labs/ethos
 	kind     Kind
 	fallback *Store // optional repo-layer store checked first for reads
+	// writeTo redirects Save and Delete to another layer. Set only in
+	// repo-only mode, where the top of the read chain is the read-only
+	// bundle but writes belong in the repo layer (DES-057).
+	writeTo *Store
+	// readOnly refuses writes: repo-only with a bundle but no repo layer
+	// has no legal write target, and silently writing into the bundle
+	// would edit shared content the repo does not own.
+	readOnly bool
 }
 
 // NewStore creates a Store for the given kind under root.
@@ -73,6 +82,20 @@ func (s *Store) Exists(slug string) bool {
 	return err == nil
 }
 
+// writeStore returns the layer Save and Delete target: the redirect when
+// one is set, this store otherwise. It errors when no layer is writable.
+func (s *Store) writeStore() (*Store, error) {
+	if s.readOnly {
+		return nil, fmt.Errorf(
+			"resolution: repo-only has no repo-local %s directory to write to — content is provided by the read-only bundle at %s; edit the bundle directly",
+			s.kind.DisplayName, s.root)
+	}
+	if s.writeTo != nil {
+		return s.writeTo, nil
+	}
+	return s, nil
+}
+
 // Save writes a new attribute .md file. Returns an error if it already exists.
 func (s *Store) Save(a *Attribute) error {
 	if err := ValidateSlug(a.Slug); err != nil {
@@ -80,6 +103,11 @@ func (s *Store) Save(a *Attribute) error {
 	}
 	if a.Content == "" {
 		return &ValidationError{Field: "content", Message: "required"}
+	}
+
+	s, err := s.writeStore()
+	if err != nil {
+		return err
 	}
 
 	p, err := s.Path(a.Slug)
@@ -224,6 +252,10 @@ func (s *Store) isNotFound(_ string, err error) bool {
 
 // Delete removes an attribute .md file.
 func (s *Store) Delete(slug string) error {
+	s, err := s.writeStore()
+	if err != nil {
+		return err
+	}
 	p, err := s.Path(slug)
 	if err != nil {
 		return err

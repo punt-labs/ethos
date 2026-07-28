@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"gopkg.in/yaml.v3"
@@ -14,10 +15,19 @@ import (
 // user-global (~/.punt-labs/ethos/). Repo-local takes precedence for
 // identity lookup, then bundle, then global. Extensions always resolve
 // from the global layer.
+//
+// Under repoAuthoritative (`resolution: repo-only`, DES-057) the global
+// layer is dropped from every read and writes route to the repo layer,
+// so a repo that vendors an incomplete set fails loud instead of being
+// silently completed from the user's home directory.
 type LayeredStore struct {
 	repo   *Store // may be nil (not in a git repo)
 	bundle *Store // may be nil (no active bundle)
 	global *Store
+	// repoAuthoritative is the one policy flag read from
+	// `resolution: repo-only`. It is false for every layered-mode
+	// caller, which keeps that path byte-identical.
+	repoAuthoritative bool
 }
 
 // Compile-time check: *LayeredStore satisfies IdentityStore.
@@ -32,9 +42,18 @@ func NewLayeredStore(repo *Store, global *Store) *LayeredStore {
 }
 
 // NewLayeredStoreWithBundle creates a three-layer store. Any of repo
-// or bundle may be nil.
-func NewLayeredStoreWithBundle(repo, bundle, global *Store) *LayeredStore {
-	return &LayeredStore{repo: repo, bundle: bundle, global: global}
+// or bundle may be nil. repoAuthoritative selects DES-057's repo-only
+// mode; false is the layered default.
+func NewLayeredStoreWithBundle(repo, bundle, global *Store, repoAuthoritative bool) *LayeredStore {
+	return &LayeredStore{repo: repo, bundle: bundle, global: global, repoAuthoritative: repoAuthoritative}
+}
+
+// RepoAuthoritative reports whether this store runs in repo-only mode.
+// The role, team, and attribute stores are built from the identity
+// store, so they read the policy here rather than re-reading the repo
+// config — one read, one answer, no chance of the layers disagreeing.
+func (ls *LayeredStore) RepoAuthoritative() bool {
+	return ls.repoAuthoritative
 }
 
 // Load reads an identity by handle, checking repo, then bundle, then
@@ -92,11 +111,26 @@ func (ls *LayeredStore) loadRaw(handle string) (*Identity, string, error) {
 			return nil, "", err
 		}
 	}
+	if ls.repoAuthoritative {
+		return nil, "", fmt.Errorf("identity %q not found in %s (resolution: repo-only): %w",
+			handle, ls.readRootsDesc(), os.ErrNotExist)
+	}
 	id, err := ls.global.Load(handle, Reference(true))
 	if err == nil {
 		return id, "global", nil
 	}
 	return nil, "", err
+}
+
+// readRootsDesc names the layers a read consults, for diagnostics that
+// must tell the user WHERE ethos looked — a repo-only miss is otherwise
+// indistinguishable from a typo.
+func (ls *LayeredStore) readRootsDesc() string {
+	var roots []string
+	for _, l := range ls.attrChain() {
+		roots = append(roots, l.store.Root())
+	}
+	return strings.Join(roots, ", ")
 }
 
 // relocateRepoVoice migrates a legacy voice field from a repo identity
@@ -216,6 +250,10 @@ type attrLayer struct {
 // attribute content: repo, then bundle, then global, skipping any layer
 // that is absent. Global is always last. The chain is the same for every
 // identity regardless of its source layer (DES-051).
+//
+// Under repo-only the global tail is dropped, so an attribute the repo
+// did not vendor stays missing rather than resolving from the user's home
+// (DES-057).
 func (ls *LayeredStore) attrChain() []attrLayer {
 	var chain []attrLayer
 	if ls.repo != nil {
@@ -223,6 +261,9 @@ func (ls *LayeredStore) attrChain() []attrLayer {
 	}
 	if ls.bundle != nil {
 		chain = append(chain, attrLayer{ls.bundle, "bundle"})
+	}
+	if ls.repoAuthoritative {
+		return chain
 	}
 	chain = append(chain, attrLayer{ls.global, "global"})
 	return chain
@@ -238,14 +279,18 @@ func loadAttribute(s *Store, kind attribute.Kind, slug string) (string, error) {
 	return a.Content, nil
 }
 
-// Save writes an identity to the repo store if available, otherwise global.
-// ValidateRefs checks both layers before writing. We bypass the inner
-// Store.Save to avoid its single-store ValidateRefs check.
+// Save writes an identity to the repo store if available, otherwise
+// global (repo-only refuses when there is no repo layer — see
+// writeStore). ValidateRefs checks both layers before writing. We bypass
+// the inner Store.Save to avoid its single-store ValidateRefs check.
 func (ls *LayeredStore) Save(id *Identity) error {
 	if err := ls.ValidateRefs(id); err != nil {
 		return err
 	}
-	s := ls.writeStore()
+	s, err := ls.writeStore()
+	if err != nil {
+		return err
+	}
 	dir := s.IdentitiesDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating identity directory: %w", err)
@@ -308,6 +353,10 @@ func (ls *LayeredStore) List() (*ListResult, error) {
 		result.Warnings = append(result.Warnings, bundleResult.Warnings...)
 	}
 
+	if ls.repoAuthoritative {
+		return result, nil
+	}
+
 	globalResult, err := ls.global.List()
 	if err != nil {
 		return nil, fmt.Errorf("listing global identities: %w", err)
@@ -345,6 +394,9 @@ func (ls *LayeredStore) FindBy(field, value string) (*Identity, error) {
 			return id, nil
 		}
 	}
+	if ls.repoAuthoritative {
+		return nil, nil
+	}
 	return ls.global.FindBy(field, value)
 }
 
@@ -356,6 +408,9 @@ func (ls *LayeredStore) Exists(handle string) bool {
 	if ls.bundle != nil && ls.bundle.Exists(handle) {
 		return true
 	}
+	if ls.repoAuthoritative {
+		return false
+	}
 	return ls.global.Exists(handle)
 }
 
@@ -365,7 +420,7 @@ func (ls *LayeredStore) Exists(handle string) bool {
 // to update one returns an error. Uses cross-layer ValidateRefs so
 // attribute references in any store are accepted.
 func (ls *LayeredStore) Update(handle string, fn func(*Identity) error) error {
-	owner := ls.global
+	var owner *Store
 	switch {
 	case ls.repo != nil && ls.repo.Exists(handle):
 		owner = ls.repo
@@ -373,6 +428,12 @@ func (ls *LayeredStore) Update(handle string, fn func(*Identity) error) error {
 		// Reject even when a global copy exists: bundle shadows global on
 		// read, so editing global would be silently invisible.
 		return fmt.Errorf("identity %q is provided by the active bundle and cannot be modified via CLI; edit the bundle directly", handle)
+	case ls.repoAuthoritative:
+		// The handle is not in any layer this store reads. Falling back to
+		// global would edit a record repo-only can never see.
+		return fmt.Errorf("identity %q not found in %s (resolution: repo-only)", handle, ls.readRootsDesc())
+	default:
+		owner = ls.global
 	}
 	validated := func(id *Identity) error {
 		if err := fn(id); err != nil {
@@ -421,19 +482,16 @@ func (ls *LayeredStore) ValidateRefs(id *Identity) error {
 	return nil
 }
 
-// attrExists checks if an attribute slug exists in any layer.
+// attrExists checks if an attribute slug exists in any layer that reads
+// consult — the same chain as attrChain, so validation cannot accept a
+// reference that resolution will then fail to find.
 func (ls *LayeredStore) attrExists(kind attribute.Kind, slug string) bool {
-	if ls.repo != nil {
-		if attribute.NewStore(ls.repo.Root(), kind).Exists(slug) {
+	for _, l := range ls.attrChain() {
+		if attribute.NewStore(l.store.Root(), kind).Exists(slug) {
 			return true
 		}
 	}
-	if ls.bundle != nil {
-		if attribute.NewStore(ls.bundle.Root(), kind).Exists(slug) {
-			return true
-		}
-	}
-	return attribute.NewStore(ls.global.Root(), kind).Exists(slug)
+	return false
 }
 
 // Root returns the repo root if available, otherwise global root.
@@ -513,10 +571,32 @@ func (ls *LayeredStore) ExtList(handle string) ([]string, error) {
 	return ls.global.ExtList(handle)
 }
 
-// writeStore returns the store to write to: repo if available, else global.
-func (ls *LayeredStore) writeStore() *Store {
+// writeStore returns the store to write to: repo if available, else
+// global.
+//
+// Under repo-only, global is not a legal target. Writing there while
+// reads never consult it produces the write-then-invisible footgun
+// DES-057 names: `ethos identity create foo` would land in the user's
+// home and be unreadable from the very repo that created it. With no
+// repo layer (identities come from a read-only bundle) there is nowhere
+// legal to write, so the write is refused.
+func (ls *LayeredStore) writeStore() (*Store, error) {
 	if ls.repo != nil {
-		return ls.repo
+		return ls.repo, nil
 	}
-	return ls.global
+	if ls.repoAuthoritative {
+		return nil, fmt.Errorf(
+			"resolution: repo-only has no repo-local identity store to write to — identities are provided by the read-only bundle at %s; edit the bundle directly",
+			ls.bundleRootOrEmpty())
+	}
+	return ls.global, nil
+}
+
+// bundleRootOrEmpty names the active bundle for diagnostics, or "(none)"
+// when there is not one.
+func (ls *LayeredStore) bundleRootOrEmpty() string {
+	if ls.bundle != nil {
+		return ls.bundle.Root()
+	}
+	return "(none)"
 }

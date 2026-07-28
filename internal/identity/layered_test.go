@@ -316,7 +316,7 @@ func setupLayeredWithBundle(t *testing.T) (*LayeredStore, *Store, *Store, *Store
 	repo := NewStore(t.TempDir())
 	bundle := NewStore(t.TempDir())
 	global := NewStore(t.TempDir())
-	ls := NewLayeredStoreWithBundle(repo, bundle, global)
+	ls := NewLayeredStoreWithBundle(repo, bundle, global, false)
 	return ls, repo, bundle, global
 }
 
