@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestPathRedactorText covers the substitution rules the audit lines
@@ -107,4 +108,39 @@ func TestPathRedactorValue(t *testing.T) {
 	t.Run("nil body stays nil", func(t *testing.T) {
 		assert.Nil(t, r.Body(nil))
 	})
+}
+
+// TestNewPathRedactor covers the usability guard on the home prefix.
+// os.UserHomeDir hands back whatever HOME holds without checking it,
+// and returns "/" rather than an error on ios — a prefix of "/" would
+// rewrite the leading separator of every absolute path, so it is
+// refused rather than used.
+func TestNewPathRedactor(t *testing.T) {
+	tests := []struct {
+		name    string
+		home    string
+		wantErr string
+	}{
+		{name: "an absolute home is usable", home: "/Users/jfreeman"},
+		{name: "empty home is refused", home: "", wantErr: "home directory"},
+		{name: "root home is refused", home: "/", wantErr: "unusable"},
+		{name: "root with trailing slashes is refused", home: "//", wantErr: "unusable"},
+		{name: "relative home is refused", home: "relative/path", wantErr: "unusable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", tt.home)
+			r, err := NewPathRedactor("/repo")
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				assert.Equal(t, PathRedactor{}, r,
+					"a refused prefix must not yield a partially-usable redactor")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.home, r.Home)
+			assert.Equal(t, "/repo", r.Repo)
+		})
+	}
 }

@@ -154,22 +154,24 @@ func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[str
 // from audit_content.go. The bool reports whether content was removed,
 // which the caller stamps on the entry as the redacted marker.
 //
-// Resolving $HOME is what makes path redaction possible; without it
-// there is no way to tell the operator's home path from any other
-// absolute path. That failure drops the input rather than storing it
-// raw. The line keeps its timestamp, tool name, and delegation
-// linkage — everything the audit trail is reconstructed from — and
-// loses only the payload. Audit logging must never block a tool call
-// (HandleAuditLog returns nil on every failure path), so failing
-// closed here means dropping content, not refusing the call.
+// A usable home prefix is what makes path redaction possible; without
+// one there is no way to tell the operator's home path from any other
+// absolute path. mission.NewPathRedactor is the single arbiter of that
+// — the delegation writer resolves its prefix through the same call,
+// so the two write paths cannot disagree about what is redactable.
+//
+// That failure drops the input rather than storing it raw. The line
+// keeps its timestamp, tool name, and delegation linkage — everything
+// the audit trail is reconstructed from — and loses only the payload.
+// Audit logging must never block a tool call (HandleAuditLog returns
+// nil on every failure path), so failing closed here means dropping
+// content, not refusing the call.
 func redactToolInput(input map[string]any, toolName, repoRoot string) (map[string]any, bool) {
-	home, err := os.UserHomeDir()
+	r, err := mission.NewPathRedactor(repoRoot)
 	if err != nil {
 		fmt.Fprintf(os.Stderr,
-			"ethos: audit-log: resolving home directory for path redaction: %v; "+
-				"storing tool=%s without its input\n", err, toolName)
+			"ethos: audit-log: %v; storing tool=%s without its input\n", err, toolName)
 		return nil, true
 	}
-	paths := redactAbsolutePaths(extractToolInput(input), home, repoRoot)
-	return redactSensitiveContent(toolName, paths)
+	return redactSensitiveContent(toolName, r.Map(extractToolInput(input)))
 }

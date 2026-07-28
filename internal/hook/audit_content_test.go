@@ -176,26 +176,35 @@ func TestRedactSensitiveContent(t *testing.T) {
 }
 
 // TestRedactToolInput_NoHomeDropsInput is the audit path's fail-closed
-// rule. Path redaction needs $HOME to know which absolute path is the
-// operator's; without it the input cannot be redacted, so it is dropped
-// rather than stored raw. Audit logging must not block a tool call, so
-// failing closed here costs the payload, not the call.
+// rule. Path redaction needs a usable home prefix to know which
+// absolute path is the operator's; without one the input cannot be
+// redacted, so it is dropped rather than stored raw. Audit logging must
+// not block a tool call, so failing closed here costs the payload, not
+// the call.
+//
+// "/" is covered alongside unset because os.UserHomeDir returns it
+// without an error on ios; mission.NewPathRedactor refuses it on every
+// platform, so the assertion holds wherever the test runs.
 func TestRedactToolInput_NoHomeDropsInput(t *testing.T) {
-	t.Setenv("HOME", "")
+	for _, home := range []string{"", "/"} {
+		t.Run("HOME="+home, func(t *testing.T) {
+			t.Setenv("HOME", home)
 
-	got, redacted := redactToolInput(map[string]any{
-		"tool_input": map[string]any{"file_path": "/Users/jfreeman/.ssh/id_ed25519"},
-	}, "Read", "")
+			got, redacted := redactToolInput(map[string]any{
+				"tool_input": map[string]any{"file_path": "/Users/jfreeman/.ssh/id_ed25519"},
+			}, "Read", "")
 
-	assert.Nil(t, got, "unredactable input must not reach the entry")
-	assert.True(t, redacted, "the line must say its content was removed")
+			assert.Nil(t, got, "unredactable input must not reach the entry")
+			assert.True(t, redacted, "the line must say its content was removed")
+		})
+	}
 }
 
 // TestBuildAuditEntry_NoHomeKeepsTheTrail asserts the line survives the
 // dropped payload: an operator reconstructing the session still gets
 // the timestamp, the tool, and the delegation linkage.
 func TestBuildAuditEntry_NoHomeKeepsTheTrail(t *testing.T) {
-	t.Setenv("HOME", "")
+	t.Setenv("HOME", "/")
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 
 	entry := buildAuditEntry(map[string]any{

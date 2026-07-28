@@ -3,6 +3,7 @@ package mission
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -91,19 +92,36 @@ func (r PathRedactor) Map(m map[string]any) map[string]any {
 	return out
 }
 
-// repoRedactor builds the redactor for a write into the git-tracked
-// mission tree. Resolving $HOME is a precondition, not a best effort:
-// a home directory ethos cannot name is one it cannot redact, and
+// NewPathRedactor builds the redactor for a write into a git-tracked
+// tree. Every such write — the delegation prompt and record here, the
+// audit lines in internal/hook — resolves its home prefix through this
+// one function so the two paths cannot disagree about what counts as
+// redactable.
+//
+// Resolving the home directory is a precondition, not a best effort: a
+// home directory ethos cannot name is one it cannot redact, and
 // writing the content anyway would put the operator's username into
 // shared history. Callers propagate the error and refuse the write.
 //
+// The value is checked, not just the error. os.UserHomeDir returns
+// whatever $HOME holds without validating it, and it returns "/" on
+// ios rather than an error. A relative or root home would not fail —
+// it would silently produce a redactor that rewrites the leading "/"
+// of every absolute path, turning /etc/hosts into ~etc/hosts. Refusing
+// an unusable prefix keeps the failure at the one place that can
+// report it.
+//
 // repoRoot may be empty at a call site that knows only the artifact's
-// own path; the $HOME substitution — the one that carries the username
+// own path; the home substitution — the one that carries the username
 // — still applies. <repo> is portability, not privacy.
-func repoRedactor(repoRoot string) (PathRedactor, error) {
+func NewPathRedactor(repoRoot string) (PathRedactor, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return PathRedactor{}, fmt.Errorf("resolving home directory for path redaction: %w", err)
 	}
-	return PathRedactor{Home: home, Repo: repoRoot}, nil
+	if !filepath.IsAbs(home) || filepath.Clean(home) == string(filepath.Separator) {
+		return PathRedactor{}, fmt.Errorf(
+			"home directory %q is unusable for path redaction (want an absolute path below the root)", home)
+	}
+	return PathRedactor{Home: filepath.Clean(home), Repo: repoRoot}, nil
 }

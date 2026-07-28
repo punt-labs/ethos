@@ -118,26 +118,37 @@ func TestWriteDelegationSkeleton_Redacts(t *testing.T) {
 }
 
 // TestWriteDelegationSkeleton_NoHomeFailsClosed asserts the fail-safe
-// rule: a home directory ethos cannot resolve is one it cannot redact,
-// so the write is refused rather than completed with the operator's
-// paths intact. The PreToolUse dispatch turns this error into a spawn
+// rule: a home directory ethos cannot use is one it cannot redact, so
+// the write is refused rather than completed with the operator's paths
+// intact. The PreToolUse dispatch turns this error into a spawn
 // refusal.
+//
+// Both unusable shapes are covered. An unset HOME is what a stripped
+// hook environment produces; a HOME of "/" is what os.UserHomeDir
+// returns on ios and what a misconfigured environment can supply
+// anywhere, and it is refused by NewPathRedactor's own check rather
+// than by the stdlib — so the assertion does not depend on which
+// platform the test runs on.
 func TestWriteDelegationSkeleton_NoHomeFailsClosed(t *testing.T) {
-	repoRoot := t.TempDir()
-	t.Setenv("HOME", "")
+	for _, home := range []string{"", "/"} {
+		t.Run("HOME="+home, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			t.Setenv("HOME", home)
 
-	_, err := WriteDelegationSkeleton(repoRoot, "m-1", "d-1", DelegationSkeleton{
-		Tier:   TierB,
-		Prompt: []byte("/Users/someone/secret.md"),
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "path redaction")
+			_, err := WriteDelegationSkeleton(repoRoot, "m-1", "d-1", DelegationSkeleton{
+				Tier:   TierB,
+				Prompt: []byte("/Users/someone/secret.md"),
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "home directory")
 
-	dir := DelegationDir(repoRoot, "m-1", "d-1")
-	for _, name := range []string{"prompt.md", "record.yaml"} {
-		_, statErr := os.Stat(filepath.Join(dir, name))
-		assert.True(t, os.IsNotExist(statErr),
-			"%s must not exist when redaction could not be applied", name)
+			dir := DelegationDir(repoRoot, "m-1", "d-1")
+			for _, name := range []string{"prompt.md", "record.yaml"} {
+				_, statErr := os.Stat(filepath.Join(dir, name))
+				assert.True(t, os.IsNotExist(statErr),
+					"%s must not exist when redaction could not be applied", name)
+			}
+		})
 	}
 }
 

@@ -316,7 +316,7 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	if strings.TrimSpace(delegationID) == "" {
 		return "", fmt.Errorf("delegationID is required for delegation skeleton")
 	}
-	redact, err := repoRedactor(repoRoot)
+	redact, err := NewPathRedactor(repoRoot)
 	if err != nil {
 		return "", fmt.Errorf("delegation skeleton: %w", err)
 	}
@@ -529,8 +529,8 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 		// gets the same treatment as the prompt. Only the repo root is
 		// unavailable here — a bare record path does not name the
 		// checkout it belongs to — and <repo> is portability polish, not
-		// the username leak (repoRedactor doc).
-		redact, rErr := repoRedactor("")
+		// the username leak (NewPathRedactor doc).
+		redact, rErr := NewPathRedactor("")
 		if rErr != nil {
 			return fmt.Errorf("close delegation: %w", rErr)
 		}
