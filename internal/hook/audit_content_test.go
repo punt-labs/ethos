@@ -166,6 +166,54 @@ func TestRedactSensitiveContent(t *testing.T) {
 		assert.Nil(t, got)
 		assert.False(t, changed)
 	})
+
+	t.Run("a sensitive call that supplied only kept fields is not marked", func(t *testing.T) {
+		got, changed := redactSensitiveContent("send_email",
+			map[string]any{"subject": "no address here"})
+		assert.Equal(t, map[string]any{"subject": "no address here"}, got)
+		assert.False(t, changed, "nothing was removed, so the line lost no content")
+	})
+}
+
+// TestRedactToolInput_NoHomeDropsInput is the audit path's fail-closed
+// rule. Path redaction needs $HOME to know which absolute path is the
+// operator's; without it the input cannot be redacted, so it is dropped
+// rather than stored raw. Audit logging must not block a tool call, so
+// failing closed here costs the payload, not the call.
+func TestRedactToolInput_NoHomeDropsInput(t *testing.T) {
+	t.Setenv("HOME", "")
+
+	got, redacted := redactToolInput(map[string]any{
+		"tool_input": map[string]any{"file_path": "/Users/jfreeman/.ssh/id_ed25519"},
+	}, "Read", "")
+
+	assert.Nil(t, got, "unredactable input must not reach the entry")
+	assert.True(t, redacted, "the line must say its content was removed")
+}
+
+// TestBuildAuditEntry_NoHomeKeepsTheTrail asserts the line survives the
+// dropped payload: an operator reconstructing the session still gets
+// the timestamp, the tool, and the delegation linkage.
+func TestBuildAuditEntry_NoHomeKeepsTheTrail(t *testing.T) {
+	t.Setenv("HOME", "")
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+
+	entry := buildAuditEntry(map[string]any{
+		"tool_name":     "Bash",
+		"delegation_id": "d-2026-07-28-001",
+		"tool_input":    map[string]any{"command": "cat /Users/jfreeman/.ssh/id_ed25519"},
+	}, "sess-1", "", now)
+
+	assert.Equal(t, "Bash", entry.Tool)
+	assert.Equal(t, "d-2026-07-28-001", entry.DelegationID)
+	assert.True(t, entry.Redacted)
+	assert.Nil(t, entry.ToolInput)
+	assert.Empty(t, entry.ToolInputHash)
+	assert.Empty(t, entry.ToolInputPreview)
+
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(line), "/Users/jfreeman")
 }
 
 // TestBuildAuditEntry_HashOverRedactedForm is the ordering invariant

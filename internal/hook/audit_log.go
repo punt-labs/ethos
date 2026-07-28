@@ -155,9 +155,7 @@ func HandleAuditLog(r io.Reader, repoRoot, globalSessionsDir string) error {
 // audit.jsonl lines on disk are unchanged.
 func buildAuditEntry(input map[string]any, sessionID, repoRoot string, now time.Time) auditEntry {
 	toolName, _ := input["tool_name"].(string)
-	home, _ := os.UserHomeDir()
-	redacted := redactAbsolutePaths(extractToolInput(input), home, repoRoot)
-	redacted, contentRedacted := redactSensitiveContent(toolName, redacted)
+	redacted, contentRedacted := redactToolInput(input, toolName, repoRoot)
 	// Feed the redacted map through the existing hash and preview
 	// helpers under the same "tool_input" envelope they expect. When
 	// the tool call carried no tool_input (a rare scalar-input hook),

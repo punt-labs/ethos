@@ -100,7 +100,7 @@ func redactSensitiveContent(toolName string, input map[string]any) (map[string]a
 		return nil, false
 	}
 	if keep, ok := sensitiveTools[bareToolName(toolName)]; ok {
-		return reduceToKeepList(input, keep), true
+		return reduceToKeepList(input, keep)
 	}
 	out, changed := sweepPII(input, false)
 	m, _ := out.(map[string]any)
@@ -127,21 +127,28 @@ func bareToolName(toolName string) string {
 // map or slice can hide prose at any depth, and one rule that reduces
 // everything is easier to verify than a type table that has to be
 // right about each case.
-func reduceToKeepList(input map[string]any, keep []string) map[string]any {
+//
+// The bool reports whether anything was actually removed, so a call
+// that supplied only kept fields is not mismarked as having lost
+// content it never had.
+func reduceToKeepList(input map[string]any, keep []string) (map[string]any, bool) {
 	kept := make(map[string]bool, len(keep))
 	for _, k := range keep {
 		kept[k] = true
 	}
 	out := make(map[string]any, len(input))
+	changed := false
 	for k, v := range input {
 		if !kept[k] {
 			out[k] = redactedValueToken
+			changed = true
 			continue
 		}
-		swept, _ := sweepPII(v, true)
+		swept, c := sweepPII(v, true)
 		out[k] = swept
+		changed = changed || c
 	}
-	return out
+	return out, changed
 }
 
 // sweepPII walks v and replaces every address inside a prompt-bearing
