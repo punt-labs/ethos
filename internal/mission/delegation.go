@@ -292,6 +292,18 @@ func DelegationDir(repoRoot, missionID, delegationID string) string {
 // with 0o700. opened_at is stamped at write time; the caller does
 // not need to populate it.
 //
+// Path redaction (ethos-ersr, ethos-n4np): the mission tree is
+// git-tracked and routinely pushed to a public repo, so the prompt
+// body and every operator-supplied record field are rewritten through
+// PathRedactor before they touch disk — the same $HOME -> ~ and
+// <repoRoot> -> <repo> rules the audit lines use. Redaction happens
+// here rather than at the call site so a future caller cannot write an
+// unredacted prompt by forgetting a step. Resolving $HOME is a
+// precondition, not a best effort: a home directory ethos cannot name
+// is a home directory it cannot redact, and writing the prompt anyway
+// would leak the operator's username. The error surfaces to the
+// PreToolUse dispatch, which refuses the spawn — fail closed.
+//
 // Returns the absolute path of the written record so the caller can
 // stash it for the depth/hash-gate refusal cleanup paths.
 func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload DelegationSkeleton) (string, error) {
@@ -304,6 +316,10 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	if strings.TrimSpace(delegationID) == "" {
 		return "", fmt.Errorf("delegationID is required for delegation skeleton")
 	}
+	redact, err := repoRedactor(repoRoot)
+	if err != nil {
+		return "", fmt.Errorf("delegation skeleton: %w", err)
+	}
 	dir := DelegationDir(repoRoot, missionID, delegationID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("creating delegation directory %s: %w", dir, err)
@@ -314,20 +330,25 @@ func WriteDelegationSkeleton(repoRoot, missionID, delegationID string, payload D
 	// signals "skeleton not yet committed" and avoids a torn read.
 	if len(payload.Prompt) > 0 {
 		if err := writeAtomicFile(dir, "prompt-*.md.tmp",
-			filepath.Join(dir, "prompt.md"), payload.Prompt); err != nil {
+			filepath.Join(dir, "prompt.md"), redact.Body(payload.Prompt)); err != nil {
 			return "", fmt.Errorf("writing delegation prompt: %w", err)
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	// Every field the caller supplies is redacted; the fields this
+	// writer stamps (ID, Mission, CreatedAt, Verdict) are generated
+	// values that cannot carry a path. Redacting the struct rather than
+	// the marshaled YAML avoids a value that reduces to exactly "~"
+	// round-tripping back as a null.
 	d := Delegation{
 		ID:               filepath.Base(delegationID),
-		Tier:             payload.Tier,
+		Tier:             redact.Text(payload.Tier),
 		Mission:          filepath.Base(missionID),
-		ParentDelegation: payload.ParentDelegation,
-		ParentSession:    payload.ParentSession,
-		Session:          payload.Session,
-		AgentType:        payload.AgentType,
-		SpawnPattern:     payload.SpawnPattern,
+		ParentDelegation: redact.Text(payload.ParentDelegation),
+		ParentSession:    redact.Text(payload.ParentSession),
+		Session:          redact.Text(payload.Session),
+		AgentType:        redact.Text(payload.AgentType),
+		SpawnPattern:     redact.Text(payload.SpawnPattern),
 		PromptHash:       payload.PromptHash,
 		CreatedAt:        now,
 		Verdict:          DelegationVerdictOpen,
@@ -504,7 +525,16 @@ func CloseDelegation(recordPath, verdict, reason string) error {
 	d.Verdict = verdict
 	d.ClosedAt = time.Now().UTC().Format(time.RFC3339)
 	if reason != "" {
-		d.Reason = reason
+		// The reason is free text and the record is git-tracked, so it
+		// gets the same treatment as the prompt. Only the repo root is
+		// unavailable here — a bare record path does not name the
+		// checkout it belongs to — and <repo> is portability polish, not
+		// the username leak (repoRedactor doc).
+		redact, rErr := repoRedactor("")
+		if rErr != nil {
+			return fmt.Errorf("close delegation: %w", rErr)
+		}
+		d.Reason = redact.Text(reason)
 	}
 	data, err := yaml.Marshal(d)
 	if err != nil {

@@ -4,7 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"strings"
+
+	"github.com/punt-labs/ethos/internal/mission"
 )
 
 // auditEntry is a single JSONL line in the session audit log.
@@ -129,63 +130,12 @@ func hashToolInput(input map[string]any) string {
 //
 // Empty homeDir or repoRoot disables that substitution. The function
 // never mutates the input map.
-func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[string]any {
-	if input == nil {
-		return nil
-	}
-	r := redactor{home: homeDir, repo: repoRoot}
-	out, _ := r.value(input).(map[string]any)
-	return out
-}
-
-// redactor carries the prefix table for a single redaction pass.
-// Held as a struct so the recursion does not thread three arguments
-// through every call.
-type redactor struct {
-	home string
-	repo string
-}
-
-// value redacts v recursively. Strings are rewritten via rewrite;
-// maps and slices recurse; other types pass through unchanged.
-func (r redactor) value(v any) any {
-	switch x := v.(type) {
-	case string:
-		return r.rewrite(x)
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			out[k] = r.value(vv)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, vv := range x {
-			out[i] = r.value(vv)
-		}
-		return out
-	default:
-		return v
-	}
-}
-
-// rewrite replaces every occurrence of repo and home prefixes inside
-// s with their portable tokens. repo is checked first so a repo
-// nested inside home (the common case) is tagged <repo>/X, not
-// ~/<rel>/X. Both prefixes are replaced globally so a Bash command
-// embedding several paths gets every one rewritten.
 //
-// The trailing-slash form is replaced first; the bare form is
-// replaced second so a path that ends exactly at repoRoot (no
-// trailing slash, e.g. `cd <repoRoot>`) also gets the token.
-func (r redactor) rewrite(s string) string {
-	if r.repo != "" {
-		s = strings.ReplaceAll(s, r.repo+"/", "<repo>/")
-		s = strings.ReplaceAll(s, r.repo, "<repo>")
-	}
-	if r.home != "" {
-		s = strings.ReplaceAll(s, r.home+"/", "~/")
-		s = strings.ReplaceAll(s, r.home, "~")
-	}
-	return s
+// The substitution itself lives on mission.PathRedactor. The Tier B
+// delegation writer redacts prompt.md and record.yaml with the same
+// type (internal/mission/delegation.go), so the audit lines and the
+// delegation records cannot drift apart — one implementation, two
+// call sites (ethos-ersr, ethos-n4np).
+func redactAbsolutePaths(input map[string]any, homeDir, repoRoot string) map[string]any {
+	return mission.PathRedactor{Home: homeDir, Repo: repoRoot}.Map(input)
 }
