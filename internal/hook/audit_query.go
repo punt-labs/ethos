@@ -31,6 +31,7 @@ type AuditView struct {
 	ToolInput        map[string]any `json:"tool_input,omitempty"`
 	ToolInputHash    string         `json:"tool_input_hash,omitempty"`
 	ToolInputPreview string         `json:"tool_input_preview,omitempty"`
+	Redacted         bool           `json:"redacted,omitempty"`
 }
 
 // Summary returns a single-line human description of the entry. Prefers
