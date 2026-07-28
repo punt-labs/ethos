@@ -116,7 +116,7 @@ func TestPathRedactorValue(t *testing.T) {
 // rewrite the leading separator of every absolute path, so it is
 // refused rather than used.
 func TestNewPathRedactor(t *testing.T) {
-	tests := []struct {
+	homes := []struct {
 		name    string
 		home    string
 		wantErr string
@@ -127,7 +127,7 @@ func TestNewPathRedactor(t *testing.T) {
 		{name: "root with trailing slashes is refused", home: "//", wantErr: "unusable"},
 		{name: "relative home is refused", home: "relative/path", wantErr: "unusable"},
 	}
-	for _, tt := range tests {
+	for _, tt := range homes {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("HOME", tt.home)
 			r, err := NewPathRedactor("/repo")
@@ -143,4 +143,39 @@ func TestNewPathRedactor(t *testing.T) {
 			assert.Equal(t, "/repo", r.Repo)
 		})
 	}
+
+	// repoRoot is optional, so an unusable one disables the <repo>
+	// token rather than failing the write. The home substitution, which
+	// is what carries the username, still applies.
+	repos := []struct {
+		name string
+		repo string
+		want string
+	}{
+		{name: "absolute repo is kept", repo: "/w/ethos", want: "/w/ethos"},
+		{name: "trailing slash is normalized", repo: "/w/ethos/", want: "/w/ethos"},
+		{name: "redundant elements are normalized", repo: "/w/x/../ethos", want: "/w/ethos"},
+		{name: "empty repo disables the token", repo: "", want: ""},
+		{name: "root repo disables the token", repo: "/", want: ""},
+		{name: "relative repo disables the token", repo: "ethos", want: ""},
+	}
+	for _, tt := range repos {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("HOME", "/Users/jfreeman")
+			r, err := NewPathRedactor(tt.repo)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, r.Repo)
+			assert.Equal(t, "/Users/jfreeman", r.Home,
+				"an unusable repoRoot must not cost the home substitution")
+		})
+	}
+
+	t.Run("a normalized repo prefix still matches", func(t *testing.T) {
+		t.Setenv("HOME", "/Users/jfreeman")
+		r, err := NewPathRedactor("/Users/jfreeman/Coding/ethos/")
+		require.NoError(t, err)
+		assert.Equal(t, "<repo>/Makefile",
+			r.Text("/Users/jfreeman/Coding/ethos/Makefile"),
+			"a trailing slash on repoRoot must not silently defeat the token")
+	})
 }

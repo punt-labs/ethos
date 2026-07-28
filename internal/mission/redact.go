@@ -18,10 +18,11 @@ import (
 // layout forever, and those trees are pushed to public repos.
 //
 // A zero Repo or Home disables that substitution rather than erroring.
-// The redactor holds no state beyond the two prefixes, so it never
-// fails — a caller cannot end up writing unredacted content because
-// redaction returned an error. That is the fail-closed property: there
-// is no error path to fall through.
+// No method on this type returns an error: once a redactor exists, a
+// caller cannot end up writing unredacted content because redaction
+// failed halfway. Deciding whether a usable redactor can be built at
+// all is NewPathRedactor's job, and that is the one place the
+// fail-closed refusal happens.
 type PathRedactor struct {
 	Home string
 	Repo string
@@ -113,15 +114,35 @@ func (r PathRedactor) Map(m map[string]any) map[string]any {
 //
 // repoRoot may be empty at a call site that knows only the artifact's
 // own path; the home substitution — the one that carries the username
-// — still applies. <repo> is portability, not privacy.
+// — still applies. <repo> is portability, not privacy, so an unusable
+// repoRoot disables that one substitution instead of failing the
+// write. It is also normalized: Text matches an exact prefix, so a
+// repoRoot carrying a trailing slash would match nothing and quietly
+// leave repo paths tagged with ~ instead of <repo>. ETHOS_REPO_ROOT is
+// operator-supplied and can arrive in either shape.
 func NewPathRedactor(repoRoot string) (PathRedactor, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return PathRedactor{}, fmt.Errorf("resolving home directory for path redaction: %w", err)
 	}
-	if !filepath.IsAbs(home) || filepath.Clean(home) == string(filepath.Separator) {
+	if !usablePrefix(home) {
 		return PathRedactor{}, fmt.Errorf(
 			"home directory %q is unusable for path redaction (want an absolute path below the root)", home)
 	}
-	return PathRedactor{Home: filepath.Clean(home), Repo: repoRoot}, nil
+	repo := ""
+	if usablePrefix(repoRoot) {
+		repo = filepath.Clean(repoRoot)
+	}
+	return PathRedactor{Home: filepath.Clean(home), Repo: repo}, nil
+}
+
+// usablePrefix reports whether p can serve as a redaction prefix. It
+// must be absolute — a relative prefix matches arbitrary substrings —
+// and it must sit below the filesystem root, because a prefix of "/"
+// rewrites the leading separator of every absolute path and turns
+// /etc/hosts into ~etc/hosts. filepath.Clean("") is ".", so the empty
+// string is rejected here rather than cleaned into a prefix that
+// matches every "." in every string.
+func usablePrefix(p string) bool {
+	return p != "" && filepath.IsAbs(p) && filepath.Clean(p) != string(filepath.Separator)
 }
