@@ -259,13 +259,19 @@ func (ls *LayeredStore) AddCollaboration(teamName string, c Collaboration) error
 	return s.AddCollaboration(teamName, c)
 }
 
-// checkNotReadOnlyLayer returns an error if the team exists in the repo
-// or bundle layer. Both layers are read-only via CLI/MCP; the error
-// message distinguishes them so the user knows where to edit. (Named for
-// the layer, not for DES-057's `resolution: repo-only` mode — the two are
-// unrelated.)
+// checkNotReadOnlyLayer returns an error if the team lives in a layer
+// this store may not write. The message distinguishes the layers so the
+// user knows where to edit. (Named for the layer, not for DES-057's
+// `resolution: repo-only` mode.)
+//
+// Under repo-only the repo layer is the ONLY writable one, so a
+// repo-tracked team is mutable there. Refusing it would make `ethos team
+// create` succeed — writes route to the repo layer — while every
+// subsequent add-member on the team it just created failed, which is not
+// a policy but a dead end (Bugbot HIGH, PR #410). The bundle stays
+// read-only in both modes.
 func (ls *LayeredStore) checkNotReadOnlyLayer(teamName string) error {
-	if ls.repo != nil && ls.repo.Exists(teamName) {
+	if !ls.repoAuthoritative && ls.repo != nil && ls.repo.Exists(teamName) {
 		return fmt.Errorf("team %q is repo-tracked (git-tracked) and cannot be modified via CLI; edit the YAML directly", teamName)
 	}
 	if ls.bundle != nil && ls.bundle.Exists(teamName) {

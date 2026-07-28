@@ -44,7 +44,9 @@ func runServeImpl() error {
 		mcp.WithTeamStore(teams),
 		mcp.WithMissionStore(missions),
 		mcp.WithADRStore(adrs),
-		mcp.WithVendorRunner(vendorRunner(is, roles, teams)),
+		// Vendor gets its own full-chain stores for the same reason the
+		// CLI does: it copies from global into the repo layer.
+		mcp.WithVendorRunner(vendorRunner()),
 	).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {

@@ -11,8 +11,6 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mcp"
 	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/role"
-	"github.com/punt-labs/ethos/internal/team"
 	"github.com/punt-labs/ethos/internal/vendor"
 	"github.com/spf13/cobra"
 )
@@ -79,7 +77,10 @@ func runVendor(cmd *cobra.Command, args []string) error {
 		return usageError{"--apply and --dry-run are mutually exclusive"}
 	}
 
-	is := identityStore()
+	// The FULL chain, not identityStore(): vendor copies from global into
+	// the repo layer, so it must see global even in a repo that has
+	// already set `resolution: repo-only`.
+	is := vendorSourceStore()
 	dest, err := vendorDest(is)
 	if err != nil {
 		return err
@@ -136,8 +137,9 @@ func runVendor(cmd *cobra.Command, args []string) error {
 // It applies the same defaults the CLI does, including emitting the
 // .local gitignore rule after a successful apply — the two surfaces must
 // leave the repo in the same state.
-func vendorRunner(is identity.IdentityStore, roles *role.LayeredStore, teams *team.LayeredStore) mcp.VendorRunner {
+func vendorRunner() mcp.VendorRunner {
 	return func(opts vendor.Options) (*vendor.Plan, error) {
+		is := vendorSourceStore()
 		if opts.Dest == "" {
 			dest, err := vendorDest(is)
 			if err != nil {
@@ -148,8 +150,8 @@ func vendorRunner(is identity.IdentityStore, roles *role.LayeredStore, teams *te
 		v, err := vendor.New(vendor.Sources{
 			Roots:      vendorRoots(is),
 			Identities: is,
-			Roles:      roles,
-			Teams:      teams,
+			Roles:      layeredRoleStore(is),
+			Teams:      layeredTeamStore(is),
 		}, opts)
 		if err != nil {
 			return nil, err

@@ -60,8 +60,12 @@ func CheckRepoSetComplete(storeRoot string) Result {
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
 	if !rep.Complete() {
+		// Name a command that actually runs. `ethos vendor --apply` with
+		// no seeds exits "no identities selected"; the repair needs a seed
+		// set, and the handles this repo already holds are exactly it
+		// (Bugbot HIGH, PR #410).
 		return Result{Name: name, Status: "FAIL",
-			Detail: rep.Summary() + " — run `ethos vendor --apply` to complete the set"}
+			Detail: rep.Summary() + " — run `" + repairCommand(rep) + "` to complete the set"}
 	}
 	if rep.ExtUnverifiable {
 		// Not a fault: a hand-authored set is legal. But the limit must be
@@ -70,6 +74,18 @@ func CheckRepoSetComplete(storeRoot string) Result {
 		return Result{Name: name, Status: "WARN", Detail: rep.Summary()}
 	}
 	return Result{Name: name, Status: "PASS", Detail: rep.Summary()}
+}
+
+// repairCommand builds the `ethos vendor` invocation that completes this
+// set. It seeds from the handles the set already holds, so re-running it
+// re-walks the closure and fills whatever went missing. It falls back to
+// `--all` when the set holds no readable identity to name — the only
+// other seed source that needs no argument from the operator.
+func repairCommand(rep *vendor.Report) string {
+	if len(rep.Handles) == 0 {
+		return "ethos vendor --all --apply"
+	}
+	return "ethos vendor " + strings.Join(rep.Handles, " ") + " --apply"
 }
 
 // CheckLocalExtNotTracked enforces DES-057 Part C's git boundary: the

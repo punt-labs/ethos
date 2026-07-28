@@ -64,7 +64,14 @@ func TestCheckRepoSetComplete(t *testing.T) {
 		r := CheckRepoSetComplete(repoRoot)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "personalities/kernighan")
-		assert.Contains(t, r.Detail, "ethos vendor --apply")
+		// The remedy must be runnable: a bare `ethos vendor --apply` exits
+		// "no identities selected", so it has to name seeds.
+		assert.Contains(t, r.Detail, "ethos vendor bwk --apply")
+	})
+
+	// A set with nothing left to seed from still gets a command that runs.
+	t.Run("repair command falls back to --all with no handles", func(t *testing.T) {
+		assert.Equal(t, "ethos vendor --all --apply", repairCommand(&vendor.Report{}))
 	})
 
 	// The manifest is what makes an omitted extension detectable at all.

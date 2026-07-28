@@ -66,8 +66,11 @@ func (e *ErrIncompleteRepoSet) Error() string {
 	for _, m := range e.Missing {
 		refs = append(refs, fmt.Sprintf("%s (looked in %s)", m, m.Path))
 	}
+	// --apply is not optional in this advice: vendor plans by default, so
+	// `ethos vendor <handle>` alone would print a plan and leave the set
+	// exactly as broken as it was.
 	return fmt.Sprintf(
-		"identity %q is incomplete under resolution: repo-only — missing %s; run `ethos vendor %s` to complete the set",
+		"identity %q is incomplete under resolution: repo-only — missing %s; run `ethos vendor %s --apply` to complete the set",
 		e.Handle, strings.Join(refs, ", "), e.Handle)
 }
 

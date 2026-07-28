@@ -79,6 +79,54 @@ func TestRepoOnly_SaveAndDeleteTargetRepo(t *testing.T) {
 	assert.False(t, repo.Exists("fresh"))
 }
 
+// Under repo-only the repo layer is the only writable one, so a
+// repo-tracked team is mutable there. Refusing it would make `team
+// create` succeed — writes route to the repo layer — while every
+// add-member on the team it just created failed (Bugbot HIGH, PR #410).
+func TestRepoOnly_RepoTeamIsMutable(t *testing.T) {
+	ls, repo, _, _ := setupRepoOnly(t)
+	require.NoError(t, ls.Save(&Team{
+		Name: "fresh", Members: []Member{{Identity: "a", Role: "x"}},
+	}, alwaysTrue, alwaysTrue))
+	require.True(t, repo.Exists("fresh"), "create writes to the repo layer")
+
+	require.NoError(t, ls.AddMember("fresh", Member{Identity: "b", Role: "y"}, alwaysTrue, alwaysTrue))
+	got, err := ls.Load("fresh")
+	require.NoError(t, err)
+	assert.Len(t, got.Members, 2)
+
+	require.NoError(t, ls.RemoveMember("fresh", "b", "y"))
+	got, err = ls.Load("fresh")
+	require.NoError(t, err)
+	assert.Len(t, got.Members, 1)
+}
+
+// Layered mode is unchanged: a repo-tracked team stays CLI-immutable,
+// because global is the write target there and editing it would be
+// invisible behind the repo copy.
+func TestLayered_RepoTeamStaysImmutable(t *testing.T) {
+	ls, repo, _, _ := setupThreeLayer(t)
+	require.NoError(t, repo.Save(&Team{
+		Name: "tracked", Members: []Member{{Identity: "a", Role: "x"}},
+	}, alwaysTrue, alwaysTrue))
+
+	err := ls.AddMember("tracked", Member{Identity: "b", Role: "y"}, alwaysTrue, alwaysTrue)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repo-tracked")
+}
+
+// The bundle is read-only in both modes.
+func TestRepoOnly_BundleTeamStaysImmutable(t *testing.T) {
+	ls, _, bundle, _ := setupRepoOnly(t)
+	require.NoError(t, bundle.Save(&Team{
+		Name: "shared", Members: []Member{{Identity: "a", Role: "x"}},
+	}, alwaysTrue, alwaysTrue))
+
+	err := ls.AddMember("shared", Member{Identity: "b", Role: "y"}, alwaysTrue, alwaysTrue)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bundle")
+}
+
 func TestRepoOnly_WriteRefusedWithoutRepoLayer(t *testing.T) {
 	bundleRoot, globalRoot := t.TempDir(), t.TempDir()
 	ls := NewLayeredStoreWithBundle("", bundleRoot, globalRoot, true)

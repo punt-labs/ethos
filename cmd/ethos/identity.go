@@ -33,10 +33,37 @@ func globalStore() *identity.Store {
 // role, team, and attribute stores are derived from the returned store,
 // so every layer answers from the same reading of the repo config.
 func identityStore() identity.IdentityStore {
-	g := globalStore()
 	repoRoot := resolve.FindRepoEthosRoot()
 	bundleRoot := resolveBundleRoot()
-	repoAuthoritative := repoAuthoritativeMode(repoRoot, bundleRoot)
+	return newIdentityStore(repoRoot, bundleRoot, repoAuthoritativeMode(repoRoot, bundleRoot))
+}
+
+// vendorSourceStore returns a store that reads the FULL chain — repo,
+// bundle, and global — regardless of the repo's resolution setting.
+//
+// `ethos vendor` is the one command whose job is to cross the boundary
+// repo-only draws: it copies FROM global INTO the repo layer. Building it
+// from identityStore() would make the tool honor the very policy it
+// exists to satisfy, so once a repo set `resolution: repo-only` vendor
+// could no longer see the global identities it needs to complete the
+// set — and the remedy `ethos doctor` prints would be unrunnable
+// (Bugbot HIGH, PR #410).
+//
+// Everything vendor WRITES is still verified under repo-only, by the
+// completeness check it runs on its own output.
+func vendorSourceStore() identity.IdentityStore {
+	repoRoot := resolve.FindRepoEthosRoot()
+	bundleRoot := resolveBundleRoot()
+	// Resolve the mode anyway, so a misconfigured repo-only repo still
+	// fails at startup rather than silently vendoring under a config
+	// ethos has rejected.
+	repoAuthoritativeMode(repoRoot, bundleRoot)
+	return newIdentityStore(repoRoot, bundleRoot, false)
+}
+
+// newIdentityStore assembles the layered store for a given policy.
+func newIdentityStore(repoRoot, bundleRoot string, repoAuthoritative bool) identity.IdentityStore {
+	g := globalStore()
 	if repoRoot == "" && bundleRoot == "" {
 		return g
 	}

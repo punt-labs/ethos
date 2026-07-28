@@ -99,6 +99,32 @@ func TestCLI_RefusedRepoRootOverrideCannotFallBackToGlobal(t *testing.T) {
 	assert.NotContains(t, stdout, "test-agent")
 }
 
+// Vendor is the one command that must cross the boundary repo-only
+// draws: it copies FROM global INTO the repo layer. Built from the
+// repo-only store it would honor the very policy it exists to satisfy,
+// so a repo that had already set repo-only could never complete its own
+// set — and doctor's remedy would be unrunnable (Bugbot HIGH, PR #410).
+func TestCLI_VendorReadsGlobalUnderRepoOnly(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setResolution(t, se, "repo-only")
+
+	// test-agent exists only in the global store, which repo-only hides.
+	_, _, exit := runCLI(t, se, "show", "test-agent")
+	require.Equal(t, 1, exit, "repo-only must hide the global identity from normal reads")
+
+	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent")
+	require.Equal(t, 0, exit, "vendor must still see it: stderr=%s", stderr)
+	assert.Contains(t, stdout, "test-agent")
+
+	_, stderr, exit = runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "stderr=%s", stderr)
+
+	// And now the repo-only read resolves, with no global fallback needed.
+	stdout, _, exit = runCLI(t, se, "show", "test-agent")
+	assert.Equal(t, 0, exit)
+	assert.Contains(t, stdout, "Test Agent")
+}
+
 // DES-057 Part C through the CLI: --local writes the companion file, the
 // base file never absorbs the secret, and the read is the merged view.
 func TestCLI_ExtLocalSplit(t *testing.T) {
