@@ -77,6 +77,8 @@ func HandleFormatOutput(r io.Reader, w io.Writer) error {
 		return formatMission(w, method, result)
 	case "adr":
 		return formatADR(w, method, result)
+	case "vendor":
+		return formatVendor(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -438,6 +440,66 @@ func formatDoctor(w io.Writer, result string) error {
 		ctx = parts[1]
 	}
 	return emit(w, summary, ctx)
+}
+
+// --- Vendor tool formatter ---
+
+// formatVendor renders a vendor plan (DES-020).
+//
+// The summary answers the two questions an operator has before letting
+// vendor write into git: how many identities is this, and did I ask for
+// that many? The gap between seeds and identities IS the blast radius —
+// the closure pulls the connected component of the team graph, so
+// naming one handle can vendor most of a roster, and a plan that hid
+// that would be a plan nobody reads twice.
+func formatVendor(w io.Writer, result string) error {
+	seeds := jsonStringArray(result, "seeds")
+	identities := jsonStringArray(result, "identities")
+	if len(identities) == 0 {
+		return emitSimple(w, truncate(result, 200))
+	}
+
+	verb := "Would vendor"
+	if jsonBool(result, "applied") {
+		verb = "Vendored"
+	}
+	summary := fmt.Sprintf("%s %d identities", verb, len(identities))
+	if extra := len(identities) - len(seeds); extra > 0 {
+		summary += fmt.Sprintf(" (%d pulled in via team membership)", extra)
+	}
+	if dest := jsonString(result, "dest"); dest != "" {
+		summary += " into " + dest
+	}
+
+	rows := [][]string{
+		{"seeds", strings.Join(seeds, ", ")},
+		{"identities", strings.Join(identities, ", ")},
+		{"personalities", strings.Join(jsonStringArray(result, "personalities"), ", ")},
+		{"writing-styles", strings.Join(jsonStringArray(result, "writing_styles"), ", ")},
+		{"talents", strings.Join(jsonStringArray(result, "talents"), ", ")},
+		{"roles", strings.Join(jsonStringArray(result, "roles"), ", ")},
+		{"teams", strings.Join(jsonStringArray(result, "teams"), ", ")},
+	}
+	var nonEmpty [][]string
+	for _, r := range rows {
+		if r[1] != "" {
+			nonEmpty = append(nonEmpty, r)
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(FormatTable([]string{"KIND", "MEMBERS"}, nonEmpty))
+
+	if warnings := jsonNestedStringArray(result, "warnings", "key"); len(warnings) > 0 {
+		fmt.Fprintf(&b, "\n\nExtension keys worth a look: %s", strings.Join(warnings, ", "))
+	}
+	if pruned := jsonStringArray(result, "pruned"); len(pruned) > 0 {
+		fmt.Fprintf(&b, "\n\nNo longer in the closure (%d): %s", len(pruned), strings.Join(pruned, ", "))
+	}
+	if verb == "Would vendor" {
+		b.WriteString("\n\nNothing written. Re-run with apply=true.")
+	}
+	return emit(w, summary, b.String())
 }
 
 // --- Team tool formatters ---
@@ -1504,6 +1566,17 @@ func jsonString(jsonStr, key string) string {
 	}
 	s, _ := m[key].(string)
 	return s
+}
+
+// jsonBool extracts a boolean field from a JSON string. A missing or
+// wrong-typed field reads as false.
+func jsonBool(jsonStr, key string) bool {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &m); err != nil {
+		return false
+	}
+	b, _ := m[key].(bool)
+	return b
 }
 
 // jsonStringArray extracts a string array field from a JSON string.

@@ -4,6 +4,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/repomiss"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/schema"
@@ -36,6 +38,7 @@ type Handler struct {
 	teams         *team.LayeredStore
 	missionStore  *mission.Store
 	adrStore      *adr.Store
+	vendor        VendorRunner
 }
 
 // Option configures optional Handler fields.
@@ -150,6 +153,10 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	if h.adrStore != nil {
 		s.AddTool(h.adrTool(), h.handleADR)
 	}
+	// Vendor tool (if a runner is configured)
+	if h.vendor != nil {
+		s.AddTool(h.vendorTool(), h.handleVendor)
+	}
 }
 
 // --- Tool Definitions ---
@@ -225,10 +232,24 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 
 	id, loadErr := h.store.Load(handle, opts...)
 	if loadErr != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("identity %q not found: %v", handle, loadErr)), nil
+		return identityLoadError(handle, loadErr), nil
 	}
 
 	return jsonResult(id)
+}
+
+// identityLoadError renders a failed identity Load for MCP. An
+// incomplete repo-authoritative set carries its own fully-formed
+// diagnostic — which refs are missing, where ethos looked, and the
+// vendor command that fixes it — so it is surfaced verbatim rather than
+// flattened into a generic "not found" that discards all of it
+// (DES-057 Part A, DES-020).
+func identityLoadError(handle string, err error) *mcplib.CallToolResult {
+	var incomplete *repomiss.ErrIncompleteRepoSet
+	if errors.As(err, &incomplete) {
+		return mcplib.NewToolResultError(err.Error())
+	}
+	return mcplib.NewToolResultError(fmt.Sprintf("identity %q not found: %v", handle, err))
 }
 
 func (h *Handler) handleListIdentities(_ context.Context, _ mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
@@ -272,7 +293,7 @@ func (h *Handler) handleGetIdentity(_ context.Context, req mcplib.CallToolReques
 
 	id, err := h.store.Load(handle, opts...)
 	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("identity not found: %v", err)), nil
+		return identityLoadError(handle, err), nil
 	}
 
 	return jsonResult(id)

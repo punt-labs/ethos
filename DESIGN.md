@@ -5491,13 +5491,23 @@ export`. Snapshots a complete, resolvable identity set into
   and suggesting `--local`. Override is **per-key only**
   (`--allow-ext-key <ns>/<key>`, repeatable); no blanket `--force`. Matching is
   **name-only** (never value inspection — keeps DES-008 intact) with
-  underscore-token membership: EXCLUDE public references first (`*_id`,
-  `fingerprint`, `keyid`, `pubkey`, …), then BLOCK (`password`, `token`,
-  `api_key`, `private_key`, `secret`, `credential`, …), then WARN (`key`,
-  `salt`, `seed`, `pin`, `dsn`, …). `gpg_key_id` → EXCLUDE → clean;
-  `memory_collection`/`session_context` → clean; `api_token` → BLOCK. The
-  identical lint runs advisory in `ethos doctor`. The curated pattern list is
-  djb-owned.
+  underscore-token membership, evaluated **BLOCK → block-pairs → EXCLUDE →
+  WARN** (fail-closed). A name BLOCKs if it holds any block token (`password`,
+  `token`, `api_key`, `private_key`, `secret`, `credential`, …) or a block
+  pair (`api`+`key`, `access`+`key`, …), **regardless of any other token it
+  also holds**. Only a name with no block token is then cleared by an EXCLUDE
+  public-reference token (`*_id`, `fingerprint`, `keyid`, `pubkey`, …) —
+  EXCLUDE overrides only WARN, never BLOCK. Then WARN (`key`, `salt`, `seed`,
+  `pin`, `dsn`, …). So `email_password`/`server_secret`/`provider_api_key` →
+  BLOCK: a block token or pair beats a leading EXCLUDE token (checking EXCLUDE
+  first was a fail-open — it cleared `*_password` keys into git — corrected
+  here, ethos-ni0y). `gpg_key_id`/`pubkey`/`key_fingerprint` → clean: no block
+  token, so EXCLUDE clears the ambiguous WARN token `key`.
+  `gpg_signing_key_id`/`access_key_id` → BLOCK: the `*_key` pair beats the
+  trailing `_id`, a deliberate fail-closed cost cleared per key with
+  `--allow-ext-key`. `memory_collection`/`session_context` → clean;
+  `api_token` → BLOCK. The identical lint runs advisory in `ethos doctor`. The
+  curated pattern list, and the fail-closed ordering, are djb-owned.
 - **MCP tool** + a `formatVendor` formatter in `internal/hook/format_output.go`
   (per DES-020; the formatter lives in the hook package, not `internal/mcp`).
 
