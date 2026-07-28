@@ -44,6 +44,7 @@ func runServeImpl() error {
 		mcp.WithTeamStore(teams),
 		mcp.WithMissionStore(missions),
 		mcp.WithADRStore(adrs),
+		mcp.WithVendorRunner(vendorRunner(is, roles, teams)),
 	).RegisterTools(s)
 
 	if err := server.ServeStdio(s); err != nil {

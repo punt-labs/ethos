@@ -9,7 +9,10 @@ import (
 
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/mcp"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/team"
 	"github.com/punt-labs/ethos/internal/vendor"
 	"github.com/spf13/cobra"
 )
@@ -105,12 +108,63 @@ func runVendor(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Vendor just put extension files into git-tracked space, so this is
+	// the moment the .local rule must exist — before the operator's first
+	// `ethos ext set --local` has anywhere to leak to.
+	if plan.Applied {
+		added, ignoreErr := ensureLocalExtIgnored(resolve.EnvRepoRoot())
+		if ignoreErr != nil {
+			return ignoreErr
+		}
+		if added && !jsonOutput {
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: added the *.local.yaml rule to .gitignore\n")
+		}
+	}
+
 	out := cmd.OutOrStdout()
 	if jsonOutput {
 		return writeJSON(out, plan)
 	}
 	writeVendorPlan(out, plan)
 	return nil
+}
+
+// vendorRunner adapts the vendor package for the MCP tool. Building a
+// Vendorer needs the repo roots and layered stores that only the command
+// layer resolves, so the tool takes the closure rather than the stores.
+//
+// It applies the same defaults the CLI does, including emitting the
+// .local gitignore rule after a successful apply — the two surfaces must
+// leave the repo in the same state.
+func vendorRunner(is identity.IdentityStore, roles *role.LayeredStore, teams *team.LayeredStore) mcp.VendorRunner {
+	return func(opts vendor.Options) (*vendor.Plan, error) {
+		if opts.Dest == "" {
+			dest, err := vendorDest(is)
+			if err != nil {
+				return nil, err
+			}
+			opts.Dest = dest
+		}
+		v, err := vendor.New(vendor.Sources{
+			Roots:      vendorRoots(is),
+			Identities: is,
+			Roles:      roles,
+			Teams:      teams,
+		}, opts)
+		if err != nil {
+			return nil, err
+		}
+		plan, err := v.Run()
+		if err != nil {
+			return nil, err
+		}
+		if plan.Applied {
+			if _, err := ensureLocalExtIgnored(resolve.EnvRepoRoot()); err != nil {
+				return nil, err
+			}
+		}
+		return plan, nil
+	}
 }
 
 // vendorDest resolves where the snapshot is written: --to, else the

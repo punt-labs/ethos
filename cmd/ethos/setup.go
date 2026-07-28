@@ -351,6 +351,16 @@ func runSetup(cmd *cobra.Command) error {
 		return fmt.Errorf("setup: assigning CEO/COO team: %w", err)
 	}
 
+	// --- Exclude .local extension files from git ---
+	// Emitted at setup so the rule predates the repo's first
+	// `ethos ext set --local`; a rule added afterwards does not untrack
+	// what is already in the index (DES-057 Part C).
+	if added, err := ensureLocalExtIgnored(repoRoot); err != nil {
+		return fmt.Errorf("setup: %w", err)
+	} else if added {
+		fmt.Fprintf(errw, "added: .gitignore rule for *.local.yaml\n")
+	}
+
 	// --- Generate agent files ---
 	is := identityStore()
 	ts := layeredTeamStore(is)

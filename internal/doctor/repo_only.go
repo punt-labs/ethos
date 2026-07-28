@@ -1,0 +1,193 @@
+package doctor
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/vendor"
+)
+
+// GitignoreRule is the pattern that keeps `.local.yaml` companions out
+// of git. Vendor and setup emit it; this file asserts it.
+const GitignoreRule = ".punt-labs/ethos/**/*.local.yaml"
+
+// CheckRepoSetComplete is the authoritative completeness gate for a repo
+// running `resolution: repo-only` (DES-057 Part A).
+//
+// Every other surface is deliberately softer — session-start degrades so
+// a live session is never bricked, live Load stays additive on
+// extensions — which means an incomplete set can run for a long time
+// while quietly resolving less than it should. This check is where that
+// stops being invisible. It runs the same predicate `ethos vendor` runs
+// on its own output, so a set vendor called complete and a set doctor
+// calls complete are the same thing by construction.
+//
+// A repo in layered mode PASSes with "not applicable": the global
+// fallback is expected to catch the tail there, so an incomplete repo
+// layer is not a fault.
+func CheckRepoSetComplete(storeRoot string) Result {
+	name := "Repo-only completeness"
+
+	if storeRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+	mode, err := resolve.ResolveResolution(storeRoot)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
+	}
+	if mode != resolve.ResolutionRepoOnly {
+		return Result{Name: name, Status: "PASS", Detail: "resolution: layered — not applicable"}
+	}
+
+	root := filepath.Join(storeRoot, ".punt-labs", "ethos")
+	if info, statErr := os.Stat(root); statErr != nil || !info.IsDir() {
+		return Result{
+			Name: name, Status: "FAIL",
+			Detail: fmt.Sprintf("resolution: repo-only but %s is not a directory", root),
+		}
+	}
+
+	rep, err := vendor.Check(root)
+	if err != nil {
+		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
+	}
+	if !rep.Complete() {
+		return Result{Name: name, Status: "FAIL",
+			Detail: rep.Summary() + " — run `ethos vendor --apply` to complete the set"}
+	}
+	if rep.ExtUnverifiable {
+		// Not a fault: a hand-authored set is legal. But the limit must be
+		// visible, or a green check would imply a guarantee doctor cannot
+		// make about extensions.
+		return Result{Name: name, Status: "WARN", Detail: rep.Summary()}
+	}
+	return Result{Name: name, Status: "PASS", Detail: rep.Summary()}
+}
+
+// CheckLocalExtNotTracked enforces DES-057 Part C's git boundary: the
+// `.local.yaml` half of an extension namespace must not reach git.
+//
+// Two failures, in the order that matters. A tracked `.local.yaml` is a
+// FAIL and says so first, because .gitignore does NOT untrack a file
+// already in the index — adding the rule would leave the file committed
+// and the repo looking clean. A missing rule alone is a WARN: nothing is
+// exposed yet, but the next `ethos ext set --local` would be.
+func CheckLocalExtNotTracked(repoRoot string) Result {
+	name := "Local extension files"
+
+	if repoRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+
+	tracked, err := trackedLocalExt(repoRoot)
+	if err != nil {
+		return Result{Name: name, Status: "PASS", Detail: err.Error()}
+	}
+	if len(tracked) > 0 {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+			"%s already tracked by git — gitignore does not untrack; run: git rm --cached %s",
+			strings.Join(tracked, ", "), strings.Join(tracked, " "))}
+	}
+
+	ignored, err := gitignoreCovers(repoRoot)
+	if err != nil {
+		return Result{Name: name, Status: "PASS", Detail: err.Error()}
+	}
+	if !ignored {
+		return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+			"no .gitignore rule for %s — add it before running `ethos ext set --local`", GitignoreRule)}
+	}
+	return Result{Name: name, Status: "PASS", Detail: "ignored and untracked"}
+}
+
+// trackedLocalExt lists `*.local.yaml` files under .punt-labs/ethos/
+// that git has in its index.
+func trackedLocalExt(repoRoot string) ([]string, error) {
+	out, err := exec.Command("git", "-C", repoRoot, "ls-files",
+		"--", ".punt-labs/ethos/**/*.local.yaml", ".punt-labs/ethos/*.local.yaml").Output()
+	if err != nil {
+		return nil, fmt.Errorf("could not ask git for tracked files: %v", err)
+	}
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// gitignoreCovers asks git whether a representative `.local.yaml` path
+// is ignored. Asking git rather than grepping .gitignore means any
+// spelling of the rule counts, and a rule in .git/info/exclude or a
+// parent .gitignore counts too.
+func gitignoreCovers(repoRoot string) (bool, error) {
+	probe := filepath.Join(".punt-labs", "ethos", "identities", "probe.ext", "quarry.local.yaml")
+	cmd := exec.Command("git", "-C", repoRoot, "check-ignore", "-q", probe)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	// git check-ignore exits 1 for "not ignored" and 128 for a real
+	// failure; only the latter is an error worth reporting.
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("could not ask git about ignore rules: %v", err)
+}
+
+// CheckExtCredentialNames runs the same name-only credential lint
+// `ethos vendor` blocks on, advisory here.
+//
+// Vendor blocks because it is the command that puts bytes into git.
+// Doctor only reports: it is a health check, and a repo whose extensions
+// were authored before the lint existed should be told, not stopped.
+func CheckExtCredentialNames(s identity.IdentityStore) Result {
+	name := "Extension key names"
+
+	if s == nil {
+		return Result{Name: name, Status: "PASS", Detail: "no identity store"}
+	}
+	list, err := s.List()
+	if err != nil {
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("could not list identities: %v", err)}
+	}
+
+	var flagged []string
+	for _, id := range list.Identities {
+		namespaces, nsErr := s.ExtList(id.Handle)
+		if nsErr != nil {
+			continue
+		}
+		for _, ns := range namespaces {
+			keys, getErr := s.ExtGet(id.Handle, ns, "")
+			if getErr != nil {
+				continue
+			}
+			for key := range keys {
+				if v := vendor.Classify(key); v == vendor.Block {
+					flagged = append(flagged, fmt.Sprintf("%s %s/%s", id.Handle, ns, key))
+				}
+			}
+		}
+	}
+	if len(flagged) == 0 {
+		return Result{Name: name, Status: "PASS", Detail: "no credential-named keys"}
+	}
+	sort.Strings(flagged)
+	return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+		"credential-named: %s — move each to a <namespace>.local.yaml (`ethos ext set ... --local`); `ethos vendor` will refuse them",
+		strings.Join(flagged, ", "))}
+}

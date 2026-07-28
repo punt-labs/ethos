@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Self-standing repos: repo-authoritative resolution, `ethos vendor`, and
+  the ext `.local` split (DES-057, ethos-ni0y).** A repo that vendored a
+  partial identity set was not self-standing: the global fallback quietly
+  supplied whatever the repo lacked, so the gaps were invisible and a fresh
+  checkout without `~/.punt-labs/ethos/` would resolve differently. Three
+  pieces close that, shipped together.
+
+  `resolution: layered | repo-only` in `.punt-labs/ethos.yaml`, a sibling of
+  `active_bundle`. Unset means `layered` — byte-identical to before. Under
+  `repo-only` the global layer leaves every read (identity lookup, the
+  attribute chain, roles, teams, and extensions) and writes route to the repo
+  layer, because a write to global that no read can see is worse than a
+  refusal. A reference the repo does not hold becomes a hard error naming
+  every miss at once and the file each one should occupy, rather than a
+  warning nobody prints. `whoami` exits non-zero and says which setting
+  suppressed the fallback; agent generation fails the affected agent;
+  `ethos doctor` is the authoritative completeness gate; session-start
+  degrades to the human identity so a live session is never bricked.
+
+- **`ethos vendor [handle...]`** snapshots a complete, resolvable identity set
+  into `.punt-labs/ethos/`. It follows references to a fixed point, including
+  the teams an identity belongs to and *those* teams' other members — the edge
+  that pulls in people reachable no other way, and without which a vendored
+  team names members the set does not contain. Because that edge pulls the
+  connected component of the team graph, vendoring one identity in a dense org
+  can vendor most of the roster, so the command plans by default, reports the
+  blast radius, and writes only under `--apply`. It refuses (non-zero) to copy
+  an extension key whose *name* reads as a credential — values are never
+  inspected — with a per-key `--allow-ext-key` override and no blanket force.
+  A `.vendor.yaml` manifest records what was copied, which is what makes an
+  omitted extension detectable at all. Flags: `--team --all --to --prune
+  --dry-run/--apply --json --allow-ext-key`. `ethos export` is unchanged; the
+  two do different jobs. Also available as the `vendor` MCP tool.
+
+- **`<handle>.ext/<namespace>.local.yaml`**, an optional companion to each
+  extension namespace for secret or machine-specific values, mirroring
+  `.envrc`/`.envrc.local`. Reads return base overlaid with `.local`; writes
+  target one file, so `ethos ext set` cannot fold a `.local` value into the
+  committable half, and `ethos ext set --local` writes the companion. Vendor
+  always skips `.local` by name. `ethos vendor` and `ethos setup` add the
+  gitignore rule, and `ethos doctor` fails if a `*.local.yaml` is already
+  git-tracked — gitignore does not untrack. This is a git-exclusion mechanism,
+  not a vault: the merged view still reaches the model at runtime.
+
 ### Fixed
 
 - **SubagentStart binds the frozen-evaluator gate by `(mission_id, role)`,

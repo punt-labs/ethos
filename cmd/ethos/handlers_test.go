@@ -148,13 +148,14 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
-	require.Len(t, results, 6)
+	require.Len(t, results, 9)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
 	}
 	assert.Contains(t, names, "Identity directory")
 	assert.Contains(t, names, "Human identity")
+	assert.Contains(t, names, "Repo-only completeness")
 }
 
 // --- whoami ---

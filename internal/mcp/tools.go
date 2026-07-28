@@ -38,6 +38,7 @@ type Handler struct {
 	teams         *team.LayeredStore
 	missionStore  *mission.Store
 	adrStore      *adr.Store
+	vendor        VendorRunner
 }
 
 // Option configures optional Handler fields.
@@ -151,6 +152,10 @@ func (h *Handler) RegisterTools(s *mcpserver.MCPServer) {
 	// ADR tool (if store configured)
 	if h.adrStore != nil {
 		s.AddTool(h.adrTool(), h.handleADR)
+	}
+	// Vendor tool (if a runner is configured)
+	if h.vendor != nil {
+		s.AddTool(h.vendorTool(), h.handleVendor)
 	}
 }
 

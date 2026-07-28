@@ -9,6 +9,7 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/internal/vendor"
 )
 
 // globalStore returns the user-global identity store (~/.punt-labs/ethos).
@@ -43,11 +44,39 @@ func identityStore() identity.IdentityStore {
 	if repoRoot != "" {
 		repo = identity.NewStore(repoRoot)
 	}
-	var bundle *identity.Store
+	var bundleStore *identity.Store
 	if bundleRoot != "" {
-		bundle = identity.NewStore(bundleRoot)
+		bundleStore = identity.NewStore(bundleRoot)
 	}
-	return identity.NewLayeredStoreWithBundle(repo, bundle, g, repoAuthoritative)
+	ls := identity.NewLayeredStoreWithBundle(repo, bundleStore, g, repoAuthoritative)
+	if repoAuthoritative {
+		ls.WithRequiredExt(requiredExt(repoRoot, bundleRoot))
+	}
+	return ls
+}
+
+// requiredExt reads the vendored set's .vendor.yaml and returns the ext
+// base files it recorded, keyed by handle — the set repo-only checks the
+// source layer against.
+//
+// The manifest is read from the layer identities resolve from. A
+// malformed one is a warning, not a fatal: it degrades ext completeness
+// to "unverifiable" (which doctor reports) rather than making every
+// command in the repo unusable over a bad advisory file.
+func requiredExt(repoRoot, bundleRoot string) map[string][]string {
+	root := repoRoot
+	if root == "" {
+		root = bundleRoot
+	}
+	if root == "" {
+		return nil
+	}
+	m, err := vendor.LoadManifest(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v; extension completeness cannot be verified\n", err)
+		return nil
+	}
+	return m.RequiredExt()
 }
 
 // repoAuthoritativeMode reports whether this repo runs in repo-only mode,

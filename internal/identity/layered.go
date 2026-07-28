@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -29,6 +30,10 @@ type LayeredStore struct {
 	// `resolution: repo-only`. It is false for every layered-mode
 	// caller, which keeps that path byte-identical.
 	repoAuthoritative bool
+	// requiredExt is the .vendor.yaml manifest's record of the ext base
+	// files this repo vendored, keyed by handle. Nil means there is no
+	// manifest, so ext completeness cannot be judged here at all.
+	requiredExt map[string][]string
 }
 
 // Compile-time check: *LayeredStore satisfies IdentityStore.
@@ -47,6 +52,20 @@ func NewLayeredStore(repo *Store, global *Store) *LayeredStore {
 // mode; false is the layered default.
 func NewLayeredStoreWithBundle(repo, bundle, global *Store, repoAuthoritative bool) *LayeredStore {
 	return &LayeredStore{repo: repo, bundle: bundle, global: global, repoAuthoritative: repoAuthoritative}
+}
+
+// WithRequiredExt records the ext base files a `.vendor.yaml` manifest
+// says this repo vendored, keyed by handle, and returns ls for chaining.
+//
+// It is the store's only knowledge of the manifest: the caller reads the
+// file and hands over the map, so internal/identity does not depend on
+// the vendor package that writes it. Absent (nil), the store reports no
+// ext misses at all — a hand-authored set with no manifest cannot have
+// its ext completeness judged, and guessing would be worse than saying
+// nothing (doctor raises the advisory).
+func (ls *LayeredStore) WithRequiredExt(required map[string][]string) *LayeredStore {
+	ls.requiredExt = required
+	return ls
 }
 
 // RepoAuthoritative reports whether this store runs in repo-only mode.
@@ -77,8 +96,13 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 	// carve-out). Live Load stays additive either way — a missing ext file
 	// never bricks a running session; the completeness verdict is doctor's
 	// and vendor's to render.
-	extData, extWarnings := ls.extLayer(source).loadExtensions(handle)
+	extLayer := ls.extLayer(source)
+	extData, extWarnings := extLayer.loadExtensions(handle)
 	id.Ext = extData
+	// Live Load stays ADDITIVE on ext: a missing namespace never bricks a
+	// running session. It records the verdict instead, and the surfaces
+	// decide — doctor and agent generation fail, session-start degrades.
+	id.MissingExt = ls.missingExt(handle, extLayer)
 
 	// Attribute resolution walks the full layer chain regardless of
 	// which layer the identity record came from.
@@ -618,6 +642,33 @@ func (ls *LayeredStore) extLayer(source string) *Store {
 		return ls.bundle
 	}
 	return ls.global
+}
+
+// missingExt reports the manifest-recorded ext base files absent from
+// the layer ext resolves from (DES-057 Part A).
+//
+// It answers only under repo-only and only with a manifest. In layered
+// mode the global store supplies ext, so there is nothing to be missing;
+// with no manifest a directory listing cannot tell "this identity has no
+// extensions" from "vendor omitted them", and inventing an answer would
+// be worse than reporting none.
+func (ls *LayeredStore) missingExt(handle string, layer *Store) []repomiss.MissingRef {
+	if !ls.repoAuthoritative || ls.requiredExt == nil {
+		return nil
+	}
+	var out []repomiss.MissingRef
+	for _, file := range ls.requiredExt[handle] {
+		path := filepath.Join(layer.ExtDir(handle), filepath.Base(file))
+		if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			continue
+		}
+		out = append(out, repomiss.MissingRef{
+			Kind: repomiss.KindExt,
+			Slug: handle + "/" + strings.TrimSuffix(file, ".yaml"),
+			Path: path,
+		})
+	}
+	return out
 }
 
 // extStore returns the ext read layer for a handle whose source is not

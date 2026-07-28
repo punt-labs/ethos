@@ -119,6 +119,17 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 		if id.Kind != "agent" {
 			continue
 		}
+		// Load records an ext miss rather than failing, so a live session
+		// is never bricked. Agent generation is the surface that must act
+		// on it: an agent written without its memory wiring looks correct
+		// and behaves as if it had amnesia (DES-057 Part A).
+		if len(id.MissingExt) > 0 {
+			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: %v\n",
+				m.Identity, repomiss.New(m.Identity, id.MissingExt))
+			expected++
+			failedMembers = append(failedMembers, m.Identity)
+			continue
+		}
 
 		r, err := roles.Load(m.Role)
 		if err != nil {

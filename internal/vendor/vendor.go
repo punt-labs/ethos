@@ -61,19 +61,23 @@ type ExtFile struct {
 // the whole user-facing result: the closure, the blast radius, the
 // credential findings, and what --prune would remove.
 type Plan struct {
-	Dest          string               `json:"dest"`
-	Seeds         []string             `json:"seeds"`
-	Identities    []string             `json:"identities"`
-	Personalities []string             `json:"personalities,omitempty"`
-	WritingStyles []string             `json:"writing_styles,omitempty"`
-	Talents       []string             `json:"talents,omitempty"`
-	Roles         []string             `json:"roles,omitempty"`
-	Teams         []string             `json:"teams,omitempty"`
-	Ext           map[string][]ExtFile `json:"-"`
-	Pruned        []string             `json:"pruned,omitempty"`
-	Warnings      []Finding            `json:"warnings,omitempty"`
-	Applied       bool                 `json:"applied"`
-	FilesWritten  int                  `json:"files_written"`
+	Dest          string   `json:"dest"`
+	Seeds         []string `json:"seeds"`
+	Identities    []string `json:"identities"`
+	Personalities []string `json:"personalities,omitempty"`
+	WritingStyles []string `json:"writing_styles,omitempty"`
+	Talents       []string `json:"talents,omitempty"`
+	Roles         []string `json:"roles,omitempty"`
+	Teams         []string `json:"teams,omitempty"`
+	// Ext is keyed by handle. It stays out of the wire shape: consumers
+	// need the count, and the authoritative per-file record is the
+	// manifest, not a command response.
+	Ext          map[string][]ExtFile `json:"-"`
+	ExtFiles     int                  `json:"ext_files"`
+	Pruned       []string             `json:"pruned,omitempty"`
+	Warnings     []Finding            `json:"warnings,omitempty"`
+	Applied      bool                 `json:"applied"`
+	FilesWritten int                  `json:"files_written"`
 }
 
 // ExtCount returns the number of extension base files in the closure.
@@ -131,6 +135,7 @@ func (v *Vendorer) Run() (*Plan, error) {
 		return nil, err
 	}
 	p.Dest = v.opts.Dest
+	p.ExtFiles = p.ExtCount()
 
 	// The guard runs before anything is written, on the plan, so a
 	// blocked key stops a dry run too. A warning that fires only after
