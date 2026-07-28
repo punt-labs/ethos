@@ -39,6 +39,25 @@ func TestCLI_RepoOnlyHidesGlobalIdentity(t *testing.T) {
 	assert.Contains(t, stderr, "repo-only")
 }
 
+// An incomplete set is not a not-found: the identity IS there, its
+// references are not. Its own error names them and the fix, so
+// relabelling it "not found" would be both wrong and less useful.
+func TestCLI_IncompleteSetIsNotReportedAsNotFound(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setResolution(t, se, "repo-only")
+
+	ethosDir := filepath.Join(se.repo, ".punt-labs", "ethos")
+	require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "identities", "test-agent.yaml"),
+		[]byte("name: Test Agent\nhandle: test-agent\nkind: agent\npersonality: kernighan\n"), 0o644))
+
+	_, stderr, exit := runCLI(t, se, "whoami")
+	assert.Equal(t, 1, exit)
+	assert.Contains(t, stderr, "is incomplete under resolution: repo-only")
+	assert.Contains(t, stderr, "personalities/kernighan")
+	assert.Contains(t, stderr, "ethos vendor test-agent")
+	assert.NotContains(t, stderr, "not found")
+}
+
 // A typo in the enum must not degrade quietly to layered — that would
 // leave the global fallback in place, which is the one thing repo-only
 // exists to remove.

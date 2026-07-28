@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/punt-labs/ethos/internal/doctor"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/repomiss"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/spf13/cobra"
 )
@@ -271,6 +273,14 @@ func runWhoami(cmd *cobra.Command) error {
 
 	id, err := is.Load(handle, opts...)
 	if err != nil {
+		// An incomplete repo-only set is not a not-found: the identity IS
+		// here, its references are not. Its own error says which ones and
+		// how to fix them, so relabelling it would be both wrong and less
+		// useful. Only a genuine miss gets the "not found" framing.
+		var incomplete *repomiss.ErrIncompleteRepoSet
+		if errors.As(err, &incomplete) {
+			return err
+		}
 		return fmt.Errorf("identity %q not found: %w", handle, err)
 	}
 
