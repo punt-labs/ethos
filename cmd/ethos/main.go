@@ -30,10 +30,14 @@ func (silentError) Error() string { return "" }
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		if _, ok := err.(silentError); !ok {
-			if _, ok := err.(usageError); !ok {
-				if _, ok := err.(failClosed); !ok {
-					fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
+			// A usageError speaks only when it carries a message; the
+			// zero value means the command already printed its own.
+			if ue, ok := err.(usageError); ok {
+				if ue.msg != "" {
+					fmt.Fprintf(os.Stderr, "ethos: %v\n", ue.msg)
 				}
+			} else if _, ok := err.(failClosed); !ok {
+				fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 			}
 		}
 		if _, ok := err.(failClosed); ok {

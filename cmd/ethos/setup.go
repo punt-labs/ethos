@@ -809,9 +809,12 @@ func hasLegacySubmodule(repoRoot string) bool {
 }
 
 // usageError is returned for exit-code-2 conditions (no TTY, bad flags).
-type usageError struct{}
+// A zero value carries no message: the command has already explained
+// itself and main() prints nothing more. A non-empty msg is printed by
+// main(), for callers that reject a flag and have nothing else to say.
+type usageError struct{ msg string }
 
-func (usageError) Error() string { return "" }
+func (e usageError) Error() string { return e.msg }
 
 // printSetupTable prints a summary table of created items (non-JSON mode).
 func printSetupTable(w io.Writer, result *setupResult) {
