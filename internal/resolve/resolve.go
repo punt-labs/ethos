@@ -107,7 +107,20 @@ func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("no identity matches git user %q, email %q, or OS user %q", gitName, gitEmail, osUser)
+	return "", fmt.Errorf("no identity matches git user %q, email %q, or OS user %q%s",
+		gitName, gitEmail, osUser, repoOnlyHint(store))
+}
+
+// repoOnlyHint explains a no-match under DES-057 repo-only mode, or
+// returns "" in layered mode. Without it the terminal error is a generic
+// "no identity matches" that cannot say WHY the global store — which
+// holds the caller's identity — went unconsulted.
+func repoOnlyHint(store identity.IdentityStore) string {
+	ls, ok := store.(*identity.LayeredStore)
+	if !ok || !ls.RepoAuthoritative() {
+		return ""
+	}
+	return " — this repo sets resolution: repo-only, so the global identity store was not consulted; run `ethos vendor <handle>` to add your identity to this repo"
 }
 
 // sessionPersona is the result of resolveFromSession.

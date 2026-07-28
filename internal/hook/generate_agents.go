@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,6 +102,17 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 		id, err := identities.Load(m.Identity)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ethos: generate-agents: skipping %q: %v\n", m.Identity, err)
+			// An incomplete repo-authoritative set is a fault, not a
+			// by-design skip: the member IS on the team and DOES have a
+			// personality, the repo just did not vendor everything it
+			// references. Count it so the caller's error names it and the
+			// run does not report success while silently producing fewer
+			// agents than the team has (DES-057 Part A).
+			var incomplete *identity.ErrIncompleteRepoSet
+			if errors.As(err, &incomplete) {
+				expected++
+				failedMembers = append(failedMembers, m.Identity)
+			}
 			continue
 		}
 		if id.Kind != "agent" {

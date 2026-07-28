@@ -119,36 +119,78 @@ func TestRepoOnly_MissNamesTheMode(t *testing.T) {
 	assert.NotContains(t, err.Error(), global.Root())
 }
 
-// Attribute content must not resolve from global either: a personality
-// the repo did not vendor stays unresolved rather than being quietly
-// supplied from the user's home.
+// Attribute content must not resolve from global either. In layered mode
+// the global copy supplies it; under repo-only the reference becomes a
+// hard ErrIncompleteRepoSet instead of a warning the caller may never
+// print.
 func TestRepoOnly_AttributeChainDropsGlobal(t *testing.T) {
 	for _, tt := range []struct {
-		name            string
-		repoAuthorative bool
-		wantContent     bool
+		name              string
+		repoAuthoritative bool
 	}{
-		{name: "layered resolves from global", wantContent: true},
-		{name: "repo-only does not", repoAuthorative: true},
+		{name: "layered resolves from global"},
+		{name: "repo-only fails loud", repoAuthoritative: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo, bundle, global := NewStore(t.TempDir()), NewStore(t.TempDir()), NewStore(t.TempDir())
-			ls := NewLayeredStoreWithBundle(repo, bundle, global, tt.repoAuthorative)
+			ls := NewLayeredStoreWithBundle(repo, bundle, global, tt.repoAuthoritative)
 
 			createTestAttribute(t, global.Root(), attribute.Personalities, "analytical", "# Global Analytical\n")
 			writeIdentityYAML(t, repo, "mal", "name: Mal\nhandle: mal\nkind: human\npersonality: analytical\n")
 
 			id, err := ls.Load("mal")
-			require.NoError(t, err)
-			if tt.wantContent {
+			if !tt.repoAuthoritative {
+				require.NoError(t, err)
 				assert.Contains(t, id.PersonalityContent, "Global Analytical")
 				assert.Empty(t, id.Warnings)
 				return
 			}
-			assert.Empty(t, id.PersonalityContent)
-			assert.NotEmpty(t, id.Warnings, "an unresolved attribute must be reported")
+
+			var incomplete *ErrIncompleteRepoSet
+			require.ErrorAs(t, err, &incomplete)
+			assert.Equal(t, "mal", incomplete.Handle)
+			require.Len(t, incomplete.Missing, 1)
+			assert.Equal(t, "personalities/analytical", incomplete.Missing[0].String())
+			assert.Contains(t, incomplete.Missing[0].Path, repo.Root())
 		})
 	}
+}
+
+// Every miss is reported at once, sorted, so a single `ethos vendor`
+// round closes the whole gap.
+func TestRepoOnly_IncompleteSetAggregatesEveryMiss(t *testing.T) {
+	ls, repo, _, _ := setupRepoOnly(t)
+	createTestAttribute(t, repo.Root(), attribute.Personalities, "analytical", "# P\n")
+	writeIdentityYAML(t, repo, "mal",
+		"name: Mal\nhandle: mal\nkind: human\npersonality: analytical\n"+
+			"writing_style: terse\ntalents:\n  - formal-methods\n  - go\n")
+
+	_, err := ls.Load("mal")
+
+	var incomplete *ErrIncompleteRepoSet
+	require.ErrorAs(t, err, &incomplete)
+
+	var refs []string
+	for _, m := range incomplete.Missing {
+		refs = append(refs, m.String())
+	}
+	assert.Equal(t, []string{
+		"talents/formal-methods", "talents/go", "writing-styles/terse",
+	}, refs, "sorted by kind then slug, and the resolved personality is absent")
+	assert.Contains(t, err.Error(), "ethos vendor mal")
+}
+
+// Reference mode does not read attribute content, so it has no misses to
+// aggregate — a repo-only store must still answer `List`-style lookups
+// for an identity whose attributes were not vendored.
+func TestRepoOnly_ReferenceModeSkipsCompletenessCheck(t *testing.T) {
+	ls, repo, _, _ := setupRepoOnly(t)
+	writeIdentityYAML(t, repo, "mal", "name: Mal\nhandle: mal\nkind: human\npersonality: analytical\n")
+
+	id, err := ls.Load("mal", Reference(true))
+	require.NoError(t, err)
+	assert.Equal(t, "analytical", id.Personality)
+	assert.Empty(t, id.PersonalityContent)
 }
 
 // ValidateRefs consults the same chain as resolution. Accepting a

@@ -201,6 +201,31 @@ func TestResolve_NoMatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "nobody")
 }
 
+// A no-match under repo-only must say WHY the global store — which does
+// hold the caller's identity — went unconsulted. Without the hint the
+// user sees a generic "no identity matches" and has no way to connect it
+// to the repo's resolution setting (DES-057 Part A).
+func TestResolve_NoMatchHintsRepoOnly(t *testing.T) {
+	setGitConfig(t, "unknown-user", "unknown@example.com")
+	t.Setenv("USER", "nobody")
+
+	repo, global := identity.NewStore(t.TempDir()), identity.NewStore(t.TempDir())
+	require.NoError(t, global.Save(&identity.Identity{
+		Name: "Mal Reynolds", Handle: "nobody", Kind: "human",
+	}))
+
+	layered := identity.NewLayeredStoreWithBundle(repo, nil, global, false)
+	handle, err := Resolve(layered, nil)
+	require.NoError(t, err, "layered still finds the global identity")
+	assert.Equal(t, "nobody", handle)
+
+	repoOnly := identity.NewLayeredStoreWithBundle(repo, nil, global, true)
+	_, err = Resolve(repoOnly, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "resolution: repo-only")
+	assert.Contains(t, err.Error(), "ethos vendor")
+}
+
 func TestResolve_PriorityOrder(t *testing.T) {
 	// git user.name should take priority over $USER.
 	setGitConfig(t, "mal-github", "")

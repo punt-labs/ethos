@@ -78,7 +78,16 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 	// Attribute resolution walks the full layer chain regardless of
 	// which layer the identity record came from.
 	if !cfg.reference {
-		id.Warnings = ls.resolveAttributesLayered(id)
+		warnings, missing := ls.resolveAttributesLayered(id)
+		id.Warnings = warnings
+		// Under repo-only there is no global tail to supply what the repo
+		// lacks, so a referenced-but-missing attribute is a hard error
+		// rather than a warning the caller may never print.
+		if ls.repoAuthoritative {
+			if err := newIncompleteRepoSet(handle, missing); err != nil {
+				return nil, err
+			}
+		}
 	}
 	id.Warnings = append(id.Warnings, extWarnings...)
 
@@ -184,10 +193,14 @@ func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 // first match. The chain does not depend on which layer the identity
 // record came from: a globally-stored identity still resolves attribute
 // content from the active bundle, honoring DES-051.
-func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
+//
+// It returns the warnings layered mode surfaces AND the same misses as
+// structured refs, which repo-only mode turns into a hard error. Both
+// come from one walk, so the two modes cannot disagree about what is
+// missing.
+func (ls *LayeredStore) resolveAttributesLayered(id *Identity) (warnings []string, missing []MissingRef) {
 	chain := ls.attrChain()
 
-	var warnings []string
 	// resolve walks the chain and returns the first layer's content. It
 	// falls through to a lower layer only when the slug is absent there;
 	// a real read error (permission, a directory in place of the file) is
@@ -213,6 +226,14 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
 		if errors.Is(lastErr, os.ErrNotExist) {
 			warnings = append(warnings, fmt.Sprintf("%s %q: %v", field, slug, lastErr))
 		}
+		// An unreadable file counts as missing too: repo-only cannot fall
+		// back, so a permission error leaves the set just as incomplete as
+		// an absent one.
+		missing = append(missing, MissingRef{
+			Kind: kind.DirName,
+			Slug: slug,
+			Path: attributePath(chain, kind, slug),
+		})
 		return "", false
 	}
 
@@ -237,7 +258,22 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity) []string {
 		}
 	}
 
-	return warnings
+	return warnings, missing
+}
+
+// attributePath names the file a miss should have occupied: the first
+// (highest-precedence) layer in the chain, which is where `ethos vendor`
+// writes. Returns "" when the chain is empty, which cannot happen for a
+// store that resolved an identity.
+func attributePath(chain []attrLayer, kind attribute.Kind, slug string) string {
+	if len(chain) == 0 {
+		return ""
+	}
+	p, err := attribute.NewStore(chain[0].store.Root(), kind).Path(slug)
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // attrLayer pairs a store with its layer name for diagnostics.
