@@ -87,12 +87,17 @@ func Verify(root string) error {
 func Check(root string) (*Report, error) {
 	rep := &Report{Root: root}
 
-	// An empty global root gives the store a layer that holds nothing, so
-	// "resolves without the global store" is verified rather than assumed.
+	// repo-only already makes the global layer unreachable, but the stores
+	// still need a root for it. An EMPTY root would resolve relative to
+	// the process's working directory — so a future change that read the
+	// layer would silently pick up whatever happens to be under the cwd.
+	// Point it at a path that cannot exist instead, so any such read fails
+	// loudly rather than answering with someone else's identities.
+	noGlobal := filepath.Join(root, ".vendor-check-has-no-global-layer")
 	store := identity.NewLayeredStoreWithBundle(
-		identity.NewStore(root), nil, identity.NewStore(""), true)
-	roles := role.NewLayeredStoreWithBundle(root, "", "", true)
-	teams := team.NewLayeredStoreWithBundle(root, "", "", true)
+		identity.NewStore(root), nil, identity.NewStore(noGlobal), true)
+	roles := role.NewLayeredStoreWithBundle(root, "", noGlobal, true)
+	teams := team.NewLayeredStoreWithBundle(root, "", noGlobal, true)
 
 	list, err := store.List()
 	if err != nil {

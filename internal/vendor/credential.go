@@ -9,13 +9,29 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// BaseExtKeys returns the key NAMES in one extension BASE file, sorted.
+// A file that does not exist yields no keys and no error — a namespace
+// present only as a `.local` companion has nothing git-bound to lint.
+//
+// Callers must pass the base `<ns>.yaml`, never a merged view. The lint's
+// remedy is "move it to `<ns>.local.yaml`"; linting the merged view would
+// keep flagging the key after the user complied, which would make the
+// advice useless and the check noise.
+func BaseExtKeys(path string) ([]string, error) {
+	keys, err := readExtKeys(path)
+	if err != nil && os.IsNotExist(err) {
+		return nil, nil
+	}
+	return keys, err
+}
+
 // readExtKeys returns the key NAMES in one extension base file, sorted.
 // Values are decoded because YAML requires it, and are then discarded
 // unread — the lint never inspects them (DES-008).
 func readExtKeys(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
+		return nil, err
 	}
 	var m map[string]string
 	if err := yaml.Unmarshal(data, &m); err != nil {

@@ -203,6 +203,24 @@ func TestCheckExtCredentialNames(t *testing.T) {
 		assert.Contains(t, r.Detail, "--local")
 	})
 
+	// Following the check's own advice must clear it. Reading the merged
+	// view would keep flagging the key after the user moved it to
+	// .local — advice that can never be satisfied is noise.
+	t.Run("moving the key to .local clears the warning", func(t *testing.T) {
+		s := newStore(t)
+		require.NoError(t, s.ExtSet("mal", "quarry", "api_token", "s3cret", identity.Local(true)))
+		require.NoError(t, s.ExtSet("mal", "quarry", "memory_collection", "mem"))
+
+		// The merged view still holds the credential-named key...
+		merged, err := s.ExtGet("mal", "quarry", "")
+		require.NoError(t, err)
+		require.Contains(t, merged, "api_token")
+
+		// ...but only the base file is git-bound, so the check is quiet.
+		r := CheckExtCredentialNames(s)
+		assert.Equal(t, "PASS", r.Status, r.Detail)
+	})
+
 	t.Run("nil store passes", func(t *testing.T) {
 		assert.Equal(t, "PASS", CheckExtCredentialNames(nil).Status)
 	})

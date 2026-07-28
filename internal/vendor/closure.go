@@ -99,6 +99,13 @@ func (v *Vendorer) closure(seeds []string) (*Plan, error) {
 					queue = append(queue, m.Identity)
 				}
 				if !seenRole[m.Role] {
+					// A team file can name a role that does not exist —
+					// team.Load's structural validation does not check
+					// existence. Catch it while planning; discovering it
+					// during the copy would leave a half-written set.
+					if !v.src.Roles.Exists(m.Role) {
+						return nil, fmt.Errorf("team %q names role %q, which does not exist in any source layer", name, m.Role)
+					}
 					seenRole[m.Role] = true
 					p.Roles = appendUnique(p.Roles, m.Role)
 				}

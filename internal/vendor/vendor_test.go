@@ -304,6 +304,21 @@ func TestPrune(t *testing.T) {
 	assert.FileExists(t, local, ".local is machine-local, not vendor's to delete")
 }
 
+// team.Load's structural validation does not check that a member's role
+// exists, so a hand-edited team file can name one that does not. Catch it
+// while planning — discovering it during the copy would leave a
+// half-written set behind.
+func TestClosureRejectsAMissingRoleAtPlanTime(t *testing.T) {
+	f := newFixture(t)
+	f.seedOrg(t)
+	require.NoError(t, os.Remove(filepath.Join(f.global, "roles", "writer.yaml")))
+
+	_, err := f.run(t, Options{Handles: []string{"bwk"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `role "writer"`)
+	assert.Contains(t, err.Error(), "does not exist")
+}
+
 func TestNewRejectsMissingInputs(t *testing.T) {
 	f := newFixture(t)
 	_, err := New(Sources{}, Options{Dest: f.repo})

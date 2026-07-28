@@ -269,7 +269,7 @@ func (v *Vendorer) guard(p *Plan) ([]Finding, error) {
 		for _, e := range p.Ext[handle] {
 			keys, err := readExtKeys(e.Src)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("reading %s: %w", e.Src, err)
 			}
 			for _, k := range keys {
 				f := Finding{Handle: handle, Namespace: e.Namespace, Key: k, Verdict: Classify(k)}

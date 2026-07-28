@@ -172,12 +172,17 @@ func CheckExtCredentialNames(s identity.IdentityStore) Result {
 			continue
 		}
 		for _, ns := range namespaces {
-			keys, getErr := s.ExtGet(id.Handle, ns, "")
-			if getErr != nil {
+			// BASE keys only, never the merged view. The remedy this
+			// check prints is "move it to <ns>.local.yaml"; reading the
+			// merged view would keep flagging the key after the user did
+			// exactly that, so following the advice would never clear the
+			// warning and the check would become noise.
+			keys, keyErr := vendor.BaseExtKeys(filepath.Join(s.ExtDir(id.Handle), ns+".yaml"))
+			if keyErr != nil {
 				continue
 			}
-			for key := range keys {
-				if v := vendor.Classify(key); v == vendor.Block {
+			for _, key := range keys {
+				if vendor.Classify(key) == vendor.Block {
 					flagged = append(flagged, fmt.Sprintf("%s %s/%s", id.Handle, ns, key))
 				}
 			}
