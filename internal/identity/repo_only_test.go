@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/repomiss"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -146,7 +147,7 @@ func TestRepoOnly_AttributeChainDropsGlobal(t *testing.T) {
 				return
 			}
 
-			var incomplete *ErrIncompleteRepoSet
+			var incomplete *repomiss.ErrIncompleteRepoSet
 			require.ErrorAs(t, err, &incomplete)
 			assert.Equal(t, "mal", incomplete.Handle)
 			require.Len(t, incomplete.Missing, 1)
@@ -167,7 +168,7 @@ func TestRepoOnly_IncompleteSetAggregatesEveryMiss(t *testing.T) {
 
 	_, err := ls.Load("mal")
 
-	var incomplete *ErrIncompleteRepoSet
+	var incomplete *repomiss.ErrIncompleteRepoSet
 	require.ErrorAs(t, err, &incomplete)
 
 	var refs []string

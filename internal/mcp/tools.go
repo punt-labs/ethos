@@ -16,6 +16,7 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/process"
+	"github.com/punt-labs/ethos/internal/repomiss"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/schema"
@@ -239,7 +240,7 @@ func (h *Handler) handleWhoami(_ context.Context, req mcplib.CallToolRequest) (*
 // flattened into a generic "not found" that discards all of it
 // (DES-057 Part A, DES-020).
 func identityLoadError(handle string, err error) *mcplib.CallToolResult {
-	var incomplete *identity.ErrIncompleteRepoSet
+	var incomplete *repomiss.ErrIncompleteRepoSet
 	if errors.As(err, &incomplete) {
 		return mcplib.NewToolResultError(err.Error())
 	}

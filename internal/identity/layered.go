@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/repomiss"
 	"gopkg.in/yaml.v3"
 )
 
@@ -88,7 +89,7 @@ func (ls *LayeredStore) Load(handle string, opts ...LoadOption) (*Identity, erro
 		// lacks, so a referenced-but-missing attribute is a hard error
 		// rather than a warning the caller may never print.
 		if ls.repoAuthoritative {
-			if err := newIncompleteRepoSet(handle, missing); err != nil {
+			if err := repomiss.New(handle, missing); err != nil {
 				return nil, err
 			}
 		}
@@ -209,7 +210,7 @@ func (ls *LayeredStore) relocateRepoVoice(handle string) error {
 // structured refs, which repo-only mode turns into a hard error. Both
 // come from one walk, so the two modes cannot disagree about what is
 // missing.
-func (ls *LayeredStore) resolveAttributesLayered(id *Identity) (warnings []string, missing []MissingRef) {
+func (ls *LayeredStore) resolveAttributesLayered(id *Identity) (warnings []string, missing []repomiss.MissingRef) {
 	chain := ls.attrChain()
 
 	// resolve walks the chain and returns the first layer's content. It
@@ -240,7 +241,7 @@ func (ls *LayeredStore) resolveAttributesLayered(id *Identity) (warnings []strin
 		// An unreadable file counts as missing too: repo-only cannot fall
 		// back, so a permission error leaves the set just as incomplete as
 		// an absent one.
-		missing = append(missing, MissingRef{
+		missing = append(missing, repomiss.MissingRef{
 			Kind: kind.DirName,
 			Slug: slug,
 			Path: attributePath(chain, kind, slug),

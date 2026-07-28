@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/repomiss"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
 	"github.com/punt-labs/ethos/internal/team"
@@ -108,7 +109,7 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 			// references. Count it so the caller's error names it and the
 			// run does not report success while silently producing fewer
 			// agents than the team has (DES-057 Part A).
-			var incomplete *identity.ErrIncompleteRepoSet
+			var incomplete *repomiss.ErrIncompleteRepoSet
 			if errors.As(err, &incomplete) {
 				expected++
 				failedMembers = append(failedMembers, m.Identity)
