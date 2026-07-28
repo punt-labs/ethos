@@ -55,8 +55,41 @@ const (
 // useful — an operator reconstructing a session needs to know an email
 // went out and roughly what about — and it passes through the PII
 // sweep below, so an address in the subject is still removed.
+//
+// The keep-list is fail-closed within an enrolled tool, but the
+// enrolment itself is a list, so every outbound-content tool on the
+// surface has to be on it. beadle sends mail three ways — a new
+// message, a reply, and a saved draft — and all three carry the same
+// body and recipients. Enrolling only send_email left the other two
+// writing full bodies into the git-tracked log, which is the same
+// defect one name over. The rest of the beadle surface reads or files
+// mail (list, read, search, move, mark) and composes nothing.
 var sensitiveTools = map[string][]string{
-	"send_email": {"subject"},
+	"send_email":    {"subject"},
+	"reply_message": {"subject"},
+	"create_draft":  {"subject"},
+}
+
+// recipientKeys names structured tool_input keys that address a
+// message rather than describe it. They are swept for addresses on
+// every tool, enrolled or not, so a mail tool nobody has enrolled yet
+// still cannot put a recipient into the log.
+//
+// Swept, not stripped. These key names are not unique to mail:
+// SendMessage carries recipient="bwk-audit-seal-r2" and biff write
+// carries to="claude:tty16", both agent names an operator needs when
+// reconstructing a session. Removing the value outright would redact
+// those lines to no benefit — there is no address in them. Sweeping
+// removes what is address-shaped and leaves what is not.
+var recipientKeys = map[string]bool{
+	"bcc":        true,
+	"cc":         true,
+	"email":      true,
+	"from":       true,
+	"recipient":  true,
+	"recipients": true,
+	"reply_to":   true,
+	"to":         true,
 }
 
 // promptBearingKeys names the tool_input keys carrying free-form prose
@@ -153,11 +186,12 @@ func reduceToKeepList(input map[string]any, keep []string) (map[string]any, bool
 	return out, changed
 }
 
-// sweepPII walks v and replaces every address inside a prompt-bearing
-// string with redactedEmailToken. inPrompt says whether the current
-// position is already under a prompt-bearing key — once inside, the
-// sweep applies at every depth below, so an address nested in a
-// structured argument of a prompt is caught too.
+// sweepPII walks v and replaces every address inside a swept string
+// with redactedEmailToken. inPrompt says whether the current position
+// is already under a prompt-bearing or recipient key — once inside,
+// the sweep applies at every depth below, so an address nested in a
+// structured argument of a prompt, or one element of a to: list, is
+// caught too.
 //
 // A container is cloned only once the first match inside it is found,
 // so a line with nothing to redact is returned as the value that came
@@ -174,7 +208,7 @@ func sweepPII(v any, inPrompt bool) (any, bool) {
 	case map[string]any:
 		out, copied := x, false
 		for k, vv := range x {
-			swept, c := sweepPII(vv, inPrompt || promptBearingKeys[k])
+			swept, c := sweepPII(vv, inPrompt || promptBearingKeys[k] || recipientKeys[k])
 			if !c {
 				continue
 			}

@@ -88,6 +88,83 @@ func TestRedactSensitiveContent(t *testing.T) {
 			wantChanged: true,
 		},
 		{
+			name: "reply_message keeps subject and reduces the rest",
+			tool: "mcp__plugin_beadle_email__reply_message",
+			input: map[string]any{
+				"message_id": "42",
+				"subject":    "Re: recap",
+				"body":       "The full reply body that must not be committed.",
+				"to":         "jim@punt-labs.com",
+				"cc":         "bwk@punt-labs.com",
+			},
+			want: map[string]any{
+				"message_id": "[redacted]",
+				"subject":    "Re: recap",
+				"body":       "[redacted]",
+				"to":         "[redacted]",
+				"cc":         "[redacted]",
+			},
+			wantChanged: true,
+		},
+		{
+			name: "create_draft keeps subject and reduces the rest",
+			tool: "mcp__plugin_beadle_email__create_draft",
+			input: map[string]any{
+				"subject": "Draft recap",
+				"body":    "Draft body that must not be committed.",
+				"to":      "jim@punt-labs.com",
+				"bcc":     "someone@example.com",
+			},
+			want: map[string]any{
+				"subject": "Draft recap",
+				"body":    "[redacted]",
+				"to":      "[redacted]",
+				"bcc":     "[redacted]",
+			},
+			wantChanged: true,
+		},
+		{
+			name: "an unenrolled tool still cannot leak a recipient",
+			tool: "mcp__some_future_plugin__dispatch_notice",
+			input: map[string]any{
+				"to":   "jim@punt-labs.com",
+				"cc":   []any{"a@example.com", "b@example.com"},
+				"note": "unswept",
+			},
+			want: map[string]any{
+				"to":   "[redacted-email]",
+				"cc":   []any{"[redacted-email]", "[redacted-email]"},
+				"note": "unswept",
+			},
+			wantChanged: true,
+		},
+		{
+			name: "a recipient key holding an agent name is left alone",
+			tool: "SendMessage",
+			input: map[string]any{
+				"recipient": "bwk-audit-seal-r2",
+				"summary":   "assign task 1",
+			},
+			want: map[string]any{
+				"recipient": "bwk-audit-seal-r2",
+				"summary":   "assign task 1",
+			},
+			wantChanged: false,
+		},
+		{
+			name: "a biff handle in a to field survives",
+			tool: "mcp__plugin_biff_tty__write",
+			input: map[string]any{
+				"to":      "claude:tty16",
+				"message": "ack",
+			},
+			want: map[string]any{
+				"to":      "claude:tty16",
+				"message": "ack",
+			},
+			wantChanged: false,
+		},
+		{
 			name: "CronCreate prompt loses the address",
 			tool: "CronCreate",
 			input: map[string]any{
