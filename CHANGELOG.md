@@ -55,6 +55,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Delegation records are path-redacted at write time (ethos-ersr,
+  ethos-n4np).** The Tier B skeleton writer put `prompt.md` and `record.yaml`
+  on disk with `$HOME` and the repo root intact. The mission tree is
+  git-tracked and routinely pushed to a public repo, so thirteen committed
+  prompts named the operator's home directory and machine layout. The
+  substitution the audit lines already applied (`$HOME` → `~`, `<repoRoot>` →
+  `<repo>`) now runs on the prompt body, every operator-supplied record field,
+  and a delegation's close reason. It runs inside `WriteDelegationSkeleton`
+  rather than at the dispatch call site, so no future caller can write an
+  unredacted prompt by skipping a step. Resolving `$HOME` is a precondition,
+  not a best effort: a home directory ethos cannot name is one it cannot
+  redact, so the write is refused and the PreToolUse dispatch turns that into
+  a spawn refusal rather than completing the write unredacted.
+
+- **Audit lines redact message content and addresses, not just paths
+  (ethos-ggtu).** Redaction rewrote `$HOME` and the repo root and nothing
+  else, so a full outbound email body plus its recipient, and a recipient
+  address inside a `CronCreate` prompt, passed through into the sealed
+  git-tracked record and were pushed to a public repo. Two name-based passes
+  now run at the write path. Sensitive tools reduce to a keep-list —
+  `send_email` keeps its subject and everything else becomes `[redacted]` — so
+  a `cc` or `reply_to` added to the tool later is redacted the day it appears
+  rather than the day someone remembers to extend a list. Prompt-bearing
+  fields get an address sweep; structured fields such as a `file_path` or a
+  Bash `command` are untouched, so a line with nothing to redact keeps the
+  bytes it had before. Both passes run *before* `tool_input_hash`, so the hash
+  is over the stored form and the DES-052 cross-machine collision check still
+  holds. A line that lost content carries `redacted: true`, matching the
+  marker the hand-redacted lines already use.
+
 - **SubagentStart binds the frozen-evaluator gate by `(mission_id, role)`,
   not by an evaluator-handle scan (ethos-z69l).** The gate matched the
   spawning subagent against the evaluator handle of *any* open mission, so a
