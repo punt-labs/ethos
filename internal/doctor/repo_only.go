@@ -33,7 +33,7 @@ const GitignoreRule = ".punt-labs/ethos/**/*.local.yaml"
 // A repo in layered mode PASSes with "not applicable": the global
 // fallback is expected to catch the tail there, so an incomplete repo
 // layer is not a fault.
-func CheckRepoSetComplete(storeRoot string) Result {
+func CheckRepoSetComplete(s identity.IdentityStore, storeRoot string) Result {
 	name := "Repo-only completeness"
 
 	if storeRoot == "" {
@@ -47,15 +47,21 @@ func CheckRepoSetComplete(storeRoot string) Result {
 		return Result{Name: name, Status: "PASS", Detail: "resolution: layered — not applicable"}
 	}
 
-	root := filepath.Join(storeRoot, ".punt-labs", "ethos")
-	if info, statErr := os.Stat(root); statErr != nil || !info.IsDir() {
+	// Check the layers the STORE reads, not a hardcoded
+	// .punt-labs/ethos/. repo-only is legal with identities supplied
+	// entirely by a repo-local bundle and no .punt-labs/ethos/ directory
+	// at all; assuming that path failed a layout that resolves perfectly
+	// at runtime (Bugbot, PR #410).
+	roots := readRoots(s, storeRoot)
+	if len(roots) == 0 {
 		return Result{
 			Name: name, Status: "FAIL",
-			Detail: fmt.Sprintf("resolution: repo-only but %s is not a directory", root),
+			Detail: fmt.Sprintf("resolution: repo-only but neither %s nor an active repo-local bundle exists",
+				filepath.Join(storeRoot, ".punt-labs", "ethos")),
 		}
 	}
 
-	rep, err := vendor.Check(root)
+	rep, err := vendor.Check(roots...)
 	if err != nil {
 		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
@@ -74,6 +80,33 @@ func CheckRepoSetComplete(storeRoot string) Result {
 		return Result{Name: name, Status: "WARN", Detail: rep.Summary()}
 	}
 	return Result{Name: name, Status: "PASS", Detail: rep.Summary()}
+}
+
+// readRoots returns the layers repo-only resolution consults, in
+// precedence order, skipping any that does not exist on disk.
+//
+// It asks the store, which already resolved the repo layer and the
+// active bundle, rather than re-deriving the paths — a second derivation
+// is a second chance to disagree with what resolution actually does. It
+// falls back to the conventional path only for a store that cannot
+// answer (a plain global store, in tests).
+func readRoots(s identity.IdentityStore, storeRoot string) []string {
+	var candidates []string
+	if ls, ok := s.(*identity.LayeredStore); ok {
+		candidates = []string{ls.RepoRoot(), ls.BundleRoot()}
+	} else {
+		candidates = []string{filepath.Join(storeRoot, ".punt-labs", "ethos")}
+	}
+	var roots []string
+	for _, r := range candidates {
+		if r == "" {
+			continue
+		}
+		if info, err := os.Stat(r); err == nil && info.IsDir() {
+			roots = append(roots, r)
+		}
+	}
+	return roots
 }
 
 // repairCommand builds the `ethos vendor` invocation that completes this

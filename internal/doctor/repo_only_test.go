@@ -39,10 +39,22 @@ func repoOnlySet(t *testing.T, resolution string) (repoRoot, ethosRoot string) {
 	return repoRoot, ethosRoot
 }
 
+// repoOnlyStore builds the store doctor would be handed for a repo whose
+// identities live in .punt-labs/ethos/.
+func repoOnlyStore(t *testing.T, repoRoot string) identity.IdentityStore {
+	t.Helper()
+	if repoRoot == "" {
+		return identity.NewStore(t.TempDir())
+	}
+	return identity.NewLayeredStoreWithBundle(
+		identity.NewStore(filepath.Join(repoRoot, ".punt-labs", "ethos")),
+		nil, identity.NewStore(t.TempDir()), true)
+}
+
 func TestCheckRepoSetComplete(t *testing.T) {
 	t.Run("complete set passes", func(t *testing.T) {
 		repoRoot, _ := repoOnlySet(t, "repo-only")
-		r := CheckRepoSetComplete(repoRoot)
+		r := CheckRepoSetComplete(repoOnlyStore(t, repoRoot), repoRoot)
 		assert.Equal(t, "PASS", r.Status, r.Detail)
 		assert.Contains(t, r.Detail, "1 identities")
 	})
@@ -52,7 +64,7 @@ func TestCheckRepoSetComplete(t *testing.T) {
 	t.Run("layered is not applicable", func(t *testing.T) {
 		repoRoot, ethosRoot := repoOnlySet(t, "layered")
 		require.NoError(t, os.Remove(filepath.Join(ethosRoot, "personalities", "kernighan.md")))
-		r := CheckRepoSetComplete(repoRoot)
+		r := CheckRepoSetComplete(repoOnlyStore(t, repoRoot), repoRoot)
 		assert.Equal(t, "PASS", r.Status)
 		assert.Contains(t, r.Detail, "not applicable")
 	})
@@ -61,7 +73,7 @@ func TestCheckRepoSetComplete(t *testing.T) {
 		repoRoot, ethosRoot := repoOnlySet(t, "repo-only")
 		require.NoError(t, os.Remove(filepath.Join(ethosRoot, "personalities", "kernighan.md")))
 
-		r := CheckRepoSetComplete(repoRoot)
+		r := CheckRepoSetComplete(repoOnlyStore(t, repoRoot), repoRoot)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "personalities/kernighan")
 		// The remedy must be runnable: a bare `ethos vendor --apply` exits
@@ -79,7 +91,7 @@ func TestCheckRepoSetComplete(t *testing.T) {
 		repoRoot, ethosRoot := repoOnlySet(t, "repo-only")
 		require.NoError(t, os.Remove(filepath.Join(ethosRoot, "identities", "bwk.ext", "quarry.yaml")))
 
-		r := CheckRepoSetComplete(repoRoot)
+		r := CheckRepoSetComplete(repoOnlyStore(t, repoRoot), repoRoot)
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "ext/bwk/quarry")
 	})
@@ -90,7 +102,7 @@ func TestCheckRepoSetComplete(t *testing.T) {
 		repoRoot, ethosRoot := repoOnlySet(t, "repo-only")
 		require.NoError(t, os.Remove(vendor.ManifestPath(ethosRoot)))
 
-		r := CheckRepoSetComplete(repoRoot)
+		r := CheckRepoSetComplete(repoOnlyStore(t, repoRoot), repoRoot)
 		assert.Equal(t, "WARN", r.Status)
 		assert.Contains(t, r.Detail, "unverifiable")
 	})
@@ -99,12 +111,34 @@ func TestCheckRepoSetComplete(t *testing.T) {
 		repoRoot, ethosRoot := repoOnlySet(t, "repo-only")
 		require.NoError(t, os.RemoveAll(ethosRoot))
 
-		r := CheckRepoSetComplete(repoRoot)
+		r := CheckRepoSetComplete(repoOnlyStore(t, repoRoot), repoRoot)
 		assert.Equal(t, "FAIL", r.Status)
 	})
 
 	t.Run("no repo passes", func(t *testing.T) {
-		assert.Equal(t, "PASS", CheckRepoSetComplete("").Status)
+		assert.Equal(t, "PASS", CheckRepoSetComplete(repoOnlyStore(t, ""), "").Status)
+	})
+
+	// repo-only is legal with identities supplied entirely by a
+	// repo-local bundle and no .punt-labs/ethos/ directory at all.
+	// Checking the conventional path alone failed a layout that resolves
+	// perfectly at runtime (Bugbot, PR #410).
+	t.Run("bundle-only layout is checked, not failed", func(t *testing.T) {
+		repoRoot, ethosRoot := repoOnlySet(t, "repo-only")
+		bundleRoot := filepath.Join(repoRoot, ".punt-labs", "ethos-bundles", "org")
+		require.NoError(t, os.MkdirAll(filepath.Dir(bundleRoot), 0o755))
+		require.NoError(t, os.Rename(ethosRoot, bundleRoot))
+		// The config still has to live where LoadRepoConfig reads it.
+		require.NoError(t, os.WriteFile(
+			filepath.Join(repoRoot, ".punt-labs", "ethos.yaml"),
+			[]byte("resolution: repo-only\n"), 0o644))
+
+		store := identity.NewLayeredStoreWithBundle(
+			nil, identity.NewStore(bundleRoot), identity.NewStore(t.TempDir()), true)
+
+		r := CheckRepoSetComplete(store, repoRoot)
+		assert.Equal(t, "PASS", r.Status, r.Detail)
+		assert.Contains(t, r.Detail, "1 identities")
 	})
 }
 

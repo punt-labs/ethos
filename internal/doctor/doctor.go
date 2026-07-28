@@ -72,7 +72,7 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	// matching every other resolution consumer; the git-boundary check
 	// reads the checkout (repoRoot), because the index and .gitignore
 	// belong to the tree being committed.
-	results = append(results, CheckRepoSetComplete(storeRoot))
+	results = append(results, CheckRepoSetComplete(s, storeRoot))
 	results = append(results, CheckLocalExtNotTracked(repoRoot))
 	results = append(results, CheckExtCredentialNames(s))
 	return results

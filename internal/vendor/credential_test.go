@@ -7,8 +7,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The lint's whole design is the EXCLUDE → BLOCK → WARN order. The cases
-// that pin it are the ones where a name matches two lists at once.
+// The lint's whole design is the BLOCK → pairs → EXCLUDE → WARN order.
+// The cases that pin it are the ones where a name matches two lists at
+// once.
 func TestClassify(t *testing.T) {
 	tests := []struct {
 		key  string
@@ -45,6 +46,33 @@ func TestClassify(t *testing.T) {
 		{"api_key", Block, "the api+key pair"},
 		{"access_key", Block, "the access+key pair"},
 
+		// BLOCK outranks EXCLUDE. Every one of these carries an EXCLUDE
+		// token, and an EXCLUDE-first pass cleared all of them straight
+		// into git — the fail-open this order exists to close.
+		{"email_password", Block, "'email' must not clear a password"},
+		{"host_password", Block, "'host' must not clear a password"},
+		{"username_password", Block, "'username' must not clear a password"},
+		{"server_secret", Block, "'server' must not clear a secret"},
+		{"provider_token", Block, "'provider' must not clear a token"},
+		{"model_apikey", Block, "'model' must not clear an apikey"},
+		{"url_credential", Block, "'url' must not clear a credential"},
+		{"file_passphrase", Block, "'file' must not clear a passphrase"},
+		{"path_private_key", Block, "'path' must not clear a private key"},
+		{"id_token", Block, "an OIDC id_token is a bearer credential"},
+		{"public_auth", Block, "'public' must not clear an auth value"},
+
+		// BLOCK pairs outrank EXCLUDE too: the vox/quarry shape of an API
+		// key leads with the EXCLUDE token "provider" or "model".
+		{"provider_api_key", Block, "the api+key pair beats 'provider'"},
+		{"model_access_key", Block, "the access+key pair beats 'model'"},
+		{"session_key", Block, "the session+key pair"},
+		{"signing_key", Block, "the signing+key pair"},
+		// The accepted cost of pairs-before-EXCLUDE: a public signing key
+		// ID blocks. One --allow-ext-key clears it; the other direction
+		// clears provider_api_key into git.
+		{"gpg_signing_key_id", Block, "conservative: pair beats the trailing 'id'"},
+		{"access_key_id", Block, "conservative: pair beats the trailing 'id'"},
+
 		// WARN: ambiguous. Reported, never blocking — a guard that fires
 		// on voice_key would be turned off.
 		{"voice_key", Warn, ""},
@@ -64,7 +92,40 @@ func TestClassify(t *testing.T) {
 
 func TestClassifyIsCaseInsensitive(t *testing.T) {
 	assert.Equal(t, Block, Classify("API_TOKEN"))
+	assert.Equal(t, Block, Classify("Email_Password"))
 	assert.Equal(t, Clean, Classify("GPG_KEY_ID"))
+}
+
+// The structural guarantee, not a spot check: NO combination of an
+// EXCLUDE token with a BLOCK token or BLOCK pair may clear. Spot cases
+// alone let the fail-open survive — the original suite paired BLOCK with
+// EXCLUDE exactly zero times, which is how `email_password` shipped as
+// Clean. This test re-derives the matrix from the live lists, so adding
+// a token cannot silently reopen the hole.
+func TestNoExcludeTokenClearsASecret(t *testing.T) {
+	for ex := range excludeTokens {
+		for bl := range blockTokens {
+			assert.Equal(t, Block, Classify(ex+"_"+bl), "%s_%s must block", ex, bl)
+			assert.Equal(t, Block, Classify(bl+"_"+ex), "%s_%s must block", bl, ex)
+		}
+		for _, p := range blockPairs {
+			pair := p[0] + "_" + p[1]
+			assert.Equal(t, Block, Classify(ex+"_"+pair), "%s_%s must block", ex, pair)
+			assert.Equal(t, Block, Classify(pair+"_"+ex), "%s_%s must block", pair, ex)
+		}
+	}
+}
+
+// The live ext roster, read off the identities this repo vendors. These
+// are the names the guard must stay quiet about; a regression here
+// blocks every vendor run and gets the guard switched off.
+func TestClassifyClearsTheLiveExtRoster(t *testing.T) {
+	for _, key := range []string{
+		"gpg_key_id", "memory_collection", "session_context",
+		"provider", "voice_id",
+	} {
+		assert.Equal(t, Clean, Classify(key), "%s is public config", key)
+	}
 }
 
 func TestParseAllowExtKeys(t *testing.T) {

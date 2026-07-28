@@ -75,11 +75,23 @@ func (v Verdict) String() string {
 // written into git) without ethos ever learning what a consumer's keys
 // mean.
 //
-// Classification is underscore-token membership, in this order:
-// EXCLUDE, then BLOCK, then WARN. Order is the whole design. `gpg_key_id`
-// holds the WARN token "key" but is a public reference, so the EXCLUDE
-// token "id" must win; testing WARN first would make every published GPG
-// binding a false positive and train users to ignore the lint.
+// Classification is underscore-token membership, in this order: BLOCK,
+// then the BLOCK pairs, then EXCLUDE, then WARN. Order is the whole
+// design, and it is the fail-closed direction:
+//
+//   - BLOCK first, because EXCLUDE first is a fail-OPEN. `email_password`
+//     holds the EXCLUDE token "email" and the BLOCK token "password"; an
+//     EXCLUDE-first pass clears it and vendors a password into git.
+//     Nothing outranks a token that names a secret outright.
+//   - BLOCK pairs before EXCLUDE, for the same reason: `provider_api_key`
+//     is a secret whose first token is the EXCLUDE token "provider".
+//     The price is a false positive on `gpg_signing_key_id`, which is
+//     public. That costs one --allow-ext-key; the other direction costs a
+//     leaked key.
+//   - EXCLUDE outranks WARN only. `gpg_key_id` holds the WARN token "key"
+//     but is a published reference, so the EXCLUDE token "id" wins;
+//     blocking every published GPG binding would train users to ignore
+//     the lint.
 //
 // The token lists are curated and djb-owned. They are deliberately
 // short: a long list of near-misses produces noise, and noise is how a
@@ -125,31 +137,45 @@ var (
 )
 
 // Classify reports the credential verdict for an ext key name.
+//
+// BLOCK is decided before EXCLUDE is consulted, so a name that matches
+// both lists blocks. EXCLUDE only outranks WARN.
 func Classify(key string) Verdict {
 	tokens := strings.Split(strings.ToLower(key), "_")
+	if anyToken(tokens, blockTokens) || anyBlockPair(tokens) {
+		return Block
+	}
+	if anyToken(tokens, excludeTokens) {
+		return Clean
+	}
+	if anyToken(tokens, warnTokens) {
+		return Warn
+	}
+	return Clean
+}
+
+// anyToken reports whether any token is a member of set.
+func anyToken(tokens []string, set map[string]bool) bool {
 	for _, t := range tokens {
-		if excludeTokens[t] {
-			return Clean
+		if set[t] {
+			return true
 		}
 	}
-	for _, t := range tokens {
-		if blockTokens[t] {
-			return Block
-		}
-	}
+	return false
+}
+
+// anyBlockPair reports whether any two ADJACENT tokens form a block
+// pair. Adjacency is required: "api key" names a secret, but "api" and
+// "key" at opposite ends of `api_endpoint_public_key` do not.
+func anyBlockPair(tokens []string) bool {
 	for i := 0; i+1 < len(tokens); i++ {
 		for _, p := range blockPairs {
 			if tokens[i] == p[0] && tokens[i+1] == p[1] {
-				return Block
+				return true
 			}
 		}
 	}
-	for _, t := range tokens {
-		if warnTokens[t] {
-			return Warn
-		}
-	}
-	return Clean
+	return false
 }
 
 // Finding is one classified ext key, named the way the user must address

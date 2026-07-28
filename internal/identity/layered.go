@@ -641,7 +641,25 @@ func (ls *LayeredStore) extLayer(source string) *Store {
 	if ls.bundle != nil {
 		return ls.bundle
 	}
-	return ls.global
+	return noExtLayer()
+}
+
+// noExtLayer is the ext read layer for a repo-only store that has
+// neither a repo nor a bundle layer. Falling back to ls.global there
+// would read the very layer repo-only exists to exclude — a fail-OPEN
+// default in the one helper whose job is keeping global out. The case
+// is unreachable today (loadRaw finds no identity without one of those
+// layers, so nothing reaches ext resolution), but a guard that depends
+// on an unreachability argument is one refactor from being wrong.
+//
+// The root is a path UNDER os.DevNull. Every open below a character
+// device fails with ENOTDIR, so no file anyone creates can make this
+// layer resolve. An empty root would instead resolve relative to the
+// process's working directory and read whatever happens to sit there —
+// the same hazard internal/vendor's Check sentinel avoids. Reads miss,
+// ext comes back empty, and missingExt reports the absence.
+func noExtLayer() *Store {
+	return NewStore(filepath.Join(os.DevNull, "ethos-repo-only-has-no-ext-layer"))
 }
 
 // missingExt reports the manifest-recorded ext base files absent from

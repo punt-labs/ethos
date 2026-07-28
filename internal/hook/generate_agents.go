@@ -109,8 +109,16 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 			// references. Count it so the caller's error names it and the
 			// run does not report success while silently producing fewer
 			// agents than the team has (DES-057 Part A).
+			//
+			// Only for members that would have produced an agent, though.
+			// This runs before the kind filter — it has to, the load
+			// failed — so counting every incomplete member would fail the
+			// run over a HUMAN's missing attributes, and humans never get
+			// agent files (Bugbot, PR #410). Reference mode skips
+			// attribute resolution, so it answers even when the full load
+			// could not.
 			var incomplete *repomiss.ErrIncompleteRepoSet
-			if errors.As(err, &incomplete) {
+			if errors.As(err, &incomplete) && isAgentKind(identities, m.Identity) {
 				expected++
 				failedMembers = append(failedMembers, m.Identity)
 			}
@@ -194,6 +202,16 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 	}
 
 	return nil
+}
+
+// isAgentKind reports whether a handle names an agent, reading only the
+// identity record. Reference mode skips attribute resolution, so it
+// answers for an identity whose full load failed on missing references.
+// An unreadable record answers false: a member we cannot classify is not
+// counted as a failed agent.
+func isAgentKind(identities identity.IdentityStore, handle string) bool {
+	id, err := identities.Load(handle, identity.Reference(true))
+	return err == nil && id.Kind == "agent"
 }
 
 // antiResponsibility is a responsibility belonging to a role the agent

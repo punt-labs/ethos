@@ -37,6 +37,42 @@ func TestGenerateAgentFiles_RepoOnlyIncompleteSetFailsTheAgent(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
 }
 
+// A HUMAN team member with missing references must not fail the run.
+// The incomplete-set branch runs before the kind filter — it has to, the
+// load failed — so counting every incomplete member would fail agent
+// generation over a human's attributes, and humans never get agent files
+// (Bugbot, PR #410).
+func TestGenerateAgentFiles_IncompleteHumanDoesNotFailTheRun(t *testing.T) {
+	root, _, teams, roles := setupTestRepo(t)
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+
+	// The shared fixture omits talent files, which under repo-only would
+	// make every agent incomplete and mask what this test is about.
+	writeFile(t, filepath.Join(ethosDir, "talents", "engineering.md"), "# Engineering\n\nGo.\n")
+	writeFile(t, filepath.Join(ethosDir, "talents", "management.md"), "# Management\n\nExecution.\n")
+
+	// test-human is on the team and now references a personality the
+	// repo does not hold. Every real agent still resolves.
+	writeYAML(t, filepath.Join(ethosDir, "identities", "test-human.yaml"), map[string]interface{}{
+		"name":        "Test Human",
+		"handle":      "test-human",
+		"kind":        "human",
+		"email":       "jim@punt-labs.com",
+		"personality": "not-vendored",
+	})
+
+	repoOnly := identity.NewLayeredStoreWithBundle(
+		identity.NewStore(ethosDir), nil, identity.NewStore(t.TempDir()), true)
+
+	var err error
+	captureStderr(t, func() {
+		err = GenerateAgentFiles(root, repoOnly, teams, roles)
+	})
+
+	require.NoError(t, err, "a human's missing refs must not fail agent generation")
+	assert.FileExists(t, filepath.Join(root, ".claude", "agents", "bwk.md"))
+}
+
 // The same missing file in layered mode resolves from the global layer,
 // so agent generation succeeds unchanged. This is the regression guard:
 // repo-only must be the only thing that changes behavior here.

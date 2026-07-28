@@ -64,16 +64,16 @@ func (r *Report) Err() error {
 }
 
 // Verify is Check reduced to an error, for callers that only gate.
-func Verify(root string) error {
-	r, err := Check(root)
+func Verify(roots ...string) error {
+	r, err := Check(roots...)
 	if err != nil {
 		return err
 	}
 	return r.Err()
 }
 
-// Check answers one question: does this directory resolve every identity
-// it contains, using nothing but itself?
+// Check answers one question: do these layers resolve every identity
+// they contain, using nothing but themselves?
 //
 // It is the predicate on BOTH sides of the feature. `ethos vendor` runs
 // it on what it just wrote, before reporting success; `ethos doctor`
@@ -81,11 +81,31 @@ func Verify(root string) error {
 // the producing half and the consuming half cannot disagree about what
 // "complete" means.
 //
-// It works by building a repo-only store rooted at the snapshot, with no
-// bundle and no global layer, and resolving through it — the same code
-// path a global-less checkout takes, not a reimplementation of it.
-func Check(root string) (*Report, error) {
-	rep := &Report{Root: root}
+// roots is the read chain in precedence order — the repo layer, then an
+// active bundle. Both are accepted because repo-only is legal with
+// identities supplied entirely by a repo-local bundle and no
+// .punt-labs/ethos/ directory at all; checking only the first root would
+// fail a layout that resolves perfectly at runtime (Bugbot, PR #410).
+// Vendor passes the one directory it wrote.
+//
+// It works by building a repo-only store over those layers with no
+// global layer and resolving through it — the same code path a
+// global-less checkout takes, not a reimplementation of it.
+func Check(roots ...string) (*Report, error) {
+	var repoRoot, bundleRoot string
+	for _, r := range roots {
+		switch {
+		case r == "":
+		case repoRoot == "":
+			repoRoot = r
+		case bundleRoot == "":
+			bundleRoot = r
+		}
+	}
+	if repoRoot == "" {
+		return nil, fmt.Errorf("vendor: at least one root is required to check completeness")
+	}
+	rep := &Report{Root: repoRoot}
 
 	// repo-only already makes the global layer unreachable, but the stores
 	// still need a root for it. An EMPTY root would resolve relative to
@@ -93,18 +113,22 @@ func Check(root string) (*Report, error) {
 	// layer would silently pick up whatever happens to be under the cwd.
 	// Point it at a path that cannot exist instead, so any such read fails
 	// loudly rather than answering with someone else's identities.
-	noGlobal := filepath.Join(root, ".vendor-check-has-no-global-layer")
+	noGlobal := filepath.Join(repoRoot, ".vendor-check-has-no-global-layer")
+	var bundleStore *identity.Store
+	if bundleRoot != "" {
+		bundleStore = identity.NewStore(bundleRoot)
+	}
 	store := identity.NewLayeredStoreWithBundle(
-		identity.NewStore(root), nil, identity.NewStore(noGlobal), true)
-	roles := role.NewLayeredStoreWithBundle(root, "", noGlobal, true)
-	teams := team.NewLayeredStoreWithBundle(root, "", noGlobal, true)
+		identity.NewStore(repoRoot), bundleStore, identity.NewStore(noGlobal), true)
+	roles := role.NewLayeredStoreWithBundle(repoRoot, bundleRoot, noGlobal, true)
+	teams := team.NewLayeredStoreWithBundle(repoRoot, bundleRoot, noGlobal, true)
 
 	list, err := store.List()
 	if err != nil {
-		return nil, fmt.Errorf("listing identities in %s: %w", root, err)
+		return nil, fmt.Errorf("listing identities in %s: %w", repoRoot, err)
 	}
 	if len(list.Warnings) > 0 {
-		return nil, fmt.Errorf("unreadable identities in %s: %s", root, strings.Join(list.Warnings, "; "))
+		return nil, fmt.Errorf("unreadable identities in %s: %s", repoRoot, strings.Join(list.Warnings, "; "))
 	}
 	for _, id := range list.Identities {
 		rep.Handles = append(rep.Handles, id.Handle)
@@ -120,7 +144,7 @@ func Check(root string) (*Report, error) {
 		case errors.As(err, &incomplete):
 			rep.Missing = append(rep.Missing, incomplete.Missing...)
 		default:
-			return nil, fmt.Errorf("loading identity %q from %s: %w", handle, root, err)
+			return nil, fmt.Errorf("loading identity %q from %s: %w", handle, repoRoot, err)
 		}
 	}
 
@@ -128,28 +152,32 @@ func Check(root string) (*Report, error) {
 	// its members and their roles must all be present here.
 	teamNames, err := teams.List()
 	if err != nil {
-		return nil, fmt.Errorf("listing teams in %s: %w", root, err)
+		return nil, fmt.Errorf("listing teams in %s: %w", repoRoot, err)
 	}
 	sort.Strings(teamNames)
 	for _, name := range teamNames {
 		t, err := teams.Load(name)
 		if err != nil {
-			return nil, fmt.Errorf("loading team %q from %s: %w", name, root, err)
+			return nil, fmt.Errorf("loading team %q from %s: %w", name, repoRoot, err)
 		}
-		rep.Missing = append(rep.Missing, missingTeamRefs(root, t, store, roles)...)
+		rep.Missing = append(rep.Missing, missingTeamRefs(repoRoot, t, store, roles)...)
 	}
 
 	// Ext dimension: manifest parity. Extra files and .local companions
 	// are ignored; only a manifest-recorded base file that is absent
 	// counts, since that is the only case that proves an omission.
-	m, err := LoadManifest(root)
+	layers := []string{repoRoot}
+	if bundleRoot != "" {
+		layers = append(layers, bundleRoot)
+	}
+	m, err := firstManifest(layers)
 	if err != nil {
 		return nil, err
 	}
 	if m == nil {
 		rep.ExtUnverifiable = true
 	} else {
-		rep.Missing = append(rep.Missing, missingExtRefs(root, m.RequiredExt())...)
+		rep.Missing = append(rep.Missing, missingExtRefs(layers, m.RequiredExt())...)
 	}
 
 	rep.Missing = repomiss.Sorted(rep.Missing)
@@ -181,10 +209,27 @@ func missingTeamRefs(root string, t *team.Team, store identity.IdentityStore, ro
 	return out
 }
 
-// missingExtRefs reports manifest-recorded ext base files absent from the
-// set. This is a subset check by design: an extra namespace someone added
-// by hand is not an incompleteness.
-func missingExtRefs(root string, required map[string][]string) []repomiss.MissingRef {
+// firstManifest returns the manifest from the highest-precedence layer
+// that has one, or (nil, nil) when none does. A vendored set carries its
+// manifest at its own root, and that root may be the repo layer or a
+// repo-local bundle.
+func firstManifest(layers []string) (*Manifest, error) {
+	for _, root := range layers {
+		m, err := LoadManifest(root)
+		if err != nil {
+			return nil, err
+		}
+		if m != nil {
+			return m, nil
+		}
+	}
+	return nil, nil
+}
+
+// missingExtRefs reports manifest-recorded ext base files absent from
+// every layer. This is a subset check by design: an extra namespace
+// someone added by hand is not an incompleteness.
+func missingExtRefs(layers []string, required map[string][]string) []repomiss.MissingRef {
 	handles := make([]string, 0, len(required))
 	for h := range required {
 		handles = append(handles, h)
@@ -194,16 +239,29 @@ func missingExtRefs(root string, required map[string][]string) []repomiss.Missin
 	var out []repomiss.MissingRef
 	for _, h := range handles {
 		for _, file := range required[h] {
-			path := filepath.Join(root, "identities", h+".ext", file)
-			if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
+			rel := filepath.Join("identities", h+".ext", file)
+			if anyLayerHasRegular(layers, rel) {
 				continue
 			}
 			out = append(out, repomiss.MissingRef{
 				Kind: repomiss.KindExt,
 				Slug: h + "/" + strings.TrimSuffix(file, ".yaml"),
-				Path: path,
+				// The highest-precedence layer is where vendor would put it.
+				Path: filepath.Join(layers[0], rel),
 			})
 		}
 	}
 	return out
+}
+
+// anyLayerHasRegular reports whether rel names a regular file in any
+// layer. lstat, not stat: a link is not a vendored file.
+func anyLayerHasRegular(layers []string, rel string) bool {
+	for _, root := range layers {
+		info, err := os.Lstat(filepath.Join(root, rel))
+		if err == nil && info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
