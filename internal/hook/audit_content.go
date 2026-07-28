@@ -57,30 +57,46 @@ const (
 // sweep below, so an address in the subject is still removed.
 //
 // The keep-list is fail-closed within an enrolled tool, but the
-// enrolment itself is a list, so every outbound-content tool on the
-// surface has to be on it. beadle sends mail three ways — a new
-// message, a reply, and a saved draft — and all three carry the same
-// body and recipients. Enrolling only send_email left the other two
-// writing full bodies into the git-tracked log, which is the same
-// defect one name over. The rest of the beadle surface reads or files
-// mail (list, read, search, move, mark) and composes nothing.
+// enrolment itself is a list, so every tool on the surface that
+// composes a message or names a person has to be on it. Enrolling only
+// send_email left reply_message writing full bodies into the
+// git-tracked log, which is the same defect one name over. create_draft
+// is not on beadle's surface today; it is the conventional name for a
+// third compose path, and enrolling a tool that does not exist costs
+// nothing while enrolling it late costs a leak.
+//
+// The contact tools are enrolled with an empty keep-list. An address
+// book is a list of real people: add_contact carries a legal name, an
+// address, and nicknames; remove_contact carries the name. None of that
+// belongs in a git-tracked file, and "add_contact was called" is the
+// whole of the audit value — the keys stay, so the line still shows it.
+//
+// The rest of the beadle surface reads or files mail (list, read,
+// search, move, mark, download) and composes nothing.
 var sensitiveTools = map[string][]string{
-	"send_email":    {"subject"},
-	"reply_message": {"subject"},
-	"create_draft":  {"subject"},
+	"send_email":     {"subject"},
+	"reply_message":  {"subject"},
+	"create_draft":   {"subject"},
+	"add_contact":    {},
+	"remove_contact": {},
 }
 
 // recipientKeys names structured tool_input keys that address a
-// message rather than describe it. They are swept for addresses on
-// every tool, enrolled or not, so a mail tool nobody has enrolled yet
-// still cannot put a recipient into the log.
+// message rather than describe it. They are swept on every tool,
+// enrolled or not, so a mail tool nobody has enrolled yet still cannot
+// put a recipient into the log.
 //
-// Swept, not stripped. These key names are not unique to mail:
-// SendMessage carries recipient="bwk-audit-seal-r2" and biff write
-// carries to="claude:tty16", both agent names an operator needs when
-// reconstructing a session. Removing the value outright would redact
-// those lines to no benefit — there is no address in them. Sweeping
-// removes what is address-shaped and leaves what is not.
+// A value here is reduced whole once it contains an address, not
+// patched at the match. A recipient field holds "Display Name <addr>",
+// and the display name identifies the person as surely as the address
+// does; leaving it behind would redact the machine-readable half of a
+// leak and commit the readable half.
+//
+// The trigger is still the address, because these key names are not
+// unique to mail: SendMessage carries recipient="bwk-audit-seal-r2" and
+// biff write carries to="claude:tty16", both agent names an operator
+// needs when reconstructing a session. No address in the value means no
+// leak to close, and the line keeps its audit value.
 var recipientKeys = map[string]bool{
 	"bcc":        true,
 	"cc":         true,
@@ -99,6 +115,10 @@ var recipientKeys = map[string]bool{
 //
 // Add a key here when a tool starts carrying model-authored text under
 // a new name. Widening the set can only redact more; it cannot leak.
+//
+// query earns its place from find_contact, which looks a person up by
+// "name, email, or alias" — an operator asking for a contact by address
+// wrote that address into the log under a key no other pass covered.
 var promptBearingKeys = map[string]bool{
 	"body":         true,
 	"content":      true,
@@ -107,6 +127,7 @@ var promptBearingKeys = map[string]bool{
 	"message":      true,
 	"notes":        true,
 	"prompt":       true,
+	"query":        true,
 	"reason":       true,
 	"subject":      true,
 	"summary":      true,
@@ -137,7 +158,7 @@ func redactSensitiveContent(toolName string, input map[string]any) (map[string]a
 	if keep, ok := sensitiveTools[bareToolName(toolName)]; ok {
 		return reduceToKeepList(input, keep)
 	}
-	out, changed := sweepPII(input, false)
+	out, changed := sweepPII(input, sweepOff)
 	m, _ := out.(map[string]any)
 	return m, changed
 }
@@ -179,36 +200,63 @@ func reduceToKeepList(input map[string]any, keep []string) (map[string]any, bool
 			changed = true
 			continue
 		}
-		swept, c := sweepPII(v, true)
+		swept, c := sweepPII(v, sweepPrompt)
 		out[k] = swept
 		changed = changed || c
 	}
 	return out, changed
 }
 
-// sweepPII walks v and replaces every address inside a swept string
-// with redactedEmailToken. inPrompt says whether the current position
-// is already under a prompt-bearing or recipient key — once inside,
-// the sweep applies at every depth below, so an address nested in a
-// structured argument of a prompt, or one element of a to: list, is
-// caught too.
+// sweepMode says how a string at the current position is treated.
+// A key selects the mode for everything beneath it, so an address
+// nested in a structured argument of a prompt, or one element of a to:
+// list, is reached at the same mode as the key that opened it.
+type sweepMode int
+
+const (
+	// sweepOff is a structured argument: a file_path, a glob, a cron
+	// expression. Left verbatim so a non-sensitive line keeps its bytes.
+	sweepOff sweepMode = iota
+	// sweepPrompt is prose. Addresses inside it are replaced at the
+	// match; the surrounding sentence is what makes the line useful.
+	sweepPrompt
+	// sweepAddress is a recipient field. A string holding an address is
+	// replaced whole — see recipientKeys.
+	sweepAddress
+)
+
+// modeFor returns the mode for a value reached under key k at the
+// current mode. A recipient key always wins, including inside a
+// prompt, because the widest reduction is the safe one. Otherwise a
+// mode already in force propagates down: prose stays prose however
+// deeply it is nested.
+func modeFor(mode sweepMode, k string) sweepMode {
+	switch {
+	case recipientKeys[k]:
+		return sweepAddress
+	case mode != sweepOff:
+		return mode
+	case promptBearingKeys[k]:
+		return sweepPrompt
+	default:
+		return sweepOff
+	}
+}
+
+// sweepPII walks v and removes addresses according to mode.
 //
 // A container is cloned only once the first match inside it is found,
 // so a line with nothing to redact is returned as the value that came
 // in — no copy, and it marshals to exactly the bytes it did before
 // this policy existed.
-func sweepPII(v any, inPrompt bool) (any, bool) {
+func sweepPII(v any, mode sweepMode) (any, bool) {
 	switch x := v.(type) {
 	case string:
-		if !inPrompt {
-			return x, false
-		}
-		s := emailPattern.ReplaceAllString(x, redactedEmailToken)
-		return s, s != x
+		return sweepString(x, mode)
 	case map[string]any:
 		out, copied := x, false
 		for k, vv := range x {
-			swept, c := sweepPII(vv, inPrompt || promptBearingKeys[k] || recipientKeys[k])
+			swept, c := sweepPII(vv, modeFor(mode, k))
 			if !c {
 				continue
 			}
@@ -221,7 +269,7 @@ func sweepPII(v any, inPrompt bool) (any, bool) {
 	case []any:
 		out, copied := x, false
 		for i, vv := range x {
-			swept, c := sweepPII(vv, inPrompt)
+			swept, c := sweepPII(vv, mode)
 			if !c {
 				continue
 			}
@@ -233,5 +281,22 @@ func sweepPII(v any, inPrompt bool) (any, bool) {
 		return out, copied
 	default:
 		return v, false
+	}
+}
+
+// sweepString applies one mode to one string and reports whether it
+// changed.
+func sweepString(s string, mode sweepMode) (string, bool) {
+	switch mode {
+	case sweepPrompt:
+		r := emailPattern.ReplaceAllString(s, redactedEmailToken)
+		return r, r != s
+	case sweepAddress:
+		if emailPattern.MatchString(s) {
+			return redactedValueToken, true
+		}
+		return s, false
+	default:
+		return s, false
 	}
 }

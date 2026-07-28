@@ -132,11 +132,107 @@ func TestRedactSensitiveContent(t *testing.T) {
 				"note": "unswept",
 			},
 			want: map[string]any{
-				"to":   "[redacted-email]",
-				"cc":   []any{"[redacted-email]", "[redacted-email]"},
+				"to":   "[redacted]",
+				"cc":   []any{"[redacted]", "[redacted]"},
 				"note": "unswept",
 			},
 			wantChanged: true,
+		},
+		{
+			// A mail header is "Display Name <addr>". Sweeping the
+			// address alone would commit the name, which identifies
+			// the person just as well.
+			name: "a display name beside an address goes with it",
+			tool: "mcp__some_future_plugin__dispatch_notice",
+			input: map[string]any{
+				"to":       "Jim Freeman <jim@punt-labs.com>",
+				"reply_to": []any{"Brian K <bwk@punt-labs.com>"},
+			},
+			want: map[string]any{
+				"to":       "[redacted]",
+				"reply_to": []any{"[redacted]"},
+			},
+			wantChanged: true,
+		},
+		{
+			// A recipient key nested under a prompt is still a
+			// recipient key: the widest reduction wins.
+			name: "a recipient nested in a prompt is reduced whole",
+			tool: "Agent",
+			input: map[string]any{
+				"prompt": map[string]any{
+					"to":   "Jim Freeman <jim@punt-labs.com>",
+					"step": "send the recap to jim@punt-labs.com",
+				},
+			},
+			want: map[string]any{
+				"prompt": map[string]any{
+					"to":   "[redacted]",
+					"step": "send the recap to [redacted-email]",
+				},
+			},
+			wantChanged: true,
+		},
+		{
+			// The address book is a list of real people: a legal
+			// name, an address, and nicknames, none of it
+			// git-tracked-file material.
+			name: "add_contact keeps nothing",
+			tool: "mcp__plugin_beadle_email__add_contact",
+			input: map[string]any{
+				"name":        "Jim Freeman",
+				"email":       "jim@punt-labs.com",
+				"aliases":     []any{"jim", "jmf"},
+				"notes":       "operator",
+				"permissions": "rwx",
+			},
+			want: map[string]any{
+				"name":        "[redacted]",
+				"email":       "[redacted]",
+				"aliases":     "[redacted]",
+				"notes":       "[redacted]",
+				"permissions": "[redacted]",
+			},
+			wantChanged: true,
+		},
+		{
+			name:        "remove_contact keeps nothing",
+			tool:        "mcp__plugin_beadle_email__remove_contact",
+			input:       map[string]any{"name": "Jim Freeman"},
+			want:        map[string]any{"name": "[redacted]"},
+			wantChanged: true,
+		},
+		{
+			// find_contact looks a person up by "name, email, or
+			// alias" — the address arrives under query, which no
+			// other pass covered.
+			name:        "find_contact loses an address in its query",
+			tool:        "mcp__plugin_beadle_email__find_contact",
+			input:       map[string]any{"query": "jim@punt-labs.com"},
+			want:        map[string]any{"query": "[redacted-email]"},
+			wantChanged: true,
+		},
+		{
+			name:        "a query naming no address survives",
+			tool:        "mcp__plugin_quarry_quarry__search",
+			input:       map[string]any{"query": "what were Q3 margins"},
+			want:        map[string]any{"query": "what were Q3 margins"},
+			wantChanged: false,
+		},
+		{
+			// search_messages narrows by sender substring, which is
+			// not an address and stays legible.
+			name: "a from substring is not an address",
+			tool: "mcp__plugin_beadle_email__search_messages",
+			input: map[string]any{
+				"from":   "jim",
+				"folder": "INBOX",
+			},
+			want: map[string]any{
+				"from":   "jim",
+				"folder": "INBOX",
+			},
+			wantChanged: false,
 		},
 		{
 			name: "a recipient key holding an agent name is left alone",
@@ -338,6 +434,70 @@ func TestBuildAuditEntry_HashOverRedactedForm(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(line), "jim@punt-labs.com")
 	assert.NotContains(t, string(line), "the full body that must not be committed")
+}
+
+// TestBuildAuditEntry_ReplyMessage covers the sibling defect: enrolling
+// only send_email left reply_message — same body, same recipients, one
+// name over — writing both into the git-tracked log. The assertions are
+// the ones that would have caught it: nothing of the body or the
+// addresses in the marshalled line, and the hash over the stored form.
+func TestBuildAuditEntry_ReplyMessage(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	input := map[string]any{
+		"tool_name": "mcp__plugin_beadle_email__reply_message",
+		"tool_input": map[string]any{
+			"message_id": "4711",
+			"subject":    "Re: recap",
+			"body":       "the full reply that must not be committed",
+			"to":         "jim@punt-labs.com",
+			"cc":         []any{"bwk@punt-labs.com"},
+		},
+	}
+
+	entry := buildAuditEntry(input, "sess-1", "", now)
+
+	assert.True(t, entry.Redacted)
+	assert.Equal(t, "Re: recap", entry.ToolInput["subject"],
+		"the subject is what keeps the line worth reading")
+	assert.Equal(t, "[redacted]", entry.ToolInput["body"])
+	assert.Equal(t, "[redacted]", entry.ToolInput["to"])
+	assert.Equal(t, "[redacted]", entry.ToolInput["cc"])
+
+	wantHash := hashToolInput(map[string]any{"tool_input": entry.ToolInput})
+	assert.Equal(t, wantHash, entry.ToolInputHash,
+		"the hash must be over what is on disk (DES-054)")
+
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(line), "jim@punt-labs.com")
+	assert.NotContains(t, string(line), "bwk@punt-labs.com")
+	assert.NotContains(t, string(line), "the full reply that must not be committed")
+}
+
+// TestBuildAuditEntry_AddContact covers the address book. add_contact
+// is the one beadle tool that writes a person's legal name and address
+// together, and it composes no message, so nothing in the call survives.
+func TestBuildAuditEntry_AddContact(t *testing.T) {
+	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
+	entry := buildAuditEntry(map[string]any{
+		"tool_name": "mcp__plugin_beadle_email__add_contact",
+		"tool_input": map[string]any{
+			"name":  "Jim Freeman",
+			"email": "jim@punt-labs.com",
+		},
+	}, "sess-1", "", now)
+
+	assert.True(t, entry.Redacted)
+	assert.Equal(t, "[redacted]", entry.ToolInput["name"])
+	assert.Equal(t, "[redacted]", entry.ToolInput["email"])
+
+	line, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(line), "Jim Freeman",
+		"a contact's name is as identifying as the address beside it")
+	assert.NotContains(t, string(line), "jim@punt-labs.com")
+	assert.Contains(t, string(line), `"name"`,
+		"the keys stay so the line still shows a contact was added")
 }
 
 // TestBuildAuditEntry_NonSensitiveUnchanged pins the no-weakening
