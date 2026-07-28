@@ -65,7 +65,7 @@ func identityStore() identity.IdentityStore {
 // misconfiguration the user asked for is reported at startup, not
 // worked around.
 func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
-	mode, err := resolve.ResolveResolution(resolve.StoreRepoRoot())
+	mode, err := resolve.ResolveResolution(resolutionConfigRoot())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
@@ -84,6 +84,24 @@ func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 		os.Exit(1)
 	}
 	return true
+}
+
+// resolutionConfigRoot returns the tree whose .punt-labs/ethos.yaml
+// carries the resolution policy.
+//
+// It is StoreRepoRoot, except when a set ETHOS_REPO_ROOT was REFUSED —
+// StoreRepoRoot returns "" for a refused override, which would leave the
+// repo's own config unread and let a repo-only repo fall back to global
+// on a warning alone. Reading the mode from the override path directly
+// means the refusal cannot launder itself into the silent fallback
+// repo-only exists to forbid; the missing store then trips the
+// no-repo-layer error above.
+func resolutionConfigRoot() string {
+	if root := resolve.StoreRepoRoot(); root != "" {
+		return root
+	}
+	root, _ := resolve.RepoRootOverride()
+	return root
 }
 
 // sessionStore returns the default session store rooted at the same

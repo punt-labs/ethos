@@ -125,8 +125,9 @@ func (ls *LayeredStore) loadRaw(handle string) (*Identity, string, error) {
 		}
 	}
 	if ls.repoAuthoritative {
-		return nil, "", fmt.Errorf("identity %q not found in %s (resolution: repo-only): %w",
-			handle, ls.readRootsDesc(), os.ErrNotExist)
+		// Load prefixes the handle; naming it again here reads as a stutter.
+		return nil, "", fmt.Errorf("not found in %s (resolution: repo-only): %w",
+			ls.readRootsDesc(), os.ErrNotExist)
 	}
 	id, err := ls.global.Load(handle, Reference(true))
 	if err == nil {
