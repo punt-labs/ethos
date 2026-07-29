@@ -4,16 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"sync"
+	"io"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
-
-// beadDeprecationOnce ensures the bead→ticket deprecation warning is
-// emitted at most once per process, avoiding N duplicate warnings when
-// Store.checkWriteSetConflicts loads many old missions.
-var beadDeprecationOnce sync.Once
 
 // knownInputKeys is the set of valid field names under "inputs:".
 var knownInputKeys = map[string]bool{
@@ -72,9 +67,16 @@ func (in *Inputs) UnmarshalJSON(data []byte) error {
 	return in.applyParsed(raw.Files, raw.Ticket, raw.Bead, raw.References, raw.Trigger)
 }
 
-// applyParsed populates the receiver from parsed intermediate fields,
-// enforces the ticket/bead exclusion, and emits the deprecation warning
-// when bead is used. Shared by UnmarshalYAML and UnmarshalJSON.
+// applyParsed populates the receiver from parsed intermediate fields
+// and enforces the ticket/bead exclusion. Shared by UnmarshalYAML and
+// UnmarshalJSON.
+//
+// It does NOT emit the bead deprecation warning: decode runs on every
+// store load, including the conflict scan that reads unrelated old
+// missions, so a warning here fired on every create/dispatch (ethos-
+// c0yp). The warning is a user-facing signal about a contract the
+// caller submitted, so the create paths raise it via BeadAlias — see
+// WarnBeadDeprecated.
 func (in *Inputs) applyParsed(files []string, ticket, bead string, references []string, trigger *Trigger) error {
 	if ticket != "" && bead != "" {
 		return fmt.Errorf("inputs: both 'ticket' and 'bead' set; use 'ticket' (bead is deprecated)")
@@ -86,10 +88,33 @@ func (in *Inputs) applyParsed(files []string, ticket, bead string, references []
 		in.Ticket = ticket
 	} else if bead != "" {
 		in.Ticket = bead
-		beadDeprecationOnce.Do(func() {
-			fmt.Fprintf(os.Stderr,
-				"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket' (first seen value: %q)\n", bead)
-		})
 	}
 	return nil
+}
+
+// BeadAlias returns the deprecated inputs.bead value a contract body
+// sets, or "" when it uses inputs.ticket (or neither). It probes the
+// raw bytes through a plain struct — no custom unmarshaler, no strict
+// decode — so it triggers no side effect and tolerates a body that the
+// strict decoder will reject on its own. The create paths call it to
+// decide whether to warn about a contract the user actually submitted,
+// which is why the warning no longer lives in the decode path.
+func BeadAlias(data []byte) string {
+	var probe struct {
+		Inputs struct {
+			Bead string `yaml:"bead"`
+		} `yaml:"inputs"`
+	}
+	if err := yaml.Unmarshal(data, &probe); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(probe.Inputs.Bead)
+}
+
+// WarnBeadDeprecated writes the DES-049 deprecation warning to w,
+// naming the bead value the user supplied. Callers guard on a non-empty
+// BeadAlias result.
+func WarnBeadDeprecated(w io.Writer, bead string) {
+	fmt.Fprintf(w,
+		"ethos: deprecation warning: 'inputs.bead' is deprecated — use 'inputs.ticket' (value: %q)\n", bead)
 }

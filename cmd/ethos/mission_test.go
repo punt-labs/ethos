@@ -343,6 +343,68 @@ func TestMissionCreate_FromFile(t *testing.T) {
 	assert.NotEmpty(t, c.Evaluator.PinnedAt)
 }
 
+// TestMissionCreate_WarnsOnBead proves ethos-c0yp: a contract the user
+// submits with the deprecated inputs.bead field still earns the DES-049
+// deprecation warning, naming the value so it can be migrated.
+func TestMissionCreate_WarnsOnBead(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t) // uses inputs.bead: ethos-07m.5
+	out := captureStderrFn(t, func() {
+		captureStdoutE(t, func() error { return runMissionCreate() })
+	})
+	assert.Contains(t, out, "deprecation warning")
+	assert.Contains(t, out, "inputs.bead")
+	assert.Contains(t, out, "ethos-07m.5")
+}
+
+// TestMissionCreate_TicketIsSilent proves the other half: a contract that
+// uses inputs.ticket emits no deprecation, even though the store already
+// holds a bead mission the conflict scan will Load.
+func TestMissionCreate_TicketIsSilent(t *testing.T) {
+	missionTestEnv(t)
+	// First, land a bead mission (warns, ignored here).
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	// Now a ticket contract with a disjoint write-set: the scan Loads the
+	// bead mission but must not warn.
+	dir := t.TempDir()
+	ticketFile := filepath.Join(dir, "ticket.yaml")
+	body := `leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  ticket: ethos-42
+write_set:
+  - tests/ticket-silent/
+tools:
+  - Read
+success_criteria:
+  - make check passes
+budget:
+  rounds: 1
+`
+	require.NoError(t, os.WriteFile(ticketFile, []byte(body), 0o600))
+	missionCreateFile = ticketFile
+	out := captureStderrFn(t, func() {
+		captureStdoutE(t, func() error { return runMissionCreate() })
+	})
+	assert.NotContains(t, out, "deprecation", "a ticket submission with a bead mission in the store must stay silent")
+}
+
+// TestMissionLint_WarnsOnBead proves the advisory linter also warns for a
+// user-submitted legacy inputs.bead contract.
+func TestMissionLint_WarnsOnBead(t *testing.T) {
+	missionTestEnv(t)
+	file := writeContractFile(t) // uses inputs.bead
+	out := captureStderrFn(t, func() {
+		captureStdoutE(t, func() error { return runMissionLint(file) })
+	})
+	assert.Contains(t, out, "deprecation warning")
+	assert.Contains(t, out, "inputs.bead")
+}
+
 func TestMissionCreate_FromFileJSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true

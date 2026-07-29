@@ -108,6 +108,48 @@ func submitRoundResult(t *testing.T, s *Store, c *Contract, verdict string) {
 	require.NoError(t, s.AppendResult(c.MissionID, r))
 }
 
+// TestStore_Create_NoBeadWarningFromConflictScan proves ethos-c0yp: a
+// create that scans an existing legacy inputs.bead mission for write-set
+// conflicts must not emit the deprecation warning. The warning is a
+// user-submission signal; the scan reads registry files the user is not
+// editing, so it stays silent.
+func TestStore_Create_NoBeadWarningFromConflictScan(t *testing.T) {
+	s := testStore(t)
+
+	// Plant a valid legacy mission whose inputs use the deprecated bead
+	// field, on disk, so the conflict scan Loads (and decodes) it.
+	legacy := `mission_id: m-2026-05-11-001
+status: open
+created_at: "2026-05-11T00:00:00Z"
+updated_at: "2026-05-11T00:00:00Z"
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+  pinned_at: "2026-05-11T00:00:00Z"
+inputs:
+  bead: punt-labs-6dj
+write_set:
+  - tests/legacy/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 1
+current_round: 1
+`
+	legacyPath := mustContractPath(t, s, "m-2026-05-11-001")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacyPath), 0o700))
+	require.NoError(t, os.WriteFile(legacyPath, []byte(legacy), 0o600))
+
+	// Create a new, disjoint ticket mission. Its write-set does not
+	// overlap the legacy one, so the scan Loads the bead mission and
+	// discards it — decoding it must not warn.
+	out := captureStderr(t, func() {
+		require.NoError(t, s.Create(disjointContract("m-2026-05-12-001")))
+	})
+	assert.NotContains(t, out, "deprecation", "conflict scan of a legacy bead mission must stay silent")
+}
+
 func TestStore_RoundTrip(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-001")

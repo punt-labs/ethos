@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -105,6 +106,12 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	parsed, err := mission.DecodeContractStrict([]byte(body), "mcp create request")
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	// DES-049: warn about the deprecated inputs.bead only for the
+	// contract the user submitted here, not for the old missions the
+	// store scans during conflict checking (ethos-c0yp).
+	if bead := mission.BeadAlias([]byte(body)); bead != "" {
+		mission.WarnBeadDeprecated(os.Stderr, bead)
 	}
 	c := *parsed
 

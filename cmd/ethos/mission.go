@@ -884,6 +884,11 @@ func runMissionCreate() error {
 	if err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
+	// DES-049: warn only about the contract the user submitted, not the
+	// old missions the store scans for write-set conflicts (ethos-c0yp).
+	if bead := mission.BeadAlias(data); bead != "" {
+		mission.WarnBeadDeprecated(os.Stderr, bead)
+	}
 	c := *parsed
 
 	// Apply server-controlled fields (mission_id, status, timestamps,
@@ -1852,6 +1857,11 @@ func runMissionLint(file string) error {
 	c, err := mission.DecodeContractStrict(data, file)
 	if err != nil {
 		return fmt.Errorf("mission lint: %w", err)
+	}
+	// DES-049: the linted file is user-submitted, so a legacy inputs.bead
+	// still earns the deprecation warning (ethos-c0yp).
+	if bead := mission.BeadAlias(data); bead != "" {
+		mission.WarnBeadDeprecated(os.Stderr, bead)
 	}
 	ws := mission.Lint(c)
 	if jsonOutput {

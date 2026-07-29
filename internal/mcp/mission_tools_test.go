@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -18,6 +19,25 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// captureStderr runs fn with os.Stderr redirected to a pipe and returns
+// the captured output. Restores os.Stderr in all cases.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	old := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	done := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- b
+	}()
+	fn()
+	_ = w.Close()
+	return string(<-done)
+}
 
 // validContractYAML is a minimal valid contract body the MCP create
 // handler accepts. It omits server-controlled fields (mission_id,
@@ -149,6 +169,25 @@ func TestHandleMission_Create(t *testing.T) {
 	assert.Equal(t, "claude", c.Leader)
 	assert.Equal(t, "bwk", c.Worker)
 	assert.Equal(t, "djb", c.Evaluator.Handle)
+}
+
+// TestHandleMission_CreateWarnsOnBead proves ethos-c0yp for the MCP
+// surface: a contract submitted with the deprecated inputs.bead field
+// still emits the DES-049 deprecation warning on stderr.
+func TestHandleMission_CreateWarnsOnBead(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	out := captureStderr(t, func() {
+		result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+			"method":   "create",
+			"contract": validContractYAML, // uses inputs.bead: ethos-07m.5
+		}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+	})
+	assert.Contains(t, out, "deprecation warning")
+	assert.Contains(t, out, "inputs.bead")
+	assert.Contains(t, out, "ethos-07m.5")
 }
 
 func TestHandleMission_CreateMissingContract(t *testing.T) {
