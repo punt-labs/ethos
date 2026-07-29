@@ -14,8 +14,10 @@ func TestInstallAgentDefinitions(t *testing.T) {
 		name         string
 		sourceFiles  map[string]string // filename → content in agents/
 		destFiles    map[string]string // filename → content in .claude/agents/
+		generated    map[string]bool   // handles the generator owns
 		wantDeployed []string
 		wantContent  map[string]string // filename → expected content after install
+		wantAbsent   []string          // filenames that must NOT exist in dest
 	}{
 		{
 			name: "both files deployed when dest is empty",
@@ -87,6 +89,20 @@ func TestInstallAgentDefinitions(t *testing.T) {
 				"bwk.md": "# bwk agent",
 			},
 		},
+		{
+			name: "generated handle stub is not copied; non-generated is",
+			sourceFiles: map[string]string{
+				"bwk.md": "# bwk stub",
+				"mdm.md": "# mdm stub",
+			},
+			destFiles:    nil,
+			generated:    map[string]bool{"bwk": true},
+			wantDeployed: []string{"mdm.md"},
+			wantContent: map[string]string{
+				"mdm.md": "# mdm stub",
+			},
+			wantAbsent: []string{"bwk.md"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -119,7 +135,7 @@ func TestInstallAgentDefinitions(t *testing.T) {
 				}
 			}
 
-			deployed, err := InstallAgentDefinitions(ethosRoot)
+			deployed, err := InstallAgentDefinitions(ethosRoot, tt.generated)
 			require.NoError(t, err)
 
 			assert.ElementsMatch(t, tt.wantDeployed, deployed)
@@ -128,6 +144,11 @@ func TestInstallAgentDefinitions(t *testing.T) {
 				got, readErr := os.ReadFile(filepath.Join(repoRoot, ".claude", "agents", name))
 				require.NoError(t, readErr, "reading deployed file %s", name)
 				assert.Equal(t, want, string(got), "content of %s", name)
+			}
+
+			for _, name := range tt.wantAbsent {
+				_, statErr := os.Stat(filepath.Join(repoRoot, ".claude", "agents", name))
+				assert.True(t, os.IsNotExist(statErr), "stub for generator-owned handle %s must not be copied", name)
 			}
 		})
 	}

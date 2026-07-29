@@ -92,7 +92,14 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 			repomiss.New(agentPersona, agentID.MissingExt))
 	}
 
-	installAgentDefs()
+	// Subordinate the legacy stub copy to the DES-026 generator: resolve
+	// the handles the generator owns first, so InstallAgentDefinitions
+	// skips their stubs and only the generator writes those files.
+	generated, gErr := GeneratedAgentHandles(repoRoot, store, deps.Teams)
+	if gErr != nil {
+		fmt.Fprintf(os.Stderr, "ethos: session-start: resolving generated agents: %v\n", gErr)
+	}
+	installAgentDefs(generated)
 
 	// Generate .claude/agents/<handle>.md from ethos identity data.
 	// Propagates: the returned error is the single authoritative
@@ -196,12 +203,12 @@ func emitHumanFallback(resolvedID *identity.Identity) error {
 
 // installAgentDefs copies agent definitions from the ethos agents dir
 // into .claude/agents/. Logs results to stderr.
-func installAgentDefs() {
+func installAgentDefs(generated map[string]bool) {
 	ethosRoot := resolve.FindRepoEthosRoot()
 	if ethosRoot == "" {
 		return
 	}
-	deployed, err := InstallAgentDefinitions(ethosRoot)
+	deployed, err := InstallAgentDefinitions(ethosRoot, generated)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: agent install failed: %v\n", err)
 	}

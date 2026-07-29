@@ -161,6 +161,21 @@ func setupTestRepo(t *testing.T) (string, identity.IdentityStore, *team.LayeredS
 	return root, identities, teams, roles
 }
 
+// TestGeneratedAgentHandles asserts the ownership set the stub installer
+// subordinates to: agent-kind team members except the main agent. In the
+// test repo, claude is the main agent (skipped) and test-human is a human
+// (skipped), so only bwk is owned.
+func TestGeneratedAgentHandles(t *testing.T) {
+	root, ids, teams, _ := setupTestRepo(t)
+
+	owned, err := GeneratedAgentHandles(root, ids, teams)
+	require.NoError(t, err)
+
+	assert.True(t, owned["bwk"], "an agent-kind team member is owned by the generator")
+	assert.False(t, owned["claude"], "the main session agent is not generated")
+	assert.False(t, owned["test-human"], "a human member is not generated")
+}
+
 func writeYAML(t *testing.T, path string, data interface{}) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
