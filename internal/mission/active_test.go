@@ -184,3 +184,29 @@ func TestClearActiveMission_EmptyArgsAreNoOp(t *testing.T) {
 	require.NoError(t, ClearActiveMission("", "sess-x"))
 	require.NoError(t, ClearActiveMission("/tmp/ethos", ""))
 }
+
+func TestClearDelegationBinding_RemovesFile(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-deleg"
+	require.NoError(t, WriteDelegationBinding(root, sess, DelegationBinding{
+		DelegationID:  "d-1",
+		MissionID:     "m-2026-07-29-001",
+		ParentSession: sess,
+	}))
+
+	require.NoError(t, ClearDelegationBinding(root, sess))
+
+	b, err := ReadDelegationBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, DelegationBinding{}, b)
+}
+
+func TestClearDelegationBinding_MissingIsNotAnError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, ClearDelegationBinding(root, "sess-never-existed"))
+}
+
+func TestClearDelegationBinding_EmptyArgsAreNoOp(t *testing.T) {
+	require.NoError(t, ClearDelegationBinding("", "sess-x"))
+	require.NoError(t, ClearDelegationBinding("/tmp/ethos", ""))
+}

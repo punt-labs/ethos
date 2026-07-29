@@ -27,26 +27,32 @@ msg_file="$1"
 [ -f "$msg_file" ] || exit "$_host_status"
 # Fallback: when MISSION_ID/DELEGATION_ID aren't in env (the common
 # case for subagent commits — additional_env doesn't persist into
-# subprocess env), read the delegation-binding sidecar written by
-# the PreToolUse Tier B dispatch. Pick the most recently modified
-# binding across all sessions — correct for single-user single-
-# session, the common case.
+# subprocess env), gate on an ACTIVE mission, not the delegation
+# binding. `ethos mission claim` writes the active-mission sidecar;
+# `mission release` and terminal transitions clear it. The
+# delegation-binding sidecar was never cleared, so keying off it tagged
+# unrelated T4 commits from later sessions (ethos-jawp).
 if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
-  # Session dirs are <date>-<session-id>, so reverse-sorted they
-  # give most-recent first. Pick the first binding file found in
-  # that order so a stale sidecar from an older session can't
-  # silently tag the wrong delegation.
-  binding_file=""
+  # Session dirs are <date>-<session-id>, so reverse-sorted they give
+  # most-recent first. Pick the first session with an active-mission
+  # sidecar so a stale binding from an older session can't tag this
+  # commit.
+  session_dir=""
   for d in $(find "$HOME/.punt-labs/ethos/sessions" -maxdepth 1 -type d 2>/dev/null | sort -r); do
-    if [ -f "$d/delegation-binding" ]; then
-      binding_file="$d/delegation-binding"
+    if [ -f "$d/active-mission" ]; then
+      session_dir="$d"
       break
     fi
   done
-  if [ -n "$binding_file" ] && [ -f "$binding_file" ]; then
-    DELEGATION_ID=$(sed -n '1p' "$binding_file")
-    MISSION_ID=$(sed -n '2p' "$binding_file")
-    export DELEGATION_ID MISSION_ID
+  if [ -n "$session_dir" ]; then
+    MISSION_ID=$(sed -n '1p' "$session_dir/active-mission" | tr -d '[:space:]')
+    # Tag the delegation only when its binding names this same mission
+    # — a binding left from a different mission must not ride along.
+    binding_file="$session_dir/delegation-binding"
+    if [ -f "$binding_file" ] && [ "$(sed -n '2p' "$binding_file")" = "$MISSION_ID" ]; then
+      DELEGATION_ID=$(sed -n '1p' "$binding_file")
+    fi
+    export MISSION_ID DELEGATION_ID
   fi
 fi
 [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ] && exit "$_host_status"

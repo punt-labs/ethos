@@ -213,3 +213,26 @@ func ClearActiveMission(globalRoot, sessionID string) error {
 	}
 	return nil
 }
+
+// ClearDelegationBinding removes the delegation-binding sidecar for
+// sessionID. Missing is not an error — clearing an already-clear slot
+// is a no-op.
+//
+// The binding is written per-dispatch but was never cleared, so it
+// accumulated across sessions and let the commit-msg hook's fallback
+// tag unrelated commits with a stale delegation (ethos-jawp). Clearing
+// it on `mission release` and on terminal transitions bounds the
+// sidecar's lifetime to the dispatch it describes.
+func ClearDelegationBinding(globalRoot, sessionID string) error {
+	path := DelegationBindingPath(globalRoot, sessionID)
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("removing delegation-binding sidecar %q: %w", path, err)
+	}
+	return nil
+}

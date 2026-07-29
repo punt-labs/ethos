@@ -1253,6 +1253,12 @@ func runMissionClose(idOrPrefix, status string) error {
 			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
 		}
 	}
+	// A terminal transition ends this session's work on the mission, so
+	// clear its delegation-binding sidecar — otherwise a stale binding
+	// would let the commit-msg hook tag later missionless commits
+	// (ethos-jawp). Best-effort: a closed mission stays closed even if
+	// the session cannot be resolved or the sidecar cannot be removed.
+	clearClosedDelegationBinding(id)
 	if jsonOutput {
 		printJSON(map[string]any{
 			"mission_id": id,
@@ -1768,6 +1774,12 @@ func runMissionRelease() error {
 	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
 		return fmt.Errorf("mission release: %w", err)
 	}
+	// Clear the delegation-binding sidecar too: it is written per
+	// dispatch but was never cleaned, so a release that left it behind
+	// let the commit-msg hook tag later missionless commits (ethos-jawp).
+	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
+		return fmt.Errorf("mission release: %w", err)
+	}
 
 	if jsonOutput {
 		printJSON(map[string]string{"session": sessionID})
@@ -1775,6 +1787,30 @@ func runMissionRelease() error {
 	}
 	fmt.Printf("released session %s\n", sessionID)
 	return nil
+}
+
+// clearClosedDelegationBinding removes the caller's delegation-binding
+// sidecar when it names the mission that just closed. It resolves the
+// session best-effort — a close must not fail because no session is in
+// context — and only clears a binding that matches missionID so a
+// binding for a different, still-open dispatch survives.
+func clearClosedDelegationBinding(missionID string) {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil || sessionID == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	b, err := mission.ReadDelegationBinding(globalRoot, sessionID)
+	if err != nil || b.MissionID != missionID {
+		return
+	}
+	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: clearing delegation binding: %v\n", err)
+	}
 }
 
 // resolveLeader returns the agent handle from the repo's ethos config.
