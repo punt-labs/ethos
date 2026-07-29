@@ -348,6 +348,7 @@ func TestStore_RejectsSymlink_AllLoaderPaths(t *testing.T) {
 
 			if tc.preCreateReflection {
 				r := &Reflection{
+					Mission:        missionID,
 					Round:          c.CurrentRound,
 					Author:         c.Leader,
 					Recommendation: "continue",
@@ -1789,8 +1790,9 @@ func TestApplyServerFields_HashRoundTripsThroughCreate(t *testing.T) {
 // with the given recommendation. Tests use this to keep the table
 // rows compact and the assertions focused on the gate behavior, not
 // on building the input.
-func reflectionFor(round int, rec string) *Reflection {
+func reflectionFor(missionID string, round int, rec string) *Reflection {
 	return &Reflection{
+		Mission:        missionID,
 		Round:          round,
 		Author:         "claude",
 		Converging:     true,
@@ -1860,7 +1862,7 @@ func TestStore_AppendReflection_RoundTrip(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationContinue)
+	r := reflectionFor(c.MissionID, 1, RecommendationContinue)
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 	assert.NotEmpty(t, r.CreatedAt, "AppendReflection must reflect CreatedAt back")
 
@@ -1883,7 +1885,7 @@ func TestStore_AppendReflection_RejectsWrongRound(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	// Mission is at round 1; submitting a round-2 reflection is wrong.
-	r := reflectionFor(2, RecommendationContinue)
+	r := reflectionFor(c.MissionID, 2, RecommendationContinue)
 	err := s.AppendReflection(c.MissionID, r)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "round 2")
@@ -1899,8 +1901,8 @@ func TestStore_AppendReflection_RejectsDuplicate(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
-	err := s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationPivot))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
+	err := s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationPivot))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 	assert.Contains(t, err.Error(), "append-only")
@@ -1916,7 +1918,7 @@ func TestStore_AppendReflection_RejectsClosedMission(t *testing.T) {
 	_, err := s.Close(c.MissionID, StatusClosed)
 	require.NoError(t, err)
 
-	err = s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue))
+	err = s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "terminal state")
 }
@@ -1930,7 +1932,7 @@ func TestStore_AppendReflection_RejectsMalformed(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	bad := reflectionFor(1, RecommendationContinue)
+	bad := reflectionFor(c.MissionID, 1, RecommendationContinue)
 	bad.Signals = nil
 	err := s.AppendReflection(c.MissionID, bad)
 	require.Error(t, err)
@@ -1969,7 +1971,7 @@ func TestStore_AdvanceRound_UnblocksAfterReflection(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 2, newRound)
@@ -1989,17 +1991,17 @@ func TestStore_AdvanceRound_BudgetExhaustionRefused(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	// Round 1 → 2.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	_, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 
 	// Round 2 → 3.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(2, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 2, RecommendationContinue)))
 	_, err = s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 
 	// Round 3 → 4 must fail (budget exhausted).
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(3, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 3, RecommendationContinue)))
 	_, err = s.AdvanceRound(c.MissionID, "claude")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exhausted its round budget")
@@ -2018,7 +2020,7 @@ func TestStore_AdvanceRound_StopRecommendationBlocks(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationStop)
+	r := reflectionFor(c.MissionID, 1, RecommendationStop)
 	r.Reason = "the test fixture is irreparable; stop and re-scope"
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 
@@ -2035,7 +2037,7 @@ func TestStore_AdvanceRound_EscalateRecommendationBlocks(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationEscalate)
+	r := reflectionFor(c.MissionID, 1, RecommendationEscalate)
 	r.Reason = "needs human review"
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 
@@ -2053,7 +2055,7 @@ func TestStore_AdvanceRound_PivotPermitted(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationPivot)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationPivot)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 2, newRound)
@@ -2083,7 +2085,7 @@ func TestStore_AdvanceRound_LogsTransition(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	_, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 
@@ -2147,7 +2149,7 @@ func TestStore_AdvanceRound_ConcurrentSerialization(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	c.Budget.Rounds = 5
 	require.NoError(t, s.Create(c))
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 
 	const n = 10
 	var wg sync.WaitGroup
@@ -2242,6 +2244,7 @@ func TestStore_ListSkipsReflectionsFile(t *testing.T) {
 
 	// Append a reflection so the sibling file exists on disk.
 	r := &Reflection{
+		Mission:        c.MissionID,
 		Round:          1,
 		Author:         "claude",
 		Converging:     true,
@@ -3112,7 +3115,7 @@ func TestStore_CloseGate_RefusesWhenOnlyStaleRoundHasResult(t *testing.T) {
 
 	// Round 1: submit result and advance.
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	require.Equal(t, 2, newRound)
@@ -3190,7 +3193,7 @@ func TestStore_ListSkipsResultsFile_CoexistsWithReflections(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 
 	ids, err := s.List()
 	require.NoError(t, err)
@@ -3211,13 +3214,13 @@ func TestStore_NonTerminalTransitionsUnchanged(t *testing.T) {
 
 	// Round 1 → 2: reflection only, no result. The gate is
 	// close-specific; advance must work.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 2, newRound)
 
 	// Round 2 → 3: same.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(2, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 2, RecommendationContinue)))
 	newRound, err = s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 3, newRound)
@@ -3380,7 +3383,7 @@ func TestStore_AppendReflection_NormalizesAuthor(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationContinue)
+	r := reflectionFor(c.MissionID, 1, RecommendationContinue)
 	r.Author = "  claude  "
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 
@@ -3463,6 +3466,7 @@ func TestStore_AppendReflectionRollbackRemovesFile(t *testing.T) {
 	require.NoError(t, os.Mkdir(logPath, 0o700))
 
 	r := validReflection()
+	r.Mission = c.MissionID
 	r.Round = c.CurrentRound
 	err := s.AppendReflection(c.MissionID, &r)
 	require.Error(t, err)

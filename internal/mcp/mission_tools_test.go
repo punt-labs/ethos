@@ -538,24 +538,28 @@ func TestHandleMission_CreateRejectsCrossMissionConflict(t *testing.T) {
 // the MCP reflect handler accepts. Tests parameterize it via
 // reflectionYAMLForRound when they need other rounds or
 // recommendations.
-const validReflectionYAML = `round: 1
+func validReflectionYAML(missionID string) string {
+	return fmt.Sprintf(`mission: %s
+round: 1
 author: claude
 converging: true
 signals:
   - tests passing
 recommendation: continue
 reason: round 1 went well
-`
+`, missionID)
+}
 
-func reflectionYAMLForRound(round int, rec, reason string) string {
-	return fmt.Sprintf(`round: %d
+func reflectionYAMLForRound(missionID string, round int, rec, reason string) string {
+	return fmt.Sprintf(`mission: %s
+round: %d
 author: claude
 converging: true
 signals:
   - tests passing
 recommendation: %s
 reason: %q
-`, round, rec, reason)
+`, missionID, round, rec, reason)
 }
 
 func TestHandleMission_Reflect_RoundTrip(t *testing.T) {
@@ -572,7 +576,7 @@ func TestHandleMission_Reflect_RoundTrip(t *testing.T) {
 	reflectResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML(created.MissionID),
 	}))
 	require.NoError(t, err)
 	require.False(t, reflectResult.IsError, "reflect must succeed: %s", resultText(t, reflectResult))
@@ -588,7 +592,7 @@ func TestHandleMission_Reflect_RequiresMissionID(t *testing.T) {
 	h := testHandlerWithMissions(t)
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML("m-2026-04-08-001"),
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
@@ -616,7 +620,7 @@ func TestHandleMission_Reflect_RejectsUnknownField(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	body := validReflectionYAML + "bogus: smuggled\n"
+	body := validReflectionYAML(created.MissionID) + "bogus: smuggled\n"
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
@@ -659,7 +663,7 @@ func TestHandleMission_Reflections_ReturnsAfterReflect(t *testing.T) {
 	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML(created.MissionID),
 	}))
 	require.NoError(t, err)
 
@@ -709,7 +713,7 @@ func TestHandleMission_Advance_HappyPath(t *testing.T) {
 	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML(created.MissionID),
 	}))
 	require.NoError(t, err)
 
@@ -736,7 +740,7 @@ func TestHandleMission_Advance_StopBlocks(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	stopBody := reflectionYAMLForRound(1, "stop", "fixture is broken; close")
+	stopBody := reflectionYAMLForRound(created.MissionID, 1, "stop", "fixture is broken; close")
 	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,

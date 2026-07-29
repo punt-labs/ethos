@@ -708,11 +708,12 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 // and returns the path. The body is parameterized by round and
 // recommendation so the same helper covers continue, pivot, stop,
 // and escalate cases.
-func writeReflectionFile(t *testing.T, round int, recommendation, reason string) string {
+func writeReflectionFile(t *testing.T, missionID string, round int, recommendation, reason string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, fmt.Sprintf("reflection-%d.yaml", round))
-	body := fmt.Sprintf(`round: %d
+	body := fmt.Sprintf(`mission: %s
+round: %d
 author: claude
 converging: true
 signals:
@@ -720,7 +721,7 @@ signals:
   - lint clean
 recommendation: %s
 reason: %q
-`, round, recommendation, reason)
+`, missionID, round, recommendation, reason)
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
 }
@@ -735,7 +736,7 @@ func TestMissionReflect_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "round 1 went well")
+	missionReflectFile = writeReflectionFile(t, ids[0], 1, "continue", "round 1 went well")
 	stdout := captureStdoutE(t, func() error { return runMissionReflect(ids[0], missionReflectFile) })
 	// Text mode echoes `reflected: <id> round=1 rec=continue` so a
 	// scripting caller sees the reflection landed (ethos-30c).
@@ -761,7 +762,7 @@ func TestMissionReflect_JSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, ids[0], 1, "continue", "ok")
 	out := captureStdoutE(t, func() error { return runMissionReflect(ids[0], missionReflectFile) })
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
@@ -842,7 +843,7 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 	id := ids[0]
 
 	// Reflect on round 1.
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, id, 1, "continue", "ok")
 	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	// Advance — text mode echoes `advanced: <id> round 1 -> 2` so a
@@ -1316,7 +1317,7 @@ func TestMissionReflections_JSON(t *testing.T) {
 	assert.Equal(t, "[]", strings.TrimSpace(out))
 
 	// Submit a reflection and re-fetch.
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, id, 1, "continue", "ok")
 	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	out = captureStdoutE(t, func() error { return runMissionReflections(id) })
@@ -1560,7 +1561,7 @@ func TestMissionAdvance_JSON(t *testing.T) {
 	require.Len(t, ids, 1)
 	id := ids[0]
 
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, id, 1, "continue", "ok")
 	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	out := captureStdoutE(t, func() error { return runMissionAdvance(id) })

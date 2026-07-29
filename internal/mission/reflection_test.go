@@ -13,6 +13,7 @@ import (
 // Validate. Tests mutate copies to exercise individual failure modes.
 func validReflection() Reflection {
 	return Reflection{
+		Mission:        "m-2026-04-08-001",
 		Round:          1,
 		CreatedAt:      "2026-04-08T08:00:00Z",
 		Author:         "claude",
@@ -41,6 +42,16 @@ func TestReflection_Validate(t *testing.T) {
 		mutate  func(*Reflection)
 		wantErr string
 	}{
+		{
+			name:    "missing mission",
+			mutate:  func(r *Reflection) { r.Mission = "" },
+			wantErr: "invalid mission",
+		},
+		{
+			name:    "malformed mission",
+			mutate:  func(r *Reflection) { r.Mission = "not-a-mission" },
+			wantErr: "invalid mission",
+		},
 		{
 			name:    "round zero",
 			mutate:  func(r *Reflection) { r.Round = 0 },
@@ -159,6 +170,7 @@ func TestReflection_Validate_AcceptsContinueWithoutReason(t *testing.T) {
 func TestReflection_Validate_AcceptsAllRecommendations(t *testing.T) {
 	for _, rec := range []string{
 		RecommendationContinue,
+		RecommendationAdvance,
 		RecommendationPivot,
 		RecommendationStop,
 		RecommendationEscalate,
@@ -184,6 +196,7 @@ func TestReflection_YAMLRoundTrip(t *testing.T) {
 	parsed, err := DecodeReflectionStrict(data, "test")
 	require.NoError(t, err)
 
+	assert.Equal(t, r.Mission, parsed.Mission)
 	assert.Equal(t, r.Round, parsed.Round)
 	assert.Equal(t, r.CreatedAt, parsed.CreatedAt)
 	assert.Equal(t, r.Author, parsed.Author)
@@ -237,6 +250,7 @@ func TestIsTerminalRecommendation(t *testing.T) {
 	assert.True(t, IsTerminalRecommendation(RecommendationStop))
 	assert.True(t, IsTerminalRecommendation(RecommendationEscalate))
 	assert.False(t, IsTerminalRecommendation(RecommendationContinue))
+	assert.False(t, IsTerminalRecommendation(RecommendationAdvance))
 	assert.False(t, IsTerminalRecommendation(RecommendationPivot))
 	assert.False(t, IsTerminalRecommendation(""))
 	assert.False(t, IsTerminalRecommendation("yolo"))

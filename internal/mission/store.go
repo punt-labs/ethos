@@ -1483,6 +1483,16 @@ func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) 
 		if err := r.Validate(); err != nil {
 			return nil, fmt.Errorf("reflections[%d] for %q: %w", i, missionID, err)
 		}
+		// On-disk trust symmetry with AppendReflection and the results
+		// read path: the write path refuses a reflection whose Mission
+		// does not match the target, so the read path must too — a
+		// hand-edited file cannot claim a different mission.
+		if r.Mission != missionID {
+			return nil, fmt.Errorf(
+				"reflections[%d].mission: expected %q, got %q",
+				i, missionID, r.Mission,
+			)
+		}
 		if i > 0 && wrapper.Reflections[i-1].Round >= r.Round {
 			return nil, fmt.Errorf(
 				"reflections file %q is out of order or has duplicate round: %d after %d",
@@ -1537,6 +1547,15 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 		// here gives a clearer diagnostic than "advance refused" later.
 		if c.Status != StatusOpen {
 			return fmt.Errorf("mission %q is in terminal state %q; reflections are accepted only on open missions", missionID, c.Status)
+		}
+		// Mission ID cross-check, symmetric with AppendResult: the
+		// reflection's self-declared Mission must match the caller's
+		// target so a file renamed between missions cannot slip past.
+		if staged.Mission != missionID {
+			return fmt.Errorf(
+				"reflection mission %q does not match target mission %q",
+				staged.Mission, missionID,
+			)
 		}
 		if staged.Round != c.CurrentRound {
 			return fmt.Errorf(

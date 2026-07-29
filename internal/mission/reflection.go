@@ -23,6 +23,13 @@ import (
 // The reflection is append-only by construction: ReflectionStore.Append
 // refuses to overwrite an existing round's reflection.
 type Reflection struct {
+	// Mission is the full mission ID the reflection covers. Required
+	// and validated, symmetric with Result.Mission: the reflect path
+	// rejects a file whose Mission does not match the target mission
+	// (ReflectionStore.Append), so a reflection cut loose from its
+	// mission cannot be silently reunited with the wrong one.
+	Mission string `yaml:"mission" json:"mission"`
+
 	// Round is the round this reflection covers (the round that just
 	// ended). Reflections are 1-indexed: the reflection submitted at
 	// the end of round 1 has Round == 1.
@@ -70,8 +77,14 @@ type Reflection struct {
 // Recommendation enum values. The set is closed; Validate rejects
 // anything else. The names are deliberately short — they appear in
 // gate error messages and in the event log.
+//
+// continue and advance are synonyms for "advance permitted, same
+// approach": advance names the `ethos mission advance` verb the
+// operator actually types, so the reflection can echo the command it
+// authorizes. Both are non-terminal.
 const (
 	RecommendationContinue = "continue"
+	RecommendationAdvance  = "advance"
 	RecommendationPivot    = "pivot"
 	RecommendationStop     = "stop"
 	RecommendationEscalate = "escalate"
@@ -79,6 +92,7 @@ const (
 
 var validRecommendations = map[string]bool{
 	RecommendationContinue: true,
+	RecommendationAdvance:  true,
 	RecommendationPivot:    true,
 	RecommendationStop:     true,
 	RecommendationEscalate: true,
@@ -99,15 +113,16 @@ func IsTerminalRecommendation(r string) bool {
 // defensively on every read.
 //
 // Validation rules (must match the numbered list below exactly):
-//  1. round is in [1, maxRounds]
-//  2. author is non-empty and contains no control characters
-//  3. recommendation is one of {continue, pivot, stop, escalate}
-//  4. signals has at least one entry; each entry is non-empty and
+//  1. mission matches the m-YYYY-MM-DD-NNN pattern
+//  2. round is in [1, maxRounds]
+//  3. author is non-empty and contains no control characters
+//  4. recommendation is one of {continue, advance, pivot, stop, escalate}
+//  5. signals has at least one entry; each entry is non-empty and
 //     contains no control characters
-//  5. reason is non-empty when recommendation is stop or escalate
+//  6. reason is non-empty when recommendation is stop or escalate
 //     (the gate surfaces it verbatim; an empty reason produces a
 //     refusal message with no actionable content)
-//  6. created_at, when set, is parseable as RFC3339
+//  7. created_at, when set, is parseable as RFC3339
 //
 // Validate does NOT check that round number relates to a contract's
 // budget — that's the round-advance gate's job, where the contract is
@@ -115,6 +130,9 @@ func IsTerminalRecommendation(r string) bool {
 func (r *Reflection) Validate() error {
 	if r == nil {
 		return fmt.Errorf("reflection is nil")
+	}
+	if !missionIDPattern.MatchString(r.Mission) {
+		return fmt.Errorf("invalid mission %q: must match m-YYYY-MM-DD-NNN", r.Mission)
 	}
 	if r.Round < minRounds || r.Round > maxRounds {
 		return fmt.Errorf("invalid round %d: must be in [%d, %d]", r.Round, minRounds, maxRounds)
@@ -126,7 +144,7 @@ func (r *Reflection) Validate() error {
 		return fmt.Errorf("author contains control character")
 	}
 	if !validRecommendations[r.Recommendation] {
-		return fmt.Errorf("invalid recommendation %q: must be one of continue, pivot, stop, escalate", r.Recommendation)
+		return fmt.Errorf("invalid recommendation %q: must be one of continue, advance, pivot, stop, escalate", r.Recommendation)
 	}
 	if len(r.Signals) == 0 {
 		return fmt.Errorf("signals must contain at least one entry")
