@@ -55,6 +55,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Four mission/hook friction defects (ethos-jawp, ethos-72wj, ethos-qvbh,
+  ethos-c0yp).**
+
+  - *Commit-msg trailers tagged unrelated commits (ethos-jawp).* The
+    `commit-msg` hook keyed its `Mission:`/`Delegation:` trailers off the
+    delegation-binding sidecar, which was never cleared, so a stale binding
+    from an earlier session tagged unrelated T4 commits. The fallback now
+    gates on the active-mission sidecar (`mission claim` writes it; `mission
+    release` and terminal transitions clear it), and a new
+    `ClearDelegationBinding` runs on release and close so bindings stop
+    accumulating. The delegation is tagged only when its binding names the
+    active mission.
+
+  - *Stub agent install no longer shadows the generator (ethos-72wj).*
+    `InstallAgentDefinitions` unconditionally copied legacy stubs from
+    `.punt-labs/ethos/agents/` over `.claude/agents/` — the copy-from-agents
+    path DES-026 rejected — double-writing and leaving a sticky stub for any
+    handle the generator owns. It now consults `GeneratedAgentHandles`
+    (agent-kind team members minus the main agent) and skips those stubs;
+    non-generated stubs still copy. The repo's committed `.claude/agents/`
+    data churn and the commit-vs-gitignore version-skew question are tracked
+    separately, pending an operator decision.
+
+  - *Reflection `mission:` field and `advance` recommendation (ethos-qvbh).*
+    Result required a validated `mission:` field but Reflection rejected it —
+    an asymmetry between the two sibling artifacts. Reflection now requires a
+    pattern-validated `mission:`, cross-checked against the target mission on
+    both the append and read paths (symmetric with Result; the strict
+    `KnownFields` decoder is unchanged). The reflection `recommendation` enum
+    also accepts `advance` — a non-terminal synonym of `continue` that echoes
+    the `ethos mission advance` verb.
+
+  - *`inputs.bead` deprecation warning scoped to user submission
+    (ethos-c0yp).* The warning was a decode side-effect, so it fired for every
+    mission the write-set conflict scan loaded — including an unrelated legacy
+    closed mission — printing on every `create`/`dispatch`. It now fires only
+    where the user submits a contract (`mission create`, MCP create, `mission
+    lint`); `dispatch` and pipeline instantiate build `Inputs{Ticket}` and
+    never warn. The `bead`→`ticket` aliasing, both-set rejection, and
+    marshal-emits-`ticket` behavior are unchanged.
+
 - **Delegation records are path-redacted at write time (ethos-ersr,
   ethos-n4np).** The Tier B skeleton writer put `prompt.md` and `record.yaml`
   on disk with `$HOME` and the repo root intact. The mission tree is
