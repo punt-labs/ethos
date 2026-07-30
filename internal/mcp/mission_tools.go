@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/resolve"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -236,12 +238,51 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to close mission: %v", err)), nil
 	}
-	return jsonResult(map[string]any{
+	payload := map[string]any{
 		"mission_id": id,
 		"status":     status,
 		"round":      result.Round,
 		"verdict":    result.Verdict,
-	})
+	}
+	// Parity with the CLI close: a terminal transition ends this
+	// session's work on the mission, so clear its sidecars. Closing via
+	// MCP used to skip this, leaving the active-mission sidecar in place
+	// and the commit-msg hook tagging later missionless commits with the
+	// closed mission (ethos-jawp).
+	if w := h.clearClosedMissionBindings(id); w != "" {
+		payload["warning"] = w
+	}
+	return jsonResult(payload)
+}
+
+// clearClosedMissionBindings clears the calling session's mission
+// sidecars for a mission that just closed, and returns a warning string
+// when something real failed — "" when there was nothing to do.
+//
+// The close is already on disk and cannot be undone, so a cleanup
+// failure must not turn the call into an error result. It rides back in
+// the successful result's `warning` field instead, where the caller sees
+// it: the mission closed, but a sidecar may still be tagging commits.
+//
+// No session in context means no sidecars to clear, which is ordinary
+// and silent.
+func (h *Handler) clearClosedMissionBindings(missionID string) string {
+	if h.sessionStore == nil {
+		return ""
+	}
+	sessionID, _ := resolve.SessionID(h.sessionStore)
+	if sessionID == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Sprintf("clearing mission bindings: user home dir: %v", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := mission.ClearMissionBindings(globalRoot, sessionID, missionID); err != nil {
+		return fmt.Sprintf("clearing mission bindings: %v", err)
+	}
+	return ""
 }
 
 // handleReflectMission parses the reflection YAML and appends it to

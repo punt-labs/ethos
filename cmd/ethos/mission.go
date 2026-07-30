@@ -1795,25 +1795,18 @@ func runMissionRelease() error {
 	return nil
 }
 
-// clearClosedSessionBindings removes the caller's active-mission and
-// delegation-binding sidecars when they name the mission that just left
-// the open set. Both must go: the commit-msg trailer fallback gates on
-// the active-mission sidecar, so a close without an explicit `mission
-// release` would keep tagging later missionless commits with the closed
-// mission (ethos-jawp).
-//
-// It resolves the session best-effort — a close must not fail because no
-// session is in context — and clears each sidecar only when it names
-// missionID, so a claim or dispatch for a different, still-open mission
-// survives.
+// clearClosedSessionBindings resolves the caller's session and hands it
+// to mission.ClearMissionBindings, which owns the sidecar logic and is
+// shared with the MCP close path. This function is the CLI's half:
+// session resolution and stderr reporting.
 //
 // Every step is advisory, so none of them can fail the close. But a step
 // that fails for a real reason (permission denied, a corrupt sidecar, a
 // session store that will not read) leaves the sidecar in place and the
-// trailer gate open on a closed mission — the exact bug this function
-// exists to prevent. So each real failure prints one stderr line, while
-// the ordinary "nothing to clear" states — no session, no sidecar, a
-// sidecar naming another mission — stay silent.
+// trailer gate open on a closed mission — the exact bug this exists to
+// prevent. So each real failure prints one stderr line, while the
+// ordinary "nothing to clear" states — no session, no sidecar, a sidecar
+// naming another mission — stay silent.
 func clearClosedSessionBindings(missionID string) {
 	sessionID, _, err := resolveSessionContext()
 	if err != nil {
@@ -1834,29 +1827,8 @@ func clearClosedSessionBindings(missionID string) {
 		return
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-
-	// ReadActiveMission and ReadDelegationBinding both report a missing
-	// sidecar as a zero value with a nil error, so a non-nil error here
-	// is always a real read failure — never "no sidecar".
-	active, err := mission.ReadActiveMission(globalRoot, sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: reading active mission: %v\n", err)
-	} else if active == missionID {
-		if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission close: clearing active mission: %v\n", err)
-		}
-	}
-
-	b, err := mission.ReadDelegationBinding(globalRoot, sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: reading delegation binding: %v\n", err)
-		return
-	}
-	if b.MissionID != missionID {
-		return
-	}
-	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "ethos: mission close: clearing delegation binding: %v\n", err)
+	if err := mission.ClearMissionBindings(globalRoot, sessionID, missionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
 	}
 }
 

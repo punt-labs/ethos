@@ -77,7 +77,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     advisory and never fails a close, but it now prints one stderr line per
     genuine failure — an unresolvable session, an unreadable sidecar — because
     each of those leaves the trailer gate open on a closed mission. The
-    ordinary "nothing to clear" states stay silent.
+    ordinary "nothing to clear" states stay silent. Both close surfaces do
+    this: the sidecar logic lives in `mission.ClearMissionBindings` next to the
+    sidecar readers, and the MCP close method calls it too. Closing via MCP
+    previously skipped the cleanup entirely, so the friction the CLI fix
+    removed was still live on the other surface. On the MCP path the close has
+    already happened, so a cleanup failure comes back as a `warning` field on
+    the successful result rather than turning the call into an error.
 
   - *Stub agent install no longer shadows the generator (ethos-72wj).*
     `InstallAgentDefinitions` unconditionally copied legacy stubs from

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
 
 	"github.com/stretchr/testify/assert"
@@ -133,6 +135,16 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 		WithTeamStore(ts),
 		WithMissionStore(ms),
 	)
+}
+
+// testHandlerWithSessions is testHandlerWithMissions plus a session
+// store. The sidecar cleanup on close is a no-op without one, so the
+// tests that exercise it need the wiring `ethos serve` does.
+func testHandlerWithSessions(t *testing.T) *Handler {
+	t.Helper()
+	h := testHandlerWithMissions(t)
+	WithSessionStore(session.NewStore(t.TempDir()))(h)
+	return h
 }
 
 func TestHandleMission_NoStoreConfigured(t *testing.T) {
@@ -482,6 +494,134 @@ func TestHandleMission_Close(t *testing.T) {
 	var loaded mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
 	assert.Equal(t, mission.StatusClosed, loaded.Status)
+}
+
+// closeViaMCP creates a mission, submits a satisfying result, and closes
+// it through the MCP close method. Returns the mission ID.
+func closeViaMCP(t *testing.T, h *Handler, contract string) string {
+	t.Helper()
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contract,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError, "close must succeed: %s", resultText(t, closeResult))
+	return created.MissionID
+}
+
+// TestHandleMission_CloseClearsActiveMission asserts the MCP close path
+// clears the active-mission sidecar, matching the CLI. Closing via MCP
+// used to skip the cleanup entirely, so the commit-msg hook kept tagging
+// later missionless commits with the closed mission (ethos-jawp) — the
+// friction the CLI fix removed, still live on the other surface.
+//
+// It drives the whole close method with the sidecar already on disk, so
+// the assertion covers the wiring in handleCloseMission, not the helper
+// in isolation.
+func TestHandleMission_CloseClearsActiveMission(t *testing.T) {
+	const sess = "sess-mcp-close"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, created.MissionID))
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
+	assert.NotContains(t, payload, "warning", "a clean clear must not warn")
+
+	_, statErr := os.Stat(mission.ActiveMissionPath(globalRoot, sess))
+	assert.True(t, os.IsNotExist(statErr),
+		"the MCP close method must clear the sidecar; got %v", statErr)
+}
+
+// TestHandleMission_CloseLeavesOtherMissionActive asserts the MCP clear
+// is scoped the same way the CLI's is: a sidecar naming a different,
+// still-open mission survives the close.
+func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
+	const sess = "sess-mcp-other"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	const holding = "m-2026-07-30-999"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, holding))
+
+	id := closeViaMCP(t, h, validContractYAML)
+	require.NotEqual(t, holding, id)
+
+	data, err := os.ReadFile(mission.ActiveMissionPath(globalRoot, sess))
+	require.NoError(t, err, "closing one mission must not clear a claim on another")
+	assert.Equal(t, holding+"\n", string(data))
+}
+
+// TestHandleMission_CloseWarnsOnUnreadableSidecar asserts a genuine read
+// failure reaches the caller. The close succeeded, so it must not become
+// an error result — the warning rides in the payload instead.
+func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
+	const sess = "sess-mcp-warn"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	// A directory where the sidecar belongs makes os.ReadFile fail with
+	// EISDIR — a real error, portably distinct from "no sidecar".
+	require.NoError(t, os.MkdirAll(mission.ActiveMissionPath(globalRoot, sess), 0o700))
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError, "an advisory cleanup failure must not fail the close")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
+	assert.Equal(t, mission.StatusClosed, payload["status"])
+	require.Contains(t, payload, "warning")
+	assert.Contains(t, payload["warning"], "reading active mission")
 }
 
 func TestHandleMission_CloseFailedAndEscalated(t *testing.T) {
