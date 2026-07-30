@@ -555,7 +555,7 @@ func TestHandleMission_CloseClearsActiveMission(t *testing.T) {
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
-	assert.NotContains(t, payload, "warning", "a clean clear must not warn")
+	assert.NotContains(t, payload, "warnings", "a clean clear must not warn")
 
 	_, statErr := os.Stat(mission.ActiveMissionPath(globalRoot, sess))
 	assert.True(t, os.IsNotExist(statErr),
@@ -587,7 +587,8 @@ func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
 
 // TestHandleMission_CloseWarnsOnUnreadableSidecar asserts a genuine read
 // failure reaches the caller. The close succeeded, so it must not become
-// an error result — the warning rides in the payload instead.
+// an error result — the warning rides in the payload's `warnings` array,
+// which is the key the hook formatter renders (DES-020).
 func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
 	const sess = "sess-mcp-warn"
 	home := t.TempDir()
@@ -620,8 +621,54 @@ func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
 	assert.Equal(t, mission.StatusClosed, payload["status"])
-	require.Contains(t, payload, "warning")
-	assert.Contains(t, payload["warning"], "reading active mission")
+	// A top-level array of strings, matching LogPayload.Warnings and the
+	// show path — that is the shape writeMissionWarnings iterates.
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "warnings must be a top-level array; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "reading active mission")
+}
+
+// TestHandleMission_CloseWarnsPerCause asserts one array entry per
+// failure. Both sidecars are independent, so both can fail at once, and
+// each must land on its own bullet rather than being mashed into one
+// string with a newline in it.
+func TestHandleMission_CloseWarnsPerCause(t *testing.T) {
+	const sess = "sess-mcp-two-warns"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	require.NoError(t, os.MkdirAll(mission.ActiveMissionPath(globalRoot, sess), 0o700))
+	require.NoError(t, os.MkdirAll(mission.DelegationBindingPath(globalRoot, sess), 0o700))
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok)
+	require.Len(t, warnings, 2, "one entry per cause")
+	for _, w := range warnings {
+		assert.NotContains(t, w, "\n", "each cause must be its own entry")
+	}
 }
 
 func TestHandleMission_CloseFailedAndEscalated(t *testing.T) {

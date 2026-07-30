@@ -249,40 +249,60 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	// MCP used to skip this, leaving the active-mission sidecar in place
 	// and the commit-msg hook tagging later missionless commits with the
 	// closed mission (ethos-jawp).
-	if w := h.clearClosedMissionBindings(id); w != "" {
-		payload["warning"] = w
+	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
+		payload["warnings"] = warnings
 	}
 	return jsonResult(payload)
 }
 
 // clearClosedMissionBindings clears the calling session's mission
-// sidecars for a mission that just closed, and returns a warning string
-// when something real failed — "" when there was nothing to do.
+// sidecars for a mission that just closed, and returns one warning per
+// genuine failure — nil when there was nothing to do.
 //
 // The close is already on disk and cannot be undone, so a cleanup
 // failure must not turn the call into an error result. It rides back in
-// the successful result's `warning` field instead, where the caller sees
-// it: the mission closed, but a sidecar may still be tagging commits.
+// the successful result's `warnings` array instead, which the formatter
+// renders under a Warnings header: the mission closed, but a sidecar may
+// still be tagging commits.
 //
 // No session in context means no sidecars to clear, which is ordinary
 // and silent.
-func (h *Handler) clearClosedMissionBindings(missionID string) string {
+func (h *Handler) clearClosedMissionBindings(missionID string) []string {
 	if h.sessionStore == nil {
-		return ""
+		return nil
 	}
 	sessionID, _ := resolve.SessionID(h.sessionStore)
 	if sessionID == "" {
-		return ""
+		return nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Sprintf("clearing mission bindings: user home dir: %v", err)
+		return []string{fmt.Sprintf("clearing mission bindings: user home dir: %v", err)}
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	if err := mission.ClearMissionBindings(globalRoot, sessionID, missionID); err != nil {
-		return fmt.Sprintf("clearing mission bindings: %v", err)
+	return clearBindingWarnings(mission.ClearMissionBindings(globalRoot, sessionID, missionID))
+}
+
+// clearBindingWarnings flattens a ClearMissionBindings error into one
+// warning per cause. The two sidecars are independent, so the error may
+// carry two causes joined by errors.Join, which reports them through
+// Unwrap() []error. One entry per cause keeps each on its own bullet in
+// the formatter's Warnings section — a single joined string would render
+// as one bullet with an embedded newline.
+func clearBindingWarnings(err error) []string {
+	if err == nil {
+		return nil
 	}
-	return ""
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return []string{"clearing mission bindings: " + err.Error()}
+	}
+	causes := joined.Unwrap()
+	out := make([]string, 0, len(causes))
+	for _, c := range causes {
+		out = append(out, "clearing mission bindings: "+c.Error())
+	}
+	return out
 }
 
 // handleReflectMission parses the reflection YAML and appends it to

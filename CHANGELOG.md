@@ -82,8 +82,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     sidecar readers, and the MCP close method calls it too. Closing via MCP
     previously skipped the cleanup entirely, so the friction the CLI fix
     removed was still live on the other surface. On the MCP path the close has
-    already happened, so a cleanup failure comes back as a `warning` field on
-    the successful result rather than turning the call into an error.
+    already happened, so a cleanup failure comes back as a `warnings` array on
+    the successful result rather than turning the call into an error — one
+    entry per cause, matching the log and show payloads. `formatMissionClose`
+    renders it under a `Warnings:` header; it previously emitted a bare
+    summary line with no context, so a warning on the close result would have
+    reached no rendered surface at all.
 
   - *Stub agent install no longer shadows the generator (ethos-72wj).*
     `InstallAgentDefinitions` unconditionally copied legacy stubs from
