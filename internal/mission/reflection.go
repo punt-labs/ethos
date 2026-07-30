@@ -28,6 +28,10 @@ type Reflection struct {
 	// rejects a file whose Mission does not match the target mission
 	// (ReflectionStore.Append), so a reflection cut loose from its
 	// mission cannot be silently reunited with the wrong one.
+	//
+	// Required on submission. On read, a blank field in a file written
+	// before the field existed is back-filled from the containing
+	// mission directory (decodeReflectionsFile).
 	Mission string `yaml:"mission" json:"mission"`
 
 	// Round is the round this reflection covers (the round that just

@@ -85,7 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     both the append and read paths (symmetric with Result; the strict
     `KnownFields` decoder is unchanged). The reflection `recommendation` enum
     also accepts `advance` — a non-terminal synonym of `continue` that echoes
-    the `ethos mission advance` verb.
+    the `ethos mission advance` verb. Reflections written before the field
+    existed have no `mission:` key, so the read path back-fills a blank field
+    from the containing mission directory; an explicit mismatch is still a hard
+    error, and the submission path still requires the field.
 
   - *`inputs.bead` deprecation warning scoped to user submission
     (ethos-c0yp).* The warning was a decode side-effect, so it fired for every

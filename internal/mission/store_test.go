@@ -2182,6 +2182,143 @@ func TestStore_LoadReflections_RejectsUnknownField(t *testing.T) {
 	assert.Contains(t, err.Error(), "field bogus not found")
 }
 
+// legacyReflectionsBody is a reflections.yaml as written before the
+// mission field existed — no mission: key on the entry. Twenty-one such
+// files are tracked in this repo under .punt-labs/ethos/missions/.
+const legacyReflectionsBody = `reflections:
+    - round: 1
+      created_at: "2026-07-05T03:17:48Z"
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: round 1 is clean
+`
+
+// TestStore_LoadReflections_BackfillsLegacyMission asserts that a
+// reflections file predating the mission field still loads, with
+// Mission filled in from the containing mission directory. Requiring
+// the field on read would make every already-tracked reflections file
+// unreadable.
+func TestStore_LoadReflections_BackfillsLegacyMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	require.NoError(t, os.WriteFile(
+		mustReflectionsPath(t, s, c.MissionID), []byte(legacyReflectionsBody), 0o600))
+
+	rs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, c.MissionID, rs[0].Mission)
+	assert.Equal(t, 1, rs[0].Round)
+}
+
+// TestStore_LoadReflections_BackfillsBlankMission asserts the back-fill
+// covers an explicitly blank mission field, not just an absent key —
+// both are "no mission recorded".
+func TestStore_LoadReflections_BackfillsBlankMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	body := []byte(`reflections:
+    - mission: "   "
+      round: 1
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: ok
+`)
+	require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), body, 0o600))
+
+	rs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, c.MissionID, rs[0].Mission)
+}
+
+// TestStore_LoadReflections_RejectsMismatchedMission asserts the
+// back-fill does not weaken the cross-check: a reflection that names a
+// different mission is still refused on read.
+func TestStore_LoadReflections_RejectsMismatchedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	body := []byte(`reflections:
+    - mission: m-2026-04-08-999
+      round: 1
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: ok
+`)
+	require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), body, 0o600))
+
+	_, err := s.LoadReflections(c.MissionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `expected "m-2026-04-08-001", got "m-2026-04-08-999"`)
+}
+
+// TestStore_LoadReflections_RejectsMalformedMission asserts that a
+// present-but-garbage mission field is still a Validate error: the
+// back-fill applies only to a blank field.
+func TestStore_LoadReflections_RejectsMalformedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	body := []byte(`reflections:
+    - mission: not-a-mission-id
+      round: 1
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: ok
+`)
+	require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), body, 0o600))
+
+	_, err := s.LoadReflections(c.MissionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid mission")
+}
+
+// TestStore_AdvanceRound_AcceptsLegacyReflection asserts the gate can
+// still read a round-1 reflection written before the mission field
+// existed, so an in-flight mission is not stranded at its current round.
+func TestStore_AdvanceRound_AcceptsLegacyReflection(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.Budget.Rounds = 3
+	require.NoError(t, s.Create(c))
+	require.NoError(t, os.WriteFile(
+		mustReflectionsPath(t, s, c.MissionID), []byte(legacyReflectionsBody), 0o600))
+
+	round, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	assert.Equal(t, 2, round)
+}
+
+// TestStore_AppendReflection_StillRequiresMission asserts the write path
+// is unchanged by the read-path back-fill: a submitted reflection with
+// no mission field is refused.
+func TestStore_AppendReflection_StillRequiresMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := reflectionFor(c.MissionID, 1, RecommendationContinue)
+	r.Mission = ""
+	err := s.AppendReflection(c.MissionID, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid mission")
+}
+
 // TestStore_AdvanceRound_ConcurrentSerialization asserts that two
 // concurrent advances on the same mission cannot both succeed: the
 // per-mission flock serializes the bumps so the contract's
