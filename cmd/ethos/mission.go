@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -1805,23 +1806,53 @@ func runMissionRelease() error {
 // session is in context — and clears each sidecar only when it names
 // missionID, so a claim or dispatch for a different, still-open mission
 // survives.
+//
+// Every step is advisory, so none of them can fail the close. But a step
+// that fails for a real reason (permission denied, a corrupt sidecar, a
+// session store that will not read) leaves the sidecar in place and the
+// trailer gate open on a closed mission — the exact bug this function
+// exists to prevent. So each real failure prints one stderr line, while
+// the ordinary "nothing to clear" states — no session, no sidecar, a
+// sidecar naming another mission — stay silent.
 func clearClosedSessionBindings(missionID string) {
 	sessionID, _, err := resolveSessionContext()
-	if err != nil || sessionID == "" {
+	if err != nil {
+		// errNoSession is the ordinary case: `mission close` run outside
+		// a session has no sidecars to clear. Anything else is a real
+		// resolution failure.
+		if !errors.Is(err, errNoSession) {
+			fmt.Fprintf(os.Stderr, "ethos: mission close: resolving session: %v\n", err)
+		}
+		return
+	}
+	if sessionID == "" {
 		return
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: user home dir: %v\n", err)
 		return
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
-	if active, aErr := mission.ReadActiveMission(globalRoot, sessionID); aErr == nil && active == missionID {
-		if cErr := mission.ClearActiveMission(globalRoot, sessionID); cErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission close: clearing active mission: %v\n", cErr)
+
+	// ReadActiveMission and ReadDelegationBinding both report a missing
+	// sidecar as a zero value with a nil error, so a non-nil error here
+	// is always a real read failure — never "no sidecar".
+	active, err := mission.ReadActiveMission(globalRoot, sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: reading active mission: %v\n", err)
+	} else if active == missionID {
+		if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission close: clearing active mission: %v\n", err)
 		}
 	}
+
 	b, err := mission.ReadDelegationBinding(globalRoot, sessionID)
-	if err != nil || b.MissionID != missionID {
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: reading delegation binding: %v\n", err)
+		return
+	}
+	if b.MissionID != missionID {
 		return
 	}
 	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {

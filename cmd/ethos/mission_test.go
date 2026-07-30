@@ -3929,6 +3929,75 @@ func TestMissionClose_LeavesOtherMissionActive(t *testing.T) {
 	assert.Equal(t, holding+"\n", string(data))
 }
 
+// sidecarDir replaces the named sidecar with a directory, which makes
+// os.ReadFile return a real error (EISDIR) rather than the ENOENT the
+// helpers report as "no sidecar". It is the portable way to exercise the
+// genuine-read-failure branch.
+func sidecarDir(t *testing.T, home, sessionID, name string) {
+	t.Helper()
+	path := filepath.Join(home, ".punt-labs", "ethos", "sessions", sessionID, name)
+	require.NoError(t, os.MkdirAll(path, 0o700))
+}
+
+// TestClearClosedSessionBindings_ReportsReadFailures asserts the gating
+// reads are not silent. A missing sidecar is a nil error, so any error
+// from these reads is a real failure that leaves the sidecar in place —
+// and with it the commit-msg trailer gate open on a closed mission
+// (ethos-jawp). Swallowing it hides the bug the function prevents.
+func TestClearClosedSessionBindings_ReportsReadFailures(t *testing.T) {
+	const sess = "sess-read-fail"
+
+	t.Run("active-mission read failure is reported", func(t *testing.T) {
+		home := missionTestEnv(t)
+		t.Setenv("ETHOS_SESSION", sess)
+		seedRosterForSession(t, sess)
+		sidecarDir(t, home, sess, "active-mission")
+
+		out := captureStderrFn(t, func() {
+			clearClosedSessionBindings("m-2026-07-30-001")
+		})
+		assert.Contains(t, out, "reading active mission")
+	})
+
+	t.Run("delegation-binding read failure is reported", func(t *testing.T) {
+		home := missionTestEnv(t)
+		t.Setenv("ETHOS_SESSION", sess)
+		seedRosterForSession(t, sess)
+		sidecarDir(t, home, sess, "delegation-binding")
+
+		out := captureStderrFn(t, func() {
+			clearClosedSessionBindings("m-2026-07-30-001")
+		})
+		assert.Contains(t, out, "reading delegation binding")
+	})
+
+	t.Run("no sidecars at all is silent", func(t *testing.T) {
+		missionTestEnv(t)
+		t.Setenv("ETHOS_SESSION", sess)
+		seedRosterForSession(t, sess)
+
+		out := captureStderrFn(t, func() {
+			clearClosedSessionBindings("m-2026-07-30-001")
+		})
+		assert.Empty(t, out, "nothing to clear is the normal path, not a warning")
+	})
+}
+
+// TestClearClosedSessionBindings_ReportsStaleSession asserts that a
+// session that will not resolve for a real reason is reported. A stale
+// ETHOS_SESSION naming no roster is not errNoSession — it means the
+// sidecars cannot be located at all, so nothing gets cleared and the
+// operator needs to hear about it.
+func TestClearClosedSessionBindings_ReportsStaleSession(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-never-created")
+
+	out := captureStderrFn(t, func() {
+		clearClosedSessionBindings("m-2026-07-30-001")
+	})
+	assert.Contains(t, out, "resolving session")
+}
+
 func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-never-claimed")

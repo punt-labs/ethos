@@ -73,7 +73,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     open mission survives. Session discovery in the hook reads one path per
     line instead of word-splitting `find` output, so a `$HOME` containing a
     space no longer loses the sidecar, and both sidecar lines are stripped of
-    whitespace so a CRLF or hand-edited file still matches.
+    whitespace so a CRLF or hand-edited file still matches. The clear is
+    advisory and never fails a close, but it now prints one stderr line per
+    genuine failure — an unresolvable session, an unreadable sidecar — because
+    each of those leaves the trailer gate open on a closed mission. The
+    ordinary "nothing to clear" states stay silent.
 
   - *Stub agent install no longer shadows the generator (ethos-72wj).*
     `InstallAgentDefinitions` unconditionally copied legacy stubs from
