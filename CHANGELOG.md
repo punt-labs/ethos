@@ -70,7 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     every terminal status — otherwise a close without an explicit `mission
     release` left the trailer gate open on the closed mission. Each sidecar is
     cleared only when it names the mission that closed, so a claim on another
-    open mission survives.
+    open mission survives. Session discovery in the hook reads one path per
+    line instead of word-splitting `find` output, so a `$HOME` containing a
+    space no longer loses the sidecar, and both sidecar lines are stripped of
+    whitespace so a CRLF or hand-edited file still matches.
 
   - *Stub agent install no longer shadows the generator (ethos-72wj).*
     `InstallAgentDefinitions` unconditionally copied legacy stubs from

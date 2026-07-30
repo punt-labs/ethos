@@ -28,6 +28,7 @@ func TestCommitMsgHook_TrailerGate(t *testing.T) {
 
 	tests := []struct {
 		name           string
+		homeSubdir     string // HOME is this subdir of the temp dir; empty => temp dir itself
 		activeMission  string // active-mission sidecar body; empty => no sidecar
 		binding        string // delegation-binding body; empty => no file
 		wantMission    bool
@@ -61,11 +62,43 @@ func TestCommitMsgHook_TrailerGate(t *testing.T) {
 			wantMission:    true,
 			wantDelegation: false,
 		},
+		{
+			// Session discovery once word-split find's output, so any
+			// space in HOME lost the sidecar and dropped the trailer.
+			name:           "a HOME containing spaces still discovers the session",
+			homeSubdir:     "My Home Dir",
+			activeMission:  missionID + "\n",
+			binding:        delegID + "\n" + missionID + "\n" + "sess1\n",
+			wantMission:    true,
+			wantDelegation: true,
+		},
+		{
+			// A hand-edited or CRLF sidecar must still match: the
+			// mission comparison strips whitespace on both sides.
+			name:           "CRLF and trailing space in the sidecars still match",
+			activeMission:  missionID + " \r\n",
+			binding:        delegID + "\r\n" + missionID + "\r\n" + "sess1\r\n",
+			wantMission:    true,
+			wantDelegation: true,
+		},
+		{
+			// An empty active-mission file leaves MISSION_ID blank; a
+			// blank must not match a binding's blank line 2 and tag a
+			// lone Delegation trailer.
+			name:           "an empty active-mission file tags nothing",
+			activeMission:  "\n",
+			binding:        delegID + "\n\nsess1\n",
+			wantMission:    false,
+			wantDelegation: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			home := t.TempDir()
+			if tt.homeSubdir != "" {
+				home = filepath.Join(home, tt.homeSubdir)
+			}
 			sessDir := filepath.Join(home, ".punt-labs", "ethos", "sessions", "2026-07-29-sess1")
 			if err := os.MkdirAll(sessDir, 0o700); err != nil {
 				t.Fatal(err)
