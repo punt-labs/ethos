@@ -1433,6 +1433,9 @@ type reflectionsFile struct {
 // Decodes with KnownFields(true) so a hand-edited reflections file
 // cannot smuggle extra keys past the trust boundary, symmetric with
 // the contract decode path.
+//
+// A reflection with no mission: field is legacy data; decode fills it
+// from missionID. See decodeReflectionsFile.
 func (s *Store) LoadReflections(missionID string) ([]Reflection, error) {
 	if strings.TrimSpace(missionID) == "" {
 		return nil, fmt.Errorf("missionID is required")
@@ -1461,6 +1464,9 @@ func (s *Store) LoadReflections(missionID string) ([]Reflection, error) {
 // decodeReflectionsFile parses a reflections.yaml body, runs Validate
 // on every entry, and asserts the round-monotone invariant. Returns
 // the decoded slice (nil if the file is empty/blank).
+//
+// A blank mission field is back-filled from missionID; a non-blank one
+// that disagrees with missionID is refused.
 func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, nil
@@ -1480,8 +1486,30 @@ func decodeReflectionsFile(data []byte, missionID string) ([]Reflection, error) 
 	}
 	for i := range wrapper.Reflections {
 		r := &wrapper.Reflections[i]
+		// Legacy back-fill. Reflections written before the mission field
+		// existed carry no mission: key, and every such file already sits
+		// in missions/<id>/, so the containing directory names the mission
+		// unambiguously. Fill a blank field from missionID before Validate
+		// rather than refusing to read data that predates the field —
+		// otherwise AdvanceRound cannot load prior rounds for any in-flight
+		// mission. The write path is untouched: Validate still requires the
+		// field of every newly submitted reflection.
+		if strings.TrimSpace(r.Mission) == "" {
+			r.Mission = missionID
+		}
 		if err := r.Validate(); err != nil {
 			return nil, fmt.Errorf("reflections[%d] for %q: %w", i, missionID, err)
+		}
+		// On-disk trust symmetry with AppendReflection and the results
+		// read path: the write path refuses a reflection whose Mission
+		// does not match the target, so the read path must too — a
+		// hand-edited file cannot claim a different mission. Only a
+		// non-blank mismatch reaches here; a blank field was back-filled.
+		if r.Mission != missionID {
+			return nil, fmt.Errorf(
+				"reflections[%d].mission: expected %q, got %q",
+				i, missionID, r.Mission,
+			)
 		}
 		if i > 0 && wrapper.Reflections[i-1].Round >= r.Round {
 			return nil, fmt.Errorf(
@@ -1537,6 +1565,15 @@ func (s *Store) AppendReflection(missionID string, r *Reflection) error {
 		// here gives a clearer diagnostic than "advance refused" later.
 		if c.Status != StatusOpen {
 			return fmt.Errorf("mission %q is in terminal state %q; reflections are accepted only on open missions", missionID, c.Status)
+		}
+		// Mission ID cross-check, symmetric with AppendResult: the
+		// reflection's self-declared Mission must match the caller's
+		// target so a file renamed between missions cannot slip past.
+		if staged.Mission != missionID {
+			return fmt.Errorf(
+				"reflection mission %q does not match target mission %q",
+				staged.Mission, missionID,
+			)
 		}
 		if staged.Round != c.CurrentRound {
 			return fmt.Errorf(

@@ -65,7 +65,7 @@ func TestStorageLayout_FullLifecycleAllFilesInRepoTree(t *testing.T) {
 
 	// --- 2. Reflect produces reflections.yaml ---
 
-	r := reflectionFor(1, RecommendationContinue)
+	r := reflectionFor(id, 1, RecommendationContinue)
 	require.NoError(t, s.AppendReflection(id, r))
 
 	assertFileExists(t, filepath.Join(perMissionDir, "reflections.yaml"),

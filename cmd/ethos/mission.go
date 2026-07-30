@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -884,6 +885,11 @@ func runMissionCreate() error {
 	if err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
+	// DES-049: warn only about the contract the user submitted, not the
+	// old missions the store scans for write-set conflicts (ethos-c0yp).
+	if bead := mission.BeadAlias(data); bead != "" {
+		mission.WarnBeadDeprecated(os.Stderr, bead)
+	}
 	c := *parsed
 
 	// Apply server-controlled fields (mission_id, status, timestamps,
@@ -1253,6 +1259,12 @@ func runMissionClose(idOrPrefix, status string) error {
 			fmt.Fprintf(os.Stderr, "ethos: mission close: sealing mission log: %v\n", sErr)
 		}
 	}
+	// A terminal transition ends this session's work on the mission, so
+	// clear both of its sidecars — otherwise the commit-msg hook keeps
+	// tagging later missionless commits (ethos-jawp). Best-effort: a
+	// closed mission stays closed even if the session cannot be resolved
+	// or a sidecar cannot be removed.
+	clearClosedSessionBindings(id)
 	if jsonOutput {
 		printJSON(map[string]any{
 			"mission_id": id,
@@ -1768,6 +1780,12 @@ func runMissionRelease() error {
 	if err := mission.ClearActiveMission(globalRoot, sessionID); err != nil {
 		return fmt.Errorf("mission release: %w", err)
 	}
+	// Clear the delegation-binding sidecar too: it is written per
+	// dispatch but was never cleaned, so a release that left it behind
+	// let the commit-msg hook tag later missionless commits (ethos-jawp).
+	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
+		return fmt.Errorf("mission release: %w", err)
+	}
 
 	if jsonOutput {
 		printJSON(map[string]string{"session": sessionID})
@@ -1775,6 +1793,43 @@ func runMissionRelease() error {
 	}
 	fmt.Printf("released session %s\n", sessionID)
 	return nil
+}
+
+// clearClosedSessionBindings resolves the caller's session and hands it
+// to mission.ClearMissionBindings, which owns the sidecar logic and is
+// shared with the MCP close path. This function is the CLI's half:
+// session resolution and stderr reporting.
+//
+// Every step is advisory, so none of them can fail the close. But a step
+// that fails for a real reason (permission denied, a corrupt sidecar, a
+// session store that will not read) leaves the sidecar in place and the
+// trailer gate open on a closed mission — the exact bug this exists to
+// prevent. So each real failure prints one stderr line, while the
+// ordinary "nothing to clear" states — no session, no sidecar, a sidecar
+// naming another mission — stay silent.
+func clearClosedSessionBindings(missionID string) {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil {
+		// errNoSession is the ordinary case: `mission close` run outside
+		// a session has no sidecars to clear. Anything else is a real
+		// resolution failure.
+		if !errors.Is(err, errNoSession) {
+			fmt.Fprintf(os.Stderr, "ethos: mission close: resolving session: %v\n", err)
+		}
+		return
+	}
+	if sessionID == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: user home dir: %v\n", err)
+		return
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := mission.ClearMissionBindings(globalRoot, sessionID, missionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission close: %v\n", err)
+	}
 }
 
 // resolveLeader returns the agent handle from the repo's ethos config.
@@ -1816,6 +1871,11 @@ func runMissionLint(file string) error {
 	c, err := mission.DecodeContractStrict(data, file)
 	if err != nil {
 		return fmt.Errorf("mission lint: %w", err)
+	}
+	// DES-049: the linted file is user-submitted, so a legacy inputs.bead
+	// still earns the deprecation warning (ethos-c0yp).
+	if bead := mission.BeadAlias(data); bead != "" {
+		mission.WarnBeadDeprecated(os.Stderr, bead)
 	}
 	ws := mission.Lint(c)
 	if jsonOutput {

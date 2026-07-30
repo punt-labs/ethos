@@ -1385,7 +1385,14 @@ func formatMissionList(w io.Writer, result string) error {
 }
 
 // formatMissionClose renders the close method's confirmation as a
-// single-line summary.
+// single-line summary, plus a Warnings section when the payload carries
+// one.
+//
+// Close warns only when the post-close sidecar cleanup failed
+// (ethos-jawp): the mission did close, so the summary line is unchanged,
+// but the operator must learn that a sidecar may still be tagging
+// commits with the closed mission. Without this the warning would reach
+// no rendered surface at all.
 func formatMissionClose(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -1396,7 +1403,16 @@ func formatMissionClose(w io.Writer, result string) error {
 	if missionID == "" {
 		return emitSimple(w, truncate(result, 200))
 	}
-	return emitSimple(w, fmt.Sprintf("Closed %s as %s", missionID, status))
+	summary := fmt.Sprintf("Closed %s as %s", missionID, status)
+	warnings, _ := c["warnings"].([]any)
+	if len(warnings) == 0 {
+		return emitSimple(w, summary)
+	}
+	var ctx strings.Builder
+	writeMissionWarnings(&ctx, warnings)
+	// writeMissionWarnings separates its section from whatever precedes
+	// it; on a close nothing does, so drop the leading blank lines.
+	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
 }
 
 // --- ADR tool formatters ---

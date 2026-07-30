@@ -184,3 +184,132 @@ func TestClearActiveMission_EmptyArgsAreNoOp(t *testing.T) {
 	require.NoError(t, ClearActiveMission("", "sess-x"))
 	require.NoError(t, ClearActiveMission("/tmp/ethos", ""))
 }
+
+func TestClearDelegationBinding_RemovesFile(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-deleg"
+	require.NoError(t, WriteDelegationBinding(root, sess, DelegationBinding{
+		DelegationID:  "d-1",
+		MissionID:     "m-2026-07-29-001",
+		ParentSession: sess,
+	}))
+
+	require.NoError(t, ClearDelegationBinding(root, sess))
+
+	b, err := ReadDelegationBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, DelegationBinding{}, b)
+}
+
+func TestClearDelegationBinding_MissingIsNotAnError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, ClearDelegationBinding(root, "sess-never-existed"))
+}
+
+func TestClearDelegationBinding_EmptyArgsAreNoOp(t *testing.T) {
+	require.NoError(t, ClearDelegationBinding("", "sess-x"))
+	require.NoError(t, ClearDelegationBinding("/tmp/ethos", ""))
+}
+
+// ClearMissionBindings is the one clear both close surfaces call — the
+// CLI's `mission close` and the MCP close method. The tests below pin
+// what it clears, what it leaves alone, and what it reports.
+
+const clearTestMission = "m-2026-07-29-001"
+
+func TestClearMissionBindings_ClearsBothSidecars(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-both"
+	require.NoError(t, WriteActiveMission(root, sess, clearTestMission))
+	require.NoError(t, WriteDelegationBinding(root, sess, DelegationBinding{
+		DelegationID:  "d-1",
+		MissionID:     clearTestMission,
+		ParentSession: sess,
+	}))
+
+	require.NoError(t, ClearMissionBindings(root, sess, clearTestMission))
+
+	active, err := ReadActiveMission(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "", active)
+	b, err := ReadDelegationBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, DelegationBinding{}, b)
+}
+
+// TestClearMissionBindings_ScopedToMission is the guard that keeps a
+// closing mission from releasing another mission's claim.
+func TestClearMissionBindings_ScopedToMission(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-scoped"
+	const other = "m-2026-07-29-002"
+	require.NoError(t, WriteActiveMission(root, sess, other))
+	require.NoError(t, WriteDelegationBinding(root, sess, DelegationBinding{
+		DelegationID:  "d-1",
+		MissionID:     other,
+		ParentSession: sess,
+	}))
+
+	require.NoError(t, ClearMissionBindings(root, sess, clearTestMission))
+
+	active, err := ReadActiveMission(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, other, active, "another mission's claim must survive")
+	b, err := ReadDelegationBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, other, b.MissionID, "another mission's binding must survive")
+}
+
+func TestClearMissionBindings_MissingSidecarsAreSilent(t *testing.T) {
+	root := t.TempDir()
+	assert.NoError(t, ClearMissionBindings(root, "sess-empty", clearTestMission),
+		"nothing to clear is the ordinary state, not a failure")
+}
+
+func TestClearMissionBindings_EmptyArgsAreNoOp(t *testing.T) {
+	root := t.TempDir()
+	assert.NoError(t, ClearMissionBindings("", "sess-x", clearTestMission))
+	assert.NoError(t, ClearMissionBindings(root, "", clearTestMission))
+	assert.NoError(t, ClearMissionBindings(root, "sess-x", ""))
+}
+
+// TestClearMissionBindings_ReportsReadFailures asserts that a real read
+// failure is reported rather than swallowed, and that a failure on one
+// sidecar does not stop work on the other — they are independent, and a
+// sidecar left in place keeps the commit-msg trailer gate open on a
+// closed mission (ethos-jawp).
+func TestClearMissionBindings_ReportsReadFailures(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-unreadable"
+
+	// A directory where each sidecar belongs makes os.ReadFile fail with
+	// EISDIR — a real error, portably distinct from "no sidecar".
+	require.NoError(t, os.MkdirAll(ActiveMissionPath(root, sess), 0o700))
+	require.NoError(t, os.MkdirAll(DelegationBindingPath(root, sess), 0o700))
+
+	err := ClearMissionBindings(root, sess, clearTestMission)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reading active mission")
+	assert.Contains(t, err.Error(), "reading delegation binding",
+		"a failure on one sidecar must not skip the other")
+}
+
+// TestClearMissionBindings_ReportsClearFailure asserts a failed removal
+// is reported too. A read-only parent directory blocks the unlink while
+// leaving the file itself readable.
+func TestClearMissionBindings_ReportsClearFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	root := t.TempDir()
+	sess := "sess-locked"
+	require.NoError(t, WriteActiveMission(root, sess, clearTestMission))
+
+	dir := filepath.Dir(ActiveMissionPath(root, sess))
+	require.NoError(t, os.Chmod(dir, 0o500))
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	err := ClearMissionBindings(root, sess, clearTestMission)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clearing active mission")
+}

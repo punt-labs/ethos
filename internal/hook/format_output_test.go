@@ -884,6 +884,54 @@ func TestFormatOutput_Mission_Close_Escalated(t *testing.T) {
 	assert.Equal(t, "Closed m-2026-04-07-001 as escalated", r.HookSpecificOutput.UpdatedMCPToolOutput)
 }
 
+// TestFormatOutput_Mission_Close_Warnings asserts the close formatter
+// renders a `warnings` array under a Warnings header. Close warns only
+// when the post-close sidecar cleanup failed (ethos-jawp); the mission
+// still closed, so the summary is unchanged, but the operator has to see
+// that a sidecar may still be tagging commits. Before this the formatter
+// used emitSimple and dropped all context, so the warning reached no
+// rendered surface.
+func TestFormatOutput_Mission_Close_Warnings(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","status":"closed",` +
+		`"warnings":["clearing mission bindings: reading active mission: is a directory"]}`
+	payload := makeToolPayload("mission", "close", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Closed m-2026-04-07-001 as closed", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t,
+		"Warnings:\n  - clearing mission bindings: reading active mission: is a directory",
+		r.HookSpecificOutput.AdditionalContext)
+}
+
+// TestFormatOutput_Mission_Close_MultipleWarnings asserts each entry
+// lands on its own bullet.
+func TestFormatOutput_Mission_Close_MultipleWarnings(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","status":"failed",` +
+		`"warnings":["reading active mission: is a directory",` +
+		`"reading delegation binding: is a directory"]}`
+	payload := makeToolPayload("mission", "close", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t,
+		"Warnings:\n  - reading active mission: is a directory"+
+			"\n  - reading delegation binding: is a directory",
+		r.HookSpecificOutput.AdditionalContext)
+}
+
+// TestFormatOutput_Mission_Close_EmptyWarnings asserts a clean close
+// stays a bare one-liner: an absent or empty array adds no section.
+func TestFormatOutput_Mission_Close_EmptyWarnings(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","status":"closed","warnings":[]}`
+	payload := makeToolPayload("mission", "close", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Closed m-2026-04-07-001 as closed", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Empty(t, r.HookSpecificOutput.AdditionalContext)
+}
+
 // --- 3.4: reflect, advance, reflections formatter tests ---
 
 func TestFormatOutput_Mission_Reflect(t *testing.T) {

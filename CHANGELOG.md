@@ -55,6 +55,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Four mission/hook friction defects (ethos-jawp, ethos-72wj, ethos-qvbh,
+  ethos-c0yp).**
+
+  - *Commit-msg trailers tagged unrelated commits (ethos-jawp).* The
+    `commit-msg` hook keyed its `Mission:`/`Delegation:` trailers off the
+    delegation-binding sidecar, which was never cleared, so a stale binding
+    from an earlier session tagged unrelated T4 commits. The fallback now
+    gates on the active-mission sidecar (`mission claim` writes it; `mission
+    release` and terminal transitions clear it), and a new
+    `ClearDelegationBinding` runs on release and close so bindings stop
+    accumulating. The delegation is tagged only when its binding names the
+    active mission. `mission close` clears the active-mission sidecar too, on
+    every terminal status — otherwise a close without an explicit `mission
+    release` left the trailer gate open on the closed mission. Each sidecar is
+    cleared only when it names the mission that closed, so a claim on another
+    open mission survives. Session discovery in the hook reads one path per
+    line instead of word-splitting `find` output, so a `$HOME` containing a
+    space no longer loses the sidecar, and both sidecar lines are stripped of
+    whitespace so a CRLF or hand-edited file still matches. The clear is
+    advisory and never fails a close, but it now prints one stderr line per
+    genuine failure — an unresolvable session, an unreadable sidecar — because
+    each of those leaves the trailer gate open on a closed mission. The
+    ordinary "nothing to clear" states stay silent. Both close surfaces do
+    this: the sidecar logic lives in `mission.ClearMissionBindings` next to the
+    sidecar readers, and the MCP close method calls it too. Closing via MCP
+    previously skipped the cleanup entirely, so the friction the CLI fix
+    removed was still live on the other surface. On the MCP path the close has
+    already happened, so a cleanup failure comes back as a `warnings` array on
+    the successful result rather than turning the call into an error — one
+    entry per cause, matching the log and show payloads. `formatMissionClose`
+    renders it under a `Warnings:` header; it previously emitted a bare
+    summary line with no context, so a warning on the close result would have
+    reached no rendered surface at all.
+
+  - *Stub agent install no longer shadows the generator (ethos-72wj).*
+    `InstallAgentDefinitions` unconditionally copied legacy stubs from
+    `.punt-labs/ethos/agents/` over `.claude/agents/` — the copy-from-agents
+    path DES-026 rejected — double-writing and leaving a sticky stub for any
+    handle the generator owns. It now consults `GeneratedAgentHandles`
+    (agent-kind team members minus the main agent) and skips those stubs;
+    non-generated stubs still copy. The install fails closed when that
+    ownership lookup errors: a nil owned-set means "copy every stub", so
+    falling through would have restored the clobber on exactly the path where
+    ownership is unknown. It installs nothing and says so instead — the
+    generator writes the authoritative files, and no stub beats a stub
+    shadowing a generated one. A nil set from a *successful* lookup is
+    unchanged and still copies everything: it means the generator owns nothing.
+    The repo's committed `.claude/agents/` data churn and the
+    commit-vs-gitignore version-skew question are tracked separately, pending
+    an operator decision.
+
+  - *Reflection `mission:` field and `advance` recommendation (ethos-qvbh).*
+    Result required a validated `mission:` field but Reflection rejected it —
+    an asymmetry between the two sibling artifacts. Reflection now requires a
+    pattern-validated `mission:`, cross-checked against the target mission on
+    both the append and read paths (symmetric with Result; the strict
+    `KnownFields` decoder is unchanged). The reflection `recommendation` enum
+    also accepts `advance` — a non-terminal synonym of `continue` that echoes
+    the `ethos mission advance` verb. Reflections written before the field
+    existed have no `mission:` key, so the read path back-fills a blank field
+    from the containing mission directory; an explicit mismatch is still a hard
+    error, and the submission path still requires the field.
+
+  - *`inputs.bead` deprecation warning scoped to user submission
+    (ethos-c0yp).* The warning was a decode side-effect, so it fired for every
+    mission the write-set conflict scan loaded — including an unrelated legacy
+    closed mission — printing on every `create`/`dispatch`. It now fires only
+    where the user submits a contract (`mission create`, MCP create, `mission
+    lint`); `dispatch` and pipeline instantiate build `Inputs{Ticket}` and
+    never warn. The `bead`→`ticket` aliasing, both-set rejection, and
+    marshal-emits-`ticket` behavior are unchanged.
+
 - **Delegation records are path-redacted at write time (ethos-ersr,
   ethos-n4np).** The Tier B skeleton writer put `prompt.md` and `record.yaml`
   on disk with `$HOME` and the repo root intact. The mission tree is

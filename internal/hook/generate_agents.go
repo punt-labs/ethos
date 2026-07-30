@@ -204,6 +204,46 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 	return nil
 }
 
+// GeneratedAgentHandles returns the set of identity handles the
+// SessionStart generator (GenerateAgentFilesTo) is responsible for:
+// every agent-kind member of the configured team except the main
+// session agent. InstallAgentDefinitions consults this set so it does
+// not copy a legacy stub over a generated file.
+//
+// Ownership is by team membership and identity kind, not by whether
+// generation succeeds. A member the generator skips for want of tools
+// or personality is still the generator's handle; falling back to its
+// stub would resurrect the copy-from-agents path DES-026 rejected.
+//
+// A nil team store or an unconfigured team yields an empty set — the
+// installer then copies every stub, its behavior before this change.
+func GeneratedAgentHandles(configRoot string, identities identity.IdentityStore, teams *team.LayeredStore) (map[string]bool, error) {
+	if teams == nil {
+		return nil, nil
+	}
+	cfg, err := resolve.LoadRepoConfig(configRoot)
+	if err != nil {
+		return nil, fmt.Errorf("generated agent handles: %w", err)
+	}
+	if cfg == nil || cfg.Team == "" {
+		return nil, nil
+	}
+	t, err := teams.Load(cfg.Team)
+	if err != nil {
+		return nil, fmt.Errorf("loading team %q: %w", cfg.Team, err)
+	}
+	owned := make(map[string]bool)
+	for _, m := range t.Members {
+		if m.Identity == cfg.Agent {
+			continue
+		}
+		if isAgentKind(identities, m.Identity) {
+			owned[m.Identity] = true
+		}
+	}
+	return owned, nil
+}
+
 // isAgentKind reports whether a handle names an agent, reading only the
 // identity record. Reference mode skips attribute resolution, so it
 // answers for an identity whose full load failed on missing references.
