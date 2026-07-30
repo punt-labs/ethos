@@ -1259,11 +1259,11 @@ func runMissionClose(idOrPrefix, status string) error {
 		}
 	}
 	// A terminal transition ends this session's work on the mission, so
-	// clear its delegation-binding sidecar — otherwise a stale binding
-	// would let the commit-msg hook tag later missionless commits
-	// (ethos-jawp). Best-effort: a closed mission stays closed even if
-	// the session cannot be resolved or the sidecar cannot be removed.
-	clearClosedDelegationBinding(id)
+	// clear both of its sidecars — otherwise the commit-msg hook keeps
+	// tagging later missionless commits (ethos-jawp). Best-effort: a
+	// closed mission stays closed even if the session cannot be resolved
+	// or a sidecar cannot be removed.
+	clearClosedSessionBindings(id)
 	if jsonOutput {
 		printJSON(map[string]any{
 			"mission_id": id,
@@ -1794,12 +1794,18 @@ func runMissionRelease() error {
 	return nil
 }
 
-// clearClosedDelegationBinding removes the caller's delegation-binding
-// sidecar when it names the mission that just closed. It resolves the
-// session best-effort — a close must not fail because no session is in
-// context — and only clears a binding that matches missionID so a
-// binding for a different, still-open dispatch survives.
-func clearClosedDelegationBinding(missionID string) {
+// clearClosedSessionBindings removes the caller's active-mission and
+// delegation-binding sidecars when they name the mission that just left
+// the open set. Both must go: the commit-msg trailer fallback gates on
+// the active-mission sidecar, so a close without an explicit `mission
+// release` would keep tagging later missionless commits with the closed
+// mission (ethos-jawp).
+//
+// It resolves the session best-effort — a close must not fail because no
+// session is in context — and clears each sidecar only when it names
+// missionID, so a claim or dispatch for a different, still-open mission
+// survives.
+func clearClosedSessionBindings(missionID string) {
 	sessionID, _, err := resolveSessionContext()
 	if err != nil || sessionID == "" {
 		return
@@ -1809,6 +1815,11 @@ func clearClosedDelegationBinding(missionID string) {
 		return
 	}
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if active, aErr := mission.ReadActiveMission(globalRoot, sessionID); aErr == nil && active == missionID {
+		if cErr := mission.ClearActiveMission(globalRoot, sessionID); cErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission close: clearing active mission: %v\n", cErr)
+		}
+	}
 	b, err := mission.ReadDelegationBinding(globalRoot, sessionID)
 	if err != nil || b.MissionID != missionID {
 		return

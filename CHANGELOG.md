@@ -66,7 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     release` and terminal transitions clear it), and a new
     `ClearDelegationBinding` runs on release and close so bindings stop
     accumulating. The delegation is tagged only when its binding names the
-    active mission.
+    active mission. `mission close` clears the active-mission sidecar too, on
+    every terminal status — otherwise a close without an explicit `mission
+    release` left the trailer gate open on the closed mission. Each sidecar is
+    cleared only when it names the mission that closed, so a claim on another
+    open mission survives.
 
   - *Stub agent install no longer shadows the generator (ethos-72wj).*
     `InstallAgentDefinitions` unconditionally copied legacy stubs from

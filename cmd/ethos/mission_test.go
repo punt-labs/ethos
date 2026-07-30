@@ -3854,6 +3854,81 @@ func TestMissionRelease_RemovesSidecar(t *testing.T) {
 		"release must remove the sidecar; got %v", statErr)
 }
 
+// TestMissionClose_ClearsActiveMission asserts that a terminal
+// transition clears the active-mission sidecar without an explicit
+// `mission release`. The commit-msg trailer fallback gates on that
+// sidecar, so a close that left it behind kept stamping later
+// missionless commits with the closed mission (ethos-jawp). The
+// no-sidecar case in hooks.TestCommitMsgHook_TrailerGate is the other
+// half: no sidecar means no trailer.
+func TestMissionClose_ClearsActiveMission(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	t.Setenv("ETHOS_SESSION", "sess-close-clears")
+	seedRosterForSession(t, "sess-close-clears")
+	require.NoError(t, runMissionClaim(id))
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-close-clears", "active-mission")
+	require.FileExists(t, sidecar)
+
+	submitCLIResult(t, id, 1)
+	captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusClosed) })
+
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr),
+		"close must clear the active-mission sidecar; got %v", statErr)
+}
+
+// TestMissionCloseFailed_ClearsActiveMission asserts the clear runs on
+// every terminal status, not just a passing close.
+func TestMissionCloseFailed_ClearsActiveMission(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	t.Setenv("ETHOS_SESSION", "sess-close-failed")
+	seedRosterForSession(t, "sess-close-failed")
+	require.NoError(t, runMissionClaim(id))
+
+	submitCLIResult(t, id, 1)
+	captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusFailed) })
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-close-failed", "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr),
+		"a failed close must clear the active-mission sidecar; got %v", statErr)
+}
+
+// TestMissionClose_LeavesOtherMissionActive asserts the clear is scoped
+// to the mission that closed: a session holding a claim on a different,
+// still-open mission keeps it.
+func TestMissionClose_LeavesOtherMissionActive(t *testing.T) {
+	home := missionTestEnv(t)
+
+	missionCreateFile = writeContractFileWithWriteSet(t, "internal/a/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+	missionCreateFile = writeContractFileWithWriteSet(t, "internal/b/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ids, err := missionStore().List()
+	require.NoError(t, err)
+	require.Len(t, ids, 2)
+	closing, holding := ids[0], ids[1]
+
+	t.Setenv("ETHOS_SESSION", "sess-close-other")
+	seedRosterForSession(t, "sess-close-other")
+	require.NoError(t, runMissionClaim(holding))
+
+	submitCLIResult(t, closing, 1)
+	captureStdoutE(t, func() error { return runMissionClose(closing, mission.StatusClosed) })
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-close-other", "active-mission")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err, "closing one mission must not clear a claim on another")
+	assert.Equal(t, holding+"\n", string(data))
+}
+
 func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 	missionTestEnv(t)
 	t.Setenv("ETHOS_SESSION", "sess-never-claimed")
