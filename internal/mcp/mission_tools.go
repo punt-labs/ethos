@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/internal/resolve"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )
@@ -105,6 +108,12 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	parsed, err := mission.DecodeContractStrict([]byte(body), "mcp create request")
 	if err != nil {
 		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	// DES-049: warn about the deprecated inputs.bead only for the
+	// contract the user submitted here, not for the old missions the
+	// store scans during conflict checking (ethos-c0yp).
+	if bead := mission.BeadAlias([]byte(body)); bead != "" {
+		mission.WarnBeadDeprecated(os.Stderr, bead)
 	}
 	c := *parsed
 
@@ -229,12 +238,71 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	if err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to close mission: %v", err)), nil
 	}
-	return jsonResult(map[string]any{
+	payload := map[string]any{
 		"mission_id": id,
 		"status":     status,
 		"round":      result.Round,
 		"verdict":    result.Verdict,
-	})
+	}
+	// Parity with the CLI close: a terminal transition ends this
+	// session's work on the mission, so clear its sidecars. Closing via
+	// MCP used to skip this, leaving the active-mission sidecar in place
+	// and the commit-msg hook tagging later missionless commits with the
+	// closed mission (ethos-jawp).
+	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	return jsonResult(payload)
+}
+
+// clearClosedMissionBindings clears the calling session's mission
+// sidecars for a mission that just closed, and returns one warning per
+// genuine failure — nil when there was nothing to do.
+//
+// The close is already on disk and cannot be undone, so a cleanup
+// failure must not turn the call into an error result. It rides back in
+// the successful result's `warnings` array instead, which the formatter
+// renders under a Warnings header: the mission closed, but a sidecar may
+// still be tagging commits.
+//
+// No session in context means no sidecars to clear, which is ordinary
+// and silent.
+func (h *Handler) clearClosedMissionBindings(missionID string) []string {
+	if h.sessionStore == nil {
+		return nil
+	}
+	sessionID, _ := resolve.SessionID(h.sessionStore)
+	if sessionID == "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return []string{fmt.Sprintf("clearing mission bindings: user home dir: %v", err)}
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	return clearBindingWarnings(mission.ClearMissionBindings(globalRoot, sessionID, missionID))
+}
+
+// clearBindingWarnings flattens a ClearMissionBindings error into one
+// warning per cause. The two sidecars are independent, so the error may
+// carry two causes joined by errors.Join, which reports them through
+// Unwrap() []error. One entry per cause keeps each on its own bullet in
+// the formatter's Warnings section — a single joined string would render
+// as one bullet with an embedded newline.
+func clearBindingWarnings(err error) []string {
+	if err == nil {
+		return nil
+	}
+	joined, ok := err.(interface{ Unwrap() []error })
+	if !ok {
+		return []string{"clearing mission bindings: " + err.Error()}
+	}
+	causes := joined.Unwrap()
+	out := make([]string, 0, len(causes))
+	for _, c := range causes {
+		out = append(out, "clearing mission bindings: "+c.Error())
+	}
+	return out
 }
 
 // handleReflectMission parses the reflection YAML and appends it to

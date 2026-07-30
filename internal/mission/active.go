@@ -213,3 +213,73 @@ func ClearActiveMission(globalRoot, sessionID string) error {
 	}
 	return nil
 }
+
+// ClearMissionBindings removes sessionID's active-mission and
+// delegation-binding sidecars when they name missionID. Every surface
+// that takes a mission out of the open set calls it: the commit-msg
+// trailer fallback gates on the active-mission sidecar, so a close that
+// left it behind would keep tagging later missionless commits with the
+// closed mission (ethos-jawp).
+//
+// Each sidecar is cleared only when it names missionID, so a claim or
+// dispatch for a different, still-open mission survives. A missing
+// sidecar is a silent no-op — that is the ordinary state.
+//
+// The two sidecars are independent, so a failure on one does not stop
+// work on the other; all failures come back joined. Callers treat the
+// result as advisory — a mission that closed stays closed — but must
+// report it, because each failure leaves a sidecar in place and the
+// trailer gate open on a closed mission.
+func ClearMissionBindings(globalRoot, sessionID, missionID string) error {
+	if globalRoot == "" || sessionID == "" || missionID == "" {
+		return nil
+	}
+	var errs []error
+
+	// ReadActiveMission and ReadDelegationBinding both report a missing
+	// sidecar as a zero value with a nil error, so a non-nil error here
+	// is always a real read failure — never "no sidecar".
+	active, err := ReadActiveMission(globalRoot, sessionID)
+	switch {
+	case err != nil:
+		errs = append(errs, fmt.Errorf("reading active mission: %w", err))
+	case active == missionID:
+		if err := ClearActiveMission(globalRoot, sessionID); err != nil {
+			errs = append(errs, fmt.Errorf("clearing active mission: %w", err))
+		}
+	}
+
+	b, err := ReadDelegationBinding(globalRoot, sessionID)
+	switch {
+	case err != nil:
+		errs = append(errs, fmt.Errorf("reading delegation binding: %w", err))
+	case b.MissionID == missionID:
+		if err := ClearDelegationBinding(globalRoot, sessionID); err != nil {
+			errs = append(errs, fmt.Errorf("clearing delegation binding: %w", err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// ClearDelegationBinding removes the delegation-binding sidecar for
+// sessionID. Missing is not an error — clearing an already-clear slot
+// is a no-op.
+//
+// The binding is written per-dispatch but was never cleared, so it
+// accumulated across sessions and let the commit-msg hook's fallback
+// tag unrelated commits with a stale delegation (ethos-jawp). Clearing
+// it on `mission release` and on terminal transitions bounds the
+// sidecar's lifetime to the dispatch it describes.
+func ClearDelegationBinding(globalRoot, sessionID string) error {
+	path := DelegationBindingPath(globalRoot, sessionID)
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("removing delegation-binding sidecar %q: %w", path, err)
+	}
+	return nil
+}

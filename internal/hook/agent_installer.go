@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/punt-labs/ethos/internal/resolve"
 )
@@ -12,7 +13,20 @@ import (
 // InstallAgentDefinitions copies agent .md files from the ethos agents
 // directory to .claude/agents/. Only copies files that are missing or
 // have different content. Returns the list of deployed filenames.
-func InstallAgentDefinitions(ethosRoot string) ([]string, error) {
+//
+// generated is the set of handles the DES-026 generator owns (see
+// GeneratedAgentHandles). A stub for such a handle is NOT copied: the
+// generator writes those files from identity data, so copying a legacy
+// stub over them would double-write and leave a sticky stub the
+// generator has to overwrite every session — the copy-from-agents path
+// DES-026 rejected and the dirty-tree risk DES-013 flags.
+//
+// A nil set skips nothing and copies everything. That is correct only
+// when the caller KNOWS the generator owns no handle. Never pass nil
+// because the ownership lookup failed — that silently reinstates the
+// pre-DES-026 clobber. Callers fail closed instead and install nothing;
+// see installStubAgentDefs.
+func InstallAgentDefinitions(ethosRoot string, generated map[string]bool) ([]string, error) {
 	srcDir := filepath.Join(ethosRoot, "agents")
 	entries, err := os.ReadDir(srcDir)
 	if os.IsNotExist(err) {
@@ -31,6 +45,12 @@ func InstallAgentDefinitions(ethosRoot string) ([]string, error) {
 	var deployed []string
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".md" {
+			continue
+		}
+
+		// Subordinate the stub copy to the generator: never copy a stub
+		// for a handle the generator owns.
+		if generated[strings.TrimSuffix(e.Name(), ".md")] {
 			continue
 		}
 

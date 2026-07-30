@@ -343,6 +343,68 @@ func TestMissionCreate_FromFile(t *testing.T) {
 	assert.NotEmpty(t, c.Evaluator.PinnedAt)
 }
 
+// TestMissionCreate_WarnsOnBead proves ethos-c0yp: a contract the user
+// submits with the deprecated inputs.bead field still earns the DES-049
+// deprecation warning, naming the value so it can be migrated.
+func TestMissionCreate_WarnsOnBead(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t) // uses inputs.bead: ethos-07m.5
+	out := captureStderrFn(t, func() {
+		captureStdoutE(t, func() error { return runMissionCreate() })
+	})
+	assert.Contains(t, out, "deprecation warning")
+	assert.Contains(t, out, "inputs.bead")
+	assert.Contains(t, out, "ethos-07m.5")
+}
+
+// TestMissionCreate_TicketIsSilent proves the other half: a contract that
+// uses inputs.ticket emits no deprecation, even though the store already
+// holds a bead mission the conflict scan will Load.
+func TestMissionCreate_TicketIsSilent(t *testing.T) {
+	missionTestEnv(t)
+	// First, land a bead mission (warns, ignored here).
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	// Now a ticket contract with a disjoint write-set: the scan Loads the
+	// bead mission but must not warn.
+	dir := t.TempDir()
+	ticketFile := filepath.Join(dir, "ticket.yaml")
+	body := `leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  ticket: ethos-42
+write_set:
+  - tests/ticket-silent/
+tools:
+  - Read
+success_criteria:
+  - make check passes
+budget:
+  rounds: 1
+`
+	require.NoError(t, os.WriteFile(ticketFile, []byte(body), 0o600))
+	missionCreateFile = ticketFile
+	out := captureStderrFn(t, func() {
+		captureStdoutE(t, func() error { return runMissionCreate() })
+	})
+	assert.NotContains(t, out, "deprecation", "a ticket submission with a bead mission in the store must stay silent")
+}
+
+// TestMissionLint_WarnsOnBead proves the advisory linter also warns for a
+// user-submitted legacy inputs.bead contract.
+func TestMissionLint_WarnsOnBead(t *testing.T) {
+	missionTestEnv(t)
+	file := writeContractFile(t) // uses inputs.bead
+	out := captureStderrFn(t, func() {
+		captureStdoutE(t, func() error { return runMissionLint(file) })
+	})
+	assert.Contains(t, out, "deprecation warning")
+	assert.Contains(t, out, "inputs.bead")
+}
+
 func TestMissionCreate_FromFileJSON(t *testing.T) {
 	missionTestEnv(t)
 	jsonOutput = true
@@ -708,11 +770,12 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 // and returns the path. The body is parameterized by round and
 // recommendation so the same helper covers continue, pivot, stop,
 // and escalate cases.
-func writeReflectionFile(t *testing.T, round int, recommendation, reason string) string {
+func writeReflectionFile(t *testing.T, missionID string, round int, recommendation, reason string) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, fmt.Sprintf("reflection-%d.yaml", round))
-	body := fmt.Sprintf(`round: %d
+	body := fmt.Sprintf(`mission: %s
+round: %d
 author: claude
 converging: true
 signals:
@@ -720,7 +783,7 @@ signals:
   - lint clean
 recommendation: %s
 reason: %q
-`, round, recommendation, reason)
+`, missionID, round, recommendation, reason)
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	return path
 }
@@ -735,7 +798,7 @@ func TestMissionReflect_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "round 1 went well")
+	missionReflectFile = writeReflectionFile(t, ids[0], 1, "continue", "round 1 went well")
 	stdout := captureStdoutE(t, func() error { return runMissionReflect(ids[0], missionReflectFile) })
 	// Text mode echoes `reflected: <id> round=1 rec=continue` so a
 	// scripting caller sees the reflection landed (ethos-30c).
@@ -761,7 +824,7 @@ func TestMissionReflect_JSON(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, ids, 1)
 
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, ids[0], 1, "continue", "ok")
 	out := captureStdoutE(t, func() error { return runMissionReflect(ids[0], missionReflectFile) })
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
@@ -842,7 +905,7 @@ func TestMissionAdvance_HappyPath(t *testing.T) {
 	id := ids[0]
 
 	// Reflect on round 1.
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, id, 1, "continue", "ok")
 	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	// Advance — text mode echoes `advanced: <id> round 1 -> 2` so a
@@ -1316,7 +1379,7 @@ func TestMissionReflections_JSON(t *testing.T) {
 	assert.Equal(t, "[]", strings.TrimSpace(out))
 
 	// Submit a reflection and re-fetch.
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, id, 1, "continue", "ok")
 	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	out = captureStdoutE(t, func() error { return runMissionReflections(id) })
@@ -1560,7 +1623,7 @@ func TestMissionAdvance_JSON(t *testing.T) {
 	require.Len(t, ids, 1)
 	id := ids[0]
 
-	missionReflectFile = writeReflectionFile(t, 1, "continue", "ok")
+	missionReflectFile = writeReflectionFile(t, id, 1, "continue", "ok")
 	captureStdoutE(t, func() error { return runMissionReflect(id, missionReflectFile) })
 
 	out := captureStdoutE(t, func() error { return runMissionAdvance(id) })
@@ -3789,6 +3852,150 @@ func TestMissionRelease_RemovesSidecar(t *testing.T) {
 	_, statErr := os.Stat(sidecar)
 	assert.True(t, os.IsNotExist(statErr),
 		"release must remove the sidecar; got %v", statErr)
+}
+
+// TestMissionClose_ClearsActiveMission asserts that a terminal
+// transition clears the active-mission sidecar without an explicit
+// `mission release`. The commit-msg trailer fallback gates on that
+// sidecar, so a close that left it behind kept stamping later
+// missionless commits with the closed mission (ethos-jawp). The
+// no-sidecar case in hooks.TestCommitMsgHook_TrailerGate is the other
+// half: no sidecar means no trailer.
+func TestMissionClose_ClearsActiveMission(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	t.Setenv("ETHOS_SESSION", "sess-close-clears")
+	seedRosterForSession(t, "sess-close-clears")
+	require.NoError(t, runMissionClaim(id))
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-close-clears", "active-mission")
+	require.FileExists(t, sidecar)
+
+	submitCLIResult(t, id, 1)
+	captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusClosed) })
+
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr),
+		"close must clear the active-mission sidecar; got %v", statErr)
+}
+
+// TestMissionCloseFailed_ClearsActiveMission asserts the clear runs on
+// every terminal status, not just a passing close.
+func TestMissionCloseFailed_ClearsActiveMission(t *testing.T) {
+	home := missionTestEnv(t)
+	id := seedMissionForClaim(t)
+	t.Setenv("ETHOS_SESSION", "sess-close-failed")
+	seedRosterForSession(t, "sess-close-failed")
+	require.NoError(t, runMissionClaim(id))
+
+	submitCLIResult(t, id, 1)
+	captureStdoutE(t, func() error { return runMissionClose(id, mission.StatusFailed) })
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-close-failed", "active-mission")
+	_, statErr := os.Stat(sidecar)
+	assert.True(t, os.IsNotExist(statErr),
+		"a failed close must clear the active-mission sidecar; got %v", statErr)
+}
+
+// TestMissionClose_LeavesOtherMissionActive asserts the clear is scoped
+// to the mission that closed: a session holding a claim on a different,
+// still-open mission keeps it.
+func TestMissionClose_LeavesOtherMissionActive(t *testing.T) {
+	home := missionTestEnv(t)
+
+	missionCreateFile = writeContractFileWithWriteSet(t, "internal/a/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+	missionCreateFile = writeContractFileWithWriteSet(t, "internal/b/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ids, err := missionStore().List()
+	require.NoError(t, err)
+	require.Len(t, ids, 2)
+	closing, holding := ids[0], ids[1]
+
+	t.Setenv("ETHOS_SESSION", "sess-close-other")
+	seedRosterForSession(t, "sess-close-other")
+	require.NoError(t, runMissionClaim(holding))
+
+	submitCLIResult(t, closing, 1)
+	captureStdoutE(t, func() error { return runMissionClose(closing, mission.StatusClosed) })
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-close-other", "active-mission")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err, "closing one mission must not clear a claim on another")
+	assert.Equal(t, holding+"\n", string(data))
+}
+
+// sidecarDir replaces the named sidecar with a directory, which makes
+// os.ReadFile return a real error (EISDIR) rather than the ENOENT the
+// helpers report as "no sidecar". It is the portable way to exercise the
+// genuine-read-failure branch.
+func sidecarDir(t *testing.T, home, sessionID, name string) {
+	t.Helper()
+	path := filepath.Join(home, ".punt-labs", "ethos", "sessions", sessionID, name)
+	require.NoError(t, os.MkdirAll(path, 0o700))
+}
+
+// TestClearClosedSessionBindings_ReportsReadFailures asserts the gating
+// reads are not silent. A missing sidecar is a nil error, so any error
+// from these reads is a real failure that leaves the sidecar in place —
+// and with it the commit-msg trailer gate open on a closed mission
+// (ethos-jawp). Swallowing it hides the bug the function prevents.
+func TestClearClosedSessionBindings_ReportsReadFailures(t *testing.T) {
+	const sess = "sess-read-fail"
+
+	t.Run("active-mission read failure is reported", func(t *testing.T) {
+		home := missionTestEnv(t)
+		t.Setenv("ETHOS_SESSION", sess)
+		seedRosterForSession(t, sess)
+		sidecarDir(t, home, sess, "active-mission")
+
+		out := captureStderrFn(t, func() {
+			clearClosedSessionBindings("m-2026-07-30-001")
+		})
+		assert.Contains(t, out, "reading active mission")
+	})
+
+	t.Run("delegation-binding read failure is reported", func(t *testing.T) {
+		home := missionTestEnv(t)
+		t.Setenv("ETHOS_SESSION", sess)
+		seedRosterForSession(t, sess)
+		sidecarDir(t, home, sess, "delegation-binding")
+
+		out := captureStderrFn(t, func() {
+			clearClosedSessionBindings("m-2026-07-30-001")
+		})
+		assert.Contains(t, out, "reading delegation binding")
+	})
+
+	t.Run("no sidecars at all is silent", func(t *testing.T) {
+		missionTestEnv(t)
+		t.Setenv("ETHOS_SESSION", sess)
+		seedRosterForSession(t, sess)
+
+		out := captureStderrFn(t, func() {
+			clearClosedSessionBindings("m-2026-07-30-001")
+		})
+		assert.Empty(t, out, "nothing to clear is the normal path, not a warning")
+	})
+}
+
+// TestClearClosedSessionBindings_ReportsStaleSession asserts that a
+// session that will not resolve for a real reason is reported. A stale
+// ETHOS_SESSION naming no roster is not errNoSession — it means the
+// sidecars cannot be located at all, so nothing gets cleared and the
+// operator needs to hear about it.
+func TestClearClosedSessionBindings_ReportsStaleSession(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-never-created")
+
+	out := captureStderrFn(t, func() {
+		clearClosedSessionBindings("m-2026-07-30-001")
+	})
+	assert.Contains(t, out, "resolving session")
 }
 
 func TestMissionRelease_MissingIsNotAnError(t *testing.T) {

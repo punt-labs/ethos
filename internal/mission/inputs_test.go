@@ -1,11 +1,10 @@
 package mission
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
-	"strings"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,15 +12,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// resetBeadDeprecation resets the once guard so each test can observe
-// the warning independently. Must be called before any test that
-// expects the deprecation message.
-func resetBeadDeprecation() {
-	beadDeprecationOnce = sync.Once{}
-}
-
 // captureStderr runs fn with os.Stderr redirected to a pipe and returns
 // the captured output. Restores os.Stderr before returning in all cases.
+// Shared by tests across the package that assert stderr diagnostics.
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
@@ -47,16 +40,15 @@ func TestInputs_YAML_Ticket(t *testing.T) {
 	assert.Equal(t, []string{"foo.go"}, in.Files)
 }
 
+// TestInputs_YAML_Bead_BackCompat asserts the deprecated bead alias
+// still decodes into Ticket. The decode is silent: the deprecation
+// warning moved to the user-submission path (ethos-c0yp), so it no
+// longer fires from a plain Unmarshal.
 func TestInputs_YAML_Bead_BackCompat(t *testing.T) {
-	resetBeadDeprecation()
 	data := []byte("bead: ethos-42\n")
 	var in Inputs
-	captured := captureStderr(t, func() {
-		require.NoError(t, yaml.Unmarshal(data, &in))
-	})
+	require.NoError(t, yaml.Unmarshal(data, &in))
 	assert.Equal(t, "ethos-42", in.Ticket)
-	assert.Contains(t, captured, "deprecation warning")
-	assert.Contains(t, captured, "inputs.bead")
 }
 
 func TestInputs_YAML_Both_Error(t *testing.T) {
@@ -84,14 +76,10 @@ func TestInputs_JSON_Ticket(t *testing.T) {
 }
 
 func TestInputs_JSON_Bead_BackCompat(t *testing.T) {
-	resetBeadDeprecation()
 	data := []byte(`{"bead":"ethos-42"}`)
 	var in Inputs
-	captured := captureStderr(t, func() {
-		require.NoError(t, json.Unmarshal(data, &in))
-	})
+	require.NoError(t, json.Unmarshal(data, &in))
 	assert.Equal(t, "ethos-42", in.Ticket)
-	assert.Contains(t, captured, "deprecation warning")
 }
 
 func TestInputs_JSON_Both_Error(t *testing.T) {
@@ -140,7 +128,6 @@ func TestInputs_YAML_RoundTrip_ViaContract(t *testing.T) {
 // TestInputs_YAML_OldContract_BeadKey verifies that an old contract
 // YAML file with "bead:" key loads into Ticket.
 func TestInputs_YAML_OldContract_BeadKey(t *testing.T) {
-	resetBeadDeprecation()
 	data := []byte(`
 mission_id: m-test-002
 status: open
@@ -165,48 +152,34 @@ budget:
 current_round: 1
 `)
 	var c Contract
-	captured := captureStderr(t, func() {
-		require.NoError(t, yaml.Unmarshal(data, &c))
-	})
+	require.NoError(t, yaml.Unmarshal(data, &c))
 	assert.Equal(t, "ethos-old", c.Inputs.Ticket)
-	assert.Contains(t, captured, "deprecation warning")
 }
 
 // Explicit empty string in `ticket:` is treated as absent by omitempty
 // semantics -- both in YAML and JSON. If `bead:` is also set, the bead
-// alias applies (with the usual deprecation warning) rather than
-// triggering a "both set" error. This test documents the invariant so
-// a future refactor doesn't silently break it.
+// alias applies rather than triggering a "both set" error. This test
+// documents the invariant so a future refactor doesn't silently break
+// it.
 
 func TestInputs_YAML_EmptyTicketWithBead_PromotesBead(t *testing.T) {
-	resetBeadDeprecation()
 	data := []byte("ticket: \"\"\nbead: ethos-123\n")
 	var in Inputs
-	captured := captureStderr(t, func() {
-		require.NoError(t, yaml.Unmarshal(data, &in))
-	})
+	require.NoError(t, yaml.Unmarshal(data, &in))
 	assert.Equal(t, "ethos-123", in.Ticket)
-	assert.Contains(t, captured, "deprecation warning")
-	assert.Contains(t, captured, "inputs.bead")
 }
 
 func TestInputs_JSON_EmptyTicketWithBead_PromotesBead(t *testing.T) {
-	resetBeadDeprecation()
 	data := []byte(`{"ticket":"","bead":"ethos-123"}`)
 	var in Inputs
-	captured := captureStderr(t, func() {
-		require.NoError(t, json.Unmarshal(data, &in))
-	})
+	require.NoError(t, json.Unmarshal(data, &in))
 	assert.Equal(t, "ethos-123", in.Ticket)
-	assert.Contains(t, captured, "deprecation warning")
-	assert.Contains(t, captured, "inputs.bead")
 }
 
 // TestInputs_StrictDecoder_AcceptsBead verifies that DecodeContractStrict
 // (which uses KnownFields=true) still accepts old "bead:" contracts
 // because the custom UnmarshalYAML handles the field internally.
 func TestInputs_StrictDecoder_AcceptsBead(t *testing.T) {
-	resetBeadDeprecation()
 	data := []byte(`
 mission_id: m-test-003
 status: open
@@ -230,14 +203,9 @@ budget:
   reflection_after_each: true
 current_round: 1
 `)
-	var c *Contract
-	captured := captureStderr(t, func() {
-		var err error
-		c, err = DecodeContractStrict(data, "test")
-		require.NoError(t, err)
-	})
+	c, err := DecodeContractStrict(data, "test")
+	require.NoError(t, err)
 	assert.Equal(t, "ethos-strict", c.Inputs.Ticket)
-	assert.Contains(t, captured, "deprecation warning")
 }
 
 // TestInputs_StrictDecoder_RejectsUnknownFieldUnderInputs verifies that
@@ -314,20 +282,39 @@ func TestInputs_JSON_AllKnownFields(t *testing.T) {
 	assert.Equal(t, []string{"ref.md"}, in.References)
 }
 
-// TestInputs_BeadDeprecation_EmitsOnce verifies that decoding multiple
-// missions with inputs.bead emits the deprecation warning exactly once.
-func TestInputs_BeadDeprecation_EmitsOnce(t *testing.T) {
-	resetBeadDeprecation()
-	captured := captureStderr(t, func() {
-		for _, v := range []string{"ethos-1", "ethos-2", "ethos-3"} {
-			var in Inputs
-			data := []byte("bead: " + v + "\n")
-			require.NoError(t, yaml.Unmarshal(data, &in))
-			assert.Equal(t, v, in.Ticket)
-		}
-	})
-	n := strings.Count(captured, "deprecation warning")
-	assert.Equal(t, 1, n, "expected exactly 1 deprecation warning, got %d in:\n%s", n, captured)
+// TestBeadAlias reports the deprecated inputs.bead value a contract
+// body sets, and "" for a ticket-only or bead-less body. The
+// user-submission paths use it to decide whether to warn (ethos-c0yp);
+// an incidental store load that decodes an old bead mission does not
+// call it, so the scan stays silent.
+func TestBeadAlias(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{"bead set", "inputs:\n  bead: punt-labs-6dj\n", "punt-labs-6dj"},
+		{"ticket set", "inputs:\n  ticket: ethos-42\n", ""},
+		{"no inputs", "leader: claude\n", ""},
+		{"blank bead", "inputs:\n  bead: \"  \"\n", ""},
+		{"malformed yaml", "inputs: [unterminated\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, BeadAlias([]byte(tt.body)))
+		})
+	}
+}
+
+// TestWarnBeadDeprecated asserts the warning names the field and the
+// bead value so the operator can find and migrate it.
+func TestWarnBeadDeprecated(t *testing.T) {
+	var buf bytes.Buffer
+	WarnBeadDeprecated(&buf, "punt-labs-6dj")
+	out := buf.String()
+	assert.Contains(t, out, "deprecation warning")
+	assert.Contains(t, out, "inputs.bead")
+	assert.Contains(t, out, "punt-labs-6dj")
 }
 
 func TestInputs_TriggerYAML(t *testing.T) {

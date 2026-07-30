@@ -108,6 +108,48 @@ func submitRoundResult(t *testing.T, s *Store, c *Contract, verdict string) {
 	require.NoError(t, s.AppendResult(c.MissionID, r))
 }
 
+// TestStore_Create_NoBeadWarningFromConflictScan proves ethos-c0yp: a
+// create that scans an existing legacy inputs.bead mission for write-set
+// conflicts must not emit the deprecation warning. The warning is a
+// user-submission signal; the scan reads registry files the user is not
+// editing, so it stays silent.
+func TestStore_Create_NoBeadWarningFromConflictScan(t *testing.T) {
+	s := testStore(t)
+
+	// Plant a valid legacy mission whose inputs use the deprecated bead
+	// field, on disk, so the conflict scan Loads (and decodes) it.
+	legacy := `mission_id: m-2026-05-11-001
+status: open
+created_at: "2026-05-11T00:00:00Z"
+updated_at: "2026-05-11T00:00:00Z"
+leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+  pinned_at: "2026-05-11T00:00:00Z"
+inputs:
+  bead: punt-labs-6dj
+write_set:
+  - tests/legacy/
+success_criteria:
+  - make check passes
+budget:
+  rounds: 1
+current_round: 1
+`
+	legacyPath := mustContractPath(t, s, "m-2026-05-11-001")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacyPath), 0o700))
+	require.NoError(t, os.WriteFile(legacyPath, []byte(legacy), 0o600))
+
+	// Create a new, disjoint ticket mission. Its write-set does not
+	// overlap the legacy one, so the scan Loads the bead mission and
+	// discards it — decoding it must not warn.
+	out := captureStderr(t, func() {
+		require.NoError(t, s.Create(disjointContract("m-2026-05-12-001")))
+	})
+	assert.NotContains(t, out, "deprecation", "conflict scan of a legacy bead mission must stay silent")
+}
+
 func TestStore_RoundTrip(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-001")
@@ -348,6 +390,7 @@ func TestStore_RejectsSymlink_AllLoaderPaths(t *testing.T) {
 
 			if tc.preCreateReflection {
 				r := &Reflection{
+					Mission:        missionID,
 					Round:          c.CurrentRound,
 					Author:         c.Leader,
 					Recommendation: "continue",
@@ -1789,8 +1832,9 @@ func TestApplyServerFields_HashRoundTripsThroughCreate(t *testing.T) {
 // with the given recommendation. Tests use this to keep the table
 // rows compact and the assertions focused on the gate behavior, not
 // on building the input.
-func reflectionFor(round int, rec string) *Reflection {
+func reflectionFor(missionID string, round int, rec string) *Reflection {
 	return &Reflection{
+		Mission:        missionID,
 		Round:          round,
 		Author:         "claude",
 		Converging:     true,
@@ -1860,7 +1904,7 @@ func TestStore_AppendReflection_RoundTrip(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationContinue)
+	r := reflectionFor(c.MissionID, 1, RecommendationContinue)
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 	assert.NotEmpty(t, r.CreatedAt, "AppendReflection must reflect CreatedAt back")
 
@@ -1883,7 +1927,7 @@ func TestStore_AppendReflection_RejectsWrongRound(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	// Mission is at round 1; submitting a round-2 reflection is wrong.
-	r := reflectionFor(2, RecommendationContinue)
+	r := reflectionFor(c.MissionID, 2, RecommendationContinue)
 	err := s.AppendReflection(c.MissionID, r)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "round 2")
@@ -1899,8 +1943,8 @@ func TestStore_AppendReflection_RejectsDuplicate(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
-	err := s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationPivot))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
+	err := s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationPivot))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already exists")
 	assert.Contains(t, err.Error(), "append-only")
@@ -1916,7 +1960,7 @@ func TestStore_AppendReflection_RejectsClosedMission(t *testing.T) {
 	_, err := s.Close(c.MissionID, StatusClosed)
 	require.NoError(t, err)
 
-	err = s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue))
+	err = s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "terminal state")
 }
@@ -1930,7 +1974,7 @@ func TestStore_AppendReflection_RejectsMalformed(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	bad := reflectionFor(1, RecommendationContinue)
+	bad := reflectionFor(c.MissionID, 1, RecommendationContinue)
 	bad.Signals = nil
 	err := s.AppendReflection(c.MissionID, bad)
 	require.Error(t, err)
@@ -1969,7 +2013,7 @@ func TestStore_AdvanceRound_UnblocksAfterReflection(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 2, newRound)
@@ -1989,17 +2033,17 @@ func TestStore_AdvanceRound_BudgetExhaustionRefused(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	// Round 1 → 2.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	_, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 
 	// Round 2 → 3.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(2, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 2, RecommendationContinue)))
 	_, err = s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 
 	// Round 3 → 4 must fail (budget exhausted).
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(3, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 3, RecommendationContinue)))
 	_, err = s.AdvanceRound(c.MissionID, "claude")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exhausted its round budget")
@@ -2018,7 +2062,7 @@ func TestStore_AdvanceRound_StopRecommendationBlocks(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationStop)
+	r := reflectionFor(c.MissionID, 1, RecommendationStop)
 	r.Reason = "the test fixture is irreparable; stop and re-scope"
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 
@@ -2035,7 +2079,7 @@ func TestStore_AdvanceRound_EscalateRecommendationBlocks(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationEscalate)
+	r := reflectionFor(c.MissionID, 1, RecommendationEscalate)
 	r.Reason = "needs human review"
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 
@@ -2053,7 +2097,7 @@ func TestStore_AdvanceRound_PivotPermitted(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationPivot)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationPivot)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 2, newRound)
@@ -2083,7 +2127,7 @@ func TestStore_AdvanceRound_LogsTransition(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	_, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 
@@ -2138,6 +2182,143 @@ func TestStore_LoadReflections_RejectsUnknownField(t *testing.T) {
 	assert.Contains(t, err.Error(), "field bogus not found")
 }
 
+// legacyReflectionsBody is a reflections.yaml as written before the
+// mission field existed — no mission: key on the entry. Twenty-one such
+// files are tracked in this repo under .punt-labs/ethos/missions/.
+const legacyReflectionsBody = `reflections:
+    - round: 1
+      created_at: "2026-07-05T03:17:48Z"
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: round 1 is clean
+`
+
+// TestStore_LoadReflections_BackfillsLegacyMission asserts that a
+// reflections file predating the mission field still loads, with
+// Mission filled in from the containing mission directory. Requiring
+// the field on read would make every already-tracked reflections file
+// unreadable.
+func TestStore_LoadReflections_BackfillsLegacyMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	require.NoError(t, os.WriteFile(
+		mustReflectionsPath(t, s, c.MissionID), []byte(legacyReflectionsBody), 0o600))
+
+	rs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, c.MissionID, rs[0].Mission)
+	assert.Equal(t, 1, rs[0].Round)
+}
+
+// TestStore_LoadReflections_BackfillsBlankMission asserts the back-fill
+// covers an explicitly blank mission field, not just an absent key —
+// both are "no mission recorded".
+func TestStore_LoadReflections_BackfillsBlankMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	body := []byte(`reflections:
+    - mission: "   "
+      round: 1
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: ok
+`)
+	require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), body, 0o600))
+
+	rs, err := s.LoadReflections(c.MissionID)
+	require.NoError(t, err)
+	require.Len(t, rs, 1)
+	assert.Equal(t, c.MissionID, rs[0].Mission)
+}
+
+// TestStore_LoadReflections_RejectsMismatchedMission asserts the
+// back-fill does not weaken the cross-check: a reflection that names a
+// different mission is still refused on read.
+func TestStore_LoadReflections_RejectsMismatchedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	body := []byte(`reflections:
+    - mission: m-2026-04-08-999
+      round: 1
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: ok
+`)
+	require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), body, 0o600))
+
+	_, err := s.LoadReflections(c.MissionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `expected "m-2026-04-08-001", got "m-2026-04-08-999"`)
+}
+
+// TestStore_LoadReflections_RejectsMalformedMission asserts that a
+// present-but-garbage mission field is still a Validate error: the
+// back-fill applies only to a blank field.
+func TestStore_LoadReflections_RejectsMalformedMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+	body := []byte(`reflections:
+    - mission: not-a-mission-id
+      round: 1
+      author: claude
+      converging: true
+      signals:
+        - all green
+      recommendation: continue
+      reason: ok
+`)
+	require.NoError(t, os.WriteFile(mustReflectionsPath(t, s, c.MissionID), body, 0o600))
+
+	_, err := s.LoadReflections(c.MissionID)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid mission")
+}
+
+// TestStore_AdvanceRound_AcceptsLegacyReflection asserts the gate can
+// still read a round-1 reflection written before the mission field
+// existed, so an in-flight mission is not stranded at its current round.
+func TestStore_AdvanceRound_AcceptsLegacyReflection(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.Budget.Rounds = 3
+	require.NoError(t, s.Create(c))
+	require.NoError(t, os.WriteFile(
+		mustReflectionsPath(t, s, c.MissionID), []byte(legacyReflectionsBody), 0o600))
+
+	round, err := s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	assert.Equal(t, 2, round)
+}
+
+// TestStore_AppendReflection_StillRequiresMission asserts the write path
+// is unchanged by the read-path back-fill: a submitted reflection with
+// no mission field is refused.
+func TestStore_AppendReflection_StillRequiresMission(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	require.NoError(t, s.Create(c))
+
+	r := reflectionFor(c.MissionID, 1, RecommendationContinue)
+	r.Mission = ""
+	err := s.AppendReflection(c.MissionID, r)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid mission")
+}
+
 // TestStore_AdvanceRound_ConcurrentSerialization asserts that two
 // concurrent advances on the same mission cannot both succeed: the
 // per-mission flock serializes the bumps so the contract's
@@ -2147,7 +2328,7 @@ func TestStore_AdvanceRound_ConcurrentSerialization(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	c.Budget.Rounds = 5
 	require.NoError(t, s.Create(c))
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 
 	const n = 10
 	var wg sync.WaitGroup
@@ -2242,6 +2423,7 @@ func TestStore_ListSkipsReflectionsFile(t *testing.T) {
 
 	// Append a reflection so the sibling file exists on disk.
 	r := &Reflection{
+		Mission:        c.MissionID,
 		Round:          1,
 		Author:         "claude",
 		Converging:     true,
@@ -3112,7 +3294,7 @@ func TestStore_CloseGate_RefusesWhenOnlyStaleRoundHasResult(t *testing.T) {
 
 	// Round 1: submit result and advance.
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	require.Equal(t, 2, newRound)
@@ -3190,7 +3372,7 @@ func TestStore_ListSkipsResultsFile_CoexistsWithReflections(t *testing.T) {
 	require.NoError(t, s.Create(c))
 
 	submitRoundResult(t, s, c, VerdictPass)
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 
 	ids, err := s.List()
 	require.NoError(t, err)
@@ -3211,13 +3393,13 @@ func TestStore_NonTerminalTransitionsUnchanged(t *testing.T) {
 
 	// Round 1 → 2: reflection only, no result. The gate is
 	// close-specific; advance must work.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(1, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
 	newRound, err := s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 2, newRound)
 
 	// Round 2 → 3: same.
-	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(2, RecommendationContinue)))
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 2, RecommendationContinue)))
 	newRound, err = s.AdvanceRound(c.MissionID, "claude")
 	require.NoError(t, err)
 	assert.Equal(t, 3, newRound)
@@ -3380,7 +3562,7 @@ func TestStore_AppendReflection_NormalizesAuthor(t *testing.T) {
 	c := newContract("m-2026-04-08-001")
 	require.NoError(t, s.Create(c))
 
-	r := reflectionFor(1, RecommendationContinue)
+	r := reflectionFor(c.MissionID, 1, RecommendationContinue)
 	r.Author = "  claude  "
 	require.NoError(t, s.AppendReflection(c.MissionID, r))
 
@@ -3463,6 +3645,7 @@ func TestStore_AppendReflectionRollbackRemovesFile(t *testing.T) {
 	require.NoError(t, os.Mkdir(logPath, 0o700))
 
 	r := validReflection()
+	r.Mission = c.MissionID
 	r.Round = c.CurrentRound
 	err := s.AppendReflection(c.MissionID, &r)
 	require.Error(t, err)

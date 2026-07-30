@@ -27,26 +27,44 @@ msg_file="$1"
 [ -f "$msg_file" ] || exit "$_host_status"
 # Fallback: when MISSION_ID/DELEGATION_ID aren't in env (the common
 # case for subagent commits — additional_env doesn't persist into
-# subprocess env), read the delegation-binding sidecar written by
-# the PreToolUse Tier B dispatch. Pick the most recently modified
-# binding across all sessions — correct for single-user single-
-# session, the common case.
+# subprocess env), gate on an ACTIVE mission, not the delegation
+# binding. `ethos mission claim` writes the active-mission sidecar;
+# `mission release` and terminal transitions clear it. The
+# delegation-binding sidecar was never cleared, so keying off it tagged
+# unrelated T4 commits from later sessions (ethos-jawp).
 if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
-  # Session dirs are <date>-<session-id>, so reverse-sorted they
-  # give most-recent first. Pick the first binding file found in
-  # that order so a stale sidecar from an older session can't
-  # silently tag the wrong delegation.
-  binding_file=""
-  for d in $(find "$HOME/.punt-labs/ethos/sessions" -maxdepth 1 -type d 2>/dev/null | sort -r); do
-    if [ -f "$d/delegation-binding" ]; then
-      binding_file="$d/delegation-binding"
-      break
+  # Session dirs are <date>-<session-id>, so reverse-sorted they give
+  # most-recent first. Pick the first session with an active-mission
+  # sidecar so a stale binding from an older session can't tag this
+  # commit.
+  #
+  # Read one path per line. `for d in $(find ...)` split on every space
+  # and tab, so a $HOME (or any ancestor) containing a space silently
+  # broke discovery and dropped the trailer. The while loop runs in the
+  # pipeline's subshell, so it prints the winner and the command
+  # substitution collects it.
+  session_dir=$(find "$HOME/.punt-labs/ethos/sessions" -maxdepth 1 -type d 2>/dev/null |
+    sort -r |
+    while IFS= read -r d; do
+      if [ -f "$d/active-mission" ]; then
+        printf '%s\n' "$d"
+        break
+      fi
+    done)
+  if [ -n "$session_dir" ]; then
+    MISSION_ID=$(sed -n '1p' "$session_dir/active-mission" | tr -d '[:space:]')
+    # Tag the delegation only when its binding names this same mission
+    # — a binding left from a different mission must not ride along.
+    # Strip whitespace from the binding lines too: a CRLF or a
+    # hand-edited trailing space would otherwise defeat the match and
+    # drop the Delegation trailer. An empty MISSION_ID matches nothing,
+    # so an unreadable active-mission file cannot tag a delegation.
+    binding_file="$session_dir/delegation-binding"
+    if [ -n "$MISSION_ID" ] && [ -f "$binding_file" ] &&
+      [ "$(sed -n '2p' "$binding_file" | tr -d '[:space:]')" = "$MISSION_ID" ]; then
+      DELEGATION_ID=$(sed -n '1p' "$binding_file" | tr -d '[:space:]')
     fi
-  done
-  if [ -n "$binding_file" ] && [ -f "$binding_file" ]; then
-    DELEGATION_ID=$(sed -n '1p' "$binding_file")
-    MISSION_ID=$(sed -n '2p' "$binding_file")
-    export DELEGATION_ID MISSION_ID
+    export MISSION_ID DELEGATION_ID
   fi
 fi
 [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ] && exit "$_host_status"

@@ -92,7 +92,7 @@ func HandleSessionStart(r io.Reader, deps SessionStartDeps) error {
 			repomiss.New(agentPersona, agentID.MissingExt))
 	}
 
-	installAgentDefs()
+	installStubAgentDefs(repoRoot, store, deps.Teams)
 
 	// Generate .claude/agents/<handle>.md from ethos identity data.
 	// Propagates: the returned error is the single authoritative
@@ -194,14 +194,44 @@ func emitHumanFallback(resolvedID *identity.Identity) error {
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
 
+// installStubAgentDefs installs the legacy stub agent definitions,
+// subordinated to the DES-026 generator: a stub is copied only for a
+// handle the generator does not own.
+//
+// Ownership must be KNOWN before anything is copied. A nil owned-set
+// tells InstallAgentDefinitions to copy every stub, so there is no safe
+// set to pass when the lookup itself failed — copying everything would
+// put stubs over generator-owned files, the sticky-stub overwrite this
+// subordination exists to prevent. A lookup error therefore installs
+// nothing and says so on stderr. The generator writes the authoritative
+// files right after; if it also fails, no stub is a better state than a
+// stub that shadows a file the generator owns.
+//
+// A nil set from a SUCCESSFUL lookup is a different thing and still
+// copies everything: it means the generator owns nothing — no team store
+// wired, or no team configured — so the stubs are the only source for
+// those agents.
+func installStubAgentDefs(configRoot string, identities identity.IdentityStore, teams *team.LayeredStore) {
+	generated, err := GeneratedAgentHandles(configRoot, identities, teams)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: session-start: resolving generated agents: %v; installing no stubs\n", err)
+		return
+	}
+	installAgentDefs(generated)
+}
+
 // installAgentDefs copies agent definitions from the ethos agents dir
 // into .claude/agents/. Logs results to stderr.
-func installAgentDefs() {
+//
+// Call it through installStubAgentDefs, which establishes that generated
+// is a known ownership set and not the nil a failed lookup returns.
+func installAgentDefs(generated map[string]bool) {
 	ethosRoot := resolve.FindRepoEthosRoot()
 	if ethosRoot == "" {
 		return
 	}
-	deployed, err := InstallAgentDefinitions(ethosRoot)
+	deployed, err := InstallAgentDefinitions(ethosRoot, generated)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: session-start: agent install failed: %v\n", err)
 	}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,11 +15,31 @@ import (
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// captureStderr runs fn with os.Stderr redirected to a pipe and returns
+// the captured output. Restores os.Stderr in all cases.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	old := os.Stderr
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	done := make(chan []byte, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- b
+	}()
+	fn()
+	_ = w.Close()
+	return string(<-done)
+}
 
 // validContractYAML is a minimal valid contract body the MCP create
 // handler accepts. It omits server-controlled fields (mission_id,
@@ -115,6 +137,16 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 	)
 }
 
+// testHandlerWithSessions is testHandlerWithMissions plus a session
+// store. The sidecar cleanup on close is a no-op without one, so the
+// tests that exercise it need the wiring `ethos serve` does.
+func testHandlerWithSessions(t *testing.T) *Handler {
+	t.Helper()
+	h := testHandlerWithMissions(t)
+	WithSessionStore(session.NewStore(t.TempDir()))(h)
+	return h
+}
+
 func TestHandleMission_NoStoreConfigured(t *testing.T) {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
@@ -149,6 +181,25 @@ func TestHandleMission_Create(t *testing.T) {
 	assert.Equal(t, "claude", c.Leader)
 	assert.Equal(t, "bwk", c.Worker)
 	assert.Equal(t, "djb", c.Evaluator.Handle)
+}
+
+// TestHandleMission_CreateWarnsOnBead proves ethos-c0yp for the MCP
+// surface: a contract submitted with the deprecated inputs.bead field
+// still emits the DES-049 deprecation warning on stderr.
+func TestHandleMission_CreateWarnsOnBead(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	out := captureStderr(t, func() {
+		result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+			"method":   "create",
+			"contract": validContractYAML, // uses inputs.bead: ethos-07m.5
+		}))
+		require.NoError(t, err)
+		require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+	})
+	assert.Contains(t, out, "deprecation warning")
+	assert.Contains(t, out, "inputs.bead")
+	assert.Contains(t, out, "ethos-07m.5")
 }
 
 func TestHandleMission_CreateMissingContract(t *testing.T) {
@@ -445,6 +496,181 @@ func TestHandleMission_Close(t *testing.T) {
 	assert.Equal(t, mission.StatusClosed, loaded.Status)
 }
 
+// closeViaMCP creates a mission, submits a satisfying result, and closes
+// it through the MCP close method. Returns the mission ID.
+func closeViaMCP(t *testing.T, h *Handler, contract string) string {
+	t.Helper()
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": contract,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError, "close must succeed: %s", resultText(t, closeResult))
+	return created.MissionID
+}
+
+// TestHandleMission_CloseClearsActiveMission asserts the MCP close path
+// clears the active-mission sidecar, matching the CLI. Closing via MCP
+// used to skip the cleanup entirely, so the commit-msg hook kept tagging
+// later missionless commits with the closed mission (ethos-jawp) — the
+// friction the CLI fix removed, still live on the other surface.
+//
+// It drives the whole close method with the sidecar already on disk, so
+// the assertion covers the wiring in handleCloseMission, not the helper
+// in isolation.
+func TestHandleMission_CloseClearsActiveMission(t *testing.T) {
+	const sess = "sess-mcp-close"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, created.MissionID))
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
+	assert.NotContains(t, payload, "warnings", "a clean clear must not warn")
+
+	_, statErr := os.Stat(mission.ActiveMissionPath(globalRoot, sess))
+	assert.True(t, os.IsNotExist(statErr),
+		"the MCP close method must clear the sidecar; got %v", statErr)
+}
+
+// TestHandleMission_CloseLeavesOtherMissionActive asserts the MCP clear
+// is scoped the same way the CLI's is: a sidecar naming a different,
+// still-open mission survives the close.
+func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
+	const sess = "sess-mcp-other"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	const holding = "m-2026-07-30-999"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, holding))
+
+	id := closeViaMCP(t, h, validContractYAML)
+	require.NotEqual(t, holding, id)
+
+	data, err := os.ReadFile(mission.ActiveMissionPath(globalRoot, sess))
+	require.NoError(t, err, "closing one mission must not clear a claim on another")
+	assert.Equal(t, holding+"\n", string(data))
+}
+
+// TestHandleMission_CloseWarnsOnUnreadableSidecar asserts a genuine read
+// failure reaches the caller. The close succeeded, so it must not become
+// an error result — the warning rides in the payload's `warnings` array,
+// which is the key the hook formatter renders (DES-020).
+func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
+	const sess = "sess-mcp-warn"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	// A directory where the sidecar belongs makes os.ReadFile fail with
+	// EISDIR — a real error, portably distinct from "no sidecar".
+	require.NoError(t, os.MkdirAll(mission.ActiveMissionPath(globalRoot, sess), 0o700))
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError, "an advisory cleanup failure must not fail the close")
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
+	assert.Equal(t, mission.StatusClosed, payload["status"])
+	// A top-level array of strings, matching LogPayload.Warnings and the
+	// show path — that is the shape writeMissionWarnings iterates.
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "warnings must be a top-level array; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "reading active mission")
+}
+
+// TestHandleMission_CloseWarnsPerCause asserts one array entry per
+// failure. Both sidecars are independent, so both can fail at once, and
+// each must land on its own bullet rather than being mashed into one
+// string with a newline in it.
+func TestHandleMission_CloseWarnsPerCause(t *testing.T) {
+	const sess = "sess-mcp-two-warns"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	require.NoError(t, os.MkdirAll(mission.ActiveMissionPath(globalRoot, sess), 0o700))
+	require.NoError(t, os.MkdirAll(mission.DelegationBindingPath(globalRoot, sess), 0o700))
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, closeResult)), &payload))
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok)
+	require.Len(t, warnings, 2, "one entry per cause")
+	for _, w := range warnings {
+		assert.NotContains(t, w, "\n", "each cause must be its own entry")
+	}
+}
+
 func TestHandleMission_CloseFailedAndEscalated(t *testing.T) {
 	for _, st := range []string{mission.StatusFailed, mission.StatusEscalated} {
 		t.Run(st, func(t *testing.T) {
@@ -538,24 +764,28 @@ func TestHandleMission_CreateRejectsCrossMissionConflict(t *testing.T) {
 // the MCP reflect handler accepts. Tests parameterize it via
 // reflectionYAMLForRound when they need other rounds or
 // recommendations.
-const validReflectionYAML = `round: 1
+func validReflectionYAML(missionID string) string {
+	return fmt.Sprintf(`mission: %s
+round: 1
 author: claude
 converging: true
 signals:
   - tests passing
 recommendation: continue
 reason: round 1 went well
-`
+`, missionID)
+}
 
-func reflectionYAMLForRound(round int, rec, reason string) string {
-	return fmt.Sprintf(`round: %d
+func reflectionYAMLForRound(missionID string, round int, rec, reason string) string {
+	return fmt.Sprintf(`mission: %s
+round: %d
 author: claude
 converging: true
 signals:
   - tests passing
 recommendation: %s
 reason: %q
-`, round, rec, reason)
+`, missionID, round, rec, reason)
 }
 
 func TestHandleMission_Reflect_RoundTrip(t *testing.T) {
@@ -572,7 +802,7 @@ func TestHandleMission_Reflect_RoundTrip(t *testing.T) {
 	reflectResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML(created.MissionID),
 	}))
 	require.NoError(t, err)
 	require.False(t, reflectResult.IsError, "reflect must succeed: %s", resultText(t, reflectResult))
@@ -588,7 +818,7 @@ func TestHandleMission_Reflect_RequiresMissionID(t *testing.T) {
 	h := testHandlerWithMissions(t)
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML("m-2026-04-08-001"),
 	}))
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
@@ -616,7 +846,7 @@ func TestHandleMission_Reflect_RejectsUnknownField(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	body := validReflectionYAML + "bogus: smuggled\n"
+	body := validReflectionYAML(created.MissionID) + "bogus: smuggled\n"
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
@@ -659,7 +889,7 @@ func TestHandleMission_Reflections_ReturnsAfterReflect(t *testing.T) {
 	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML(created.MissionID),
 	}))
 	require.NoError(t, err)
 
@@ -709,7 +939,7 @@ func TestHandleMission_Advance_HappyPath(t *testing.T) {
 	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
-		"reflection": validReflectionYAML,
+		"reflection": validReflectionYAML(created.MissionID),
 	}))
 	require.NoError(t, err)
 
@@ -736,7 +966,7 @@ func TestHandleMission_Advance_StopBlocks(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	stopBody := reflectionYAMLForRound(1, "stop", "fixture is broken; close")
+	stopBody := reflectionYAMLForRound(created.MissionID, 1, "stop", "fixture is broken; close")
 	_, err = h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "reflect",
 		"mission_id": created.MissionID,
