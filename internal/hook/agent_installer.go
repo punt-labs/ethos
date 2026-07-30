@@ -19,8 +19,13 @@ import (
 // generator writes those files from identity data, so copying a legacy
 // stub over them would double-write and leave a sticky stub the
 // generator has to overwrite every session — the copy-from-agents path
-// DES-026 rejected and the dirty-tree risk DES-013 flags. A nil set
-// skips nothing, preserving the copy-everything behavior.
+// DES-026 rejected and the dirty-tree risk DES-013 flags.
+//
+// A nil set skips nothing and copies everything. That is correct only
+// when the caller KNOWS the generator owns no handle. Never pass nil
+// because the ownership lookup failed — that silently reinstates the
+// pre-DES-026 clobber. Callers fail closed instead and install nothing;
+// see installStubAgentDefs.
 func InstallAgentDefinitions(ethosRoot string, generated map[string]bool) ([]string, error) {
 	srcDir := filepath.Join(ethosRoot, "agents")
 	entries, err := os.ReadDir(srcDir)

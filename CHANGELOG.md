@@ -95,9 +95,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     path DES-026 rejected — double-writing and leaving a sticky stub for any
     handle the generator owns. It now consults `GeneratedAgentHandles`
     (agent-kind team members minus the main agent) and skips those stubs;
-    non-generated stubs still copy. The repo's committed `.claude/agents/`
-    data churn and the commit-vs-gitignore version-skew question are tracked
-    separately, pending an operator decision.
+    non-generated stubs still copy. The install fails closed when that
+    ownership lookup errors: a nil owned-set means "copy every stub", so
+    falling through would have restored the clobber on exactly the path where
+    ownership is unknown. It installs nothing and says so instead — the
+    generator writes the authoritative files, and no stub beats a stub
+    shadowing a generated one. A nil set from a *successful* lookup is
+    unchanged and still copies everything: it means the generator owns nothing.
+    The repo's committed `.claude/agents/` data churn and the
+    commit-vs-gitignore version-skew question are tracked separately, pending
+    an operator decision.
 
   - *Reflection `mission:` field and `advance` recommendation (ethos-qvbh).*
     Result required a validated `mission:` field but Reflection rejected it —
