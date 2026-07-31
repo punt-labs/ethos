@@ -38,15 +38,38 @@ func sealMissionChunkFor(t *testing.T, repoRoot, missionID, sessionID string) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600))
 }
 
-func TestPurgeTombstoned_LostMissionLiveFlagsTombstone(t *testing.T) {
+// writeDelegationRecordFor writes a Tier B delegation record naming sessionID
+// as the worker — the other half of SessionBoundMissions' expected-set union,
+// beside the mission-claim sidecar.
+func writeDelegationRecordFor(t *testing.T, repoRoot, missionID, sessionID string) {
+	t.Helper()
+	dir := filepath.Join(mission.RepoStatePath(repoRoot, "missions"), missionID, "delegations", "d-2026-07-21-001")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	body := "id: d-2026-07-21-001\ntier: B\nmission: " + missionID +
+		"\nsession: " + sessionID + "\nagent_type: bwk\ncreated_at: \"2026-07-21T00:00:00Z\"\nverdict: open\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "record.yaml"), []byte(body), 0o600))
+}
+
+// TestPurgeTombstoned_DelegationBoundMissionFlagsTombstone covers the
+// delegation-record half of the mission-binding union: the session was
+// dispatched under a mission, sealed no chunk for it, and its live log is gone.
+//
+// Its own live audit file is written AND SEALED, so the session-namespace probe
+// reports clean and the tombstone flag can only come from the mission
+// namespace. Without that the test passes whatever the mission logic does —
+// which is what this test used to do under a name promising otherwise
+// (ethos-q6e2).
+func TestPurgeTombstoned_DelegationBoundMissionFlagsTombstone(t *testing.T) {
 	s := testStore(t)
 	repoRoot := t.TempDir()
 	root := Participant{AgentID: "user1"}
 	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
-	require.NoError(t, s.Create("sess-ml", root, primary, testRepoID, ""))
-	// The session sealed a mission chunk but its mission live log is gone
-	// (never on disk) — REQ-1: purge must flag this loss in a tombstone.
-	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-ml")
+	require.NoError(t, s.CreateInCheckout("sess-ml", root, primary, testRepoID, repoRoot, ""))
+	writeSealedLive(t, repoRoot, "sess-ml")
+	writeDelegationRecordFor(t, repoRoot, "m-2026-07-21-009", "sess-ml")
+	// Another session's chunk for the same mission vouches for that session,
+	// never for this one.
+	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "other-sess")
 
 	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
 	require.NoError(t, err)
@@ -54,16 +77,21 @@ func TestPurgeTombstoned_LostMissionLiveFlagsTombstone(t *testing.T) {
 	assert.Empty(t, refused)
 
 	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-ml.purged"))
-	require.NoError(t, err)
+	require.NoError(t, err, "a mission-namespace loss must leave a tombstone")
 	assert.True(t, tb.LiveFileGone, "lost mission live log must set the tombstone flag")
 }
 
+// TestPurgeTombstoned_ClaimedButUnsealedMissionFlagsTombstone is the
+// claim-sidecar half of the same union, isolated the same way: the session's
+// own live audit file is sealed and clean, so only the mission namespace can
+// supply the flag.
 func TestPurgeTombstoned_ClaimedButUnsealedMissionFlagsTombstone(t *testing.T) {
 	s := testStore(t)
 	repoRoot := t.TempDir()
 	root := Participant{AgentID: "user1"}
 	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
-	require.NoError(t, s.Create("sess-claimed", root, primary, testRepoID, ""))
+	require.NoError(t, s.CreateInCheckout("sess-claimed", root, primary, testRepoID, repoRoot, ""))
+	writeSealedLive(t, repoRoot, "sess-claimed")
 	// REQ-1 residual: the session CLAIMED a mission (sidecar binding) but sealed
 	// no chunk, and its mission live log is gone. With only chunk-derived
 	// enumeration this loss is silent; the mission-binding union must catch it.
@@ -77,6 +105,31 @@ func TestPurgeTombstoned_ClaimedButUnsealedMissionFlagsTombstone(t *testing.T) {
 	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-claimed.purged"))
 	require.NoError(t, err)
 	assert.True(t, tb.LiveFileGone, "claimed-but-unsealed lost mission live log must set the tombstone flag")
+}
+
+// TestPurgeTombstoned_NoMissionBindingLeavesNoTombstone is the control the two
+// tests above need to mean anything. It is their setup with the mission binding
+// removed and nothing else changed: if it still produced a tombstone, the flag
+// they assert would be coming from the session namespace and their names would
+// be lying again. It must purge silently, so the only difference between it and
+// them is the mission-namespace logic under test.
+func TestPurgeTombstoned_NoMissionBindingLeavesNoTombstone(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.CreateInCheckout("sess-control", root, primary, testRepoID, repoRoot, ""))
+	writeSealedLive(t, repoRoot, "sess-control")
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-control")
+	assert.Empty(t, refused)
+
+	_, err = audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-control.purged"))
+	assert.Error(t, err,
+		"a clean session with no mission binding must leave no tombstone; "+
+			"if it does, the mission-namespace assertions above prove nothing")
 }
 
 // breakMissionTree makes the repo's mission tree unreadable by planting a
@@ -143,14 +196,37 @@ func TestPurgeTombstoned_MissionProbeErrorRefuses(t *testing.T) {
 	assert.Contains(t, refused, "sess-mp")
 }
 
+// establishWroteHere makes repoRoot look like a checkout this session really
+// wrote in, so a missing live file there reads as a deletion rather than as the
+// ordinary absence of another checkout's state (ethos-q6e2).
+//
+// The evidence is a sibling live MISSION log, not a directory: the seal
+// MkdirAlls the live zone and creates <session>.lock in whatever checkout it
+// runs in, so any directory-keyed probe manufactures its own evidence. Only
+// <session>.log.jsonl is written solely by the live writer.
+func establishWroteHere(t *testing.T, repoRoot, sessionID string) {
+	t.Helper()
+	path := audit.LiveMissionLogPath(repoRoot, "m-2026-07-21-100", sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","event":"create"}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
+	// Seal it so this sibling contributes no unsealed lines of its own.
+	dir := audit.SealedMissionDir(repoRoot, "m-2026-07-21-100")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, audit.MissionChunkFile(sessionID, 100, 100)), []byte(line), 0o600))
+}
+
 func TestPurgeTombstoned_TombstoneWriteFailureRefuses(t *testing.T) {
 	s := testStore(t)
 	repoRoot := t.TempDir()
 	root := Participant{AgentID: "user1"}
 	primary := Participant{AgentID: "9999999", Parent: "user1"}
 	require.NoError(t, s.Create("sess-tb", root, primary, testRepoID, ""))
-	// No live file → liveGone → a tombstone is attempted. Block its write by
-	// planting a directory at the tombstone path; the roster must survive.
+	// The checkout wrote session audit files but this session's is gone →
+	// liveGone → a tombstone is attempted. Block its write by planting a
+	// directory at the tombstone path; the roster must survive.
+	establishWroteHere(t, repoRoot, "sess-tb")
 	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tb.purged"), 0o700))
 
 	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
@@ -168,6 +244,7 @@ func TestPurgeTombstoned_TombstoneWriteFailureRefusesUnderForce(t *testing.T) {
 	root := Participant{AgentID: "user1"}
 	primary := Participant{AgentID: "9999999", Parent: "user1"}
 	require.NoError(t, s.Create("sess-tbf", root, primary, testRepoID, ""))
+	establishWroteHere(t, repoRoot, "sess-tbf")
 	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tbf.purged"), 0o700))
 
 	// --force overrides an unprovable state, never a failed loss record.
@@ -438,4 +515,53 @@ func TestPurgeTombstoned_OtherRepoIdentitySkipped(t *testing.T) {
 	ids, err := s.List()
 	require.NoError(t, err)
 	assert.Contains(t, ids, "sess-other", "a session from another repo identity must be left untouched")
+}
+
+// TestPurgeTombstoned_NonWriterCheckoutMintsNoSessionTombstone is the
+// session-namespace twin of the mission fix. A purge run in a checkout that
+// never wrote session audit files must not read its own empty live zone as this
+// session's loss — that minted a PERMANENT flagged tombstone, warning at every
+// commit until acked, for a session that lost nothing.
+//
+// The vacuum skips rosters with no recorded checkout, but purge falls back to
+// repoRoot for them, so the session-namespace probe alone was enough to
+// fabricate the record (Bugbot, PR #413).
+func TestPurgeTombstoned_NonWriterCheckoutMintsNoSessionTombstone(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir() // exists, and never wrote a session audit file
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	// A roster predating the checkout field: purge falls back to repoRoot.
+	require.NoError(t, s.Create("sess-elsewhere", root, primary, testRepoID, ""))
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-elsewhere")
+	assert.Empty(t, refused, "a checkout with no live zone must not force a refusal")
+
+	_, err = audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-elsewhere.purged"))
+	assert.Error(t, err,
+		"a checkout that never wrote session audit files must not mint a loss tombstone")
+}
+
+// TestPurgeTombstoned_WriterCheckoutGoneFlagsSessionTombstone is the other
+// side: a recorded checkout that no longer exists took its live zone with it,
+// which is the crash -> checkout-deleted case the tombstone exists to record.
+// Absence there must still flag.
+func TestPurgeTombstoned_WriterCheckoutGoneFlagsSessionTombstone(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	gone := filepath.Join(t.TempDir(), "deleted-checkout")
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.CreateInCheckout("sess-gone", root, primary, testRepoID, gone, ""))
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, true)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-gone")
+	assert.Empty(t, refused)
+
+	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-gone.purged"))
+	require.NoError(t, err, "a deleted writer checkout must leave a loss tombstone")
+	assert.True(t, tb.LiveFileGone)
 }

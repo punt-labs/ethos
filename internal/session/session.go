@@ -13,10 +13,20 @@ type Participant struct {
 }
 
 // Roster is the session-scoped list of all participants.
+//
+// Repo and Checkout are two different bindings and neither substitutes for the
+// other. Repo is a git-remote identity (org/name) shared by every checkout of
+// that repo. Checkout is the one filesystem path whose machine-local live audit
+// zone this session writes to (DES-058) — the path DESIGN.md §Seal failure
+// requires the vacuum cross-check to retain, so a probe reads the live files
+// where they were written rather than wherever a commit happens to run. It is
+// empty on rosters written before the field existed, which reads as "writer
+// unknown".
 type Roster struct {
 	Session      string        `yaml:"session" json:"session"`
 	Started      string        `yaml:"started" json:"started"`
 	Repo         string        `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Checkout     string        `yaml:"checkout,omitempty" json:"checkout,omitempty"`
 	Host         string        `yaml:"host,omitempty" json:"host,omitempty"`
 	Participants []Participant `yaml:"participants" json:"participants"`
 }

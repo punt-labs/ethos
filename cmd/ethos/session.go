@@ -489,7 +489,8 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    exactly as the hook resolves them — R6 convergence).
 	root := session.Participant{AgentID: human, Persona: human}
 	primary := session.Participant{AgentID: primaryID, Persona: primaryPersona, Parent: human}
-	if err := ss.Create(id, root, primary, hook.ResolveRepo(), hook.ResolveHost()); err != nil {
+	if err := ss.CreateInCheckout(id, root, primary,
+		hook.ResolveRepo(), resolve.EnvRepoRoot(), hook.ResolveHost()); err != nil {
 		return fmt.Errorf("session start: creating roster: %w", err)
 	}
 

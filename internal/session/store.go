@@ -44,8 +44,20 @@ func (s *Store) currentDir() string {
 	return filepath.Join(s.sessionsDir(), "current")
 }
 
-// Create creates a new session roster with root and primary participants.
+// Create creates a new session roster with root and primary participants,
+// recording no checkout. A session started inside a repo should use
+// CreateInCheckout instead, so its live audit zone stays findable from
+// elsewhere.
 func (s *Store) Create(sessionID string, root, primary Participant, repo, host string) error {
+	return s.CreateInCheckout(sessionID, root, primary, repo, "", host)
+}
+
+// CreateInCheckout is Create for a session started inside a checkout. checkout
+// is that checkout's path — the one whose machine-local live audit zone this
+// session writes to (DES-058). Recording it is what lets a probe run from any
+// checkout read the live files where they were actually written, instead of
+// concluding from their absence here that they were lost.
+func (s *Store) CreateInCheckout(sessionID string, root, primary Participant, repo, checkout, host string) error {
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return fmt.Errorf("creating sessions directory: %w", err)
 	}
@@ -73,6 +85,7 @@ func (s *Store) Create(sessionID string, root, primary Participant, repo, host s
 		Session:      sessionID,
 		Started:      now,
 		Repo:         repo,
+		Checkout:     checkout,
 		Host:         host,
 		Participants: participants,
 	}
@@ -325,43 +338,66 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	unsealed := 0
 	liveGone := false
 	probeFailed := false
-	// The probes read the live audit zone under repoRoot keyed by session id — a
-	// bound session reaching here has repo == repoID, so repoRoot owns its zone,
-	// and an empty-binding session's zone is repoRoot too whenever a checkout is
-	// in scope. With no checkout in scope (purge run outside any repo) an
-	// empty-binding session's zone lives under a no-origin checkout we cannot name,
-	// so its unsealed state is unprovable — fail safe exactly as a probe error
-	// does: flag it and let the refuse/tombstone logic below handle force.
-	if repoRoot != "" {
-		if n, cErr := audit.SessionUnsealedCount(repoRoot, roster.Session); cErr != nil {
+	// The live probes read the checkout the roster recorded as its writer, not
+	// whichever checkout this purge runs in. Two checkouts share a repo identity
+	// but not a live zone (DES-058), so probing the wrong one reports a live file
+	// "gone" that was never there and mints a permanent, un-earned loss tombstone
+	// (ethos-q6e2). A roster written before the field existed records no
+	// checkout; it falls back to repoRoot, which is what every roster did before.
+	writer := audit.RecordedWriter(roster.Checkout)
+	if roster.Checkout == "" {
+		writer = audit.AssumedWriter(repoRoot)
+	}
+	liveRoot := writer.Root
+	// Tracked chunks live in a checkout too — normally repoRoot, the one this
+	// purge runs in. With no checkout in scope the recorded one is the only
+	// checkout we can name, and it holds its own tracked tree; reading there
+	// beats resolving ".punt-labs/..." relative to the working directory, which
+	// is either nothing or some unrelated repo's chunks.
+	trackedRoot := repoRoot
+	if trackedRoot == "" {
+		trackedRoot = liveRoot
+	}
+	// With no checkout in scope and none recorded, the session's zone lives under
+	// a checkout we cannot name, so its unsealed state is unprovable — fail safe
+	// exactly as a probe error does: flag it and let the refuse/tombstone logic
+	// below handle force.
+	if liveRoot != "" {
+		if n, cErr := audit.SessionUnsealedCountAcross(trackedRoot, liveRoot, roster.Session); cErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: probing %s unsealed audit lines: %v\n", roster.Session, cErr)
 		} else {
 			unsealed = n
 		}
-		liveGone = !audit.SessionLiveFileExists(repoRoot, roster.Session)
+		liveGone = audit.SessionLiveFileLost(writer, roster.Session)
 		// REQ-1: the guard spans both namespaces. A session that sealed a
 		// mission chunk and then lost its mission live log (worktree torn
 		// down), or a Tier B session that claimed a mission but sealed no
 		// chunk yet, must not purge silently — enumerate the expected mission
 		// live files (chunk-derived union mission-record bindings) and fold
 		// their unsealed/gone state in.
-		bound, bErr := mission.SessionBoundMissions(s.root, repoRoot, roster.Session)
+		bound, bErr := mission.SessionBoundMissions(s.root, trackedRoot, roster.Session)
 		if bErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: resolving %s mission bindings: %v\n", roster.Session, bErr)
 		}
-		expected, eErr := audit.ExpectedMissionLiveFiles(repoRoot, roster.Session, bound)
+		expected, eErr := audit.ExpectedMissionLiveFiles(trackedRoot, writer, roster.Session, bound)
 		if eErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: enumerating %s mission live files: %v\n", roster.Session, eErr)
 		}
 		for _, ml := range expected {
-			if !ml.Present {
+			if ml.Lost() {
 				liveGone = true
 				continue
 			}
-			if n, cErr := audit.MissionUnsealedCount(repoRoot, ml.MissionID, roster.Session); cErr != nil {
+			if !ml.Present {
+				// Absent but durable: sealed chunks or a frozen legacy record
+				// hold the lines. Nothing to count and nothing to flag — this
+				// is the steady state in every checkout but the writer's.
+				continue
+			}
+			if n, cErr := audit.MissionUnsealedCount(trackedRoot, liveRoot, ml.MissionID, roster.Session); cErr != nil {
 				probeFailed = true
 				fmt.Fprintf(os.Stderr, "ethos: purge: probing mission %s unsealed lines for %s: %v\n",
 					ml.MissionID, roster.Session, cErr)
@@ -392,7 +428,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 			Session:       roster.Session,
 			StartDate:     rosterStartDate(roster),
 			Repo:          repo,     // git-remote identity ("" for a no-origin checkout) — the vacuum matches on it
-			Checkout:      repoRoot, // the filesystem checkout the probes ran under ("" when out of repo)
+			Checkout:      liveRoot, // the checkout whose live zone the probes read ("" when unrecorded and out of repo)
 			UnsealedLines: unsealed > 0 || probeFailed,
 			LiveFileGone:  liveGone,
 		}

@@ -5968,6 +5968,45 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   I11-chunk makes it unreachable normally, so if it appears the store is
   damaged and the seal fails loudly rather than sealing past it.
 
+**Implementation note (ethos-q6e2).** "The path itself is retained in the purge
+tombstone and vacuum cross-check" was specified but only half-built: the
+tombstone carried `Checkout`, the cross-check ignored it, and the roster had no
+field to carry one, so both probes fell back to whichever checkout was
+committing. Any checkout that had not written a session's live file read its
+absence as loss — a false "lines were lost" on every commit from a worktree, a
+fresh clone, or a second machine, for every mission a long-lived session had
+ever touched. The fix threads the recorded writer through both probes:
+`session.Roster` gains `Checkout` (a peer of `Repo` — an identity is shared by
+every checkout of a repo, a live zone by exactly one), the live probes follow it,
+and the tracked-chunk probes stay rooted at the committing checkout. The loss
+predicate is `Lost() = !(Present || Legacy) && (WriterRecorded || !Sealed ||
+!WriterPresent || WriterZone)`. A sealed chunk vouches only through its own
+watermark — it proves the lines up to the last seal survived, not the unsealed
+tail that lives only in the live file — so it cannot suppress a deletion in the
+checkout that wrote it. Suppression happens in exactly one case: a checkout we
+merely fell back to (`!WriterRecorded`), still present (`WriterPresent`), holding
+no live log of this session (`!WriterZone`). `WriterZone` is keyed on a sibling
+`<session>.log.jsonl`, the one artifact the seal never creates — it makes only a
+`.lock`, so a directory-existence probe would manufacture its own evidence and
+silence the very loss it guards on the *first* seal, since the seal runs before
+the vacuum in one invocation. A recorded writer that cannot produce the file is a
+deletion and warns; a bound mission that sealed nothing warns; a legacy pre-field
+roster (empty `Checkout`) suppresses — the bounded residual, which ages out as
+sessions restart. The guard is stronger than before its break: a checkout that
+deleted the writer is now distinguishable from one that never wrote there, and
+the deletion is visible from any checkout, not only the writer's.
+
+**Maintaining this guard.** The predicate took four revisions and every hole was
+the same shape — a locally-plausible suppression that silently dropped a real
+loss — and the unit test table stayed green through the two worst. What caught
+them was mutation testing at two levels: mutate every term of `Lost()` and every
+`RecordedWriter`/`AssumedWriter` call site, and require a distinct named test to
+die for each. A wiring mutant — a recorded writer mis-wired as a fallback —
+restored the whole bug with a green suite until an integration test that plants
+*no* sibling live log under the recorded checkout made the `WriterRecorded` term
+load-bearing. Keep that discipline for any change here: a green suite is not
+evidence this predicate is sound.
+
 ### Invariant changes
 
 `I10-audit-atomic` amended: appends target the live session log under the
