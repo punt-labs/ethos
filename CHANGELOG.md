@@ -55,6 +55,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pre-commit audit seal no longer reports sealed mission-log lines as lost
+  (`ethos-q6e2`).** The vacuum cross-check warned "unsealed mission-log lines
+  were lost" whenever a mission's live log was absent, without consulting the
+  sealed watermark. The live zone is per-checkout by design while sealed chunks
+  are git-tracked and travel, so every checkout that had not written the log —
+  a worktree, a fresh clone, a second machine — reported loss for every mission
+  a long-lived session had ever touched, on every commit. **No audit data was
+  ever lost:** every warned mission's live tail sat at or below its sealed
+  watermark, and the lines were already committed in `.punt-labs/ethos/`. A
+  sealed chunk, or a frozen pre-DES-058 `log.jsonl`, is now taken as proof the
+  lines survived; the genuine-loss case — a mission the session is bound to
+  that sealed nothing and has no live file — still warns. The session roster now
+  records the checkout that wrote it, so the live probe follows the recorded
+  writer rather than whichever checkout is committing; a checkout that deleted
+  the writer is now distinguishable from one that never wrote there, making the
+  guard strictly stronger. `ethos session purge` used the same predicate and
+  could mint a permanent flagged loss tombstone for a session that lost nothing;
+  it no longer can.
+
 - **Four mission/hook friction defects (ethos-jawp, ethos-72wj, ethos-qvbh,
   ethos-c0yp).**
 

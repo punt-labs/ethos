@@ -5968,6 +5968,26 @@ gitignored `.punt-labs/local/` zone is the live write path; the tracked
   I11-chunk makes it unreachable normally, so if it appears the store is
   damaged and the seal fails loudly rather than sealing past it.
 
+**Implementation note (ethos-q6e2).** "The path itself is retained in the purge
+tombstone and vacuum cross-check" was specified but only half-built: the
+tombstone carried `Checkout` and the cross-check ignored it, and the roster had
+no field to carry one, so both probes fell back to whichever checkout was
+committing. Any checkout that had not written a session's live file therefore
+read its absence as loss, even though the sealed chunk proving the lines
+survived was right there in the tracked tree — a false "lines were lost" on
+every commit from a worktree, a fresh clone, or a second machine. Two fixes,
+both narrowing: the loss test now consults the watermark first (a sealed chunk,
+or a frozen pre-DES-058 `log.jsonl` for a mission that sealed nothing else, is
+proof of survival, so absence beside a chunk is the steady state of every
+non-writing checkout, not loss); and `session.Roster` now carries `Checkout` as
+a peer of `Repo` — an identity is shared by every checkout of a repo, a live
+zone by exactly one — so the live probes follow the recorded writer while the
+tracked-chunk probes stay rooted at the committing checkout. A roster or
+tombstone recording no checkout names no writer, so nothing is concluded from an
+absence there. The genuine-loss guard is unweakened and in fact stronger: a
+checkout that deleted the writer is now distinguishable from one that never
+wrote there.
+
 ### Invariant changes
 
 `I10-audit-atomic` amended: appends target the live session log under the
