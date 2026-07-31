@@ -193,6 +193,27 @@ func SessionLiveFileExists(liveRoot, sessionID string) bool {
 	return err == nil
 }
 
+// SessionLiveFileLost reports whether a session's live audit file is missing in
+// a way that means loss rather than the ordinary absence of another checkout's
+// state. It is the session-namespace twin of MissionLive.Lost and weighs the
+// same two facts about the writer:
+//
+//   - the writer checkout is GONE — it took its live zone with it, so nothing
+//     there can be inspected and the lines are unaccounted for; or
+//   - the writer is present and HAS a live-sessions zone, so it wrote audit
+//     files and this one's absence is a deletion.
+//
+// A present writer with no live-sessions zone never wrote there, so its missing
+// file says nothing. That is the case a probe run from the wrong checkout hits,
+// and reading it as loss minted permanent, un-earned tombstones (ethos-q6e2).
+func SessionLiveFileLost(liveRoot, sessionID string) bool {
+	if SessionLiveFileExists(liveRoot, sessionID) {
+		return false
+	}
+	present, zone := checkoutState(liveRoot, LiveSessionsDir)
+	return !present || zone
+}
+
 // SessionDateFormat is the YYYY-MM-DD prefix on a dated per-session sealed
 // directory. UTC by convention so two operators in different timezones see the
 // same directory name for the same session.
@@ -343,7 +364,7 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 		add(id)
 	}
 
-	writerPresent, writerZone := writerCheckoutState(liveRoot)
+	writerPresent, writerZone := checkoutState(liveRoot, LiveMissionsDir)
 
 	sort.Strings(ids)
 	out := make([]MissionLive, 0, len(ids))
@@ -371,23 +392,23 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 	return out, nil
 }
 
-// writerCheckoutState reports whether the recorded writer checkout still exists
-// and whether it has a live-missions zone. MissionLive.Lost needs both: an
-// absent zone means "never wrote mission live logs" only when the checkout
-// itself is still there to have written them.
+// checkoutState reports whether the recorded writer checkout still exists and
+// whether the live zone named by zoneDir is present inside it. Both the mission
+// and session guards need the pair: an absent zone means "never wrote there"
+// only when the checkout itself is still around to have written it.
 //
 // An empty root is not a checkout, and it must not read as present: joining
 // onto "" builds a relative path that could match some unrelated directory
 // below the working directory. An unknown writer is treated as gone, which
 // warns — the fail-safe direction.
-func writerCheckoutState(liveRoot string) (present, zone bool) {
+func checkoutState(liveRoot string, zoneDir func(string) string) (present, zone bool) {
 	if liveRoot == "" {
 		return false, false
 	}
 	if info, err := os.Stat(liveRoot); err != nil || !info.IsDir() {
 		return false, false
 	}
-	info, err := os.Stat(LiveMissionsDir(liveRoot))
+	info, err := os.Stat(zoneDir(liveRoot))
 	return true, err == nil && info.IsDir()
 }
 
