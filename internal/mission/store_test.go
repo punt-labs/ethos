@@ -3025,6 +3025,56 @@ func TestStore_AppendResult_FilesChangedContainment_TrailingSlash(t *testing.T) 
 	require.NoError(t, s.AppendResult(c.MissionID, r))
 }
 
+// TestStore_AppendResult_FilesChangedContainment_Glob asserts
+// ethos-qy7k: a write_set entry declaring a glob admits the paths the
+// glob names. Before the fix, `docs/**` compared literally — the
+// result's real path had `audited-delegation.md` where the entry had
+// `**`, so a legitimate result submission was refused and the worker
+// could not close the round.
+func TestStore_AppendResult_FilesChangedContainment_Glob(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"docs/**", "internal/mission/*.go"}
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = []FileChange{
+		{Path: "docs/audited-delegation.md"},
+		{Path: "docs/design/adr/des-054.md"},
+		{Path: "internal/mission/store.go"},
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+}
+
+// TestStore_AppendResult_FilesChangedContainment_GlobStillBounded
+// asserts the glob fix did not turn the containment check into a
+// pass-through: a path outside every declared entry is still refused,
+// and a single-star entry does not reach across a path separator.
+func TestStore_AppendResult_FilesChangedContainment_GlobStillBounded(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"docs/**", "internal/mission/*.go"}
+	require.NoError(t, s.Create(c))
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "outside every entry", path: "cmd/ethos/mission.go"},
+		{name: "sibling of a glob root", path: "docsite/index.md"},
+		{name: "single star does not span a separator", path: "internal/mission/sub/store.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := resultFor(c, VerdictPass)
+			r.FilesChanged = []FileChange{{Path: tt.path}}
+			err := s.AppendResult(c.MissionID, r)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "outside mission")
+		})
+	}
+}
+
 // TestStore_AppendResult_FilesChangedAcceptsValid asserts the positive
 // branch of the containment check: paths under a write_set entry
 // (exact, prefix, and dot-segment variants) are all admitted.

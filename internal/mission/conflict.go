@@ -5,6 +5,7 @@ package mission
 import (
 	"errors"
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 )
@@ -253,11 +254,34 @@ func pathsOverlap(a, b string) bool {
 	return true
 }
 
+// PathContainedBy reports whether file lives inside the write_set
+// entry. It is the exported form of pathContainedBy for callers
+// outside the package — the PreToolUse verifier allowlist — so the
+// allowlist admits exactly what the result-containment check admits.
+// A second implementation in the hook package would drift the moment
+// the entry semantics change.
+func PathContainedBy(file, entry string) bool {
+	return pathContainedBy(file, entry)
+}
+
 // pathContainedBy reports whether a file path lives inside a
 // write_set entry. The predicate is asymmetric: the entry's
-// normalized segment list must be a prefix of the file's normalized
-// segment list, AND the file must have at least as many segments as
-// the entry. "Equal" counts as contained.
+// normalized segment list must match a prefix of the file's
+// normalized segment list, AND the file must have at least as many
+// segments as the entry consumes. "Equal" counts as contained.
+//
+// Entry segments carrying glob metacharacters (`*`, `?`, `[`) match
+// by pattern rather than by literal equality: `*` and `?` match
+// within one segment (path.Match), and a `**` segment matches any
+// number of segments, including none. A write_set that declares
+// `docs/**` claims every path under docs/, so a result reporting
+// `docs/audited-delegation.md` is inside it (ethos-qy7k — the
+// literal comparison read `**` as a directory named `**` and refused
+// every real path under the declared entry).
+//
+// Globs only ever widen what an entry contains, and only for entries
+// that declare one. A literal entry compares exactly as before, so
+// the parent-claim refusal below is untouched.
 //
 // This is the right primitive for Phase 3.6 result containment —
 // "is the result's files_changed path inside the contract's
@@ -279,15 +303,65 @@ func pathContainedBy(file, entry string) bool {
 	if len(fs) == 0 || len(es) == 0 {
 		return false
 	}
-	if len(fs) < len(es) {
+	return segmentsContain(fs, es)
+}
+
+// segmentsContain reports whether the entry segments match a leading
+// run of the file segments. Literal and single-segment glob entries
+// consume one file segment each; a `**` entry consumes any number,
+// which is what makes the match a backtracking walk rather than a
+// straight loop. star records the last `**` position and mark the
+// file offset it was matched at, so a failure downstream retries with
+// `**` swallowing one more segment.
+//
+// The entry running out is success — everything below the matched
+// prefix is inside the entry. The file running out with entry
+// segments still to match is failure: that is the parent-claim shape
+// (file `cmd`, entry `cmd/ethos/serve.go`) the asymmetry exists to
+// refuse.
+func segmentsContain(fs, es []string) bool {
+	i, j := 0, 0
+	star, mark := -1, 0
+	for {
+		if j == len(es) {
+			return true
+		}
+		if es[j] == "**" {
+			star, mark = j, i
+			j++
+			continue
+		}
+		if i < len(fs) && segmentMatches(es[j], fs[i]) {
+			i++
+			j++
+			continue
+		}
+		if star >= 0 && mark < len(fs) {
+			mark++
+			i = mark
+			j = star + 1
+			continue
+		}
 		return false
 	}
-	for i, seg := range es {
-		if fs[i] != seg {
-			return false
-		}
+}
+
+// segmentMatches reports whether one entry segment matches one file
+// segment. A segment with no glob metacharacter compares literally —
+// the common case, and the one that keeps every non-glob write_set
+// entry byte-identical in behavior. A malformed pattern (path.Match
+// returns ErrBadPattern, e.g. an unclosed `[`) also falls back to
+// literal comparison rather than matching nothing: the per-entry
+// validator accepts such a path, so it names a real file.
+func segmentMatches(entrySeg, fileSeg string) bool {
+	if !strings.ContainsAny(entrySeg, "*?[") {
+		return entrySeg == fileSeg
 	}
-	return true
+	ok, err := path.Match(entrySeg, fileSeg)
+	if err != nil {
+		return entrySeg == fileSeg
+	}
+	return ok
 }
 
 // splitSegments normalizes a write_set entry and splits it on the

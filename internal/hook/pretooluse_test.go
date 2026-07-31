@@ -325,6 +325,34 @@ func TestPathAllowed(t *testing.T) {
 	}
 }
 
+// TestPathAllowed_GlobEntry asserts ethos-qy7k on the enforcement
+// side: the allowlist is built from the write_set, so an entry that
+// declares a glob must admit the paths the glob names. Compared
+// literally, `docs/**` authorized nothing at all — the verifier was
+// refused every write the contract had allowed.
+func TestPathAllowed_GlobEntry(t *testing.T) {
+	entries := []string{"docs/**", "internal/mission/*.go"}
+
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{"doublestar one level down", "docs/audited-delegation.md", true},
+		{"doublestar many levels down", "docs/design/adr/des-054.md", true},
+		{"single star inside one segment", "internal/mission/store.go", true},
+		{"single star does not span a separator", "internal/mission/sub/store.go", false},
+		{"outside every entry", "cmd/ethos/hook.go", false},
+		{"sibling of the glob root", "docsite/index.md", false},
+		{"traversal out of a glob entry", "docs/../secret.md", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, pathAllowed(tt.target, entries))
+		})
+	}
+}
+
 // TestHandlePreToolUse_EnvVarFromSubagentStart verifies end-to-end
 // that the env var format produced by buildVerifierAllowlistEnv is
 // correctly consumed by HandlePreToolUse.

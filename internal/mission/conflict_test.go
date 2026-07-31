@@ -332,6 +332,80 @@ func TestPathContainedBy(t *testing.T) {
 			entry: "internal/mission",
 			want:  false,
 		},
+		{
+			// ethos-qy7k: a doublestar entry claims everything under
+			// the directory. The literal comparison read `**` as a
+			// directory name and refused every real path.
+			name:  "doublestar entry contains a file one level down",
+			file:  "docs/audited-delegation.md",
+			entry: "docs/**",
+			want:  true,
+		},
+		{
+			name:  "doublestar entry contains a file many levels down",
+			file:  "docs/design/adr/des-054.md",
+			entry: "docs/**",
+			want:  true,
+		},
+		{
+			name:  "doublestar entry does not contain a sibling tree",
+			file:  "internal/mission/store.go",
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			name:  "doublestar in the middle spans intermediate segments",
+			file:  "internal/mission/sub/pkg/store.go",
+			entry: "internal/**/store.go",
+			want:  true,
+		},
+		{
+			name:  "doublestar in the middle still requires the tail to match",
+			file:  "internal/mission/sub/pkg/result.go",
+			entry: "internal/**/store.go",
+			want:  false,
+		},
+		{
+			name:  "single star matches within one segment only",
+			file:  "internal/mission/store.go",
+			entry: "internal/*",
+			want:  true,
+		},
+		{
+			name:  "single star does not match a path separator",
+			file:  "internal/mission/store.go",
+			entry: "*.go",
+			want:  false,
+		},
+		{
+			name:  "star suffix matches an extension within a segment",
+			file:  "internal/mission/store.go",
+			entry: "internal/mission/*.go",
+			want:  true,
+		},
+		{
+			name:  "star suffix rejects a different extension",
+			file:  "internal/mission/store.yaml",
+			entry: "internal/mission/*.go",
+			want:  false,
+		},
+		{
+			// A glob entry must not resurrect the parent-claim
+			// exploit: the file still has to reach the entry's tail.
+			name:  "parent of a glob entry is still refused",
+			file:  "internal",
+			entry: "internal/*/store.go",
+			want:  false,
+		},
+		{
+			// An unclosed bracket is not a valid pattern; path.Match
+			// reports ErrBadPattern. The validator accepts the entry,
+			// so it must still match the file it literally names.
+			name:  "malformed pattern compares literally",
+			file:  "internal/a[b/store.go",
+			entry: "internal/a[b",
+			want:  true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
