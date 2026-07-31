@@ -521,25 +521,32 @@ func TestStore_CreateInCheckoutRecordsCheckout(t *testing.T) {
 	assert.Equal(t, "", roster.Checkout)
 }
 
-// TestPurgeTombstoned_SealedMissionDoesNotFlagTombstone is Fix 4 of ethos-q6e2.
-// The mission-namespace guard used to read an absent live log as loss, so a
-// purge run anywhere but the writing checkout minted a PERMANENT flagged
-// tombstone — a loss record that was never earned and warns at every commit
-// until acked. A sealed chunk is proof the lines survived, so this session is
-// clean and must purge silently.
+// TestPurgeTombstoned_SealedMissionInNonWriterCheckoutDoesNotFlagTombstone is
+// Fix 4 of ethos-q6e2. The mission-namespace guard used to read an absent live
+// log as loss, so a purge run anywhere but the writing checkout minted a
+// PERMANENT flagged tombstone — a loss record that was never earned and warns
+// at every commit until acked.
+//
+// The suppression is narrower than "a chunk exists", and this test's setup is
+// what makes it apply: the checkout has NO live-missions zone, so it never
+// wrote these files and its absence of them says nothing. A checkout that HAS
+// the zone but not this mission's file is looking at a deletion and still
+// flags — TestVacuumCrossCheckWarnsOnDeletedLiveLogInWriterCheckout covers that
+// side.
 //
 // The session's own live audit file is written and fully sealed here, so the
 // session-namespace probe cannot supply the flag: only the mission branch is
 // under test.
-func TestPurgeTombstoned_SealedMissionDoesNotFlagTombstone(t *testing.T) {
+func TestPurgeTombstoned_SealedMissionInNonWriterCheckoutDoesNotFlagTombstone(t *testing.T) {
 	s := testStore(t)
 	repoRoot := t.TempDir()
 	root := Participant{AgentID: "user1"}
 	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
 	require.NoError(t, s.CreateInCheckout("sess-sealed", root, primary, testRepoID, repoRoot, ""))
 	writeSealedLive(t, repoRoot, "sess-sealed")
-	// A mission whose chunk carries this session, with no live log in this
-	// checkout — the steady state of every checkout that did not write it.
+	// A mission whose chunk carries this session, with no live log and no
+	// live-missions zone in this checkout — the steady state of every checkout
+	// that did not write them.
 	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-sealed")
 
 	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
@@ -591,4 +598,50 @@ func TestPurgeTombstoned_OutOfRepoUsesRecordedCheckout(t *testing.T) {
 
 	_, err = audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-oor.purged"))
 	assert.Error(t, err, "state provable at the recorded checkout must not flag a loss")
+}
+
+// TestPurgeTombstoned_DeletedLiveLogInWriterCheckoutFlagsTombstone is the other
+// side of the suppression, on the purge path. Here the checkout DID write
+// mission live logs — a sibling mission's file stands — so this mission's
+// missing file is a deletion, and the tail written after the chunk's watermark
+// went with it. Purge must record that loss.
+//
+// Without the WriterZone distinction a sealed chunk suppressed unconditionally
+// and the whole deletion class purged silently (rsc, PR #413 M1).
+func TestPurgeTombstoned_DeletedLiveLogInWriterCheckoutFlagsTombstone(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.CreateInCheckout("sess-del", root, primary, testRepoID, repoRoot, ""))
+	writeSealedLive(t, repoRoot, "sess-del")
+	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-del")
+	// The live-missions zone exists here — this checkout wrote mission logs —
+	// so m-2026-07-21-009's absent file is a deletion, not another checkout's
+	// ordinary absence.
+	writeLiveMissionLogFor(t, repoRoot, "m-2026-07-21-010", "sess-del")
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-del")
+	assert.Empty(t, refused)
+
+	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-del.purged"))
+	require.NoError(t, err, "a deletion in the writer's own checkout must leave a tombstone")
+	assert.True(t, tb.LiveFileGone, "the deleted mission live log must set the flag")
+}
+
+// writeLiveMissionLogFor writes one sealed-and-clean live mission log, enough
+// to establish that the checkout has a live-missions zone.
+func writeLiveMissionLogFor(t *testing.T, repoRoot, missionID, sessionID string) {
+	t.Helper()
+	path := audit.LiveMissionLogPath(repoRoot, missionID, sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","event":"create"}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
+	// Seal it, so this sibling contributes no unsealed lines of its own.
+	dir := audit.SealedMissionDir(repoRoot, missionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, audit.MissionChunkFile(sessionID, 100, 100)), []byte(line), 0o600))
 }

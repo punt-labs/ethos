@@ -308,6 +308,20 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 			wantLost: true,
 		},
 		{
+			name:    "sealed chunk, live log DELETED in the writer's own checkout",
+			mission: "m-2026-07-21-005",
+			setup: func(t *testing.T, repo, mid string) {
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
+				// The checkout has a live-missions zone — another mission's
+				// live log stands — so this mission's absent file is a
+				// deletion, not the ordinary absence of another checkout's
+				// files. The chunk vouches only through ts 200; anything
+				// written after it lived solely in the deleted file.
+				writeLiveMissionLine(t, repo, "m-2026-07-21-006", sess, 300)
+			},
+			wantLost: true,
+		},
+		{
 			name:    "bound, hybrid mission whose chunks were all quarantined",
 			mission: "m-2026-07-20-021",
 			setup: func(t *testing.T, repo, mid string) {

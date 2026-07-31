@@ -127,6 +127,50 @@ func TestVacuumCrossCheckSilentOnSealedMissionLive(t *testing.T) {
 	}
 }
 
+// TestVacuumCrossCheckWarnsOnDeletedLiveLogInWriterCheckout is the class a
+// chunk must NOT suppress. A chunk vouches only through its watermark; the tail
+// written after the last seal lives solely in the live file. So in the checkout
+// that wrote it — where the live-missions zone stands and only THIS mission's
+// file is missing — an absent live log is a deletion, and those post-watermark
+// lines are genuinely gone.
+//
+// Suppressing on a sealed chunk alone made the whole chunk-derived half of the
+// expected set unable to warn under any input, dropping the case the
+// enumeration exists for (rsc, PR #413 M1).
+func TestVacuumCrossCheckWarnsOnDeletedLiveLogInWriterCheckout(t *testing.T) {
+	repo := t.TempDir()
+	globalRoot := t.TempDir()
+	const sess = "sess-deleted"
+	mid := "m-2026-07-21-001"
+	writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile(sess, 100, 200), 100, 200)
+	// This checkout wrote mission live logs — a sibling mission's file stands —
+	// so the absent one is a deletion, not another checkout's ordinary absence.
+	writeLiveMissionLog(t, repo, "m-2026-07-21-002", sess, 300)
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, sess), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("mission "+mid)) ||
+		!bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
+		t.Errorf("a deleted live log in the writer's checkout passed unremarked: %q", buf.String())
+	}
+}
+
+// writeLiveMissionLog writes one line to a mission's per-(mission, session)
+// live log in a checkout's local zone.
+func writeLiveMissionLog(t *testing.T, repo, mid, sess string, ts int64) {
+	t.Helper()
+	path := audit.LiveMissionLogPath(repo, mid, sess)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":"` + audit.FormatLineTS(ts) + `","tool":"Bash"}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestVacuumCrossCheckNoLiveZoneReproduction is the reported symptom at scale:
 // a fresh checkout of a repo whose tracked tree already holds many missions'
 // sealed chunks — a worktree, a clone, a second machine — has no live zone at

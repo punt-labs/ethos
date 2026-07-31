@@ -242,19 +242,41 @@ type MissionLive struct {
 	// Requiring the mission to hold no chunk from ANY session keeps the
 	// proof to missions that closed before the split existed.
 	Legacy bool
+	// WriterZone reports whether the probed checkout's live-missions zone
+	// exists at all. It separates "this checkout never had these files" from
+	// "this checkout had them and this one is missing" — the difference
+	// between the steady state and a deletion.
+	WriterZone bool
 }
 
-// Lost reports whether a mission's lines are unaccounted for: the live file
-// is absent AND nothing durable holds them.
+// Lost reports whether a mission's lines are unaccounted for.
 //
 // Absence alone is not loss. The live zone is per-checkout by design
 // (DES-058), so the live file is absent in every checkout but the one that
 // wrote it — while a sealed chunk is git-tracked and travels to all of them.
-// A chunk (or a frozen legacy record) is therefore proof the lines survived,
-// and the only genuine-loss signal left is a mission the session is bound to
-// that sealed nothing and has no live file.
+// Reading absence as loss reported every mission a long-lived session had
+// touched, in every other checkout (ethos-q6e2).
+//
+// But a chunk only proves the lines UP TO its watermark survived. The tail
+// written after the last seal lives solely in the live file, so a chunk cannot
+// vouch for a deletion in the writer's own checkout — which is precisely the
+// case the chunk-derived half of the expected set was built to catch
+// (docs/audit-seal.md §Seal failure policy). Suppressing on Sealed alone drops
+// that whole class.
+//
+// WriterZone is what tells the two apart. A checkout with no live-missions zone
+// never wrote these files and has nothing to say about them; a checkout that
+// has the zone but not this mission's file is looking at a deletion. So a chunk
+// suppresses only where the zone is absent:
+//
+//	!Present && !Legacy && (!Sealed || WriterZone)
+//
+// Bounded residual: a session that wrote in two checkouts records only one, so
+// probing the recorded one can warn about a live file that is alive in the
+// other. That is far smaller than dropping every deletion in a sealed mission,
+// and it errs toward reporting.
 func (m MissionLive) Lost() bool {
-	return !m.Present && !m.Sealed && !m.Legacy
+	return !m.Present && !m.Legacy && (!m.Sealed || m.WriterZone)
 }
 
 // ExpectedMissionLiveFiles returns the per-(mission, session) live-log files a
@@ -306,6 +328,8 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 		add(id)
 	}
 
+	writerZone := liveMissionsZoneExists(liveRoot)
+
 	sort.Strings(ids)
 	out := make([]MissionLive, 0, len(ids))
 	for _, id := range ids {
@@ -320,14 +344,30 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 			return nil, err
 		}
 		out = append(out, MissionLive{
-			MissionID: id,
-			LivePath:  livePath,
-			Present:   statErr == nil,
-			Sealed:    sealed > 0,
-			Legacy:    legacy,
+			MissionID:  id,
+			LivePath:   livePath,
+			Present:    statErr == nil,
+			Sealed:     sealed > 0,
+			Legacy:     legacy,
+			WriterZone: writerZone,
 		})
 	}
 	return out, nil
+}
+
+// liveMissionsZoneExists reports whether a checkout has a live-missions zone —
+// evidence that mission live logs were written there, so a missing one is a
+// deletion rather than the ordinary absence of another checkout's files.
+//
+// An empty root is not a checkout. Joining onto "" would build a relative path
+// that could match some unrelated directory below the working directory, and an
+// unknown writer must never be read as a present zone.
+func liveMissionsZoneExists(liveRoot string) bool {
+	if liveRoot == "" {
+		return false
+	}
+	info, err := os.Stat(LiveMissionsDir(liveRoot))
+	return err == nil && info.IsDir()
 }
 
 // missionIsWhollyLegacy reports whether a mission's whole record is frozen
