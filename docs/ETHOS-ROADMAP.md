@@ -2,14 +2,16 @@
 
 Where ethos is going. Organized into phases that build on each other.
 
-## Current Status (2026-05-23)
+## Current Status (2026-07-30)
 
-Ethos is on `main` at v3.11.0 with all six original phases complete
-plus the DES-054 audited-delegation initiative (three phases) merged
-to the unreleased branch. 13 pipeline templates (8 core + 5 in
-gstack bundle), 10 archetypes, 2 embedded bundles (gstack, foundation).
-Phase 2.6 (`/mission` Phase B–C: conflict detection and dry-run)
-remains planned.
+Ethos is released at v4.8.0 with all six original phases complete plus
+the DES-054 audited-delegation initiative merged. Since v4.0.0 the project
+has shipped DES-057 self-standing repos (`ethos vendor`, `resolution:
+repo-only`, ext `.local`), the DES-058 live/sealed audit split, committed-PII
+redaction, and the entity-schema command (DES-066). 13 pipeline templates
+(8 core + 5 in gstack bundle), 10 archetypes, 2 embedded bundles (gstack,
+foundation). Phase 2.6 (`/mission` Phase B–C: conflict detection and
+dry-run) remains planned.
 
 | Phase | Status | Summary |
 |---|---|---|

@@ -382,8 +382,8 @@ contain `~` and `<repo>` tokens instead of absolute paths. The
 `tool_input_hash` is computed over the redacted form, so the
 hash is machine-independent and doesn't encode PII.
 
-**Gaps:** Entries written before the redaction fix (pre-v3.13.0)
-contain raw absolute paths including the username. These are in
+**Gaps:** Entries written before the redaction fix (ethos-ersr /
+ethos-n4np / ethos-ggtu) contain raw absolute paths including the username. These are in
 git history if committed. The redaction applies to `tool_input`
 and `tool_input_preview` but not to the conversation transcript
 (quarry captures), which may contain absolute paths in code
