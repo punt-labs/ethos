@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/hook"
@@ -93,6 +94,15 @@ var hookAuditLogCmd = &cobra.Command{
 	},
 }
 
+var hookCommitTrailersCmd = &cobra.Command{
+	Use:   "commit-trailers",
+	Short: "Mission/Delegation trailer values for the committing session",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookCommitTrailers(cmd.OutOrStdout())
+	},
+}
+
 func init() {
 	hookCmd.AddCommand(
 		hookSessionStartCmd,
@@ -103,6 +113,7 @@ func init() {
 		hookPreToolUseCmd,
 		hookFormatOutputCmd,
 		hookAuditLogCmd,
+		hookCommitTrailersCmd,
 	)
 	rootCmd.AddCommand(hookCmd)
 }
@@ -183,6 +194,33 @@ func runHookPreCompact() error {
 func runHookPreToolUse() error {
 	if err := hook.HandlePreToolUse(os.Stdin, os.Stdout); err != nil {
 		return fmt.Errorf("hook pre-tool-use: %w", err)
+	}
+	return nil
+}
+
+// runHookCommitTrailers prints the Mission/Delegation trailer values
+// for the session that is committing, for the commit-msg hook to read
+// back. Resolution is the harness-neutral chain the rest of the CLI
+// uses — ETHOS_SESSION, then the Claude process-tree walk — so a hook
+// running under a Bash tool call inside a session finds that session
+// and no other.
+//
+// An unresolved session prints nothing and exits 0: the hook adds no
+// trailer rather than guessing at one (ethos-pobi). A commit from a
+// plain terminal, from a non-Claude harness, or from a session with
+// no active mission is untouched.
+func runHookCommitTrailers(out io.Writer) error {
+	sessionID, _ := resolve.SessionID(sessionStore())
+	if sessionID == "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("hook commit-trailers: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := hook.WriteCommitTrailers(out, globalRoot, sessionID); err != nil {
+		return fmt.Errorf("hook commit-trailers: %w", err)
 	}
 	return nil
 }

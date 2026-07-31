@@ -183,16 +183,21 @@ func ReadDelegationBinding(globalRoot, sessionID string) (DelegationBinding, err
 		}
 		return DelegationBinding{}, fmt.Errorf("reading delegation-binding %q: %w", path, err)
 	}
+	// Trim each line, not just the file: a sidecar written with CRLF
+	// endings (or hand-edited with a trailing space) would otherwise
+	// carry the stray byte into the mission ID and fail every
+	// comparison against it — the delegation would silently drop off
+	// the commit trailer.
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	var b DelegationBinding
 	if len(lines) > 0 {
-		b.DelegationID = lines[0]
+		b.DelegationID = strings.TrimSpace(lines[0])
 	}
 	if len(lines) > 1 {
-		b.MissionID = lines[1]
+		b.MissionID = strings.TrimSpace(lines[1])
 	}
 	if len(lines) > 2 {
-		b.ParentSession = lines[2]
+		b.ParentSession = strings.TrimSpace(lines[2])
 	}
 	return b, nil
 }
