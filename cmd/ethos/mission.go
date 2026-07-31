@@ -918,6 +918,7 @@ func runMissionCreate() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
+	bindDispatchedMission("create", c.MissionID)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -1711,6 +1712,7 @@ func runMissionDispatch() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission dispatch: %w", err)
 	}
+	bindDispatchedMission("dispatch", c.MissionID)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -1793,6 +1795,71 @@ func runMissionRelease() error {
 	}
 	fmt.Printf("released session %s\n", sessionID)
 	return nil
+}
+
+// bindDispatchedMission points the caller's session at the mission it
+// just named, so the next Agent() spawn files its delegation record
+// under that mission (ethos-7vo3).
+//
+// The PreToolUse dispatch cannot see a MISSION_ID the leader never
+// exported into its own environment, so it falls back to the
+// active-mission sidecar. The sidecar was written only by `ethos
+// mission claim` and stayed put until an explicit `release`, which
+// made it sticky: a leader who created m-B while still bound to m-A
+// filed m-B's delegation under m-A (observed: d-078 under m-017).
+// Creating or dispatching a mission is the leader naming one
+// explicitly, so it is the moment the binding must follow.
+//
+// A rebind over a different mission prints one stderr line — the
+// leader is losing a binding they may still want, and a silent
+// rebind is how the stale-binding class hides. The delegation-binding
+// sidecar from the previous mission's dispatch is cleared with it;
+// it describes a dispatch that is no longer current.
+//
+// Every step is advisory: a session that will not resolve is the
+// ordinary case for a human running dispatch from a plain terminal,
+// and a mission that was created stays created. Real failures print
+// one stderr line naming op so the leader can tell which command left
+// the binding behind.
+func bindDispatchedMission(op, missionID string) {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil {
+		if !errors.Is(err, errNoSession) {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: resolving session: %v\n", op, err)
+		}
+		return
+	}
+	if sessionID == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: user home dir: %v\n", op, err)
+		return
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	previous, err := mission.ReadActiveMission(globalRoot, sessionID)
+	if err != nil {
+		// Report and continue: the rebind below is what makes the next
+		// spawn correct, and an unreadable sidecar is exactly the state
+		// that must be overwritten.
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: reading active mission: %v\n", op, err)
+	}
+	if err := mission.WriteActiveMission(globalRoot, sessionID, missionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: binding session %s to %s: %v\n",
+			op, sessionID, missionID, err)
+		return
+	}
+	if previous == "" || previous == missionID {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"ethos: mission %s: session %s was bound to %s; rebound to %s — delegations now file under %s\n",
+		op, sessionID, previous, missionID, missionID)
+	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: clearing delegation binding: %v\n", op, err)
+	}
 }
 
 // clearClosedSessionBindings resolves the caller's session and hands it

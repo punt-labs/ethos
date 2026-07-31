@@ -2022,6 +2022,84 @@ func TestDispatchAgent_ActiveMissionSidecar(t *testing.T) {
 	assert.Equal(t, sessionID, d.ParentSession)
 }
 
+// TestDispatchAgent_ActiveMissionSidecarStaleWarns pins ethos-7vo3:
+// a sidecar left pointing at a mission that has since closed must not
+// take the spawn. Closing clears the sidecar in the closing session
+// only, so a mission closed from anywhere else leaves the binding
+// behind — and a delegation filed under a mission whose results are
+// already in is a false audit trail. The spawn runs as Tier A and the
+// stale binding is named on stderr.
+func TestDispatchAgent_ActiveMissionSidecarStaleWarns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-05-23-623"
+	stageClosedContract(t, home, missionID)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-stale-sidecar"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, missionID))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "1")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	warning := captureHookStderr(t, func() {
+		require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+	})
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+		"a stale binding must not block the spawn")
+	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a closed mission must not take a new delegation")
+	assert.Contains(t, warning, missionID, "the warning must name the stale mission")
+	assert.Contains(t, warning, "closed")
+}
+
+// stageClosedContract stages a mission and walks it to closed through
+// the real lifecycle — the close gate requires a result artifact, so
+// there is no shortcut that leaves a well-formed contract on disk.
+func stageClosedContract(t *testing.T, home, missionID string) {
+	t.Helper()
+	stageContract(t, home, missionID)
+	store := mission.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
+	require.NoError(t, store.AppendResult(missionID, &mission.Result{
+		Mission:    missionID,
+		Round:      1,
+		Author:     "bwk",
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence:   []mission.EvidenceCheck{{Name: "make check", Status: mission.EvidenceStatusPass}},
+	}))
+	_, err := store.Close(missionID, mission.StatusClosed)
+	require.NoError(t, err)
+}
+
+// captureHookStderr redirects os.Stderr for the duration of fn and
+// returns what the hook wrote there.
+func captureHookStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(r)
+	require.NoError(t, err)
+	return buf.String()
+}
+
 // TestDispatchAgent_ActiveMissionSidecarPrefersEnv asserts the
 // dispatch ordering: a MISSION_ID env override beats the sidecar.
 // Operator-set env wins so a worker that explicitly overrides keeps

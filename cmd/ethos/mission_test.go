@@ -4007,6 +4007,119 @@ func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 	require.NoError(t, runMissionRelease())
 }
 
+// TestMissionDispatch_RebindsStaleActiveMission pins ethos-7vo3: the
+// mission named at dispatch owns the session binding, so the next
+// Agent() spawn files its delegation under it. Before the fix the
+// sidecar stayed on whatever `mission claim` last wrote, and a leader
+// who dispatched a second mission without releasing the first filed
+// the new delegation under the old mission.
+func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
+	home := missionTestEnv(t)
+	stale := seedMissionForClaim(t)
+
+	t.Setenv("ETHOS_SESSION", "sess-rebind")
+	seedRosterForSession(t, "sess-rebind")
+	require.NoError(t, runMissionClaim(stale))
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 2, "the seeded mission and the dispatched one")
+	dispatched := ids[0]
+	if dispatched == stale {
+		dispatched = ids[1]
+	}
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-rebind", "active-mission")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err)
+	assert.Equal(t, dispatched+"\n", string(data),
+		"dispatch must bind the session to the mission it just created")
+
+	assert.Contains(t, warning, stale, "the warning must name the stale binding")
+	assert.Contains(t, warning, dispatched, "the warning must name the new binding")
+}
+
+// TestMissionDispatch_RebindClearsDelegationBinding asserts the other
+// half of the rebind: the delegation-binding sidecar describes the
+// previous mission's dispatch, so it must not survive a rebind onto a
+// different mission.
+func TestMissionDispatch_RebindClearsDelegationBinding(t *testing.T) {
+	home := missionTestEnv(t)
+	stale := seedMissionForClaim(t)
+
+	t.Setenv("ETHOS_SESSION", "sess-rebind-binding")
+	seedRosterForSession(t, "sess-rebind-binding")
+	require.NoError(t, runMissionClaim(stale))
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	require.NoError(t, mission.WriteDelegationBinding(globalRoot, "sess-rebind-binding",
+		mission.DelegationBinding{
+			DelegationID:  "d-2026-07-31-001",
+			MissionID:     stale,
+			ParentSession: "sess-rebind-binding",
+		}))
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	captureStdoutE(t, func() error {
+		captureStderrFn(t, func() { require.NoError(t, runMissionDispatch()) })
+		return nil
+	})
+
+	binding := filepath.Join(globalRoot, "sessions", "sess-rebind-binding", "delegation-binding")
+	_, statErr := os.Stat(binding)
+	assert.True(t, os.IsNotExist(statErr),
+		"a rebind onto another mission must clear the previous delegation binding; got %v", statErr)
+}
+
+// TestMissionDispatch_RebindOntoSameMissionIsQuiet asserts the warning
+// fires on a real rebind only. Re-dispatching while bound to the same
+// mission is not a stale binding and must not print one.
+func TestMissionDispatch_RebindOntoSameMissionIsQuiet(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-rebind-quiet")
+	seedRosterForSession(t, "sess-rebind-quiet")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+	assert.NotContains(t, warning, "was bound to",
+		"a first bind is not a rebind and must not warn: %s", warning)
+}
+
 func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	// resolveSessionContext walks the process tree when ETHOS_SESSION
 	// is unset; a unit test running as part of go test sees the real
