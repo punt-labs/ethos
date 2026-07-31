@@ -1235,6 +1235,53 @@ func TestStore_CreateRejectsCrossMissionConflict(t *testing.T) {
 	assert.Equal(t, aLogBefore, aLogAfter, "mission A's log must be unchanged")
 }
 
+// TestStore_CreateRejectsGlobOverlap asserts that admission control
+// sees through a glob (ethos-qy7k round 2). Making containment
+// glob-aware without the overlap check left two open missions free to
+// claim `docs/**` and `docs/a.md` and both be admitted — the silent
+// cross-mission corruption DES-032 exists to refuse. The glob side
+// blocks whether it is created first or second.
+func TestStore_CreateRejectsGlobOverlap(t *testing.T) {
+	tests := []struct {
+		name  string
+		first string
+		next  string
+	}{
+		{name: "file under an open glob claim", first: "docs/**", next: "docs/a.md"},
+		{name: "glob claim over an open file", first: "docs/a.md", next: "docs/**"},
+		{name: "glob claim over an open directory", first: "docs/", next: "docs/**"},
+		{name: "two globs sharing a root", first: "docs/**", next: "docs/*.md"},
+		{name: "single star over a named file", first: "internal/mission/*.go", next: "internal/mission/store.go"},
+		{name: "leading glob claims the whole tree", first: "internal/mission", next: "**/store.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := testStore(t)
+			a := withWriteSet("m-2026-04-08-001", tt.first)
+			require.NoError(t, s.Create(a))
+
+			b := withWriteSet("m-2026-04-08-002", tt.next)
+			err := s.Create(b)
+			require.Error(t, err, "%q must conflict with open %q", tt.next, tt.first)
+			assert.Contains(t, err.Error(), "write_set conflict")
+			assert.Contains(t, err.Error(), a.MissionID)
+
+			_, statErr := os.Stat(mustContractPath(t, s, b.MissionID))
+			assert.True(t, os.IsNotExist(statErr), "the rejected mission must leave no contract")
+		})
+	}
+}
+
+// TestStore_CreateAllowsDisjointGlobs asserts the glob-aware overlap
+// check did not turn admission control into a blanket refusal: two
+// globs over different trees still coexist.
+func TestStore_CreateAllowsDisjointGlobs(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Create(withWriteSet("m-2026-04-08-001", "docs/**")))
+	require.NoError(t, s.Create(withWriteSet("m-2026-04-08-002", "internal/mission/*.go")))
+	require.NoError(t, s.Create(withWriteSet("m-2026-04-08-003", "cmd/ethos/main.go")))
+}
+
 // TestStore_CreateAllowsConflictAfterClose asserts that closed,
 // failed, and escalated missions are out of the conflict registry —
 // only StatusOpen blocks a new create.
@@ -3023,6 +3070,56 @@ func TestStore_AppendResult_FilesChangedContainment_TrailingSlash(t *testing.T) 
 		{Path: "internal/mission/store.go"},
 	}
 	require.NoError(t, s.AppendResult(c.MissionID, r))
+}
+
+// TestStore_AppendResult_FilesChangedContainment_Glob asserts
+// ethos-qy7k: a write_set entry declaring a glob admits the paths the
+// glob names. Before the fix, `docs/**` compared literally — the
+// result's real path had `audited-delegation.md` where the entry had
+// `**`, so a legitimate result submission was refused and the worker
+// could not close the round.
+func TestStore_AppendResult_FilesChangedContainment_Glob(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"docs/**", "internal/mission/*.go"}
+	require.NoError(t, s.Create(c))
+
+	r := resultFor(c, VerdictPass)
+	r.FilesChanged = []FileChange{
+		{Path: "docs/audited-delegation.md"},
+		{Path: "docs/design/adr/des-054.md"},
+		{Path: "internal/mission/store.go"},
+	}
+	require.NoError(t, s.AppendResult(c.MissionID, r))
+}
+
+// TestStore_AppendResult_FilesChangedContainment_GlobStillBounded
+// asserts the glob fix did not turn the containment check into a
+// pass-through: a path outside every declared entry is still refused,
+// and a single-star entry does not reach across a path separator.
+func TestStore_AppendResult_FilesChangedContainment_GlobStillBounded(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-001")
+	c.WriteSet = []string{"docs/**", "internal/mission/*.go"}
+	require.NoError(t, s.Create(c))
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "outside every entry", path: "cmd/ethos/mission.go"},
+		{name: "sibling of a glob root", path: "docsite/index.md"},
+		{name: "single star does not span a separator", path: "internal/mission/sub/store.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := resultFor(c, VerdictPass)
+			r.FilesChanged = []FileChange{{Path: tt.path}}
+			err := s.AppendResult(c.MissionID, r)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "outside mission")
+		})
+	}
 }
 
 // TestStore_AppendResult_FilesChangedAcceptsValid asserts the positive

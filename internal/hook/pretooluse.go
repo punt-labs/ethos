@@ -264,36 +264,22 @@ func splitAllowlist(raw string) []string {
 }
 
 // pathAllowed reports whether target is inside any allowlist entry.
-// Paths are normalized with filepath.Clean and mission.CanonicalPath
-// so "./a" and "a" compare equal, ".." traversals are collapsed, and
-// the prefix check uses a "/" boundary to prevent "internal/hook"
-// from matching "internal/hookextra/file.go".
+// filepath.Clean resolves ".." segments first so "a/b/../../c" becomes
+// "c" and a traversal cannot pass a prefix check before resolution;
+// mission.PathContainedBy then applies the write_set entry semantics —
+// segment-boundary prefix ("internal/hook" does not admit
+// "internal/hookextra/file.go") plus the glob forms an entry may
+// declare (ethos-qy7k). The allowlist is built from the write_set, so
+// it must admit exactly what the contract's own containment check
+// admits; a second matcher here would drift.
 func pathAllowed(target string, entries []string) bool {
-	ct := cleanCanonical(target)
-	if ct == "" {
-		return false
-	}
+	ct := filepath.Clean(target)
 	for _, entry := range entries {
-		ce := cleanCanonical(entry)
-		if ce == "" {
-			continue
-		}
-		if ct == ce {
-			return true
-		}
-		if strings.HasPrefix(ct, ce+"/") {
+		if mission.PathContainedBy(ct, filepath.Clean(entry)) {
 			return true
 		}
 	}
 	return false
-}
-
-// cleanCanonical applies filepath.Clean then mission.CanonicalPath.
-// filepath.Clean resolves ".." segments so "a/b/../../c" becomes "c",
-// preventing traversal attacks that pass a prefix check before
-// resolution.
-func cleanCanonical(p string) string {
-	return mission.CanonicalPath(filepath.Clean(p))
 }
 
 // tierAAdvice is the one-line suggestion emitted to stderr when an

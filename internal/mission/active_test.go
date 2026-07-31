@@ -5,6 +5,7 @@ package mission
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -58,6 +59,183 @@ func TestWriteActiveMission_RoundTrip(t *testing.T) {
 	got, err := ReadActiveMission(root, sess)
 	require.NoError(t, err)
 	assert.Equal(t, mid, got)
+}
+
+// TestActiveMissionBinding_Origin covers the bind origin the
+// ethos-7vo3 ruling introduced: a claim binding produces commit
+// trailers, a dispatch binding files delegations but must not. Both
+// forms round-trip, and ReadActiveMission still answers with the
+// mission alone.
+func TestActiveMissionBinding_Origin(t *testing.T) {
+	tests := []struct {
+		name   string
+		write  func(root, sess, mid string) error
+		origin string
+	}{
+		{
+			name:   "claim is the default form",
+			write:  WriteActiveMission,
+			origin: BindOriginClaim,
+		},
+		{
+			name: "dispatch is explicit",
+			write: func(root, sess, mid string) error {
+				return WriteActiveMissionOrigin(root, sess, mid, BindOriginDispatch)
+			},
+			origin: BindOriginDispatch,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sess := "sess-origin"
+			mid := "m-2026-07-31-004"
+			require.NoError(t, tt.write(root, sess, mid))
+
+			b, err := ReadActiveMissionBinding(root, sess)
+			require.NoError(t, err)
+			assert.Equal(t, mid, b.MissionID)
+			assert.Equal(t, tt.origin, b.Origin)
+
+			got, err := ReadActiveMission(root, sess)
+			require.NoError(t, err)
+			assert.Equal(t, mid, got, "the mission-only read must not see the origin line")
+		})
+	}
+}
+
+// TestReadActiveMissionBinding_LegacySidecarReadsAsClaim pins the
+// compatibility rule for sidecars written before the origin line
+// existed. Every one of them came from `ethos mission claim`, so a
+// bare mission ID reads as a claim — an installed session mid-upgrade
+// keeps its commit trailers.
+func TestReadActiveMissionBinding_LegacySidecarReadsAsClaim(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-legacy"
+	path := ActiveMissionPath(root, sess)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("m-2026-07-31-004\n"), 0o600))
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-07-31-004", b.MissionID)
+	assert.Equal(t, BindOriginClaim, b.Origin)
+}
+
+// TestReadActiveMissionBinding_UnknownOriginIsPreserved asserts an
+// origin this build does not know is returned as written rather than
+// silently rewritten to claim. Only BindOriginClaim turns trailers on,
+// so an unknown value withholds them — the safe direction.
+func TestReadActiveMissionBinding_UnknownOriginIsPreserved(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-unknown-origin"
+	mid := "m-2026-07-31-004"
+	require.NoError(t, WriteActiveMission(root, sess, mid))
+	writeOriginFile(t, root, sess, "future-origin", mid)
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "future-origin", b.Origin)
+	assert.NotEqual(t, BindOriginClaim, b.Origin)
+}
+
+// TestActiveMissionSidecar_StaysOneLine is the regression rsc found on
+// PR #415: the origin must NOT go into active-mission. Every reader
+// that predates it does TrimSpace over the whole file, so a second
+// line turns the mission ID into "m-...\nclaim" and the older binary
+// denies every Agent spawn. Our own workflow triggers it — agents run
+// a CLI built to .tmp while Claude Code hooks invoke the installed
+// binary — so one claim through a new build would poison the session
+// for the old one.
+func TestActiveMissionSidecar_StaysOneLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		write func(root, sess, mid string) error
+	}{
+		{name: "claim", write: WriteActiveMission},
+		{
+			name: "dispatch",
+			write: func(root, sess, mid string) error {
+				return WriteActiveMissionOrigin(root, sess, mid, BindOriginDispatch)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sess := "sess-one-line"
+			mid := "m-2026-07-31-004"
+			require.NoError(t, tt.write(root, sess, mid))
+
+			data, err := os.ReadFile(ActiveMissionPath(root, sess))
+			require.NoError(t, err)
+			assert.Equal(t, mid+"\n", string(data),
+				"active-mission must hold the mission ID and nothing else")
+
+			// What an older reader does with the file: TrimSpace over
+			// the whole thing. It must yield a usable mission ID.
+			assert.Equal(t, mid, strings.TrimSpace(string(data)),
+				"an older binary must read a clean mission ID")
+		})
+	}
+}
+
+// TestReadActiveMissionBinding_StaleOriginIgnored asserts the two files
+// are self-checking: an origin sidecar naming a different mission is
+// left over from an earlier binding and must not label the current one.
+func TestReadActiveMissionBinding_StaleOriginIgnored(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-stale-origin"
+	require.NoError(t, WriteActiveMission(root, sess, "m-2026-07-31-004"))
+	writeOriginFile(t, root, sess, BindOriginDispatch, "m-2026-07-31-001")
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-07-31-004", b.MissionID)
+	assert.Equal(t, BindOriginClaim, b.Origin,
+		"an origin naming another mission must be ignored")
+}
+
+// TestWriteActiveMission_ClaimClearsDispatchOrigin asserts a claim over
+// a dispatch binding removes the origin file, so the operator's
+// commits carry trailers again.
+func TestWriteActiveMission_ClaimClearsDispatchOrigin(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-claim-over-dispatch"
+	mid := "m-2026-07-31-004"
+	require.NoError(t, WriteActiveMissionOrigin(root, sess, mid, BindOriginDispatch))
+	require.NoError(t, WriteActiveMission(root, sess, mid))
+
+	_, statErr := os.Stat(ActiveMissionOriginPath(root, sess))
+	assert.True(t, os.IsNotExist(statErr), "a claim must leave no origin file: %v", statErr)
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, BindOriginClaim, b.Origin)
+}
+
+// TestClearActiveMission_RemovesOriginToo asserts the pair is cleared
+// together — an origin file outliving its binding would label whatever
+// the session binds next.
+func TestClearActiveMission_RemovesOriginToo(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-clear-both"
+	require.NoError(t, WriteActiveMissionOrigin(root, sess, "m-2026-07-31-004", BindOriginDispatch))
+	require.NoError(t, ClearActiveMission(root, sess))
+
+	_, statErr := os.Stat(ActiveMissionPath(root, sess))
+	assert.True(t, os.IsNotExist(statErr), "active-mission must be gone: %v", statErr)
+	_, statErr = os.Stat(ActiveMissionOriginPath(root, sess))
+	assert.True(t, os.IsNotExist(statErr), "active-mission-origin must be gone: %v", statErr)
+}
+
+// writeOriginFile stages the origin sidecar directly, for the cases
+// that need a shape the writers do not produce.
+func writeOriginFile(t *testing.T, root, sess, origin, missionID string) {
+	t.Helper()
+	path := ActiveMissionOriginPath(root, sess)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte(origin+"\n"+missionID+"\n"), 0o600))
 }
 
 func TestWriteActiveMission_FileMode0o600(t *testing.T) {
@@ -271,6 +449,24 @@ func TestClearMissionBindings_EmptyArgsAreNoOp(t *testing.T) {
 	assert.NoError(t, ClearMissionBindings("", "sess-x", clearTestMission))
 	assert.NoError(t, ClearMissionBindings(root, "", clearTestMission))
 	assert.NoError(t, ClearMissionBindings(root, "sess-x", ""))
+}
+
+// TestReadActiveMissionBinding_UnreadableOriginIsAnError asserts the
+// one shape that does NOT fall back to claim: an origin file that
+// exists but will not read. Absence is a state this design assigns a
+// meaning to; an I/O failure on a file that is there means the binding
+// is unknown, and answering "claim" would invent one.
+func TestReadActiveMissionBinding_UnreadableOriginIsAnError(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-unreadable-origin"
+	require.NoError(t, WriteActiveMission(root, sess, "m-2026-07-31-004"))
+	// A directory where the sidecar belongs makes os.ReadFile fail with
+	// EISDIR — a real error, portably distinct from "no sidecar".
+	require.NoError(t, os.MkdirAll(ActiveMissionOriginPath(root, sess), 0o700))
+
+	_, err := ReadActiveMissionBinding(root, sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "active-mission-origin")
 }
 
 // TestClearMissionBindings_ReportsReadFailures asserts that a real read

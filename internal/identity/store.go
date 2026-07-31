@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
@@ -289,6 +290,15 @@ func (s *Store) list(skipMigrate bool) (*ListResult, error) {
 // Supported fields: "handle", "email", "github".
 // Returns nil, nil when no identity matches (not an error).
 // Returns an error for unsupported fields or store read failures.
+//
+// Two identities sharing a value is an error, not a coin toss. The
+// search used to return whichever file the directory read reached
+// first, so a store where two people share an email — reachable now
+// that `ethos setup` defaults a human's email to git user.email —
+// resolved to an arbitrary one of them and every downstream
+// attribution silently followed the wrong identity. The error names
+// every candidate so the operator can see what to disambiguate
+// (ethos-u4kq).
 func (s *Store) FindBy(field, value string) (*Identity, error) {
 	switch field {
 	case "handle", "email", "github":
@@ -302,21 +312,48 @@ func (s *Store) FindBy(field, value string) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
+	var matches []*Identity
 	for _, id := range result.Identities {
-		var fieldValue string
-		switch field {
-		case "handle":
-			fieldValue = id.Handle
-		case "email":
-			fieldValue = id.Email
-		case "github":
-			fieldValue = id.GitHub
-		}
-		if fieldValue == value {
-			return id, nil
+		if identityField(id, field) == value {
+			matches = append(matches, id)
 		}
 	}
-	return nil, nil
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, ambiguousError(field, value, matches)
+	}
+}
+
+// identityField returns the value of the named searchable field. The
+// caller has already checked the field name; an unknown name yields
+// "", which matches nothing.
+func identityField(id *Identity, field string) string {
+	switch field {
+	case "handle":
+		return id.Handle
+	case "email":
+		return id.Email
+	case "github":
+		return id.GitHub
+	}
+	return ""
+}
+
+// ambiguousError builds the operator-facing collision error. Handles
+// are sorted so the same collision produces the same text on every
+// run, whatever order the directory read returned.
+func ambiguousError(field, value string, matches []*Identity) error {
+	handles := make([]string, 0, len(matches))
+	for _, id := range matches {
+		handles = append(handles, id.Handle)
+	}
+	sort.Strings(handles)
+	return fmt.Errorf("ambiguous identity: %d matches for %s %q: %s",
+		len(matches), field, value, strings.Join(handles, ", "))
 }
 
 // Exists checks whether an identity file exists for the given handle.

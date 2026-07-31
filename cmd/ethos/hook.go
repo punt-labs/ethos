@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/punt-labs/ethos/internal/hook"
@@ -15,10 +16,27 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// hookCmd is a pure dispatcher: every hook is a subcommand and the
+// group itself does nothing useful. It still carries a RunE, because a
+// command with no Run is "not runnable" and cobra answers an unknown
+// subcommand by printing this group's help on STDOUT and exiting 0
+// (command.go: `if !c.Runnable() { return flag.ErrHelp }`, which
+// precedes argument validation). A caller that shells out to `ethos
+// hook <x>` against a binary too old to know <x> — the commit-msg
+// trailer fallback does exactly that — then reads help text as output
+// and silently produces nothing (rsc on PR #415).
+//
+// RunE plus NoArgs makes both misuses loud: an unknown subcommand
+// fails argument validation, and a bare `ethos hook` returns the error
+// below. Both exit non-zero, which is what a shell caller tests.
 var hookCmd = &cobra.Command{
 	Use:    "hook",
 	Short:  "Internal hook dispatcher (not for direct use)",
 	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return fmt.Errorf("hook: no hook named; run `ethos hook --help` for the list")
+	},
 }
 
 var hookSessionStartCmd = &cobra.Command{
@@ -93,6 +111,15 @@ var hookAuditLogCmd = &cobra.Command{
 	},
 }
 
+var hookCommitTrailersCmd = &cobra.Command{
+	Use:   "commit-trailers",
+	Short: "Mission/Delegation trailer values for the committing session",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runHookCommitTrailers(cmd.OutOrStdout())
+	},
+}
+
 func init() {
 	hookCmd.AddCommand(
 		hookSessionStartCmd,
@@ -103,6 +130,7 @@ func init() {
 		hookPreToolUseCmd,
 		hookFormatOutputCmd,
 		hookAuditLogCmd,
+		hookCommitTrailersCmd,
 	)
 	rootCmd.AddCommand(hookCmd)
 }
@@ -183,6 +211,33 @@ func runHookPreCompact() error {
 func runHookPreToolUse() error {
 	if err := hook.HandlePreToolUse(os.Stdin, os.Stdout); err != nil {
 		return fmt.Errorf("hook pre-tool-use: %w", err)
+	}
+	return nil
+}
+
+// runHookCommitTrailers prints the Mission/Delegation trailer values
+// for the session that is committing, for the commit-msg hook to read
+// back. Resolution is the harness-neutral chain the rest of the CLI
+// uses — ETHOS_SESSION, then the Claude process-tree walk — so a hook
+// running under a Bash tool call inside a session finds that session
+// and no other.
+//
+// An unresolved session prints nothing and exits 0: the hook adds no
+// trailer rather than guessing at one (ethos-pobi). A commit from a
+// plain terminal, from a non-Claude harness, or from a session with
+// no active mission is untouched.
+func runHookCommitTrailers(out io.Writer) error {
+	sessionID, _ := resolve.SessionID(sessionStore())
+	if sessionID == "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("hook commit-trailers: %w", err)
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	if err := hook.WriteCommitTrailers(out, globalRoot, sessionID); err != nil {
+		return fmt.Errorf("hook commit-trailers: %w", err)
 	}
 	return nil
 }

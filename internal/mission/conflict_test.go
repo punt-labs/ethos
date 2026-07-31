@@ -204,11 +204,107 @@ func TestPathsOverlap(t *testing.T) {
 			b:    "internal/foo",
 			want: true,
 		},
+		// --- Glob entries (ethos-qy7k round 2). Containment became
+		// glob-aware; overlap has to follow or two missions can claim
+		// the same tree through a glob and both be admitted.
+		{
+			name: "doublestar entry overlaps a file inside its root",
+			a:    "docs/**",
+			b:    "docs/a.md",
+			want: true,
+		},
+		{
+			name: "file inside a doublestar root overlaps it (symmetric)",
+			a:    "docs/a.md",
+			b:    "docs/**",
+			want: true,
+		},
+		{
+			name: "doublestar entry overlaps the directory it globs",
+			a:    "docs/**",
+			b:    "docs/",
+			want: true,
+		},
+		{
+			name: "two doublestar entries under one root overlap",
+			a:    "docs/**",
+			b:    "docs/**/adr",
+			want: true,
+		},
+		{
+			name: "doublestar entry does not overlap a sibling tree",
+			a:    "docs/**",
+			b:    "internal/mission",
+			want: false,
+		},
+		{
+			name: "single star entry overlaps its literal prefix",
+			a:    "internal/mission/*.go",
+			b:    "internal/mission/store.go",
+			want: true,
+		},
+		{
+			name: "single star entry does not overlap a sibling package",
+			a:    "internal/mission/*.go",
+			b:    "internal/hook",
+			want: false,
+		},
+		{
+			// A first-segment glob can match at the root, so it
+			// claims everything. It must not read as "matches
+			// nothing" the way an empty entry does.
+			name: "leading glob claims the root and overlaps anything",
+			a:    "*.go",
+			b:    "internal/mission/store.go",
+			want: true,
+		},
+		{
+			name: "leading doublestar claims the root and overlaps anything",
+			a:    "**/store.go",
+			b:    "cmd/ethos",
+			want: true,
+		},
+		{
+			name: "leading glob against an empty entry still matches nothing",
+			a:    "*.go",
+			b:    "",
+			want: false,
+		},
+		// Brackets are literal here too: a bracketed segment is not a
+		// pattern, so it is compared, not truncated away.
+		{
+			name: "bracketed file names overlap only themselves",
+			a:    "docs/[draft].md",
+			b:    "docs/[draft].md",
+			want: true,
+		},
+		{
+			name: "a bracketed file does not overlap a character-class expansion",
+			a:    "docs/[draft].md",
+			b:    "docs/d.md",
+			want: false,
+		},
+		{
+			name: "a bracketed directory overlaps its children",
+			a:    "app/[id]",
+			b:    "app/[id]/page.tsx",
+			want: true,
+		},
+		{
+			name: "bracketed siblings do not overlap",
+			a:    "app/[id]",
+			b:    "app/[slug]",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, pathsOverlap(tt.a, tt.b),
 				"pathsOverlap(%q, %q)", tt.a, tt.b)
+			// The relation is symmetric by contract; every case must
+			// hold in both directions.
+			assert.Equal(t, tt.want, pathsOverlap(tt.b, tt.a),
+				"pathsOverlap(%q, %q) [reversed]", tt.b, tt.a)
 		})
 	}
 }
@@ -330,6 +426,127 @@ func TestPathContainedBy(t *testing.T) {
 			name:  "case sensitivity",
 			file:  "Internal/mission",
 			entry: "internal/mission",
+			want:  false,
+		},
+		{
+			// ethos-qy7k: a doublestar entry claims everything under
+			// the directory. The literal comparison read `**` as a
+			// directory name and refused every real path.
+			name:  "doublestar entry contains a file one level down",
+			file:  "docs/audited-delegation.md",
+			entry: "docs/**",
+			want:  true,
+		},
+		{
+			name:  "doublestar entry contains a file many levels down",
+			file:  "docs/design/adr/des-054.md",
+			entry: "docs/**",
+			want:  true,
+		},
+		{
+			name:  "doublestar entry does not contain a sibling tree",
+			file:  "internal/mission/store.go",
+			entry: "docs/**",
+			want:  false,
+		},
+		{
+			name:  "doublestar in the middle spans intermediate segments",
+			file:  "internal/mission/sub/pkg/store.go",
+			entry: "internal/**/store.go",
+			want:  true,
+		},
+		{
+			name:  "doublestar in the middle still requires the tail to match",
+			file:  "internal/mission/sub/pkg/result.go",
+			entry: "internal/**/store.go",
+			want:  false,
+		},
+		{
+			name:  "single star matches within one segment only",
+			file:  "internal/mission/store.go",
+			entry: "internal/*",
+			want:  true,
+		},
+		{
+			name:  "single star does not match a path separator",
+			file:  "internal/mission/store.go",
+			entry: "*.go",
+			want:  false,
+		},
+		{
+			name:  "star suffix matches an extension within a segment",
+			file:  "internal/mission/store.go",
+			entry: "internal/mission/*.go",
+			want:  true,
+		},
+		{
+			name:  "star suffix rejects a different extension",
+			file:  "internal/mission/store.yaml",
+			entry: "internal/mission/*.go",
+			want:  false,
+		},
+		{
+			// A glob entry must not resurrect the parent-claim
+			// exploit: the file still has to reach the entry's tail.
+			name:  "parent of a glob entry is still refused",
+			file:  "internal",
+			entry: "internal/*/store.go",
+			want:  false,
+		},
+		{
+			// An unclosed bracket is not a valid pattern; path.Match
+			// reports ErrBadPattern. The validator accepts the entry,
+			// so it must still match the file it literally names.
+			name:  "malformed pattern compares literally",
+			file:  "internal/a[b/store.go",
+			entry: "internal/a[b",
+			want:  true,
+		},
+		// --- Brackets are filename characters, not character classes
+		// (Bugbot on PR #415). path.Match read `[draft]` as a class, so
+		// an entry naming a real file stopped matching its own path
+		// while matching one nobody declared — wrong in both
+		// directions, inside the containment gate.
+		{
+			name:  "a bracketed file name matches itself",
+			file:  "docs/[draft].md",
+			entry: "docs/[draft].md",
+			want:  true,
+		},
+		{
+			name:  "a bracketed route file matches itself",
+			file:  "app/routes/[id].tsx",
+			entry: "app/routes/[id].tsx",
+			want:  true,
+		},
+		{
+			name:  "a bracketed directory entry contains its children",
+			file:  "app/[id]/page.tsx",
+			entry: "app/[id]",
+			want:  true,
+		},
+		{
+			// The character-class reading admitted this. It must not:
+			// the entry names one bracketed file, not every one-letter
+			// file whose name is drawn from the brackets.
+			name:  "a bracketed entry does not admit a character-class expansion",
+			file:  "docs/d.md",
+			entry: "docs/[draft].md",
+			want:  false,
+		},
+		{
+			name:  "a star still globs alongside brackets in the path",
+			file:  "app/[id]/page.tsx",
+			entry: "app/*/page.tsx",
+			want:  true,
+		},
+		{
+			// A segment using * with a malformed bracket cannot be
+			// parsed as a pattern, so it falls back to a literal
+			// comparison — which only matches its own text.
+			name:  "star with a malformed bracket falls back to literal",
+			file:  "internal/a[bc.go",
+			entry: "internal/a[b*",
 			want:  false,
 		},
 	}
@@ -990,4 +1207,46 @@ func TestFormatConflictError(t *testing.T) {
 	t.Run("empty returns nil error", func(t *testing.T) {
 		assert.NoError(t, formatConflictError([]Conflict{}))
 	})
+}
+
+// TestSplitPathList locks the one splitter both path-list surfaces
+// use — the CLI's --write-set/--extract-into flags and pipeline
+// template expansion (ethos-t2lb).
+func TestSplitPathList(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{name: "empty", in: "", want: nil},
+		{name: "whitespace only", in: "   \t ", want: nil},
+		{name: "single path", in: "internal/mission", want: []string{"internal/mission"}},
+		{name: "surrounding whitespace", in: "  internal/mission  ", want: []string{"internal/mission"}},
+		{
+			name: "comma separated",
+			in:   "internal/mission,cmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name: "space separated",
+			in:   "internal/mission cmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name: "comma and space separated",
+			in:   "internal/mission, cmd/ethos , hooks",
+			want: []string{"internal/mission", "cmd/ethos", "hooks"},
+		},
+		{
+			name: "newline separated",
+			in:   "internal/mission\ncmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{name: "empty fields dropped", in: ",,internal/mission,,", want: []string{"internal/mission"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, SplitPathList(tt.in))
+		})
+	}
 }

@@ -176,14 +176,15 @@ func TestCheckHumanIdentity(t *testing.T) {
 
 	t.Run("no match — identities exist but none match", func(t *testing.T) {
 		// A real misconfiguration: identities are present but none match the
-		// caller. This still FAILs loudly.
+		// caller. This still FAILs loudly, and the detail is the resolver's
+		// own error rather than a prefix over it.
 		s, ss, root := newFixture(t)
 		writeIdentity(t, root, "mal",
 			"name: Mal\nhandle: mal\nkind: human\n")
 		t.Setenv("USER", "ghost")
 		r := CheckHumanIdentity(s, ss)
 		assert.Equal(t, "FAIL", r.Status)
-		assert.Contains(t, r.Detail, "no match")
+		assert.Contains(t, r.Detail, "no identity matches")
 	})
 
 	t.Run("malformed file", func(t *testing.T) {
@@ -195,8 +196,38 @@ func TestCheckHumanIdentity(t *testing.T) {
 		t.Setenv("USER", "bad")
 		r := CheckHumanIdentity(s, ss)
 		assert.Equal(t, "FAIL", r.Status)
-		assert.Contains(t, r.Detail, "no match")
+		assert.Contains(t, r.Detail, "no identity matches")
 	})
+
+	t.Run("ambiguous — two identities share an email", func(t *testing.T) {
+		// The collision ethos-u4kq made loud. The check must report what
+		// the resolver said: there are TWO matches, not none. The old
+		// "no match — " prefix contradicted its own detail.
+		s, ss, root := newFixture(t)
+		writeIdentity(t, root, "mal",
+			"name: Mal\nhandle: mal\nkind: human\nemail: crew@serenity.ship\n")
+		writeIdentity(t, root, "zoe",
+			"name: Zoe\nhandle: zoe\nkind: human\nemail: crew@serenity.ship\n")
+		t.Setenv("USER", "ghost")
+		setGitEmail(t, "crew@serenity.ship")
+		r := CheckHumanIdentity(s, ss)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "ambiguous identity: 2 matches")
+		assert.Contains(t, r.Detail, "mal, zoe")
+		assert.NotContains(t, r.Detail, "no match",
+			"the detail must not claim there were no matches when there were two")
+	})
+}
+
+// setGitEmail points git config at a temp file declaring only user.email,
+// so resolution reaches the email step deterministically.
+func setGitEmail(t *testing.T, email string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), ".gitconfig")
+	require.NoError(t, os.WriteFile(path, []byte("[user]\n\temail = "+email+"\n"), 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", path)
+	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 }
 
 func TestCheckDefaultAgent(t *testing.T) {

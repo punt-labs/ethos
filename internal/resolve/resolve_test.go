@@ -176,6 +176,31 @@ func TestResolve_GitEmailMatchesEmail(t *testing.T) {
 	assert.Equal(t, "mal", handle)
 }
 
+// TestResolve_AmbiguousEmailFailsLoud pins ethos-u4kq at the level the
+// operator meets it: `ethos whoami` with two identities sharing the
+// git email must refuse and name both, not answer with an arbitrary
+// one. The collision is reachable in an ordinary repo — `ethos setup`
+// defaults a human's email to git user.email.
+func TestResolve_AmbiguousEmailFailsLoud(t *testing.T) {
+	setGitConfig(t, "unknown-user", "crew@serenity.ship")
+	t.Setenv("USER", "nobody")
+	t.Setenv("ETHOS_SESSION", "")
+
+	s := identity.NewStore(t.TempDir())
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human", Email: "crew@serenity.ship",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Zoe Washburne", Handle: "zoe", Kind: "human", Email: "crew@serenity.ship",
+	}))
+
+	handle, err := Resolve(s, nil)
+	require.Error(t, err, "an ambiguous email must not resolve to an arbitrary identity")
+	assert.Empty(t, handle)
+	assert.Contains(t, err.Error(), "ambiguous identity: 2 matches")
+	assert.Contains(t, err.Error(), "mal, zoe")
+}
+
 func TestResolve_OSUserMatchesHandle(t *testing.T) {
 	setGitConfig(t, "unknown-user", "unknown@example.com")
 	t.Setenv("USER", "mal")

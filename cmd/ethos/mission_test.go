@@ -12,6 +12,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -3797,7 +3798,13 @@ func TestMissionClaim_WritesSidecar(t *testing.T) {
 		"sess-claim-1", "active-mission")
 	data, err := os.ReadFile(sidecar)
 	require.NoError(t, err, "claim must write the sidecar at the expected path")
+	// One line, and only the mission ID: every reader that predates the
+	// bind origin must still parse it (rsc on PR #415). The origin lives
+	// in the sibling active-mission-origin file.
 	assert.Equal(t, id+"\n", string(data))
+	_, statErr := os.Stat(filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-claim-1", "active-mission-origin"))
+	assert.True(t, os.IsNotExist(statErr), "a claim leaves no origin file: %v", statErr)
 
 	info, err := os.Stat(sidecar)
 	require.NoError(t, err)
@@ -4005,6 +4012,210 @@ func TestMissionRelease_MissingIsNotAnError(t *testing.T) {
 
 	// No prior claim — release is still a no-op.
 	require.NoError(t, runMissionRelease())
+}
+
+// TestMissionDispatch_RebindsStaleActiveMission pins ethos-7vo3: the
+// mission named at dispatch owns the session binding, so the next
+// Agent() spawn files its delegation under it. Before the fix the
+// sidecar stayed on whatever `mission claim` last wrote, and a leader
+// who dispatched a second mission without releasing the first filed
+// the new delegation under the old mission.
+func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
+	home := missionTestEnv(t)
+	stale := seedMissionForClaim(t)
+
+	t.Setenv("ETHOS_SESSION", "sess-rebind")
+	seedRosterForSession(t, "sess-rebind")
+	require.NoError(t, runMissionClaim(stale))
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 2, "the seeded mission and the dispatched one")
+	dispatched := ids[0]
+	if dispatched == stale {
+		dispatched = ids[1]
+	}
+
+	sidecar := filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-rebind", "active-mission")
+	data, err := os.ReadFile(sidecar)
+	require.NoError(t, err)
+	assert.Equal(t, dispatched+"\n", string(data),
+		"dispatch must bind the session to the mission it just created")
+	// The origin rides in its own file so active-mission stays readable
+	// by older binaries (rsc on PR #415).
+	origin, err := os.ReadFile(filepath.Join(home, ".punt-labs", "ethos", "sessions",
+		"sess-rebind", "active-mission-origin"))
+	require.NoError(t, err, "a dispatch must record its origin")
+	assert.Equal(t, mission.BindOriginDispatch+"\n"+dispatched+"\n", string(origin),
+		"the origin file names its own mission so a stale one is ignored")
+
+	assert.Contains(t, warning, stale, "the warning must name the stale binding")
+	assert.Contains(t, warning, dispatched, "the warning must name the new binding")
+	assert.Contains(t, warning, "commit trailers are off",
+		"the leader must be told the rebind stops their trailers")
+}
+
+// TestMissionDispatch_BindProducesNoCommitTrailers pins the ethos-7vo3
+// ruling: a dispatch binds the session for DELEGATION FILING only. The
+// leader keeps working in the same session, and stamping their later
+// commits with a mission they handed to someone else is ethos-jawp's
+// false-trailer class through a new door. An explicit claim is what
+// turns trailers back on.
+func TestMissionDispatch_BindProducesNoCommitTrailers(t *testing.T) {
+	home := missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-trailer-origin")
+	seedRosterForSession(t, "sess-trailer-origin")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+	captureStdoutE(t, func() error {
+		captureStderrFn(t, func() { require.NoError(t, runMissionDispatch()) })
+		return nil
+	})
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	// A delegation binding for the dispatched mission is on disk, so
+	// the only thing withholding the trailers is the bind origin.
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	dispatched := ids[0]
+	require.NoError(t, mission.WriteDelegationBinding(globalRoot, "sess-trailer-origin",
+		mission.DelegationBinding{
+			DelegationID:  "d-2026-07-31-001",
+			MissionID:     dispatched,
+			ParentSession: "sess-trailer-origin",
+		}))
+
+	var out bytes.Buffer
+	require.NoError(t, hook.WriteCommitTrailers(&out, globalRoot, "sess-trailer-origin"))
+	assert.Empty(t, out.String(),
+		"a dispatch binding must produce no commit trailers")
+
+	// An explicit claim on the same mission turns them on.
+	require.NoError(t, runMissionClaim(dispatched))
+	out.Reset()
+	require.NoError(t, hook.WriteCommitTrailers(&out, globalRoot, "sess-trailer-origin"))
+	assert.Contains(t, out.String(), "MISSION_ID="+dispatched,
+		"an explicit claim must produce the mission trailer")
+	assert.Contains(t, out.String(), "DELEGATION_ID=d-2026-07-31-001")
+}
+
+// TestMissionDispatch_WarnsWhenPathFlagSplits pins the warning that
+// makes ethos-t2lb's split visible. Splitting is what makes a
+// multi-path value work, but it also widens the claim: a stray space
+// in `--write-set "zz space/dir.md"` asks for one file and yields two
+// entries, one of them a whole-tree claim on `zz` that admission
+// control enforces against every other mission. The one-line dispatch
+// summary cannot show that, so the warning must — and it must not
+// render identically to the input the operator typed.
+func TestMissionDispatch_WarnsWhenPathFlagSplits(t *testing.T) {
+	tests := []struct {
+		name      string
+		writeSet  string
+		wantWarn  bool
+		wantParts []string
+	}{
+		{
+			name:      "a stray space widens the claim",
+			writeSet:  "zz space/dir.md",
+			wantWarn:  true,
+			wantParts: []string{`"zz"`, `"space/dir.md"`, "split into 2 entries"},
+		},
+		{
+			name:      "a comma-separated list is reported too",
+			writeSet:  "internal/alpha,internal/beta",
+			wantWarn:  true,
+			wantParts: []string{`"internal/alpha"`, `"internal/beta"`},
+		},
+		{
+			name:     "a single path is quiet",
+			writeSet: "internal/alpha/store.go",
+			wantWarn: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			missionTestEnv(t)
+			dispatchWorker = "bwk"
+			dispatchEvaluator = "djb"
+			dispatchWriteSet = tt.writeSet
+			dispatchExtractInto = ""
+			dispatchCriteria = []string{"make check passes"}
+			dispatchType = "implement"
+			dispatchBudget = 2
+
+			var warning string
+			captureStdoutE(t, func() error {
+				warning = captureStderrFn(t, func() {
+					require.NoError(t, runMissionDispatch())
+				})
+				return nil
+			})
+
+			if !tt.wantWarn {
+				assert.NotContains(t, warning, "split into",
+					"a single path must not warn: %s", warning)
+				return
+			}
+			assert.Contains(t, warning, "--write-set split into")
+			for _, part := range tt.wantParts {
+				assert.Contains(t, warning, part)
+			}
+			// The whole point of quoting: the warning must not read
+			// back as the single path the operator thought they typed.
+			assert.NotContains(t, warning, "entries: "+tt.writeSet+"\n",
+				"the entries must not render identically to the input: %s", warning)
+		})
+	}
+}
+
+// TestMissionDispatch_WarnsWhenExtractIntoSplits asserts the same
+// warning covers --extract-into, which carries the same widening risk.
+func TestMissionDispatch_WarnsWhenExtractIntoSplits(t *testing.T) {
+	missionTestEnv(t)
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchExtractInto = "docs/new one/more"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch())
+		})
+		return nil
+	})
+	assert.Contains(t, warning, "--extract-into split into 2 entries")
+	assert.Contains(t, warning, `"docs/new"`)
+	assert.Contains(t, warning, `"one/more"`)
+	dispatchExtractInto = ""
 }
 
 func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {

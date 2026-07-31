@@ -663,6 +663,300 @@ func TestInstantiate_HappyPath(t *testing.T) {
 	}
 }
 
+// TestInstantiate_MultiPathVar pins ethos-t2lb: a --var value holding
+// several paths must expand into several write_set entries. Before the
+// fix the whole value landed in one entry — a path naming no file, so
+// admission control had nothing real to check and every edit the
+// worker made fell outside the write_set.
+func TestInstantiate_MultiPathVar(t *testing.T) {
+	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{
+			{Name: "implement", Archetype: "implement", WriteSet: []string{"{target}"},
+				Worker: "bwk", SuccessCriteria: []string{"make check passes"}},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		target string
+		want   []string
+	}{
+		{
+			name:   "space separated",
+			target: "internal/mission cmd/ethos hooks",
+			want:   []string{"internal/mission", "cmd/ethos", "hooks"},
+		},
+		{
+			name:   "comma separated",
+			target: "internal/mission,cmd/ethos",
+			want:   []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name:   "comma and space separated",
+			target: "internal/mission, cmd/ethos",
+			want:   []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name:   "single path is unchanged",
+			target: "internal/mission",
+			want:   []string{"internal/mission"},
+		},
+		{
+			name:   "surrounding whitespace is dropped",
+			target: "  internal/mission  ",
+			want:   []string{"internal/mission"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contracts, err := Instantiate(p, InstantiateOptions{
+				PipelineID: "sprint-2026-07-31",
+				Vars:       map[string]string{"target": tt.target},
+				Leader:     "claude",
+				Evaluator:  "rsc",
+				Worker:     "bwk",
+				Now:        now,
+			})
+			if err != nil {
+				t.Fatalf("Instantiate: %v", err)
+			}
+			got := contracts[0].WriteSet
+			if len(got) != len(tt.want) {
+				t.Fatalf("WriteSet = %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("WriteSet[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+			// Each entry must stand on its own for admission control.
+			for _, e := range got {
+				if err := validateWriteSetEntry(e); err != nil {
+					t.Errorf("entry %q does not validate: %v", e, err)
+				}
+			}
+		})
+	}
+}
+
+// TestInstantiate_MultiPathVarKeepsTemplatePrefix pins the prefix drop
+// Bugbot found on PR #415: splitting the expanded string turned
+// `docs/{target}` with two paths into `docs/a.md` plus a bare `b.md`.
+// The second path lost its directory and the write_set claimed a
+// top-level file nobody meant. Each path must carry the whole template
+// around it.
+func TestInstantiate_MultiPathVarKeepsTemplatePrefix(t *testing.T) {
+	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		writeSet []string
+		target   string
+		want     []string
+	}{
+		{
+			name:     "prefix repeats on every path",
+			writeSet: []string{"docs/{target}"},
+			target:   "a.md b.md",
+			want:     []string{"docs/a.md", "docs/b.md"},
+		},
+		{
+			name:     "suffix repeats on every path",
+			writeSet: []string{"{target}/store.go"},
+			target:   "internal/mission internal/hook",
+			want:     []string{"internal/mission/store.go", "internal/hook/store.go"},
+		},
+		{
+			name:     "prefix and suffix both repeat",
+			writeSet: []string{"src/{target}/main.go"},
+			target:   "alpha,beta",
+			want:     []string{"src/alpha/main.go", "src/beta/main.go"},
+		},
+		{
+			name:     "bare variable is unchanged",
+			writeSet: []string{"{target}"},
+			target:   "internal/mission cmd/ethos",
+			want:     []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name:     "single path with a prefix is unchanged",
+			writeSet: []string{"docs/{target}"},
+			target:   "a.md",
+			want:     []string{"docs/a.md"},
+		},
+		{
+			name:     "a second variable holding one path still substitutes",
+			writeSet: []string{"{root}/{target}"},
+			target:   "a.md b.md",
+			want:     []string{"docs/a.md", "docs/b.md"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pipeline{
+				Name: "sprint",
+				Stages: []Stage{{
+					Name: "implement", Archetype: "implement", WriteSet: tt.writeSet,
+					Worker: "bwk", SuccessCriteria: []string{"make check passes"},
+				}},
+			}
+			contracts, err := Instantiate(p, InstantiateOptions{
+				PipelineID: "sprint-2026-07-31",
+				Vars:       map[string]string{"target": tt.target, "root": "docs"},
+				Leader:     "claude",
+				Evaluator:  "rsc",
+				Worker:     "bwk",
+				Now:        now,
+			})
+			if err != nil {
+				t.Fatalf("Instantiate: %v", err)
+			}
+			got := contracts[0].WriteSet
+			if len(got) != len(tt.want) {
+				t.Fatalf("WriteSet = %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("WriteSet[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestInstantiate_EmptyVarRefused pins the silent drop Bugbot found on
+// PR #415. SplitPathList drops empty results, so an entry whose
+// variable expands to nothing vanished from the write_set instead of
+// reaching the contract validator, which rejects an empty entry. The
+// contract then claimed LESS than the pipeline declared, with nothing
+// said. A leader who wrote an entry is owed either the paths it names
+// or a refusal naming it.
+func TestInstantiate_EmptyVarRefused(t *testing.T) {
+	tests := []struct {
+		name     string
+		writeSet []string
+		vars     map[string]string
+		wantIn   []string
+	}{
+		{
+			name:     "one entry of several expands to nothing",
+			writeSet: []string{"{a}", "{b}"},
+			vars:     map[string]string{"a": "internal/alpha", "b": ""},
+			wantIn:   []string{`write_set[1]`, `"{b}"`, "expanded to no path"},
+		},
+		{
+			name:     "the only entry expands to nothing",
+			writeSet: []string{"{target}"},
+			vars:     map[string]string{"target": ""},
+			wantIn:   []string{`write_set[0]`, "expanded to no path"},
+		},
+		{
+			name:     "a whitespace-only value names no path",
+			writeSet: []string{"{target}"},
+			vars:     map[string]string{"target": "   "},
+			wantIn:   []string{"expanded to no path"},
+		},
+		{
+			name:     "a separators-only value names no path",
+			writeSet: []string{"{target}"},
+			vars:     map[string]string{"target": ",,"},
+			wantIn:   []string{"expanded to no path"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pipeline{
+				Name: "sprint",
+				Stages: []Stage{{
+					Name: "implement", Archetype: "implement", WriteSet: tt.writeSet,
+					Worker: "bwk", SuccessCriteria: []string{"make check passes"},
+				}},
+			}
+			_, err := Instantiate(p, InstantiateOptions{
+				PipelineID: "sprint-2026-07-31",
+				Vars:       tt.vars,
+				Leader:     "claude",
+				Evaluator:  "rsc",
+				Worker:     "bwk",
+				Now:        time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC),
+			})
+			if err == nil {
+				t.Fatal("an entry that names no path must be refused, not dropped")
+			}
+			for _, want := range tt.wantIn {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error must name %q, got: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// TestInstantiate_EmptyVarInAWrappedEntryStillExpands asserts the
+// refusal is about naming no path, not about an empty variable per se:
+// a variable that expands to nothing INSIDE a larger template still
+// leaves a real path behind, and that is allowed.
+func TestInstantiate_EmptyVarInAWrappedEntryStillExpands(t *testing.T) {
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{{
+			Name: "implement", Archetype: "implement",
+			WriteSet: []string{"docs/{suffix}"},
+			Worker:   "bwk", SuccessCriteria: []string{"make check passes"},
+		}},
+	}
+	contracts, err := Instantiate(p, InstantiateOptions{
+		PipelineID: "sprint-2026-07-31",
+		Vars:       map[string]string{"suffix": ""},
+		Leader:     "claude",
+		Evaluator:  "rsc",
+		Worker:     "bwk",
+		Now:        time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	// `docs/` — a directory-shaped entry, which is a real claim.
+	if got := contracts[0].WriteSet; len(got) != 1 || got[0] != "docs/" {
+		t.Errorf("WriteSet = %v, want [docs/]", got)
+	}
+}
+
+// TestInstantiate_TwoMultiPathVarsRefused asserts the ambiguous shape
+// is named, not guessed at: two multi-path variables in one entry
+// describe a cartesian product, which no write_set means.
+func TestInstantiate_TwoMultiPathVarsRefused(t *testing.T) {
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{{
+			Name: "implement", Archetype: "implement",
+			WriteSet: []string{"{dirs}/{files}"},
+			Worker:   "bwk", SuccessCriteria: []string{"make check passes"},
+		}},
+	}
+	_, err := Instantiate(p, InstantiateOptions{
+		PipelineID: "sprint-2026-07-31",
+		Vars:       map[string]string{"dirs": "a b", "files": "x.go y.go"},
+		Leader:     "claude",
+		Evaluator:  "rsc",
+		Worker:     "bwk",
+		Now:        time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("two multi-path variables in one entry must be refused")
+	}
+	for _, want := range []string{"multi-path variables", "dirs", "files", "write_set[0]"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name %q, got: %v", want, err)
+		}
+	}
+}
+
 func TestInstantiate_MissingVar(t *testing.T) {
 	p := &Pipeline{
 		Name: "test-pipeline",
