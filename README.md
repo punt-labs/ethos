@@ -5,9 +5,19 @@
 
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
-[![Release](https://img.shields.io/github/v/release/punt-labs/ethos)](https://github.com/punt-labs/ethos/releases/latest)
+[![Go Reference](https://pkg.go.dev/badge/github.com/punt-labs/ethos.svg)](https://pkg.go.dev/github.com/punt-labs/ethos)
+[![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
 
-## The problem
+Ethos binds a name, personality, writing style, domain expertise, email,
+GitHub handle, and voice into one identity that other tools read, and adds
+typed mission contracts that record and bind what an agent is asked to do.
+It ships as a single Go binary with a Claude Code plugin, an MCP server, and
+a filesystem layout other tools read directly. It runs locally — no server,
+no telemetry, no cloud.
+
+**Platforms:** macOS, Linux (amd64, arm64).
+
+## The Problem
 
 Agents write code you're responsible for, and you can't see what
 they did or why.
@@ -22,10 +32,9 @@ There is no durable record connecting a line of code to the contract
 that authorized it, the prompt that drove it, and the tool calls
 that produced it.
 
-## What ethos does
+## What Ethos Does
 
-Ethos makes agent delegation responsible rather than reckless. Three
-axes:
+Ethos records and bounds agent delegation along three axes:
 
 **Control.** Typed mission contracts with file-level write-sets
 enforced at runtime, frozen evaluators (hash-pinned so nobody swaps
@@ -48,7 +57,7 @@ model's output the way a real colleague's expertise would. Roles
 restrict tool access. Teams define delegation topology. The
 configuration is reusable, measurable, and improvable.
 
-## Quick start
+## Quick Start
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/7759dd5/install.sh | sh
@@ -103,11 +112,29 @@ works. If you build from source or run `setup` on a machine that was
 never seeded, run `ethos seed` first — `setup` otherwise fails with an
 error naming the missing attribute and telling you to seed.
 
-**Platforms:** macOS, Linux (amd64, arm64).
+## Features
 
-## What it looks like
+| Feature | What it does |
+|---------|-------------|
+| Mission contracts | Typed delegation with write-sets, frozen evaluators, bounded rounds, success criteria |
+| Audit trail | Per-tool-call log tagged with delegation ID + contract ID; PII-redacted paths |
+| Git trailers | `Mission:`/`Delegation:` on every commit; blame chain from line to prompt |
+| Traceability UI | Browse code with ethos blame; mission + delegation detail views |
+| Preconditions | Gate tool calls on prior reads ("must read DESIGN.md before editing") |
+| Expert identities | Personalities, writing styles, talents bound to named agents |
+| Team structure | Roles with tool restrictions, reports-to graph, anti-responsibilities |
+| Pipeline templates | Multi-stage mission workflows from 8 built-in templates (plus bundle-specific ones) |
+| Lifecycle hooks | 7 events (SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, PreCompact, SessionEnd) |
+| Write-set enforcement | PreToolUse blocks unauthorized file modifications at runtime |
+| Self-standing repos | `ethos vendor` snapshots a resolvable identity set; `resolution: repo-only` drops the global fallback |
+| Symlink rejection | Uniform policy across all mission loaders and lock paths |
+| Depth limits | Configurable ceiling on nested delegation chains |
+| Query surface | `ethos find missions` with date/worker/status filters |
+| Composable integration | CLI, MCP (12 tools), filesystem reads; works with biff, vox, beadle, quarry |
 
-### Traceability: line of code → full history
+## What It Looks Like
+
+### Traceability: Line of Code to Full History
 
 When commits carry `Mission:`/`Delegation:` git trailers (appended
 automatically by the commit-msg hook), the blame chain works like
@@ -160,7 +187,7 @@ Or visually: `ethos ui` opens a localhost dashboard where you browse
 the repo, click a line, and see the agent who wrote it, the prompt
 they received, and every tool call they made.
 
-### Contract-bound delegation
+### Contract-Bound Delegation
 
 ```yaml
 leader: claude
@@ -182,7 +209,7 @@ When a verifier agent is spawned, the PreToolUse hook enforces the
 write-set — an Edit to a file outside the contract is blocked before
 it executes.
 
-### Specialist agents
+### Specialist Agents
 
 ```text
 [ethos] Subagent bwk spawned: go-specialist
@@ -196,25 +223,6 @@ model's output, a writing style, domain talents, and a role that
 determines which tools they can use. Generated from identity +
 role + team data as `.claude/agents/*.md`.
 
-## Features
-
-| Feature | What it does |
-|---------|-------------|
-| Mission contracts | Typed delegation with write-sets, frozen evaluators, bounded rounds, success criteria |
-| Audit trail | Per-tool-call log tagged with delegation ID + contract ID; PII-redacted paths |
-| Git trailers | `Mission:`/`Delegation:` on every commit; blame chain from line to prompt |
-| Traceability UI | Browse code with ethos blame; mission + delegation detail views |
-| Preconditions | Gate tool calls on prior reads ("must read DESIGN.md before editing") |
-| Expert identities | Personalities, writing styles, talents bound to named agents |
-| Team structure | Roles with tool restrictions, reports-to graph, anti-responsibilities |
-| Pipeline templates | Multi-stage mission workflows from 8 built-in templates (plus bundle-specific ones) |
-| Lifecycle hooks | 7 events (SessionStart, PreToolUse, PostToolUse, SubagentStart, SubagentStop, PreCompact, SessionEnd) |
-| Write-set enforcement | PreToolUse blocks unauthorized file modifications at runtime |
-| Symlink rejection | Uniform policy across all mission loaders and lock paths |
-| Depth limits | Configurable ceiling on nested delegation chains |
-| Query surface | `ethos find missions` with date/worker/status filters |
-| Composable integration | CLI, MCP (11 tools), filesystem reads; works with biff, vox, beadle, quarry |
-
 ## Commands
 
 Essentials below. Every command accepts `--json`. Full reference in
@@ -225,6 +233,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos enable` / `disable` | Turn ethos on/off in this repo (see below) |
 | `ethos setup` | Set up identities and team (60-second wizard) |
 | `ethos whoami` | Show your resolved identity |
+| `ethos identity schema` | Show the field reference for an entity (also `role schema`, `team schema`) |
 | `ethos session start` / `end` | Open/close a session from any harness — `eval "$(ethos session start)"` |
 | `ethos iam <persona>` | Declare your persona in the active session |
 | `ethos doctor` | Check installation health |
@@ -257,7 +266,7 @@ re-minted), and resolution is `--session` > `ETHOS_SESSION` > the Claude
 process walk. Outside a session, `iam` and `mission claim` fail with an
 error naming `ethos session start`.
 
-### Self-standing repos: `vendor` and `resolution: repo-only`
+### Self-Standing Repos: `vendor` and `resolution: repo-only`
 
 By default ethos resolves repo → active bundle → global, and the global
 fallback catches whatever the repo lacks. That is what you want on a
@@ -311,7 +320,7 @@ reaches the model at runtime.
 `ethos export` is a different job — a lossy conversion of one identity
 into a foreign format — and is unchanged.
 
-### Git worktrees and the store root
+### Git Worktrees and the Store Root
 
 The repo-layer store lives at `<repo>/.punt-labs/ethos/`. Ethos resolves it
 through the git common dir, so an agent working in a linked worktree
@@ -332,7 +341,7 @@ wrong. It overrides the git walk for every command and hook:
 ETHOS_REPO_ROOT=/path/to/repo ethos mission list
 ```
 
-### enable / disable
+### Enable / Disable
 
 `install.sh` is machine scope only — it installs the binary, registers the
 plugin, and seeds global content. Per-repo enablement is `ethos enable`,
@@ -369,7 +378,7 @@ The chained hook scripts gate on the marker: they do no commit-time work
 unless `.punt-labs/ethos/enabled` exists, so a dormant repo's hook is inert
 while still preserving a host hook's failing fall-through.
 
-## How this is different
+## How This Is Different
 
 | Tool | What it does | Where ethos differs |
 |------|--------------|---------------------|

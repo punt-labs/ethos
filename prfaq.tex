@@ -77,7 +77,7 @@
 
 % ── Document version ─────────────────────────────────────────────────────────
 \newcommand{\prfaqversion}[2]{\def\theprfaqmajor{#1}\def\theprfaqminor{#2}}
-\prfaqversion{3}{2}
+\prfaqversion{3}{3}
 
 % ── Header/footer ────────────────────────────────────────────────────────────
 \usepackage{fancyhdr}
@@ -209,10 +209,10 @@ PR/FAQ & Working Backwards & + pipeline stage invocation \\
 
 Two commands, under 60 seconds:
 
-{\small\texttt{curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/main/install.sh | sh}} \\
+{\small\texttt{curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/7759dd5/install.sh | sh}} \\
 {\small\texttt{ethos setup}}
 
-\noindent The installer places the binary, seeds starter content (roles, talents, pipelines, two team bundles), and registers the Claude Code plugin (pass {\small\texttt{--no-plugin}} for a CLI-only install on non-Claude harnesses or plugin-restricted environments). {\small\texttt{ethos setup}} is an interactive wizard that asks three questions---name, handle, working style---then creates human and agent identities, writes the repo config, activates the \textbf{foundation} team bundle (a CEO/COO leadership pair over 4 specialist agents---the human is CEO, {\small\texttt{claude}} is COO, and specialists report to the COO), and generates agent definition files. Start Claude Code. The agent knows who it is, who you are, and how to delegate.
+\noindent The installer places the binary, seeds starter content (roles, talents, pipelines, two team bundles), and registers the Claude Code plugin (pass {\small\texttt{--no-plugin}} for a CLI-only install on non-Claude harnesses or plugin-restricted environments). {\small\texttt{ethos setup}} is an interactive wizard that asks a few questions---name, handle, email, GitHub handle, working style---then creates human and agent identities, writes the repo config, activates the \textbf{foundation} team bundle (a CEO/COO leadership pair over 4 specialist agents---the human is CEO, {\small\texttt{claude}} is COO, and specialists report to the COO), and generates agent definition files. Start Claude Code. The agent knows who it is, who you are, and how to delegate.
 
 On day one, the team works with defaults. On day three, the developer runs their first pipeline ({\small\texttt{ethos mission pipeline instantiate standard}}). On day seven, they customize: override a personality, add a domain talent, create a custom pipeline for their review process. The progression is use the defaults, then make them yours.
 
@@ -252,7 +252,7 @@ Ethos is the only tool that combines human-agent parity (same schema for both), 
 \end{faqpair}
 
 \begin{faqpair}{How do I get started?}
-Install ({\small\texttt{curl -fsSL .../install.sh | sh}}), then run {\small\texttt{ethos setup}} in your project directory. The wizard asks three questions and creates a working team in under 60 seconds. No account, no cloud, no API key. For non-interactive environments, use {\small\texttt{ethos setup --file config.yaml}}. On non-Claude harnesses or plugin-restricted environments, install the CLI only with {\small\texttt{sh -s -- --no-plugin}} (or {\small\texttt{ETHOS\_NO\_PLUGIN=1}}).
+Install ({\small\texttt{curl -fsSL .../install.sh | sh}}), then run {\small\texttt{ethos setup}} in your project directory. The wizard asks a few questions and creates a working team in under 60 seconds. No account, no cloud, no API key. For non-interactive environments, use {\small\texttt{ethos setup --file config.yaml}}. On non-Claude harnesses or plugin-restricted environments, install the CLI only with {\small\texttt{sh -s -- --no-plugin}} (or {\small\texttt{ETHOS\_NO\_PLUGIN=1}}).
 \end{faqpair}
 
 \begin{faqpair}{How much does it cost?}
@@ -276,7 +276,7 @@ Three integration surfaces, any coupling level:
 \begin{itemize}[nosep]
   \item \textbf{Filesystem.} Read YAML at known paths. Zero dependency.
   \item \textbf{CLI.} Call {\small\texttt{ethos whoami}}, {\small\texttt{ethos mission show}}, {\small\texttt{ethos session}} from hooks and scripts.
-  \item \textbf{MCP server.} 11 tools covering identity, sessions, teams, roles, missions, ADRs, and extensions.
+  \item \textbf{MCP server.} 12 tools covering identity, sessions, teams, roles, missions, ADRs, extensions, and vendoring.
 \end{itemize}
 
 The composable integration pattern is the core architectural thesis. Ethos is the harness---it doesn't do the messaging, the voice, the email, or the search. It gives each tool the identity context that makes its output feel like working with a real colleague. The integration surface is open to any third-party tool.
@@ -393,9 +393,9 @@ None. Ethos is a standalone Go binary with zero runtime dependencies. It does no
 \end{faqpair}
 
 \begin{faqpair}{What is the development status?}
-v3.9.0 shipped. 24 KLOC production Go, 38 KLOC tests, A+ Go Report Card.
+v4.9.0 shipped. 45 KLOC production Go, 65 KLOC tests, golangci-lint clean.
 
-\textbf{Shipped:} Identity, sessions, persona animation, teams, roles, anti-responsibilities, all~7 workflow primitives, safety constraints, audit logging, ADRs, archetypes, import\slash export, team bundles with three-layer resolution, foundation and gstack bundles, the CEO/COO default team shape (human CEO, {\small\texttt{claude}} COO), {\small\texttt{ethos setup}} wizard, CLI-only install ({\small\texttt{--no-plugin}}), 13 pipeline templates, mission dispatch one-liner, automatic mission traceability, PR/FAQ pipeline integration (LaTeX output, meeting personas, peer review).
+\textbf{Shipped (v4.9.0):} Identity, sessions, persona animation, teams, roles, anti-responsibilities, all~7 workflow primitives, safety constraints, audit logging (live write path plus committed sealed chunks), ADRs, archetypes, import\slash export, team bundles with three-layer resolution, foundation and gstack bundles, the CEO/COO default team shape (human CEO, {\small\texttt{claude}} COO), {\small\texttt{ethos setup}} wizard, CLI-only install ({\small\texttt{--no-plugin}}), the {\small\texttt{schema}} subcommand ({\small\texttt{ethos identity\slash role\slash team schema}}), 13 pipeline templates, mission dispatch one-liner, automatic mission traceability, self-standing repos ({\small\texttt{ethos vendor}}, {\small\texttt{resolution: repo-only}}, ext {\small\texttt{.local}}), committed-PII redaction, the mission-lifecycle-cluster correctness fixes, PR/FAQ pipeline integration (LaTeX output, meeting personas, peer review).
 
 \textbf{In progress:} Per-agent mission memory---quarry already supports agent-scoped {\small\texttt{remember}} and {\small\texttt{find}}. Remaining: ethos-side hooks for mission-close takeaways and mission-dispatch prior-work search (ethos-d17).
 
@@ -409,9 +409,9 @@ Ethos is a local tool---no server, no database. Scaling means identities on one 
 \begin{faqpair}{How does ethos capture intent and maintain audit trails?}\label{faq:audit-trails}
 Three layers, each independent:
 
-\textbf{Git (durable, shared).} Mission contracts, structured results, and typed ADRs live in {\small\texttt{.ethos/}} in the repository. The contract captures intent before delegation---what was specified, what files are owned, what success looks like. The result captures outcome---what was delivered, what passed, what didn't. ADRs capture design decisions with a status lifecycle (proposed $\to$ settled $\to$ superseded), rejected alternatives, and links to the missions where decisions were made~\cite{promptpals2026adrsai}. All travel with the code in version control.
+\textbf{Git (durable, shared).} Mission contracts, structured results, typed ADRs, the mission trace log, and sealed per-tool-call audit chunks live under {\small\texttt{.punt-labs/ethos/}} in the repository. The contract captures intent before delegation---what was specified, what files are owned, what success looks like. The result captures outcome---what was delivered, what passed, what didn't. ADRs capture design decisions with a status lifecycle (proposed $\to$ settled $\to$ superseded), rejected alternatives, and links to the missions where decisions were made~\cite{promptpals2026adrsai}. A pre-commit hook seals pending audit lines into immutable, timestamp-named chunks so the tool-call record lands in the same commit as the work. All travel with the code in version control.
 
-\textbf{Local (operational).} Event-by-event JSONL logs per mission and per-session tool audit trails stay on the developer's machine. Useful for debugging and post-mortems but not shared. This is operational telemetry, not the permanent record.
+\textbf{Local (operational).} While a session runs, per-tool-call audit lines write to a machine-local, gitignored live file (so a repo with an active session keeps a clean {\small\texttt{git status}}); the pre-commit seal promotes them into the git layer. Per-mission event JSONL logs stay on the developer's machine for debugging and post-mortems.
 
 \textbf{Quarry (optional, semantic).} When Quarry is installed, conversation transcripts are captured before context compaction and tagged with the active mission ID. Semantic search across sessions finds the reasoning behind decisions---``why did we choose conventions over enforcement?'' retrieves the conversation where DES-041 was discussed. Quarry adds the unstructured ``why'' layer that structured artifacts cannot capture.
 
@@ -481,7 +481,7 @@ Five shifts converged:
 \midrule
 Value      & \textcolor{RiskAmber}{Medium} & The identity gap is structurally confirmed (253 CLAUDE.md files, 466 SoulSpec projects, OWASP top 10). The delegation gap is confirmed (93\% unscoped credentials, 48.9\% blind to M2M traffic). The combined product---identity + workflow + integration in one layer---is untested with customers. SoulSpec validates identity demand but only for agents. Missions validated in practice (12m55s end-to-end) but not by external users. The ``pull'' signal is untested: do developers want a unified layer, or do they expect identity and delegation from separate tools? \\
 Usability  & \textcolor{RiskAmber}{Medium} & Identity onboarding is simple (three commands, five minutes). The mission workflow introduces 7 primitives that have not been tested with external users. The live example demonstrates feasibility, not usability---it was operated by the builder. \\
-Feasibility & \textcolor{RiskGreen}{Low} & All 6 phases shipped (1--5 + 6.1). 24 KLOC production Go, 38 KLOC tests, A+ Go Report Card. All 7 workflow primitives, 6 integration hooks, audit logging, safety constraints, team bundles, setup wizard, 13 pipeline templates, 10 archetypes, and 2 embedded bundles are implemented and tested. No unsolved technical problems. \\
+Feasibility & \textcolor{RiskGreen}{Low} & Shipped through v4.9.0. 45 KLOC production Go, 65 KLOC tests, golangci-lint clean. All 7 workflow primitives, 7 lifecycle hooks, audit logging (live plus sealed), safety constraints, team bundles, setup wizard, 13 pipeline templates, 10 archetypes, and 2 embedded bundles are implemented and tested. Self-standing repos ({\small\texttt{ethos vendor}}, repo-only resolution) ship in v4.9.0. No unsolved technical problems. \\
 Viability  & \textcolor{RiskAmber}{Medium} & Ethos is free infrastructure whose viability depends on adoption and downstream tool value. Maintenance cost is low (40--80 hrs/year). If SoulSpec captures agent identity and a dominant tool ships native delegation, both pillars face competition. The cross-tool integration pattern is the most defensible value---it is the only structural advantage that requires a shared layer rather than per-tool features. \\
 \bottomrule
 \end{tabularx}
@@ -521,7 +521,7 @@ Three scenarios would cause ethos to fail:
   \featureitem{SessionStart working context}{git branch, uncommitted changes, dirty file count injected at session start}\label{feat:workctx}
   \featureitem{Role-based safety constraints}{tool + message pairs emitted in generated agent files}\label{feat:safety}
   \featureitem{Session audit logging}{PostToolUse hook appends one JSONL line per tool invocation to a per-session audit log}\label{feat:auditlog}
-  \featureitem{Three integration surfaces}{filesystem (zero dependency), CLI (hooks/scripts), MCP server (11 tools)}\label{feat:surfaces}
+  \featureitem{Three integration surfaces}{filesystem (zero dependency), CLI (hooks/scripts), MCP server (12 tools)}\label{feat:surfaces}
   \featureitem{Extension model}{per-tool attributes under <handle>.ext/<tool>.yaml; any tool attaches config without schema changes}\label{feat:extensions}
   \featureitem{Starter content}{10 domain talents, 6 role archetypes, baseline-ops skill ship in the box}\label{feat:starter}
   \featureitem{Mission archetypes}{named contract conventions---implement (tight write-set, specific criteria, agent executes), design (broad write-set, open criteria, agent proposes and pushes back), review (read-only, findings with confidence), investigate (read-only, questions answered). Agency is expressed through contract specificity, not a mode switch}\label{feat:archetypes}
@@ -533,12 +533,14 @@ Three scenarios would cause ethos to fail:
   \featureitem{Integration guides}{filesystem, CLI, and MCP guides with working examples for third-party tools}\label{feat:guides}
   \featureitem{Team bundles}{config-driven switchable starter teams. Three-layer resolution: repo-local $\to$ active bundle $\to$ global. {\small\texttt{ethos team activate/deactivate/available/migrate}}}\label{feat:bundles}
   \featureitem{Foundation bundle}{general-purpose team for any codebase: a CEO/COO leadership pair (human CEO, {\small\texttt{claude}} COO) over 4 specialists (architect, implementer, reviewer, security) that report to the COO. Language-agnostic. Ships embedded alongside gstack}\label{feat:foundation}
-  \featureitem{Setup wizard}{{\small\texttt{ethos setup}}---3-prompt interactive wizard creates human + agent identities, writes repo config, activates bundle, generates agent files. {\small\texttt{--solo}}, {\small\texttt{--bundle}}, {\small\texttt{--file}}, {\small\texttt{--json}} flags}\label{feat:setup}
+  \featureitem{Setup wizard}{{\small\texttt{ethos setup}}---interactive wizard (name, handle, email, GitHub, working style) creates human + agent identities, writes repo config, activates bundle, generates agent files. {\small\texttt{--solo}}, {\small\texttt{--bundle}}, {\small\texttt{--file}}, {\small\texttt{--json}} flags}\label{feat:setup}
   \featureitem{Pipeline templates}{multi-stage mission workflows: 8 global pipelines (standard, quick, product, full, formal, docs, coverage, coe) plus 5 gstack-specific templates (13 total). {\small\texttt{ethos mission pipeline instantiate}}}\label{feat:pipelines}
   \featureitem{Mission dispatch}{one-liner creation from CLI flags: {\small\texttt{--worker}}, {\small\texttt{--evaluator}}, {\small\texttt{--write-set}}, {\small\texttt{--criteria}}}\label{feat:dispatch}
-  \featureitem{Mission traceability}{close auto-appends summary JSONL to {\small\texttt{.ethos/missions.jsonl}} for commit-ready traceability}\label{feat:traceability}
+  \featureitem{Mission traceability}{close auto-appends a summary line to the tracked {\small\texttt{missions.jsonl}} trace log under {\small\texttt{.punt-labs/ethos/}} for commit-ready traceability}\label{feat:traceability}
   \featureitem{PR/FAQ pipeline integration}{product pipeline's prfaq stage invokes the full Working Backwards workflow---research, structured discovery, meeting personas, peer review, LaTeX output}\label{feat:prfaq-integration}
   \featureitem{Release externalization}{{\small\texttt{/prfaq:externalize}} generates a release-scoped press release from CHANGELOG entries}\label{feat:externalize}
+  \featureitem{Self-standing repos}{{\small\texttt{ethos vendor}} snapshots a resolvable identity set into the repo (following team-membership edges to a fixed point, planning by default); {\small\texttt{resolution: repo-only}} drops the global fallback so a missing reference is a hard error, not silent home-directory resolution; {\small\texttt{<handle>.ext/<ns>.local.yaml}} keeps secrets out of git. {\small\texttt{ethos doctor}} is the completeness gate}\label{feat:self-standing}
+  \featureitem{Sealed audit record}{per-tool-call audit lines write to a gitignored live file during a session and seal into immutable, timestamp-named chunks at pre-commit, so the audit trail lands in the same commit as the work and merges without conflict}\label{feat:sealed-audit}
 \end{enumerate}
 
 \subsection*{Should Do}
