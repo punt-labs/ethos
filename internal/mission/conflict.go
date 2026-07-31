@@ -315,10 +315,11 @@ func PathContainedBy(file, entry string) bool {
 // normalized segment list, AND the file must have at least as many
 // segments as the entry consumes. "Equal" counts as contained.
 //
-// Entry segments carrying glob metacharacters (`*`, `?`, `[`) match
-// by pattern rather than by literal equality: `*` and `?` match
-// within one segment (path.Match), and a `**` segment matches any
-// number of segments, including none. A write_set that declares
+// Entry segments carrying a glob metacharacter (`*` or `?`) match by
+// pattern rather than by literal equality: `*` and `?` match within
+// one segment (path.Match), and a `**` segment matches any number of
+// segments, including none. Brackets are ordinary filename characters
+// here, not character classes — see globMeta. A write_set that declares
 // `docs/**` claims every path under docs/, so a result reporting
 // `docs/audited-delegation.md` is inside it (ethos-qy7k — the
 // literal comparison read `**` as a directory named `**` and refused
@@ -406,10 +407,15 @@ func segmentsContain(fs, es []string) bool {
 // segmentMatches reports whether one entry segment matches one file
 // segment. A segment with no glob metacharacter compares literally —
 // the common case, and the one that keeps every non-glob write_set
-// entry byte-identical in behavior. A malformed pattern (path.Match
-// returns ErrBadPattern, e.g. an unclosed `[`) also falls back to
-// literal comparison rather than matching nothing: the per-entry
-// validator accepts such a path, so it names a real file.
+// entry byte-identical in behavior. That now includes every segment
+// whose only unusual characters are brackets, so a file named
+// `[draft].md` matches the entry that names it.
+//
+// A segment that DOES use `*` or `?` alongside a malformed bracket
+// makes path.Match return ErrBadPattern; that falls back to literal
+// comparison rather than matching nothing. The per-entry validator
+// accepts such a path, so it names a real file, and a literal
+// comparison is the reading that cannot over-admit.
 func segmentMatches(entrySeg, fileSeg string) bool {
 	if !strings.ContainsAny(entrySeg, globMeta) {
 		return entrySeg == fileSeg

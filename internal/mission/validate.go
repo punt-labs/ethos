@@ -575,7 +575,7 @@ func validateWriteSetEntry(entry string) error {
 
 	// Reject glob root claims for the same reason — an entry whose
 	// every segment is nothing but glob metacharacters (`**`, `*`,
-	// `*/**`, `?`, `[]`) claims the whole tree. Since path containment
+	// `*/**`, `?`) claims the whole tree. Since path containment
 	// became glob-aware (ethos-qy7k), such an entry contains every
 	// path in the repo while naming none of them, so no leader
 	// reading the contract can tell what it claims. `docs/**` is

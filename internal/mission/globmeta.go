@@ -15,4 +15,14 @@ package mission
 // matcher and the validator: a validator that recognized fewer
 // characters would admit an entry the matcher then reads as a
 // wildcard.
-const globMeta = "*?[]"
+//
+// Brackets are NOT in the set. path.Match reads `[draft]` as a
+// character class, so an entry naming a real file with brackets in it
+// — docs/[draft].md, or a Next.js-style app/[id].tsx — stopped
+// matching its own path while matching docs/d.md, a file nobody
+// declared. Wrong in both directions, in the containment gate
+// (Bugbot on PR #415). The write_set glob vocabulary is `**`, `*`, and
+// `?` for path wildcards; character classes were never part of it, and
+// nobody writes a character-class write_set. Brackets are ordinary
+// filename characters.
+const globMeta = "*?"

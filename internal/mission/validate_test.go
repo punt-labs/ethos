@@ -443,6 +443,13 @@ func TestValidate_AcceptsAnchoredGlobs(t *testing.T) {
 		"internal/mission/*.go",
 		"internal/**/store.go",
 		"*.go",
+		// Brackets are filename characters, not metacharacters, so a
+		// bracketed name is an ordinary literal entry — never a
+		// metacharacter-only claim on the whole tree.
+		"[abc]",
+		"docs/[draft].md",
+		"app/routes/[id].tsx",
+		"app/[id]/page.tsx",
 	}
 	for _, path := range tests {
 		t.Run(path, func(t *testing.T) {

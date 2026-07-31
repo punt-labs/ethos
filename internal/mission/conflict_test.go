@@ -270,6 +270,32 @@ func TestPathsOverlap(t *testing.T) {
 			b:    "",
 			want: false,
 		},
+		// Brackets are literal here too: a bracketed segment is not a
+		// pattern, so it is compared, not truncated away.
+		{
+			name: "bracketed file names overlap only themselves",
+			a:    "docs/[draft].md",
+			b:    "docs/[draft].md",
+			want: true,
+		},
+		{
+			name: "a bracketed file does not overlap a character-class expansion",
+			a:    "docs/[draft].md",
+			b:    "docs/d.md",
+			want: false,
+		},
+		{
+			name: "a bracketed directory overlaps its children",
+			a:    "app/[id]",
+			b:    "app/[id]/page.tsx",
+			want: true,
+		},
+		{
+			name: "bracketed siblings do not overlap",
+			a:    "app/[id]",
+			b:    "app/[slug]",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -475,6 +501,53 @@ func TestPathContainedBy(t *testing.T) {
 			file:  "internal/a[b/store.go",
 			entry: "internal/a[b",
 			want:  true,
+		},
+		// --- Brackets are filename characters, not character classes
+		// (Bugbot on PR #415). path.Match read `[draft]` as a class, so
+		// an entry naming a real file stopped matching its own path
+		// while matching one nobody declared — wrong in both
+		// directions, inside the containment gate.
+		{
+			name:  "a bracketed file name matches itself",
+			file:  "docs/[draft].md",
+			entry: "docs/[draft].md",
+			want:  true,
+		},
+		{
+			name:  "a bracketed route file matches itself",
+			file:  "app/routes/[id].tsx",
+			entry: "app/routes/[id].tsx",
+			want:  true,
+		},
+		{
+			name:  "a bracketed directory entry contains its children",
+			file:  "app/[id]/page.tsx",
+			entry: "app/[id]",
+			want:  true,
+		},
+		{
+			// The character-class reading admitted this. It must not:
+			// the entry names one bracketed file, not every one-letter
+			// file whose name is drawn from the brackets.
+			name:  "a bracketed entry does not admit a character-class expansion",
+			file:  "docs/d.md",
+			entry: "docs/[draft].md",
+			want:  false,
+		},
+		{
+			name:  "a star still globs alongside brackets in the path",
+			file:  "app/[id]/page.tsx",
+			entry: "app/*/page.tsx",
+			want:  true,
+		},
+		{
+			// A segment using * with a malformed bracket cannot be
+			// parsed as a pattern, so it falls back to a literal
+			// comparison — which only matches its own text.
+			name:  "star with a malformed bracket falls back to literal",
+			file:  "internal/a[bc.go",
+			entry: "internal/a[b*",
+			want:  false,
 		},
 	}
 	for _, tt := range tests {
