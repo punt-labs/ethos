@@ -1691,8 +1691,8 @@ func runMissionDispatch() error {
 		Leader:          resolveLeader(),
 		Worker:          dispatchWorker,
 		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
-		WriteSet:        splitCSV(dispatchWriteSet),
-		ExtractInto:     splitCSV(dispatchExtractInto),
+		WriteSet:        mission.SplitPathList(dispatchWriteSet),
+		ExtractInto:     mission.SplitPathList(dispatchExtractInto),
 		SuccessCriteria: append([]string{}, dispatchCriteria...),
 		Context:         dispatchContext,
 		Type:            dispatchType,
@@ -1910,20 +1910,6 @@ func resolveLeader() string {
 		return agent
 	}
 	return "claude"
-}
-
-// splitCSV splits s on commas, trims whitespace from each element,
-// and drops empty strings.
-func splitCSV(s string) []string {
-	parts := strings.Split(s, ",")
-	var out []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // runMissionLint handles `ethos mission lint <contract.yaml>`.

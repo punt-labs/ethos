@@ -222,6 +222,48 @@ func TestPathsOverlap(t *testing.T) {
 // Round 2 of Phase 3.6 added this helper after all four reviewers
 // flagged the H1 bug: the symmetric pathsOverlap helper accepted a
 // result claiming a parent directory of a write_set file entry.
+// TestSplitPathList locks the one splitter both path-list surfaces
+// use — the CLI's --write-set/--extract-into flags and pipeline
+// template expansion (ethos-t2lb).
+func TestSplitPathList(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{name: "empty", in: "", want: nil},
+		{name: "whitespace only", in: "   \t ", want: nil},
+		{name: "single path", in: "internal/mission", want: []string{"internal/mission"}},
+		{name: "surrounding whitespace", in: "  internal/mission  ", want: []string{"internal/mission"}},
+		{
+			name: "comma separated",
+			in:   "internal/mission,cmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name: "space separated",
+			in:   "internal/mission cmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name: "comma and space separated",
+			in:   "internal/mission, cmd/ethos , hooks",
+			want: []string{"internal/mission", "cmd/ethos", "hooks"},
+		},
+		{
+			name: "newline separated",
+			in:   "internal/mission\ncmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{name: "empty fields dropped", in: ",,internal/mission,,", want: []string{"internal/mission"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, SplitPathList(tt.in))
+		})
+	}
+}
+
 func TestPathContainedBy(t *testing.T) {
 	tests := []struct {
 		name  string

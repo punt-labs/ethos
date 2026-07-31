@@ -248,7 +248,7 @@ func Instantiate(p *Pipeline, opts InstantiateOptions) ([]*Contract, error) {
 		}
 
 		// Expand template variables in write_set, context, success_criteria.
-		ws, err := expandSlice(stage.WriteSet, opts.Vars, p.Name, stage.Name, "write_set")
+		ws, err := expandPathSlice(stage.WriteSet, opts.Vars, p.Name, stage.Name, "write_set")
 		if err != nil {
 			return nil, err
 		}
@@ -376,6 +376,34 @@ func ExpandVars(s string, vars map[string]string) (string, error) {
 		i = i + 1 + close + 1
 	}
 	return result.String(), nil
+}
+
+// expandPathSlice expands template variables in a path list, then
+// splits each expanded entry with SplitPathList so a variable holding
+// several paths produces several write_set entries.
+//
+// A stage entry of `{target}` with `--var target="docs/a.md
+// docs/b.md"` substituted the whole value into one entry, and the
+// resulting path named no file: the write_set claimed nothing real
+// and every edit the worker made fell outside it (ethos-t2lb). Each
+// path must stand alone so admission control and the runtime gate
+// check it individually.
+func expandPathSlice(ss []string, vars map[string]string, pipeline, stage, field string) ([]string, error) {
+	expanded, err := expandSlice(ss, vars, pipeline, stage, field)
+	if err != nil {
+		return nil, err
+	}
+	if len(expanded) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(expanded))
+	for _, e := range expanded {
+		out = append(out, SplitPathList(e)...)
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
 }
 
 // expandSlice applies ExpandVars to each entry in ss. Errors name the

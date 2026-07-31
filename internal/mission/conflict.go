@@ -8,6 +8,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // ConflictSource identifies which field of the new contract an
@@ -444,6 +445,32 @@ func CanonicalPath(p string) string {
 		return ""
 	}
 	return strings.Join(segs, "/")
+}
+
+// SplitPathList splits one write_set or extract_into value into its
+// individual entries. Commas and whitespace both separate entries, so
+// `internal/mission,cmd/ethos` and `internal/mission cmd/ethos` yield
+// the same two paths.
+//
+// One splitter serves both surfaces that build a path list from text:
+// the CLI's `--write-set` / `--extract-into` flags and pipeline
+// template expansion. `ethos mission pipeline instantiate --var
+// target="docs/a.md docs/b.md"` used to substitute the whole value
+// into one write_set entry, producing a single path that names no
+// file — every real edit then fell outside the write_set (ethos-t2lb).
+//
+// The cost is that a path containing a space cannot be expressed in
+// either surface. That is the right trade: a space-separated list is
+// the common shape, and a collapsed entry fails late and obscurely,
+// at the first edit, rather than at admission.
+func SplitPathList(s string) []string {
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
 }
 
 // formatConflictError builds the operator-facing error string from

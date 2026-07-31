@@ -663,6 +663,85 @@ func TestInstantiate_HappyPath(t *testing.T) {
 	}
 }
 
+// TestInstantiate_MultiPathVar pins ethos-t2lb: a --var value holding
+// several paths must expand into several write_set entries. Before the
+// fix the whole value landed in one entry — a path naming no file, so
+// admission control had nothing real to check and every edit the
+// worker made fell outside the write_set.
+func TestInstantiate_MultiPathVar(t *testing.T) {
+	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{
+			{Name: "implement", Archetype: "implement", WriteSet: []string{"{target}"},
+				Worker: "bwk", SuccessCriteria: []string{"make check passes"}},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		target string
+		want   []string
+	}{
+		{
+			name:   "space separated",
+			target: "internal/mission cmd/ethos hooks",
+			want:   []string{"internal/mission", "cmd/ethos", "hooks"},
+		},
+		{
+			name:   "comma separated",
+			target: "internal/mission,cmd/ethos",
+			want:   []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name:   "comma and space separated",
+			target: "internal/mission, cmd/ethos",
+			want:   []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name:   "single path is unchanged",
+			target: "internal/mission",
+			want:   []string{"internal/mission"},
+		},
+		{
+			name:   "surrounding whitespace is dropped",
+			target: "  internal/mission  ",
+			want:   []string{"internal/mission"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contracts, err := Instantiate(p, InstantiateOptions{
+				PipelineID: "sprint-2026-07-31",
+				Vars:       map[string]string{"target": tt.target},
+				Leader:     "claude",
+				Evaluator:  "rsc",
+				Worker:     "bwk",
+				Now:        now,
+			})
+			if err != nil {
+				t.Fatalf("Instantiate: %v", err)
+			}
+			got := contracts[0].WriteSet
+			if len(got) != len(tt.want) {
+				t.Fatalf("WriteSet = %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("WriteSet[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+			// Each entry must stand on its own for admission control.
+			for _, e := range got {
+				if err := validateWriteSetEntry(e); err != nil {
+					t.Errorf("entry %q does not validate: %v", e, err)
+				}
+			}
+		})
+	}
+}
+
 func TestInstantiate_MissingVar(t *testing.T) {
 	p := &Pipeline{
 		Name: "test-pipeline",
