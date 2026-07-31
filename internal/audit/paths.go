@@ -230,9 +230,17 @@ type MissionLive struct {
 	// Sealed reports whether the mission's tracked chunks (or a covering
 	// quarantine marker) already carry this session's lines.
 	Sealed bool
-	// Legacy reports whether a frozen pre-DES-058 record — the tracked
-	// missions/<id>/log.jsonl or the drained per-checkout residue — holds
-	// this mission's lines.
+	// Legacy reports whether the mission is wholly pre-DES-058: a frozen
+	// record — the tracked missions/<id>/log.jsonl or the drained
+	// per-checkout residue — holds its lines and no session ever sealed a
+	// chunk for it.
+	//
+	// A frozen record alone is not enough. Legacy lines carry no session
+	// attribution, so unlike Sealed this cannot be filtered to one session;
+	// a mission worked both before and after the split would let its old
+	// log.jsonl vouch for a later session whose live log really was lost.
+	// Requiring the mission to hold no chunk from ANY session keeps the
+	// proof to missions that closed before the split existed.
 	Legacy bool
 }
 
@@ -307,7 +315,7 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 		if err != nil {
 			return nil, err
 		}
-		legacy, err := missionHasLegacyLines(trackedRoot, liveRoot, id)
+		legacy, err := missionIsWhollyLegacy(trackedRoot, liveRoot, id)
 		if err != nil {
 			return nil, err
 		}
@@ -322,12 +330,24 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 	return out, nil
 }
 
-// missionHasLegacyLines reports whether either of a mission's frozen
-// pre-DES-058 sources holds a parseable line. Those missions closed before the
-// live/sealed split existed, so they have no live file to find and never will.
+// missionIsWhollyLegacy reports whether a mission's whole record is frozen
+// pre-DES-058 history: one of its frozen sources holds a parseable line and no
+// session has ever sealed a chunk for it. Such a mission closed before the
+// live/sealed split existed, so it has no live file to find and never will.
+//
+// The no-chunk condition is what keeps a frozen record from vouching for the
+// wrong session. Legacy lines predate per-session attribution, so a mission
+// worked both before and after the split would otherwise let its old log.jsonl
+// mask a later session's genuinely lost live log. One chunk from any session
+// marks a mission as post-split, and the per-session Sealed evidence takes
+// over from there.
+//
 // The tracked log.jsonl travels with git; the drained residue does not, so each
 // is read from its own root.
-func missionHasLegacyLines(trackedRoot, liveRoot, missionID string) (bool, error) {
+func missionIsWhollyLegacy(trackedRoot, liveRoot, missionID string) (bool, error) {
+	if missionHasAnyChunk(SealedMissionDir(trackedRoot, missionID)) {
+		return false, nil
+	}
 	sources := []string{
 		MissionLegacyLogPath(trackedRoot, missionID),
 		MissionResiduePath(liveRoot, missionID),
@@ -342,6 +362,24 @@ func missionHasLegacyLines(trackedRoot, liveRoot, missionID string) (bool, error
 		}
 	}
 	return false, nil
+}
+
+// missionHasAnyChunk reports whether dir holds a valid mission chunk for any
+// session — the mark of a mission worked after the live/sealed split.
+func missionHasAnyChunk(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if _, kind := Classify(e.Name(), MissionNS); kind == KindValid {
+			return true
+		}
+	}
+	return false
 }
 
 // missionChunkCarriesSession reports whether any valid mission chunk in dir

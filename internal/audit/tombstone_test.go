@@ -294,6 +294,19 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 			// Another session's chunk says nothing about this session's lines.
 			wantLost: true,
 		},
+		{
+			name:    "bound, hybrid mission: legacy log plus another session's chunk",
+			mission: "m-2026-07-20-020",
+			setup: func(t *testing.T, repo, mid string) {
+				writeLegacyMissionLog(t, repo, mid, 100)
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile("other", 200, 300), 200, 300)
+			},
+			bound: []string{"m-2026-07-20-020"},
+			// A mission worked on both sides of the split. Its frozen log
+			// predates per-session attribution, so it cannot vouch for this
+			// session — whose own live log is gone and sealed nowhere.
+			wantLost: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
