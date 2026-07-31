@@ -307,6 +307,65 @@ func TestStore_FindByNoMatch(t *testing.T) {
 	assert.Nil(t, id)
 }
 
+// TestStore_FindByAmbiguous pins ethos-u4kq: two identities sharing a
+// searched value is an error naming both, not whichever file the
+// directory read reached first. An arbitrary winner is a silent wrong
+// answer — every attribution downstream follows the wrong person.
+func TestStore_FindByAmbiguous(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Save(&Identity{
+		Name: "Zoe Washburne", Handle: "zoe", Kind: "human",
+		Email: "crew@serenity.ship", GitHub: "shared-gh",
+	}))
+	require.NoError(t, s.Save(&Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
+		Email: "crew@serenity.ship", GitHub: "shared-gh",
+	}))
+
+	tests := []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "email", field: "email", value: "crew@serenity.ship"},
+		{name: "github", field: "github", value: "shared-gh"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id, err := s.FindBy(tt.field, tt.value)
+			require.Error(t, err, "an ambiguous match must not resolve")
+			assert.Nil(t, id)
+			assert.Contains(t, err.Error(), "ambiguous identity: 2 matches")
+			assert.Contains(t, err.Error(), tt.value)
+			assert.Contains(t, err.Error(), "mal")
+			assert.Contains(t, err.Error(), "zoe")
+			// Sorted, so the message is stable across read orders.
+			assert.Contains(t, err.Error(), "mal, zoe")
+		})
+	}
+}
+
+// TestStore_FindByUniqueAmongCollisions asserts the fix is scoped to
+// the colliding value: an identity whose value is unique still
+// resolves while two others collide on a different one.
+func TestStore_FindByUniqueAmongCollisions(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Save(&Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human", Email: "crew@serenity.ship",
+	}))
+	require.NoError(t, s.Save(&Identity{
+		Name: "Zoe Washburne", Handle: "zoe", Kind: "human", Email: "crew@serenity.ship",
+	}))
+	require.NoError(t, s.Save(&Identity{
+		Name: "Kaylee Frye", Handle: "kaylee", Kind: "human", Email: "kaylee@serenity.ship",
+	}))
+
+	id, err := s.FindBy("email", "kaylee@serenity.ship")
+	require.NoError(t, err)
+	require.NotNil(t, id)
+	assert.Equal(t, "kaylee", id.Handle)
+}
+
 func TestStore_FindByUnsupportedField(t *testing.T) {
 	s := testStore(t)
 	_, err := s.FindBy("name", "Mal")

@@ -325,6 +325,64 @@ func TestPathAllowed(t *testing.T) {
 	}
 }
 
+// TestPathAllowed_GlobEntry asserts ethos-qy7k on the enforcement
+// side: the allowlist is built from the write_set, so an entry that
+// declares a glob must admit the paths the glob names. Compared
+// literally, `docs/**` authorized nothing at all — the verifier was
+// refused every write the contract had allowed.
+func TestPathAllowed_GlobEntry(t *testing.T) {
+	entries := []string{"docs/**", "internal/mission/*.go"}
+
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{"doublestar one level down", "docs/audited-delegation.md", true},
+		{"doublestar many levels down", "docs/design/adr/des-054.md", true},
+		{"single star inside one segment", "internal/mission/store.go", true},
+		{"single star does not span a separator", "internal/mission/sub/store.go", false},
+		{"outside every entry", "cmd/ethos/hook.go", false},
+		{"sibling of the glob root", "docsite/index.md", false},
+		{"traversal out of a glob entry", "docs/../secret.md", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, pathAllowed(tt.target, entries))
+		})
+	}
+}
+
+// TestPathAllowed_GlobDoesNotAdmitTraversal pins the escape Copilot
+// found on PR #415: a `**` segment matched `..` like any other
+// segment, so a leading-doublestar entry — legal, since it names a
+// real file — authorized a verifier to write OUTSIDE the repo. The
+// literal matcher this replaced could not express that, so the guard
+// arrives with the glob.
+func TestPathAllowed_GlobDoesNotAdmitTraversal(t *testing.T) {
+	entries := []string{"**/notes.go", "**", "docs/**", "*.go"}
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{"leading traversal under a doublestar entry", "../notes.go"},
+		{"double traversal", "../../etc/passwd"},
+		{"traversal that resolves above the repo", "internal/hook/../../../escape.go"},
+		{"traversal reaching a name a glob entry would otherwise match", "../../notes.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, pathAllowed(tt.target, entries),
+				"%q must not be admitted by any glob entry", tt.target)
+		})
+	}
+
+	// The same entries still admit what they legitimately name.
+	assert.True(t, pathAllowed("internal/hook/notes.go", entries))
+	assert.True(t, pathAllowed("docs/design/adr.md", entries))
+}
+
 // TestHandlePreToolUse_EnvVarFromSubagentStart verifies end-to-end
 // that the env var format produced by buildVerifierAllowlistEnv is
 // correctly consumed by HandlePreToolUse.
@@ -1992,6 +2050,84 @@ func TestDispatchAgent_ActiveMissionSidecar(t *testing.T) {
 		"sidecar dispatch must record Tier B, not Tier A")
 	assert.Equal(t, missionID, d.Mission)
 	assert.Equal(t, sessionID, d.ParentSession)
+}
+
+// TestDispatchAgent_ActiveMissionSidecarStaleWarns pins ethos-7vo3:
+// a sidecar left pointing at a mission that has since closed must not
+// take the spawn. Closing clears the sidecar in the closing session
+// only, so a mission closed from anywhere else leaves the binding
+// behind — and a delegation filed under a mission whose results are
+// already in is a false audit trail. The spawn runs as Tier A and the
+// stale binding is named on stderr.
+func TestDispatchAgent_ActiveMissionSidecarStaleWarns(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	stageRepoRoot(t)
+
+	missionID := "m-2026-05-23-623"
+	stageClosedContract(t, home, missionID)
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	sessionID := "sess-stale-sidecar"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sessionID, missionID))
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", "")
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("CLAUDE_AGENT_TYPE", "bwk")
+	t.Setenv("ETHOS_QUIET_ADVICE", "1")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	payload := `{"tool_name":"Agent","tool_input":{},"session_id":"` + sessionID + `"}`
+	var out bytes.Buffer
+	warning := captureHookStderr(t, func() {
+		require.NoError(t, HandlePreToolUse(strings.NewReader(payload), &out))
+	})
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+		"a stale binding must not block the spawn")
+	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a closed mission must not take a new delegation")
+	assert.Contains(t, warning, missionID, "the warning must name the stale mission")
+	assert.Contains(t, warning, "closed")
+}
+
+// stageClosedContract stages a mission and walks it to closed through
+// the real lifecycle — the close gate requires a result artifact, so
+// there is no shortcut that leaves a well-formed contract on disk.
+func stageClosedContract(t *testing.T, home, missionID string) {
+	t.Helper()
+	stageContract(t, home, missionID)
+	store := mission.NewStore(filepath.Join(home, ".punt-labs", "ethos"))
+	require.NoError(t, store.AppendResult(missionID, &mission.Result{
+		Mission:    missionID,
+		Round:      1,
+		Author:     "bwk",
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence:   []mission.EvidenceCheck{{Name: "make check", Status: mission.EvidenceStatusPass}},
+	}))
+	_, err := store.Close(missionID, mission.StatusClosed)
+	require.NoError(t, err)
+}
+
+// captureHookStderr redirects os.Stderr for the duration of fn and
+// returns what the hook wrote there.
+func captureHookStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	require.NoError(t, w.Close())
+	var buf bytes.Buffer
+	_, err = buf.ReadFrom(r)
+	require.NoError(t, err)
+	return buf.String()
 }
 
 // TestDispatchAgent_ActiveMissionSidecarPrefersEnv asserts the

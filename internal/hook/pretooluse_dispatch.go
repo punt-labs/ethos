@@ -70,6 +70,13 @@ func dispatchAgent(w io.Writer, sessionID string, toolInput map[string]any) erro
 // a claimed mission did not bind — the dispatch then proceeds along
 // the no-sidecar path (inheritance or Tier A) so the spawn still
 // runs (Bugbot precedent: dispatch helpers must be non-blocking).
+//
+// A sidecar naming a mission that is no longer open is stale and is
+// refused with a warning (ethos-7vo3). The sidecar is cleared when
+// the mission closes in the SAME session; a mission closed from
+// anywhere else leaves it behind, and filing a fresh delegation under
+// a mission whose results are already in is a false audit trail. The
+// spawn still runs — as Tier A, where it belongs.
 func readActiveMissionForDispatch(sessionID string) string {
 	if sessionID == "" {
 		return ""
@@ -88,7 +95,42 @@ func readActiveMissionForDispatch(sessionID string) string {
 			sessionID, err)
 		return ""
 	}
+	if missionID == "" {
+		return ""
+	}
+	if reason := staleBindingReason(missionID); reason != "" {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: active-mission: session %q is bound to %s but %s; "+
+				"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
+			sessionID, missionID, reason)
+		return ""
+	}
 	return missionID
+}
+
+// staleBindingReason reports why the sidecar's mission cannot take a
+// new delegation, or "" when it can. Only one shape is stale: a
+// contract that loads and is no longer open.
+//
+// A store or contract that will not resolve is deliberately NOT
+// treated as stale. That case belongs to dispatchTierB, which refuses
+// the spawn with the missionID named in the reason — an unresolvable
+// binding must never silently admit (DES-054 round-3 rule, pinned by
+// TestDispatchAgent_ActiveMissionSidecarMalformedRefuses). Returning
+// "" here hands it to that path unchanged.
+func staleBindingReason(missionID string) string {
+	store, err := tierBMissionStore()
+	if err != nil {
+		return ""
+	}
+	c, err := store.Load(missionID)
+	if err != nil {
+		return ""
+	}
+	if c.Status != mission.StatusOpen {
+		return fmt.Sprintf("that mission is %s", c.Status)
+	}
+	return ""
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying

@@ -27,43 +27,52 @@ msg_file="$1"
 [ -f "$msg_file" ] || exit "$_host_status"
 # Fallback: when MISSION_ID/DELEGATION_ID aren't in env (the common
 # case for subagent commits — additional_env doesn't persist into
-# subprocess env), gate on an ACTIVE mission, not the delegation
-# binding. `ethos mission claim` writes the active-mission sidecar;
-# `mission release` and terminal transitions clear it. The
-# delegation-binding sidecar was never cleared, so keying off it tagged
-# unrelated T4 commits from later sessions (ethos-jawp).
+# subprocess env), ask ethos for the trailer values of the session that
+# is COMMITTING. It resolves that session the way the rest of the CLI
+# does — ETHOS_SESSION, else the Claude process-tree walk — and reads
+# only that session's active-mission and delegation-binding sidecars.
+#
+# The hook used to pick the session itself: glob every session
+# directory, reverse-sort by name, take the newest one holding an
+# active-mission sidecar. With two concurrent sessions each holding a
+# mission, a commit from the older session was stamped with the newer
+# session's mission and delegation (ethos-pobi). Nothing about the
+# committing process entered that decision.
+#
+# No resolvable session, no ethos on PATH, or no active mission means
+# no trailer. The hook never guesses.
 if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
-  # Session dirs are <date>-<session-id>, so reverse-sorted they give
-  # most-recent first. Pick the first session with an active-mission
-  # sidecar so a stale binding from an older session can't tag this
-  # commit.
-  #
-  # Read one path per line. `for d in $(find ...)` split on every space
-  # and tab, so a $HOME (or any ancestor) containing a space silently
-  # broke discovery and dropped the trailer. The while loop runs in the
-  # pipeline's subshell, so it prints the winner and the command
-  # substitution collects it.
-  session_dir=$(find "$HOME/.punt-labs/ethos/sessions" -maxdepth 1 -type d 2>/dev/null |
-    sort -r |
-    while IFS= read -r d; do
-      if [ -f "$d/active-mission" ]; then
-        printf '%s\n' "$d"
-        break
-      fi
-    done)
-  if [ -n "$session_dir" ]; then
-    MISSION_ID=$(sed -n '1p' "$session_dir/active-mission" | tr -d '[:space:]')
-    # Tag the delegation only when its binding names this same mission
-    # — a binding left from a different mission must not ride along.
-    # Strip whitespace from the binding lines too: a CRLF or a
-    # hand-edited trailing space would otherwise defeat the match and
-    # drop the Delegation trailer. An empty MISSION_ID matches nothing,
-    # so an unreadable active-mission file cannot tag a delegation.
-    binding_file="$session_dir/delegation-binding"
-    if [ -n "$MISSION_ID" ] && [ -f "$binding_file" ] &&
-      [ "$(sed -n '2p' "$binding_file" | tr -d '[:space:]')" = "$MISSION_ID" ]; then
-      DELEGATION_ID=$(sed -n '1p' "$binding_file" | tr -d '[:space:]')
-    fi
+  # Resolve the binary: PATH first, then the default install dir —
+  # the same two-step pre-commit.sh uses.
+  ethos_bin=""
+  if command -v ethos >/dev/null 2>&1; then
+    ethos_bin="ethos"
+  elif [ -x "$HOME/.local/bin/ethos" ]; then
+    ethos_bin="$HOME/.local/bin/ethos"
+  fi
+  if [ -n "$ethos_bin" ]; then
+    # KEY=value lines, at most one of each. Strip whitespace so a CRLF
+    # or a trailing space cannot end up inside a trailer value.
+    #
+    # stderr is deliberately NOT suppressed: a sidecar that will not
+    # read, or a binary too old to know this subcommand, drops the
+    # trailer, and a silently missing trailer is the failure class
+    # this hook exists to prevent. The commit still proceeds.
+    trailers=$("$ethos_bin" hook commit-trailers) || trailers=""
+    # An ethos predating `hook commit-trailers` prints the hook group's
+    # HELP on stdout and exits 0, so the `||` above never fires and the
+    # trailer vanishes without a word. Treat help-shaped output as the
+    # failure it is and say so. Newer binaries pin `hook` to NoArgs and
+    # exit non-zero, so this guard only fires on a version mismatch.
+    case "$trailers" in
+    *"Usage:"*)
+      printf 'ethos: commit-msg: %s does not support "hook commit-trailers"; upgrade ethos to restore Mission/Delegation trailers\n' \
+        "$ethos_bin" >&2
+      trailers=""
+      ;;
+    esac
+    MISSION_ID=$(printf '%s\n' "$trailers" | sed -n 's/^MISSION_ID=//p' | tr -d '[:space:]')
+    DELEGATION_ID=$(printf '%s\n' "$trailers" | sed -n 's/^DELEGATION_ID=//p' | tr -d '[:space:]')
     export MISSION_ID DELEGATION_ID
   fi
 fi

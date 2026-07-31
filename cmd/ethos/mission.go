@@ -781,8 +781,8 @@ func init() {
 
 	missionDispatchCmd.Flags().StringVar(&dispatchWorker, "worker", "", "Worker handle (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchEvaluator, "evaluator", "", "Evaluator handle (required)")
-	missionDispatchCmd.Flags().StringVar(&dispatchWriteSet, "write-set", "", "Comma-separated file/dir paths authorized for modify and create (required)")
-	missionDispatchCmd.Flags().StringVar(&dispatchExtractInto, "extract-into", "", "Comma-separated directories authorized for new-file creation only (DES-052)")
+	missionDispatchCmd.Flags().StringVar(&dispatchWriteSet, "write-set", "", "File/dir paths authorized for modify and create, separated by commas or spaces (required)")
+	missionDispatchCmd.Flags().StringVar(&dispatchExtractInto, "extract-into", "", "Directories authorized for new-file creation only, separated by commas or spaces (DES-052)")
 	missionDispatchCmd.Flags().StringArrayVar(&dispatchCriteria, "criteria", nil, "Success criterion (repeatable; pass once per criterion, commas preserved) (required)")
 	missionDispatchCmd.Flags().StringVar(&dispatchContext, "context", "", "Free-text context")
 	missionDispatchCmd.Flags().StringVar(&dispatchTicket, "ticket", "", "Ticket/bead ID")
@@ -918,6 +918,7 @@ func runMissionCreate() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission create: %w", err)
 	}
+	bindDispatchedMission("create", c.MissionID)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -1690,8 +1691,8 @@ func runMissionDispatch() error {
 		Leader:          resolveLeader(),
 		Worker:          dispatchWorker,
 		Evaluator:       mission.Evaluator{Handle: dispatchEvaluator},
-		WriteSet:        splitCSV(dispatchWriteSet),
-		ExtractInto:     splitCSV(dispatchExtractInto),
+		WriteSet:        splitPathFlag("write-set", dispatchWriteSet),
+		ExtractInto:     splitPathFlag("extract-into", dispatchExtractInto),
 		SuccessCriteria: append([]string{}, dispatchCriteria...),
 		Context:         dispatchContext,
 		Type:            dispatchType,
@@ -1711,6 +1712,7 @@ func runMissionDispatch() error {
 	if err := ms.Create(&c); err != nil {
 		return fmt.Errorf("mission dispatch: %w", err)
 	}
+	bindDispatchedMission("dispatch", c.MissionID)
 
 	if jsonOutput {
 		printJSON(&c)
@@ -1795,6 +1797,84 @@ func runMissionRelease() error {
 	return nil
 }
 
+// bindDispatchedMission points the caller's session at the mission it
+// just named, so the next Agent() spawn files its delegation record
+// under that mission (ethos-7vo3).
+//
+// The PreToolUse dispatch cannot see a MISSION_ID the leader never
+// exported into its own environment, so it falls back to the
+// active-mission sidecar. The sidecar was written only by `ethos
+// mission claim` and stayed put until an explicit `release`, which
+// made it sticky: a leader who created m-B while still bound to m-A
+// filed m-B's delegation under m-A (observed: d-078 under m-017).
+// Creating or dispatching a mission is the leader naming one
+// explicitly, so it is the moment the binding must follow.
+//
+// The binding is written with dispatch origin, so it files delegation
+// records but produces NO commit trailers. Dispatching names a mission
+// for someone else; the leader keeps doing unrelated work in the same
+// session, and stamping those commits with a dispatched mission is
+// ethos-jawp's false-trailer class arriving through a new door. Only
+// an explicit `ethos mission claim` turns trailers on.
+//
+// A rebind over a different mission prints one stderr line — the
+// leader is losing a binding they may still want, and a silent
+// rebind is how the stale-binding class hides. The delegation-binding
+// sidecar from the previous mission's dispatch is cleared with it;
+// it describes a dispatch that is no longer current.
+//
+// Every step is advisory: a session that will not resolve is the
+// ordinary case for a human running dispatch from a plain terminal,
+// and a mission that was created stays created. Real failures print
+// one stderr line naming op so the leader can tell which command left
+// the binding behind.
+func bindDispatchedMission(op, missionID string) {
+	sessionID, _, err := resolveSessionContext()
+	if err != nil {
+		if !errors.Is(err, errNoSession) {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: resolving session: %v\n", op, err)
+		}
+		return
+	}
+	if sessionID == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: user home dir: %v\n", op, err)
+		return
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	previous, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
+	if err != nil {
+		// Report and continue: the rebind below is what makes the next
+		// spawn correct, and an unreadable sidecar is exactly the state
+		// that must be overwritten.
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: reading active mission: %v\n", op, err)
+	}
+	if err := mission.WriteActiveMissionOrigin(
+		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: binding session %s to %s: %v\n",
+			op, sessionID, missionID, err)
+		return
+	}
+	// create and dispatch always mint a fresh mission ID, so a rebind
+	// onto the SAME mission cannot arise from either caller; only the
+	// changed-mission case is reachable and reported.
+	if previous.MissionID == "" || previous.MissionID == missionID {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"ethos: mission %s: session %s was bound to %s; rebound to %s — delegations now file under %s, "+
+			"and commit trailers are off until you run `ethos mission claim <id>`\n",
+		op, sessionID, previous.MissionID, missionID, missionID)
+	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: clearing delegation binding: %v\n", op, err)
+	}
+}
+
 // clearClosedSessionBindings resolves the caller's session and hands it
 // to mission.ClearMissionBindings, which owns the sidecar logic and is
 // shared with the MCP close path. This function is the CLI's half:
@@ -1845,18 +1925,36 @@ func resolveLeader() string {
 	return "claude"
 }
 
-// splitCSV splits s on commas, trims whitespace from each element,
-// and drops empty strings.
-func splitCSV(s string) []string {
-	parts := strings.Split(s, ",")
-	var out []string
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
+// splitPathFlag splits a path-list flag value into entries and reports
+// the split on stderr when there is more than one.
+//
+// The split is what makes a multi-path value work at all (ethos-t2lb),
+// but it also silently widens a claim: `--write-set "zz space/dir.md"`
+// asks for one file and yields TWO entries, one of them a whole-tree
+// claim on `zz` that admission control will enforce against every
+// other mission. The leader who typed a stray space cannot see that in
+// the one-line dispatch summary, so name the entries as they were
+// understood. The value is still accepted — a false alarm costs a
+// glance, a silent extra claim costs another mission its write_set.
+func splitPathFlag(flag, value string) []string {
+	entries := mission.SplitPathList(value)
+	if len(entries) > 1 {
+		fmt.Fprintf(os.Stderr, "ethos: mission dispatch: --%s split into %d entries: %s\n",
+			flag, len(entries), quoteEntries(entries))
 	}
-	return out
+	return entries
+}
+
+// quoteEntries renders a path list so the split is visible. Joining on
+// a space reproduced the operator's input verbatim — `--write-set "zz
+// space/dir.md"` reported `zz space/dir.md`, which reads as the single
+// path they meant rather than the two they got (rsc on PR #415).
+func quoteEntries(entries []string) string {
+	quoted := make([]string, len(entries))
+	for i, e := range entries {
+		quoted[i] = strconv.Quote(e)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // runMissionLint handles `ethos mission lint <contract.yaml>`.

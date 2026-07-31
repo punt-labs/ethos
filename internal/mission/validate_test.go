@@ -320,6 +320,16 @@ func TestValidate_RejectsPathTraversal(t *testing.T) {
 		{name: "rejects dot with trailing slash", path: "./", wantErrMatch: "claims the project root"},
 		{name: "rejects dot-slash-dot", path: "./.", wantErrMatch: "claims the project root"},
 		{name: "rejects multiple dot segments", path: "././", wantErrMatch: "claims the project root"},
+		// Glob-root rejection, the same class one notation over
+		// (ethos-qy7k round 2): now that containment is glob-aware, an
+		// entry made only of glob metacharacters contains every path
+		// in the repo while naming none of them.
+		{name: "rejects bare doublestar", path: "**", wantErrMatch: "claims the whole tree"},
+		{name: "rejects bare star", path: "*", wantErrMatch: "claims the whole tree"},
+		{name: "rejects star slash doublestar", path: "*/**", wantErrMatch: "claims the whole tree"},
+		{name: "rejects doublestar with trailing slash", path: "**/", wantErrMatch: "claims the whole tree"},
+		{name: "rejects bare question mark", path: "?", wantErrMatch: "claims the whole tree"},
+		{name: "rejects dot slash doublestar", path: "./**", wantErrMatch: "claims the whole tree"},
 	}
 
 	for _, tt := range tests {
@@ -413,6 +423,33 @@ func TestValidate_AcceptsSingleDotSegment(t *testing.T) {
 		"./internal/mission/",
 		"internal/./mission/",
 		"./cmd/ethos/mission.go",
+	}
+	for _, path := range tests {
+		t.Run(path, func(t *testing.T) {
+			c := validContract()
+			c.WriteSet = []string{path}
+			require.NoError(t, c.Validate())
+		})
+	}
+}
+
+// TestValidate_AcceptsAnchoredGlobs asserts the glob-root rejection is
+// scoped to the all-metacharacter form: a glob anchored under a real
+// directory is a legitimate write_set entry and stays one.
+func TestValidate_AcceptsAnchoredGlobs(t *testing.T) {
+	tests := []string{
+		"docs/**",
+		"docs/**/",
+		"internal/mission/*.go",
+		"internal/**/store.go",
+		"*.go",
+		// Brackets are filename characters, not metacharacters, so a
+		// bracketed name is an ordinary literal entry — never a
+		// metacharacter-only claim on the whole tree.
+		"[abc]",
+		"docs/[draft].md",
+		"app/routes/[id].tsx",
+		"app/[id]/page.tsx",
 	}
 	for _, path := range tests {
 		t.Run(path, func(t *testing.T) {
