@@ -4848,9 +4848,9 @@ change it.
   3.4/3.5/3.6 enforcement.** DES-052 is purely a write-set
   authorization extension.
 
-## DES-054: Audited delegation — Tier A audit + Tier B contracts (DRAFT)
+## DES-054: Audited delegation — Tier A audit + Tier B contracts (SETTLED)
 
-**Status**: Draft v5. Bead `ethos-98u9`. Supersedes `ethos-717p`, `ethos-gqg3`. Reviewed across four rounds (rop minimalism / rsc compatibility / jra formal invariants). Round 4 verdict: 3× APPROVE — converged.
+**Status**: Settled. Shipped across PRs #326–#328 (2026-05-22/23); hardened in v4.9.0 by the mission-lifecycle cluster (#415, DES-067). Bead `ethos-98u9`. Supersedes `ethos-717p`, `ethos-gqg3`. Reviewed across four rounds (rop minimalism / rsc compatibility / jra formal invariants). Round 4 verdict: 3× APPROVE — converged. Design converged at v5; the revision history below is retained for provenance.
 
 Revision history:
 
@@ -5287,7 +5287,31 @@ Three implementation phases. Each phase: bwk worker / rsc evaluator. Test covera
 
 Final integration test: leader runs a Tier A Agent call → audit enrichment captures parent + child + prompt in the session log; leader runs a Tier B `mission dispatch` → same audit + contract + preconditions evaluable; commits from both surface via `git log --grep Mission:` and `git log --grep Delegation:`. The `ethos audit show --delegation <id>` command renders the unified view from the single session audit store.
 
-**Implementation note (ethos-ersr / ethos-n4np / ethos-ggtu, #411).** Making the mission tree git-tracked and pushing it to a public repo turned two write paths into PII leaks. The Tier B skeleton writer wrote `prompt.md` and `record.yaml` with `$HOME` and the repo root intact, so thirteen committed prompts named the operator's home directory and machine layout; the per-tool-call audit lines carried full email bodies, recipients, and a recipient address inside a `CronCreate` prompt straight into the sealed, git-tracked record. The fixes, all applied at the write path before anything reaches disk: **one redactor, two call sites** — the path substitution the audit lines already used moved from unexported `internal/hook` code down to `mission.PathRedactor`, and `hook`'s `redactAbsolutePaths` delegates to it; **redact inside the writer, not at the call site** — `$HOME`/repo-root redaction runs inside `WriteDelegationSkeleton` (and `CloseDelegation`'s free-text reason), and an unresolvable `$HOME` refuses the write (fail closed, never a partial write); **keep-list for sensitive tools, not a deny-list** — a sensitive tool's audit input reduces to a keep-list (`send_email` keeps its subject; everything else becomes `[redacted]`), so a `cc` or `reply-to` added later is redacted the day it appears; **address sweep on prose fields only** — a second pass rewrites addresses in free-form prose fields, leaving a `Read`'s `file_path` and a `Bash` command byte-identical; **redact before the hash** — both passes run before `tool_input_hash`, preserving the DES-052 cross-machine collision-detection invariant, and lines that lose content carry `redacted: true`.
+**Implementation note (ethos-ersr / ethos-n4np / ethos-ggtu, #411).** Making the mission tree git-tracked and pushing it to a public repo turned two write paths into PII leaks. The Tier B skeleton writer wrote `prompt.md` and `record.yaml` with `$HOME` and the repo root intact, so thirteen committed prompts named the operator's home directory and machine layout; the per-tool-call audit lines carried full email bodies, recipients, and a recipient address inside a `CronCreate` prompt straight into the sealed, git-tracked record. The fixes, all applied at the write path before anything reaches disk:
+
+- **One redactor, two call sites.** The path substitution the audit lines
+  already used moved from unexported `internal/hook` code down to
+  `mission.PathRedactor`; `hook`'s `redactAbsolutePaths` delegates to it. One
+  implementation, no drift.
+- **Redact inside the writer, not at the call site.** `$HOME`/repo-root
+  redaction runs inside `WriteDelegationSkeleton` (and `CloseDelegation`'s
+  free-text reason), so a future caller cannot write an unredacted prompt by
+  forgetting a step. Resolving `$HOME` is a precondition — a home directory
+  ethos cannot name is one it cannot redact — so an unresolvable `$HOME`
+  refuses the write, which `PreToolUse` turns into a spawn refusal. Fail
+  closed, never a partial write.
+- **Keep-list for sensitive tools, not a deny-list.** A sensitive tool's
+  audit input reduces to a keep-list (`send_email` keeps its subject;
+  everything else becomes `[redacted]`), so a `cc` or `reply-to` added to the
+  tool later is redacted the day it appears, not the day someone remembers it.
+- **Address sweep on prose fields only.** A second pass rewrites addresses in
+  free-form prose fields, leaving a `Read`'s `file_path` and a `Bash` command
+  byte-identical to before.
+- **Redact before the hash.** Both passes run before `tool_input_hash`, so the
+  hash is over the stored form — the DES-052 cross-machine collision-detection
+  invariant. A hash over a form that never reaches disk cannot be checked
+  against anything. Lines that lose content carry `redacted: true`, matching
+  the marker the hand-redacted public-website lines already use.
 
 **Implementation note (four friction fixes, #412).** Four correctness fixes to specified-but-mis-built behavior. The design-relevant one is **ethos-jawp**: the commit-msg trailer hook now gates on an active mission binding rather than stamping every commit, and the active-mission sidecar clears on close — on the CLI, hook, and MCP close paths alike, with a genuine clear failure reported rather than swallowed. This makes the binding lifecycle symmetric: a delegation binds a session, its trailers land while the binding is live, and close tears the binding down. The other three are narrower: **ethos-qvbh** requires the validated `mission` field on reflections and back-fills it on read of legacy records; **ethos-72wj** subordinates the stub-agent install to the DES-026 generator and fails closed when agent-ownership lookup fails; **ethos-c0yp** scopes the `inputs.bead` deprecation to user submission so legacy reads are unaffected.
 
