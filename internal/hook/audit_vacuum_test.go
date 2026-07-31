@@ -157,6 +157,31 @@ func TestVacuumCrossCheckWarnsOnDeletedLiveLogInWriterCheckout(t *testing.T) {
 	}
 }
 
+// TestVacuumCrossCheckWarnsWhenWriterCheckoutIsGone is the crash ->
+// checkout-deleted case, the loudest loss the design names. A deleted checkout
+// took its live zone with it, so the absent zone there is NOT evidence the
+// session never wrote — reading it that way would go silent on exactly the
+// sequence the guard exists for. Only a writer that is still present can
+// demonstrate it never wrote mission live logs.
+func TestVacuumCrossCheckWarnsWhenWriterCheckoutIsGone(t *testing.T) {
+	repo := t.TempDir()
+	globalRoot := t.TempDir()
+	const sess = "sess-gone"
+	mid := "m-2026-07-21-001"
+	writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile(sess, 100, 200), 100, 200)
+	// The roster recorded a checkout that no longer exists.
+	gone := filepath.Join(t.TempDir(), "deleted-checkout")
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(repo, globalRoot, []ActiveSession{{Session: sess, Checkout: gone}}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("mission "+mid)) ||
+		!bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
+		t.Errorf("a deleted writer checkout passed unremarked: %q", buf.String())
+	}
+}
+
 // writeLiveMissionLog writes one line to a mission's per-(mission, session)
 // live log in a checkout's local zone.
 func writeLiveMissionLog(t *testing.T, repo, mid, sess string, ts int64) {

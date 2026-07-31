@@ -242,10 +242,14 @@ type MissionLive struct {
 	// Requiring the mission to hold no chunk from ANY session keeps the
 	// proof to missions that closed before the split existed.
 	Legacy bool
-	// WriterZone reports whether the probed checkout's live-missions zone
-	// exists at all. It separates "this checkout never had these files" from
-	// "this checkout had them and this one is missing" — the difference
-	// between the steady state and a deletion.
+	// WriterPresent reports whether the recorded writer checkout still exists
+	// on disk. A checkout that is gone took its whole live zone with it, and
+	// nothing there can be inspected — the crash -> checkout-deleted sequence
+	// the guard exists for.
+	WriterPresent bool
+	// WriterZone reports whether that checkout's live-missions zone exists.
+	// With WriterPresent it separates "never wrote mission live logs" from
+	// "wrote them and this one is missing" — steady state versus deletion.
 	WriterZone bool
 }
 
@@ -264,19 +268,30 @@ type MissionLive struct {
 // (docs/audit-seal.md §Seal failure policy). Suppressing on Sealed alone drops
 // that whole class.
 //
-// WriterZone is what tells the two apart. A checkout with no live-missions zone
-// never wrote these files and has nothing to say about them; a checkout that
-// has the zone but not this mission's file is looking at a deletion. So a chunk
-// suppresses only where the zone is absent:
+// The writer checkout's own state is what tells the cases apart, and it takes
+// two facts, not one. A chunk suppresses in exactly one situation: the recorded
+// writer is still there AND demonstrably never wrote mission live logs, so its
+// missing file is the ordinary absence of another checkout's state.
 //
-//	!Present && !Legacy && (!Sealed || WriterZone)
+//	WriterPresent && !WriterZone  ->  a chunk may suppress
+//
+// Everything else warns. A writer that is GONE took its live zone with it, so
+// an absent zone there is not evidence of never having written — it is the
+// crash -> checkout-deleted case, the loudest loss in the design. Checking the
+// zone alone conflated the two and went silent on it.
 //
 // Bounded residual: a session that wrote in two checkouts records only one, so
 // probing the recorded one can warn about a live file that is alive in the
-// other. That is far smaller than dropping every deletion in a sealed mission,
-// and it errs toward reporting.
+// other. That is far smaller than dropping a deletion class, and it errs toward
+// reporting.
 func (m MissionLive) Lost() bool {
-	return !m.Present && !m.Legacy && (!m.Sealed || m.WriterZone)
+	if m.Present || m.Legacy {
+		return false
+	}
+	if !m.Sealed {
+		return true
+	}
+	return !m.WriterPresent || m.WriterZone
 }
 
 // ExpectedMissionLiveFiles returns the per-(mission, session) live-log files a
@@ -328,7 +343,7 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 		add(id)
 	}
 
-	writerZone := liveMissionsZoneExists(liveRoot)
+	writerPresent, writerZone := writerCheckoutState(liveRoot)
 
 	sort.Strings(ids)
 	out := make([]MissionLive, 0, len(ids))
@@ -344,30 +359,36 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 			return nil, err
 		}
 		out = append(out, MissionLive{
-			MissionID:  id,
-			LivePath:   livePath,
-			Present:    statErr == nil,
-			Sealed:     sealed > 0,
-			Legacy:     legacy,
-			WriterZone: writerZone,
+			MissionID:     id,
+			LivePath:      livePath,
+			Present:       statErr == nil,
+			Sealed:        sealed > 0,
+			Legacy:        legacy,
+			WriterPresent: writerPresent,
+			WriterZone:    writerZone,
 		})
 	}
 	return out, nil
 }
 
-// liveMissionsZoneExists reports whether a checkout has a live-missions zone —
-// evidence that mission live logs were written there, so a missing one is a
-// deletion rather than the ordinary absence of another checkout's files.
+// writerCheckoutState reports whether the recorded writer checkout still exists
+// and whether it has a live-missions zone. MissionLive.Lost needs both: an
+// absent zone means "never wrote mission live logs" only when the checkout
+// itself is still there to have written them.
 //
-// An empty root is not a checkout. Joining onto "" would build a relative path
-// that could match some unrelated directory below the working directory, and an
-// unknown writer must never be read as a present zone.
-func liveMissionsZoneExists(liveRoot string) bool {
+// An empty root is not a checkout, and it must not read as present: joining
+// onto "" builds a relative path that could match some unrelated directory
+// below the working directory. An unknown writer is treated as gone, which
+// warns — the fail-safe direction.
+func writerCheckoutState(liveRoot string) (present, zone bool) {
 	if liveRoot == "" {
-		return false
+		return false, false
+	}
+	if info, err := os.Stat(liveRoot); err != nil || !info.IsDir() {
+		return false, false
 	}
 	info, err := os.Stat(LiveMissionsDir(liveRoot))
-	return err == nil && info.IsDir()
+	return true, err == nil && info.IsDir()
 }
 
 // missionIsWhollyLegacy reports whether a mission's whole record is frozen

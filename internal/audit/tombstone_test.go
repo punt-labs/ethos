@@ -243,18 +243,24 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 func TestExpectedMissionLiveFilesLost(t *testing.T) {
 	const sess = "sess1"
 	cases := []struct {
-		name     string
-		mission  string
-		setup    func(t *testing.T, repo, mid string)
-		bound    []string
-		wantLost bool
+		name    string
+		mission string
+		setup   func(t *testing.T, repo, mid string)
+		bound   []string
+		// writerGone probes a recorded writer checkout that no longer exists,
+		// rather than the checkout the fixture was built in.
+		writerGone bool
+		wantLost   bool
 	}{
 		{
-			name:    "sealed chunk, no live file",
+			name:    "sealed chunk, no live file, writer never wrote mission logs",
 			mission: "m-2026-07-21-001",
 			setup: func(t *testing.T, repo, mid string) {
 				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
 			},
+			// The writer is present and has no live-missions zone at all, so
+			// its missing file is the ordinary absence of another checkout's
+			// state. This is the 43-warning case.
 			wantLost: false,
 		},
 		{
@@ -308,6 +314,18 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 			wantLost: true,
 		},
 		{
+			name:    "sealed chunk, writer checkout deleted entirely",
+			mission: "m-2026-07-21-007",
+			setup: func(t *testing.T, repo, mid string) {
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
+			},
+			// The recorded writer is gone, so its absent live zone is not
+			// evidence it never wrote — it is the crash -> checkout-deleted
+			// case, and the post-watermark tail went with it.
+			writerGone: true,
+			wantLost:   true,
+		},
+		{
 			name:    "sealed chunk, live log DELETED in the writer's own checkout",
 			mission: "m-2026-07-21-005",
 			setup: func(t *testing.T, repo, mid string) {
@@ -342,7 +360,11 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := t.TempDir()
 			tc.setup(t, repo, tc.mission)
-			got, err := ExpectedMissionLiveFiles(repo, repo, sess, tc.bound)
+			liveRoot := repo
+			if tc.writerGone {
+				liveRoot = filepath.Join(t.TempDir(), "deleted-checkout")
+			}
+			got, err := ExpectedMissionLiveFiles(repo, liveRoot, sess, tc.bound)
 			if err != nil {
 				t.Fatal(err)
 			}
