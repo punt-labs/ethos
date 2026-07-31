@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,24 +94,80 @@ func TestVacuumCrossCheckRosterActiveMissingLive(t *testing.T) {
 	}
 }
 
-func TestVacuumCrossCheckWarnsOnLostMissionLive(t *testing.T) {
+// TestVacuumCrossCheckSilentOnSealedMissionLive is ethos-q6e2: a checkout that
+// did not write a mission's live log must not call the lines lost. Sealed
+// chunks are git-tracked and reach every checkout; the live log is per-checkout
+// and reaches none of them. Warning on absence alone reported loss for every
+// mission a long-lived session had touched, on every commit, in every other
+// checkout.
+func TestVacuumCrossCheckSilentOnSealedMissionLive(t *testing.T) {
 	repo := t.TempDir()
 	globalRoot := t.TempDir()
-	// A session that sealed a mission chunk (proving it wrote the live log)
-	// whose per-(mission,session) live log is now gone — REQ-1: the vacuum
-	// must warn in the mission namespace, not just the audit one.
 	mid := "m-2026-07-21-001"
-	sealedDir := sealedMissionDir(repo, mid)
-	writeChunkFile(t, sealedDir, audit.MissionChunkFile("sess-ml", 100, 200), 100, 200)
-	// The live log itself is absent under .punt-labs/local/.
+	writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile("sess-ml", 100, 200), 100, 200)
+	// No live log under .punt-labs/local/ — this checkout never wrote one.
 
 	var buf bytes.Buffer
 	if err := VacuumCrossCheck(repo, globalRoot, []string{"sess-ml"}, &buf); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("mission "+mid)) ||
-		!bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
-		t.Errorf("vacuum did not warn on lost mission live log: %q", buf.String())
+	if bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
+		t.Errorf("vacuum reported sealed mission lines as lost: %q", buf.String())
+	}
+}
+
+// TestVacuumCrossCheckNoLiveZoneReproduction is the reported symptom at scale:
+// a fresh checkout of a repo whose tracked tree already holds many missions'
+// sealed chunks — a worktree, a clone, a second machine — has no live zone at
+// all. Before the fix this printed one "lines were lost" warning per mission
+// (43 in the reported case) on every commit. It must print none.
+func TestVacuumCrossCheckNoLiveZoneReproduction(t *testing.T) {
+	repo := t.TempDir()
+	globalRoot := t.TempDir()
+	const sess = "c7e50ab0"
+	const missions = 43
+	for i := range missions {
+		mid := fmt.Sprintf("m-2026-07-21-%03d", i+1)
+		ts := int64(100 + i*10)
+		writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile(sess, ts, ts+1), ts, ts+1)
+	}
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(repo, globalRoot, []string{sess}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if n := bytes.Count(buf.Bytes(), []byte("mission live log is gone")); n != 0 {
+		t.Errorf("mission-loss warnings = %d, want 0:\n%s", n, buf.String())
+	}
+}
+
+// TestVacuumCrossCheckSilentOnLegacyMissionLog is Fix 3: a mission closed
+// before DES-058 split the zones has its events in the tracked log.jsonl and
+// never had a per-(mission, session) live log to lose.
+func TestVacuumCrossCheckSilentOnLegacyMissionLog(t *testing.T) {
+	repo := t.TempDir()
+	globalRoot := t.TempDir()
+	mid := "m-2026-07-20-013"
+	sess := "sess-legacy"
+	dir := sealedMissionDir(repo, mid)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","event":"dispatch"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "log.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The session is bound to it through the claim sidecar, so it is enumerated.
+	if err := mission.WriteActiveMission(globalRoot, sess, mid); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(repo, globalRoot, []string{sess}, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
+		t.Errorf("vacuum reported a pre-DES-058 mission as lost: %q", buf.String())
 	}
 }
 

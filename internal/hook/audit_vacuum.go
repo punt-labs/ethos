@@ -87,11 +87,17 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io
 }
 
 // warnMissingMissionLives warns for each of a session's expected mission live
-// files that is absent from disk — a lost mission-log record the audit-only
-// check would miss (REQ-1). The expected set unions the tracked mission chunks
-// carrying the session id with the missions the session is bound to in mission
-// records (claim sidecar + delegation records), so a Tier B session that
-// claimed a mission but sealed no chunk is still enumerated.
+// files whose lines are unaccounted for — a lost mission-log record the
+// audit-only check would miss (REQ-1). The expected set unions the tracked
+// mission chunks carrying the session id with the missions the session is bound
+// to in mission records (claim sidecar + delegation records), so a Tier B
+// session that claimed a mission but sealed no chunk is still enumerated.
+//
+// The warning is MissionLive.Lost, not mere absence. An absent live file beside
+// a sealed chunk is the steady state of every checkout that did not write it —
+// chunks are tracked and travel, live files are per-checkout and never do — so
+// warning on absence alone reported loss for every mission a long-lived session
+// had ever touched, in every other checkout (ethos-q6e2).
 func warnMissingMissionLives(globalRoot, repoRoot, sessionID string, w io.Writer) error {
 	bound, err := mission.SessionBoundMissions(globalRoot, repoRoot, sessionID)
 	if err != nil {
@@ -102,7 +108,7 @@ func warnMissingMissionLives(globalRoot, repoRoot, sessionID string, w io.Writer
 		return err
 	}
 	for _, ml := range expected {
-		if !ml.Present {
+		if ml.Lost() {
 			fmt.Fprintf(w,
 				"warning: session %s wrote mission-log lines for mission %s but its mission live log is gone; "+
 					"unsealed mission-log lines were lost\n",

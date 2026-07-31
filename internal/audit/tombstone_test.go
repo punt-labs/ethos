@@ -204,9 +204,15 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	if len(got) != 1 || got[0].MissionID != mid {
 		t.Fatalf("expected one mission live for sess1, got %+v", got)
 	}
-	// The live file was never written → absent → evidence of loss.
+	// The live file is absent here, but the chunk holds the lines: not loss.
 	if got[0].Present {
 		t.Error("expected mission live file reported Present, want absent")
+	}
+	if !got[0].Sealed {
+		t.Error("Sealed = false beside a tracked chunk carrying the session")
+	}
+	if got[0].Lost() {
+		t.Error("Lost() = true for an absent live file whose lines are sealed")
 	}
 	// Once the live file exists, Present flips true.
 	if err := os.MkdirAll(filepath.Dir(got[0].LivePath), 0o700); err != nil {
@@ -229,5 +235,108 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("mission unsealed count = %d, want 1", n)
+	}
+}
+
+// TestExpectedMissionLiveFilesLost covers the ethos-q6e2 predicate: absence of
+// a per-checkout live file is loss only when nothing durable holds the lines.
+func TestExpectedMissionLiveFilesLost(t *testing.T) {
+	const sess = "sess1"
+	cases := []struct {
+		name     string
+		mission  string
+		setup    func(t *testing.T, repo, mid string)
+		bound    []string
+		wantLost bool
+	}{
+		{
+			name:    "sealed chunk, no live file",
+			mission: "m-2026-07-21-001",
+			setup: func(t *testing.T, repo, mid string) {
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
+			},
+			wantLost: false,
+		},
+		{
+			name:    "bound, sealed nothing, no live file",
+			mission: "m-2026-07-21-002",
+			setup:   func(*testing.T, string, string) {},
+			bound:   []string{"m-2026-07-21-002"},
+			// The genuine loss: the session claimed the mission, sealed no
+			// chunk, and its live log is gone.
+			wantLost: true,
+		},
+		{
+			name:    "bound, sealed nothing, live file present",
+			mission: "m-2026-07-21-003",
+			setup: func(t *testing.T, repo, mid string) {
+				writeLiveMissionLine(t, repo, mid, sess, 100)
+			},
+			bound:    []string{"m-2026-07-21-003"},
+			wantLost: false,
+		},
+		{
+			name:    "bound, pre-DES-058 legacy log.jsonl, no live file",
+			mission: "m-2026-07-20-013",
+			setup: func(t *testing.T, repo, mid string) {
+				writeLegacyMissionLog(t, repo, mid, 100)
+			},
+			bound:    []string{"m-2026-07-20-013"},
+			wantLost: false,
+		},
+		{
+			name:    "bound, only another session's chunk, no live file",
+			mission: "m-2026-07-21-004",
+			setup: func(t *testing.T, repo, mid string) {
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile("other", 100, 200), 100, 200)
+			},
+			bound: []string{"m-2026-07-21-004"},
+			// Another session's chunk says nothing about this session's lines.
+			wantLost: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			tc.setup(t, repo, tc.mission)
+			got, err := ExpectedMissionLiveFiles(repo, sess, tc.bound)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != 1 || got[0].MissionID != tc.mission {
+				t.Fatalf("expected one entry for %s, got %+v", tc.mission, got)
+			}
+			if got[0].Lost() != tc.wantLost {
+				t.Errorf("Lost() = %v, want %v (%+v)", got[0].Lost(), tc.wantLost, got[0])
+			}
+		})
+	}
+}
+
+// writeLiveMissionLine appends one line to a mission's per-(mission, session)
+// live log in the checkout's local zone.
+func writeLiveMissionLine(t *testing.T, repo, mid, sess string, ts int64) {
+	t.Helper()
+	path := LiveMissionLogPath(repo, mid, sess)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":"` + FormatLineTS(ts) + `","tool":"Bash"}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeLegacyMissionLog writes the frozen pre-DES-058 tracked log.jsonl a
+// mission closed before the live/sealed split carries instead of chunks.
+func writeLegacyMissionLog(t *testing.T, repo, mid string, ts int64) {
+	t.Helper()
+	dir := SealedMissionDir(repo, mid)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":"` + FormatLineTS(ts) + `","event":"dispatch"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "log.jsonl"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

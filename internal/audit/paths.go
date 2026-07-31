@@ -199,29 +199,51 @@ func LiveFirstLineDate(livePath string) string {
 }
 
 // MissionLive names one mission live-log file a session is expected to have
-// written, plus whether it is present on disk.
+// written, plus the evidence bearing on whether its lines survived.
 type MissionLive struct {
 	MissionID string
 	LivePath  string
-	Present   bool
+	// Present reports whether the live file is on disk in the probed checkout.
+	Present bool
+	// Sealed reports whether the mission's tracked chunks (or a covering
+	// quarantine marker) already carry this session's lines.
+	Sealed bool
+	// Legacy reports whether a frozen pre-DES-058 record — the tracked
+	// missions/<id>/log.jsonl or the drained per-checkout residue — holds
+	// this mission's lines.
+	Legacy bool
+}
+
+// Lost reports whether a mission's lines are unaccounted for: the live file
+// is absent AND nothing durable holds them.
+//
+// Absence alone is not loss. The live zone is per-checkout by design
+// (DES-058), so the live file is absent in every checkout but the one that
+// wrote it — while a sealed chunk is git-tracked and travels to all of them.
+// A chunk (or a frozen legacy record) is therefore proof the lines survived,
+// and the only genuine-loss signal left is a mission the session is bound to
+// that sealed nothing and has no live file.
+func (m MissionLive) Lost() bool {
+	return !m.Present && !m.Sealed && !m.Legacy
 }
 
 // ExpectedMissionLiveFiles returns the per-(mission, session) live-log files a
 // session is expected to have written, enumerated (not globbed) so a deleted
-// file surfaces as evidence of loss. The expected set is the spec's union of
-// two sources (docs/audit-seal.md §Seal failure policy):
+// file surfaces at all. The expected set is the spec's union of two sources
+// (docs/audit-seal.md §Seal failure policy):
 //
-//   - the tracked mission chunks that carry the session's id — a sealed chunk
-//     proves the session wrote the live file, and live files are never deleted
-//     by design; and
+//   - the tracked mission chunks that carry the session's id; and
 //   - boundMissions, the missions the session is bound to in mission records
 //     (the `ethos mission claim` sidecar and Tier B delegation records),
 //     covering a session that claimed or dispatched under a mission but sealed
 //     no chunk yet. The caller derives these — audit stays ignorant of the
 //     record format.
 //
-// A file missing from disk is evidence of loss, which a glob over extant files
-// could never surface. Each entry records whether the expected file is present.
+// A file missing from disk is what a glob over extant files could never
+// surface, so enumeration is what makes loss detectable at all. But absence is
+// not itself loss: each entry also records whether tracked chunks or a frozen
+// legacy record already hold the mission's lines, and MissionLive.Lost weighs
+// the three together.
 func ExpectedMissionLiveFiles(repoRoot, sessionID string, boundMissions []string) ([]MissionLive, error) {
 	seen := make(map[string]struct{})
 	var ids []string
@@ -256,9 +278,39 @@ func ExpectedMissionLiveFiles(repoRoot, sessionID string, boundMissions []string
 	for _, id := range ids {
 		livePath := LiveMissionLogPath(repoRoot, id, sessionID)
 		_, statErr := os.Stat(livePath)
-		out = append(out, MissionLive{MissionID: id, LivePath: livePath, Present: statErr == nil})
+		sealed, err := Watermark(SealedMissionDir(repoRoot, id), MissionNS, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		legacy, err := missionHasLegacyLines(repoRoot, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, MissionLive{
+			MissionID: id,
+			LivePath:  livePath,
+			Present:   statErr == nil,
+			Sealed:    sealed > 0,
+			Legacy:    legacy,
+		})
 	}
 	return out, nil
+}
+
+// missionHasLegacyLines reports whether either of a mission's frozen
+// pre-DES-058 sources holds a parseable line. Those missions closed before the
+// live/sealed split existed, so they have no live file to find and never will.
+func missionHasLegacyLines(repoRoot, missionID string) (bool, error) {
+	for _, path := range MissionLegacySources(repoRoot, missionID) {
+		mx, err := MaxLegacyTS(path)
+		if err != nil {
+			return false, err
+		}
+		if mx > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // missionChunkCarriesSession reports whether any valid mission chunk in dir
