@@ -6829,3 +6829,125 @@ their options from the registry. `internal/mcp` is in the write-set.
   reflection already knows; reflect-plus-overlay deletes the copy.
 - **`go generate` for READMEs** — adds a generated artifact and a CI step; a
   comparison check needs neither.
+
+## DES-067: Mission-lifecycle cluster — glob write-set admission, bind-vs-claim trailers, committing-session resolution (SETTLED)
+
+**Status**: Settled. Shipped v4.9.0 (PR #415). Beads `ethos-qy7k`,
+`ethos-7vo3`, `ethos-pobi`, `ethos-t2lb`, `ethos-u4kq`. Hardens DES-054
+(audited delegation) and DES-036 (write-set admission) after dogfooding drove
+the full delegation lifecycle — declare a write-set, dispatch a worker, admit
+its result, stamp the commit — under real load.
+
+### Problem
+
+Running ethos to build ethos exercised the whole mission-to-audit path at once,
+and seven places where the built behavior diverged from the specified behavior
+surfaced together:
+
+1. A `write_set` entry declaring a glob compared literally, so `docs/**` read as
+   a directory literally named `**`. Every real path under it fell outside:
+   `ethos mission result` refused a valid submission and the PreToolUse verifier
+   allowlist — built from the same write-set — refused every write the contract
+   had authorized.
+2. The PreToolUse dispatch cannot see a `MISSION_ID` the leader never exported,
+   so it falls back to the active-mission sidecar. That sidecar was written only
+   by `ethos mission claim` and stayed put until an explicit `release`. A leader
+   who created a second mission without releasing the first filed the new
+   delegation under the old mission, so the audit trail named the wrong contract.
+3. A dispatch that merely handed work to a worker stamped `Mission`/`Delegation`
+   trailers onto the leader's own later commits — the `ethos-jawp` false-trailer
+   class arriving through a new door.
+4. The commit-msg hook stamped the trailers of the most recently dated session
+   on the machine, not the session that was committing.
+5. A `--var`/`--write-set` value holding several paths expanded into one entry,
+   so a multi-path claim shipped narrower than declared with nothing said.
+6. Identity resolution returned an arbitrary match when two identities shared an
+   email or GitHub handle.
+7. `path.Match` read `[draft]` as a character class, so a real bracketed file
+   name was refused and a name nobody declared was admitted.
+
+### Decision
+
+Seven fixes, each grounded in the shipped code:
+
+- **Glob-aware write-set containment (`ethos-qy7k`).** `pathContainedBy` matches
+  entry segments against a leading run of the file segments — `**` spans any
+  number of segments, `*`/`?` match within one (`path.Match` per segment), and a
+  segment with no glob metacharacter compares literally, so every non-glob entry
+  behaves exactly as before (the DES-036 parent-claim refusal is untouched).
+  Result admission, the cross-mission overlap check, and the hook's `pathAllowed`
+  all call the one exported `mission.PathContainedBy`, so what a contract admits
+  and what the verifier admits are identical. A target carrying a `..` segment is
+  contained by nothing, so a glob can never authorize a write outside the repo;
+  an entry made only of glob metacharacters is refused (it would claim the whole
+  tree); and `globMeta` drops `[` `]` so brackets read as ordinary filename
+  characters, not a character class.
+- **Bind origin vs claim origin (`ethos-7vo3`, closing the `ethos-jawp`
+  false-trailer class).** `mission create` and `mission dispatch` bind the
+  caller's session to the mission they just named — creating or dispatching *is*
+  the leader naming a mission — so an in-session `Agent()` spawn files its
+  delegation under that mission; a rebind prints one stderr line, and a spawn
+  against a since-closed mission proceeds as Tier A with the stale mission named
+  on stderr. But a dispatch binding files delegations only; it does **not** stamp
+  commit trailers. Those require an explicit `ethos mission claim`, so dispatching
+  work to a worker no longer tags the leader's own commits. Session resolution
+  stays advisory: a human dispatching from a plain terminal has no session, and
+  that is not an error.
+- **One-line active-mission sidecar + sibling `active-mission-origin`
+  (back-compat).** Every reader that predates the origin does `TrimSpace` over
+  the whole `active-mission` file, so a second line would turn the mission ID
+  into `m-…\ndispatch` and an older binary would deny every spawn — not
+  hypothetical, since agents run a `.tmp` build while hooks invoke the installed
+  binary. So `active-mission` stays one line, byte-identical to every version;
+  the bind origin moves to a sibling `active-mission-origin`, and a claim is its
+  *absence*, which is also what every pre-change sidecar looks like — upgrade
+  needs no migration, downgrade loses only trailer suppression. The origin names
+  its own mission, so a leftover origin cannot match the current binding. Write
+  order enforces the safe failure: a dispatch writes the origin first, a claim
+  writes the mission first then removes the origin, so an interrupted pair always
+  reads as a claim — a lost suppression costs a stray trailer, never a denied
+  spawn. A non-`ENOENT` read error means "unknown", not "claim".
+- **Committing-session trailer resolution (`ethos-pobi`).** The commit-msg hook
+  stamps the `Mission`/`Delegation` trailers of the session that is committing,
+  resolved through `ETHOS_SESSION` or the Claude process tree, instead of the
+  most recently dated session on the machine. An unresolvable session gets no
+  trailer, and a failed lookup is surfaced rather than swallowed.
+- **Comma-or-whitespace write-set splitting (`ethos-t2lb`).** `SplitPathList`
+  splits `--var`, `--write-set`, and `--extract-into` values on commas **or**
+  whitespace, so a multi-path value expands into distinct `write_set` entries,
+  each admission-checked on its own. Any value that splits prints the resulting
+  entries to stderr (quoted, comma-joined) so a two-entry expansion of
+  `zz space/dir.md` is visible. An entry whose variable expands to nothing is
+  refused, naming the stage, index, and entry, rather than silently vanishing.
+- **Ambiguous-identity refusal (`ethos-u4kq`).** Identity resolution refuses an
+  ambiguous match instead of returning an arbitrary one: two identities sharing
+  an email or GitHub handle produce `ambiguous identity: N matches …` naming
+  every candidate.
+- **Platform-tag hardening.** `globMeta` and `SplitPathList` moved to an untagged
+  `pathlist.go`; they had sat in `//go:build !windows` files that untagged
+  callers (`validate.go`, `pipeline.go`) depend on, a break invisible to a
+  darwin/linux `make check`. A constant or function with no platform behavior
+  belongs in a file with no platform constraint.
+
+### Rejected alternatives
+
+- **A separate hook-side prefix check** (status quo). Rejected: the verifier
+  allowlist drifted from the contract's containment check — the source of the
+  `ethos-qy7k` double refusal. One exported matcher removes the second
+  implementation.
+- **Keep character-class globbing** (`path.Match` default). Rejected: character
+  classes were never part of the `**`/`*`/`?` write-set vocabulary, nobody writes
+  a character-class write-set, and their support over-admitted files nobody
+  declared.
+- **Carry the bind origin as a second line in `active-mission`.** Rejected: it
+  poisons every `TrimSpace`-reading binary in a mixed-version session. The
+  sibling-file-plus-absence encoding is downgrade-safe by construction.
+- **Make a claim the only thing that files a delegation.** Rejected: dispatching
+  *is* an explicit naming of a mission, so the delegation must file under it; the
+  trailer-emission gate is what separates "filed" from "stamped".
+- **Split write-set values on commas only** (prior behavior). Rejected: a
+  whitespace-separated `--var` value shipped as a single entry claiming a path
+  that does not exist. Splitting on either, plus an echo to stderr, makes the
+  expansion auditable.
+- **Return the first identity match.** Rejected: an arbitrary answer to an
+  ambiguous question is worse than a refusal that names the collision.
