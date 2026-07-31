@@ -1,0 +1,56 @@
+results:
+    - mission: m-2026-07-28-015
+      round: 1
+      created_at: "2026-07-28T16:53:49Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: internal/resolve/resolve.go
+          added: 0
+          removed: 0
+        - path: internal/identity/layered.go
+          added: 0
+          removed: 0
+        - path: internal/attribute/layered.go
+          added: 0
+          removed: 0
+        - path: internal/role/layered.go
+          added: 0
+          removed: 0
+        - path: internal/team/layered.go
+          added: 0
+          removed: 0
+        - path: internal/repomiss/repomiss.go
+          added: 0
+          removed: 0
+        - path: internal/vendor/vendor.go
+          added: 0
+          removed: 0
+        - path: internal/doctor/repo_only.go
+          added: 0
+          removed: 0
+        - path: internal/hook/generate_agents.go
+          added: 0
+          removed: 0
+        - path: cmd/ethos/vendor.go
+          added: 0
+          removed: 0
+        - path: CHANGELOG.md
+          added: 0
+          removed: 0
+      evidence:
+        - name: make check green before every commit (golangci-lint + go test -race + validate-content)
+          status: pass
+        - name: CI docs + test green on PR
+          status: pass
+        - name: 'leader independent verification of the credential guard: built the binary in an isolated worktree, confirmed email_password/server_secret/provider_token/provider_api_key -> BLOCK, gpg_key_id/memory_collection/session_context -> Clean, cross-product matrix test passes'
+          status: pass
+        - name: 'dogfood: vendor bwk pulls 29 identities/211 files via team membership; HOME=empty dir, ethos show bwk resolves fully incl quarry memory_collection (DES-057 acceptance criterion 1)'
+          status: pass
+        - name: 'adversarial review (code-reviewer + silent-failure-hunter) caught 3 real bugs pre-merge: credential guard fail-open (EXCLUDE-before-BLOCK cleared *_password), vendor sourcing from repo-only view, repo-only team-mutation lock — all fixed'
+          status: pass
+      open_questions:
+        - Credential fix (#7) and repo-only team-mutation fix were completed by djb (write-set split when bwk was mid-flight); DESIGN.md:5494-5498 credential-order correction authored by the leader (COO owns DESIGN.md). bwk landed Parts A/B/C + 6 findings across 13 commits.
+      prose: |
+        ethos-ni0y = DES-057 implemented and merged in PR #410 (self-standing repos: repo-authoritative resolution mode, `ethos vendor` with transitive closure + fail-closed credential guard, ext `.local` split). Layered/default mode is byte-identical (matrix regression tests). The security-adjacent review earned its keep: a credential-guard fail-open that would have vendored *_password keys into git was caught and fixed (BLOCK-before-EXCLUDE, ~700-assertion matrix test), independently re-verified by the leader against the binary. The import-cycle leaf package (internal/repomiss) was the one leader-approved deviation from DES-057's literal layout; DESIGN.md updated to match the shipped fail-closed order.

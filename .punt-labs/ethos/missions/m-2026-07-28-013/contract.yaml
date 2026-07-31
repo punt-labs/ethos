@@ -1,0 +1,36 @@
+mission_id: m-2026-07-28-013
+status: escalated
+type: implement
+created_at: "2026-07-28T14:11:52Z"
+updated_at: "2026-07-28T14:17:39Z"
+closed_at: "2026-07-28T14:17:39Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-28T14:11:52Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - internal/resolve
+    - internal/identity
+    - internal/attribute
+    - internal/role
+    - internal/team
+    - internal/bundle
+    - internal/config
+    - internal/hook
+    - internal/mcp
+    - cmd/ethos
+    - CHANGELOG.md
+success_criteria:
+    - 'Implement bead ethos-ni0y = DES-057 (SETTLED, ratified 2026-07-11) in full, v1 ships all three parts together. Read DES-057 in DESIGN.md end-to-end first; it is the authoritative spec — follow it exactly, do not re-litigate the design. This is a feature, not a fix: repo-authoritative resolution mode + `ethos vendor` command + ext `.local` split. Nothing here changes DES-051''s default `layered` behavior — unset config must stay byte-identical to today.'
+    - 'Part A — repo-authoritative resolution: add a `resolution: layered | repo-only` enum in .punt-labs/ethos.yaml (sibling to active_bundle; unset => layered => byte-identical). In repo-only, disable the global read across all five read surfaces DES-057 names (identity loadRaw/FindBy/Exists/List, the identity-internal attrChain, the standalone attribute store, role, team) via one `repoAuthoritative bool` threaded through NewLayeredStoreWithBundle and read once via identityStore(). Route writes to the repo layer uniformly in repo-only (all four stores). Aggregate misses into one typed ErrIncompleteRepoSet wrapping []MissingRef{Kind,Slug,Path}; referenced-but-missing attributes become hard errors in repo-only. Wire the surfaces DES-057 lists: whoami (non-zero), agent generation (fail affected agent), session-start (DEGRADE: stderr + skip, never brick), MCP (typed error per DES-020), doctor (authoritative hard completeness gate). repo-only with no repo layer = hard startup error. Keep repo->bundle for SourceRepo/SourceLegacy; reject a SourceGlobal bundle under repo-only at startup.'
+    - 'Part B — `ethos vendor [handle...]`: top-level peer of `ethos export` (keep export as-is). Plan/--dry-run by DEFAULT (writes git-tracked space); --apply executes. Flags per DES-057: [handle...] --team --all --to --prune --dry-run/--apply --json --allow-ext-key; REJECT --no-teams and --from. Transitive-closure BFS to fixed point over the edges DES-057 lists INCLUDING the reverse edge identity->teams-that-contain-it (pulls global-only members like claudia); roles are leaves; no team->team edge. Write a `.vendor.yaml` manifest recording the vendored closure + each identity''s copied ext base files (this manifest is Part A''s required-ext set). Completeness postcondition verified before success: a repo-only store rooted at the snapshot resolves every identity with zero not-found and every team validates against that layer alone; ext dimension is manifest-parity (subset check, ignores .local). Copy regular files only (lstat; never follow a symlink). Fail-closed credential guard: BLOCK (non-zero) when a base ext key NAME matches the credential heuristic (name-only, never value inspection; EXCLUDE public refs first, then BLOCK, then WARN — the curated djb-owned list), naming <handle> <ns>/<key>; override per-key only via --allow-ext-key (repeatable), no blanket --force. MCP tool + a formatVendor formatter in internal/hook/format_output.go per DES-020.'
+    - 'Part C — ext `.local` split (amends DES-008): each <handle>.ext/<ns>.yaml gains an optional <handle>.ext/<ns>.local.yaml for secret/machine-specific values (mirrors .envrc/.envrc.local). One readNamespace(handle, ns) helper reads base then overlays .local. vendor ALWAYS skips <ns>.local.yaml. The Part A ext carve-out (repo-only ext resolves from the repo/bundle source layer via readNamespace, not global; extStore(handle) selector gated on repoAuthoritative; ext writes to a bundle-sourced identity refused) depends on readNamespace, so implement C before the A ext carve-out. layered mode stays byte-identical.'
+    - 'make check green before EVERY commit (read FULL output: golangci-lint + go test -race + validate-content; `make tools` if golangci-lint missing). Commit incrementally, one logical part/surface per commit (Part C readNamespace, then Part A resolution + surfaces, then Part B vendor + guard + manifest, then the A ext carve-out), each passing make check. Do not accumulate >30 min uncommitted. Table-driven tests for: layered-mode byte-identical (regression), repo-only miss => ErrIncompleteRepoSet naming the missing kind/slug, the vendor BFS pulling a team-only member (claudia case), the credential-guard EXCLUDE/BLOCK/WARN classifications, readNamespace base+.local merge, doctor completeness gate.'
+    - 'Dogfood with the built binary before declaring done: `ethos vendor --dry-run` shows the closure + blast radius; `--apply` into a temp repo produces a .vendor.yaml + a snapshot that resolves under `resolution: repo-only` with zero not-found; `ethos doctor` passes the completeness gate on a complete set and fails loud (naming the missing ref) on an incomplete one; a credential-named ext key blocks vendor with the --allow-ext-key hint. CHANGELOG [Unreleased] Added entry citing DES-057 / ethos-ni0y. Do NOT edit DESIGN.md (leader owns; DES-057 already ratified) or files outside the write-set.'
+budget:
+    rounds: 3
+    reflection_after_each: false
+current_round: 1

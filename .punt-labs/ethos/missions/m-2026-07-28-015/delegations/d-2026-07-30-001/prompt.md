@@ -1,0 +1,27 @@
+You are fixing three review findings on an OPEN PR (#412, branch `fix/ethos-friction-defects`) in the ethos repo.
+
+CRITICAL: Do ALL work inside the EXISTING worktree at `/Users/jfreeman/Coding/punt-labs/ethos/.claude/worktrees/agent-a5ac40d7c7ac92083`. That directory is already checked out to branch `fix/ethos-friction-defects` (tip 9d5b6bf). `cd` there first. Do NOT create a new worktree. Do NOT touch the main checkout at the repo root. Do NOT run `make install`.
+
+The branch already contains four fixes (jawp, 72wj-partial, qvbh, c0yp). Copilot and Cursor Bugbot found three real defects in those fixes. Fix all three. Each fix must TIGHTEN or be neutral — never loosen a settled invariant.
+
+FINDING 1 — HIGH, backward-compat regression (in the qvbh change). Files: internal/mission/reflection.go (~L129-136 Validate, and the decode/LoadReflections path ~L1551 or wherever decodeReflectionsFile lives), plus internal/mission/store.go if AdvanceRound reads there.
+Problem: `Reflection.Validate` now requires a pattern-valid `mission:` field, and `LoadReflections`/`decodeReflectionsFile` rejects any on-disk entry whose `mission` does not match the containing mission ID. But ~16 EXISTING tracked reflections.yaml files (e.g. `.punt-labs/ethos/missions/m-2026-07-05-001/reflections.yaml`) have NO `mission:` field. After this change, reading them fails with "invalid mission", and `AdvanceRound` can no longer load prior reflections for in-flight missions. This is a real regression.
+Required fix: In the DECODE path (when reading a reflections.yaml belonging to a known mission ID), treat a MISSING or BLANK `mission` as legacy — default it to the containing missionID BEFORE validating. Still REJECT a non-empty `mission:` that mismatches the containing mission ID (that stays a hard error). This preserves the tightening (new writes carry the validated field; explicit mismatch is rejected) without breaking existing data. Do NOT loosen `Reflection.Validate` itself for the WRITE/submission path — new reflections submitted via the CLI/MCP must still carry a valid `mission:`. The back-fill applies only to reading legacy on-disk files.
+Tests: add a decode test with a legacy reflections.yaml (no `mission` field) that loads successfully with mission back-filled to the containing ID; and a test that a non-empty MISMATCHED `mission:` is still rejected. Verify AdvanceRound works against a legacy file.
+
+FINDING 2 — MEDIUM (in the jawp change). File: cmd/ethos/mission.go (runMissionClose ~L1260-1819), internal/mission/active.go.
+Problem: commit-msg trailers are now gated on the active-mission sidecar, and terminal transitions are documented to clear it — but `runMissionClose` only calls `clearClosedDelegationBinding`. `ClearActiveMission` still runs only on `mission release`. So after a close WITHOUT an explicit release, later commits keep getting a stale `Mission:` trailer.
+Required fix: call `ClearActiveMission` on the terminal close transition in `runMissionClose` (and check fail/other terminal transitions in the same command surface — clear the active-mission binding wherever a mission leaves the active state). Result: a missionless commit after close gets NO trailer (this tightens jawp's own fix). Add/extend a test proving close clears the active-mission sidecar and a subsequent commit gets no Mission trailer.
+
+FINDING 3 — LOW, robustness (Copilot, in the jawp change). File: hooks/commit-msg.sh.
+Problem: the fallback session-discovery loop `for d in $(find ... | sort ...)` word-splits on spaces/tabs — if $HOME or any ancestor path contains spaces, discovery breaks and trailers won't be added. Also the binding-file mission/delegation reads are not whitespace-trimmed, so a CRLF or hand-edited sidecar fails the mission-match check.
+Required fix: iterate with newline-only IFS (e.g. `while IFS= read -r d; do ... done < <(find ... | sort ...)`), and trim whitespace/CR from the sidecar lines before comparing. shellcheck (via `make lint` / `make check`) must stay clean.
+
+WORKFLOW:
+1. cd into the worktree dir above. `git status` to confirm you're on fix/ethos-friction-defects at 9d5b6bf, clean.
+2. Fix each finding with a failing test first where practical. Commit incrementally — one commit per finding (fix + its tests together). Each commit must pass `make check` (go vet, staticcheck, shellcheck, markdownlint, go test -race). Do NOT accumulate more than 30 minutes of uncommitted changes. Do NOT use # noqa / # nolint / //nolint / xfail or any suppression — fix the code. No `--no-verify`.
+3. Do NOT modify `.claude/agents/`. Keep the diff within: internal/mission/, cmd/ethos/, hooks/, internal/hook/, internal/mcp/, CHANGELOG.md. Add a CHANGELOG note under [Unreleased] Fixed if the existing entry doesn't already cover these (the branch already has a Fixed entry for the four base fixes — extend it or add a line noting the back-compat + trailer-clearing fixes).
+4. After all three commits pass `make check`, `git push` to origin/fix/ethos-friction-defects.
+5. Report back: which commits you pushed (SHAs), the make check result (paste the tail showing PASS), and confirm the diff stayed in scope and .claude/agents/ is untouched. Do NOT open a new PR — #412 already exists; pushing updates it.
+
+Report your final status via your return value.

@@ -1,0 +1,31 @@
+results:
+    - mission: m-2026-07-27-010
+      round: 1
+      created_at: "2026-07-27T04:16:25Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/hook/generate_agents.go
+          added: 0
+          removed: 0
+        - path: internal/hook/generate_agents_test.go
+          added: 0
+          removed: 0
+        - path: internal/hook/generate_agents_exec_test.go
+          added: 0
+          removed: 0
+        - path: CHANGELOG.md
+          added: 0
+          removed: 0
+      evidence:
+        - name: make check (golangci-lint + go test -race + validate-content)
+          status: pass
+        - name: CI docs + test on PR
+          status: pass
+        - name: 'behavioral exec test: worktree edit runs make check in worktree, not main'
+          status: pass
+        - name: 'local review: feature-dev:code-reviewer + silent-failure-hunter clean'
+          status: pass
+      prose: |
+        ethos-n4tk fixed and merged in PR #407. The emitted PostToolUse make-check hook now resolves the repo root from the edited file (git -C dirname rev-parse --show-toplevel) for absolute paths, so isolated-worktree subagents run make check in their own worktree instead of the main repo; falls back to CLAUDE_PROJECT_DIR for relative/no-path/git-error cases.

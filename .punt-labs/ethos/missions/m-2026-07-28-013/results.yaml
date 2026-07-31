@@ -1,0 +1,18 @@
+results:
+    - mission: m-2026-07-28-013
+      round: 1
+      created_at: "2026-07-28T14:17:39Z"
+      author: bwk
+      verdict: escalate
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: DES-057 read end-to-end + four layered stores, ext.go, doctor, format_output, mcp/tools reviewed
+          status: pass
+        - name: write-set completeness check against DES-057 package layout
+          status: fail
+      open_questions:
+        - 'Leader-side write-set scoping error: DES-057 requires internal/doctor (completeness gate + advisories + credential lint + .local-tracked check, DESIGN.md:5423-5525) and a new internal/vendor package (closure walk, :5599); neither is in the write-set. internal/config is in the write-set but is a phantom — DES-057 puts `resolution` on the existing resolve.RepoConfig (:5603). Re-contract with corrected write-set.'
+        - DES-057's stated ErrIncompleteRepoSet layout (type owned by internal/vendor, imported by the four stores) is a Go import cycle since vendor must import those stores to walk the closure. Leader approved a leaf package internal/repomiss holding only the types + aggregation, imported by stores/vendor/doctor — preserves the one-type/no-divergence property; vendor keeps the walk + completeness predicate.
+      prose: |
+        Escalated to re-scope: the mission write-set omitted internal/doctor and internal/vendor (both required by DES-057) and included a phantom internal/config. Re-created as a successor mission with the corrected write-set (adds internal/doctor, internal/vendor, internal/repomiss; drops internal/config). No implementation regression — Part C readNamespace work in internal/identity persists on the branch. Import-cycle resolution (leaf package internal/repomiss) approved by the leader.

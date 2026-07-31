@@ -1,0 +1,41 @@
+results:
+    - mission: m-2026-07-28-016
+      round: 1
+      created_at: "2026-07-28T18:15:21Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/mission/redact.go
+          added: 0
+          removed: 0
+        - path: internal/mission/delegation.go
+          added: 0
+          removed: 0
+        - path: internal/hook/audit_content.go
+          added: 0
+          removed: 0
+        - path: internal/hook/audit_entry.go
+          added: 0
+          removed: 0
+        - path: internal/hook/audit_log.go
+          added: 0
+          removed: 0
+        - path: CHANGELOG.md
+          added: 0
+          removed: 0
+      evidence:
+        - name: make check green before every commit (golangci-lint + go test -race + validate-content)
+          status: pass
+        - name: CI docs + test green on PR
+          status: pass
+        - name: 'leader independent verification (isolated worktree): reply_message/create_draft keep only subject with body/to/cc -> [redacted]; add_contact/remove_contact keep nothing; find_contact query swept; tool_input_hash over the redacted form; non-sensitive (Read) line byte-identical'
+          status: pass
+        - name: bwk binary-verified the base fixes (prompt.md path -> ~, send_email {body,to,cc} redacted, CronCreate email redacted, hash reproduces over stored form)
+          status: pass
+        - name: 'adversarial silent-failure review caught the enrollment fail-open (send_email siblings leaked); djb then grepped beadle''s real 18-tool surface and closed three more: find_contact query (CRITICAL), add_contact/remove_contact legal name (HIGH), display-name-beside-redacted-email (MEDIUM)'
+          status: pass
+      open_questions:
+        - 'bwk authored the base cluster (delegation path redaction, audit content keep-list, fail-closed $HOME) + 3 Copilot-found path-boundary bug fixes. djb (evaluator) closed the sibling-tool + contact-tool content fail-opens under a leader hand-off after the enrollment gap slipped several cycles. Leader authored docs/audited-delegation.md + the CHANGELOG amendment (COO owns docs). Two operator decisions surfaced to Jim: (a) 13 already-committed prompts still carry $HOME paths — git filter-repo is his call; (b) redaction is fail-closed for new writes.'
+      prose: |
+        Redaction/committed-PII cluster (ethos-ersr + ethos-n4np + ethos-ggtu) merged in PR #411. Delegation records (prompt.md/record.yaml/close-reason) now run through one shared mission.PathRedactor at write time; the audit write path gained a per-tool content keep-list (send_email, reply_message keep only subject; add_contact/remove_contact keep nothing) plus a structured-recipient strip and a find_contact query sweep, all fail-closed and applied before tool_input_hash so the DES-054 collision invariant holds. The security-adjacent review earned its keep repeatedly: the keep-list was correct within a tool but the SET of enrolled tools was a deny-list, so sibling and contact tools leaked full bodies, recipients, and legal names into git-tracked history until enrollment was made comprehensive by grepping beadle's real tool surface. Path prefix matching was also hardened to a component boundary (fixing a pre-existing sibling-checkout corruption).

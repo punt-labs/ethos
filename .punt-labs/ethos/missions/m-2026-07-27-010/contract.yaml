@@ -1,0 +1,27 @@
+mission_id: m-2026-07-27-010
+status: closed
+type: implement
+created_at: "2026-07-27T03:34:11Z"
+updated_at: "2026-07-27T04:16:25Z"
+closed_at: "2026-07-27T04:16:25Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: mdm
+    pinned_at: "2026-07-27T03:34:11Z"
+    hash: ef40d0badfbd1d014e269ed88a0bbd9dc7060d8180ed9a681eea8a5b93f1807a
+inputs: {}
+write_set:
+    - internal/hook
+    - CHANGELOG.md
+success_criteria:
+    - 'Fix ethos-n4tk in internal/hook/generate_agents.go: the emitted PostToolUse Write|Edit make-check hook currently runs ''cd $CLAUDE_PROJECT_DIR && make check'' in ALL branches (see the command string near line 388 and the cwd-pinning comment near lines 371-372). This runs make check against the MAIN repo, not the isolated git worktree a subagent edits when spawned with isolation=worktree — so it is blind to the agent''s changes, blocks on unrelated failures, and burns ~70s per edit. Change it so that when the edited file path is known (the matched-file-pattern branch), the hook resolves the repo root FROM THE EDITED FILE: _dir of the file path, then ''git -C _dir rev-parse --show-toplevel''; cd to that root and run make check there. If that resolution yields empty (git error, file outside a repo), fall back to $CLAUDE_PROJECT_DIR. The two fallback branches that have no file path (jq missing; empty .tool_input.file_path) keep using $CLAUDE_PROJECT_DIR.'
+    - 'Preserve every other behavior of the emitted hook exactly: the skip cases (paths under .tmp/ or .punt-labs/ethos/), the language-marker file-pattern filter, capturing combined output, emitting only the last 60 lines to stderr on failure, exit 2 on failure and exit 0 otherwise (blocking PostToolUse contract). Watch the shell-escaping in the Go string literal — it is heavily backslash-escaped; keep it valid and keep the fmt verbs (%s for filePatterns) intact.'
+    - Update the stale comment block (near lines 371-372) that says cwd is pinned via $CLAUDE_PROJECT_DIR to accurately describe the new worktree-aware resolution and why (isolated-worktree subagents).
+    - 'Tests: update internal/hook/generate_agents_test.go to assert the emitted command resolves the worktree root from the edited file (contains a ''git -C'' ... ''rev-parse --show-toplevel'' resolution keyed off the file path) and only falls back to CLAUDE_PROJECT_DIR when no path is present. Extend internal/hook/generate_agents_exec_test.go to prove behaviorally that editing a file inside a linked git worktree runs make check in THAT worktree, not the main checkout (e.g. a temp main repo + ''git worktree add'', a sentinel Makefile in each that records cwd, assert the worktree''s ran). Table-driven where it fits.'
+    - make check must pass before EVERY commit (read the full output; golangci-lint + tests + validate-content). Commit incrementally — one commit per logical step (the generate_agents.go change; the test change), each passing make check. Do not accumulate more than 30 minutes of uncommitted changes.
+    - 'Add a CHANGELOG.md [Unreleased] Fixed entry citing ethos-n4tk (isolated-worktree subagents now run make check against their own worktree, not the main repo). Dogfood with the built binary: regenerate an agent .md (or print the emitted hook) and confirm the make-check command resolves the worktree root from the edited file path in the matched branch and falls back to CLAUDE_PROJECT_DIR otherwise. Do NOT edit files outside the write-set.'
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 1

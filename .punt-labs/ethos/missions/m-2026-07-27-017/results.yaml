@@ -1,0 +1,39 @@
+results:
+    - mission: m-2026-07-27-017
+      round: 1
+      created_at: "2026-07-27T19:21:41Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/hook/subagent_start.go
+          added: 0
+          removed: 0
+        - path: internal/hook/subagent_start_test.go
+          added: 0
+          removed: 0
+        - path: internal/hook/subprocess_test.go
+          added: 0
+          removed: 0
+        - path: cmd/ethos/mission.go
+          added: 0
+          removed: 0
+        - path: cmd/ethos/mission_test.go
+          added: 0
+          removed: 0
+        - path: CHANGELOG.md
+          added: 0
+          removed: 0
+      evidence:
+        - name: make check (golangci-lint + go test -race + validate-content)
+          status: pass
+        - name: CI docs + test + Cursor Bugbot on PR
+          status: pass
+        - name: 'leader spot-check: checkVerifierHash binds by declared MISSION_ID + role; gate fires only when the declared open mission names the handle as evaluator'
+          status: pass
+        - name: 'silent-failure review: gate fail-closed on misconfig/load/recompute failures; DES-033 preserved; one LOW non-blocking observability note (empty-MISSION_ID silent skip) beaded'
+          status: pass
+        - name: 'regression tests: worker spawn declaring its own mission not misbound as another mission''s verifier; genuine verifier drift still refuses; create-warning pos+neg'
+          status: pass
+      prose: |
+        ethos-z69l fixed and merged in PR #409. SubagentStart's frozen-evaluator gate (checkVerifierHash) now binds by the spawn's declared MISSION_ID + role rather than scanning all open missions by evaluator handle, so a handle that is worker on one mission and evaluator on another is no longer misbound as the other mission's verifier. DES-033 preserved (a genuine verifier spawn on a drifted pinned hash still refuses; fail-closed on misconfig/load/recompute errors). Added a non-fatal `ethos mission create` advisory on handle overlap with open missions. One LOW observability follow-up (empty-MISSION_ID silent gate-skip) logged as a separate bead.

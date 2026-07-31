@@ -1,0 +1,77 @@
+results:
+    - mission: m-2026-07-31-001
+      round: 1
+      created_at: "2026-07-31T00:26:57Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: cmd/ethos/audit.go
+          added: 5
+          removed: 4
+        - path: cmd/ethos/session.go
+          added: 2
+          removed: 1
+        - path: internal/audit/paths.go
+          added: 113
+          removed: 29
+        - path: internal/audit/paths_test.go
+          added: 1
+          removed: 1
+        - path: internal/audit/tombstone_test.go
+          added: 113
+          removed: 4
+        - path: internal/hook/audit_vacuum.go
+          added: 54
+          removed: 25
+        - path: internal/hook/audit_vacuum_test.go
+          added: 188
+          removed: 13
+        - path: internal/session/session.go
+          added: 10
+          removed: 0
+        - path: internal/session/store.go
+          added: 42
+          removed: 15
+        - path: internal/session/store_test.go
+          added: 68
+          removed: 0
+      evidence:
+        - name: make check (golangci-lint 0 issues, go test -race, shellcheck, markdownlint, validate-content)
+          status: pass
+        - name: 'new tests fail against HEAD: SilentOnSealedMissionLive, NoLiveZoneReproduction, SilentOnLegacyMissionLog'
+          status: pass
+        - name: 'genuine-loss guard unchanged: WarnsOnClaimedButUnsealedMissionLive passes before AND after'
+          status: pass
+        - name: 'dogfood main checkout: 7 warnings -> 0'
+          status: pass
+        - name: 'dogfood fresh checkout with no live zone: 48 warnings (43 mission-loss) -> 5 (0 mission-loss); the 5 are true positives for junk rosters'
+          status: pass
+        - name: 'no data was ever lost: Watermark + SelectLiveTail over all 43 warned missions totals 0 unsealed lines'
+          status: pass
+        - name: PR punt-labs/ethos#413 open, Copilot review requested once
+          status: pass
+      open_questions:
+        - Write-set extension needed for internal/hook/session_start.go. It still calls Create, so SessionStart-written rosters record an empty Checkout and the checkout-scoping half of Fix 2 stays inert for them. Fix 1 removes the false positives regardless. Edit is a ResolveCheckout() helper beside ResolveRepo()/ResolveHost() (session_start.go:272-294) plus switching line 176 to CreateInCheckout.
+        - 'Write-set extension needed for internal/session/tombstone_purge_test.go. TestPurgeTombstoned_LostMissionLiveFlagsTombstone (line 41) now passes for the wrong reason: its subject is the mission namespace but the flag it observes comes from the session-namespace probe, because it never writes a live audit file. store_test.go''s TestPurgeTombstoned_SealedMissionDoesNotFlagTombstone covers the mission branch correctly; the misleading test still needs its name and setup reconciled.'
+        - Docs (CHANGELOG, DES-058 note, docs/audit-seal.md Seal failure paragraph) are leader-authored and outside the write-set. Exact proposed text sent to the leader.
+      prose: |
+        The vacuum cross-check compared a git-tracked fact against a gitignored
+        file. Sealed chunks travel between checkouts; the live zone is per-checkout
+        by design (DES-058). Warning on file absence alone therefore reported loss
+        for every mission a long-lived session had touched, in every checkout that
+        had not written the log. No audit data was ever lost.
+
+        Fix 1 makes the predicate MissionLive.Lost — absent AND unsealed AND no
+        frozen legacy record — so a sealed chunk is taken as proof of survival.
+        Fix 3 folds in the pre-DES-058 log.jsonl. Fix 2 implements the design's
+        already-stated "path retained in the vacuum cross-check": session.Roster
+        gains Checkout as a peer of Repo, and the live probes follow it while
+        tracked-chunk probes stay at the committing checkout. Fix 4 applies the
+        same predicate to the session purge guard, which could otherwise mint a
+        permanent flagged loss tombstone for a session that lost nothing, and makes
+        the tombstone branch honor Tombstone.Checkout.
+
+        Store.Create keeps its signature and delegates to a new CreateInCheckout.
+        That choice shrank the out-of-write-set blast radius from eight files to
+        one, at the cost of a second constructor.

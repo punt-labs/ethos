@@ -1,0 +1,221 @@
+results:
+    - mission: m-2026-07-31-004
+      round: 1
+      created_at: "2026-07-31T05:49:10Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: cmd/ethos/hook.go
+          added: 38
+          removed: 0
+        - path: cmd/ethos/mission.go
+          added: 69
+          removed: 16
+        - path: cmd/ethos/mission_test.go
+          added: 113
+          removed: 0
+        - path: hooks/commit-msg.sh
+          added: 33
+          removed: 36
+        - path: hooks/commit_msg_test.go
+          added: 189
+          removed: 2
+        - path: internal/hook/commit_trailers.go
+          added: 61
+          removed: 0
+        - path: internal/hook/pretooluse.go
+          added: 10
+          removed: 24
+        - path: internal/hook/pretooluse_dispatch.go
+          added: 42
+          removed: 0
+        - path: internal/hook/pretooluse_test.go
+          added: 106
+          removed: 0
+        - path: internal/identity/store.go
+          added: 49
+          removed: 12
+        - path: internal/identity/store_test.go
+          added: 59
+          removed: 0
+        - path: internal/mission/active.go
+          added: 8
+          removed: 3
+        - path: internal/mission/conflict.go
+          added: 110
+          removed: 9
+        - path: internal/mission/conflict_test.go
+          added: 116
+          removed: 0
+        - path: internal/mission/pipeline.go
+          added: 29
+          removed: 1
+        - path: internal/mission/pipeline_test.go
+          added: 79
+          removed: 0
+        - path: internal/mission/store_test.go
+          added: 50
+          removed: 0
+        - path: internal/resolve/resolve_test.go
+          added: 25
+          removed: 0
+      evidence:
+        - name: make check (lint, markdownlint, go test -race -count=1, validate-content) green before every commit
+          status: pass
+        - name: each new test fails against the pre-fix source (verified by reverting the source file and re-running)
+          status: pass
+        - name: dogfood - whoami with two identities sharing an email refuses with "ambiguous identity 2 matches ... mal, zoe"
+          status: pass
+        - name: dogfood - second dispatch rebinds the session sidecar and warns; PreToolUse against a closed mission warns and spawns Tier A
+          status: pass
+        - name: dogfood - a docs/** write_set accepts a result naming docs/audited-delegation.md; an outside path is still refused
+          status: pass
+        - name: dogfood - ethos hook commit-trailers resolves the live session through the PID walk
+          status: pass
+      open_questions:
+        - The MCP mission create path (internal/mcp/mission_tools.go) is outside this write_set, so an MCP-created mission does not rebind the session's active mission the way the CLI now does. The stale-binding class is closed on the CLI path only; a follow-up mission should bring MCP to parity.
+        - mission lint's write_set coverage heuristic (internal/mission/lint.go) still compares entries literally, so a glob write_set may draw a spurious advisory warning. Lint is advisory and out of this bug's scope, but it is now inconsistent with the containment check.
+        - CHANGELOG.md and docs/audited-delegation.md are leader-authored; proposed text for both is in the PR description.
+      prose: |
+        Five commits, one per bug, each with its tests.
+
+        qy7k: pathContainedBy matches entry segments against a leading run of the
+        file segments, with ** spanning any number of segments and */? matching
+        within one. Non-glob entries are byte-identical in behavior, so the DES-036
+        parent-claim refusal stands. The hook's pathAllowed now calls the same
+        matcher through the exported mission.PathContainedBy.
+
+        7vo3 (item A only): mission create and mission dispatch bind the session to
+        the mission just named, warning on a rebind and clearing the previous
+        dispatch's delegation binding. The hook refuses a sidecar naming a
+        non-open mission and spawns Tier A with a warning. A sidecar the store
+        cannot resolve still blocks, as DES-054 round 3 settled. No contract
+        invariant moves.
+
+        pobi: the commit-msg fallback asks ethos hook commit-trailers, which
+        resolves the committing session (ETHOS_SESSION, else the PID walk) and
+        reads only that session's sidecars. Unresolved means no trailer.
+
+        t2lb: one splitter (mission.SplitPathList, commas and whitespace) serves
+        both the CLI path-list flags and pipeline template expansion, so a
+        multi-path --var becomes distinct, individually admission-checked entries.
+
+        u4kq: FindBy refuses more than one match, naming every candidate sorted.
+        Zero and one match are unchanged, so LayeredStore precedence is untouched.
+
+        PR #415 open, Copilot review requested once. Not merged.
+    - mission: m-2026-07-31-004
+      round: 2
+      created_at: "2026-07-31T06:40:18Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: cmd/ethos/hook.go
+          added: 17
+          removed: 0
+        - path: cmd/ethos/mission.go
+          added: 50
+          removed: 10
+        - path: cmd/ethos/mission_test.go
+          added: 83
+          removed: 5
+        - path: cmd/ethos/pipeline.go
+          added: 28
+          removed: 0
+        - path: hooks/commit-msg.sh
+          added: 12
+          removed: 0
+        - path: hooks/commit_msg_test.go
+          added: 67
+          removed: 0
+        - path: internal/hook/commit_trailers.go
+          added: 13
+          removed: 2
+        - path: internal/hook/commit_trailers_test.go
+          added: 137
+          removed: 0
+        - path: internal/mission/active.go
+          added: 84
+          removed: 16
+        - path: internal/mission/active_test.go
+          added: 78
+          removed: 0
+        - path: internal/mission/conflict.go
+          added: 47
+          removed: 3
+        - path: internal/mission/conflict_test.go
+          added: 112
+          removed: 42
+        - path: internal/mission/store_test.go
+          added: 47
+          removed: 0
+        - path: internal/mission/validate.go
+          added: 22
+          removed: 0
+        - path: internal/mission/validate_test.go
+          added: 30
+          removed: 0
+      evidence:
+        - name: make check green before the commit (lint, markdownlint, go test -race -count=1 all packages, validate-content)
+          status: pass
+        - name: CI on 946fbdb - test pass, docs pass
+          status: pass
+        - name: 'rsc re-verify 1 - dispatch docs/audited-delegation.md against open docs/** now refused: write_set conflict with mission m-2026-07-31-001'
+          status: pass
+        - name: 'rsc re-verify 1 - bare ** refused at validation: claims the whole tree via glob syntax'
+          status: pass
+        - name: rsc re-verify 4 - after dispatch, hook commit-trailers emits nothing; after explicit claim it emits MISSION_ID
+          status: pass
+        - name: 'fix 3 - dispatch --write-set ''zz space/dir.md'' prints: --write-set split into 2 entries'
+          status: pass
+        - name: fix 2 - unknown hook subcommand exits 1 (was help on stdout, exit 0); commit-msg reports a version mismatch instead of dropping the trailer
+          status: pass
+      open_questions:
+        - MCP parity (already a follow-up bead) is untouched here - internal/mcp/handleCreateMission still does not rebind the session, so the 7vo3 attribution fix covers the CLI path only.
+        - internal/mission/lint.go still compares write_set entries literally, so a glob entry may draw a spurious advisory warning. Advisory only, and now inconsistent with both the containment and the overlap checks.
+        - A write_set path containing a space is no longer expressible through --write-set, --extract-into, or a pipeline --var. Ratified by the leader as the right trade for one splitter over two that drift.
+      prose: |
+        Round 2 closes the four must-fix findings rsc raised on PR #415, plus
+        the doctor.go wording defect and the test-placement minor.
+
+        1. qy7k had moved the invariant it was told not to move. Containment
+        became glob-aware while pathsOverlap stayed literal, so two open
+        missions could claim docs/** and docs/a.md and both be admitted.
+        pathsOverlap now compares a glob entry by the literal prefix before
+        its first glob segment, and an entry that globs from its first
+        segment is a root claim overlapping everything. Truncation only
+        shortens the compared list, so admission refuses more, never less.
+        validateWriteSetEntry rejects all-metacharacter entries.
+
+        2. pobi did not do what its commit message claimed. An ethos too old
+        to know `hook commit-trailers` printed help on stdout and exited 0,
+        so the failure guard never fired. Root cause is cobra's ordering:
+        `if !c.Runnable() { return flag.ErrHelp }` precedes ValidateArgs, so
+        NoArgs alone was inert on a parent with no Run. hookCmd now carries
+        both, and the shell hook treats help-shaped output as failure.
+
+        3. t2lb widened claims silently. Both surfaces now name the entries
+        whenever a value splits; the flag help says commas or spaces.
+
+        4. Leader ruling: a dispatch binding must not produce commit
+        trailers. The sidecar records how the binding was made; claim
+        produces trailers, dispatch does not, delegation filing is unchanged.
+        A sidecar with no origin line reads as claim, so existing sessions
+        keep their trailers across the upgrade. A rebind and a
+        dispatch-over-claim each print a line so the change is never silent.
+
+        Two files in the diff are outside this contract's write_set and both
+        are authorized, not scope creep:
+
+        - internal/mcp/mission_tools_test.go — a one-line assertion update
+          applied by the leader. That test pins the active-mission sidecar's
+          on-disk bytes, which the ruling deliberately changed. I escalated
+          rather than edit it myself.
+        - internal/doctor/doctor.go and doctor_test.go — the leader
+          authorized this as a review-cycle fix. My u4kq change created a new
+          error class that the check's "no match — " prefix contradicted; the
+          detail is now the resolver's own error.
+
+        PR #415 tip is 946fbdb. Not merged.

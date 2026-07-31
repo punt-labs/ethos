@@ -1,0 +1,32 @@
+mission_id: m-2026-07-31-006
+status: open
+type: implement
+created_at: "2026-07-31T06:37:26Z"
+updated_at: "2026-07-31T06:37:26Z"
+leader: claude
+worker: mdm
+evaluator:
+    handle: dna
+    pinned_at: "2026-07-31T06:37:26Z"
+    hash: cb11878588752bbead4291066dda546629287cd9360d0be4fd857654e7c21208
+inputs: {}
+write_set:
+    - README.md
+    - AGENTS.md
+    - prfaq.tex
+    - prfaq.bib
+    - docs
+    - DESIGN.md
+success_criteria:
+    - 'HOLISTIC documentation truing-up: the entire doc corpus must be trued up as a coherent, mutually-consistent whole that accurately describes the SHIPPED product — not siloed edits. Cross-doc consistency is the primary goal: the same feature/command/flag/path must be described identically (names, defaults, behavior) everywhere it appears, and every claim must be verifiable against the current code and CLI. Do the work in the operator''s order (README -> prfaq.tex -> docs/** -> DESIGN.md), but treat inconsistencies you find in any doc as in-scope for the whole pass. Read the two governing standards FIRST and cite them: ../punt-kit/standards/readme.md (README structure/tone) and the prfaq plugin (../prfaq — the Working Backwards press-release + product-vision method) so you understand what prfaq.tex is BEFORE editing it.'
+    - 'Step 1 — README.md to the README standard (../punt-kit/standards/readme.md). Fix badges (the standard forbids a GitHub Release badge — README.md currently has one; Go projects use License + CI + Go Reference, plus the optional Working Backwards badge). Section order and Title Case per the standard. Tone: describe-don''t-sell, no marketing verbs, no anthropomorphizing, facts not opinions, truthful status. Verify every command, flag, install SHA, and path against the current binary/CLI (build .tmp/ethos and run the commands; do not trust stale prose). The Quick Start install SHA must be current.'
+    - 'Step 2 — prfaq.tex. It is a Working Backwards press release + product-vision doc (read the prfaq plugin first). True it up to the CURRENT product: the shipped-feature list, version, KLOC, competitor set, and risk ratings must match reality (recent work: DES-057 self-standing repos, DES-058 audit live/sealed split, the q6e2 audit-false-loss fix, the mission-lifecycle correctness cluster). Preserve the product thesis and every settled invariant (convention-not- enforcement, prospective contracts + close gate, strict decode, human-agent parity, local-only). Do NOT invent new positioning — true up facts to the shipped state; if a claim can no longer be substantiated, correct or remove it and note why. If a change would alter product direction or a risk assumption, STOP and escalate to the leader rather than deciding it.'
+    - 'Step 3 — docs/**. Inventory every file (docs/onboarding.md, team-setup.md, audited-delegation.md, traceability-*.md, archetypes-and-pipelines.md, architecture.tex, ETHOS-ROADMAP.md, and any others). For each: verify accuracy against the shipped product, fix stale commands/paths/flags, and ensure it is consistent with README/AGENTS/DESIGN. Organize: a coherent set with a clear purpose per doc, no duplication of the same content across files (cross-reference instead), no dead links, no orphaned/superseded docs left unmarked. If two docs describe the same thing differently, reconcile to one source of truth. The README Documentation table must list exactly what exists. Note: docs/audited-delegation.md was just updated for the bind-at-dispatch/ clear-on-close/stale-mission-Tier-A behavior — keep it consistent with that.'
+    - 'Step 4 — DESIGN.md. Ensure every ADR from recent work is present, and mark obsoleted ADRs as superseded (with the superseding ADR id + date). Recent work to reconcile (reconstruct rationale from the git log, CHANGELOG, mission records, and the code — the audit trail exists for this): #409 ethos-z69l (SubagentStart verifier gate bound by (mission_id, role)); #410 DES-057 self-standing repos (repo-only resolution, vendor, ext .local); #411 committed-PII redaction (ersr/n4np/ggtu); #412 four mission/hook friction fixes (jawp/72wj/qvbh/c0yp); #413 ethos-q6e2 audit-seal false-loss fix (the DES-058 vacuum-cross-check WriterRecorded predicate — a DES-058 implementation note already exists; decide if it warrants its own ADR); #414 agent-file regen; #415 mission-lifecycle correctness cluster (qy7k glob-aware containment, 7vo3 bind-at-dispatch, pobi committing-session trailers, t2lb var split, u4kq ambiguous-identity fail-loud) INCLUDING the ruling that a dispatch-bind files delegations but records bind-origin so it does NOT stamp commit trailers (claim-origin only). Use the existing ADR format (status lifecycle proposed/settled/superseded, rejected alternatives, links to missions). Do not fabricate rationale you cannot ground; where a decision''s rationale is unclear, escalate to the leader.'
+    - 'Consistency pass (holistic): after the four steps, do a final cross-doc sweep — README vs AGENTS vs docs/** vs DESIGN vs prfaq must agree on feature names, command names/flags, storage paths, the team/role model, and the invariant set. Produce a short consistency report in your result listing what you reconciled and any remaining cross-doc discrepancy you could not resolve without a leader ruling.'
+    - 'Constraints: markdownlint clean on every .md (make check / npx markdownlint-cli2); LaTeX files (prfaq.tex, docs/architecture.tex) must still compile if a toolchain is present, else keep edits syntactically safe. Preserve content and meaning — this is a truing-up and reorganization, not a summarization; do not strip substance to make things "cleaner." Commit incrementally, one logical step per commit (README; prfaq; each docs cluster; DESIGN), each passing the doc gates. No suppressions. Work on branch docs/holistic-truing off main in an ISOLATED WORKTREE (you will be spawned with one) — do NOT touch the main checkout or the fix/mission-lifecycle-cluster branch.'
+    - 'When done, open ONE PR to punt-labs/ethos base main titled "docs: holistic truing-up (README/prfaq/docs/DESIGN)", request Copilot review ONCE via the MCP tool, and report the PR number + your consistency report to the leader. Do NOT merge. Submit a result artifact (verdict, confidence, files_changed within the write_set, >=1 evidence). GH_TOKEN valid as claude-puntlabs — plain gh/MCP, no env -u.'
+budget:
+    rounds: 3
+    reflection_after_each: false
+current_round: 1

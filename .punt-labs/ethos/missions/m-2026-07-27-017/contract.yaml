@@ -1,0 +1,29 @@
+mission_id: m-2026-07-27-017
+status: closed
+type: implement
+created_at: "2026-07-27T18:50:58Z"
+updated_at: "2026-07-27T19:21:41Z"
+closed_at: "2026-07-27T19:21:41Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-27T18:50:58Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - internal/hook
+    - internal/mission
+    - cmd/ethos
+    - CHANGELOG.md
+success_criteria:
+    - 'Fix ethos-z69l. Root cause: internal/hook/subagent_start.go HandleSubagentStartWithDeps enforces the DES-033 frozen-evaluator gate ''when the spawning subagent matches the evaluator handle of ANY open mission'' (see the doc comment near lines 91-94 and the loop over open missions that matches by handle). So a handle that is the evaluator of one open mission gets bound as THAT mission''s frozen verifier whenever it is spawned — even when it was dispatched (with its own MISSION_ID) to WORK a different mission. Reproduced live: mdm was worker on m-2026-07-27-004 and evaluator on m-2026-07-27-005; spawning mdm to work m-004 bound it as m-005''s verifier and enforced m-005''s write-set, blocking all of m-004''s files (clean refusal, no wrong writes).'
+    - 'Bind by (mission_id, role), not by scanning all open missions for the handle. The spawn''s declared MISSION_ID (emitted by dispatch into the worker''s additional_env; confirm it is readable from the SubagentStart payload/env for the spawned agent) determines which mission the spawn serves. The frozen-evaluator hash gate must apply ONLY when the spawn actually serves THAT mission as its evaluator/verifier — i.e. the handle equals the MISSION_ID mission''s evaluator. A handle that is merely the evaluator of some OTHER open mission must NOT be treated as that other mission''s verifier when it carries a MISSION_ID naming its own (worker) mission. Preserve DES-033 fully: when the spawn IS the declared mission''s verifier and the pinned evaluator hash has drifted, still refuse (with the same refusal report + skeleton close-on-refusal).'
+    - 'No-MISSION_ID spawns (Tier A ad-hoc, or legacy HandleSubagentStart with nil Missions): preserve today''s safe behavior — do not misbind, do not regress the persona-block emission. Decide + document the rule (e.g. without a declared mission, do not apply another mission''s verifier gate by handle alone). Capture the reasoning in the code comment that currently says ''matches the evaluator handle of any open mission''.'
+    - 'Interim guard in cmd/ethos mission create: WARN (stderr, NON-fatal, does not block creation) when the new contract''s worker OR evaluator handle overlaps the worker/evaluator handle of any OPEN mission. Name the colliding mission id(s) and the overlapping handle(s) so the leader sees the collision before it can misbind a spawn. This is advisory only — do NOT add enforcement that blocks legitimate handle reuse.'
+    - 'Tests: (a) reproduce the exact collision in internal/hook — two open missions where one handle is worker on A and evaluator on B; a SubagentStart for that handle carrying MISSION_ID=A binds to A as worker and does NOT refuse as B''s verifier; (b) a genuine verifier spawn (MISSION_ID=B, handle=B''s evaluator) with a drifted pinned hash STILL refuses (DES-033 preserved); (c) cmd/ethos mission create prints the overlap warning naming the colliding mission+handle and still creates the mission. Table-driven where it fits.'
+    - 'make check must pass before EVERY commit (read full output: golangci-lint + go test -race + validate-content). Commit incrementally, one logical step per commit; do not accumulate more than 30 minutes of uncommitted changes. CHANGELOG [Unreleased] Fixed entry citing ethos-z69l. Do NOT change contract immutability or the frozen-evaluator SEMANTICS (a real verifier spawn is still hash-gated) — this is binding-scope correctness only. Do NOT edit files outside the write-set.'
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 1

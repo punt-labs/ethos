@@ -1,0 +1,54 @@
+results:
+    - mission: m-2026-07-31-006
+      round: 1
+      created_at: "2026-07-31T07:04:57Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.86
+      files_changed:
+        - path: README.md
+          added: 42
+          removed: 34
+        - path: prfaq.tex
+          added: 14
+          removed: 12
+        - path: AGENTS.md
+          added: 43
+          removed: 1
+        - path: docs/ETHOS-ROADMAP.md
+          added: 10
+          removed: 8
+        - path: docs/traceability-use-cases.md
+          added: 2
+          removed: 2
+        - path: DESIGN.md
+          added: 68
+          removed: 0
+      evidence:
+        - name: 'PR #416 opened to punt-labs/ethos base main; Copilot review requested once (5 commits)'
+          status: pass
+        - name: verified tool/flag/count facts against built .tmp/ethos binary (12 MCP tools, 7 hooks, 13 pipelines, 44/63 KLOC, 5 setup prompts, install SHA c826b65)
+          status: pass
+        - name: markdownlint-cli2 clean across all 256 .md files (0 issues)
+          status: pass
+        - name: prfaq.tex recompiles with zero overfull hboxes; cross-doc grep found no residual 11-tools / Go Report Card / stale .ethos paths / dead links
+          status: pass
+      open_questions:
+        - 'DES-054/#415 mission-lifecycle cluster (qy7k/7vo3/pobi/t2lb/u4kq, incl. the bind-origin vs claim-origin trailer ruling) is NOT on main — it lives on another agent''s unmerged branch fix/mission-lifecycle-cluster. I deliberately did NOT add a DESIGN.md ADR for it (would document unshipped behavior and collide with that branch''s DESIGN/docs edits). Escalated to the leader via biff; awaiting ruling on whether to (1) draft the #415 ADR here, (2) leave it to the other branch, or (3) add a pending placeholder.'
+        - docs/testing-roadmap.md carries a KLOC snapshot (24.4/38.2) under a header explicitly pinned to '(v3.9.0)'. Left as a dated historical snapshot rather than rewriting an internal testing doc; flag if the leader wants it re-measured to current (44/63).
+        - docs/ contains ~30 internal build-plan-*.md and *.tex spec/mission records that are point-in-time implementation artifacts, not the canonical user-facing guides in the README Documentation table. I trued the canonical set + ran corpus-wide grep consistency (paths/counts/versions/links) but did not rewrite the historical build-plans.
+      prose: |
+        Holistic documentation truing-up across README, prfaq.tex, docs/**, DESIGN.md,
+        and AGENTS.md, verified against the built binary. README brought to the README
+        standard (badges: dropped the forbidden Release badge, added Go Reference +
+        Working Backwards; Title Case; describe-don't-sell tone; Description +
+        Platforms placement; Features before What It Looks Like). prfaq trued to v4.8.0
+        (KLOC, MCP tool count 12, DES-057/DES-058, storage paths, setup prompts) with
+        the product thesis and every settled invariant preserved and no positioning
+        invented; recompiled clean. AGENTS.md: tool count 12 + vendor row, new
+        Self-Standing Repos section, ext .local, audit seal/quarantine. DESIGN.md:
+        grounded implementation notes for #409 (z69l gate binding), #411 (PII
+        redaction), #412 (friction/trailer-binding lifecycle); #413/q6e2 already a
+        DES-058 note. Cross-doc set now agrees on tool counts (12), pipeline counts
+        (8+5=13), hook events (7), storage paths, team model (CEO/COO, DES-064), and
+        the invariant set.

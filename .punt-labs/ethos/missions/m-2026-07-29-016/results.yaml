@@ -1,0 +1,20 @@
+results:
+    - mission: m-2026-07-29-016
+      round: 1
+      created_at: "2026-07-31T05:06:52Z"
+      author: bwk
+      verdict: escalate
+      confidence: 0.9
+      files_changed: []
+      evidence:
+        - name: Operator ruling 2026-07-31 REJECTS the dk9h approach (exclude regen-bookkeeping from the write_set overlap check) — feat:writeset is a shipped invariant; carving files out erodes it.
+          status: pass
+        - name: Root cause is the OO-ratchet tooling, duplicated across ~4 Python projects (vox best); fix = extract into punt-kit + treat bookkeeping with the .punt-labs/local DES-058 pattern. Infra (adb), cross-repo, not ethos internal/mission.
+          status: pass
+      prose: |
+        Reclassified off ethos internal/mission scope per operator ruling
+        2026-07-31. No ethos code change made. Closing as escalated to release
+        the mission's claim. Follow-up owned by infra (adb): extract vox's
+        OO ratchet into punt-kit and give .oo-audit.jsonl / .oo-baseline.json the
+        .punt-labs/local machine-local-zone treatment so the bookkeeping never
+        enters a mission write_set. See ethos-dk9h notes.

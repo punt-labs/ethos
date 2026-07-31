@@ -1,0 +1,7 @@
+id: d-2026-07-28-047
+tier: B
+mission: m-2026-07-28-015
+parent_session: c7e50ab0-10d9-4b09-9402-db32cfe8f2da
+agent_type: pr-review-toolkit:silent-failure-hunter
+created_at: "2026-07-28T17:18:53Z"
+verdict: open

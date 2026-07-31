@@ -1,0 +1,26 @@
+mission_id: m-2026-07-31-002
+status: closed
+type: implement
+created_at: "2026-07-31T00:28:46Z"
+updated_at: "2026-07-31T04:18:29Z"
+closed_at: "2026-07-31T04:18:29Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-31T00:28:46Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - internal/hook/session_start.go
+    - internal/hook/session_start_test.go
+    - internal/session/tombstone_purge_test.go
+success_criteria:
+    - 'Follow-up to closed m-2026-07-31-001 (Fixes 1-4 landed at df5b430+278ca7a on branch fix/q6e2-vacuum-false-loss, PR #413). This completes ethos-q6e2 by activating Fix 2''s checkout-scoping at the real roster-writer and fixing a mis-named test. Push these as follow-up commits to the SAME branch / PR #413.'
+    - 'Activate Fix 2 at the SessionStart hook: internal/hook/session_start.go:176 still calls the 5-param Store.Create, so every hook-written roster (i.e. essentially all real rosters) records an empty Checkout and the checkout-scoping is inert. Add a ResolveCheckout() helper beside the existing ResolveRepo()/ResolveHost() (~272-294) and switch line 176 to CreateInCheckout so the roster records its writing checkout path. This makes the guard STRONGER (any checkout can now detect a genuinely deleted one), does not reintroduce false positives (empty Checkout still means "unknown writer, don''t warn"), and touches no other behavior. Add a session_start_test.go case asserting a hook-created roster records the resolved checkout path.'
+    - 'Fix the mis-named test internal/session/tombstone_purge_test.go: TestPurgeTombstoned_LostMissionLiveFlagsTombstone now passes for the wrong reason — after Fix 4 the flag it observes comes from the session-namespace probe, not the mission namespace its name claims, because it never writes a live audit file. Isolate it to actually exercise its stated subject (mirror the correctly-isolated TestPurgeTombstoned_SealedMissionDoesNotFlagTombstone added in store_test.go). The test must fail if the mission-namespace flag logic regresses. Do not leave a test whose name lies.'
+    - 'make check green before every commit (go vet, staticcheck/golangci-lint, go test -race -count=1, validate-content; `make tools` first if golangci-lint missing). Commit incrementally, stay strictly within the write-set, no suppressions. Main checkout, no worktree. Do NOT edit docs/CHANGELOG/DESIGN (leader-authored). Push to PR #413, then submit a result artifact (verdict, confidence, files_changed within write-set, >=1 evidence). Work Copilot/Bugbot findings on #413 as they arrive. Do NOT merge.'
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 1

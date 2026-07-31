@@ -1,0 +1,14 @@
+You are djb. Close a security fail-open on the OPEN PR #411 (branch fix/redaction-committed-pii) in /Users/jfreeman/Coding/punt-labs/ethos — the redaction/committed-PII cluster. This is your finding (the silent-failure review of this branch surfaced it) and your domain (audit content redaction policy, same discipline as the vendor credential guard you just fixed).
+
+THE FAIL-OPEN: internal/hook/audit_content.go has a per-tool keep-list `sensitiveTools` that currently enrolls ONLY send_email:
+    var sensitiveTools = map[string][]string{
+        "send_email": {"subject"},
+    }
+The keep-list is correctly default-deny WITHIN an enrolled tool (reduceToKeepList redacts every key not named). But the SET OF ENROLLED TOOLS is a deny-list: send_email's beadle siblings reply_message and create_draft carry the same content (body, to, cc, bcc, attachments) and are NOT enrolled, so they fall to the non-sensitive path and leak full body + recipient addresses into the git-tracked audit line — the exact leak class this PR closes for send_email.
+
+FIX:
+1. Enroll the sibling content-bearing beadle tools in sensitiveTools with keep {subject} — at minimum reply_message and create_draft. Grep the beadle tool surface (mcp__plugin_beadle_email__*) for any other send/forward/reply variant that carries a body or recipients and enroll those too (e.g. any forward_message). Matching is on the bare tool name via bareToolName (mcp__ns__X -> X), which already exists — so enrolling the bare name covers every namespace.
+2. Defense-in-depth so a future email tool can't leak by default: strip structured recipient keys (to, cc, bcc, recipient, recipients) to [redacted] for ANY tool, not only when inPrompt — a bare address in a structured field is never audit-worthy. Only add this if it's a clean handful of lines and doesn't disturb the byte-identical-for-non-sensitive-tools guarantee for tools with none of those keys.
+3. Tests (internal/hook/audit_content_test.go): reply_message and create_draft audit lines keep only subject with body/to/cc/bcc -> [redacted] and tool_input_hash over the redacted form; a hypothetical un-enrolled tool with a `to` field still has it stripped (if you added #2); a non-sensitive tool (Read/Edit) line stays byte-identical with no redacted marker.
+
+Do NOT touch the path-boundary code (internal/mission/redact.go, PathRedactor) — bwk owns and finished that; only work internal/hook/audit_content.go + its test. Stay in the write-set (internal/hook). Work on the EXISTING branch fix/redaction-committed-pii (git checkout it; do NOT branch off main). make check green (golangci-lint + go test -race + validate-content; `make tools` if needed) before you commit. No suppressions. GH_TOKEN valid (claude-puntlabs), no env -u. Commit, push to the branch, reply to me (the leader) "fixed — <sha>". Do NOT merge — I re-verify (build the binary, confirm reply_message body/recipient -> redacted, hash over redacted form) and merge.

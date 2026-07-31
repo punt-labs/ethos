@@ -1,0 +1,34 @@
+mission_id: m-2026-07-31-004
+status: closed
+type: implement
+created_at: "2026-07-31T05:05:22Z"
+updated_at: "2026-07-31T13:39:18Z"
+closed_at: "2026-07-31T13:39:18Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-31T05:05:22Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - internal/mission
+    - internal/hook
+    - internal/identity
+    - internal/resolve
+    - cmd/ethos
+    - hooks
+success_criteria:
+    - 'Fix FIVE mission/audit-lifecycle correctness defects. This is the product differentiator (prfaq.tex: "what did we ask, why, and did it stay in bounds"), so every fix must make a SHIPPED feature behave as the thesis intends and MUST NOT loosen a settled invariant. Before coding, re-read prfaq.tex (feat:results, feat:writeset, feat:frozen, human-agent parity) and DESIGN.md DES-032 (write-set admission), DES-036 (result close gate), DES-054/ DES-058 (delegation records + active-mission binding). Do NOT weaken the write-set overlap refusal, the strict result decoder, or contract immutability. Commit one logical step per bug; make check green before every commit; no suppressions.'
+    - 'ethos-qy7k (feat:results matcher bug): the result-submit containment check that verifies files_changed are inside the mission write_set is NOT glob-aware, so a legitimate glob write_set entry (e.g. docs/**) FALSELY rejects real changed paths and blocks a valid result submission. Make the containment match honor the same path/glob semantics the write_set declares (segment-prefix + glob), so a path genuinely inside a declared glob is accepted, while a path truly outside any declared entry is still rejected. Do NOT weaken the check for genuinely-outside paths. Table tests: (a) files_changed under a docs/** entry is accepted; (b) a path outside every entry is still rejected; (c) exact-file and segment-prefix entries behave unchanged.'
+    - 'ethos-7vo3 item A ONLY (attribution-correctness, NOT contract mutation): delegation records mis-file under a stale per-session active-mission binding — a leader who re-dispatches without `release` files the delegation under the stale mission (observed d-078 under m-017). Root cause: the delegation-to-mission binding reads a single sticky per-session active-mission sidecar set out-of-band by `ethos mission claim` (internal/mission/active.go). Fix: bind the delegation to the mission passed EXPLICITLY at dispatch/spawn rather than the sticky sidecar; and/or auto-release the sidecar on mission close; and loudly warn when spawning against a stale binding. Do NOT touch any contract invariant — this is purely which mission a delegation record is filed under. The docs/audited-delegation.md update this implies is LEADER-authored (out of your write_set) — describe the needed doc change in your report. Tests: a re-dispatch without release files the delegation under the mission named at dispatch, not the stale sidecar; and a stale binding emits a warning.'
+    - 'ethos-pobi (same root-cause family as 7vo3): the commit-msg hook fallback (hooks/commit-msg.sh, runs when MISSION_ID/DELEGATION_ID are absent from env) picks the mission by a GLOBAL session pick — it globs all session dirs and takes the most-recent-dated one with an active-mission sidecar — instead of the COMMITTING session. With two concurrent active-mission sessions, a commit from the older-dated session gets stamped with the newer session''s Mission/Delegation trailer. Fix: resolve the COMMITTING session (ETHOS_SESSION env, else the Claude PID process walk that resolve.SessionID already uses) and read ONLY that session''s active-mission + delegation-binding sidecar; never a global pick by mtime or date. If the committing session cannot be resolved, add NO trailer (do not guess). Tests: two session dirs each with an active-mission sidecar for different missions; a commit resolving to the older session gets that session''s mission (or none), never the newer one.'
+    - 'ethos-t2lb (feat:pipelines/feat:writeset parse bug): `ethos mission pipeline instantiate` with a --var whose value contains spaces (e.g. a target path list) collapses into a single malformed write_set string entry instead of separate paths. Fix the --var parsing so a space-or-comma-separated write_set value becomes distinct write_set entries (match however dispatch --write-set already splits multiple paths; keep them consistent). Tests: a --var producing a multi-path write_set yields N distinct entries, each admission-checked individually; a single-path value is unchanged.'
+    - 'ethos-u4kq (identity correctness / no-silent-wrong-answer): identity.Store.FindBy returns the FIRST ReadDir match when multiple identities share an email, and resolve.Resolve inherits the arbitrary winner — a silent wrong identity (reachable now that setup defaults the human email to git user.email). Fix: FindBy/Resolve must return an explicit error naming the collision (e.g. "ambiguous identity: N matches for <email>: <handle1>, <handle2>") rather than an arbitrary winner — fail loud, consistent with human-agent parity and the org no-silent-wrong- answer posture. Do NOT change behavior for the unambiguous single-match case. Tests: two identities sharing an email produce an ambiguous-identity error naming both; a unique email resolves unchanged; zero matches is unchanged.'
+    - Documentation is LEADER-authored, OUTSIDE your write_set — do NOT edit CHANGELOG.md, DESIGN.md, or anything under docs/ (docs/ is claimed by another open mission; CHANGELOG/DESIGN are COO-authored). In your PR description and report to the leader, provide the exact proposed CHANGELOG [Unreleased] Fixed text citing all five bead IDs, and the docs/audited-delegation.md change 7vo3 implies. The leader commits those to your PR branch.
+    - Commit incrementally — one commit per bug (five commits), each self-contained with its tests, each passing make check (go vet, staticcheck/golangci-lint, go test -race -count=1, validate-content; run `make tools` first if golangci-lint is missing). Do not accumulate more than 30 minutes of uncommitted changes. Stay strictly within the write_set. No suppressions. Work on a feature branch off main in the MAIN checkout; do NOT use a worktree (single agent).
+    - When green, open ONE PR to punt-labs/ethos base main, request Copilot review ONCE via the MCP tool (never a /copilot comment), and report the PR number + the proposed doc/CHANGELOG text to the leader. Do NOT merge. Submit a result artifact (verdict, confidence, files_changed within the write_set, >=1 evidence). GH_TOKEN valid as claude-puntlabs — plain gh/MCP, no env -u.
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 2

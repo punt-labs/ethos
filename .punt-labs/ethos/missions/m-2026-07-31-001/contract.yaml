@@ -1,0 +1,38 @@
+mission_id: m-2026-07-31-001
+status: closed
+type: implement
+created_at: "2026-07-31T00:00:37Z"
+updated_at: "2026-07-31T00:28:24Z"
+closed_at: "2026-07-31T00:28:24Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-07-31T00:00:37Z"
+    hash: 6b43c31a096c5351be03f28cf436a5413d61afee87f1ecc8a52fa992290fd58a
+inputs: {}
+write_set:
+    - internal/hook/audit_vacuum.go
+    - internal/hook/audit_vacuum_test.go
+    - internal/audit
+    - internal/session/session.go
+    - internal/session/session_test.go
+    - internal/session/store.go
+    - internal/session/store_test.go
+    - cmd/ethos/audit.go
+    - cmd/ethos/session.go
+success_criteria:
+    - 'Fix ethos-q6e2: the pre-commit audit-seal vacuum cross-check emits false "mission live log is gone; unsealed mission-log lines were lost" warnings (root cause already diagnosed by you as bwk-q6e2 — reuse that analysis). NO data is lost; the warning fires purely on file absence and never checks the watermark, and the live zone is per-checkout by design (DES-058), so any checkout that did not write the live file warns falsely. BEFORE coding, re-read DESIGN.md DES-058 (esp. lines ~5657-5665 "the path itself is retained in the purge tombstone and vacuum cross-check", ~5913-5940 the vacuum-cross-check spec, and the I10/I11/I12 invariants) and docs/audit-seal.md §Seal failure policy (~875-954). The fix must IMPLEMENT the design''s stated intent (path retained in the vacuum cross-check; a sealed chunk proves survival), never weaken the guard that catches genuine loss (crash -> purge -> checkout-deleted).'
+    - 'Fix 1 (correctness core — absence is not loss): change the mission-log branch of the vacuum cross-check so it warns ONLY when a mission is bound to the session AND has NO sealed chunk carrying that session id AND no legacy log.jsonl. A present sealed chunk is proof the lines survived (DESIGN.md:5936-5937), so the chunk-derived half of the expected set can never indicate loss — do not stat the live file to decide loss when a chunk exists. Integrate audit.Watermark / SelectLiveTail so the only genuine-loss signal is "bound, sealed nothing, no live file". This alone must take the current ~48 warnings to 0 in the reproduction (a checkout with no live zone) WITHOUT weakening detection of a truly unsealed + deleted live file.'
+    - 'Fix 2 (design-faithful checkout scoping): add a Checkout (recorded checkout path) field to session.Roster (mirroring audit.Tombstone.Checkout), populate it when the roster entry is written, and make the roster-active branch of the vacuum cross-check probe the live file at THAT recorded checkout path — a checkout that is not the recorded writer has no standing to judge and stays silent. This is the DES-054/ DES-058 intent ("path retained in the vacuum cross-check", DESIGN.md:5657-5665); store.go:233''s "a roster Repo is a git-remote identity, never a checkout path" stays true — Checkout is a NEW, separate field, not Repo. Migration/back-compat: an empty/absent Checkout (older roster written before this field) means "unknown writer -> do NOT warn", never a false positive. Add the field with a strict, unknown-field-rejecting decode consistent with the rest of the schema.'
+    - 'Fix 3 (legacy population): recognize the pre-DES-058 tracked missions/<id>/log.jsonl (and the frozen audit.jsonl) as legacy records so missions closed before 2026-07-21 stop warning in the writing checkout too — brings the last 2 main-checkout warnings to 0.'
+    - 'Fix 4 (stop minting false tombstones): the SAME predicate guards ethos session purge (internal/session/store.go:354-371) and writes a PERMANENT flagged loss-tombstone when it sees an absent live file. Apply the same watermark + recorded-checkout logic there so a purge run from a non-writing checkout cannot fabricate an un-earned loss record. Also honor the tombstone''s own recorded Checkout in the tombstone branch of the vacuum cross-check (audit_vacuum.go passes repoRoot today, discarding Tombstone.Checkout — DESIGN.md:5917-5919 says derive the live path from the recorded checkout path). If a mission-warning acknowledgement path is needed to retire a legitimately-flagged mission warning, add it consistently with the existing session-tombstone --ack rename convention; otherwise ensure no path can mint an un-retirable false signal.'
+    - Do NOT delete or demote the warning — the guard covers a real hole. Do NOT weaken the strict unknown-field-rejecting decoders (DES-036 discipline). Do NOT touch the seal write path, chunk format, watermark math, or the redaction behavior. Keep non-affected audit/seal behavior byte-identical.
+    - 'Tests (table-driven, and each must FAIL against current code): (a) a checkout with no live zone but tracked chunks for the session produces ZERO mission-log-loss warnings; (b) a mission bound to the session with NO sealed chunk and NO live file STILL warns (genuine-loss guard preserved); (c) a roster entry with a Checkout pointing at a different path stays silent in this checkout; an empty Checkout stays silent (back-compat); (d) a pre-DES-058 legacy log.jsonl mission does not warn; (e) ethos session purge from a non-writing checkout does NOT write a flagged loss-tombstone for a session whose lines are all sealed; (f) the tombstone branch uses the recorded Checkout, not repoRoot. Reproduce the original ~48 -> 0 with a no-live-zone checkout in a test or a documented manual repro.'
+    - 'Documentation is LEADER-authored, OUTSIDE your write-set — do NOT edit docs/audit-seal.md, DESIGN.md, or CHANGELOG.md (they are claimed by other open missions and/or COO-authored). Instead, in your PR description and your report to the leader, provide the exact proposed text for: (a) a CHANGELOG [Unreleased] Fixed entry citing ethos-q6e2 stating plainly that no audit data was ever lost and the warning was a per-checkout false positive; (b) a short DES-058 implementation note that the roster now carries the recorded checkout path to satisfy the already-specified "path retained in the vacuum cross-check"; (c) any docs/audit-seal.md change the Roster.Checkout addition implies. The leader will commit those to your PR branch.'
+    - Commit incrementally — one commit per logical step (Fix 1; then Roster.Checkout + Fix 2; then Fix 3; then Fix 4; then docs/CHANGELOG), each self-contained. Each commit must pass make check (go vet, staticcheck/golangci-lint, go test -race -count=1, validate-content); run `make tools` first if golangci-lint is missing. Do not accumulate more than 30 minutes of uncommitted changes. Stay strictly within the write-set. No suppressions (# nolint / //nolint / -race skips / xfail) — fix the code or escalate. Work on a feature branch off main in the main checkout; do NOT use a worktree (single agent, avoids the earlier collision).
+    - When green, open a PR to punt-labs/ethos base main, request Copilot review ONCE via the MCP tool (never a /copilot comment), and report the PR number to the leader. Do NOT merge. GH_TOKEN is valid as claude-puntlabs — plain gh/MCP, no env -u.
+budget:
+    rounds: 2
+    reflection_after_each: false
+current_round: 1

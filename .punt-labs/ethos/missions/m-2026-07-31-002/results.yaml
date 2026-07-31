@@ -1,0 +1,61 @@
+results:
+    - mission: m-2026-07-31-002
+      round: 1
+      created_at: "2026-07-31T01:21:59Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/hook/session_start.go
+          added: 17
+          removed: 1
+        - path: internal/hook/session_start_test.go
+          added: 52
+          removed: 0
+        - path: internal/session/tombstone_purge_test.go
+          added: 60
+          removed: 7
+      evidence:
+        - name: make check (golangci-lint 0 issues, go test -race, shellcheck, markdownlint, validate-content)
+          status: pass
+        - name: TestCreateSessionRoster_RecordsCheckout fails with the old Create call site, passes with CreateInCheckout
+          status: pass
+        - name: 'end-to-end via the built binary: `ethos session start` writes checkout: /path/to/e2erepo into the roster YAML'
+          status: pass
+        - name: 'end-to-end: `ethos audit seal` from a NON-writing checkout with 3 sealed mission chunks is silent (this is the 43-warning case)'
+          status: pass
+        - name: 'end-to-end: claim a mission with no chunk and no live log -> the non-writing checkout DOES warn (guard intact from any checkout)'
+          status: pass
+        - name: 'end-to-end: delete the writing checkout -> the other checkout warns naming the missing path (guard is now STRONGER than before)'
+          status: pass
+        - name: 'purge tests isolated: both seal their own live audit file so only the mission namespace can set the flag; control case with the binding removed purges silently'
+          status: pass
+        - name: pushed to PR punt-labs/ethos#413 at 3491513; docs + test checks green
+          status: pass
+      prose: |
+        Two commits on the same branch/PR.
+
+        00f05e5 activates Fix 2 where it matters. ResolveCheckout joins
+        ResolveRepo and ResolveHost as the third binding the SessionStart hook
+        resolves, and it delegates to resolve.EnvRepoRoot — the same resolver
+        the live-write path uses — so the recorded path and the path the live
+        file lands under agree by construction rather than by two walks that
+        could drift. That drift is the class of mismatch ethos-q6e2 was.
+
+        3491513 fixes the two purge tests. Both claimed a mission-namespace
+        subject while never writing a live audit file, so liveGone was already
+        true from the session-namespace probe before the mission loop ran —
+        they passed whatever the mission logic did. After Fix 1 the first
+        one's premise was dead outright: a sealed chunk now proves survival,
+        so "sealed a chunk, live log gone" is not a loss, and store_test.go
+        asserts exactly that. Each now seals its own live audit file first and
+        they cover the two distinct halves of the binding union, a delegation
+        record and the claim sidecar. A control case runs the same setup with
+        the binding removed and must purge silently; without it neither
+        assertion would mean anything.
+
+        Verified end to end through the built binary rather than tests alone:
+        a real roster now records its checkout, a non-writing checkout is
+        silent where it used to print one warning per mission, and both
+        genuine-loss cases still fire from a checkout that did not write them
+        — which the old code could not distinguish from its own noise.
