@@ -565,3 +565,30 @@ func writeSealedLive(t *testing.T, repoRoot, sessionID string) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, audit.SessionChunkFile(100, 100)), []byte(body), 0o600))
 }
+
+// TestPurgeTombstoned_OutOfRepoUsesRecordedCheckout covers a purge run with no
+// checkout in scope for a session whose roster records one. The recorded
+// checkout is then the only checkout that can be named, and it holds both the
+// live zone and its own tracked chunks. Reading the tracked side from an empty
+// repoRoot instead would resolve ".punt-labs/..." against the working
+// directory — nothing, or some unrelated repo's chunks — and flag a loss that
+// did not happen.
+func TestPurgeTombstoned_OutOfRepoUsesRecordedCheckout(t *testing.T) {
+	s := testStore(t)
+	checkout := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	// Repo "" is a checkout with no parseable origin — the only kind that
+	// reaches the probes when the purge runs outside any repo.
+	require.NoError(t, s.CreateInCheckout("sess-oor", root, primary, "", checkout, ""))
+	writeSealedLive(t, checkout, "sess-oor")
+	sealMissionChunkFor(t, checkout, "m-2026-07-21-009", "sess-oor")
+
+	purged, refused, err := s.PurgeTombstoned("", "", false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-oor")
+	assert.Empty(t, refused)
+
+	_, err = audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-oor.purged"))
+	assert.Error(t, err, "state provable at the recorded checkout must not flag a loss")
+}
