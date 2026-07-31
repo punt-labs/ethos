@@ -10,7 +10,7 @@
 
 Ethos binds a name, personality, writing style, domain expertise, email,
 GitHub handle, and voice into one identity that other tools read, and adds
-typed mission contracts that record and bound what an agent is asked to do.
+typed mission contracts that record and bind what an agent is asked to do.
 It ships as a single Go binary with a Claude Code plugin, an MCP server, and
 a filesystem layout other tools read directly. It runs locally — no server,
 no telemetry, no cloud.

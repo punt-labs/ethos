@@ -11,7 +11,7 @@ lifecycle:
 |-------|-----------------|-----------|---------------|
 | **Persona** | Identity, judgment, taste, communication style | Durable -- survives across tasks and sessions | Ethos identity (personality + writing style + talents) |
 | **Role** | Tools, responsibilities, anti-responsibilities, team position | Semi-durable -- changes when the team changes | Ethos role YAML |
-| **Mission** | Typed I/O contract: leader, worker, evaluator, write_set, success_criteria, budget | Ephemeral -- one task, then done | Mission contract YAML at `~/.punt-labs/ethos/missions/<id>.yaml`, registered via `ethos mission create` |
+| **Mission** | Typed I/O contract: leader, worker, evaluator, write_set, success_criteria, budget | Ephemeral -- one task, then done | Mission contract YAML at `<repo>/.punt-labs/ethos/missions/<id>/contract.yaml`, registered via `ethos mission create` |
 
 The persona stays warm -- it gives the agent judgment, taste, and
 voice. The mission stays cold -- it gives the agent precision. The
@@ -361,7 +361,7 @@ carry that "right now" payload, and they are not interchangeable:
   what to read first. Leadership thinking lives here.
 - The **mission contract** is the typed YAML artifact created via
   `ethos mission create --file <yaml>` and stored at
-  `~/.punt-labs/ethos/missions/<id>.yaml`. Schema-validated at parse
+  `<repo>/.punt-labs/ethos/missions/<id>/contract.yaml`. Schema-validated at parse
   time, runtime-enforced by the Phase 3 hooks. Identity, write set,
   success criteria, and budget live here.
 
@@ -375,7 +375,7 @@ prompt carries the prose context. They reinforce each other.
 The mission contract is a typed YAML artifact, not freeform prose.
 The leader writes it once, registers it via
 `ethos mission create --file <path>`, and ethos stores it under
-`~/.punt-labs/ethos/missions/<id>.yaml` where the runtime can
+`<repo>/.punt-labs/ethos/missions/<id>/contract.yaml` where the runtime can
 enforce it. See DES-031 and the architecture spec's "Mission
 Primitive" section for the full runtime model.
 
