@@ -742,6 +742,122 @@ func TestInstantiate_MultiPathVar(t *testing.T) {
 	}
 }
 
+// TestInstantiate_MultiPathVarKeepsTemplatePrefix pins the prefix drop
+// Bugbot found on PR #415: splitting the expanded string turned
+// `docs/{target}` with two paths into `docs/a.md` plus a bare `b.md`.
+// The second path lost its directory and the write_set claimed a
+// top-level file nobody meant. Each path must carry the whole template
+// around it.
+func TestInstantiate_MultiPathVarKeepsTemplatePrefix(t *testing.T) {
+	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name     string
+		writeSet []string
+		target   string
+		want     []string
+	}{
+		{
+			name:     "prefix repeats on every path",
+			writeSet: []string{"docs/{target}"},
+			target:   "a.md b.md",
+			want:     []string{"docs/a.md", "docs/b.md"},
+		},
+		{
+			name:     "suffix repeats on every path",
+			writeSet: []string{"{target}/store.go"},
+			target:   "internal/mission internal/hook",
+			want:     []string{"internal/mission/store.go", "internal/hook/store.go"},
+		},
+		{
+			name:     "prefix and suffix both repeat",
+			writeSet: []string{"src/{target}/main.go"},
+			target:   "alpha,beta",
+			want:     []string{"src/alpha/main.go", "src/beta/main.go"},
+		},
+		{
+			name:     "bare variable is unchanged",
+			writeSet: []string{"{target}"},
+			target:   "internal/mission cmd/ethos",
+			want:     []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name:     "single path with a prefix is unchanged",
+			writeSet: []string{"docs/{target}"},
+			target:   "a.md",
+			want:     []string{"docs/a.md"},
+		},
+		{
+			name:     "a second variable holding one path still substitutes",
+			writeSet: []string{"{root}/{target}"},
+			target:   "a.md b.md",
+			want:     []string{"docs/a.md", "docs/b.md"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pipeline{
+				Name: "sprint",
+				Stages: []Stage{{
+					Name: "implement", Archetype: "implement", WriteSet: tt.writeSet,
+					Worker: "bwk", SuccessCriteria: []string{"make check passes"},
+				}},
+			}
+			contracts, err := Instantiate(p, InstantiateOptions{
+				PipelineID: "sprint-2026-07-31",
+				Vars:       map[string]string{"target": tt.target, "root": "docs"},
+				Leader:     "claude",
+				Evaluator:  "rsc",
+				Worker:     "bwk",
+				Now:        now,
+			})
+			if err != nil {
+				t.Fatalf("Instantiate: %v", err)
+			}
+			got := contracts[0].WriteSet
+			if len(got) != len(tt.want) {
+				t.Fatalf("WriteSet = %v, want %v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("WriteSet[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestInstantiate_TwoMultiPathVarsRefused asserts the ambiguous shape
+// is named, not guessed at: two multi-path variables in one entry
+// describe a cartesian product, which no write_set means.
+func TestInstantiate_TwoMultiPathVarsRefused(t *testing.T) {
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{{
+			Name: "implement", Archetype: "implement",
+			WriteSet: []string{"{dirs}/{files}"},
+			Worker:   "bwk", SuccessCriteria: []string{"make check passes"},
+		}},
+	}
+	_, err := Instantiate(p, InstantiateOptions{
+		PipelineID: "sprint-2026-07-31",
+		Vars:       map[string]string{"dirs": "a b", "files": "x.go y.go"},
+		Leader:     "claude",
+		Evaluator:  "rsc",
+		Worker:     "bwk",
+		Now:        time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC),
+	})
+	if err == nil {
+		t.Fatal("two multi-path variables in one entry must be refused")
+	}
+	for _, want := range []string{"multi-path variables", "dirs", "files", "write_set[0]"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error must name %q, got: %v", want, err)
+		}
+	}
+}
+
 func TestInstantiate_MissingVar(t *testing.T) {
 	p := &Pipeline{
 		Name: "test-pipeline",

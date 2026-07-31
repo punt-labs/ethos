@@ -388,22 +388,116 @@ func ExpandVars(s string, vars map[string]string) (string, error) {
 // and every edit the worker made fell outside it (ethos-t2lb). Each
 // path must stand alone so admission control and the runtime gate
 // check it individually.
+// The split happens PER PATH, before substitution, so a template that
+// wraps its variable keeps the wrapping on every path it produces:
+// `docs/{target}` with two paths yields `docs/a.md` and `docs/b.md`.
+// Splitting the expanded string instead produced `docs/a.md` and a
+// bare `b.md` — the prefix silently fell off the second path, and the
+// write_set claimed a top-level file nobody meant (Bugbot on PR #415).
+//
+// One multi-path variable per entry is the limit. Two would describe a
+// cartesian product, which no leader writing a write_set means; the
+// error names both variables and the entry rather than guessing.
 func expandPathSlice(ss []string, vars map[string]string, pipeline, stage, field string) ([]string, error) {
-	expanded, err := expandSlice(ss, vars, pipeline, stage, field)
-	if err != nil {
-		return nil, err
-	}
-	if len(expanded) == 0 {
+	if len(ss) == 0 {
 		return nil, nil
 	}
-	out := make([]string, 0, len(expanded))
-	for _, e := range expanded {
-		out = append(out, SplitPathList(e)...)
+	var out []string
+	for i, entry := range ss {
+		expanded, err := expandPathEntry(entry, vars)
+		if err != nil {
+			return nil, fmt.Errorf("instantiate %q stage %q %s[%d]: %w", pipeline, stage, field, i, err)
+		}
+		out = append(out, expanded...)
 	}
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// expandPathEntry expands one path-list template entry into the paths
+// it names. A variable holding several paths is substituted one path
+// at a time, so the rest of the entry is repeated around each.
+func expandPathEntry(entry string, vars map[string]string) ([]string, error) {
+	multi := multiPathKeys(entry, vars)
+	switch len(multi) {
+	case 0:
+		expanded, err := ExpandVars(entry, vars)
+		if err != nil {
+			return nil, err
+		}
+		// The template itself may carry separators even when no
+		// variable does, so split here too.
+		return SplitPathList(expanded), nil
+	case 1:
+		key := multi[0]
+		parts := SplitPathList(vars[key])
+		out := make([]string, 0, len(parts))
+		// Substituting one path at a time needs its own copy of the
+		// variable map — mutating the caller's would leak the last
+		// path into every later stage.
+		per := make(map[string]string, len(vars))
+		for k, v := range vars {
+			per[k] = v
+		}
+		for _, p := range parts {
+			per[key] = p
+			expanded, err := ExpandVars(entry, per)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, SplitPathList(expanded)...)
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf(
+			"entry %q references %d multi-path variables (%s); use one entry per variable",
+			entry, len(multi), strings.Join(multi, ", "))
+	}
+}
+
+// multiPathKeys returns, in order of first appearance, the template
+// variables referenced by entry whose values name more than one path.
+func multiPathKeys(entry string, vars map[string]string) []string {
+	var keys []string
+	seen := make(map[string]struct{})
+	for _, k := range templateKeys(entry) {
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		if len(SplitPathList(vars[k])) > 1 {
+			seen[k] = struct{}{}
+			keys = append(keys, k)
+		}
+	}
+	return keys
+}
+
+// templateKeys returns the `{key}` placeholders in s, honoring the same
+// `{{`/`}}` escapes ExpandVars applies. An unterminated `{` yields no
+// key, matching ExpandVars, which writes the remainder literally.
+func templateKeys(s string) []string {
+	var keys []string
+	for i := 0; i < len(s); {
+		if i+1 < len(s) && (s[i] == '{' && s[i+1] == '{' || s[i] == '}' && s[i+1] == '}') {
+			i += 2
+			continue
+		}
+		if s[i] != '{' {
+			i++
+			continue
+		}
+		end := strings.IndexByte(s[i+1:], '}')
+		if end < 0 {
+			break
+		}
+		if key := s[i+1 : i+1+end]; key != "" {
+			keys = append(keys, key)
+		}
+		i = i + 1 + end + 1
+	}
+	return keys
 }
 
 // expandSlice applies ExpandVars to each entry in ss. Errors name the

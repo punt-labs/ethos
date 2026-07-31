@@ -353,6 +353,36 @@ func TestPathAllowed_GlobEntry(t *testing.T) {
 	}
 }
 
+// TestPathAllowed_GlobDoesNotAdmitTraversal pins the escape Copilot
+// found on PR #415: a `**` segment matched `..` like any other
+// segment, so a leading-doublestar entry — legal, since it names a
+// real file — authorized a verifier to write OUTSIDE the repo. The
+// literal matcher this replaced could not express that, so the guard
+// arrives with the glob.
+func TestPathAllowed_GlobDoesNotAdmitTraversal(t *testing.T) {
+	entries := []string{"**/notes.go", "**", "docs/**", "*.go"}
+
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{"leading traversal under a doublestar entry", "../notes.go"},
+		{"double traversal", "../../etc/passwd"},
+		{"traversal that resolves above the repo", "internal/hook/../../../escape.go"},
+		{"traversal reaching a name a glob entry would otherwise match", "../../notes.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.False(t, pathAllowed(tt.target, entries),
+				"%q must not be admitted by any glob entry", tt.target)
+		})
+	}
+
+	// The same entries still admit what they legitimately name.
+	assert.True(t, pathAllowed("internal/hook/notes.go", entries))
+	assert.True(t, pathAllowed("docs/design/adr.md", entries))
+}
+
 // TestHandlePreToolUse_EnvVarFromSubagentStart verifies end-to-end
 // that the env var format produced by buildVerifierAllowlistEnv is
 // correctly consumed by HandlePreToolUse.

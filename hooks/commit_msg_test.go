@@ -3,6 +3,7 @@
 package hooks
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,13 +47,14 @@ func ethosBinDir(t *testing.T) string {
 			ethosErr = err
 			return
 		}
+		// Record the directory BEFORE the build so TestMain removes it
+		// on a failed build too; a build that fails on every run would
+		// otherwise leave one temp dir behind per run.
+		ethosDir = dir
 		cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "ethos"), "../cmd/ethos")
 		if out, err := cmd.CombinedOutput(); err != nil {
-			ethosErr = err
-			t.Logf("building ethos: %v\n%s", err, out)
-			return
+			ethosErr = fmt.Errorf("%w\n%s", err, out)
 		}
-		ethosDir = dir
 	})
 	if ethosErr != nil {
 		t.Fatalf("building ethos binary: %v", ethosErr)

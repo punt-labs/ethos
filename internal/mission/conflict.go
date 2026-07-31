@@ -348,6 +348,18 @@ func pathContainedBy(file, entry string) bool {
 	if len(fs) == 0 || len(es) == 0 {
 		return false
 	}
+	// A file path that still climbs out of the tree is inside nothing.
+	// Entries are validator-checked for `..` upstream, but FILES are
+	// not: the PreToolUse allowlist matches a caller-supplied tool
+	// target. A `**` segment happily matched `..`, so an entry like
+	// `**/notes.go` admitted `../notes.go` — a write outside the repo
+	// (Copilot on PR #415). The literal matcher this replaced could
+	// not express that, so the guard arrives with the glob.
+	for _, seg := range fs {
+		if seg == ".." {
+			return false
+		}
+	}
 	return segmentsContain(fs, es)
 }
 
