@@ -165,7 +165,15 @@ ethos create -f persona.yaml          # Create from YAML file
 ethos list                            # List all identities   (ethos identity list)
 ethos show mal                        # Full identity          (ethos identity show)
 ethos show mal --json                 # JSON output
+ethos identity schema                 # Field reference for an identity YAML
+ethos identity schema --json          # Same reference as JSON
 ```
+
+Each typed entity carries a `schema` subcommand that prints its field
+reference — required/optional, type, and description — so you can answer
+"what fields go in this YAML?" without reading source: `ethos identity
+schema`, `ethos role schema`, `ethos team schema`. Add `--json` for the
+machine-readable form.
 
 ### MCP Tools
 
@@ -487,6 +495,7 @@ with CLI, MCP, and layered resolution (repo-local overrides global).
 ethos team list                        # List all teams
 ethos team show engineering            # Show members, roles, collaborations
 ethos team for-repo punt-labs/ethos    # Which team works on this repo?
+ethos team schema                      # Field reference for a team YAML
 ```
 
 Via MCP:
@@ -501,6 +510,7 @@ Call mcp__plugin_ethos_self__team with method="for_repo", repo="punt-labs/ethos"
 ```bash
 ethos role list                        # List all roles
 ethos role show go-specialist          # Show role responsibilities and tools
+ethos role schema                      # Field reference for a role YAML
 ```
 
 Via MCP:
