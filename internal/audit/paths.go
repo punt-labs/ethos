@@ -375,10 +375,14 @@ func missionIsWhollyLegacy(trackedRoot, liveRoot, missionID string) (bool, error
 // near-miss counts for the same reason — the seal fails loud on one elsewhere,
 // but here it is still evidence that something was sealed. Only KindOther (a
 // contract.yaml, the legacy log itself) and a stale temp are silent.
+// An unreadable directory answers "maybe". Only an absent one answers "no":
+// reading EACCES or EIO as "no chunks here" would let the legacy sources vouch
+// for a mission whose chunk state is simply unknown, turning an I/O failure
+// into a suppressed loss warning. Fail safe toward reporting.
 func missionHasAnyChunk(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false
+		return !errors.Is(err, fs.ErrNotExist)
 	}
 	for _, e := range entries {
 		if e.IsDir() {

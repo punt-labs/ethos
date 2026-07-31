@@ -112,3 +112,51 @@ func TestFindSealedSessionDirRejectsBadDate(t *testing.T) {
 		t.Errorf("non-dated dir matched %q, want no match", got)
 	}
 }
+
+// TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch pins the fail-safe
+// direction on an I/O failure: an unreadable sealed dir leaves the chunk state
+// unknown, and unknown must not be read as "no chunks" — that would let the
+// frozen legacy sources vouch for a mission whose lines may well be lost.
+func TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch(t *testing.T) {
+	repo := t.TempDir()
+	mid := "m-2026-07-20-030"
+	dir := SealedMissionDir(repo, mid)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":"` + FormatLineTS(100) + `","event":"dispatch"}` + "\n"
+	if err := os.WriteFile(MissionLegacyLogPath(repo, mid), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Readable: a frozen log and no chunk is a wholly pre-split mission.
+	got, err := missionIsWhollyLegacy(repo, repo, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Fatal("a frozen log with no chunk must read as wholly legacy")
+	}
+
+	// Search-but-not-list (mode 0o111) is the case that isolates the chunk
+	// scan: ReadDir fails with EACCES while opening a file by name still
+	// succeeds, so the legacy log stays readable and only the chunk state
+	// becomes unknown. Mode 0o000 would break both and prove nothing.
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory modes do not deny access")
+	}
+	if err := os.Chmod(dir, 0o111); err != nil {
+		t.Skipf("cannot restrict directory permissions here: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := os.ReadFile(MissionLegacyLogPath(repo, mid)); err != nil {
+		t.Skipf("this filesystem denies open-by-name under mode 0o111: %v", err)
+	}
+
+	got, err = missionIsWhollyLegacy(repo, repo, mid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Error("an unlistable sealed dir vouched for the mission; unknown must not read as no-chunks")
+	}
+}
