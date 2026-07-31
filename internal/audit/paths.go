@@ -401,6 +401,11 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 // onto "" builds a relative path that could match some unrelated directory
 // below the working directory. An unknown writer is treated as gone, which
 // warns — the fail-safe direction.
+//
+// Only ENOENT answers "no zone". An unreadable one (EACCES, EIO) leaves the
+// question open, and open must not become "never wrote there" — that is the
+// direction that suppresses a warning, the same fail-unsafe read
+// missionHasAnyChunk was hardened against.
 func checkoutState(liveRoot string, zoneDir func(string) string) (present, zone bool) {
 	if liveRoot == "" {
 		return false, false
@@ -409,7 +414,10 @@ func checkoutState(liveRoot string, zoneDir func(string) string) (present, zone 
 		return false, false
 	}
 	info, err := os.Stat(zoneDir(liveRoot))
-	return true, err == nil && info.IsDir()
+	if err != nil {
+		return true, !errors.Is(err, fs.ErrNotExist)
+	}
+	return true, info.IsDir()
 }
 
 // missionIsWhollyLegacy reports whether a mission's whole record is frozen

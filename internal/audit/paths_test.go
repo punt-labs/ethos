@@ -160,3 +160,40 @@ func TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch(t *testing.T) {
 		t.Error("an unlistable sealed dir vouched for the mission; unknown must not read as no-chunks")
 	}
 }
+
+// TestCheckoutStateUnreadableZoneDoesNotSuppress pins the fail-safe direction
+// on the zone probe. An unreadable live zone leaves "did this checkout write
+// here?" open, and open must not resolve to "never wrote" — that is the answer
+// that lets a sealed chunk suppress a loss warning.
+func TestCheckoutStateUnreadableZoneDoesNotSuppress(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory modes do not deny access")
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(LiveMissionsDir(root), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	present, zone := checkoutState(root, LiveMissionsDir)
+	if !present || !zone {
+		t.Fatalf("readable zone: present=%v zone=%v, want true true", present, zone)
+	}
+
+	// Revoke search on the local-zone parent so stat of the missions dir fails
+	// with EACCES rather than ENOENT.
+	parent := LocalZoneBase(root)
+	if err := os.Chmod(parent, 0o000); err != nil {
+		t.Skipf("cannot revoke directory permissions here: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	if _, err := os.Stat(LiveMissionsDir(root)); err == nil {
+		t.Skip("this filesystem still permits the stat under mode 0o000")
+	}
+
+	present, zone = checkoutState(root, LiveMissionsDir)
+	if !present {
+		t.Error("the checkout itself is readable and must read as present")
+	}
+	if !zone {
+		t.Error("an unreadable zone read as 'never wrote here'; unknown must not suppress")
+	}
+}
