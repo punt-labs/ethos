@@ -115,8 +115,13 @@ func ReadActiveMission(globalRoot, sessionID string) (string, error) {
 // origin file left over from an earlier binding names a different
 // mission and is ignored, so the two files cannot drift into a wrong
 // answer — the failure mode a second file would otherwise introduce.
-// Anything else — absent, unreadable, stale, empty — reads as a claim,
-// which is the pre-origin behavior.
+// Absent, stale, empty, or short reads as a claim, which is the
+// pre-origin behavior.
+//
+// An origin file that exists but will not read is NOT one of those: it
+// surfaces as an error. Absence is a state this design assigns a
+// meaning to, but an I/O failure on a file that is there means the
+// binding is unknown, and answering "claim" would invent one.
 func ReadActiveMissionBinding(globalRoot, sessionID string) (ActiveMissionBinding, error) {
 	missionID, err := ReadActiveMission(globalRoot, sessionID)
 	if err != nil {

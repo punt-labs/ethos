@@ -451,6 +451,24 @@ func TestClearMissionBindings_EmptyArgsAreNoOp(t *testing.T) {
 	assert.NoError(t, ClearMissionBindings(root, "sess-x", ""))
 }
 
+// TestReadActiveMissionBinding_UnreadableOriginIsAnError asserts the
+// one shape that does NOT fall back to claim: an origin file that
+// exists but will not read. Absence is a state this design assigns a
+// meaning to; an I/O failure on a file that is there means the binding
+// is unknown, and answering "claim" would invent one.
+func TestReadActiveMissionBinding_UnreadableOriginIsAnError(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-unreadable-origin"
+	require.NoError(t, WriteActiveMission(root, sess, "m-2026-07-31-004"))
+	// A directory where the sidecar belongs makes os.ReadFile fail with
+	// EISDIR — a real error, portably distinct from "no sidecar".
+	require.NoError(t, os.MkdirAll(ActiveMissionOriginPath(root, sess), 0o700))
+
+	_, err := ReadActiveMissionBinding(root, sess)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "active-mission-origin")
+}
+
 // TestClearMissionBindings_ReportsReadFailures asserts that a real read
 // failure is reported rather than swallowed, and that a failure on one
 // sidecar does not stop work on the other — they are independent, and a
