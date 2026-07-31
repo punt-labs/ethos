@@ -423,10 +423,10 @@ func ExpectedMissionLiveFiles(trackedRoot string, w Writer, sessionID string, bo
 	return out, nil
 }
 
-// checkoutState reports whether the recorded writer checkout still exists and
-// whether the live zone named by zoneDir is present inside it. Both the mission
-// and session guards need the pair: an absent zone means "never wrote there"
-// only when the checkout itself is still around to have written it.
+// writerState reports whether a checkout still exists, and whether it holds any
+// live mission log written by sessionID. Both the mission and session guards
+// need the pair: "never wrote here" is only a conclusion when the checkout is
+// still around to have written.
 //
 // An empty root is not a checkout, and it must not read as present: joining
 // onto "" builds a relative path that could match some unrelated directory

@@ -648,3 +648,37 @@ func writeLiveMissionLogFor(t *testing.T, repoRoot, missionID, sessionID string)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(dir, audit.MissionChunkFile(sessionID, 100, 100)), []byte(line), 0o600))
 }
+
+// TestPurgeTombstoned_RecordedWriterHoldsNoLiveLogFlagsTombstone pins the
+// WIRING of the purge recorded-writer path, which no other test reaches.
+//
+// TestPurgeTombstoned_DeletedLiveLogInWriterCheckoutFlagsTombstone plants a
+// sibling live log, so WriterZone carries its verdict and the recorded binding
+// is never load-bearing. Here the recorded checkout exists and holds no live
+// mission log at all — the whole live-missions zone removed — so only the
+// binding separates it from a fallback probe. Downgrading RecordedWriter to
+// AssumedWriter on this path restores the whole-zone-deleted hole, and this is
+// the test that catches it.
+func TestPurgeTombstoned_RecordedWriterHoldsNoLiveLogFlagsTombstone(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.CreateInCheckout("sess-nozone", root, primary, testRepoID, repoRoot, ""))
+	// The session's own audit file is present and sealed, so the
+	// session-namespace probe reports clean and only the mission branch can
+	// supply the flag.
+	writeSealedLive(t, repoRoot, "sess-nozone")
+	// A sealed mission, and NO live-missions zone anywhere in this checkout.
+	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-nozone")
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-nozone")
+	assert.Empty(t, refused)
+
+	tb, err := audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-nozone.purged"))
+	require.NoError(t, err,
+		"a recorded writer that cannot produce the live log must leave a loss tombstone")
+	assert.True(t, tb.LiveFileGone)
+}

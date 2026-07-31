@@ -162,6 +162,35 @@ func TestVacuumCrossCheckWarnsOnDeletedLiveLogInWriterCheckout(t *testing.T) {
 	}
 }
 
+// TestVacuumCrossCheckWarnsWhenRecordedWriterHoldsNoLiveLog pins the WIRING of
+// the roster branch, which no other test reaches.
+//
+// Every other "recorded writer must warn" case also plants a sibling live log,
+// so WriterZone carries the verdict and the WriterRecorded term never has to do
+// any work. Here the recorded checkout EXISTS and holds no live log of this
+// session's at all — the whole live-missions zone was removed — so only the
+// recorded binding distinguishes it from a fallback probe. Downgrade
+// RecordedWriter to AssumedWriter in the roster branch and this is the one test
+// that notices; without it that mutation restores the whole-zone-deleted hole
+// with a green suite.
+func TestVacuumCrossCheckWarnsWhenRecordedWriterHoldsNoLiveLog(t *testing.T) {
+	committing := t.TempDir()
+	writer := t.TempDir() // exists, but holds no live zone at all
+	globalRoot := t.TempDir()
+	const sess = "sess-zone-gone"
+	mid := "m-2026-07-21-001"
+	writeChunkFile(t, sealedMissionDir(committing, mid), audit.MissionChunkFile(sess, 100, 200), 100, 200)
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(committing, globalRoot, activeIn(writer, sess), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("mission "+mid)) ||
+		!bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
+		t.Errorf("a recorded writer that cannot produce the live log passed unremarked: %q", buf.String())
+	}
+}
+
 // TestVacuumCrossCheckWarnsWhenWriterCheckoutIsGone is the crash ->
 // checkout-deleted case, the loudest loss the design names. A deleted checkout
 // took its live zone with it, so the absent zone there is NOT evidence the
