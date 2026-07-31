@@ -277,6 +277,27 @@ func TestVacuumCrossCheckRosterCheckoutScoping(t *testing.T) {
 	}
 }
 
+// TestVacuumCrossCheckNotesUnrecordedCheckouts pins the transition window: a
+// roster predating the checkout field cannot be probed, and the guard says so
+// once rather than covering fewer sessions than it appears to.
+func TestVacuumCrossCheckNotesUnrecordedCheckouts(t *testing.T) {
+	repo := t.TempDir()
+	globalRoot := t.TempDir()
+	active := []ActiveSession{{Session: "old-a"}, {Session: "old-b"}}
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(repo, globalRoot, active, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("2 active session(s) predate the roster checkout field")) {
+		t.Errorf("unrecorded checkouts passed unremarked: %q", buf.String())
+	}
+	// One aggregate line, never one per session.
+	if n := bytes.Count(buf.Bytes(), []byte("predate the roster checkout field")); n != 1 {
+		t.Errorf("note printed %d times, want 1: %q", n, buf.String())
+	}
+}
+
 // TestVacuumCrossCheckTombstoneUsesRecordedCheckout is Fix 4: the tombstone
 // branch stats the checkout the purge recorded, not the committing one. A
 // tombstone flagged in a checkout whose live file still stands must report the

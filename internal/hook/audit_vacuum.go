@@ -92,8 +92,10 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 	// session ACROSS BOTH namespaces, not audit-only). Each is probed in the
 	// checkout its roster recorded, never in whichever checkout happens to be
 	// committing.
+	unrecorded := 0
 	for _, as := range activeSessions {
 		if as.Checkout == "" {
+			unrecorded++
 			continue
 		}
 		if !audit.SessionLiveFileExists(as.Checkout, as.Session) {
@@ -105,6 +107,17 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 		if mErr := warnMissingMissionLives(globalRoot, repoRoot, as.Checkout, as.Session, w); mErr != nil {
 			return mErr
 		}
+	}
+	// Skipping those sessions is correct — nothing can be concluded about a
+	// live zone whose location is unrecorded — but a guard that quietly covers
+	// fewer sessions than it appears to is its own hazard. One aggregate line,
+	// not one per session: the condition clears for a roster the next time its
+	// session starts, and for a dead one when it is purged.
+	if unrecorded > 0 {
+		fmt.Fprintf(w,
+			"note: %d active session(s) predate the roster checkout field, so their live files "+
+				"cannot be located and are not checked; `ethos session purge` clears dead ones\n",
+			unrecorded)
 	}
 	return nil
 }
