@@ -109,9 +109,23 @@ the delegation skeleton at
 and emits `MISSION_ID + DELEGATION_ID + MISSION_ARTIFACTS_DIR` in
 `additional_env` so the spawned worker inherits the contract binding.
 
-`mission create` does **not** auto-claim — claim is explicit so the
-operator names the binding. A typo in the mission ID is refused at
-`claim` time, not silently staged.
+`mission create` and `mission dispatch` **rebind** the calling
+session's active mission to the mission they just named, so an
+in-session `Agent()` spawn files its delegation record under that
+mission rather than a stale earlier binding (ethos-7vo3). When the
+rebind replaces a different mission it is reported on stderr, and the
+previous dispatch's delegation-binding is cleared. `mission claim`
+remains the explicit way to bind to a mission created in another
+session. A typo in the mission ID is refused at bind time, not
+silently staged.
+
+The binding is cleared on close, in the closing session. A spawn whose
+active-mission sidecar names a mission that has since **closed**
+(or failed/escalated) is **not** filed under it: it runs as Tier A
+with a warning naming the stale mission, so a review-fix round (a bare
+`Agent()` with no mission) still works. A sidecar the store cannot
+**resolve** at all still blocks the spawn — a malformed or corrupt
+binding is a hard error, never a silent Tier-A fallthrough.
 
 `release` clears the sidecar. Missing-file is not an error;
 `release` is safe to call unconditionally before claiming a new

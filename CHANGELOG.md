@@ -55,6 +55,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Five mission and audit-lifecycle correctness fixes (`ethos-qy7k`,
+  `ethos-7vo3`, `ethos-pobi`, `ethos-t2lb`, `ethos-u4kq`).**
+
+  - Result submission now honors the glob semantics a `write_set` entry
+    declares — a contract claiming `docs/**` accepts a result naming a file
+    under `docs/` instead of refusing it. The PreToolUse verifier allowlist,
+    built from the same write-set, honors them too (`ethos-qy7k`).
+  - `mission create` and `mission dispatch` bind the session to the mission
+    they just named, so an in-session `Agent()` spawn files its delegation
+    record under that mission rather than a stale `mission claim` binding; a
+    rebind is reported on stderr, and a spawn against a mission that has since
+    closed warns and runs untracked (`ethos-7vo3`).
+  - The commit-msg hook stamps the `Mission`/`Delegation` trailers of the
+    session that is committing, resolved through `ETHOS_SESSION` or the Claude
+    process tree, instead of the most recently dated session on the machine.
+    An unresolvable session gets no trailer (`ethos-pobi`).
+  - `mission pipeline instantiate --var` values holding several paths expand
+    into distinct `write_set` entries, each admission-checked on its own,
+    matching how `dispatch --write-set` splits (`ethos-t2lb`).
+  - Identity resolution refuses an ambiguous match instead of returning an
+    arbitrary one: two identities sharing an email or GitHub handle now produce
+    `ambiguous identity: N matches …` naming every candidate (`ethos-u4kq`).
+
 - **Pre-commit audit seal no longer reports sealed mission-log lines as lost
   (`ethos-q6e2`).** The vacuum cross-check warned "unsealed mission-log lines
   were lost" whenever a mission's live log was absent, without consulting the
