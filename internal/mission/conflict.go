@@ -292,7 +292,7 @@ func pathsOverlap(a, b string) bool {
 func overlapSegments(p string) (segs []string, rootGlob bool) {
 	all := splitSegments(p)
 	for i, s := range all {
-		if strings.ContainsAny(s, "*?[") {
+		if strings.ContainsAny(s, globMeta) {
 			return all[:i], i == 0
 		}
 	}
@@ -403,6 +403,13 @@ func segmentsContain(fs, es []string) bool {
 	}
 }
 
+// globMeta is the set of characters that make a write_set segment a
+// pattern rather than a literal name. One definition serves the
+// matcher and the validator: a validator that recognized fewer
+// characters would admit an entry the matcher then reads as a
+// wildcard.
+const globMeta = "*?[]"
+
 // segmentMatches reports whether one entry segment matches one file
 // segment. A segment with no glob metacharacter compares literally —
 // the common case, and the one that keeps every non-glob write_set
@@ -411,7 +418,7 @@ func segmentsContain(fs, es []string) bool {
 // literal comparison rather than matching nothing: the per-entry
 // validator accepts such a path, so it names a real file.
 func segmentMatches(entrySeg, fileSeg string) bool {
-	if !strings.ContainsAny(entrySeg, "*?[") {
+	if !strings.ContainsAny(entrySeg, globMeta) {
 		return entrySeg == fileSeg
 	}
 	ok, err := path.Match(entrySeg, fileSeg)

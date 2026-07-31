@@ -314,7 +314,7 @@ func warnWriteSetExpanded(stages []mission.Stage, contracts []*mission.Contract)
 		}
 		fmt.Fprintf(os.Stderr,
 			"ethos: pipeline instantiate: stage %q write_set expanded to %d entries: %s\n",
-			stages[i].Name, len(c.WriteSet), strings.Join(c.WriteSet, " "))
+			stages[i].Name, len(c.WriteSet), quoteEntries(c.WriteSet))
 	}
 }
 

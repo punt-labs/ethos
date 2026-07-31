@@ -575,18 +575,22 @@ func validateWriteSetEntry(entry string) error {
 
 	// Reject glob root claims for the same reason — an entry whose
 	// every segment is nothing but glob metacharacters (`**`, `*`,
-	// `*/**`, `?`) claims the whole tree. Since path containment
+	// `*/**`, `?`, `[]`) claims the whole tree. Since path containment
 	// became glob-aware (ethos-qy7k), such an entry contains every
 	// path in the repo while naming none of them, so no leader
 	// reading the contract can tell what it claims. `docs/**` is
 	// legitimate and stays legitimate; only the all-metacharacter
 	// form is refused.
+	//
+	// The metacharacter set matches globMeta, which is what the
+	// matcher treats as a pattern — a validator that recognized fewer
+	// would admit an entry the matcher then reads as a wildcard.
 	isGlobRootClaim := true
 	for _, seg := range strings.Split(normalized, "/") {
 		if seg == "" || seg == "." {
 			continue
 		}
-		if strings.Trim(seg, "*?") != "" {
+		if strings.Trim(seg, globMeta) != "" {
 			isGlobRootClaim = false
 			break
 		}

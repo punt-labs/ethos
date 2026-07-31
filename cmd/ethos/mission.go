@@ -1821,10 +1821,7 @@ func runMissionRelease() error {
 // leader is losing a binding they may still want, and a silent
 // rebind is how the stale-binding class hides. The delegation-binding
 // sidecar from the previous mission's dispatch is cleared with it;
-// it describes a dispatch that is no longer current. Overwriting a
-// CLAIM with a dispatch also prints a line, even for the same
-// mission: the operator's commits stop carrying trailers, and that
-// must not happen silently.
+// it describes a dispatch that is no longer current.
 //
 // Every step is advisory: a session that will not resolve is the
 // ordinary case for a human running dispatch from a plain terminal,
@@ -1863,13 +1860,9 @@ func bindDispatchedMission(op, missionID string) {
 			op, sessionID, missionID, err)
 		return
 	}
-	if previous.MissionID == missionID && previous.Origin == mission.BindOriginClaim {
-		fmt.Fprintf(os.Stderr,
-			"ethos: mission %s: session %s had claimed %s; dispatching rebinds it as a dispatch — "+
-				"commit trailers stop until you run `ethos mission claim %s`\n",
-			op, sessionID, missionID, missionID)
-		return
-	}
+	// create and dispatch always mint a fresh mission ID, so a rebind
+	// onto the SAME mission cannot arise from either caller; only the
+	// changed-mission case is reachable and reported.
 	if previous.MissionID == "" || previous.MissionID == missionID {
 		return
 	}
@@ -1947,9 +1940,21 @@ func splitPathFlag(flag, value string) []string {
 	entries := mission.SplitPathList(value)
 	if len(entries) > 1 {
 		fmt.Fprintf(os.Stderr, "ethos: mission dispatch: --%s split into %d entries: %s\n",
-			flag, len(entries), strings.Join(entries, " "))
+			flag, len(entries), quoteEntries(entries))
 	}
 	return entries
+}
+
+// quoteEntries renders a path list so the split is visible. Joining on
+// a space reproduced the operator's input verbatim — `--write-set "zz
+// space/dir.md"` reported `zz space/dir.md`, which reads as the single
+// path they meant rather than the two they got (rsc on PR #415).
+func quoteEntries(entries []string) string {
+	quoted := make([]string, len(entries))
+	for i, e := range entries {
+		quoted[i] = strconv.Quote(e)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // runMissionLint handles `ethos mission lint <contract.yaml>`.

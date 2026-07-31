@@ -38,9 +38,19 @@ func ActiveMissionPath(globalRoot, sessionID string) string {
 	return filepath.Join(globalRoot, "sessions", filepath.Base(sessionID), "active-mission")
 }
 
-// Bind origins recorded on the second line of the active-mission
-// sidecar. The origin answers "how did this session come to be bound
-// to this mission?", and the two answers carry different authority:
+// ActiveMissionOriginPath returns the path to the bind-origin sidecar
+// that sits beside active-mission. Returns an empty string when either
+// argument is empty, matching ActiveMissionPath.
+func ActiveMissionOriginPath(globalRoot, sessionID string) string {
+	if globalRoot == "" || sessionID == "" {
+		return ""
+	}
+	return filepath.Join(globalRoot, "sessions", filepath.Base(sessionID), "active-mission-origin")
+}
+
+// Bind origins. The origin answers "how did this session come to be
+// bound to this mission?", and the two answers carry different
+// authority:
 //
 //   - BindOriginClaim — `ethos mission claim`. The operator said "I am
 //     working on this mission", so their commits carry its trailers.
@@ -51,64 +61,87 @@ func ActiveMissionPath(globalRoot, sessionID string) string {
 //     to do unrelated work in the same session, and tagging it would
 //     re-open ethos-jawp's false-trailer class through a new door.
 //
-// A sidecar with no origin line predates the field and was written by
-// `mission claim`, so it reads as BindOriginClaim.
+// THE ORIGIN LIVES IN ITS OWN FILE, and active-mission stays exactly
+// one line. A second line in active-mission broke every older reader:
+// they TrimSpace the whole file, so an ethos from before this change
+// read the mission as "m-...\nclaim" and denied every Agent spawn. The
+// break is not hypothetical — agents build to .tmp/ethos and run the
+// CLI from there while Claude Code hooks invoke the installed binary,
+// so one `mission claim` through a new build poisoned the session for
+// the installed one (rsc on PR #415).
+//
+// A claim is the ABSENCE of the origin file, which is also what every
+// sidecar written before this change looks like. Only a dispatch
+// writes one, so an upgrade needs no migration and a downgrade loses
+// only the suppression, falling back to the pre-fix default.
 const (
 	BindOriginClaim    = "claim"
 	BindOriginDispatch = "dispatch"
 )
 
-// ActiveMissionBinding is the parsed active-mission sidecar: which
-// mission the session is bound to, and how the binding was made.
+// ActiveMissionBinding is the session's mission binding: which mission,
+// and how it was made.
 type ActiveMissionBinding struct {
 	MissionID string
 	Origin    string // BindOriginClaim or BindOriginDispatch
 }
 
-// ReadActiveMission reads the mission ID from the active-mission
-// sidecar for sessionID. Returns ("", nil) when the file is absent — a
-// missing sidecar is the common "no active mission" state, not an
-// error. Validation of the missionID shape is the caller's
-// responsibility, not this helper's.
-//
-// Only the first line is returned; the origin on the second line is
-// ReadActiveMissionBinding's business. Callers that only need to know
-// WHICH mission (the dispatch binding, the audit vacuum guard, the
-// close-time clear) are unaffected by the origin.
+// ReadActiveMission reads the active-mission sidecar for sessionID.
+// Returns ("", nil) when the file is absent — a missing sidecar is the
+// common "no active mission" state, not an error. Returns the raw
+// trimmed file contents on success: validation of the missionID shape
+// is the caller's responsibility, not this helper's.
 func ReadActiveMission(globalRoot, sessionID string) (string, error) {
-	b, err := ReadActiveMissionBinding(globalRoot, sessionID)
-	if err != nil {
-		return "", err
-	}
-	return b.MissionID, nil
-}
-
-// ReadActiveMissionBinding reads the active-mission sidecar and
-// reports both the mission and the origin of the binding. A missing
-// sidecar is the zero value with a nil error. A sidecar with no origin
-// line reads as BindOriginClaim — it was written before the field
-// existed, by `mission claim`, which is the claim case.
-func ReadActiveMissionBinding(globalRoot, sessionID string) (ActiveMissionBinding, error) {
 	path := ActiveMissionPath(globalRoot, sessionID)
 	if path == "" {
-		return ActiveMissionBinding{}, nil
+		return "", nil
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return ActiveMissionBinding{}, nil
+			return "", nil
 		}
-		return ActiveMissionBinding{}, fmt.Errorf("reading active-mission sidecar %q: %w", path, err)
+		return "", fmt.Errorf("reading active-mission sidecar %q: %w", path, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+// ReadActiveMissionBinding reports the session's mission and the origin
+// of the binding. A missing active-mission sidecar is the zero value
+// with a nil error.
+//
+// The origin file is honored only when it names the SAME mission the
+// active-mission sidecar does. That makes the pair self-checking: an
+// origin file left over from an earlier binding names a different
+// mission and is ignored, so the two files cannot drift into a wrong
+// answer — the failure mode a second file would otherwise introduce.
+// Anything else — absent, unreadable, stale, empty — reads as a claim,
+// which is the pre-origin behavior.
+func ReadActiveMissionBinding(globalRoot, sessionID string) (ActiveMissionBinding, error) {
+	missionID, err := ReadActiveMission(globalRoot, sessionID)
+	if err != nil {
+		return ActiveMissionBinding{}, err
+	}
+	if missionID == "" {
+		return ActiveMissionBinding{}, nil
+	}
+	b := ActiveMissionBinding{MissionID: missionID, Origin: BindOriginClaim}
+
+	path := ActiveMissionOriginPath(globalRoot, sessionID)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return b, nil
+		}
+		return ActiveMissionBinding{}, fmt.Errorf("reading active-mission-origin sidecar %q: %w", path, err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	b := ActiveMissionBinding{
-		MissionID: strings.TrimSpace(lines[0]),
-		Origin:    BindOriginClaim,
+	if len(lines) < 2 {
+		return b, nil
 	}
-	if len(lines) > 1 {
-		if origin := strings.TrimSpace(lines[1]); origin != "" {
-			b.Origin = origin
-		}
+	origin := strings.TrimSpace(lines[0])
+	if origin != "" && strings.TrimSpace(lines[1]) == missionID {
+		b.Origin = origin
 	}
 	return b, nil
 }
@@ -121,16 +154,26 @@ func WriteActiveMission(globalRoot, sessionID, missionID string) error {
 	return WriteActiveMissionOrigin(globalRoot, sessionID, missionID, BindOriginClaim)
 }
 
-// WriteActiveMissionOrigin writes missionID and its bind origin into
-// the active-mission sidecar for sessionID. Creates the per-session
-// directory at 0o700 if needed, then writes the file atomically via
-// temp+rename so a partial write never leaves a half-formed sidecar.
-// The final file is 0o600.
+// WriteActiveMissionOrigin binds sessionID to missionID with the given
+// origin. active-mission holds the mission ID and nothing else, so
+// every reader that ever existed can read it; a dispatch additionally
+// writes the origin sidecar beside it.
 //
-// Refuses missionID == "" — clearing the sidecar is ClearActiveMission's
-// job and silently writing an empty file would let a caller "claim
-// nothing" by accident. An empty origin is written as BindOriginClaim
-// so the file always states its own origin.
+// Refuses missionID == "" — clearing is ClearActiveMission's job and
+// silently writing an empty file would let a caller "claim nothing" by
+// accident. An empty origin is treated as BindOriginClaim.
+//
+// Write order is chosen so an interrupted pair never reads wrong:
+//
+//   - dispatch writes the origin FIRST. It names the new mission, so
+//     until active-mission catches up it does not match and is ignored.
+//   - claim writes active-mission first, THEN removes the origin file.
+//     A failed removal leaves a file naming the previous mission, which
+//     no longer matches and is ignored.
+//
+// Either way the reader falls back to claim, which is the pre-fix
+// default: a lost suppression costs a stray trailer, never a denied
+// spawn.
 func WriteActiveMissionOrigin(globalRoot, sessionID, missionID, origin string) error {
 	if origin == "" {
 		origin = BindOriginClaim
@@ -143,19 +186,40 @@ func WriteActiveMissionOrigin(globalRoot, sessionID, missionID, origin string) e
 		return fmt.Errorf("writing active-mission: missionID is required (use ClearActiveMission to remove)")
 	}
 
+	if origin != BindOriginClaim {
+		if err := writeSidecarFile(
+			ActiveMissionOriginPath(globalRoot, sessionID),
+			origin+"\n"+missionID+"\n",
+		); err != nil {
+			return err
+		}
+		return writeSidecarFile(path, missionID+"\n")
+	}
+
+	if err := writeSidecarFile(path, missionID+"\n"); err != nil {
+		return err
+	}
+	return removeSidecarFile(ActiveMissionOriginPath(globalRoot, sessionID))
+}
+
+// writeSidecarFile writes content to path atomically: the per-session
+// directory is created at 0o700, the content lands in a temp file in
+// the same directory at 0o600, and a rename puts it in place. A partial
+// write never leaves a half-formed sidecar, and the temp file is
+// removed on every error path.
+func writeSidecarFile(path, content string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("creating session dir %q: %w", dir, err)
 	}
-
-	tmp, err := os.CreateTemp(dir, "active-mission.*.tmp")
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
 	if err != nil {
 		return fmt.Errorf("creating temp sidecar in %q: %w", dir, err)
 	}
 	tmpPath := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpPath) }
 
-	if _, err := tmp.WriteString(missionID + "\n" + origin + "\n"); err != nil {
+	if _, err := tmp.WriteString(content); err != nil {
 		_ = tmp.Close()
 		cleanup()
 		return fmt.Errorf("writing temp sidecar %q: %w", tmpPath, err)
@@ -172,6 +236,18 @@ func WriteActiveMissionOrigin(globalRoot, sessionID, missionID, origin string) e
 	if err := os.Rename(tmpPath, path); err != nil {
 		cleanup()
 		return fmt.Errorf("renaming sidecar %q to %q: %w", tmpPath, path, err)
+	}
+	return nil
+}
+
+// removeSidecarFile deletes path, treating "already gone" as success.
+// An empty path is a no-op so callers need no guard.
+func removeSidecarFile(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("removing sidecar %q: %w", path, err)
 	}
 	return nil
 }
@@ -204,36 +280,7 @@ func WriteDelegationBinding(globalRoot, sessionID string, b DelegationBinding) e
 	if path == "" {
 		return fmt.Errorf("writing delegation-binding: globalRoot and sessionID are required")
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("creating session dir %q: %w", dir, err)
-	}
-	content := b.DelegationID + "\n" + b.MissionID + "\n" + b.ParentSession + "\n"
-	tmp, err := os.CreateTemp(dir, "delegation-binding.*.tmp")
-	if err != nil {
-		return fmt.Errorf("creating temp binding in %q: %w", dir, err)
-	}
-	tmpPath := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		cleanup()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		cleanup()
-		return err
-	}
-	return nil
+	return writeSidecarFile(path, b.DelegationID+"\n"+b.MissionID+"\n"+b.ParentSession+"\n")
 }
 
 // ReadDelegationBinding reads the delegation-binding sidecar.
@@ -273,18 +320,19 @@ func ReadDelegationBinding(globalRoot, sessionID string) (DelegationBinding, err
 // ClearActiveMission removes the active-mission sidecar for sessionID.
 // Missing is not an error — clearing an already-clear slot is a no-op
 // so `ethos mission release` is safe to call unconditionally.
+// Both files go: the origin sidecar describes a binding that no longer
+// exists, and leaving it behind would label the session's NEXT
+// dispatch-free binding. It is removed even when the mission file is
+// already gone, so a half-cleared pair converges.
 func ClearActiveMission(globalRoot, sessionID string) error {
 	path := ActiveMissionPath(globalRoot, sessionID)
 	if path == "" {
 		return nil
 	}
-	if err := os.Remove(path); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("removing active-mission sidecar %q: %w", path, err)
-	}
-	return nil
+	return errors.Join(
+		removeSidecarFile(path),
+		removeSidecarFile(ActiveMissionOriginPath(globalRoot, sessionID)),
+	)
 }
 
 // ClearMissionBindings removes sessionID's active-mission and

@@ -582,7 +582,7 @@ func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
 
 	data, err := os.ReadFile(mission.ActiveMissionPath(globalRoot, sess))
 	require.NoError(t, err, "closing one mission must not clear a claim on another")
-	assert.Equal(t, holding+"\n"+mission.BindOriginClaim+"\n", string(data))
+	assert.Equal(t, holding+"\n", string(data))
 }
 
 // TestHandleMission_CloseWarnsOnUnreadableSidecar asserts a genuine read
