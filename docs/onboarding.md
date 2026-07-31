@@ -35,7 +35,7 @@ agent), writes the repo config, activates a bundle, and generates
 agent files. The new Quick Start becomes:
 
 ```bash
-curl -fsSL https://punt-labs.com/ethos/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/7759dd5/install.sh | sh
 ethos setup
 ```
 

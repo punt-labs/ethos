@@ -383,10 +383,9 @@ contain `~` and `<repo>` tokens instead of absolute paths. The
 hash is machine-independent and doesn't encode PII.
 
 **Gaps:** The redaction fix merged 2026-07-28 (commit `cbb7d7b`,
-PR #411) and is **not yet in a tagged release** — a release at or
-before v4.8.0 does not redact. Entries written before the fix
-contain raw absolute paths including the username, and are in git
-history if committed. The redaction applies to `tool_input` and
+PR #411) and ships in v4.9.0 — a release at or before v4.8.0 does
+not redact. Entries written before the fix contain raw absolute
+paths including the username, and are in git history if committed. The redaction applies to `tool_input` and
 `tool_input_preview` but not to the conversation transcript
 (quarry captures), which may contain absolute paths in code
 output or error messages.
