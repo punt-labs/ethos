@@ -204,11 +204,81 @@ func TestPathsOverlap(t *testing.T) {
 			b:    "internal/foo",
 			want: true,
 		},
+		// --- Glob entries (ethos-qy7k round 2). Containment became
+		// glob-aware; overlap has to follow or two missions can claim
+		// the same tree through a glob and both be admitted.
+		{
+			name: "doublestar entry overlaps a file inside its root",
+			a:    "docs/**",
+			b:    "docs/a.md",
+			want: true,
+		},
+		{
+			name: "file inside a doublestar root overlaps it (symmetric)",
+			a:    "docs/a.md",
+			b:    "docs/**",
+			want: true,
+		},
+		{
+			name: "doublestar entry overlaps the directory it globs",
+			a:    "docs/**",
+			b:    "docs/",
+			want: true,
+		},
+		{
+			name: "two doublestar entries under one root overlap",
+			a:    "docs/**",
+			b:    "docs/**/adr",
+			want: true,
+		},
+		{
+			name: "doublestar entry does not overlap a sibling tree",
+			a:    "docs/**",
+			b:    "internal/mission",
+			want: false,
+		},
+		{
+			name: "single star entry overlaps its literal prefix",
+			a:    "internal/mission/*.go",
+			b:    "internal/mission/store.go",
+			want: true,
+		},
+		{
+			name: "single star entry does not overlap a sibling package",
+			a:    "internal/mission/*.go",
+			b:    "internal/hook",
+			want: false,
+		},
+		{
+			// A first-segment glob can match at the root, so it
+			// claims everything. It must not read as "matches
+			// nothing" the way an empty entry does.
+			name: "leading glob claims the root and overlaps anything",
+			a:    "*.go",
+			b:    "internal/mission/store.go",
+			want: true,
+		},
+		{
+			name: "leading doublestar claims the root and overlaps anything",
+			a:    "**/store.go",
+			b:    "cmd/ethos",
+			want: true,
+		},
+		{
+			name: "leading glob against an empty entry still matches nothing",
+			a:    "*.go",
+			b:    "",
+			want: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, pathsOverlap(tt.a, tt.b),
 				"pathsOverlap(%q, %q)", tt.a, tt.b)
+			// The relation is symmetric by contract; every case must
+			// hold in both directions.
+			assert.Equal(t, tt.want, pathsOverlap(tt.b, tt.a),
+				"pathsOverlap(%q, %q) [reversed]", tt.b, tt.a)
 		})
 	}
 }
@@ -222,48 +292,6 @@ func TestPathsOverlap(t *testing.T) {
 // Round 2 of Phase 3.6 added this helper after all four reviewers
 // flagged the H1 bug: the symmetric pathsOverlap helper accepted a
 // result claiming a parent directory of a write_set file entry.
-// TestSplitPathList locks the one splitter both path-list surfaces
-// use — the CLI's --write-set/--extract-into flags and pipeline
-// template expansion (ethos-t2lb).
-func TestSplitPathList(t *testing.T) {
-	tests := []struct {
-		name string
-		in   string
-		want []string
-	}{
-		{name: "empty", in: "", want: nil},
-		{name: "whitespace only", in: "   \t ", want: nil},
-		{name: "single path", in: "internal/mission", want: []string{"internal/mission"}},
-		{name: "surrounding whitespace", in: "  internal/mission  ", want: []string{"internal/mission"}},
-		{
-			name: "comma separated",
-			in:   "internal/mission,cmd/ethos",
-			want: []string{"internal/mission", "cmd/ethos"},
-		},
-		{
-			name: "space separated",
-			in:   "internal/mission cmd/ethos",
-			want: []string{"internal/mission", "cmd/ethos"},
-		},
-		{
-			name: "comma and space separated",
-			in:   "internal/mission, cmd/ethos , hooks",
-			want: []string{"internal/mission", "cmd/ethos", "hooks"},
-		},
-		{
-			name: "newline separated",
-			in:   "internal/mission\ncmd/ethos",
-			want: []string{"internal/mission", "cmd/ethos"},
-		},
-		{name: "empty fields dropped", in: ",,internal/mission,,", want: []string{"internal/mission"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, SplitPathList(tt.in))
-		})
-	}
-}
-
 func TestPathContainedBy(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -1106,4 +1134,46 @@ func TestFormatConflictError(t *testing.T) {
 	t.Run("empty returns nil error", func(t *testing.T) {
 		assert.NoError(t, formatConflictError([]Conflict{}))
 	})
+}
+
+// TestSplitPathList locks the one splitter both path-list surfaces
+// use — the CLI's --write-set/--extract-into flags and pipeline
+// template expansion (ethos-t2lb).
+func TestSplitPathList(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{name: "empty", in: "", want: nil},
+		{name: "whitespace only", in: "   \t ", want: nil},
+		{name: "single path", in: "internal/mission", want: []string{"internal/mission"}},
+		{name: "surrounding whitespace", in: "  internal/mission  ", want: []string{"internal/mission"}},
+		{
+			name: "comma separated",
+			in:   "internal/mission,cmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name: "space separated",
+			in:   "internal/mission cmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{
+			name: "comma and space separated",
+			in:   "internal/mission, cmd/ethos , hooks",
+			want: []string{"internal/mission", "cmd/ethos", "hooks"},
+		},
+		{
+			name: "newline separated",
+			in:   "internal/mission\ncmd/ethos",
+			want: []string{"internal/mission", "cmd/ethos"},
+		},
+		{name: "empty fields dropped", in: ",,internal/mission,,", want: []string{"internal/mission"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, SplitPathList(tt.in))
+		})
+	}
 }

@@ -29,6 +29,16 @@ const (
 // delegation (ethos-pobi). Reading exactly one session's sidecars is
 // the fix; an unresolved session writes nothing rather than guessing.
 //
+// Only a CLAIM-origin binding produces trailers. `mission create` and
+// `mission dispatch` also bind the session — that is what files the
+// next spawn's delegation under the right mission (ethos-7vo3) — but
+// they name a mission FOR SOMEONE ELSE. The leader goes on doing
+// unrelated work in the same session, and stamping those commits with
+// a mission they dispatched is ethos-jawp's false-trailer class
+// arriving through a new door. `ethos mission claim` is how an
+// operator says "I am working on this", and it is the only thing that
+// turns trailers on.
+//
 // The delegation is emitted only when its binding names the same
 // mission, so a binding left from an earlier dispatch under a
 // different mission cannot ride along (ethos-jawp).
@@ -36,11 +46,12 @@ func WriteCommitTrailers(w io.Writer, globalRoot, sessionID string) error {
 	if globalRoot == "" || sessionID == "" {
 		return nil
 	}
-	missionID, err := mission.ReadActiveMission(globalRoot, sessionID)
+	binding, err := mission.ReadActiveMissionBinding(globalRoot, sessionID)
 	if err != nil {
 		return fmt.Errorf("reading active mission for session %q: %w", sessionID, err)
 	}
-	if missionID == "" {
+	missionID := binding.MissionID
+	if missionID == "" || binding.Origin != mission.BindOriginClaim {
 		return nil
 	}
 	if _, err := fmt.Fprintf(w, "%s=%s\n", commitTrailerMissionKey, missionID); err != nil {

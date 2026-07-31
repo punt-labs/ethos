@@ -573,6 +573,28 @@ func validateWriteSetEntry(entry string) error {
 		return fmt.Errorf("%q claims the project root via dot syntax; specify the directories or files this mission writes", trimmed)
 	}
 
+	// Reject glob root claims for the same reason — an entry whose
+	// every segment is nothing but glob metacharacters (`**`, `*`,
+	// `*/**`, `?`) claims the whole tree. Since path containment
+	// became glob-aware (ethos-qy7k), such an entry contains every
+	// path in the repo while naming none of them, so no leader
+	// reading the contract can tell what it claims. `docs/**` is
+	// legitimate and stays legitimate; only the all-metacharacter
+	// form is refused.
+	isGlobRootClaim := true
+	for _, seg := range strings.Split(normalized, "/") {
+		if seg == "" || seg == "." {
+			continue
+		}
+		if strings.Trim(seg, "*?") != "" {
+			isGlobRootClaim = false
+			break
+		}
+	}
+	if isGlobRootClaim {
+		return fmt.Errorf("%q claims the whole tree via glob syntax; specify the directories or files this mission writes", trimmed)
+	}
+
 	// Scan every segment for literal `..`. This catches both leading
 	// (`../etc/passwd`) and embedded (`internal/../../tmp`) traversal.
 	// Uses the already-normalized form so `internal\..\..\tmp` is

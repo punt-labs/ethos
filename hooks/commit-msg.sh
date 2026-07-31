@@ -59,6 +59,18 @@ if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
     # trailer, and a silently missing trailer is the failure class
     # this hook exists to prevent. The commit still proceeds.
     trailers=$("$ethos_bin" hook commit-trailers) || trailers=""
+    # An ethos predating `hook commit-trailers` prints the hook group's
+    # HELP on stdout and exits 0, so the `||` above never fires and the
+    # trailer vanishes without a word. Treat help-shaped output as the
+    # failure it is and say so. Newer binaries pin `hook` to NoArgs and
+    # exit non-zero, so this guard only fires on a version mismatch.
+    case "$trailers" in
+    *"Usage:"*)
+      printf 'ethos: commit-msg: %s does not support "hook commit-trailers"; upgrade ethos to restore Mission/Delegation trailers\n' \
+        "$ethos_bin" >&2
+      trailers=""
+      ;;
+    esac
     MISSION_ID=$(printf '%s\n' "$trailers" | sed -n 's/^MISSION_ID=//p' | tr -d '[:space:]')
     DELEGATION_ID=$(printf '%s\n' "$trailers" | sed -n 's/^DELEGATION_ID=//p' | tr -d '[:space:]')
     export MISSION_ID DELEGATION_ID

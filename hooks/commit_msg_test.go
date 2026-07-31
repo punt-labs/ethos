@@ -326,6 +326,73 @@ func TestCommitMsgHook_ResolvesCommittingSession(t *testing.T) {
 	}
 }
 
+// TestCommitMsgHook_OldBinaryPrintsHelp pins the version-skew hole
+// rsc found: an ethos predating `hook commit-trailers` answers the
+// unknown subcommand by printing the hook group's HELP on stdout and
+// exiting 0. The `||` fallback never fires, no KEY=value line is
+// found, and the trailer disappears without a word — the silent drop
+// the fallback exists to prevent. The hook must recognize help-shaped
+// output as failure and say so.
+func TestCommitMsgHook_OldBinaryPrintsHelp(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not found on PATH; skipping")
+	}
+
+	home := t.TempDir()
+	stageSession(t, home, sessionID, "m-2026-07-29-007", "d-2026-07-29-042")
+
+	// A stub standing in for the old binary: help on stdout, exit 0.
+	binDir := t.TempDir()
+	writeFile(t, filepath.Join(binDir, "ethos"), `#!/bin/sh
+cat <<'HELP'
+Internal hook dispatcher (not for direct use)
+
+Usage:
+  ethos hook [command]
+
+Available Commands:
+  audit-log       PostToolUse audit logger
+HELP
+exit 0
+`)
+	if err := os.Chmod(filepath.Join(binDir, "ethos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	writeFile(t, filepath.Join(repo, ".punt-labs", "ethos", "enabled"), "")
+
+	msgFile := filepath.Join(repo, "COMMIT_EDITMSG")
+	writeFile(t, msgFile, "feat: a change\n")
+
+	script := filepath.Join(t.TempDir(), "commit-msg.sh")
+	writeFile(t, script, string(CommitMsg))
+	if err := os.Chmod(script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("/bin/sh", script, msgFile)
+	cmd.Dir = repo
+	cmd.Env = hookEnv(home, binDir, sessionID)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("hook failed: %v\n%s", err, out)
+	}
+
+	data, err := os.ReadFile(msgFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := string(data)
+	if strings.Contains(msg, "Mission: ") || strings.Contains(msg, "Usage:") {
+		t.Errorf("help output must not reach the commit message:\n%s", msg)
+	}
+	if !strings.Contains(string(out), "does not support") {
+		t.Errorf("the version mismatch must be reported, got:\n%s", out)
+	}
+}
+
 // stageSession writes one session's active-mission and
 // delegation-binding sidecars under home.
 func stageSession(t *testing.T, home, session, missionID, delegationID string) {

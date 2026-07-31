@@ -16,10 +16,27 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// hookCmd is a pure dispatcher: every hook is a subcommand and the
+// group itself does nothing useful. It still carries a RunE, because a
+// command with no Run is "not runnable" and cobra answers an unknown
+// subcommand by printing this group's help on STDOUT and exiting 0
+// (command.go: `if !c.Runnable() { return flag.ErrHelp }`, which
+// precedes argument validation). A caller that shells out to `ethos
+// hook <x>` against a binary too old to know <x> — the commit-msg
+// trailer fallback does exactly that — then reads help text as output
+// and silently produces nothing (rsc on PR #415).
+//
+// RunE plus NoArgs makes both misuses loud: an unknown subcommand
+// fails argument validation, and a bare `ethos hook` returns the error
+// below. Both exit non-zero, which is what a shell caller tests.
 var hookCmd = &cobra.Command{
 	Use:    "hook",
 	Short:  "Internal hook dispatcher (not for direct use)",
 	Hidden: true,
+	Args:   cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return fmt.Errorf("hook: no hook named; run `ethos hook --help` for the list")
+	},
 }
 
 var hookSessionStartCmd = &cobra.Command{

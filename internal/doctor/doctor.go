@@ -400,12 +400,19 @@ func hasRepoLocalTeam(storeRoot string) bool {
 //   - Fresh install: the store holds no identities at all. This is the
 //     expected first-run state, not a fault — WARN and point at `ethos setup`
 //     rather than FAIL with circular "fix it, then re-run doctor" guidance.
-//   - Misconfiguration: identities exist but none match the caller's git or OS
-//     user. This is a real fault — FAIL loudly, unchanged.
+//   - Misconfiguration: identities exist but the caller does not resolve to
+//     exactly one of them — no match, or several sharing an email or GitHub
+//     handle (ethos-u4kq). This is a real fault — FAIL loudly.
 //
 // An unreadable identity file (a Warning from List) counts as "not fresh": a
 // broken file is a misconfiguration, so it FAILs rather than masquerading as a
 // clean first run.
+//
+// The failure detail is the resolver's own error, with no prefix. Every error
+// it returns already says what went wrong — "no identity matches git user ..."
+// or "ambiguous identity: 2 matches for email ...". The old "no match — "
+// prefix contradicted the second one: an ambiguous store has too many matches,
+// not none.
 func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) Result {
 	name := "Human identity"
 	handle, err := resolve.Resolve(s, ss)
@@ -414,7 +421,7 @@ func CheckHumanIdentity(s identity.IdentityStore, ss *session.Store) Result {
 			len(list.Identities) == 0 && len(list.Warnings) == 0 {
 			return Result{Name: name, Status: "WARN", Detail: "no identity yet — run `ethos setup` to create yours"}
 		}
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("no match — %v", err)}
+		return Result{Name: name, Status: "FAIL", Detail: err.Error()}
 	}
 	id, err := s.Load(handle, identity.Reference(true))
 	if err != nil {

@@ -240,6 +240,7 @@ func runPipelineInstantiate(name string) error {
 	if err != nil {
 		return fmt.Errorf("pipeline instantiate: %w", err)
 	}
+	warnWriteSetExpanded(p.Stages, contracts)
 
 	if pipelineInstDryRun {
 		return printInstantiateResult(p.Stages, contracts, true)
@@ -288,6 +289,33 @@ func runPipelineInstantiate(name string) error {
 	}
 
 	return printInstantiateResult(p.Stages, contracts, false)
+}
+
+// warnWriteSetExpanded names every stage whose write_set grew during
+// template expansion, which happens when a --var value holds several
+// paths (ethos-t2lb).
+//
+// Splitting is what makes a multi-path var work, but it also widens
+// the claim: a stray space in `--var target="zz space/dir.md"` turns
+// one intended file into two entries, one of them a whole-tree claim
+// on `zz` that admission control enforces against every other
+// mission. The instantiate summary table shows mission IDs, not
+// paths, so without this line the leader has no way to see it.
+//
+// Growth is the exact signal — expansion cannot shrink a list — so
+// this reports when and only when a value split.
+func warnWriteSetExpanded(stages []mission.Stage, contracts []*mission.Contract) {
+	for i, c := range contracts {
+		if i >= len(stages) || c == nil {
+			continue
+		}
+		if len(c.WriteSet) <= len(stages[i].WriteSet) {
+			continue
+		}
+		fmt.Fprintf(os.Stderr,
+			"ethos: pipeline instantiate: stage %q write_set expanded to %d entries: %s\n",
+			stages[i].Name, len(c.WriteSet), strings.Join(c.WriteSet, " "))
+	}
 }
 
 // parseVarFlags parses --var key=value flags into a map.

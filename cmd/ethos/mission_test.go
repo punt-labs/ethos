@@ -12,6 +12,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -3797,7 +3798,9 @@ func TestMissionClaim_WritesSidecar(t *testing.T) {
 		"sess-claim-1", "active-mission")
 	data, err := os.ReadFile(sidecar)
 	require.NoError(t, err, "claim must write the sidecar at the expected path")
-	assert.Equal(t, id+"\n", string(data))
+	// Line 1 is the mission, line 2 the bind origin. Claim origin is
+	// what turns commit trailers on (ethos-7vo3 ruling).
+	assert.Equal(t, id+"\n"+mission.BindOriginClaim+"\n", string(data))
 
 	info, err := os.Stat(sidecar)
 	require.NoError(t, err)
@@ -3834,7 +3837,7 @@ func TestMissionClaim_PrefixMatch(t *testing.T) {
 		"sess-prefix", "active-mission")
 	data, err := os.ReadFile(sidecar)
 	require.NoError(t, err)
-	assert.Equal(t, id+"\n", string(data),
+	assert.Equal(t, id+"\n"+mission.BindOriginClaim+"\n", string(data),
 		"prefix match must resolve to the full ID before staging the sidecar")
 }
 
@@ -3926,7 +3929,7 @@ func TestMissionClose_LeavesOtherMissionActive(t *testing.T) {
 		"sess-close-other", "active-mission")
 	data, err := os.ReadFile(sidecar)
 	require.NoError(t, err, "closing one mission must not clear a claim on another")
-	assert.Equal(t, holding+"\n", string(data))
+	assert.Equal(t, holding+"\n"+mission.BindOriginClaim+"\n", string(data))
 }
 
 // sidecarDir replaces the named sidecar with a directory, which makes
@@ -4049,11 +4052,86 @@ func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 		"sess-rebind", "active-mission")
 	data, err := os.ReadFile(sidecar)
 	require.NoError(t, err)
-	assert.Equal(t, dispatched+"\n", string(data),
-		"dispatch must bind the session to the mission it just created")
+	assert.Equal(t, dispatched+"\n"+mission.BindOriginDispatch+"\n", string(data),
+		"dispatch must bind the session to the mission it just created, with dispatch origin")
 
 	assert.Contains(t, warning, stale, "the warning must name the stale binding")
 	assert.Contains(t, warning, dispatched, "the warning must name the new binding")
+	assert.Contains(t, warning, "commit trailers are off",
+		"the leader must be told the rebind stops their trailers")
+}
+
+// TestMissionDispatch_BindProducesNoCommitTrailers pins the ethos-7vo3
+// ruling: a dispatch binds the session for DELEGATION FILING only. The
+// leader keeps working in the same session, and stamping their later
+// commits with a mission they handed to someone else is ethos-jawp's
+// false-trailer class through a new door. An explicit claim is what
+// turns trailers back on.
+func TestMissionDispatch_BindProducesNoCommitTrailers(t *testing.T) {
+	home := missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "sess-trailer-origin")
+	seedRosterForSession(t, "sess-trailer-origin")
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+	captureStdoutE(t, func() error {
+		captureStderrFn(t, func() { require.NoError(t, runMissionDispatch()) })
+		return nil
+	})
+
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+	// A delegation binding for the dispatched mission is on disk, so
+	// the only thing withholding the trailers is the bind origin.
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	dispatched := ids[0]
+	require.NoError(t, mission.WriteDelegationBinding(globalRoot, "sess-trailer-origin",
+		mission.DelegationBinding{
+			DelegationID:  "d-2026-07-31-001",
+			MissionID:     dispatched,
+			ParentSession: "sess-trailer-origin",
+		}))
+
+	var out bytes.Buffer
+	require.NoError(t, hook.WriteCommitTrailers(&out, globalRoot, "sess-trailer-origin"))
+	assert.Empty(t, out.String(),
+		"a dispatch binding must produce no commit trailers")
+
+	// An explicit claim on the same mission turns them on.
+	require.NoError(t, runMissionClaim(dispatched))
+	out.Reset()
+	require.NoError(t, hook.WriteCommitTrailers(&out, globalRoot, "sess-trailer-origin"))
+	assert.Contains(t, out.String(), "MISSION_ID="+dispatched,
+		"an explicit claim must produce the mission trailer")
+	assert.Contains(t, out.String(), "DELEGATION_ID=d-2026-07-31-001")
+}
+
+// TestMissionDispatch_OverClaimWarnsTrailersStop asserts the operator
+// is told when dispatching the mission they had claimed silently turns
+// their own commit trailers off.
+func TestMissionDispatch_OverClaimWarnsTrailersStop(t *testing.T) {
+	missionTestEnv(t)
+	claimed := seedMissionForClaim(t)
+	t.Setenv("ETHOS_SESSION", "sess-claim-then-dispatch")
+	seedRosterForSession(t, "sess-claim-then-dispatch")
+	require.NoError(t, runMissionClaim(claimed))
+
+	// Dispatch the SAME mission the session had claimed. The mission
+	// does not change, so only the origin does — and that is exactly
+	// the transition that must not be silent.
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() { bindDispatchedMission("dispatch", claimed) })
+		return nil
+	})
+	assert.Contains(t, warning, "commit trailers stop")
+	assert.Contains(t, warning, claimed)
 }
 
 // TestMissionDispatch_RebindClearsDelegationBinding asserts the other

@@ -1235,6 +1235,53 @@ func TestStore_CreateRejectsCrossMissionConflict(t *testing.T) {
 	assert.Equal(t, aLogBefore, aLogAfter, "mission A's log must be unchanged")
 }
 
+// TestStore_CreateRejectsGlobOverlap asserts that admission control
+// sees through a glob (ethos-qy7k round 2). Making containment
+// glob-aware without the overlap check left two open missions free to
+// claim `docs/**` and `docs/a.md` and both be admitted — the silent
+// cross-mission corruption DES-032 exists to refuse. The glob side
+// blocks whether it is created first or second.
+func TestStore_CreateRejectsGlobOverlap(t *testing.T) {
+	tests := []struct {
+		name  string
+		first string
+		next  string
+	}{
+		{name: "file under an open glob claim", first: "docs/**", next: "docs/a.md"},
+		{name: "glob claim over an open file", first: "docs/a.md", next: "docs/**"},
+		{name: "glob claim over an open directory", first: "docs/", next: "docs/**"},
+		{name: "two globs sharing a root", first: "docs/**", next: "docs/*.md"},
+		{name: "single star over a named file", first: "internal/mission/*.go", next: "internal/mission/store.go"},
+		{name: "leading glob claims the whole tree", first: "internal/mission", next: "**/store.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := testStore(t)
+			a := withWriteSet("m-2026-04-08-001", tt.first)
+			require.NoError(t, s.Create(a))
+
+			b := withWriteSet("m-2026-04-08-002", tt.next)
+			err := s.Create(b)
+			require.Error(t, err, "%q must conflict with open %q", tt.next, tt.first)
+			assert.Contains(t, err.Error(), "write_set conflict")
+			assert.Contains(t, err.Error(), a.MissionID)
+
+			_, statErr := os.Stat(mustContractPath(t, s, b.MissionID))
+			assert.True(t, os.IsNotExist(statErr), "the rejected mission must leave no contract")
+		})
+	}
+}
+
+// TestStore_CreateAllowsDisjointGlobs asserts the glob-aware overlap
+// check did not turn admission control into a blanket refusal: two
+// globs over different trees still coexist.
+func TestStore_CreateAllowsDisjointGlobs(t *testing.T) {
+	s := testStore(t)
+	require.NoError(t, s.Create(withWriteSet("m-2026-04-08-001", "docs/**")))
+	require.NoError(t, s.Create(withWriteSet("m-2026-04-08-002", "internal/mission/*.go")))
+	require.NoError(t, s.Create(withWriteSet("m-2026-04-08-003", "cmd/ethos/main.go")))
+}
+
 // TestStore_CreateAllowsConflictAfterClose asserts that closed,
 // failed, and escalated missions are out of the conflict registry —
 // only StatusOpen blocks a new create.

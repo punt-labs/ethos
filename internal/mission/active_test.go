@@ -60,6 +60,84 @@ func TestWriteActiveMission_RoundTrip(t *testing.T) {
 	assert.Equal(t, mid, got)
 }
 
+// TestActiveMissionBinding_Origin covers the bind origin the
+// ethos-7vo3 ruling introduced: a claim binding produces commit
+// trailers, a dispatch binding files delegations but must not. Both
+// forms round-trip, and ReadActiveMission still answers with the
+// mission alone.
+func TestActiveMissionBinding_Origin(t *testing.T) {
+	tests := []struct {
+		name   string
+		write  func(root, sess, mid string) error
+		origin string
+	}{
+		{
+			name:   "claim is the default form",
+			write:  WriteActiveMission,
+			origin: BindOriginClaim,
+		},
+		{
+			name: "dispatch is explicit",
+			write: func(root, sess, mid string) error {
+				return WriteActiveMissionOrigin(root, sess, mid, BindOriginDispatch)
+			},
+			origin: BindOriginDispatch,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			sess := "sess-origin"
+			mid := "m-2026-07-31-004"
+			require.NoError(t, tt.write(root, sess, mid))
+
+			b, err := ReadActiveMissionBinding(root, sess)
+			require.NoError(t, err)
+			assert.Equal(t, mid, b.MissionID)
+			assert.Equal(t, tt.origin, b.Origin)
+
+			got, err := ReadActiveMission(root, sess)
+			require.NoError(t, err)
+			assert.Equal(t, mid, got, "the mission-only read must not see the origin line")
+		})
+	}
+}
+
+// TestReadActiveMissionBinding_LegacySidecarReadsAsClaim pins the
+// compatibility rule for sidecars written before the origin line
+// existed. Every one of them came from `ethos mission claim`, so a
+// bare mission ID reads as a claim — an installed session mid-upgrade
+// keeps its commit trailers.
+func TestReadActiveMissionBinding_LegacySidecarReadsAsClaim(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-legacy"
+	path := ActiveMissionPath(root, sess)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("m-2026-07-31-004\n"), 0o600))
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-07-31-004", b.MissionID)
+	assert.Equal(t, BindOriginClaim, b.Origin)
+}
+
+// TestReadActiveMissionBinding_UnknownOriginIsPreserved asserts an
+// origin this build does not know is returned as written rather than
+// silently rewritten to claim. Only BindOriginClaim turns trailers on,
+// so an unknown value withholds them — the safe direction.
+func TestReadActiveMissionBinding_UnknownOriginIsPreserved(t *testing.T) {
+	root := t.TempDir()
+	sess := "sess-unknown-origin"
+	path := ActiveMissionPath(root, sess)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	require.NoError(t, os.WriteFile(path, []byte("m-2026-07-31-004\nfuture-origin\n"), 0o600))
+
+	b, err := ReadActiveMissionBinding(root, sess)
+	require.NoError(t, err)
+	assert.Equal(t, "future-origin", b.Origin)
+	assert.NotEqual(t, BindOriginClaim, b.Origin)
+}
+
 func TestWriteActiveMission_FileMode0o600(t *testing.T) {
 	root := t.TempDir()
 	sess := "sess-mode"
