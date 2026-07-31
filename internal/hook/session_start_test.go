@@ -692,3 +692,55 @@ func TestHandleSessionStart_ResolveAgentErrorPropagates(t *testing.T) {
 	require.NotNil(t, inner,
 		"HandleSessionStart wrap must use %%w; errors.Unwrap returned nil")
 }
+
+// TestCreateSessionRoster_RecordsCheckout pins the ethos-q6e2 binding at the
+// place essentially every real roster is written. The roster must record the
+// work-tree root whose machine-local live audit zone the session writes to, so
+// a probe running from another checkout reads the live files where they were
+// actually written instead of concluding from their absence that they were
+// lost. A roster with no checkout names no writer and is never warned about,
+// so leaving this call site on the checkout-less Create would make the whole
+// scoping inert.
+func TestCreateSessionRoster_RecordsCheckout(t *testing.T) {
+	checkout := t.TempDir()
+	t.Setenv("ETHOS_REPO_ROOT", checkout)
+	ss := session.NewStore(t.TempDir())
+
+	createSessionRoster(ss, "sess-checkout", nil, "claude")
+
+	roster, err := ss.Load("sess-checkout")
+	require.NoError(t, err)
+	assert.Equal(t, checkout, roster.Checkout,
+		"the roster must record the checkout the live audit zone belongs to")
+}
+
+// TestCreateSessionRoster_NoRepoRecordsNoCheckout is the other half: outside
+// any repo there is no live zone and nothing to record. Empty reads as "writer
+// unknown", which the vacuum cross-check declines to draw conclusions from.
+func TestCreateSessionRoster_NoRepoRecordsNoCheckout(t *testing.T) {
+	// An override naming a non-directory resolves to no repo, without
+	// depending on where the test binary happens to run.
+	t.Setenv("ETHOS_REPO_ROOT", filepath.Join(t.TempDir(), "nope"))
+	ss := session.NewStore(t.TempDir())
+
+	createSessionRoster(ss, "sess-norepo", nil, "claude")
+
+	roster, err := ss.Load("sess-norepo")
+	require.NoError(t, err)
+	assert.Empty(t, roster.Checkout,
+		"outside a repo there is no live zone to record")
+}
+
+// TestResolveCheckoutMatchesLiveWritePath guards the property the recorded
+// path exists for: it must be the root the live audit file actually lands
+// under. Two independent walks that could drift apart is the mismatch class
+// ethos-q6e2 was.
+func TestResolveCheckoutMatchesLiveWritePath(t *testing.T) {
+	checkout := t.TempDir()
+	t.Setenv("ETHOS_REPO_ROOT", checkout)
+
+	got := ResolveCheckout()
+	assert.Equal(t, checkout, got)
+	assert.Equal(t, liveAuditPath(checkout, "s"), liveAuditPath(got, "s"),
+		"the recorded checkout must resolve the same live path the writer uses")
+}
