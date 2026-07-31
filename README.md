@@ -233,6 +233,7 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos enable` / `disable` | Turn ethos on/off in this repo (see below) |
 | `ethos setup` | Set up identities and team (60-second wizard) |
 | `ethos whoami` | Show your resolved identity |
+| `ethos identity schema` | Show the field reference for an entity (also `role schema`, `team schema`) |
 | `ethos session start` / `end` | Open/close a session from any harness — `eval "$(ethos session start)"` |
 | `ethos iam <persona>` | Declare your persona in the active session |
 | `ethos doctor` | Check installation health |
