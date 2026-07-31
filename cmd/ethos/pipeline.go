@@ -302,19 +302,29 @@ func runPipelineInstantiate(name string) error {
 // mission. The instantiate summary table shows mission IDs, not
 // paths, so without this line the leader has no way to see it.
 //
-// Growth is the exact signal — expansion cannot shrink a list — so
-// this reports when and only when a value split.
+// A SHRINK is reported too, in its own words. Expansion refuses an
+// entry that names no path, so a shorter list should be unreachable —
+// but "should be unreachable" is exactly what the silent-omission bug
+// relied on (Bugbot on PR #415), and a count that drops without a word
+// is how a narrowed write_set ships unnoticed. The canary costs two
+// lines.
 func warnWriteSetExpanded(stages []mission.Stage, contracts []*mission.Contract) {
 	for i, c := range contracts {
 		if i >= len(stages) || c == nil {
 			continue
 		}
-		if len(c.WriteSet) <= len(stages[i].WriteSet) {
-			continue
+		before, after := len(stages[i].WriteSet), len(c.WriteSet)
+		switch {
+		case after > before:
+			fmt.Fprintf(os.Stderr,
+				"ethos: pipeline instantiate: stage %q write_set expanded to %d entries: %s\n",
+				stages[i].Name, after, quoteEntries(c.WriteSet))
+		case after < before:
+			fmt.Fprintf(os.Stderr,
+				"ethos: pipeline instantiate: stage %q write_set SHRANK from %d to %d entries: %s — "+
+					"an entry named no path; report this, the contract claims less than the pipeline declares\n",
+				stages[i].Name, before, after, quoteEntries(c.WriteSet))
 		}
-		fmt.Fprintf(os.Stderr,
-			"ethos: pipeline instantiate: stage %q write_set expanded to %d entries: %s\n",
-			stages[i].Name, len(c.WriteSet), quoteEntries(c.WriteSet))
 	}
 }
 

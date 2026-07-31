@@ -419,7 +419,30 @@ func expandPathSlice(ss []string, vars map[string]string, pipeline, stage, field
 // expandPathEntry expands one path-list template entry into the paths
 // it names. A variable holding several paths is substituted one path
 // at a time, so the rest of the entry is repeated around each.
+//
+// An entry that names no path at all is an ERROR, never an omission.
+// SplitPathList drops empty results, so a template like `{target}`
+// with an empty variable used to vanish from the write_set instead of
+// reaching the contract validator, which rejects an empty entry
+// (Bugbot on PR #415). A leader who wrote an entry is owed either the
+// paths it names or a refusal naming the entry — silently shipping a
+// contract with a narrower write_set than its author wrote is the
+// worst of the three.
 func expandPathEntry(entry string, vars map[string]string) ([]string, error) {
+	paths, err := expandPathEntryParts(entry, vars)
+	if err != nil {
+		return nil, err
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf(
+			"entry %q expanded to no path; a variable it uses is empty", entry)
+	}
+	return paths, nil
+}
+
+// expandPathEntryParts does the expansion itself; expandPathEntry owns
+// the empty-result rule.
+func expandPathEntryParts(entry string, vars map[string]string) ([]string, error) {
 	multi := multiPathKeys(entry, vars)
 	switch len(multi) {
 	case 0:

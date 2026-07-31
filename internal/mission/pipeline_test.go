@@ -828,6 +828,105 @@ func TestInstantiate_MultiPathVarKeepsTemplatePrefix(t *testing.T) {
 	}
 }
 
+// TestInstantiate_EmptyVarRefused pins the silent drop Bugbot found on
+// PR #415. SplitPathList drops empty results, so an entry whose
+// variable expands to nothing vanished from the write_set instead of
+// reaching the contract validator, which rejects an empty entry. The
+// contract then claimed LESS than the pipeline declared, with nothing
+// said. A leader who wrote an entry is owed either the paths it names
+// or a refusal naming it.
+func TestInstantiate_EmptyVarRefused(t *testing.T) {
+	tests := []struct {
+		name     string
+		writeSet []string
+		vars     map[string]string
+		wantIn   []string
+	}{
+		{
+			name:     "one entry of several expands to nothing",
+			writeSet: []string{"{a}", "{b}"},
+			vars:     map[string]string{"a": "internal/alpha", "b": ""},
+			wantIn:   []string{`write_set[1]`, `"{b}"`, "expanded to no path"},
+		},
+		{
+			name:     "the only entry expands to nothing",
+			writeSet: []string{"{target}"},
+			vars:     map[string]string{"target": ""},
+			wantIn:   []string{`write_set[0]`, "expanded to no path"},
+		},
+		{
+			name:     "a whitespace-only value names no path",
+			writeSet: []string{"{target}"},
+			vars:     map[string]string{"target": "   "},
+			wantIn:   []string{"expanded to no path"},
+		},
+		{
+			name:     "a separators-only value names no path",
+			writeSet: []string{"{target}"},
+			vars:     map[string]string{"target": ",,"},
+			wantIn:   []string{"expanded to no path"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Pipeline{
+				Name: "sprint",
+				Stages: []Stage{{
+					Name: "implement", Archetype: "implement", WriteSet: tt.writeSet,
+					Worker: "bwk", SuccessCriteria: []string{"make check passes"},
+				}},
+			}
+			_, err := Instantiate(p, InstantiateOptions{
+				PipelineID: "sprint-2026-07-31",
+				Vars:       tt.vars,
+				Leader:     "claude",
+				Evaluator:  "rsc",
+				Worker:     "bwk",
+				Now:        time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC),
+			})
+			if err == nil {
+				t.Fatal("an entry that names no path must be refused, not dropped")
+			}
+			for _, want := range tt.wantIn {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error must name %q, got: %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// TestInstantiate_EmptyVarInAWrappedEntryStillExpands asserts the
+// refusal is about naming no path, not about an empty variable per se:
+// a variable that expands to nothing INSIDE a larger template still
+// leaves a real path behind, and that is allowed.
+func TestInstantiate_EmptyVarInAWrappedEntryStillExpands(t *testing.T) {
+	p := &Pipeline{
+		Name: "sprint",
+		Stages: []Stage{{
+			Name: "implement", Archetype: "implement",
+			WriteSet: []string{"docs/{suffix}"},
+			Worker:   "bwk", SuccessCriteria: []string{"make check passes"},
+		}},
+	}
+	contracts, err := Instantiate(p, InstantiateOptions{
+		PipelineID: "sprint-2026-07-31",
+		Vars:       map[string]string{"suffix": ""},
+		Leader:     "claude",
+		Evaluator:  "rsc",
+		Worker:     "bwk",
+		Now:        time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("Instantiate: %v", err)
+	}
+	// `docs/` — a directory-shaped entry, which is a real claim.
+	if got := contracts[0].WriteSet; len(got) != 1 || got[0] != "docs/" {
+		t.Errorf("WriteSet = %v, want [docs/]", got)
+	}
+}
+
 // TestInstantiate_TwoMultiPathVarsRefused asserts the ambiguous shape
 // is named, not guessed at: two multi-path variables in one entry
 // describe a cartesian product, which no write_set means.

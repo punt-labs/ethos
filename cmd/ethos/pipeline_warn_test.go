@@ -39,6 +39,17 @@ func TestWarnWriteSetExpanded(t *testing.T) {
 			contract: []string{"docs/", "internal/"},
 			wantWarn: false,
 		},
+		{
+			// Expansion refuses an entry that names no path, so a
+			// shorter list should be unreachable — which is exactly
+			// what the silent-omission bug relied on. The canary says
+			// so in its own words rather than reporting an "expansion".
+			name:      "a shrink is reported as a shrink",
+			stage:     []string{"{a}", "{b}"},
+			contract:  []string{"internal/alpha"},
+			wantWarn:  true,
+			wantParts: []string{`stage "implement"`, "SHRANK from 2 to 1", "claims less than the pipeline declares"},
+		},
 	}
 
 	for _, tt := range tests {
