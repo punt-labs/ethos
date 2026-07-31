@@ -53,7 +53,12 @@ if [ -z "${MISSION_ID:-}" ] && [ -z "${DELEGATION_ID:-}" ]; then
   if [ -n "$ethos_bin" ]; then
     # KEY=value lines, at most one of each. Strip whitespace so a CRLF
     # or a trailing space cannot end up inside a trailer value.
-    trailers=$("$ethos_bin" hook commit-trailers 2>/dev/null) || trailers=""
+    #
+    # stderr is deliberately NOT suppressed: a sidecar that will not
+    # read, or a binary too old to know this subcommand, drops the
+    # trailer, and a silently missing trailer is the failure class
+    # this hook exists to prevent. The commit still proceeds.
+    trailers=$("$ethos_bin" hook commit-trailers) || trailers=""
     MISSION_ID=$(printf '%s\n' "$trailers" | sed -n 's/^MISSION_ID=//p' | tr -d '[:space:]')
     DELEGATION_ID=$(printf '%s\n' "$trailers" | sed -n 's/^DELEGATION_ID=//p' | tr -d '[:space:]')
     export MISSION_ID DELEGATION_ID

@@ -23,6 +23,17 @@ var (
 	ethosErr  error
 )
 
+// TestMain removes the shared binary directory after the last test.
+// The build is cached across tests by ethosOnce, so no single test can
+// own its lifetime.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if ethosDir != "" {
+		_ = os.RemoveAll(ethosDir)
+	}
+	os.Exit(code)
+}
+
 // ethosBinDir builds the ethos binary once per test binary and returns
 // the directory to prepend to PATH. The commit-msg hook shells out to
 // `ethos hook commit-trailers` for the fallback trailer values, so the
