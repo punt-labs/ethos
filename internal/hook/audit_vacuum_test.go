@@ -137,7 +137,7 @@ func TestVacuumCrossCheckNoLiveZoneReproduction(t *testing.T) {
 	globalRoot := t.TempDir()
 	const sess = "c7e50ab0"
 	const missions = 43
-	for i := range missions {
+	for i := 0; i < missions; i++ {
 		mid := fmt.Sprintf("m-2026-07-21-%03d", i+1)
 		ts := int64(100 + i*10)
 		writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile(sess, ts, ts+1), ts, ts+1)
