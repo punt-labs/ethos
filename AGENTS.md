@@ -129,6 +129,29 @@ the marker: a never-enabled or disabled repo passes ("not enabled here"); a
 repo with the hook chained but no marker WARNs (gated-but-unenabled); an
 enabled repo FAILs if the seal is missing or inactive.
 
+## Self-Standing Repos
+
+By default ethos resolves repo → active bundle → global, and the global
+fallback supplies whatever the repo lacks. `ethos vendor` snapshots a
+resolvable identity set into `.punt-labs/ethos/` so the repo stands on its
+own, and `resolution: repo-only` in `.punt-labs/ethos.yaml` drops the global
+fallback so a missing reference is a hard error instead of a silent
+home-directory read.
+
+```bash
+ethos vendor bwk                       # plan: show the closure and its blast radius
+ethos vendor bwk --apply               # write into .punt-labs/ethos/
+ethos vendor --team engineering --apply --prune
+```
+
+Vendor follows references to a fixed point — attributes, roles, and the teams
+an identity belongs to plus *those* teams' other members — so it plans by
+default and reports the gap between what you asked for and what it would write.
+It refuses to copy a credential-named extension key (`--allow-ext-key <ns>/<key>`
+overrides one key). `ethos doctor` is the completeness gate under `repo-only`.
+See [README](README.md#self-standing-repos-vendor-and-resolution-repo-only) for
+the full walkthrough and [DESIGN.md](DESIGN.md) DES-057 for rationale.
+
 ## Identity Operations
 
 ### CLI
@@ -146,7 +169,7 @@ ethos show mal --json                 # JSON output
 
 ### MCP Tools
 
-When running as a Claude Code plugin, ethos registers an MCP server (named `ethos`, plugin key `self` -- tool names follow the pattern `mcp__plugin_ethos_self__<tool>`) with 11 tools using method-dispatch.
+When running as a Claude Code plugin, ethos registers an MCP server (named `ethos`, plugin key `self` -- tool names follow the pattern `mcp__plugin_ethos_self__<tool>`) with 12 tools. Most use method-dispatch; `vendor` and `doctor` are single-action tools.
 
 **All tools use a consolidated `method` parameter:**
 
@@ -162,6 +185,7 @@ When running as a Claude Code plugin, ethos registers an MCP server (named `etho
 | `role` | list, show, create, delete | `name`, `responsibilities`, `permissions` |
 | `mission` | create, show, list, close, reflect, reflections, advance, result, results, log | `mission_id`, `contract`, `reflection`, `result`, `status` |
 | `adr` | create, list, show | `id`, `title`, `status`, `body` |
+| `vendor` | *(single action — plans; `apply` writes)* | `handles`, `team`, `all`, `to`, `prune`, `apply`, `allow_ext_key` |
 | `doctor` | *(none — standalone)* | *(none)* |
 
 **Example — read identity from MCP:**
@@ -346,7 +370,17 @@ ethos ext delete mal vox default_mood
 
 # Delete an entire namespace
 ethos ext delete mal vox
+
+# Write a secret to the git-excluded companion file
+ethos ext set --local mal vox api_token <value>
 ```
+
+Each namespace has an optional `<handle>.ext/<namespace>.local.yaml` companion
+for secret or machine-specific values (mirrors `.envrc`/`.envrc.local`). Reads
+return base overlaid with `.local`; `ethos ext set --local` targets the
+companion, which `.gitignore` covers and `ethos vendor` never copies. This is a
+git-exclusion mechanism, not a vault — the merged view still reaches the model
+at runtime (DES-057).
 
 ### MCP Tools
 
@@ -842,11 +876,19 @@ regex (`^(?:<pattern>)$`); a malformed pattern is rejected at
 ```bash
 ethos audit show --delegation <id>             # forensic query across sessions
 ethos audit show --delegation <id> --format text
+ethos audit seal [--dry-run]                   # seal live lines into tracked chunks (pre-commit runs this)
+ethos audit quarantine <chunk>                 # retire a corrupt sealed chunk, recover the live tail
 ethos audit migrate                            # legacy → repo-tree audit logs
 ethos audit migrate --dry-run --verbose
 ethos mission migrate --to-repo                # legacy → repo-tree missions
 ethos mission migrate <mission-id> --to-repo
 ```
+
+During a session, per-tool-call lines write to a machine-local, gitignored
+live file, so an active session keeps a clean `git status`. The `pre-commit`
+hook runs `ethos audit seal`, which copies pending lines into immutable,
+timestamp-named chunks under the tracked tree, so the audit record lands in
+the same commit as the work (DES-058).
 
 `ethos audit show` walks `<repo>/.punt-labs/ethos/sessions/<date>-<id>/audit.jsonl`
 (with legacy global fallback) and prints every entry whose
