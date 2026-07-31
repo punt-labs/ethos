@@ -364,8 +364,17 @@ func missionIsWhollyLegacy(trackedRoot, liveRoot, missionID string) (bool, error
 	return false, nil
 }
 
-// missionHasAnyChunk reports whether dir holds a valid mission chunk for any
-// session — the mark of a mission worked after the live/sealed split.
+// missionHasAnyChunk reports whether dir holds a post-split chunk-namespace
+// artifact for any session — the mark of a mission worked after the live/sealed
+// split.
+//
+// Every artifact counts, not only a well-formed chunk. A mission whose chunks
+// were all quarantined holds markers and retired .corrupt files and no valid
+// chunk at all; reading that as "never sealed anything" would hand the mission
+// back to its frozen log.jsonl and reopen the hole this predicate closes. A
+// near-miss counts for the same reason — the seal fails loud on one elsewhere,
+// but here it is still evidence that something was sealed. Only KindOther (a
+// contract.yaml, the legacy log itself) and a stale temp are silent.
 func missionHasAnyChunk(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -375,8 +384,11 @@ func missionHasAnyChunk(dir string) bool {
 		if e.IsDir() {
 			continue
 		}
-		if _, kind := Classify(e.Name(), MissionNS); kind == KindValid {
+		switch _, kind := Classify(e.Name(), MissionNS); kind {
+		case KindValid, KindNearMiss, KindCorrupt, KindQuarantine:
 			return true
+		case KindOther, KindTemp:
+			// A sibling or a swept temp says nothing about sealing.
 		}
 	}
 	return false

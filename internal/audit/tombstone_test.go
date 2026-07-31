@@ -307,6 +307,22 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 			// session — whose own live log is gone and sealed nowhere.
 			wantLost: true,
 		},
+		{
+			name:    "bound, hybrid mission whose chunks were all quarantined",
+			mission: "m-2026-07-20-021",
+			setup: func(t *testing.T, repo, mid string) {
+				writeLegacyMissionLog(t, repo, mid, 100)
+				// Quarantine retires the chunk and leaves a marker, so no
+				// KindValid chunk survives — but the mission was still worked
+				// after the split and its legacy log must not vouch for anyone.
+				dir := SealedMissionDir(repo, mid)
+				cn, _ := Classify(MissionChunkFile("other", 200, 300), MissionNS)
+				writeChunk(t, dir, cn.ChunkFile()+".corrupt", 200, 300)
+				writeChunk(t, dir, cn.MarkerFile())
+			},
+			bound:    []string{"m-2026-07-20-021"},
+			wantLost: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
