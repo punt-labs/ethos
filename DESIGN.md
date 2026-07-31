@@ -2774,6 +2774,24 @@ Any future mission created with the 3.3 binary gets a real hash.
   because it does work that's often unused (most hook invocations
   are for non-evaluator subagents).
 
+**Implementation note (ethos-z69l, #409).** The gate originally scanned
+every open mission and matched by evaluator handle alone. A handle that is
+worker on one open mission and evaluator on another was bound as the other
+mission's frozen verifier whenever it spawned — even when dispatched, with
+its own `MISSION_ID`, to *work* its own mission. The misbound spawn then
+enforced the wrong mission's write-set and refused its actual one.
+`checkVerifierHash` now reads the spawn's declared `MISSION_ID` and applies
+the gate only when that one mission is open and names the subagent as its
+evaluator; a spawn serving the declared mission in any other role takes the
+normal persona path. The decision preserved: bind the gate by
+`(mission_id, role)`, not by handle. Per-mission binding makes cross-mission
+drift aggregation structurally impossible, so `formatDriftError` reports only
+the single declared mission. `ethos mission create` additionally prints a
+non-fatal warning when a new contract's worker or evaluator handle overlaps
+an open mission's, since handle overlap is the precondition for this
+misbinding class — advisory only, because handle reuse across missions is a
+legitimate pattern.
+
 ## DES-034: Bounded rounds with mandatory reflection (SETTLED)
 
 **Status**: Settled. Implemented 2026-04-08 as `ethos-07m.8` — the
@@ -5246,6 +5264,56 @@ Twelve invariants. v2's I8/I9/I10 (about synthetic contracts) **obsolete** under
 - **Hostable code in contracts** (general predicate language). Rejected: sandbox concern.
 - **`KnownFields(strip)` flag.** Rejected: would silently drop preconditions/delegations.
 - **Make Agent advice blocking** (refuse Tier A spawns until contract). Rejected per CEO direction.
+
+## Implementation note (ethos-ersr / ethos-n4np / ethos-ggtu, #411)
+
+Making the mission tree git-tracked and pushing it to a public repo turned
+two write paths into PII leaks. The Tier B skeleton writer wrote `prompt.md`
+and `record.yaml` with `$HOME` and the repo root intact, so thirteen
+committed prompts named the operator's home directory and machine layout; the
+per-tool-call audit lines carried full email bodies, recipients, and a
+recipient address inside a `CronCreate` prompt straight into the sealed,
+git-tracked record. The fixes, all applied at the write path before anything
+reaches disk:
+
+- **One redactor, two call sites.** The path substitution the audit lines
+  already used moved from unexported `internal/hook` code down to
+  `mission.PathRedactor`; `hook`'s `redactAbsolutePaths` delegates to it. One
+  implementation, no drift.
+- **Redact inside the writer, not at the call site.** `$HOME`/repo-root
+  redaction runs inside `WriteDelegationSkeleton` (and `CloseDelegation`'s
+  free-text reason), so a future caller cannot write an unredacted prompt by
+  forgetting a step. Resolving `$HOME` is a precondition — a home directory
+  ethos cannot name is one it cannot redact — so an unresolvable `$HOME`
+  refuses the write, which `PreToolUse` turns into a spawn refusal. Fail
+  closed, never a partial write.
+- **Keep-list for sensitive tools, not a deny-list.** A sensitive tool's
+  audit input reduces to a keep-list (`send_email` keeps its subject;
+  everything else becomes `[redacted]`), so a `cc` or `reply-to` added to the
+  tool later is redacted the day it appears, not the day someone remembers it.
+- **Address sweep on prose fields only.** A second pass rewrites addresses in
+  free-form prose fields, leaving a `Read`'s `file_path` and a `Bash` command
+  byte-identical to before.
+- **Redact before the hash.** Both passes run before `tool_input_hash`, so the
+  hash is over the stored form — the DES-052 cross-machine collision-detection
+  invariant. A hash over a form that never reaches disk cannot be checked
+  against anything. Lines that lose content carry `redacted: true`, matching
+  the marker the hand-redacted public-website lines already use.
+
+## Implementation note (four friction fixes, #412)
+
+Four correctness fixes to specified-but-mis-built behavior. The
+design-relevant one is **ethos-jawp**: the commit-msg trailer hook now gates
+on an active mission binding rather than stamping every commit, and the
+active-mission sidecar clears on close — on the CLI, hook, and MCP close paths
+alike, with a genuine clear failure reported rather than swallowed. This makes
+the binding lifecycle symmetric: a delegation binds a session, its trailers
+land while the binding is live, and close tears the binding down. The other
+three are narrower: **ethos-qvbh** requires the validated `mission` field on
+reflections and back-fills it on read of legacy records; **ethos-72wj**
+subordinates the stub-agent install to the DES-026 generator and fails closed
+when agent-ownership lookup fails; **ethos-c0yp** scopes the `inputs.bead`
+deprecation to user submission so legacy reads are unaffected.
 
 ## Open questions
 
