@@ -344,10 +344,11 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 	// "gone" that was never there and mints a permanent, un-earned loss tombstone
 	// (ethos-q6e2). A roster written before the field existed records no
 	// checkout; it falls back to repoRoot, which is what every roster did before.
-	liveRoot := roster.Checkout
-	if liveRoot == "" {
-		liveRoot = repoRoot
+	writer := audit.RecordedWriter(roster.Checkout)
+	if roster.Checkout == "" {
+		writer = audit.AssumedWriter(repoRoot)
 	}
+	liveRoot := writer.Root
 	// Tracked chunks live in a checkout too — normally repoRoot, the one this
 	// purge runs in. With no checkout in scope the recorded one is the only
 	// checkout we can name, and it holds its own tracked tree; reading there
@@ -368,7 +369,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 		} else {
 			unsealed = n
 		}
-		liveGone = audit.SessionLiveFileLost(liveRoot, roster.Session)
+		liveGone = audit.SessionLiveFileLost(writer, roster.Session)
 		// REQ-1: the guard spans both namespaces. A session that sealed a
 		// mission chunk and then lost its mission live log (worktree torn
 		// down), or a Tier B session that claimed a mission but sealed no
@@ -380,7 +381,7 @@ func (s *Store) purgeOneTombstoned(roster *Roster, repoRoot, repoID string, forc
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: resolving %s mission bindings: %v\n", roster.Session, bErr)
 		}
-		expected, eErr := audit.ExpectedMissionLiveFiles(trackedRoot, liveRoot, roster.Session, bound)
+		expected, eErr := audit.ExpectedMissionLiveFiles(trackedRoot, writer, roster.Session, bound)
 		if eErr != nil {
 			probeFailed = true
 			fmt.Fprintf(os.Stderr, "ethos: purge: enumerating %s mission live files: %v\n", roster.Session, eErr)

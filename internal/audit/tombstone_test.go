@@ -197,14 +197,15 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	// A chunk for a different session must not appear for sess1.
 	writeChunk(t, dir, MissionChunkFile("sess2", 300, 400), 300, 400)
 
-	got, err := ExpectedMissionLiveFiles(repo, repo, "sess1", nil)
+	// Probed as a fallback: nothing bound sess1 to this checkout, so its absent
+	// live file is the ordinary absence of another checkout's state.
+	got, err := ExpectedMissionLiveFiles(repo, AssumedWriter(repo), "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].MissionID != mid {
 		t.Fatalf("expected one mission live for sess1, got %+v", got)
 	}
-	// The live file is absent here, but the chunk holds the lines: not loss.
 	if got[0].Present {
 		t.Error("expected mission live file reported Present, want absent")
 	}
@@ -212,7 +213,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 		t.Error("Sealed = false beside a tracked chunk carrying the session")
 	}
 	if got[0].Lost() {
-		t.Error("Lost() = true for an absent live file whose lines are sealed")
+		t.Error("Lost() = true for a fallback checkout's absent live file whose lines are sealed")
 	}
 	// Once the live file exists, Present flips true.
 	if err := os.MkdirAll(filepath.Dir(got[0].LivePath), 0o700); err != nil {
@@ -221,7 +222,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	if err := os.WriteFile(got[0].LivePath, []byte(`{"ts":"`+FormatLineTS(300)+`"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err = ExpectedMissionLiveFiles(repo, repo, "sess1", nil)
+	got, err = ExpectedMissionLiveFiles(repo, RecordedWriter(repo), "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,18 +251,33 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 		// writerGone probes a recorded writer checkout that no longer exists,
 		// rather than the checkout the fixture was built in.
 		writerGone bool
-		wantLost   bool
+		// fallbackWriter probes a checkout nothing ever bound the session to —
+		// the legacy-roster case, the only one a chunk may suppress.
+		fallbackWriter bool
+		wantLost       bool
 	}{
 		{
-			name:    "sealed chunk, no live file, writer never wrote mission logs",
+			name:    "sealed chunk, fallback checkout that never wrote here",
 			mission: "m-2026-07-21-001",
 			setup: func(t *testing.T, repo, mid string) {
 				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
 			},
-			// The writer is present and has no live-missions zone at all, so
-			// its missing file is the ordinary absence of another checkout's
-			// state. This is the 43-warning case.
-			wantLost: false,
+			// Nobody bound this session to this checkout; it is present and
+			// holds no live mission log of the session's. The only case a chunk
+			// may suppress, and the 43-warning case.
+			fallbackWriter: true,
+			wantLost:       false,
+		},
+		{
+			name:    "sealed chunk, RECORDED writer that cannot produce the file",
+			mission: "m-2026-07-21-008",
+			setup: func(t *testing.T, repo, mid string) {
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
+			},
+			// Same filesystem state as above. The difference is that a roster
+			// bound the session HERE, so the missing file is a deletion — the
+			// whole-zone-removed case a zone-only probe went silent on.
+			wantLost: true,
 		},
 		{
 			name:    "bound, sealed nothing, no live file",
@@ -340,6 +356,42 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 			wantLost: true,
 		},
 		{
+			// Fallback probes still warn on evidence that does not depend on
+			// which checkout we stand in. Nothing durable holds these lines
+			// anywhere, so no checkout needs standing to say so.
+			name:           "fallback checkout, bound, sealed nothing",
+			mission:        "m-2026-07-21-011",
+			setup:          func(*testing.T, string, string) {},
+			bound:          []string{"m-2026-07-21-011"},
+			fallbackWriter: true,
+			wantLost:       true,
+		},
+		{
+			name:    "fallback checkout, sealed, but the checkout is gone",
+			mission: "m-2026-07-21-012",
+			setup: func(t *testing.T, repo, mid string) {
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
+			},
+			// Even unbound, a checkout that no longer exists took its live zone
+			// with it and nothing there can be inspected.
+			fallbackWriter: true,
+			writerGone:     true,
+			wantLost:       true,
+		},
+		{
+			name:    "fallback checkout that DID write here, one file missing",
+			mission: "m-2026-07-21-013",
+			setup: func(t *testing.T, repo, mid string) {
+				writeChunk(t, SealedMissionDir(repo, mid), MissionChunkFile(sess, 100, 200), 100, 200)
+				// A sibling live log of this session's stands here, so this
+				// checkout demonstrably wrote the session's files and the
+				// missing one is a deletion — recorded binding or not.
+				writeLiveMissionLine(t, repo, "m-2026-07-21-014", sess, 300)
+			},
+			fallbackWriter: true,
+			wantLost:       true,
+		},
+		{
 			name:    "bound, hybrid mission whose chunks were all quarantined",
 			mission: "m-2026-07-20-021",
 			setup: func(t *testing.T, repo, mid string) {
@@ -364,7 +416,11 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 			if tc.writerGone {
 				liveRoot = filepath.Join(t.TempDir(), "deleted-checkout")
 			}
-			got, err := ExpectedMissionLiveFiles(repo, liveRoot, sess, tc.bound)
+			writer := RecordedWriter(liveRoot)
+			if tc.fallbackWriter {
+				writer = AssumedWriter(liveRoot)
+			}
+			got, err := ExpectedMissionLiveFiles(repo, writer, sess, tc.bound)
 			if err != nil {
 				t.Fatal(err)
 			}

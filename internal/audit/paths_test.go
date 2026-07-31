@@ -161,39 +161,97 @@ func TestMissionIsWhollyLegacyUnreadableDirDoesNotVouch(t *testing.T) {
 	}
 }
 
-// TestCheckoutStateUnreadableZoneDoesNotSuppress pins the fail-safe direction
-// on the zone probe. An unreadable live zone leaves "did this checkout write
-// here?" open, and open must not resolve to "never wrote" — that is the answer
-// that lets a sealed chunk suppress a loss warning.
-func TestCheckoutStateUnreadableZoneDoesNotSuppress(t *testing.T) {
+// TestWriterStateUnreadableZoneReadsAsNoEvidence pins the ReadDir-error rule
+// and, more importantly, the reason it is allowed to differ from
+// missionHasAnyChunk's error-means-maybe.
+//
+// An unreadable live-missions tree yields "no evidence", which suppresses. That
+// would be fail-unsafe if it were reachable, and it is not: the seal walks the
+// same tree and fails the whole run with exit 2 before the vacuum executes
+// (docs/audit-seal.md §Seal failure policy), and on the purge path
+// SessionUnsealedCountAcross errors first and sets probeFailed. The suppression
+// is unreachable rather than silent. Anyone tempted to "fix" this to true
+// should read that argument first — hence the test that states it.
+func TestWriterStateUnreadableZoneReadsAsNoEvidence(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: directory modes do not deny access")
 	}
+	const sess = "sess-unreadable"
 	root := t.TempDir()
-	if err := os.MkdirAll(LiveMissionsDir(root), 0o700); err != nil {
+	logPath := LiveMissionLogPath(root, "m-2026-07-21-001", sess)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	present, zone := checkoutState(root, LiveMissionsDir)
-	if !present || !zone {
-		t.Fatalf("readable zone: present=%v zone=%v, want true true", present, zone)
+	if err := os.WriteFile(logPath, []byte(`{"ts":"`+FormatLineTS(100)+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, wrote := writerState(root, sess); !wrote {
+		t.Fatal("readable zone with a live log must read as wrote-here")
 	}
 
-	// Revoke search on the local-zone parent so stat of the missions dir fails
-	// with EACCES rather than ENOENT.
-	parent := LocalZoneBase(root)
-	if err := os.Chmod(parent, 0o000); err != nil {
+	if err := os.Chmod(LiveMissionsDir(root), 0o000); err != nil {
 		t.Skipf("cannot revoke directory permissions here: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
-	if _, err := os.Stat(LiveMissionsDir(root)); err == nil {
-		t.Skip("this filesystem still permits the stat under mode 0o000")
+	t.Cleanup(func() { _ = os.Chmod(LiveMissionsDir(root), 0o700) })
+	if _, err := os.ReadDir(LiveMissionsDir(root)); err == nil {
+		t.Skip("this filesystem still permits the read under mode 0o000")
 	}
 
-	present, zone = checkoutState(root, LiveMissionsDir)
+	present, wrote := writerState(root, sess)
 	if !present {
 		t.Error("the checkout itself is readable and must read as present")
 	}
-	if !zone {
-		t.Error("an unreadable zone read as 'never wrote here'; unknown must not suppress")
+	if wrote {
+		t.Error("an unreadable zone must yield no evidence, not manufactured evidence")
+	}
+}
+
+// TestWriterStateIgnoresSealCreatedLocks closes the gap that let a
+// self-defeating discriminator pass the whole suite. WriterZone answers "did
+// this checkout write live mission logs?", and the seal itself MkdirAlls the
+// live-missions tree and O_CREATEs <session>.lock for every mission it
+// enumerates — including ones it finds only in the TRACKED tree. Keying on the
+// directory therefore manufactured the evidence, and because the seal runs
+// before the vacuum in the same invocation the probe was poisoned on the very
+// first run.
+//
+// The existing tests all build the filesystem directly and never run a seal, so
+// none of them could see it. This one plants exactly what a seal leaves behind.
+func TestWriterStateIgnoresSealCreatedLocks(t *testing.T) {
+	const sess = "sess-lock"
+	root := t.TempDir()
+
+	// Exactly the residue of `ethos audit seal` in a checkout that never wrote:
+	// a per-mission directory holding only the flock.
+	for _, mid := range []string{"m-2026-07-21-001", "m-2026-07-21-002"} {
+		lock := LiveMissionLockPath(root, mid, sess)
+		if err := os.MkdirAll(filepath.Dir(lock), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(lock, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	present, wrote := writerState(root, sess)
+	if !present {
+		t.Error("the checkout exists and must read as present")
+	}
+	if wrote {
+		t.Error("seal-created locks counted as evidence the checkout wrote live logs")
+	}
+
+	// One real live log — which only the live writer creates — flips it.
+	logPath := LiveMissionLogPath(root, "m-2026-07-21-002", sess)
+	if err := os.WriteFile(logPath, []byte(`{"ts":"`+FormatLineTS(100)+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, wrote = writerState(root, sess); !wrote {
+		t.Error("a live mission log must count as evidence the checkout wrote here")
+	}
+
+	// Another session's live log says nothing about this one.
+	if _, wrote = writerState(root, "other-sess"); wrote {
+		t.Error("another session's live log counted as this session's evidence")
 	}
 }

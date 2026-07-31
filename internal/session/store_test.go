@@ -528,11 +528,11 @@ func TestStore_CreateInCheckoutRecordsCheckout(t *testing.T) {
 // at every commit until acked.
 //
 // The suppression is narrower than "a chunk exists", and this test's setup is
-// what makes it apply: the checkout has NO live-missions zone, so it never
-// wrote these files and its absence of them says nothing. A checkout that HAS
-// the zone but not this mission's file is looking at a deletion and still
-// flags — TestVacuumCrossCheckWarnsOnDeletedLiveLogInWriterCheckout covers that
-// side.
+// what makes it apply: the roster records NO checkout, so the purge falls back
+// to whichever one it runs in, and that checkout holds no live mission log of
+// this session's. Nothing ever said the session's files belong here, so their
+// absence says nothing. A checkout the roster DID record still flags —
+// TestPurgeTombstoned_DeletedLiveLogInWriterCheckoutFlagsTombstone covers it.
 //
 // The session's own live audit file is written and fully sealed here, so the
 // session-namespace probe cannot supply the flag: only the mission branch is
@@ -542,11 +542,11 @@ func TestPurgeTombstoned_SealedMissionInNonWriterCheckoutDoesNotFlagTombstone(t 
 	repoRoot := t.TempDir()
 	root := Participant{AgentID: "user1"}
 	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
-	require.NoError(t, s.CreateInCheckout("sess-sealed", root, primary, testRepoID, repoRoot, ""))
+	// A roster predating the checkout field: the probe falls back to repoRoot.
+	require.NoError(t, s.Create("sess-sealed", root, primary, testRepoID, ""))
 	writeSealedLive(t, repoRoot, "sess-sealed")
-	// A mission whose chunk carries this session, with no live log and no
-	// live-missions zone in this checkout — the steady state of every checkout
-	// that did not write them.
+	// A mission whose chunk carries this session, with no live log in this
+	// checkout — the steady state of every checkout that did not write them.
 	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-sealed")
 
 	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
@@ -590,6 +590,9 @@ func TestPurgeTombstoned_OutOfRepoUsesRecordedCheckout(t *testing.T) {
 	require.NoError(t, s.CreateInCheckout("sess-oor", root, primary, "", checkout, ""))
 	writeSealedLive(t, checkout, "sess-oor")
 	sealMissionChunkFor(t, checkout, "m-2026-07-21-009", "sess-oor")
+	// The recorded checkout really holds the mission's live log, so there is
+	// nothing missing there to report.
+	writeLiveMissionLogFor(t, checkout, "m-2026-07-21-009", "sess-oor")
 
 	purged, refused, err := s.PurgeTombstoned("", "", false)
 	require.NoError(t, err)

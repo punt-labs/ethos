@@ -193,25 +193,36 @@ func SessionLiveFileExists(liveRoot, sessionID string) bool {
 	return err == nil
 }
 
+// Writer names the checkout a session's live files belong to, and says whether
+// that binding was recorded or merely assumed.
+//
+// Recorded is the difference between "this session's live files live HERE" and
+// "we had nowhere else to look". A roster or tombstone that names a checkout
+// asserts the first; falling back to the committing checkout is the second, and
+// a checkout we only guessed at cannot testify that anything is missing from it.
+type Writer struct {
+	Root     string
+	Recorded bool
+}
+
+// RecordedWriter names a checkout a roster or tombstone explicitly bound the
+// session to. AssumedWriter names the fallback: the committing checkout, used
+// because no binding was recorded.
+func RecordedWriter(root string) Writer { return Writer{Root: root, Recorded: true} }
+
+// AssumedWriter is the fallback binding — see RecordedWriter.
+func AssumedWriter(root string) Writer { return Writer{Root: root} }
+
 // SessionLiveFileLost reports whether a session's live audit file is missing in
 // a way that means loss rather than the ordinary absence of another checkout's
-// state. It is the session-namespace twin of MissionLive.Lost and weighs the
-// same two facts about the writer:
-//
-//   - the writer checkout is GONE — it took its live zone with it, so nothing
-//     there can be inspected and the lines are unaccounted for; or
-//   - the writer is present and HAS a live-sessions zone, so it wrote audit
-//     files and this one's absence is a deletion.
-//
-// A present writer with no live-sessions zone never wrote there, so its missing
-// file says nothing. That is the case a probe run from the wrong checkout hits,
-// and reading it as loss minted permanent, un-earned tombstones (ethos-q6e2).
-func SessionLiveFileLost(liveRoot, sessionID string) bool {
-	if SessionLiveFileExists(liveRoot, sessionID) {
+// state. It is the session-namespace twin of MissionLive.Lost and applies the
+// same rule, so the two namespaces cannot drift apart.
+func SessionLiveFileLost(w Writer, sessionID string) bool {
+	if SessionLiveFileExists(w.Root, sessionID) {
 		return false
 	}
-	present, zone := checkoutState(liveRoot, LiveSessionsDir)
-	return !present || zone
+	present, wrote := writerState(w.Root, sessionID)
+	return w.Recorded || !present || wrote
 }
 
 // SessionDateFormat is the YYYY-MM-DD prefix on a dated per-session sealed
@@ -268,10 +279,17 @@ type MissionLive struct {
 	// nothing there can be inspected — the crash -> checkout-deleted sequence
 	// the guard exists for.
 	WriterPresent bool
-	// WriterZone reports whether that checkout's live-missions zone exists.
-	// With WriterPresent it separates "never wrote mission live logs" from
-	// "wrote them and this one is missing" — steady state versus deletion.
+	// WriterZone reports whether that checkout holds any live mission log for
+	// this session. With WriterPresent it separates "never wrote mission live
+	// logs here" from "wrote them and this one is missing" — steady state
+	// versus deletion. It reads a sibling <session>.log.jsonl, never the
+	// directory, because the seal creates the directory itself; see
+	// holdsAnyLiveMissionLog.
 	WriterZone bool
+	// WriterRecorded reports whether a roster or tombstone actually bound the
+	// session to this checkout, as opposed to the probe falling back to
+	// whichever checkout is committing. See Writer.
+	WriterRecorded bool
 }
 
 // Lost reports whether a mission's lines are unaccounted for.
@@ -289,30 +307,42 @@ type MissionLive struct {
 // (docs/audit-seal.md §Seal failure policy). Suppressing on Sealed alone drops
 // that whole class.
 //
-// The writer checkout's own state is what tells the cases apart, and it takes
-// two facts, not one. A chunk suppresses in exactly one situation: the recorded
-// writer is still there AND demonstrably never wrote mission live logs, so its
-// missing file is the ordinary absence of another checkout's state.
+// So a chunk suppresses in exactly ONE situation, and it is worth stating as a
+// whole because three narrower readings of it each dropped a real loss:
 //
-//	WriterPresent && !WriterZone  ->  a chunk may suppress
+//	!WriterRecorded && WriterPresent && !WriterZone
 //
-// Everything else warns. A writer that is GONE took its live zone with it, so
-// an absent zone there is not evidence of never having written — it is the
-// crash -> checkout-deleted case, the loudest loss in the design. Checking the
-// zone alone conflated the two and went silent on it.
+// That is: nobody ever said this session's live files belong here, the checkout
+// is still around, and it holds no live mission log of this session's. We are
+// looking at a checkout we merely fell back to, which never wrote these files —
+// its missing file is the ordinary absence of another checkout's state.
 //
-// Bounded residual: a session that wrote in two checkouts records only one, so
-// probing the recorded one can warn about a live file that is alive in the
-// other. That is far smaller than dropping a deletion class, and it errs toward
-// reporting.
+// Everything else warns:
+//
+//   - WriterRecorded — a checkout that was bound to this session and cannot
+//     produce the file is a deletion, whether one file went, the whole live
+//     zone went, or the checkout itself went.
+//   - !Sealed — nothing durable holds the lines at all.
+//   - !WriterPresent — the checkout is gone and took its live zone with it,
+//     the crash -> checkout-deleted case, the loudest loss in the design.
+//   - WriterZone — sibling live logs stand, so this absence is a deletion.
+//
+// WriterZone reads a sibling <session>.log.jsonl and never the directory. The
+// seal MkdirAlls the live-missions tree and creates <session>.lock in whatever
+// checkout it runs in, so a directory-keyed probe manufactures its own
+// evidence — and since the seal runs before the vacuum in one invocation, it
+// poisoned the very first run.
+//
+// Bounded residual, accepted: a roster written before the checkout field
+// existed records no writer, so a genuine loss in that fallback case does not
+// warn. That class ages out as sessions restart. The two-checkout case — one
+// session writing in a worktree the roster never recorded — errs the other way
+// and warns; measured at zero instances in this repo.
 func (m MissionLive) Lost() bool {
 	if m.Present || m.Legacy {
 		return false
 	}
-	if !m.Sealed {
-		return true
-	}
-	return !m.WriterPresent || m.WriterZone
+	return m.WriterRecorded || !m.Sealed || !m.WriterPresent || m.WriterZone
 }
 
 // ExpectedMissionLiveFiles returns the per-(mission, session) live-log files a
@@ -334,8 +364,8 @@ func (m MissionLive) Lost() bool {
 // the three together.
 //
 // Chunks and the tracked legacy log are read from trackedRoot; live files and
-// the drained residue from liveRoot, the checkout that wrote them.
-func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMissions []string) ([]MissionLive, error) {
+// the drained residue from w, the checkout that wrote them.
+func ExpectedMissionLiveFiles(trackedRoot string, w Writer, sessionID string, boundMissions []string) ([]MissionLive, error) {
 	seen := make(map[string]struct{})
 	var ids []string
 	add := func(id string) {
@@ -364,29 +394,30 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 		add(id)
 	}
 
-	writerPresent, writerZone := checkoutState(liveRoot, LiveMissionsDir)
+	writerPresent, writerZone := writerState(w.Root, sessionID)
 
 	sort.Strings(ids)
 	out := make([]MissionLive, 0, len(ids))
 	for _, id := range ids {
-		livePath := LiveMissionLogPath(liveRoot, id, sessionID)
+		livePath := LiveMissionLogPath(w.Root, id, sessionID)
 		_, statErr := os.Stat(livePath)
 		sealed, err := Watermark(SealedMissionDir(trackedRoot, id), MissionNS, sessionID)
 		if err != nil {
 			return nil, err
 		}
-		legacy, err := missionIsWhollyLegacy(trackedRoot, liveRoot, id)
+		legacy, err := missionIsWhollyLegacy(trackedRoot, w.Root, id)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, MissionLive{
-			MissionID:     id,
-			LivePath:      livePath,
-			Present:       statErr == nil,
-			Sealed:        sealed > 0,
-			Legacy:        legacy,
-			WriterPresent: writerPresent,
-			WriterZone:    writerZone,
+			MissionID:      id,
+			LivePath:       livePath,
+			Present:        statErr == nil,
+			Sealed:         sealed > 0,
+			Legacy:         legacy,
+			WriterPresent:  writerPresent,
+			WriterZone:     writerZone,
+			WriterRecorded: w.Recorded,
 		})
 	}
 	return out, nil
@@ -401,23 +432,51 @@ func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMiss
 // onto "" builds a relative path that could match some unrelated directory
 // below the working directory. An unknown writer is treated as gone, which
 // warns — the fail-safe direction.
-//
-// Only ENOENT answers "no zone". An unreadable one (EACCES, EIO) leaves the
-// question open, and open must not become "never wrote there" — that is the
-// direction that suppresses a warning, the same fail-unsafe read
-// missionHasAnyChunk was hardened against.
-func checkoutState(liveRoot string, zoneDir func(string) string) (present, zone bool) {
+func writerState(liveRoot, sessionID string) (present, wrote bool) {
 	if liveRoot == "" {
 		return false, false
 	}
 	if info, err := os.Stat(liveRoot); err != nil || !info.IsDir() {
 		return false, false
 	}
-	info, err := os.Stat(zoneDir(liveRoot))
+	return true, holdsAnyLiveMissionLog(liveRoot, sessionID)
+}
+
+// holdsAnyLiveMissionLog reports whether liveRoot holds at least one live
+// mission log written by sessionID — the evidence that this checkout is where
+// that session's live files go.
+//
+// It reads <session>.log.jsonl, never the directory, and that is the whole
+// point. The seal takes a per-(mission, session) flock beside the live log, and
+// audit.WithLock MkdirAlls the lock's parent and O_CREATEs <session>.lock
+// (flock_unix.go) for every mission it enumerates — including the ones it finds
+// in the TRACKED tree. So a single `ethos audit seal` in a checkout that never
+// wrote anything materializes the live-missions directory for every tracked
+// mission. Keying on directory existence therefore manufactures its own
+// evidence: the seal runs before the vacuum in the same invocation, so the
+// probe was already poisoned on the first run. Only the live log itself is
+// written solely by the live writer.
+//
+// A ReadDir error yields false, which suppresses — the opposite of the
+// error-means-maybe rule missionHasAnyChunk follows. That is safe here because
+// the suppression is unreachable, not silent: an unreadable live-missions tree
+// fails the seal itself with exit 2 (docs/audit-seal.md §Seal failure policy)
+// before the vacuum runs, and on the purge path SessionUnsealedCountAcross
+// errors first and sets probeFailed.
+func holdsAnyLiveMissionLog(liveRoot, sessionID string) bool {
+	entries, err := os.ReadDir(LiveMissionsDir(liveRoot))
 	if err != nil {
-		return true, !errors.Is(err, fs.ErrNotExist)
+		return false
 	}
-	return true, info.IsDir()
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(LiveMissionLogPath(liveRoot, e.Name(), sessionID)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // missionIsWhollyLegacy reports whether a mission's whole record is frozen

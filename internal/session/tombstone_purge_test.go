@@ -196,14 +196,25 @@ func TestPurgeTombstoned_MissionProbeErrorRefuses(t *testing.T) {
 	assert.Contains(t, refused, "sess-mp")
 }
 
-// establishLiveSessionsZone makes repoRoot look like a checkout that has
-// written session audit files, so a MISSING file for some other session reads
-// as a deletion rather than as the ordinary absence of another checkout's
-// state. Without it a bare temp dir has no live-sessions zone and nothing about
-// it is evidence of loss (ethos-q6e2).
-func establishLiveSessionsZone(t *testing.T, repoRoot string) {
+// establishWroteHere makes repoRoot look like a checkout this session really
+// wrote in, so a missing live file there reads as a deletion rather than as the
+// ordinary absence of another checkout's state (ethos-q6e2).
+//
+// The evidence is a sibling live MISSION log, not a directory: the seal
+// MkdirAlls the live zone and creates <session>.lock in whatever checkout it
+// runs in, so any directory-keyed probe manufactures its own evidence. Only
+// <session>.log.jsonl is written solely by the live writer.
+func establishWroteHere(t *testing.T, repoRoot, sessionID string) {
 	t.Helper()
-	require.NoError(t, os.MkdirAll(audit.LiveSessionsDir(repoRoot), 0o700))
+	path := audit.LiveMissionLogPath(repoRoot, "m-2026-07-21-100", sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","event":"create"}` + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o600))
+	// Seal it so this sibling contributes no unsealed lines of its own.
+	dir := audit.SealedMissionDir(repoRoot, "m-2026-07-21-100")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, audit.MissionChunkFile(sessionID, 100, 100)), []byte(line), 0o600))
 }
 
 func TestPurgeTombstoned_TombstoneWriteFailureRefuses(t *testing.T) {
@@ -215,7 +226,7 @@ func TestPurgeTombstoned_TombstoneWriteFailureRefuses(t *testing.T) {
 	// The checkout wrote session audit files but this session's is gone →
 	// liveGone → a tombstone is attempted. Block its write by planting a
 	// directory at the tombstone path; the roster must survive.
-	establishLiveSessionsZone(t, repoRoot)
+	establishWroteHere(t, repoRoot, "sess-tb")
 	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tb.purged"), 0o700))
 
 	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
@@ -233,7 +244,7 @@ func TestPurgeTombstoned_TombstoneWriteFailureRefusesUnderForce(t *testing.T) {
 	root := Participant{AgentID: "user1"}
 	primary := Participant{AgentID: "9999999", Parent: "user1"}
 	require.NoError(t, s.Create("sess-tbf", root, primary, testRepoID, ""))
-	establishLiveSessionsZone(t, repoRoot)
+	establishWroteHere(t, repoRoot, "sess-tbf")
 	require.NoError(t, os.MkdirAll(filepath.Join(s.sessionsDir(), "sess-tbf.purged"), 0o700))
 
 	// --force overrides an unprovable state, never a failed loss record.

@@ -111,15 +111,20 @@ func TestVacuumCrossCheckRosterActiveMissingLive(t *testing.T) {
 // and reaches none of them. Warning on absence alone reported loss for every
 // mission a long-lived session had touched, on every commit, in every other
 // checkout.
+//
+// The roster records the checkout that really wrote the log, so the probe
+// follows it there and finds the file. That is the whole mechanism: the fix is
+// looking in the right place, not suppressing on the chunk.
 func TestVacuumCrossCheckSilentOnSealedMissionLive(t *testing.T) {
-	repo := t.TempDir()
+	committing := t.TempDir() // a clone with only the tracked tree
+	writer := t.TempDir()     // the checkout that actually wrote the live log
 	globalRoot := t.TempDir()
 	mid := "m-2026-07-21-001"
-	writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile("sess-ml", 100, 200), 100, 200)
-	// No live log under .punt-labs/local/ — this checkout never wrote one.
+	writeChunkFile(t, sealedMissionDir(committing, mid), audit.MissionChunkFile("sess-ml", 100, 200), 100, 200)
+	writeLiveMissionLog(t, writer, mid, "sess-ml", 200)
 
 	var buf bytes.Buffer
-	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, "sess-ml"), &buf); err != nil {
+	if err := VacuumCrossCheck(committing, globalRoot, activeIn(writer, "sess-ml"), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
@@ -202,22 +207,52 @@ func writeLiveMissionLog(t *testing.T, repo, mid, sess string, ts int64) {
 // all. Before the fix this printed one "lines were lost" warning per mission
 // (43 in the reported case) on every commit. It must print none.
 func TestVacuumCrossCheckNoLiveZoneReproduction(t *testing.T) {
-	repo := t.TempDir()
+	committing := t.TempDir() // the worktree/clone: tracked tree only, no live zone
+	writer := t.TempDir()     // where the session actually wrote
 	globalRoot := t.TempDir()
 	const sess = "c7e50ab0"
 	const missions = 43
 	for i := 0; i < missions; i++ {
 		mid := fmt.Sprintf("m-2026-07-21-%03d", i+1)
 		ts := int64(100 + i*10)
-		writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile(sess, ts, ts+1), ts, ts+1)
+		writeChunkFile(t, sealedMissionDir(committing, mid), audit.MissionChunkFile(sess, ts, ts+1), ts, ts+1)
+		writeLiveMissionLog(t, writer, mid, sess, ts+1)
 	}
 
 	var buf bytes.Buffer
-	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, sess), &buf); err != nil {
+	if err := VacuumCrossCheck(committing, globalRoot, activeIn(writer, sess), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if n := bytes.Count(buf.Bytes(), []byte("mission live log is gone")); n != 0 {
 		t.Errorf("mission-loss warnings = %d, want 0:\n%s", n, buf.String())
+	}
+}
+
+// TestVacuumCrossCheckFallbackCheckoutSuppresses is the one case a chunk is
+// still allowed to silence: a tombstone that recorded no checkout, so the probe
+// falls back to the committing one. Nothing ever bound the session there and it
+// holds no live log of the session's, so its missing file is the ordinary
+// absence of another checkout's state, not evidence.
+func TestVacuumCrossCheckFallbackCheckoutSuppresses(t *testing.T) {
+	repo := t.TempDir()
+	gitRepoWithOrigin(t, repo, vacuumTestRepoID)
+	globalRoot := t.TempDir()
+	const sess = "sess-fallback"
+	mid := "m-2026-07-21-001"
+	writeChunkFile(t, sealedMissionDir(repo, mid), audit.MissionChunkFile(sess, 100, 200), 100, 200)
+	// A tombstone with no Checkout — written before the field existed.
+	if err := audit.WriteTombstone(globalSessionsDir(t, globalRoot), audit.Tombstone{
+		Session: sess, Repo: vacuumTestRepoID, UnsealedLines: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(repo, globalRoot, nil, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
+		t.Errorf("a fallback checkout claimed a mission loss it cannot know about: %q", buf.String())
 	}
 }
 

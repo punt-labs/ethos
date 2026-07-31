@@ -59,10 +59,11 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 		// stat'd (DESIGN.md §Seal failure). A tombstone written before the
 		// field existed names no checkout; fall back to this one, which is what
 		// the pre-field code always did.
-		liveRoot := t.Checkout
-		if liveRoot == "" {
-			liveRoot = repoRoot
+		writer := audit.RecordedWriter(t.Checkout)
+		if t.Checkout == "" {
+			writer = audit.AssumedWriter(repoRoot)
 		}
+		liveRoot := writer.Root
 		if !audit.SessionLiveFileExists(liveRoot, t.Session) {
 			fmt.Fprintf(w,
 				"warning: session %s was purged with unsealed audit lines and its live file is gone; "+
@@ -81,7 +82,7 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 			}
 		}
 		// A purged session's mission-log lines are guarded the same way.
-		if mErr := warnMissingMissionLives(globalRoot, repoRoot, liveRoot, t.Session, w); mErr != nil {
+		if mErr := warnMissingMissionLives(globalRoot, repoRoot, writer, t.Session, w); mErr != nil {
 			return mErr
 		}
 	}
@@ -104,7 +105,7 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 					"if it was deleted, unsealed lines were lost\n",
 				as.Session, as.Checkout)
 		}
-		if mErr := warnMissingMissionLives(globalRoot, repoRoot, as.Checkout, as.Session, w); mErr != nil {
+		if mErr := warnMissingMissionLives(globalRoot, repoRoot, audit.RecordedWriter(as.Checkout), as.Session, w); mErr != nil {
 			return mErr
 		}
 	}
@@ -134,12 +135,12 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSessio
 // chunks are tracked and travel, live files are per-checkout and never do — so
 // warning on absence alone reported loss for every mission a long-lived session
 // had ever touched, in every other checkout (ethos-q6e2).
-func warnMissingMissionLives(globalRoot, repoRoot, liveRoot, sessionID string, w io.Writer) error {
+func warnMissingMissionLives(globalRoot, repoRoot string, writer audit.Writer, sessionID string, w io.Writer) error {
 	bound, err := mission.SessionBoundMissions(globalRoot, repoRoot, sessionID)
 	if err != nil {
 		return err
 	}
-	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, liveRoot, sessionID, bound)
+	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, writer, sessionID, bound)
 	if err != nil {
 		return err
 	}
