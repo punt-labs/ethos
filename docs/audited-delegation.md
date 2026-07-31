@@ -119,6 +119,17 @@ remains the explicit way to bind to a mission created in another
 session. A typo in the mission ID is refused at bind time, not
 silently staged.
 
+The sidecar records how it was bound — `claim` or `dispatch` — in a
+sibling `active-mission-origin` file. Only a `claim` origin produces
+commit trailers: `dispatch` binds the session for delegation filing but
+leaves the leader's own commits untrailed, so dispatching work to a
+worker no longer tags unrelated later commits with that mission. Run
+`ethos mission claim <id>` to turn trailers on; the rebind's stderr line
+says so. The `active-mission` file itself stays a single line holding
+only the mission ID, so a reader that predates the origin field is
+unaffected — the origin travels beside it, and an origin that names a
+different mission than `active-mission` is ignored.
+
 The binding is cleared on close, in the closing session. A spawn whose
 active-mission sidecar names a mission that has since **closed**
 (or failed/escalated) is **not** filed under it: it runs as Tier A
