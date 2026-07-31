@@ -31,7 +31,7 @@ a senior engineer. "Before this, I spent a full afternoon reading docs
 and still didn't have a working team."
 
 Ethos is free, open-source, and runs entirely on your machine.
-Install: `curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/main/install.sh | sh`.
+Install: `curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/7759dd5/install.sh | sh`.
 Then run `ethos setup`.
 
 ---

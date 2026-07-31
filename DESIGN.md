@@ -2774,6 +2774,24 @@ Any future mission created with the 3.3 binary gets a real hash.
   because it does work that's often unused (most hook invocations
   are for non-evaluator subagents).
 
+**Implementation note (ethos-z69l, #409).** The gate originally scanned
+every open mission and matched by evaluator handle alone. A handle that is
+worker on one open mission and evaluator on another was bound as the other
+mission's frozen verifier whenever it spawned — even when dispatched, with
+its own `MISSION_ID`, to *work* its own mission. The misbound spawn then
+enforced the wrong mission's write-set and refused its actual one.
+`checkVerifierHash` now reads the spawn's declared `MISSION_ID` and applies
+the gate only when that one mission is open and names the subagent as its
+evaluator; a spawn serving the declared mission in any other role takes the
+normal persona path. The decision preserved: bind the gate by
+`(mission_id, role)`, not by handle. Per-mission binding makes cross-mission
+drift aggregation structurally impossible, so `formatDriftError` reports only
+the single declared mission. `ethos mission create` additionally prints a
+non-fatal warning when a new contract's worker or evaluator handle overlaps
+an open mission's, since handle overlap is the precondition for this
+misbinding class — advisory only, because handle reuse across missions is a
+legitimate pattern.
+
 ## DES-034: Bounded rounds with mandatory reflection (SETTLED)
 
 **Status**: Settled. Implemented 2026-04-08 as `ethos-07m.8` — the
@@ -4830,9 +4848,9 @@ change it.
   3.4/3.5/3.6 enforcement.** DES-052 is purely a write-set
   authorization extension.
 
-## DES-054: Audited delegation — Tier A audit + Tier B contracts (DRAFT)
+## DES-054: Audited delegation — Tier A audit + Tier B contracts (SETTLED)
 
-**Status**: Draft v5. Bead `ethos-98u9`. Supersedes `ethos-717p`, `ethos-gqg3`. Reviewed across four rounds (rop minimalism / rsc compatibility / jra formal invariants). Round 4 verdict: 3× APPROVE — converged.
+**Status**: Settled. Shipped across PRs #326–#328 (2026-05-22/23); hardened in v4.9.0 by the mission-lifecycle cluster (#415, DES-067). Bead `ethos-98u9`. Supersedes `ethos-717p`, `ethos-gqg3`. Reviewed across four rounds (rop minimalism / rsc compatibility / jra formal invariants). Round 4 verdict: 3× APPROVE — converged. Design converged at v5; the revision history below is retained for provenance.
 
 Revision history:
 
@@ -5269,6 +5287,34 @@ Three implementation phases. Each phase: bwk worker / rsc evaluator. Test covera
 
 Final integration test: leader runs a Tier A Agent call → audit enrichment captures parent + child + prompt in the session log; leader runs a Tier B `mission dispatch` → same audit + contract + preconditions evaluable; commits from both surface via `git log --grep Mission:` and `git log --grep Delegation:`. The `ethos audit show --delegation <id>` command renders the unified view from the single session audit store.
 
+**Implementation note (ethos-ersr / ethos-n4np / ethos-ggtu, #411).** Making the mission tree git-tracked and pushing it to a public repo turned two write paths into PII leaks. The Tier B skeleton writer wrote `prompt.md` and `record.yaml` with `$HOME` and the repo root intact, so thirteen committed prompts named the operator's home directory and machine layout; the per-tool-call audit lines carried full email bodies, recipients, and a recipient address inside a `CronCreate` prompt straight into the sealed, git-tracked record. The fixes, all applied at the write path before anything reaches disk:
+
+- **One redactor, two call sites.** The path substitution the audit lines
+  already used moved from unexported `internal/hook` code down to
+  `mission.PathRedactor`; `hook`'s `redactAbsolutePaths` delegates to it. One
+  implementation, no drift.
+- **Redact inside the writer, not at the call site.** `$HOME`/repo-root
+  redaction runs inside `WriteDelegationSkeleton` (and `CloseDelegation`'s
+  free-text reason), so a future caller cannot write an unredacted prompt by
+  forgetting a step. Resolving `$HOME` is a precondition — a home directory
+  ethos cannot name is one it cannot redact — so an unresolvable `$HOME`
+  refuses the write, which `PreToolUse` turns into a spawn refusal. Fail
+  closed, never a partial write.
+- **Keep-list for sensitive tools, not a deny-list.** A sensitive tool's
+  audit input reduces to a keep-list (`send_email` keeps its subject;
+  everything else becomes `[redacted]`), so a `cc` or `reply-to` added to the
+  tool later is redacted the day it appears, not the day someone remembers it.
+- **Address sweep on prose fields only.** A second pass rewrites addresses in
+  free-form prose fields, leaving a `Read`'s `file_path` and a `Bash` command
+  byte-identical to before.
+- **Redact before the hash.** Both passes run before `tool_input_hash`, so the
+  hash is over the stored form — the DES-052 cross-machine collision-detection
+  invariant. A hash over a form that never reaches disk cannot be checked
+  against anything. Lines that lose content carry `redacted: true`, matching
+  the marker the hand-redacted public-website lines already use.
+
+**Implementation note (four friction fixes, #412).** Four correctness fixes to specified-but-mis-built behavior. The design-relevant one is **ethos-jawp**: the commit-msg trailer hook now gates on an active mission binding rather than stamping every commit, and the active-mission sidecar clears on close — on the CLI, hook, and MCP close paths alike, with a genuine clear failure reported rather than swallowed. This makes the binding lifecycle symmetric: a delegation binds a session, its trailers land while the binding is live, and close tears the binding down. The other three are narrower: **ethos-qvbh** requires the validated `mission` field on reflections and back-fills it on read of legacy records; **ethos-72wj** subordinates the stub-agent install to the DES-026 generator and fails closed when agent-ownership lookup fails; **ethos-c0yp** scopes the `inputs.bead` deprecation to user submission so legacy reads are unaffected.
+
 ---
 
 **End of draft v5.** Round-3 verdicts (rop APPROVE / jra APPROVE / rsc APPROVE WITH ONE NEW REQ) plus CEO clean-slate direction applied. Three structural simplifications landed (date-keyed two-tree layout, single audit storage, sibling-file counters) plus three round-3 IMPL fixes (Tier A verdict semantics, `max_delegation_depth` cleanup, transition window stated). Round 4 dispatched to test stability — design converges when a review round adds zero new substantive findings.
@@ -5630,9 +5676,9 @@ Design missions (specialist drafts preserved in branch history):
 
 ---
 
-## DES-058: Live audit write path and sealed committed record (amends DES-054) (DRAFT)
+## DES-058: Live audit write path and sealed committed record (amends DES-054) (SETTLED)
 
-**Status**: Draft. Bead `ethos-t5b6`. Amends DES-054 v5 storage.
+**Status**: Settled. Shipped in v4.8.0. Bead `ethos-t5b6`. Amends DES-054 v5 storage.
 Cross-repo request from punt-kit (clean-tree gate on `punt release`
 preflight failing against siblings with live sessions). Full design:
 `docs/audit-seal.md`.
@@ -6783,3 +6829,125 @@ their options from the registry. `internal/mcp` is in the write-set.
   reflection already knows; reflect-plus-overlay deletes the copy.
 - **`go generate` for READMEs** — adds a generated artifact and a CI step; a
   comparison check needs neither.
+
+## DES-067: Mission-lifecycle cluster — glob write-set admission, bind-vs-claim trailers, committing-session resolution (SETTLED)
+
+**Status**: Settled. Shipped v4.9.0 (PR #415). Beads `ethos-qy7k`,
+`ethos-7vo3`, `ethos-pobi`, `ethos-t2lb`, `ethos-u4kq`. Hardens DES-054
+(audited delegation) and DES-036 (write-set admission) after dogfooding drove
+the full delegation lifecycle — declare a write-set, dispatch a worker, admit
+its result, stamp the commit — under real load.
+
+### Problem
+
+Running ethos to build ethos exercised the whole mission-to-audit path at once,
+and seven places where the built behavior diverged from the specified behavior
+surfaced together:
+
+1. A `write_set` entry declaring a glob compared literally, so `docs/**` read as
+   a directory literally named `**`. Every real path under it fell outside:
+   `ethos mission result` refused a valid submission and the PreToolUse verifier
+   allowlist — built from the same write-set — refused every write the contract
+   had authorized.
+2. The PreToolUse dispatch cannot see a `MISSION_ID` the leader never exported,
+   so it falls back to the active-mission sidecar. That sidecar was written only
+   by `ethos mission claim` and stayed put until an explicit `release`. A leader
+   who created a second mission without releasing the first filed the new
+   delegation under the old mission, so the audit trail named the wrong contract.
+3. A dispatch that merely handed work to a worker stamped `Mission`/`Delegation`
+   trailers onto the leader's own later commits — the `ethos-jawp` false-trailer
+   class arriving through a new door.
+4. The commit-msg hook stamped the trailers of the most recently dated session
+   on the machine, not the session that was committing.
+5. A `--var`/`--write-set` value holding several paths expanded into one entry,
+   so a multi-path claim shipped narrower than declared with nothing said.
+6. Identity resolution returned an arbitrary match when two identities shared an
+   email or GitHub handle.
+7. `path.Match` read `[draft]` as a character class, so a real bracketed file
+   name was refused and a name nobody declared was admitted.
+
+### Decision
+
+Seven fixes, each grounded in the shipped code:
+
+- **Glob-aware write-set containment (`ethos-qy7k`).** `pathContainedBy` matches
+  entry segments against a leading run of the file segments — `**` spans any
+  number of segments, `*`/`?` match within one (`path.Match` per segment), and a
+  segment with no glob metacharacter compares literally, so every non-glob entry
+  behaves exactly as before (the DES-036 parent-claim refusal is untouched).
+  Result admission, the cross-mission overlap check, and the hook's `pathAllowed`
+  all call the one exported `mission.PathContainedBy`, so what a contract admits
+  and what the verifier admits are identical. A target carrying a `..` segment is
+  contained by nothing, so a glob can never authorize a write outside the repo;
+  an entry made only of glob metacharacters is refused (it would claim the whole
+  tree); and `globMeta` drops `[` `]` so brackets read as ordinary filename
+  characters, not a character class.
+- **Bind origin vs claim origin (`ethos-7vo3`, closing the `ethos-jawp`
+  false-trailer class).** `mission create` and `mission dispatch` bind the
+  caller's session to the mission they just named — creating or dispatching *is*
+  the leader naming a mission — so an in-session `Agent()` spawn files its
+  delegation under that mission; a rebind prints one stderr line, and a spawn
+  against a since-closed mission proceeds as Tier A with the stale mission named
+  on stderr. But a dispatch binding files delegations only; it does **not** stamp
+  commit trailers. Those require an explicit `ethos mission claim`, so dispatching
+  work to a worker no longer tags the leader's own commits. Session resolution
+  stays advisory: a human dispatching from a plain terminal has no session, and
+  that is not an error.
+- **One-line active-mission sidecar + sibling `active-mission-origin`
+  (back-compat).** Every reader that predates the origin does `TrimSpace` over
+  the whole `active-mission` file, so a second line would turn the mission ID
+  into `m-…\ndispatch` and an older binary would deny every spawn — not
+  hypothetical, since agents run a `.tmp` build while hooks invoke the installed
+  binary. So `active-mission` stays one line, byte-identical to every version;
+  the bind origin moves to a sibling `active-mission-origin`, and a claim is its
+  *absence*, which is also what every pre-change sidecar looks like — upgrade
+  needs no migration, downgrade loses only trailer suppression. The origin names
+  its own mission, so a leftover origin cannot match the current binding. Write
+  order enforces the safe failure: a dispatch writes the origin first, a claim
+  writes the mission first then removes the origin, so an interrupted pair always
+  reads as a claim — a lost suppression costs a stray trailer, never a denied
+  spawn. A non-`ENOENT` read error means "unknown", not "claim".
+- **Committing-session trailer resolution (`ethos-pobi`).** The commit-msg hook
+  stamps the `Mission`/`Delegation` trailers of the session that is committing,
+  resolved through `ETHOS_SESSION` or the Claude process tree, instead of the
+  most recently dated session on the machine. An unresolvable session gets no
+  trailer, and a failed lookup is surfaced rather than swallowed.
+- **Comma-or-whitespace write-set splitting (`ethos-t2lb`).** `SplitPathList`
+  splits `--var`, `--write-set`, and `--extract-into` values on commas **or**
+  whitespace, so a multi-path value expands into distinct `write_set` entries,
+  each admission-checked on its own. Any value that splits prints the resulting
+  entries to stderr (quoted, comma-joined) so a two-entry expansion of
+  `zz space/dir.md` is visible. An entry whose variable expands to nothing is
+  refused, naming the stage, index, and entry, rather than silently vanishing.
+- **Ambiguous-identity refusal (`ethos-u4kq`).** Identity resolution refuses an
+  ambiguous match instead of returning an arbitrary one: two identities sharing
+  an email or GitHub handle produce `ambiguous identity: N matches …` naming
+  every candidate.
+- **Platform-tag hardening.** `globMeta` and `SplitPathList` moved to an untagged
+  `pathlist.go`; they had sat in `//go:build !windows` files that untagged
+  callers (`validate.go`, `pipeline.go`) depend on, a break invisible to a
+  darwin/linux `make check`. A constant or function with no platform behavior
+  belongs in a file with no platform constraint.
+
+### Rejected alternatives
+
+- **A separate hook-side prefix check** (status quo). Rejected: the verifier
+  allowlist drifted from the contract's containment check — the source of the
+  `ethos-qy7k` double refusal. One exported matcher removes the second
+  implementation.
+- **Keep character-class globbing** (`path.Match` default). Rejected: character
+  classes were never part of the `**`/`*`/`?` write-set vocabulary, nobody writes
+  a character-class write-set, and their support over-admitted files nobody
+  declared.
+- **Carry the bind origin as a second line in `active-mission`.** Rejected: it
+  poisons every `TrimSpace`-reading binary in a mixed-version session. The
+  sibling-file-plus-absence encoding is downgrade-safe by construction.
+- **Make a claim the only thing that files a delegation.** Rejected: dispatching
+  *is* an explicit naming of a mission, so the delegation must file under it; the
+  trailer-emission gate is what separates "filed" from "stamped".
+- **Split write-set values on commas only** (prior behavior). Rejected: a
+  whitespace-separated `--var` value shipped as a single entry claiming a path
+  that does not exist. Splitting on either, plus an echo to stderr, makes the
+  expansion auditable.
+- **Return the first identity match.** Rejected: an arbitrary answer to an
+  ambiguous question is worse than a refusal that names the collision.

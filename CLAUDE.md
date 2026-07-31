@@ -121,7 +121,7 @@ Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `she
 | `internal/seed/` | Embedded starter content (roles, talents, archetypes, pipelines, bundles) deployed by `ethos seed` |
 | `internal/adr/` | ADR model and storage backing the `adr` MCP tool |
 | `internal/ui/` | Localhost web UI for traceability data (`ethos ui`). Embedded Go HTTP server + html/template + Tailwind CDN. Reads missions, delegations, audit trails from `.punt-labs/ethos/`. |
-| `internal/mcp/` | MCP tool definitions and handlers (11 tools) |
+| `internal/mcp/` | MCP tool definitions and handlers (12 tools) |
 
 ### Storage Layout
 
@@ -145,7 +145,7 @@ Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `she
 | Global bundles | `~/.punt-labs/ethos/bundles/<name>/` | No |
 | ADRs | `~/.punt-labs/ethos/adrs/<id>.yaml` | No |
 | Repo bundles | `.punt-labs/ethos-bundles/<name>/` | Yes |
-| Missions | `~/.punt-labs/ethos/missions/<id>.yaml` | No |
+| Missions | `<repo>/.punt-labs/ethos/missions/<id>/` | Yes |
 | Mission traces | `<repo>/.punt-labs/ethos/missions.jsonl` | Yes |
 | Sessions | `~/.punt-labs/ethos/sessions/<session-id>.yaml` | No |
 
