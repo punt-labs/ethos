@@ -28,6 +28,17 @@ func globalSessionsDir(t *testing.T, globalRoot string) string {
 	return dir
 }
 
+// activeIn returns roster-active sessions that recorded checkout as the writer
+// of their live zone — the ordinary case, where the committing checkout is also
+// the one that wrote the live files.
+func activeIn(checkout string, sessions ...string) []ActiveSession {
+	out := make([]ActiveSession, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, ActiveSession{Session: s, Checkout: checkout})
+	}
+	return out
+}
+
 // gitRepoWithOrigin makes dir a git checkout whose origin remote resolves to id,
 // so VacuumCrossCheck derives that identity from the checkout.
 func gitRepoWithOrigin(t *testing.T, dir, id string) {
@@ -86,7 +97,7 @@ func TestVacuumCrossCheckRosterActiveMissingLive(t *testing.T) {
 	globalRoot := t.TempDir()
 	var buf bytes.Buffer
 	// An active session bound to the repo whose live file does not exist.
-	if err := VacuumCrossCheck(repo, globalRoot, []string{"sess-active"}, &buf); err != nil {
+	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, "sess-active"), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(buf.Bytes(), []byte("sess-active")) {
@@ -108,7 +119,7 @@ func TestVacuumCrossCheckSilentOnSealedMissionLive(t *testing.T) {
 	// No live log under .punt-labs/local/ — this checkout never wrote one.
 
 	var buf bytes.Buffer
-	if err := VacuumCrossCheck(repo, globalRoot, []string{"sess-ml"}, &buf); err != nil {
+	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, "sess-ml"), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
@@ -133,7 +144,7 @@ func TestVacuumCrossCheckNoLiveZoneReproduction(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := VacuumCrossCheck(repo, globalRoot, []string{sess}, &buf); err != nil {
+	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, sess), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if n := bytes.Count(buf.Bytes(), []byte("mission live log is gone")); n != 0 {
@@ -163,7 +174,7 @@ func TestVacuumCrossCheckSilentOnLegacyMissionLog(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := VacuumCrossCheck(repo, globalRoot, []string{sess}, &buf); err != nil {
+	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, sess), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
@@ -188,11 +199,118 @@ func TestVacuumCrossCheckWarnsOnClaimedButUnsealedMissionLive(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := VacuumCrossCheck(repo, globalRoot, []string{sess}, &buf); err != nil {
+	if err := VacuumCrossCheck(repo, globalRoot, activeIn(repo, sess), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(buf.Bytes(), []byte("mission "+mid)) ||
 		!bytes.Contains(buf.Bytes(), []byte("mission live log is gone")) {
 		t.Errorf("vacuum did not warn on claimed-but-unsealed lost mission live log: %q", buf.String())
+	}
+}
+
+// TestVacuumCrossCheckRosterCheckoutScoping is Fix 2: the live probes follow
+// the checkout a roster recorded, never the checkout that happens to be
+// committing. A session whose live files are alive in its own checkout draws no
+// warning here, and a roster that recorded no checkout names no writer at all,
+// so nothing can be concluded from an absence.
+func TestVacuumCrossCheckRosterCheckoutScoping(t *testing.T) {
+	const sess = "sess-elsewhere"
+	mid := "m-2026-07-21-011"
+
+	cases := []struct {
+		name string
+		// checkout resolves the recorded path once the temp dirs exist.
+		checkout  func(committing, writer string) string
+		writeLive bool
+		wantWarn  bool
+	}{
+		{
+			name:      "recorded checkout is another live one",
+			checkout:  func(_, writer string) string { return writer },
+			writeLive: true,
+			wantWarn:  false,
+		},
+		{
+			name:      "recorded checkout is another one, live file gone",
+			checkout:  func(_, writer string) string { return writer },
+			writeLive: false,
+			wantWarn:  true,
+		},
+		{
+			name:      "roster records no checkout",
+			checkout:  func(string, string) string { return "" },
+			writeLive: false,
+			wantWarn:  false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			committing := t.TempDir()
+			writer := t.TempDir()
+			globalRoot := t.TempDir()
+			// The session is bound to the mission but sealed no chunk, so only
+			// the live file can account for its lines.
+			if err := mission.WriteActiveMission(globalRoot, sess, mid); err != nil {
+				t.Fatal(err)
+			}
+			if tc.writeLive {
+				path := audit.LiveMissionLogPath(writer, mid, sess)
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				line := `{"ts":"` + audit.FormatLineTS(100) + `","tool":"Bash"}` + "\n"
+				if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			active := []ActiveSession{{Session: sess, Checkout: tc.checkout(committing, writer)}}
+
+			var buf bytes.Buffer
+			if err := VacuumCrossCheck(committing, globalRoot, active, &buf); err != nil {
+				t.Fatal(err)
+			}
+			got := bytes.Contains(buf.Bytes(), []byte("mission live log is gone"))
+			if got != tc.wantWarn {
+				t.Errorf("warned = %v, want %v: %q", got, tc.wantWarn, buf.String())
+			}
+		})
+	}
+}
+
+// TestVacuumCrossCheckTombstoneUsesRecordedCheckout is Fix 4: the tombstone
+// branch stats the checkout the purge recorded, not the committing one. A
+// tombstone flagged in a checkout whose live file still stands must report the
+// unsealed lines, not declare them gone.
+func TestVacuumCrossCheckTombstoneUsesRecordedCheckout(t *testing.T) {
+	committing := t.TempDir()
+	gitRepoWithOrigin(t, committing, vacuumTestRepoID)
+	writer := t.TempDir()
+	globalRoot := t.TempDir()
+
+	// The live audit file stands in the recorded checkout, holding one unsealed
+	// line. It does not exist under the committing checkout.
+	livePath := audit.LiveAuditPath(writer, "sess-tb")
+	if err := os.MkdirAll(filepath.Dir(livePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"ts":"` + audit.FormatLineTS(100) + `","tool":"Bash"}` + "\n"
+	if err := os.WriteFile(livePath, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := audit.WriteTombstone(globalSessionsDir(t, globalRoot), audit.Tombstone{
+		Session: "sess-tb", Repo: vacuumTestRepoID, Checkout: writer, UnsealedLines: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := VacuumCrossCheck(committing, globalRoot, nil, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(buf.Bytes(), []byte("live file is gone")) {
+		t.Errorf("tombstone branch called a live file gone that stands in its recorded checkout: %q", buf.String())
+	}
+	if !bytes.Contains(buf.Bytes(), []byte("1 unsealed audit line(s) still on disk")) {
+		t.Errorf("tombstone branch did not count the unsealed line at the recorded checkout: %q", buf.String())
 	}
 }

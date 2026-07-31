@@ -89,13 +89,20 @@ func MissionResiduePath(repoRoot, missionID string) string {
 	return filepath.Join(LiveMissionsDir(repoRoot), filepath.Base(missionID)+".jsonl")
 }
 
+// MissionLegacyLogPath returns a mission's frozen pre-DES-058 tracked event
+// log — the record a mission closed before the live/sealed split carries
+// instead of chunks. It is git-tracked, so it reaches every checkout.
+func MissionLegacyLogPath(repoRoot, missionID string) string {
+	return filepath.Join(SealedMissionDir(repoRoot, missionID), "log.jsonl")
+}
+
 // MissionLegacySources returns a mission's frozen pre-discipline sources in
 // read order: the tracked log.jsonl first, then the drained missions/<id>.jsonl
 // residue. Both contribute their max ts to the mission watermark and pass
 // through the read undeduped as the mission's oldest lines.
 func MissionLegacySources(repoRoot, missionID string) []string {
 	return []string{
-		filepath.Join(SealedMissionDir(repoRoot, missionID), "log.jsonl"),
+		MissionLegacyLogPath(repoRoot, missionID),
 		MissionResiduePath(repoRoot, missionID),
 	}
 }
@@ -144,11 +151,19 @@ func SessionDirMatches(name, sessionID string) bool {
 	return name[dateLen+1:] == sessionID
 }
 
-// SessionUnsealedCount returns how many live audit lines a session holds past
-// its sealed watermark — the lines a purge would strand. Zero when the live
-// file is absent or fully sealed.
-func SessionUnsealedCount(repoRoot, sessionID string) (int, error) {
-	dir, err := FindSealedSessionDir(repoRoot, sessionID)
+// The two zones of DES-058 sit in two different roots whenever one checkout
+// probes a session that another one wrote. Sealed chunks are git-tracked and
+// reach every checkout, so they are read from trackedRoot — the checkout doing
+// the probing. The live file is machine-local and reaches none of them, so it
+// is read from liveRoot — the checkout that recorded itself as the writer. The
+// two roots are the same directory in the ordinary case, and a probe that
+// conflates them is the ethos-q6e2 defect.
+
+// SessionUnsealedCountAcross returns how many live audit lines a session holds
+// past its sealed watermark when the sealed record and the live file live in
+// different checkouts. Zero when the live file is absent or fully sealed.
+func SessionUnsealedCountAcross(trackedRoot, liveRoot, sessionID string) (int, error) {
+	dir, err := FindSealedSessionDir(trackedRoot, sessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -156,18 +171,25 @@ func SessionUnsealedCount(repoRoot, sessionID string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	tail, err := LiveLinesPastWatermark(LiveAuditPath(repoRoot, sessionID), "", wm)
+	tail, err := LiveLinesPastWatermark(LiveAuditPath(liveRoot, sessionID), "", wm)
 	if err != nil {
 		return 0, err
 	}
 	return len(tail), nil
 }
 
-// SessionLiveFileExists reports whether a session's recorded live audit file
-// is present. An absent recorded live file at purge time is itself evidence —
-// a checkout deleted before its lines sealed.
-func SessionLiveFileExists(repoRoot, sessionID string) bool {
-	_, err := os.Stat(LiveAuditPath(repoRoot, sessionID))
+// SessionUnsealedCount is SessionUnsealedCountAcross for a session probed in
+// the checkout that wrote it — the lines a purge there would strand.
+func SessionUnsealedCount(repoRoot, sessionID string) (int, error) {
+	return SessionUnsealedCountAcross(repoRoot, repoRoot, sessionID)
+}
+
+// SessionLiveFileExists reports whether a session's recorded live audit file is
+// present in liveRoot, the checkout that recorded itself as its writer. An
+// absent live file THERE is evidence — a checkout deleted before its lines
+// sealed. Its absence anywhere else says nothing.
+func SessionLiveFileExists(liveRoot, sessionID string) bool {
+	_, err := os.Stat(LiveAuditPath(liveRoot, sessionID))
 	return err == nil
 }
 
@@ -244,7 +266,10 @@ func (m MissionLive) Lost() bool {
 // not itself loss: each entry also records whether tracked chunks or a frozen
 // legacy record already hold the mission's lines, and MissionLive.Lost weighs
 // the three together.
-func ExpectedMissionLiveFiles(repoRoot, sessionID string, boundMissions []string) ([]MissionLive, error) {
+//
+// Chunks and the tracked legacy log are read from trackedRoot; live files and
+// the drained residue from liveRoot, the checkout that wrote them.
+func ExpectedMissionLiveFiles(trackedRoot, liveRoot, sessionID string, boundMissions []string) ([]MissionLive, error) {
 	seen := make(map[string]struct{})
 	var ids []string
 	add := func(id string) {
@@ -259,7 +284,7 @@ func ExpectedMissionLiveFiles(repoRoot, sessionID string, boundMissions []string
 		ids = append(ids, id)
 	}
 
-	base := SealedMissionsBase(repoRoot)
+	base := SealedMissionsBase(trackedRoot)
 	missions, err := os.ReadDir(base)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("reading %s: %w", base, err)
@@ -276,13 +301,13 @@ func ExpectedMissionLiveFiles(repoRoot, sessionID string, boundMissions []string
 	sort.Strings(ids)
 	out := make([]MissionLive, 0, len(ids))
 	for _, id := range ids {
-		livePath := LiveMissionLogPath(repoRoot, id, sessionID)
+		livePath := LiveMissionLogPath(liveRoot, id, sessionID)
 		_, statErr := os.Stat(livePath)
-		sealed, err := Watermark(SealedMissionDir(repoRoot, id), MissionNS, sessionID)
+		sealed, err := Watermark(SealedMissionDir(trackedRoot, id), MissionNS, sessionID)
 		if err != nil {
 			return nil, err
 		}
-		legacy, err := missionHasLegacyLines(repoRoot, id)
+		legacy, err := missionHasLegacyLines(trackedRoot, liveRoot, id)
 		if err != nil {
 			return nil, err
 		}
@@ -300,8 +325,14 @@ func ExpectedMissionLiveFiles(repoRoot, sessionID string, boundMissions []string
 // missionHasLegacyLines reports whether either of a mission's frozen
 // pre-DES-058 sources holds a parseable line. Those missions closed before the
 // live/sealed split existed, so they have no live file to find and never will.
-func missionHasLegacyLines(repoRoot, missionID string) (bool, error) {
-	for _, path := range MissionLegacySources(repoRoot, missionID) {
+// The tracked log.jsonl travels with git; the drained residue does not, so each
+// is read from its own root.
+func missionHasLegacyLines(trackedRoot, liveRoot, missionID string) (bool, error) {
+	sources := []string{
+		MissionLegacyLogPath(trackedRoot, missionID),
+		MissionResiduePath(liveRoot, missionID),
+	}
+	for _, path := range sources {
 		mx, err := MaxLegacyTS(path)
 		if err != nil {
 			return false, err
@@ -333,14 +364,15 @@ func missionChunkCarriesSession(dir, sessionID string) bool {
 
 // MissionUnsealedCount returns how many lines a mission's per-(mission,
 // session) live log holds past its sealed watermark. Zero when the live file
-// is absent or fully sealed.
-func MissionUnsealedCount(repoRoot, missionID, sessionID string) (int, error) {
-	sealedDir := SealedMissionDir(repoRoot, missionID)
+// is absent or fully sealed. Chunks come from trackedRoot, the live log from
+// liveRoot — the checkout that wrote it.
+func MissionUnsealedCount(trackedRoot, liveRoot, missionID, sessionID string) (int, error) {
+	sealedDir := SealedMissionDir(trackedRoot, missionID)
 	wm, err := Watermark(sealedDir, MissionNS, sessionID)
 	if err != nil {
 		return 0, err
 	}
-	tail, err := LiveLinesPastWatermark(LiveMissionLogPath(repoRoot, missionID, sessionID), sessionID, wm)
+	tail, err := LiveLinesPastWatermark(LiveMissionLogPath(liveRoot, missionID, sessionID), sessionID, wm)
 	if err != nil {
 		return 0, err
 	}

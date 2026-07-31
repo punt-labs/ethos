@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -496,4 +497,71 @@ func TestStore_CreatePreservesExplicitJoined(t *testing.T) {
 	assert.Equal(t, "2025-01-01T00:00:00Z", roster.Participants[0].Joined)
 	assert.NotEmpty(t, roster.Participants[1].Joined)
 	assert.NotEqual(t, "2025-01-01T00:00:00Z", roster.Participants[1].Joined)
+}
+
+// TestStore_CreateInCheckoutRecordsCheckout pins the DES-058 binding the
+// vacuum cross-check reads: the roster records the checkout whose live audit
+// zone the session writes to, distinct from the git-remote identity. Create
+// records none, which reads as "writer unknown".
+func TestStore_CreateInCheckoutRecordsCheckout(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "99999", Parent: "user1"}
+
+	require.NoError(t, s.CreateInCheckout("sess-co", root, primary,
+		"punt-labs/ethos", "/checkouts/ethos", "host1"))
+	roster, err := s.Load("sess-co")
+	require.NoError(t, err)
+	assert.Equal(t, "punt-labs/ethos", roster.Repo)
+	assert.Equal(t, "/checkouts/ethos", roster.Checkout)
+
+	require.NoError(t, s.Create("sess-noco", root, primary, "punt-labs/ethos", "host1"))
+	roster, err = s.Load("sess-noco")
+	require.NoError(t, err)
+	assert.Equal(t, "", roster.Checkout)
+}
+
+// TestPurgeTombstoned_SealedMissionDoesNotFlagTombstone is Fix 4 of ethos-q6e2.
+// The mission-namespace guard used to read an absent live log as loss, so a
+// purge run anywhere but the writing checkout minted a PERMANENT flagged
+// tombstone — a loss record that was never earned and warns at every commit
+// until acked. A sealed chunk is proof the lines survived, so this session is
+// clean and must purge silently.
+//
+// The session's own live audit file is written and fully sealed here, so the
+// session-namespace probe cannot supply the flag: only the mission branch is
+// under test.
+func TestPurgeTombstoned_SealedMissionDoesNotFlagTombstone(t *testing.T) {
+	s := testStore(t)
+	repoRoot := t.TempDir()
+	root := Participant{AgentID: "user1"}
+	primary := Participant{AgentID: "9999999", Parent: "user1"} // dead PID → stale
+	require.NoError(t, s.CreateInCheckout("sess-sealed", root, primary, testRepoID, repoRoot, ""))
+	writeSealedLive(t, repoRoot, "sess-sealed")
+	// A mission whose chunk carries this session, with no live log in this
+	// checkout — the steady state of every checkout that did not write it.
+	sealMissionChunkFor(t, repoRoot, "m-2026-07-21-009", "sess-sealed")
+
+	purged, refused, err := s.PurgeTombstoned(repoRoot, testRepoID, false)
+	require.NoError(t, err)
+	assert.Contains(t, purged, "sess-sealed")
+	assert.Empty(t, refused)
+
+	_, err = audit.ReadTombstone(filepath.Join(s.sessionsDir(), "sess-sealed.purged"))
+	assert.Error(t, err, "a session whose mission lines are all sealed must leave no loss tombstone")
+}
+
+// writeSealedLive writes a live audit line for sessionID under repoRoot and
+// seals it into a tracked chunk, so the session-namespace probe reports the
+// file present with nothing unsealed.
+func writeSealedLive(t *testing.T, repoRoot, sessionID string) {
+	t.Helper()
+	live := audit.LiveAuditPath(repoRoot, sessionID)
+	require.NoError(t, os.MkdirAll(filepath.Dir(live), 0o700))
+	body := `{"ts":"` + audit.FormatLineTS(100) + `","session":"` + sessionID + `","tool":"Read"}` + "\n"
+	require.NoError(t, os.WriteFile(live, []byte(body), 0o600))
+
+	dir := filepath.Join(audit.SealedSessionsBase(repoRoot), "2026-07-21-"+sessionID)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, audit.SessionChunkFile(100, 100)), []byte(body), 0o600))
 }

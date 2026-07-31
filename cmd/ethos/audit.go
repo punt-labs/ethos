@@ -219,8 +219,9 @@ func sessionStartDateResolver(repoRoot string) func(string) string {
 // it exists to catch. A single unreadable roster skips that session
 // (best-effort, the doc-sanctioned case), but a List error empties the whole
 // half of the cross-check, so it warns on stderr rather than silently
-// returning nil.
-func activeRepoSessions(repoRoot string, errOut io.Writer) []string {
+// returning nil. Each result carries the checkout its roster recorded, so the
+// cross-check probes the live zone where it was written.
+func activeRepoSessions(repoRoot string, errOut io.Writer) []hook.ActiveSession {
 	repoID := audit.RepoIdentity(repoRoot)
 	ss := sessionStore()
 	ids, err := ss.List()
@@ -228,14 +229,14 @@ func activeRepoSessions(repoRoot string, errOut io.Writer) []string {
 		fmt.Fprintf(errOut, "ethos: audit seal: listing sessions for vacuum cross-check: %v\n", err)
 		return nil
 	}
-	var out []string
+	var out []hook.ActiveSession
 	for _, id := range ids {
 		roster, err := ss.Load(id)
 		if err != nil {
 			continue
 		}
 		if roster.Repo == repoID {
-			out = append(out, id)
+			out = append(out, hook.ActiveSession{Session: id, Checkout: roster.Checkout})
 		}
 	}
 	return out

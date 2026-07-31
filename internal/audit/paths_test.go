@@ -37,7 +37,7 @@ func TestMissionUnsealedCountIgnoresLegacyGrowth(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	n, err := MissionUnsealedCount(repoRoot, missionID, sess)
+	n, err := MissionUnsealedCount(repoRoot, repoRoot, missionID, sess)
 	if err != nil {
 		t.Fatal(err)
 	}

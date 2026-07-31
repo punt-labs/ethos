@@ -9,6 +9,15 @@ import (
 	"github.com/punt-labs/ethos/internal/mission"
 )
 
+// ActiveSession names a roster-active session and the checkout its roster
+// recorded as the writer of its live zone. An empty Checkout is a roster
+// written before the field existed: the writer is unknown, so no checkout has
+// standing to call that session's live files lost.
+type ActiveSession struct {
+	Session  string
+	Checkout string
+}
+
 // VacuumCrossCheck guards the seal's silent-vacuum case (docs/audit-seal.md
 // §Seal failure policy): a seal that touches nothing must still notice a
 // session whose unsealed audit lines were lost. It is per session and
@@ -28,12 +37,13 @@ import (
 //
 // A tombstone's Repo is a git-remote identity (org/name), not a checkout path,
 // so it is matched against this checkout's identity — derived by the same parser
-// session-start used — while filesystem probes stay rooted at repoRoot. A
-// checkout with no parseable origin has identity "", which matches the "" its
-// own sessions recorded. Two checkouts of one repo share an identity, so a seal
-// in one may warn about a session sealed in the other; that is the fail-safe
-// direction (extra caution, never a silent loss).
-func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io.Writer) error {
+// session-start used. A checkout with no parseable origin has identity "",
+// which matches the "" its own sessions recorded. Two checkouts of one repo
+// share an identity, which is why the identity alone cannot say where a
+// session's live files are: each source carries its own recorded checkout path
+// and the live probes follow it, while the tracked chunks are read from
+// repoRoot, the committing checkout.
+func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []ActiveSession, w io.Writer) error {
 	repoID := audit.RepoIdentity(repoRoot)
 	globalSessionsDir := filepath.Join(globalRoot, "sessions")
 	tombstones, err := audit.ListTombstones(globalSessionsDir, w)
@@ -44,13 +54,22 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io
 		if t.Repo != repoID || !t.Flagged() {
 			continue
 		}
-		if !audit.SessionLiveFileExists(repoRoot, t.Session) {
+		// The tombstone records the checkout it was purged from, and the live
+		// zone lives under that checkout — so that is where the live files are
+		// stat'd (DESIGN.md §Seal failure). A tombstone written before the
+		// field existed names no checkout; fall back to this one, which is what
+		// the pre-field code always did.
+		liveRoot := t.Checkout
+		if liveRoot == "" {
+			liveRoot = repoRoot
+		}
+		if !audit.SessionLiveFileExists(liveRoot, t.Session) {
 			fmt.Fprintf(w,
 				"warning: session %s was purged with unsealed audit lines and its live file is gone; "+
 					"those lines are lost. Acknowledge with `ethos session purge --ack %s`\n",
 				t.Session, t.Session)
 		} else {
-			n, cErr := audit.SessionUnsealedCount(repoRoot, t.Session)
+			n, cErr := audit.SessionUnsealedCountAcross(repoRoot, liveRoot, t.Session)
 			if cErr != nil {
 				return cErr
 			}
@@ -61,9 +80,8 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io
 					t.Session, n, t.Session)
 			}
 		}
-		// A purged session's mission-log lines are guarded the same way: an
-		// expected mission live file gone is a lost mission-log record.
-		if mErr := warnMissingMissionLives(globalRoot, repoRoot, t.Session, w); mErr != nil {
+		// A purged session's mission-log lines are guarded the same way.
+		if mErr := warnMissingMissionLives(globalRoot, repoRoot, liveRoot, t.Session, w); mErr != nil {
 			return mErr
 		}
 	}
@@ -71,15 +89,20 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io
 	// Roster-active sessions bound to this repo whose recorded live file has
 	// vanished — a single deleted live file with no purge to leave a tombstone,
 	// in either the audit or the mission namespace (REQ-1: the guard is per
-	// session ACROSS BOTH namespaces, not audit-only).
-	for _, sessionID := range activeSessions {
-		if !audit.SessionLiveFileExists(repoRoot, sessionID) {
-			fmt.Fprintf(w,
-				"warning: active session %s has no live audit file in this repo; "+
-					"if it was deleted, unsealed lines were lost\n",
-				sessionID)
+	// session ACROSS BOTH namespaces, not audit-only). Each is probed in the
+	// checkout its roster recorded, never in whichever checkout happens to be
+	// committing.
+	for _, as := range activeSessions {
+		if as.Checkout == "" {
+			continue
 		}
-		if mErr := warnMissingMissionLives(globalRoot, repoRoot, sessionID, w); mErr != nil {
+		if !audit.SessionLiveFileExists(as.Checkout, as.Session) {
+			fmt.Fprintf(w,
+				"warning: active session %s has no live audit file in %s; "+
+					"if it was deleted, unsealed lines were lost\n",
+				as.Session, as.Checkout)
+		}
+		if mErr := warnMissingMissionLives(globalRoot, repoRoot, as.Checkout, as.Session, w); mErr != nil {
 			return mErr
 		}
 	}
@@ -98,12 +121,12 @@ func VacuumCrossCheck(repoRoot, globalRoot string, activeSessions []string, w io
 // chunks are tracked and travel, live files are per-checkout and never do — so
 // warning on absence alone reported loss for every mission a long-lived session
 // had ever touched, in every other checkout (ethos-q6e2).
-func warnMissingMissionLives(globalRoot, repoRoot, sessionID string, w io.Writer) error {
+func warnMissingMissionLives(globalRoot, repoRoot, liveRoot, sessionID string, w io.Writer) error {
 	bound, err := mission.SessionBoundMissions(globalRoot, repoRoot, sessionID)
 	if err != nil {
 		return err
 	}
-	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, sessionID, bound)
+	expected, err := audit.ExpectedMissionLiveFiles(repoRoot, liveRoot, sessionID, bound)
 	if err != nil {
 		return err
 	}

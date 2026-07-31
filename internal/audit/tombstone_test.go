@@ -197,7 +197,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	// A chunk for a different session must not appear for sess1.
 	writeChunk(t, dir, MissionChunkFile("sess2", 300, 400), 300, 400)
 
-	got, err := ExpectedMissionLiveFiles(repo, "sess1", nil)
+	got, err := ExpectedMissionLiveFiles(repo, repo, "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 	if err := os.WriteFile(got[0].LivePath, []byte(`{"ts":"`+FormatLineTS(300)+`"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err = ExpectedMissionLiveFiles(repo, "sess1", nil)
+	got, err = ExpectedMissionLiveFiles(repo, repo, "sess1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +229,7 @@ func TestExpectedMissionLiveFiles(t *testing.T) {
 		t.Error("expected mission live file reported absent after write")
 	}
 	// It holds one line past the empty watermark → unsealed.
-	n, err := MissionUnsealedCount(repo, mid, "sess1")
+	n, err := MissionUnsealedCount(repo, repo, mid, "sess1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestExpectedMissionLiveFilesLost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := t.TempDir()
 			tc.setup(t, repo, tc.mission)
-			got, err := ExpectedMissionLiveFiles(repo, sess, tc.bound)
+			got, err := ExpectedMissionLiveFiles(repo, repo, sess, tc.bound)
 			if err != nil {
 				t.Fatal(err)
 			}
