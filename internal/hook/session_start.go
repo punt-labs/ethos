@@ -171,9 +171,10 @@ func createSessionRoster(ss *session.Store, sessionID string, resolvedID *identi
 	primary := session.Participant{AgentID: claudePID, Persona: agentPersona, Parent: userID}
 
 	repo := ResolveRepo()
+	checkout := ResolveCheckout()
 	host := ResolveHost()
 
-	if err := ss.Create(sessionID, root, primary, repo, host); err != nil {
+	if err := ss.CreateInCheckout(sessionID, root, primary, repo, checkout, host); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to create session roster: %v\n", err)
 	} else if err := ss.WriteCurrentSession(claudePID, sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: failed to write current session: %v\n", err)
@@ -276,6 +277,21 @@ func ResolveRepo() string {
 		return ""
 	}
 	return audit.ParseGitRemote(string(out))
+}
+
+// ResolveCheckout returns the work-tree root whose machine-local live audit
+// zone this session will write to — the same value the SessionStart hook
+// records for a roster. Empty outside a repo. Exported so `ethos session start`
+// resolves it identically.
+//
+// It calls the resolver the live-write path itself uses (cmd/ethos/hook.go's
+// audit-log entry point resolves repoRoot the same way), so the recorded path
+// and the path the live file lands under agree by construction rather than by
+// two walks that could disagree. In a linked worktree that is the WORKTREE
+// root, which is right: the live zone belongs to the checkout, not the shared
+// store.
+func ResolveCheckout() string {
+	return resolve.EnvRepoRoot()
 }
 
 // ResolveHost returns the short hostname (no domain) — the same value the
