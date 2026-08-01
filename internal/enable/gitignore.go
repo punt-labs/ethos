@@ -68,7 +68,14 @@ type ignoreRule struct {
 var gitignoreRules = []ignoreRule{
 	{
 		pattern: ".punt-labs/**/local/**",
+		// The first probe is the zero-directory case, `.punt-labs/local/`
+		// itself. `/**/` spans zero or more directories, so the canonical
+		// rule covers it, but a narrower `.punt-labs/*/local/**` does not —
+		// and with only the nested probes that narrow rule passed for
+		// coverage while the top-level DES-058 live zone stayed stageable
+		// (Bugbot, review of PR #423).
 		probes: []string{
+			".punt-labs/local/probe/probe.jsonl",
 			".punt-labs/ethos/local/probe/probe.jsonl",
 			".punt-labs/vox/local/probe.json",
 		},
@@ -256,12 +263,22 @@ func covers(repoRoot string, r ignoreRule, present map[string]bool) bool {
 // either: git reports the match that applies, and a `!` match means the path
 // is not ignored at all.
 //
+// core.excludesFile is disabled at the source rather than filtered out of the
+// answer. Git prints the source as the configured path, so a relative
+// core.excludesFile prints "myexcludes" — indistinguishable from a nested
+// .gitignore in the work tree, and travelsWithRepo passed it (Copilot, review
+// of PR #423). Pointing the setting at the null device makes git find no
+// patterns there at all, whatever the spelling, and -c overrides the system,
+// global, and repo config alike. travelsWithRepo still handles
+// .git/info/exclude, which no config setting can turn off.
+//
 // --no-index keeps the answer about the rules alone, so a path that is somehow
 // in the index does not read as "not ignored". check-ignore exits 1 when no
 // path matches; any other failure means git could not answer and is returned
 // as an error for the caller to fall back on.
 func gitExcludes(repoRoot string, probes []string) (bool, error) {
-	cmd := exec.Command("git", "-C", repoRoot, "check-ignore", "-v", "-z", "--no-index", "--stdin")
+	cmd := exec.Command("git", "-C", repoRoot, "-c", "core.excludesFile="+os.DevNull,
+		"check-ignore", "-v", "-z", "--no-index", "--stdin")
 	cmd.Stdin = strings.NewReader(strings.Join(probes, "\x00") + "\x00")
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -295,9 +312,12 @@ func gitExcludes(repoRoot string, probes []string) (bool, error) {
 
 // travelsWithRepo reports whether an ignore source is part of the repo every
 // clone gets. git prints the source relative to the repo root for a .gitignore
-// inside the work tree — ".gitignore", ".punt-labs/.gitignore" — and rejects
-// here are the two that are local to one machine: an absolute path
-// (core.excludesFile) and anything under a .git directory (info/exclude).
+// inside the work tree — ".gitignore", ".punt-labs/.gitignore" — and the
+// rejects here are the sources local to one machine: anything under a .git
+// directory (info/exclude), which no config setting can disable, and any
+// absolute path. The absolute case is belt and braces: gitExcludes already
+// points core.excludesFile at the null device, because judging that setting by
+// the path git prints misses a relative one.
 //
 // It does not require the file to be committed yet. The .gitignore ethos just
 // wrote is untracked until the operator commits it, and demanding tracked

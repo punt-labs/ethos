@@ -128,6 +128,49 @@ func TestEnableProtectsNonEthosSecretsUnderLegacyNarrowRule(t *testing.T) {
 	}
 }
 
+// The live-zone counterpart of the narrow-rule repro. `.punt-labs/*/local/**`
+// excludes every tool's nested live zone and misses `.punt-labs/local/` — the
+// top-level DES-058 zone, which the canonical rule reaches because `/**/`
+// spans zero directories. Probing only the nested zones let that rule pass for
+// coverage while the live audit and lock files stayed stageable (Bugbot,
+// review of PR #423).
+func TestEnableCoversTopLevelLiveZone(t *testing.T) {
+	dir := gitRepo(t)
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte(".punt-labs/*/local/**\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	live := []string{
+		".punt-labs/local/audit/session.jsonl",
+		".punt-labs/local/session.lock",
+	}
+	for _, rel := range live {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("live\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+
+	got := readFile(t, path)
+	if !hasExactLine(got, liveZonePattern) {
+		t.Fatalf("canonical live-zone rule not written; .gitignore:\n%s", got)
+	}
+	gitRun(t, dir, "add", "-A")
+	staged := gitOutput(t, dir, "diff", "--cached", "--name-only")
+	for _, rel := range live {
+		if strings.Contains(staged, rel) {
+			t.Errorf("%s was staged; .gitignore:\n%s", rel, got)
+		}
+	}
+}
+
 func TestEnableGitignoreBroaderRulesAreCoverage(t *testing.T) {
 	dir := gitRepo(t)
 	// None of these is a pattern enable writes, but each excludes the paths
@@ -249,6 +292,22 @@ func TestLocalIgnoredRejectsUntravelingSources(t *testing.T) {
 			t.Fatal(err)
 		}
 		gitRun(t, dir, "config", "core.excludesFile", global)
+		assertLocalIgnored(t, dir, false)
+	})
+
+	// The setting is what does not travel, not the path it happens to hold. A
+	// relative core.excludesFile names a file inside the work tree, so git
+	// prints a source indistinguishable from a nested .gitignore and reading
+	// the printed path let it pass for coverage (Copilot, review of PR #423).
+	// The clone that CI makes copies the file and not the config that points
+	// at it, so it must not count either.
+	t.Run("relative core.excludesFile", func(t *testing.T) {
+		dir := gitRepo(t)
+		if err := os.WriteFile(filepath.Join(dir, "extra-excludes"),
+			[]byte(LocalIgnoreRule+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, dir, "config", "core.excludesFile", "extra-excludes")
 		assertLocalIgnored(t, dir, false)
 	})
 
