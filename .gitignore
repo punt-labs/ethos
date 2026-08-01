@@ -16,6 +16,11 @@ coverage.out
 # here and must never be committed. Canonical org-wide form.
 .punt-labs/**/local/**
 
+# ext .local secret files (DES-057): <handle>.ext/<namespace>.local.yaml
+# holds credentials — `ethos ext set --local` writes them and vendor refuses
+# to copy them. Ignore so a secret can never be staged.
+.punt-labs/ethos/**/*.local.yaml
+
 # Claude local settings
 .claude/settings.local.json
 .claude/*.local.md
