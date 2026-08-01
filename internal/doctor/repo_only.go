@@ -10,14 +10,22 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/enable"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/vendor"
 )
 
-// GitignoreRule is the pattern that keeps `.local.yaml` companions out
-// of git. Vendor and setup emit it; this file asserts it.
-const GitignoreRule = ".punt-labs/ethos/**/*.local.yaml"
+// GitignoreRule is the pattern that keeps machine-local companions out of
+// git. It is enable's canonical spelling, not a second one: enable, setup,
+// and vendor write exactly this, and the remedy doctor prints must be the
+// rule they write or an operator who follows the advice re-creates the
+// narrow `.punt-labs/ethos/**/*.local.yaml` that one canonical rule
+// replaced (#422).
+//
+// It is what doctor ADVISES, never what doctor accepts — the check below
+// asks git, so any rule that excludes the path counts.
+const GitignoreRule = enable.LocalIgnoreRule
 
 // CheckRepoSetComplete is the authoritative completeness gate for a repo
 // running `resolution: repo-only` (DES-057 Part A).

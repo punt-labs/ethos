@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/enable"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/mcp"
@@ -118,7 +119,7 @@ func runVendor(cmd *cobra.Command, args []string) error {
 			return ignoreErr
 		}
 		if added && !jsonOutput {
-			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: added the *.local.yaml rule to .gitignore\n")
+			fmt.Fprintf(cmd.ErrOrStderr(), "ethos: added the %s rule to .gitignore\n", enable.LocalIgnoreRule)
 		}
 	}
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/punt-labs/ethos/internal/attribute"
 	"github.com/punt-labs/ethos/internal/bundle"
+	"github.com/punt-labs/ethos/internal/enable"
 	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -358,7 +359,7 @@ func runSetup(cmd *cobra.Command) error {
 	if added, err := ensureLocalExtIgnored(repoRoot); err != nil {
 		return fmt.Errorf("setup: %w", err)
 	} else if added {
-		fmt.Fprintf(errw, "added: .gitignore rule for *.local.yaml\n")
+		fmt.Fprintf(errw, "added: .gitignore rule %s\n", enable.LocalIgnoreRule)
 	}
 
 	// --- Generate agent files ---
