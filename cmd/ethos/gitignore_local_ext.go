@@ -6,41 +6,41 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/doctor"
+	"github.com/punt-labs/ethos/internal/enable"
 )
 
-// localExtIgnoreMarker heads the block this emits. It is deliberately
-// separate from the block `ethos enable` writes: that one covers runtime
-// files that churn and must never be committed for mechanical reasons,
-// this one covers the half of an extension namespace that may hold
-// secrets. Folding them together would mislabel one of them for whoever
-// reads the .gitignore next.
-const localExtIgnoreMarker = "# ethos: the .local half of an extension namespace — may hold secrets, never track"
-
 // ensureLocalExtIgnored adds DES-057 Part C's git-exclusion rule to the
-// repo's .gitignore if it is not already covered, and reports whether it
-// wrote anything.
+// repo's .gitignore if the repo does not already exclude machine-local
+// files, and reports whether it wrote anything.
 //
 // The rule is the boundary. `.local.yaml` is a git-exclusion mechanism,
 // not a vault: the merged view still reaches the model at runtime. What
 // it guarantees is that the file never enters git — and only if the rule
 // is there before the first `ethos ext set --local`.
 //
-// Matching is exact on a trimmed line, so an existing rule counts and a
-// re-run adds nothing. It never rewrites or reorders existing lines.
+// Coverage is enable.LocalIgnored — git's own answer for a representative
+// `.local` path — so any rule that already excludes such a file counts
+// and a re-run adds nothing. It never rewrites or reorders existing
+// lines. The note above the rule is deliberately not the marker `ethos
+// enable` uses for the runtime zones: those churn and must stay untracked
+// for mechanical reasons, this one may hold secrets, and one label for
+// both would mislead whoever reads the .gitignore next.
 func ensureLocalExtIgnored(repoRoot string) (added bool, err error) {
 	if repoRoot == "" {
 		return false, nil
 	}
+	covered, err := enable.LocalIgnored(repoRoot)
+	if err != nil {
+		return false, err
+	}
+	if covered {
+		return false, nil
+	}
+
 	path := filepath.Join(repoRoot, ".gitignore")
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("reading %s: %w", path, err)
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.TrimRight(line, "\r") == doctor.GitignoreRule {
-			return false, nil
-		}
 	}
 
 	var b strings.Builder
@@ -51,8 +51,8 @@ func ensureLocalExtIgnored(repoRoot string) (added bool, err error) {
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString(localExtIgnoreMarker + "\n")
-	b.WriteString(doctor.GitignoreRule + "\n")
+	b.WriteString(enable.LocalIgnoreNote + "\n")
+	b.WriteString(enable.LocalIgnoreRule + "\n")
 
 	mode := os.FileMode(0o644)
 	if fi, statErr := os.Stat(path); statErr == nil {

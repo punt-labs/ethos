@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gitignore coverage for `.punt-labs` machine-local files is semantic,
+  canonical, and fail-closed (`ethos-8s2z`).** `ethos enable`, `setup`, and
+  `vendor --apply` now decide whether machine-local files are ignored with `git
+  check-ignore` rather than an exact string match, so a repo already carrying
+  the canonical `.punt-labs/**/*.local.*` rule is recognized and the narrow
+  per-file rule is never re-appended (previously `setup`/`vendor` could re-add
+  it and dirty the tree). Coverage is fail-closed: it probes a **set** of
+  representative paths — including a non-ethos subtree and a non-`.yaml`
+  variant — and treats the tree as covered only when **every** probe is ignored,
+  so the legacy narrow `.punt-labs/ethos/**/*.local.yaml` rule that earlier
+  releases advised no longer masks an unignored `vox` or `beadle` secret. A
+  match counts only when its ignoring source travels with the repo — a
+  `.git/info/exclude` or `core.excludesFile` entry is rejected — so a per-clone
+  exclude cannot suppress writing the committed rule. `enable`, `setup`,
+  `vendor`, and `doctor` share one exported `LocalIgnoreRule` constant, so the
+  rule `doctor` advises and the rule the write path emits cannot drift apart,
+  and `doctor`'s tracked-secret scan now covers the whole `.punt-labs/**/*.local.*`
+  tree — a committed `vox` or `beadle` `.local` secret FAILs `doctor` by name,
+  not just an ethos one. The same fail-closed probe-set check now also guards
+  the DES-058 live-zone rule (`.punt-labs/**/local/**`): a probe set that
+  includes the top-level zone means a repo whose `.gitignore` covered only
+  nested tool subtrees (`.punt-labs/*/local/**`) now gets the canonical
+  `.punt-labs/**/local/**` written, where before the live audit/mission files
+  under `.punt-labs/local/` stayed stageable. The repo `.gitignore` carries a
+  single canonical `.punt-labs/**/*.local.*` rule covering every tool subtree's
+  `.local.*` secrets and config, alongside `.punt-labs/**/local/**` for the
+  DES-058 live zone.
+
 ## [4.9.0] - 2026-07-31
 
 ### Added

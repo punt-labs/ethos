@@ -1,8 +1,6 @@
 package doctor
 
 import (
-	"bytes"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,14 +8,24 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/internal/enable"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/vendor"
 )
 
-// GitignoreRule is the pattern that keeps `.local.yaml` companions out
-// of git. Vendor and setup emit it; this file asserts it.
-const GitignoreRule = ".punt-labs/ethos/**/*.local.yaml"
+// GitignoreRule is the pattern that keeps machine-local companions out of
+// git. It is enable's canonical spelling, not a second one: enable, setup,
+// and vendor write exactly this, and the remedy doctor prints must be the
+// rule they write or an operator who follows the advice re-creates the
+// narrow `.punt-labs/ethos/**/*.local.yaml` that one canonical rule
+// replaced (#422).
+//
+// It is what doctor ADVISES; what doctor accepts is enable.LocalIgnored,
+// which asks git whether the repo's own committed rules exclude every kind
+// of machine-local file — so an equivalent spelling counts and a partial
+// one does not.
+const GitignoreRule = enable.LocalIgnoreRule
 
 // CheckRepoSetComplete is the authoritative completeness gate for a repo
 // running `resolution: repo-only` (DES-057 Part A).
@@ -122,9 +130,10 @@ func repairCommand(rep *vendor.Report) string {
 }
 
 // CheckLocalExtNotTracked enforces DES-057 Part C's git boundary: the
-// `.local.yaml` half of an extension namespace must not reach git.
+// machine-local half of a tool namespace — any `.local.*` file under
+// .punt-labs/, not just ethos's `.local.yaml` — must not reach git.
 //
-// Two failures, in the order that matters. A tracked `.local.yaml` is a
+// Two failures, in the order that matters. A tracked `.local.*` file is a
 // FAIL and says so first, because .gitignore does NOT untrack a file
 // already in the index — adding the rule would leave the file committed
 // and the repo looking clean. A missing rule alone is a WARN: nothing is
@@ -137,7 +146,7 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	}
 
 	// A git failure means the check did not run. PASS would report that
-	// `.local.yaml` tracking was verified when nothing was verified —
+	// `.local.*` tracking was verified when nothing was verified —
 	// a false all-clear on secret-bearing files is the one answer this
 	// check must never give.
 	tracked, err := trackedLocalExt(repoRoot)
@@ -150,7 +159,10 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 			strings.Join(tracked, ", "), strings.Join(tracked, " "))}
 	}
 
-	ignored, err := gitignoreCovers(repoRoot)
+	// One predicate, shared with enable/setup/vendor: doctor must not call a
+	// repo protected that those commands would still write the rule into, or
+	// the operator gets a green check and a stageable secret.
+	ignored, err := enable.LocalIgnored(repoRoot)
 	if err != nil {
 		return Result{Name: name, Status: "WARN", Detail: "could not verify: " + err.Error()}
 	}
@@ -161,11 +173,18 @@ func CheckLocalExtNotTracked(repoRoot string) Result {
 	return Result{Name: name, Status: "PASS", Detail: "ignored and untracked"}
 }
 
-// trackedLocalExt lists `*.local.yaml` files under .punt-labs/ethos/
-// that git has in its index.
+// trackedLocalExt lists the machine-local files under .punt-labs/ that git
+// has in its index.
+//
+// It scans the same canonical pattern the rule excludes, not ethos's old
+// `.punt-labs/ethos/**/*.local.yaml`: a tracked .punt-labs/vox/vox.local.md
+// is as much a secret in git as a tracked ethos one, and the narrow scan let
+// it through (djb, review of PR #423). The :(glob) pathspec magic makes git
+// read the pattern with .gitignore's own semantics, where `/**/` spans zero
+// or more directories — so a file directly under .punt-labs/ is caught too.
 func trackedLocalExt(repoRoot string) ([]string, error) {
 	out, err := exec.Command("git", "-C", repoRoot, "ls-files",
-		"--", ".punt-labs/ethos/**/*.local.yaml", ".punt-labs/ethos/*.local.yaml").Output()
+		"--", ":(glob)"+GitignoreRule).Output()
 	if err != nil {
 		return nil, fmt.Errorf("could not ask git for tracked files: %v", err)
 	}
@@ -177,28 +196,6 @@ func trackedLocalExt(repoRoot string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
-}
-
-// gitignoreCovers asks git whether a representative `.local.yaml` path
-// is ignored. Asking git rather than grepping .gitignore means any
-// spelling of the rule counts, and a rule in .git/info/exclude or a
-// parent .gitignore counts too.
-func gitignoreCovers(repoRoot string) (bool, error) {
-	probe := filepath.Join(".punt-labs", "ethos", "identities", "probe.ext", "quarry.local.yaml")
-	cmd := exec.Command("git", "-C", repoRoot, "check-ignore", "-q", probe)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	if err == nil {
-		return true, nil
-	}
-	// git check-ignore exits 1 for "not ignored" and 128 for a real
-	// failure; only the latter is an error worth reporting.
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, fmt.Errorf("could not ask git about ignore rules: %v", err)
 }
 
 // CheckExtCredentialNames runs the same name-only credential lint
