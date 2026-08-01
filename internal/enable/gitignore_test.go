@@ -2,6 +2,7 @@ package enable
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,6 +69,319 @@ func TestEnableGitignoreIndentedNearDuplicateNotCoverage(t *testing.T) {
 			t.Errorf("unindented runtime pattern %q not appended; got:\n%s", want, got)
 		}
 	}
+}
+
+func TestEnableAddsCanonicalLocalRule(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	got := readFile(t, filepath.Join(dir, ".gitignore"))
+	if n := strings.Count(got, LocalIgnoreRule); n != 1 {
+		t.Errorf("canonical local rule appears %d times, want 1; got:\n%s", n, got)
+	}
+	// The rule is only as good as what git makes of it: a freshly enabled repo
+	// must actually exclude a machine-local file of every shape, which is the
+	// same question `ethos doctor` asks.
+	excluded, err := gitExcludes(dir, localIgnoreProbes)
+	if err != nil {
+		t.Fatalf("gitExcludes: %v", err)
+	}
+	if !excluded {
+		t.Errorf("git does not exclude every probe after enable; .gitignore:\n%s", got)
+	}
+}
+
+// The repro djb ran: with only the legacy narrow rule, a vox and a beadle
+// secret were stageable while ethos called the repo protected. After enable
+// the canonical rule is written and `git add -A` stages neither.
+func TestEnableProtectsNonEthosSecretsUnderLegacyNarrowRule(t *testing.T) {
+	dir := gitRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"),
+		[]byte(".punt-labs/ethos/**/*.local.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secrets := []string{
+		".punt-labs/vox/vox.local.md",
+		".punt-labs/beadle/creds.local.json",
+	}
+	for _, rel := range secrets {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("token: s3cret\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+
+	gitRun(t, dir, "add", "-A")
+	staged := gitOutput(t, dir, "diff", "--cached", "--name-only")
+	for _, rel := range secrets {
+		if strings.Contains(staged, rel) {
+			t.Errorf("%s was staged; .gitignore:\n%s", rel, readFile(t, filepath.Join(dir, ".gitignore")))
+		}
+	}
+}
+
+// The live-zone counterpart of the narrow-rule repro. `.punt-labs/*/local/**`
+// excludes every tool's nested live zone and misses `.punt-labs/local/` — the
+// top-level DES-058 zone, which the canonical rule reaches because `/**/`
+// spans zero directories. Probing only the nested zones let that rule pass for
+// coverage while the live audit and lock files stayed stageable (Bugbot,
+// review of PR #423).
+func TestEnableCoversTopLevelLiveZone(t *testing.T) {
+	dir := gitRepo(t)
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte(".punt-labs/*/local/**\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	live := []string{
+		".punt-labs/local/audit/session.jsonl",
+		".punt-labs/local/session.lock",
+	}
+	for _, rel := range live {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("live\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+
+	got := readFile(t, path)
+	if !hasExactLine(got, liveZonePattern) {
+		t.Fatalf("canonical live-zone rule not written; .gitignore:\n%s", got)
+	}
+	gitRun(t, dir, "add", "-A")
+	staged := gitOutput(t, dir, "diff", "--cached", "--name-only")
+	for _, rel := range live {
+		if strings.Contains(staged, rel) {
+			t.Errorf("%s was staged; .gitignore:\n%s", rel, got)
+		}
+	}
+}
+
+func TestEnableGitignoreBroaderRulesAreCoverage(t *testing.T) {
+	dir := gitRepo(t)
+	// None of these is a pattern enable writes, but each excludes the paths
+	// enable cares about. Asking git rather than string-matching one blessed
+	// spelling is what keeps enable from appending a redundant near-duplicate.
+	initial := ".punt-labs/**/local/**\n.punt-labs/**/*.lock\n.punt-labs/**/*.local.*\n"
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Enable(dir)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if got := readFile(t, path); got != initial {
+		t.Errorf(".gitignore rewritten though already covered:\nwant:\n%s\ngot:\n%s", initial, got)
+	}
+	var action string
+	for _, s := range rep.Steps {
+		if s.Step == "gitignore" {
+			action = s.Status
+		}
+	}
+	if action != "already" {
+		t.Errorf("gitignore step = %q, want %q", action, "already")
+	}
+}
+
+func TestLocalIgnored(t *testing.T) {
+	cases := []struct {
+		name      string
+		gitignore string
+		want      bool
+	}{
+		{"empty repo", "", false},
+		{"unrelated rules", "*.log\nbuild/\n", false},
+		{"canonical rule", LocalIgnoreRule + "\n", true},
+		{"broader subtree rule", ".punt-labs/**\n", true},
+		{"indented rule is a different pattern", "  " + LocalIgnoreRule + "\n", false},
+
+		// Each of these excludes part of what the canonical rule excludes and
+		// leaves the rest stageable. Part is not coverage.
+		{"legacy narrow rule covers only ethos yaml", ".punt-labs/ethos/**/*.local.yaml\n", false},
+		{"yaml-only rule leaves other extensions", ".punt-labs/**/*.local.yaml\n", false},
+		{"ethos-only rule leaves other tools", ".punt-labs/ethos/**/*.local.*\n", false},
+		{"nested-only rule leaves the top level", ".punt-labs/*/**/*.local.*\n", false},
+
+		// A pattern that matches but is negated afterwards excludes nothing.
+		{"negation defeats the canonical rule", LocalIgnoreRule + "\n!.punt-labs/vox/**\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := gitRepo(t)
+			if c.gitignore != "" {
+				if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(c.gitignore), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := LocalIgnored(dir)
+			if err != nil {
+				t.Fatalf("LocalIgnored: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("LocalIgnored = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// A rule whose line is in the file but which git does not honour is the one
+// case enable cannot fix by writing: the line it would append is already
+// there. It must say so rather than append a second copy on every run.
+func TestEnableReportsDefeatedRule(t *testing.T) {
+	dir := gitRepo(t)
+	initial := ".punt-labs/**/local/**\n" + missionLockPat + "\n" +
+		LocalIgnoreRule + "\n!.punt-labs/vox/**\n"
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Enable(dir)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if got := readFile(t, path); got != initial {
+		t.Errorf(".gitignore rewritten with a duplicate line:\nwant:\n%s\ngot:\n%s", initial, got)
+	}
+	var step StepResult
+	for _, s := range rep.Steps {
+		if s.Step == "gitignore" {
+			step = s
+		}
+	}
+	if step.Status != "attention" {
+		t.Errorf("gitignore step = %q, want %q; detail=%q", step.Status, "attention", step.Detail)
+	}
+	if !strings.Contains(step.Detail, "still stageable") {
+		t.Errorf("detail does not say the files are exposed: %q", step.Detail)
+	}
+}
+
+// An exclude that lives outside the work tree protects one clone. The next
+// clone — CI's, a colleague's — has no such rule, so ethos must still write
+// the committed one.
+func TestLocalIgnoredRejectsUntravelingSources(t *testing.T) {
+	t.Run("info/exclude", func(t *testing.T) {
+		dir := gitRepo(t)
+		if err := os.WriteFile(filepath.Join(dir, ".git", "info", "exclude"),
+			[]byte(LocalIgnoreRule+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertLocalIgnored(t, dir, false)
+	})
+
+	t.Run("core.excludesFile", func(t *testing.T) {
+		dir := gitRepo(t)
+		global := filepath.Join(t.TempDir(), "global-ignore")
+		if err := os.WriteFile(global, []byte(LocalIgnoreRule+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, dir, "config", "core.excludesFile", global)
+		assertLocalIgnored(t, dir, false)
+	})
+
+	// The setting is what does not travel, not the path it happens to hold. A
+	// relative core.excludesFile names a file inside the work tree, so git
+	// prints a source indistinguishable from a nested .gitignore and reading
+	// the printed path let it pass for coverage (Copilot, review of PR #423).
+	// The clone that CI makes copies the file and not the config that points
+	// at it, so it must not count either.
+	t.Run("relative core.excludesFile", func(t *testing.T) {
+		dir := gitRepo(t)
+		if err := os.WriteFile(filepath.Join(dir, "extra-excludes"),
+			[]byte(LocalIgnoreRule+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitRun(t, dir, "config", "core.excludesFile", "extra-excludes")
+		assertLocalIgnored(t, dir, false)
+	})
+
+	// A .gitignore deeper in the tree does travel, so it counts.
+	t.Run("nested .gitignore in the work tree", func(t *testing.T) {
+		dir := gitRepo(t)
+		if err := os.MkdirAll(filepath.Join(dir, ".punt-labs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".punt-labs", ".gitignore"),
+			[]byte("*.local.*\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		assertLocalIgnored(t, dir, true)
+	})
+}
+
+// With no git to ask, the literal canonical line in the file is all there is
+// to go on — and nothing else counts, so ethos writes the rule rather than
+// guessing that some other spelling covers it.
+func TestLocalIgnoredFallsBackWhenGitCannotAnswer(t *testing.T) {
+	cases := []struct {
+		name      string
+		gitignore string
+		want      bool
+	}{
+		{"canonical line present", LocalIgnoreRule + "\n", true},
+		{"another spelling", ".punt-labs/**\n", false},
+		{"nothing", "*.log\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := gitRepo(t)
+			if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(c.gitignore), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// No git on PATH: exec cannot resolve the binary, so check-ignore
+			// never runs.
+			t.Setenv("PATH", filepath.Join(t.TempDir(), "empty"))
+			assertLocalIgnored(t, dir, c.want)
+		})
+	}
+}
+
+// Not a work tree at all: git fails, there is no .gitignore to fall back on,
+// and the answer must be "not covered" rather than an error or a shrug.
+func TestLocalIgnoredOutsideAWorkTree(t *testing.T) {
+	assertLocalIgnored(t, filepath.Join(t.TempDir(), "no-such-repo"), false)
+}
+
+func assertLocalIgnored(t *testing.T, dir string, want bool) {
+	t.Helper()
+	got, err := LocalIgnored(dir)
+	if err != nil {
+		t.Fatalf("LocalIgnored: %v", err)
+	}
+	if got != want {
+		t.Errorf("LocalIgnored = %v, want %v", got, want)
+	}
+}
+
+// gitOutput runs git in dir and returns its stdout.
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_COUNT=0",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return string(out)
 }
 
 // hasExactLine reports whether s contains want as a complete line.
@@ -217,7 +531,7 @@ func TestEnableGitignoreCRLFIdempotent(t *testing.T) {
 	dir := gitRepo(t)
 	// A CRLF .gitignore already covering the zones must be a no-op on enable —
 	// the trailing \r must not defeat the presence check and cause a duplicate.
-	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n"
+	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n" + LocalIgnoreRule + "\r\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
