@@ -27,10 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rule `doctor` advises and the rule the write path emits cannot drift apart,
   and `doctor`'s tracked-secret scan now covers the whole `.punt-labs/**/*.local.*`
   tree — a committed `vox` or `beadle` `.local` secret FAILs `doctor` by name,
-  not just an ethos one. The repo `.gitignore` carries a single canonical
-  `.punt-labs/**/*.local.*` rule covering every tool subtree's `.local.*`
-  secrets and config, alongside `.punt-labs/**/local/**` for the DES-058 live
-  zone.
+  not just an ethos one. The same fail-closed probe-set check now also guards
+  the DES-058 live-zone rule (`.punt-labs/**/local/**`): a probe set that
+  includes the top-level zone means a repo whose `.gitignore` covered only
+  nested tool subtrees (`.punt-labs/*/local/**`) now gets the canonical
+  `.punt-labs/**/local/**` written, where before the live audit/mission files
+  under `.punt-labs/local/` stayed stageable. The repo `.gitignore` carries a
+  single canonical `.punt-labs/**/*.local.*` rule covering every tool subtree's
+  `.local.*` secrets and config, alongside `.punt-labs/**/local/**` for the
+  DES-058 live zone.
 
 ## [4.9.0] - 2026-07-31
 
