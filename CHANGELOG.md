@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Specialist sub-agents get scoped MCP tool access.** Every specialist role now grants the inbound MCP set — quarry memory + search (`find`/`remember`/`show`/`ingest`/`use`/`status`/`list`), biff `plan`/`read_messages`, and ethos `identity`/`session` — so a dispatched specialist can use its own agent-scoped memory, set its plan, and resolve its session-bound identity in its own session rather than only via the Bash CLI. The formal-methods roles (`z-specialist`, `b-specialist`) additionally get the z-spec toolchain. Outbound and coordination tools (biff write/wall, beadle, GitHub, mission dispatch, lux) stay leader-only, withheld from every specialist role.
+
 ### Fixed
 
 - **Gitignore coverage for `.punt-labs` machine-local files is semantic,
