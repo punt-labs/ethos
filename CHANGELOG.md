@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gitignore coverage for `.punt-labs` machine-local files is semantic and
+  canonical (`ethos-8s2z`).** `ethos enable`, `setup`, and `vendor --apply`
+  now decide whether a machine-local ignore rule is present with `git
+  check-ignore` on a probe path rather than an exact string match, so a repo
+  already carrying the canonical `.punt-labs/**/*.local.*` rule is recognized
+  and the narrow per-file rule is never re-appended (previously `setup`/`vendor`
+  could re-add it and dirty the tree). `enable`, `setup`, `vendor`, and
+  `doctor` share one exported `LocalIgnoreRule` constant, so the rule `doctor`
+  advises and the rule the write path emits cannot drift apart. The repo
+  `.gitignore` carries a single canonical `.punt-labs/**/*.local.*` rule
+  covering every tool subtree's `.local.*` secrets and config, alongside
+  `.punt-labs/**/local/**` for the DES-058 live zone.
+
 ## [4.9.0] - 2026-07-31
 
 ### Added
