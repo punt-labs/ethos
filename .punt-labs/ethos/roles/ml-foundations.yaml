@@ -10,9 +10,15 @@ tools:
   - Bash
   - Grep
   - Glob
-  # Scoped inbound MCP set. Recall, search, and read only — no
-  # outbound tool (biff write/wall/talk, beadle mail, GitHub, mission
-  # dispatch, lux) appears here, and none may be added.
+  # Scoped MCP set: explicit names, never a wildcard. Inbound in the
+  # sense that matters — nothing here reaches another agent or an
+  # external service. It is not read-only, and should not be read as
+  # such: quarry remember and ingest write the local corpus, biff plan
+  # writes a status string, and ethos identity and session carry create
+  # and purge. MCP scopes per tool, not per method, so the read halves
+  # cannot be taken alone. What is absent is the boundary: no biff
+  # write, wall, or talk, no beadle mail, no GitHub, no ethos mission
+  # (dispatch stays with the leader), no lux. None may be added.
   - mcp__plugin_quarry_quarry__find
   - mcp__plugin_quarry_quarry__remember
   - mcp__plugin_quarry_quarry__show
