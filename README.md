@@ -61,16 +61,25 @@ configuration is reusable, measurable, and improvable.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/7759dd5/install.sh | sh
+```
+
+Then set up your identity and team:
+
+```bash
 ethos setup
 ```
 
 To install the CLI without the Claude Code plugin — for a non-Claude
 harness, or a Claude install where org policy blocks plugins — pass
-`--no-plugin` (or set `ETHOS_NO_PLUGIN=1` where arguments cannot pass
-through the pipe):
+`--no-plugin`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/7759dd5/install.sh | sh -s -- --no-plugin
+```
+
+Or, where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/7759dd5/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
@@ -254,11 +263,28 @@ Ethos is harness-neutral. Inside Claude Code a session is created for you by
 hooks. Anywhere else, open one explicitly — one line at shell or harness
 init:
 
+Start a session — this exports `ETHOS_SESSION` and `ETHOS_AGENT_ID`:
+
 ```bash
-eval "$(ethos session start --persona bwk)"   # exports ETHOS_SESSION + ETHOS_AGENT_ID
-ethos whoami                                   # reports the declared persona
-ethos session                                  # shows the roster
-ethos session end                              # teardown
+eval "$(ethos session start --persona bwk)"
+```
+
+Report the declared persona:
+
+```bash
+ethos whoami
+```
+
+Show the roster:
+
+```bash
+ethos session
+```
+
+Tear the session down:
+
+```bash
+ethos session end
 ```
 
 `session start` is idempotent (a live `ETHOS_SESSION` is reported, not
@@ -276,9 +302,21 @@ identity set does not know it is partial: the gaps resolve from
 
 `ethos vendor` produces a set that resolves on its own:
 
+Plan — show the closure and its blast radius:
+
 ```bash
-ethos vendor bwk                  # plan: shows the closure and its blast radius
-ethos vendor bwk --apply          # write into .punt-labs/ethos/
+ethos vendor bwk
+```
+
+Write it into `.punt-labs/ethos/`:
+
+```bash
+ethos vendor bwk --apply
+```
+
+Vendor a whole team, pruning anything outside the closure:
+
+```bash
 ethos vendor --team engineering --apply --prune
 ```
 
@@ -409,11 +447,28 @@ markdown cannot represent it).
 
 ## Development
 
+Run all quality gates (vet, staticcheck, markdownlint, shellcheck, tests):
+
 ```bash
-make check    # All quality gates (vet, staticcheck, markdownlint, shellcheck, tests)
-make build    # Build binary
-make install  # Install to ~/.local/bin
-make help     # List all targets
+make check
+```
+
+Build the binary:
+
+```bash
+make build
+```
+
+Install to `~/.local/bin`:
+
+```bash
+make install
+```
+
+List all targets:
+
+```bash
+make help
 ```
 
 Contributors: see [CLAUDE.md](CLAUDE.md) for the development
