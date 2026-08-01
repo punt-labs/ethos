@@ -10,26 +10,70 @@ import (
 	"strings"
 )
 
-// gitignoreMarker heads the block enable appends so the runtime patterns are
+// gitignoreMarker heads the block enable appends so the patterns are
 // identifiable as ethos-managed.
 const gitignoreMarker = "# ethos runtime (never track) — DES-058 live zone + mission locks"
 
-// gitignorePatterns are the runtime zones a consumer repo must never track: the
-// DES-058 live-session files (audit + lock) and the mission runtime locks. The
-// seal hook rewrites these continuously while a session is live, so tracking
-// them deadlocks git checkout/pull and leaks them into release PRs.
-var gitignorePatterns = []string{
-	".punt-labs/**/local/**",
-	".punt-labs/ethos/missions/**/*.lock",
+// LocalIgnoreRule is the one canonical pattern that keeps every tool's
+// machine-local file out of git: any `.local.<ext>` file anywhere under
+// `.punt-labs/`. enable, setup, and vendor all write this spelling. They do not
+// require it: coverage is decided by asking git, so a repo that excludes the
+// same paths another way is left alone.
+const LocalIgnoreRule = ".punt-labs/**/*.local.*"
+
+// LocalIgnoreNote labels the canonical rule for whoever reads the .gitignore
+// next. The runtime zones churn and must stay untracked for mechanical
+// reasons; this one covers files that may hold secrets, and a shared label
+// would mislabel one of them.
+const LocalIgnoreNote = "# ethos: machine-local files (.local.*) — may hold secrets, never track"
+
+// localIgnoreProbe is a representative machine-local path a covering rule must
+// exclude. It names no real file: git check-ignore reports a path already in
+// the index as not ignored, so a probe must be one git has never seen.
+const localIgnoreProbe = ".punt-labs/ethos/identities/probe.ext/probe.local.yaml"
+
+// ignoreRule is one pattern enable ensures the repo excludes: the pattern
+// itself, the probe path that decides whether it is already covered, the
+// comment written above it, and whether it names a runtime zone.
+type ignoreRule struct {
+	pattern string
+	probe   string
+	note    string
+	runtime bool
 }
 
-// ensureGitignore makes the repo .gitignore cover ethos's runtime zones. It
-// adds only the patterns not already present, so re-enable adds nothing
-// (idempotent). When the ethos block already exists the missing patterns are
-// inserted under that one marker — never a second marker block; otherwise a
-// fresh marked block is appended. Existing lines are left in place and never
-// reordered. A missing .gitignore is created. It returns the step action
-// ("added" or "already") and a detail line for the report.
+// gitignoreRules are the patterns a consumer repo must never track. The
+// runtime zones are the DES-058 live-session files (audit + lock) and the
+// mission locks: the seal hook rewrites them continuously while a session is
+// live, so tracking them deadlocks git checkout/pull and leaks them into
+// release PRs. The last rule is the machine-local half of any tool namespace,
+// which may hold secrets.
+var gitignoreRules = []ignoreRule{
+	{
+		pattern: ".punt-labs/**/local/**",
+		probe:   ".punt-labs/ethos/local/probe/probe.jsonl",
+		runtime: true,
+	},
+	{
+		pattern: ".punt-labs/ethos/missions/**/*.lock",
+		probe:   ".punt-labs/ethos/missions/m-probe/probe.lock",
+		runtime: true,
+	},
+	{
+		pattern: LocalIgnoreRule,
+		probe:   localIgnoreProbe,
+		note:    LocalIgnoreNote,
+	},
+}
+
+// ensureGitignore makes the repo .gitignore cover ethos's runtime zones and
+// the machine-local files. It adds only the patterns the repo does not already
+// exclude, so re-enable adds nothing (idempotent). When the ethos block already
+// exists the missing patterns are inserted under that one marker — never a
+// second marker block; otherwise a fresh marked block is appended. Existing
+// lines are left in place and never reordered. A missing .gitignore is created.
+// It returns the step action ("added" or "already") and a detail line for the
+// report.
 func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	path := filepath.Join(repoRoot, ".gitignore")
 	data, err := os.ReadFile(path)
@@ -37,30 +81,26 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		return "", "", fmt.Errorf("reading .gitignore: %w", err)
 	}
 
-	// Match lines exactly, but for the comparison only: leading whitespace is
-	// significant in .gitignore, so an indented "  .punt-labs/**/local/**" is a
-	// different pattern — it matches paths that start with spaces, not the real
-	// files — and must not count as coverage, or the real zone stays unignored.
-	// A trailing \r (CRLF file) is stripped for the comparison so a CRLF repo
-	// stays idempotent; leading whitespace is left intact.
-	lines := strings.Split(string(data), "\n")
-	present := make(map[string]bool, len(lines))
+	present := presentLines(data)
 	markerIdx := -1
+	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
-		key := strings.TrimRight(line, "\r")
-		present[key] = true
-		if markerIdx < 0 && key == gitignoreMarker {
+		if strings.TrimRight(line, "\r") == gitignoreMarker {
 			markerIdx = i
+			break
 		}
 	}
-	var missing []string
-	for _, p := range gitignorePatterns {
-		if !present[p] {
-			missing = append(missing, p)
+	var missing []ignoreRule
+	var patterns []string
+	for _, r := range gitignoreRules {
+		if covers(repoRoot, r.pattern, r.probe, present) {
+			continue
 		}
+		missing = append(missing, r)
+		patterns = append(patterns, r.pattern)
 	}
 	if len(missing) == 0 {
-		return "already", ".gitignore already ignores ethos runtime zones", nil
+		return "already", ".gitignore already ignores ethos runtime zones and machine-local files", nil
 	}
 
 	// Preserve the file's existing line ending so the block we add matches.
@@ -68,9 +108,13 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	if bytes.Contains(data, []byte("\r\n")) {
 		eol = "\r\n"
 	}
-	ins := make([]string, len(missing))
-	for i, m := range missing {
-		ins[i] = m + strings.TrimSuffix(eol, "\n")
+	cr := strings.TrimSuffix(eol, "\n")
+	var ins []string
+	for _, r := range missing {
+		if r.note != "" {
+			ins = append(ins, r.note+cr)
+		}
+		ins = append(ins, r.pattern+cr)
 	}
 
 	var out string
@@ -105,7 +149,73 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	if err := writeGitignore(path, []byte(out)); err != nil {
 		return "", "", err
 	}
-	return "added", "ignored " + strings.Join(missing, ", "), nil
+	return "added", "ignored " + strings.Join(patterns, ", "), nil
+}
+
+// presentLines indexes the .gitignore's lines for an exact-match lookup.
+// Leading whitespace is significant in .gitignore, so an indented
+// "  .punt-labs/**/local/**" is a different pattern — it matches paths that
+// start with spaces, not the real files — and is not folded into the
+// unindented key. A trailing \r (CRLF file) is stripped so a CRLF repo still
+// matches.
+func presentLines(data []byte) map[string]bool {
+	lines := strings.Split(string(data), "\n")
+	present := make(map[string]bool, len(lines))
+	for _, line := range lines {
+		present[strings.TrimRight(line, "\r")] = true
+	}
+	return present
+}
+
+// covers reports whether the repo already excludes probe from git.
+//
+// git is the authority. `git check-ignore` sees any spelling that matches the
+// path — the canonical `.punt-labs/**/*.local.*` as readily as a narrower rule
+// — plus rules in .git/info/exclude and in a parent directory's .gitignore. A
+// repo that already excludes the path is left alone; string-matching one
+// blessed spelling instead would re-append a redundant narrow rule on every
+// setup and vendor --apply, dirtying the tree (Bugbot, PR #422).
+//
+// The literal pattern still counts on its own, for two reasons: when git
+// cannot answer (no git in PATH, not a work tree, a bare directory in a test)
+// it is all there is to go on, and it keeps a re-run from appending a
+// duplicate even if the probe is a poor witness for the pattern.
+func covers(repoRoot, pattern, probe string, present map[string]bool) bool {
+	if present[pattern] {
+		return true
+	}
+	ignored, err := gitIgnores(repoRoot, probe)
+	return err == nil && ignored
+}
+
+// gitIgnores reports whether git's ignore rules exclude the repo-relative path
+// rel. --no-index makes the answer about the rules alone, so a path that is
+// somehow tracked does not read as "not ignored". check-ignore exits 1 when no
+// path is ignored; any other failure means git could not answer and is
+// returned as an error for the caller to fall back on.
+func gitIgnores(repoRoot, rel string) (bool, error) {
+	cmd := exec.Command("git", "-C", repoRoot, "check-ignore", "-q", "--no-index", "--", rel)
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return false, nil
+	}
+	return false, fmt.Errorf("git check-ignore %s: %w", rel, err)
+}
+
+// LocalIgnored reports whether the repo already keeps machine-local
+// `.local.*` files out of git, by the same predicate enable uses. Setup and
+// vendor call it before writing LocalIgnoreRule, so the three commands agree
+// with each other and with what `ethos doctor` asks git.
+func LocalIgnored(repoRoot string) (bool, error) {
+	data, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("reading .gitignore: %w", err)
+	}
+	return covers(repoRoot, LocalIgnoreRule, localIgnoreProbe, presentLines(data)), nil
 }
 
 // writeGitignore replaces the .gitignore at path atomically and durably: it
@@ -171,12 +281,16 @@ func writeGitignore(path string, data []byte) error {
 // repo that committed these files before enabling still tracks them, and the
 // live seal hook rewriting them keeps deadlocking git checkout/pull with no
 // operator signal. The :(glob) pathspec magic makes git evaluate the same
-// globs the .gitignore uses. Untracking (git rm --cached) is the operator's
+// globs the .gitignore uses. A tracked machine-local file is a different
+// fault — a secret in git, which `ethos doctor` FAILs on — so it is not
+// folded into this warning. Untracking (git rm --cached) is the operator's
 // call, so the caller only warns.
 func trackedRuntimeFiles(repoRoot string) ([]string, error) {
 	args := []string{"-C", repoRoot, "ls-files", "-z", "--"}
-	for _, p := range gitignorePatterns {
-		args = append(args, ":(glob)"+p)
+	for _, r := range gitignoreRules {
+		if r.runtime {
+			args = append(args, ":(glob)"+r.pattern)
+		}
 	}
 	out, err := exec.Command("git", args...).Output()
 	if err != nil {

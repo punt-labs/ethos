@@ -70,6 +70,87 @@ func TestEnableGitignoreIndentedNearDuplicateNotCoverage(t *testing.T) {
 	}
 }
 
+func TestEnableAddsCanonicalLocalRule(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	got := readFile(t, filepath.Join(dir, ".gitignore"))
+	if n := strings.Count(got, LocalIgnoreRule); n != 1 {
+		t.Errorf("canonical local rule appears %d times, want 1; got:\n%s", n, got)
+	}
+	// The rule is only as good as what git makes of it: a freshly enabled repo
+	// must actually exclude a machine-local file, which is the same question
+	// `ethos doctor` asks.
+	ignored, err := gitIgnores(dir, localIgnoreProbe)
+	if err != nil {
+		t.Fatalf("gitIgnores: %v", err)
+	}
+	if !ignored {
+		t.Errorf("git does not ignore %s after enable; .gitignore:\n%s", localIgnoreProbe, got)
+	}
+}
+
+func TestEnableGitignoreBroaderRulesAreCoverage(t *testing.T) {
+	dir := gitRepo(t)
+	// None of these is a pattern enable writes, but each excludes the paths
+	// enable cares about. Asking git rather than string-matching one blessed
+	// spelling is what keeps enable from appending a redundant near-duplicate.
+	initial := ".punt-labs/**/local/**\n.punt-labs/**/*.lock\n.punt-labs/**/*.local.*\n"
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Enable(dir)
+	if err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if got := readFile(t, path); got != initial {
+		t.Errorf(".gitignore rewritten though already covered:\nwant:\n%s\ngot:\n%s", initial, got)
+	}
+	var action string
+	for _, s := range rep.Steps {
+		if s.Step == "gitignore" {
+			action = s.Status
+		}
+	}
+	if action != "already" {
+		t.Errorf("gitignore step = %q, want %q", action, "already")
+	}
+}
+
+func TestLocalIgnored(t *testing.T) {
+	cases := []struct {
+		name      string
+		gitignore string
+		want      bool
+	}{
+		{"empty repo", "", false},
+		{"unrelated rules", "*.log\nbuild/\n", false},
+		{"canonical rule", LocalIgnoreRule + "\n", true},
+		{"legacy narrow rule", ".punt-labs/ethos/**/*.local.yaml\n", true},
+		{"broader subtree rule", ".punt-labs/**\n", true},
+		{"indented rule is a different pattern", "  " + LocalIgnoreRule + "\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := gitRepo(t)
+			if c.gitignore != "" {
+				if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(c.gitignore), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := LocalIgnored(dir)
+			if err != nil {
+				t.Fatalf("LocalIgnored: %v", err)
+			}
+			if got != c.want {
+				t.Errorf("LocalIgnored = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // hasExactLine reports whether s contains want as a complete line.
 func hasExactLine(s, want string) bool {
 	for _, line := range strings.Split(s, "\n") {
@@ -217,7 +298,7 @@ func TestEnableGitignoreCRLFIdempotent(t *testing.T) {
 	dir := gitRepo(t)
 	// A CRLF .gitignore already covering the zones must be a no-op on enable —
 	// the trailing \r must not defeat the presence check and cause a duplicate.
-	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n"
+	initial := "*.log\r\n" + gitignoreMarker + "\r\n" + liveZonePattern + "\r\n" + missionLockPat + "\r\n" + LocalIgnoreRule + "\r\n"
 	path := filepath.Join(dir, ".gitignore")
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatal(err)
