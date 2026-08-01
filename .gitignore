@@ -16,10 +16,12 @@ coverage.out
 # here and must never be committed. Canonical org-wide form.
 .punt-labs/**/local/**
 
-# ext .local secret files (DES-057): <handle>.ext/<namespace>.local.yaml
-# holds credentials — `ethos ext set --local` writes them and vendor refuses
-# to copy them. Ignore so a secret can never be staged.
-.punt-labs/ethos/**/*.local.yaml
+# Machine-local file variants across every .punt-labs tool subtree: the
+# `.local.` infix marks per-machine config and secrets that must never be
+# committed — ethos ext secrets (<handle>.ext/<ns>.local.yaml, DES-057),
+# biff/vox local config, and any future tool. One canonical rule instead of
+# a per-tool nested .gitignore.
+.punt-labs/**/*.local.*
 
 # Claude local settings
 .claude/settings.local.json
