@@ -224,6 +224,68 @@ func TestCheckLocalExtNotTracked(t *testing.T) {
 		assert.Equal(t, "WARN", r.Status)
 		assert.Contains(t, r.Detail, "could not verify")
 	})
+
+	// The detector scans the whole .punt-labs/ tree, not just ethos's. A
+	// tracked vox or beadle secret is as committed as a tracked ethos one,
+	// and the narrow scan walked past both.
+	t.Run("tracked non-ethos secret fails", func(t *testing.T) {
+		for _, rel := range []string{
+			".punt-labs/vox/vox.local.md",
+			".punt-labs/beadle/creds.local.json",
+			".punt-labs/top.local.env",
+		} {
+			t.Run(rel, func(t *testing.T) {
+				root := gitRepo(t)
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"),
+					[]byte(GitignoreRule+"\n"), 0o644))
+				p := filepath.Join(root, filepath.FromSlash(rel))
+				require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o755))
+				require.NoError(t, os.WriteFile(p, []byte("token: s3cret\n"), 0o644))
+
+				add := exec.Command("git", "-C", root, "add", "-f", rel)
+				out, err := add.CombinedOutput()
+				require.NoError(t, err, string(out))
+
+				r := CheckLocalExtNotTracked(root)
+				assert.Equal(t, "FAIL", r.Status, r.Detail)
+				assert.Contains(t, r.Detail, rel)
+			})
+		}
+	})
+
+	// Coverage is enable's predicate now, so a rule that protects only part
+	// of .punt-labs/ must not read as protection — doctor and the commands
+	// that write the rule have to give the same answer.
+	t.Run("partial rule warns", func(t *testing.T) {
+		for _, rule := range []string{
+			".punt-labs/ethos/**/*.local.yaml",
+			".punt-labs/**/*.local.yaml",
+			".punt-labs/ethos/**/*.local.*",
+		} {
+			t.Run(rule, func(t *testing.T) {
+				root := gitRepo(t)
+				require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"),
+					[]byte(rule+"\n"), 0o644))
+				writeLocalExt(t, root)
+
+				r := CheckLocalExtNotTracked(root)
+				assert.Equal(t, "WARN", r.Status, r.Detail)
+				assert.Contains(t, r.Detail, GitignoreRule)
+			})
+		}
+	})
+
+	// .git/info/exclude protects this clone and no other. Doctor must not
+	// bless a repo whose protection does not travel.
+	t.Run("info/exclude does not count", func(t *testing.T) {
+		root := gitRepo(t)
+		require.NoError(t, os.WriteFile(filepath.Join(root, ".git", "info", "exclude"),
+			[]byte(GitignoreRule+"\n"), 0o644))
+		writeLocalExt(t, root)
+
+		r := CheckLocalExtNotTracked(root)
+		assert.Equal(t, "WARN", r.Status, r.Detail)
+	})
 }
 
 func TestCheckExtCredentialNames(t *testing.T) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,14 +13,15 @@ import (
 // A repo that already excludes machine-local files must come back from setup
 // and vendor --apply untouched, whatever spelling it uses. String-matching one
 // blessed rule re-appended a narrower near-duplicate on every run and dirtied
-// the tree (Bugbot, PR #422).
+// the tree (Bugbot, PR #422). "Already excludes" means all of them: a rule that
+// covers only part of the namespace is not on this list — see
+// TestEnsureLocalExtIgnoredUpgradesNarrowRule.
 func TestEnsureLocalExtIgnoredLeavesCoveredRepoAlone(t *testing.T) {
 	cases := []struct {
 		name      string
 		gitignore string
 	}{
 		{"canonical rule", enable.LocalIgnoreRule + "\n"},
-		{"legacy narrow rule", ".punt-labs/ethos/**/*.local.yaml\n"},
 		{"whole subtree", ".punt-labs/**\n"},
 	}
 	for _, c := range cases {
@@ -85,6 +87,51 @@ func TestEnsureLocalExtIgnoredAddsCanonicalRuleOnce(t *testing.T) {
 	}
 }
 
+// The narrow rule every shipped `ethos doctor` told operators to add,
+// `.punt-labs/ethos/**/*.local.yaml`, covers one corner of the namespace and
+// leaves `.punt-labs/vox/`, `.punt-labs/beadle/`, and every non-yaml variant
+// stageable. One probe under .punt-labs/ethos/ read it as coverage, so ethos
+// wrote nothing and `git add -A` staged the secret (djb, review of PR #423).
+// It must now read as uncovered and get the canonical rule alongside it.
+func TestEnsureLocalExtIgnoredUpgradesNarrowRule(t *testing.T) {
+	const narrow = ".punt-labs/ethos/**/*.local.yaml\n"
+	dir := enableGitRepo(t)
+	path := filepath.Join(dir, ".gitignore")
+	if err := os.WriteFile(path, []byte(narrow), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	added, err := ensureLocalExtIgnored(dir)
+	if err != nil {
+		t.Fatalf("ensureLocalExtIgnored: %v", err)
+	}
+	if !added {
+		t.Fatal("narrow rule accepted as coverage; the canonical rule was not written")
+	}
+	got := readGitignore(t, path)
+	if !strings.HasPrefix(got, narrow) {
+		t.Errorf("existing rule not preserved; got:\n%s", got)
+	}
+	if n := strings.Count(got, enable.LocalIgnoreRule); n != 1 {
+		t.Errorf("canonical rule appears %d times, want 1; got:\n%s", n, got)
+	}
+	covered, err := enable.LocalIgnored(dir)
+	if err != nil {
+		t.Fatalf("LocalIgnored: %v", err)
+	}
+	if !covered {
+		t.Errorf("repo still uncovered after writing the rule; .gitignore:\n%s", got)
+	}
+
+	// djb's repro. The secrets the narrow rule missed must not reach the index.
+	for _, f := range []string{".punt-labs/vox/vox.local.md", ".punt-labs/beadle/creds.local.json"} {
+		writeRepoFile(t, dir, f, "secret\n")
+	}
+	if staged := gitAddAll(t, dir); len(staged) != 1 || staged[0] != ".gitignore" {
+		t.Errorf("git add -A staged %v, want only [.gitignore]", staged)
+	}
+}
+
 // A repo with no .gitignore at all gets one, and the rule it gets must be the
 // rule git honours — the same question `ethos doctor` asks.
 func TestEnsureLocalExtIgnoredCreatesGitignore(t *testing.T) {
@@ -117,6 +164,39 @@ func TestEnsureLocalExtIgnoredOutsideRepo(t *testing.T) {
 	if added {
 		t.Error("wrote a .gitignore with no repo root")
 	}
+}
+
+// writeRepoFile creates the repo-relative file rel, and any directory it needs.
+func writeRepoFile(t *testing.T, repoRoot, rel, content string) {
+	t.Helper()
+	path := filepath.Join(repoRoot, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// gitAddAll stages everything git will let it and returns the paths that landed
+// in the index — what an operator's `git add -A` would commit.
+func gitAddAll(t *testing.T, repoRoot string) []string {
+	t.Helper()
+	add := exec.Command("git", "-C", repoRoot, "add", "-A")
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add -A: %v: %s", err, out)
+	}
+	out, err := exec.Command("git", "-C", repoRoot, "diff", "--cached", "--name-only", "-z").Output()
+	if err != nil {
+		t.Fatalf("git diff --cached: %v", err)
+	}
+	var staged []string
+	for _, f := range strings.Split(string(out), "\x00") {
+		if f != "" {
+			staged = append(staged, f)
+		}
+	}
+	return staged
 }
 
 func readGitignore(t *testing.T, path string) string {

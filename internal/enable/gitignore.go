@@ -27,17 +27,33 @@ const LocalIgnoreRule = ".punt-labs/**/*.local.*"
 // would mislabel one of them.
 const LocalIgnoreNote = "# ethos: machine-local files (.local.*) — may hold secrets, never track"
 
-// localIgnoreProbe is a representative machine-local path a covering rule must
-// exclude. It names no real file: git check-ignore reports a path already in
-// the index as not ignored, so a probe must be one git has never seen.
-const localIgnoreProbe = ".punt-labs/ethos/identities/probe.ext/probe.local.yaml"
+// localIgnoreProbes are the machine-local paths a covering rule must exclude —
+// every one of them, or the rule is not coverage.
+//
+// One probe under .punt-labs/ethos/ was not enough. The narrow
+// `.punt-labs/ethos/**/*.local.yaml` that every shipped `ethos doctor` told
+// operators to add satisfies such a probe while leaving `.punt-labs/vox/`,
+// `.punt-labs/beadle/`, and every non-yaml variant stageable; ethos then
+// reported the repo covered and wrote nothing, and `git add -A` staged the
+// secret (djb, review of PR #423). So the set spans what the canonical rule
+// spans: a non-ethos subtree, a non-yaml extension, and the zero-directory
+// case directly under .punt-labs/.
+//
+// They name no real files: git check-ignore reports a path already in the
+// index as not ignored, so a probe must be one git has never seen.
+var localIgnoreProbes = []string{
+	".punt-labs/ethos/identities/probe.ext/probe.local.yaml",
+	".punt-labs/vox/probe.local.md",
+	".punt-labs/beadle/probe.local.json",
+	".punt-labs/probe.local.env",
+}
 
 // ignoreRule is one pattern enable ensures the repo excludes: the pattern
-// itself, the probe path that decides whether it is already covered, the
+// itself, the probe paths that decide whether it is already covered, the
 // comment written above it, and whether it names a runtime zone.
 type ignoreRule struct {
 	pattern string
-	probe   string
+	probes  []string
 	note    string
 	runtime bool
 }
@@ -47,23 +63,34 @@ type ignoreRule struct {
 // mission locks: the seal hook rewrites them continuously while a session is
 // live, so tracking them deadlocks git checkout/pull and leaks them into
 // release PRs. The last rule is the machine-local half of any tool namespace,
-// which may hold secrets.
+// which may hold secrets. Each rule's probes span the breadth of its pattern,
+// so a narrower rule that covers only part of it does not pass for coverage.
 var gitignoreRules = []ignoreRule{
 	{
 		pattern: ".punt-labs/**/local/**",
-		probe:   ".punt-labs/ethos/local/probe/probe.jsonl",
+		probes: []string{
+			".punt-labs/ethos/local/probe/probe.jsonl",
+			".punt-labs/vox/local/probe.json",
+		},
 		runtime: true,
 	},
 	{
 		pattern: ".punt-labs/ethos/missions/**/*.lock",
-		probe:   ".punt-labs/ethos/missions/m-probe/probe.lock",
+		probes: []string{
+			".punt-labs/ethos/missions/m-probe/probe.lock",
+			".punt-labs/ethos/missions/m-probe/delegations/d-probe/probe.lock",
+		},
 		runtime: true,
 	},
-	{
-		pattern: LocalIgnoreRule,
-		probe:   localIgnoreProbe,
-		note:    LocalIgnoreNote,
-	},
+	machineLocalRule,
+}
+
+// machineLocalRule is the machine-local entry of gitignoreRules, named so
+// LocalIgnored and enable cannot drift onto different probe sets.
+var machineLocalRule = ignoreRule{
+	pattern: LocalIgnoreRule,
+	probes:  localIgnoreProbes,
+	note:    LocalIgnoreNote,
 }
 
 // ensureGitignore makes the repo .gitignore cover ethos's runtime zones and
@@ -72,8 +99,11 @@ var gitignoreRules = []ignoreRule{
 // exists the missing patterns are inserted under that one marker — never a
 // second marker block; otherwise a fresh marked block is appended. Existing
 // lines are left in place and never reordered. A missing .gitignore is created.
-// It returns the step action ("added" or "already") and a detail line for the
-// report.
+//
+// It returns the step action and a detail line for the report: "added" when it
+// wrote, "already" when the repo was covered, and "attention" when a pattern's
+// line is in the file but git does not honour it — the one case ethos cannot
+// fix by writing, because the line it would write is already there.
 func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	path := filepath.Join(repoRoot, ".gitignore")
 	data, err := os.ReadFile(path)
@@ -91,15 +121,28 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 		}
 	}
 	var missing []ignoreRule
-	var patterns []string
+	var patterns, defeated []string
 	for _, r := range gitignoreRules {
-		if covers(repoRoot, r.pattern, r.probe, present) {
+		if covers(repoRoot, r, present) {
+			continue
+		}
+		// The pattern is uncovered but its literal line is already in the
+		// file: a later negation or an override defeats it, and appending a
+		// second copy of the same line would not change git's answer — it
+		// would just grow the file on every run. Report it instead; only a
+		// human can resolve the conflict.
+		if present[r.pattern] {
+			defeated = append(defeated, r.pattern)
 			continue
 		}
 		missing = append(missing, r)
 		patterns = append(patterns, r.pattern)
 	}
 	if len(missing) == 0 {
+		if len(defeated) > 0 {
+			return "attention", strings.Join(defeated, ", ") +
+				" present in .gitignore but not honoured by git (a later negation or an override) — those files are still stageable", nil
+		}
 		return "already", ".gitignore already ignores ethos runtime zones and machine-local files", nil
 	}
 
@@ -149,7 +192,12 @@ func ensureGitignore(repoRoot string) (action, detail string, err error) {
 	if err := writeGitignore(path, []byte(out)); err != nil {
 		return "", "", err
 	}
-	return "added", "ignored " + strings.Join(patterns, ", "), nil
+	detail = "ignored " + strings.Join(patterns, ", ")
+	if len(defeated) > 0 {
+		detail += "; " + strings.Join(defeated, ", ") +
+			" present but not honoured by git (a later negation or an override) — those files are still stageable"
+	}
+	return "added", detail, nil
 }
 
 // presentLines indexes the .gitignore's lines for an exact-match lookup.
@@ -167,55 +215,115 @@ func presentLines(data []byte) map[string]bool {
 	return present
 }
 
-// covers reports whether the repo already excludes probe from git.
+// covers reports whether the repo's own committed ignore rules exclude every
+// one of the rule's probes.
 //
-// git is the authority. `git check-ignore` sees any spelling that matches the
-// path — the canonical `.punt-labs/**/*.local.*` as readily as a narrower rule
-// — plus rules in .git/info/exclude and in a parent directory's .gitignore. A
-// repo that already excludes the path is left alone; string-matching one
-// blessed spelling instead would re-append a redundant narrow rule on every
-// setup and vendor --apply, dirtying the tree (Bugbot, PR #422).
+// git is the authority on what a rule matches: `git check-ignore` reads the
+// canonical `.punt-labs/**/*.local.*` as readily as any other spelling, so a
+// repo that already excludes the paths is left alone rather than having a
+// redundant near-duplicate appended on every setup and vendor --apply (Bugbot,
+// PR #422). Two things git is not the authority on, and both are decided here
+// in gitExcludes: which rules travel with the repo, and whether one probe
+// standing in for a whole pattern is enough.
 //
-// The literal pattern still counts on its own, for two reasons: when git
-// cannot answer (no git in PATH, not a work tree, a bare directory in a test)
-// it is all there is to go on, and it keeps a re-run from appending a
-// duplicate even if the probe is a poor witness for the pattern.
-func covers(repoRoot, pattern, probe string, present map[string]bool) bool {
-	if present[pattern] {
-		return true
+// It answers false on any doubt. A rule that covers part of the pattern, a
+// match that comes from an untraveling source, and a git that cannot answer at
+// all all mean "write the rule" — a redundant line costs nothing, a secret
+// staged by a repo that reported itself protected costs everything.
+//
+// The literal pattern is consulted only when git cannot answer (no git in
+// PATH, not a work tree). It is a fallback, not a second opinion: when git
+// answers "not excluded" for a pattern whose line is right there in the file,
+// something overrides it, and taking the line's word for it is the fail-open
+// this predicate exists to prevent.
+func covers(repoRoot string, r ignoreRule, present map[string]bool) bool {
+	excluded, err := gitExcludes(repoRoot, r.probes)
+	if err != nil {
+		return present[r.pattern]
 	}
-	ignored, err := gitIgnores(repoRoot, probe)
-	return err == nil && ignored
+	return excluded
 }
 
-// gitIgnores reports whether git's ignore rules exclude the repo-relative path
-// rel. --no-index makes the answer about the rules alone, so a path that is
-// somehow tracked does not read as "not ignored". check-ignore exits 1 when no
-// path is ignored; any other failure means git could not answer and is
-// returned as an error for the caller to fall back on.
-func gitIgnores(repoRoot, rel string) (bool, error) {
-	cmd := exec.Command("git", "-C", repoRoot, "check-ignore", "-q", "--no-index", "--", rel)
-	err := cmd.Run()
-	if err == nil {
-		return true, nil
+// gitExcludes reports whether the repo's own ignore rules exclude every path
+// in probes. Every one: a rule that excludes some of them is not coverage for
+// a pattern that spans all of them.
+//
+// The matching rule must also live in the work tree. `git check-ignore` counts
+// .git/info/exclude and core.excludesFile, and neither travels with the repo —
+// a per-clone exclude on the operator's machine would suppress writing the
+// committed rule, and the fresh clone that CI or a colleague makes would stage
+// the secret (djb, review of PR #423). A negated pattern is not coverage
+// either: git reports the match that applies, and a `!` match means the path
+// is not ignored at all.
+//
+// --no-index keeps the answer about the rules alone, so a path that is somehow
+// in the index does not read as "not ignored". check-ignore exits 1 when no
+// path matches; any other failure means git could not answer and is returned
+// as an error for the caller to fall back on.
+func gitExcludes(repoRoot string, probes []string) (bool, error) {
+	cmd := exec.Command("git", "-C", repoRoot, "check-ignore", "-v", "-z", "--no-index", "--stdin")
+	cmd.Stdin = strings.NewReader(strings.Join(probes, "\x00") + "\x00")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		// Exit 1 is "no path matched" — an answer, and the answer is no.
+		if !errors.As(err, &ee) || ee.ExitCode() != 1 {
+			return false, fmt.Errorf("git check-ignore: %w: %s", err, strings.TrimSpace(stderr.String()))
+		}
 	}
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 1 {
-		return false, nil
+
+	// -v -z prints four NUL-terminated fields per match: source, line number,
+	// pattern, pathname. Unmatched paths print nothing.
+	matched := make(map[string]bool, len(probes))
+	fields := strings.Split(stdout.String(), "\x00")
+	for i := 0; i+3 < len(fields); i += 4 {
+		source, pattern, path := fields[i], fields[i+2], fields[i+3]
+		if strings.HasPrefix(pattern, "!") || !travelsWithRepo(source) {
+			continue
+		}
+		matched[path] = true
 	}
-	return false, fmt.Errorf("git check-ignore %s: %w", rel, err)
+	for _, p := range probes {
+		if !matched[p] {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
-// LocalIgnored reports whether the repo already keeps machine-local
-// `.local.*` files out of git, by the same predicate enable uses. Setup and
-// vendor call it before writing LocalIgnoreRule, so the three commands agree
-// with each other and with what `ethos doctor` asks git.
+// travelsWithRepo reports whether an ignore source is part of the repo every
+// clone gets. git prints the source relative to the repo root for a .gitignore
+// inside the work tree — ".gitignore", ".punt-labs/.gitignore" — and rejects
+// here are the two that are local to one machine: an absolute path
+// (core.excludesFile) and anything under a .git directory (info/exclude).
+//
+// It does not require the file to be committed yet. The .gitignore ethos just
+// wrote is untracked until the operator commits it, and demanding tracked
+// status would make the very next run append the rule a second time.
+func travelsWithRepo(source string) bool {
+	if source == "" || filepath.IsAbs(source) {
+		return false
+	}
+	for _, seg := range strings.Split(filepath.ToSlash(filepath.Clean(source)), "/") {
+		if seg == ".git" || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// LocalIgnored reports whether the repo's own committed rules keep every kind
+// of machine-local `.local.*` file out of git, by the same predicate enable
+// uses. Setup, vendor, and doctor call it, so all four surfaces answer one
+// question one way.
 func LocalIgnored(repoRoot string) (bool, error) {
 	data, err := os.ReadFile(filepath.Join(repoRoot, ".gitignore"))
 	if err != nil && !os.IsNotExist(err) {
 		return false, fmt.Errorf("reading .gitignore: %w", err)
 	}
-	return covers(repoRoot, LocalIgnoreRule, localIgnoreProbe, presentLines(data)), nil
+	return covers(repoRoot, machineLocalRule, presentLines(data)), nil
 }
 
 // writeGitignore replaces the .gitignore at path atomically and durably: it
