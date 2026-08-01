@@ -24,3 +24,10 @@ tools:
   - mcp__plugin_biff_tty__read_messages
   - mcp__plugin_ethos_self__identity
   - mcp__plugin_ethos_self__session
+  # Formal-methods roles also drive the Z toolchain over MCP.
+  - mcp__plugin_z-spec_zspec__check
+  - mcp__plugin_z-spec_zspec__model_check
+  - mcp__plugin_z-spec_zspec__test
+  - mcp__plugin_z-spec_zspec__animate
+  - mcp__plugin_z-spec_zspec__browse
+  - mcp__plugin_z-spec_zspec__get_report
