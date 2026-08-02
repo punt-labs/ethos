@@ -24,8 +24,15 @@ SessionStart; restart Claude Code to regenerate them after a team change.
 - `ethos mission pipeline list|show|instantiate <name>` — drive multi-stage
   work from a template.
 
-Commit one logical step at a time; the write-set is enforced at runtime, so
-an edit outside it fails the mission.
+Scope the write-set to the work's real breadth so you don't have to widen it
+later. It is a spectrum, not a tight file list: a single file for a one-file
+fix; a **directory prefix** (e.g. `internal/enable/`) to authorize modify+create
+anywhere under it when you can't name every file up front; a **glob** where it
+fits; and `extract_into` for new files a worker creates while decomposing. The
+set is enforced at runtime — an edit outside it fails the mission — but it can
+be as broad as the work honestly needs. Prefer declaring the right breadth up
+front over declaring a tight list and paying the escalate→close→recreate
+re-scope when the work legitimately grows. Commit one logical step at a time.
 
 ## Audit
 
