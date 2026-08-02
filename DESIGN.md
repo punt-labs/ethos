@@ -5676,9 +5676,11 @@ secret stayed stageable (fail-open). Coverage is now decided with `git
 check-ignore`, fail-closed: `enable`/`setup`/`vendor` probe a **set** of
 representative paths — including a non-ethos subtree and a non-`.yaml` variant —
 and treat the tree as covered only when *every* probe is ignored; a match counts
-only when its ignoring source travels with the repo (a `.git/info/exclude` or
-`core.excludesFile` entry is rejected via `-c core.excludesFile=/dev/null`, so a
-per-clone exclude cannot suppress writing the committed rule). `enable`,
+only when its ignoring source travels with the repo: `core.excludesFile` is
+neutralized at the source with `-c core.excludesFile=<os.DevNull>` (the null
+device, portable across platforms), and a `.git/info/exclude` match is rejected
+because its source sits inside `.git` and does not travel — so a per-clone
+exclude cannot suppress writing the committed rule. `enable`,
 `setup`, `vendor`, and `doctor` share one exported `enable.LocalIgnoreRule`
 constant, so the rule `doctor` advises and the rule the write path emits cannot
 drift, and `doctor`'s tracked-secret scan covers the whole
@@ -7013,8 +7015,9 @@ in its own session:
   plugin prefix — every repo declares its own checkout as a `<tool>-dev` plugin,
   so released-only names silently miss inside that tool's own repo. No wildcards.
 - **Per-tool, not per-method.** MCP scoping is per tool: granting `identity` also
-  grants its `create`, `session` its `purge`, biff `plan` its status-write.
-  Accepted — all are local or status-only, never outbound coordination. The one
+  grants its `create`, `session` its roster-editing `iam`/`join`/`leave`, biff
+  `plan` its status-write. Accepted — all are local or status-only (a roster
+  self-edit is attribution, not privilege), never outbound coordination. The one
   exception: `tech-writer`, the only role without `Bash`, omits `identity` — with
   no CLI door, the MCP tool would be its sole route to ethos-mediated identity
   creation, unwanted for a documentation role.
