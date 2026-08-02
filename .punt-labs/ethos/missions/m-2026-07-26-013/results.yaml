@@ -1,0 +1,12 @@
+results:
+    - mission: m-2026-07-26-013
+      round: 1
+      created_at: "2026-08-02T16:05:55Z"
+      author: claude
+      verdict: escalate
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: dormant mission superseded; deliverable shipped
+          status: skip
+      prose: Dormant since 2026-07-26. The schema-subcommand design it was to produce shipped long ago (ethos identity/role/team schema, released in v4.9.0), so there is no outstanding deliverable. Closing to release its docs write-set (docs/agent-definitions.md, docs/agent-identity-spec.tex), which is blocking current work on the agent tool-scope note.

@@ -1,0 +1,183 @@
+results:
+    - mission: m-2026-08-01-009
+      round: 1
+      created_at: "2026-08-01T21:43:38Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: .punt-labs/ethos/roles/architect.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/b-specialist.yaml
+          added: 21
+          removed: 0
+        - path: .punt-labs/ethos/roles/cli-minimalist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/cli-specialist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/cloud-native-engineer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/debugger.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/devex-specialist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/finance-ops.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/go-specialist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/go-toolchain.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/implementer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/infra-engineer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/ml-foundations.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/ml-specialist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/pm-building-blocks.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/pm-grounding.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/product-discovery.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/product-lead.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/product-strategy.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/python-language-design.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/python-specialist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/qa-engineer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/release-manager.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/reviewer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/security-architect.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/security-engineer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/security-reviewer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/smalltalk-patterns.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/smalltalk-specialist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/swift-platforms.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/swift-specialist.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/tech-writer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/ux-cognitive.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/ux-designer.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/web-javascript.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/web-typescript.yaml
+          added: 14
+          removed: 0
+        - path: .punt-labs/ethos/roles/z-specialist.yaml
+          added: 21
+          removed: 0
+      evidence:
+        - name: make check on 767c4b1 (inbound set, 37 roles)
+          status: pass
+        - name: make check on 2b85237 (z-spec, 2 formal-methods roles)
+          status: pass
+        - name: 'validate-content: 31 identities, 3 teams, 211 attributes'
+          status: pass
+        - name: tool names read from each server's source before use (quarry mcp_server.py:118-128, biff messaging.py:159 + plan.py:26, ethos tools.go:129-160, z-spec server.py)
+          status: pass
+        - name: 'grant reaches the generated agent: .claude/agents/bwk.md frontmatter lists all 11 inbound tools'
+          status: pass
+        - name: 'z-spec confined to the formal-methods pair: only jms.md (Spivey) and jra.md (Abrial) carry z-spec tools'
+          status: pass
+        - name: 'boundary proved exhaustively: the complete mcp__ inventory across all 27 generated agents is 17 distinct names (11 inbound x27, 6 z-spec x2) and nothing else'
+          status: pass
+        - name: 'no outbound name anywhere: denylist scan for biff write/wall/talk/mesg/who/finger/last, beadle, github, ethos mission, lux, vox finds zero frontmatter hits'
+          status: pass
+        - name: 'change is purely additive: 0 tool-line removals, 305 additions, across all 27 agents'
+          status: pass
+        - name: 'leadership untouched: ceo.yaml and coo.yaml unchanged, neither carries a tools: key'
+          status: pass
+        - name: 'write-set respected: git diff over .punt-labs/ethos/roles is 37 files, 524 insertions, 0 deletions, nothing outside'
+          status: pass
+        - name: live demo — a specialist calling quarry over MCP in-session (restart-gated, runs post-merge)
+          status: skip
+      open_questions:
+        - The contract's premise that the roles live in a punt-labs/team submodule is false for this repo. There is no .gitmodules and git submodule status is empty; .punt-labs/ethos/roles/*.yaml are ordinary tracked files of punt-labs/ethos. The team submodule exists in the workspace repo and holds a different, smaller role set (11 files) that lacks z-specialist and b-specialist entirely, so the contract as written could not be executed there. Work done in punt-labs/ethos, which is where the write-set resolves and where the named roles exist. An org-wide grant needs a separate PR against punt-labs/team for its 9 specialist roles.
+        - 'Three granted tools are not purely read-only and should be ruled on rather than assumed: ethos identity carries a create method, ethos session carries purge, and biff plan writes a status string. MCP scoping is per-tool, not per-method, so the read halves cannot be granted alone. All three act on local or status state rather than on another agent or an external service, which is why they were granted as instructed — flagged, not deviated.'
+        - The regenerated .claude/agents/ files are not in the diff; committing them would reach outside the write-set. Generation is idempotent and runs at SessionStart, so they update in every checkout on the next session. Leader decides whether they should ship in this PR.
+        - No CHANGELOG entry, for the same write-set reason. The change is user-facing (specialists gain MCP tools), so the pre-PR checklist wants one. Leader decides whether to re-scope or add it.
+        - 'The live demonstration is restart-gated, as the contract anticipated: agent types are discovered at SessionStart, so a specialist actually calling quarry over MCP can only be shown after merge and a restart.'
+      prose: |
+        A sub-agent's MCP access is gated by the tools: list its role supplies.
+        A specialist scoped to Read/Write/Edit/Bash/Grep/Glob therefore reaches
+        no MCP server at all — it cannot recall a memory, search the corpus,
+        read its mail, or ask ethos who it is. Confirmed from this session: the
+        MCP server instruction blocks are injected into a scoped specialist's
+        context, but the tools themselves are absent.
+
+        The fix is 37 role files and no code. Each specialist role gains eleven
+        named inbound tools; the two formal-methods roles gain six more for the
+        Z toolchain. The security property is that the boundary is the list
+        itself: no outbound tool appears, so none can be reached.
+
+        Names are explicit rather than the wildcard. The wildcard is smaller to
+        write and wrong twice over — it would grant quarry's delete and its
+        three registration tools, and it would hide from an auditor exactly
+        what a specialist can do.
+
+        Withheld by name: quarry delete, register_directory,
+        deregister_directory, sync_all_registrations; biff write, wall, talk,
+        mesg, who, finger, last; ethos mission, role, team, ext, adr, vendor,
+        doctor; every beadle, GitHub, and lux tool.
+
+        The boundary is verified by exhaustion rather than by denylist. The
+        complete inventory of every mcp__ name appearing in any of the 27
+        generated agent files is seventeen distinct names: the eleven inbound
+        tools on all 27, and the six z-spec tools on exactly two. There is
+        nothing else to find, so there is nothing an outbound name could hide
+        behind. Diffing every tool line of the committed agents against the
+        regenerated ones gives 305 additions and zero removals.
+
+        Delivered as PR punt-labs/ethos#424 in two commits, 767c4b1 and
+        2b85237, each passing make check.

@@ -1,0 +1,65 @@
+results:
+    - mission: m-2026-08-02-003
+      round: 1
+      created_at: "2026-08-02T16:14:18Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs/agent-definitions.md
+          added: 23
+          removed: 12
+        - path: docs/agent-identity-spec.tex
+          added: 61
+          removed: 7
+      evidence:
+        - name: note block in docs/agent-definitions.md example diffed against .claude/agents/bwk.md — byte-identical
+          status: pass
+        - name: fresh `ethos hook session-start` from .tmp build — .claude/agents unchanged, no drift
+          status: pass
+        - name: pdflatex -halt-on-error on agent-identity-spec.tex — 11 pages, no errors
+          status: pass
+        - name: box-warning comparison against main's version of the .tex — 3 before, 3 after
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Both docs enumerate the generated body section by section, so the
+        tool-scope note falsified both. Fixed on branch fix/agent-tool-scope-note,
+        commit f0b187d.
+
+        docs/agent-definitions.md: eight sections becomes nine, the note is
+        documented as section 2 with the reason it exists, and the abbreviated
+        bwk.md example carries the block at its real position — after the
+        reporting line, before the first personality heading. The example text is
+        byte-identical to a freshly generated bwk.md, verified by diff.
+
+        docs/agent-identity-spec.tex claimed to match buildAgentFile, and the
+        note was not the only place it had drifted. Three further defects, all
+        fixed since the claim cannot be true while any of them stands:
+
+          1. The Body Assembly Order enumeration omitted What You Don't Do,
+             Safety Constraints, and Output Format.
+          2. A Note directly under it asserted "There is no What You Do / What
+             You Don't Do section today --- that is future work (Phase 2.1)".
+             That section has shipped.
+          3. The frontmatter table and the closing paragraph of the worked
+             example listed `skills` and `hooks` as not yet generated. Both are
+             generated: `skills` always, `hooks` for roles holding Write or Edit.
+
+        Added a Tool Scope subsection explaining the harness behavior the block
+        counters. The rmh worked example gains the note, the skills/hooks
+        frontmatter, and a What You Don't Do section.
+
+        The .tex is pure ASCII and its listings already transcribe em dashes as
+        `---` (line 601 does this for rmh's personality). The note in the listing
+        follows that convention and a sentence below the listing says so, rather
+        than introducing the file's first non-ASCII byte inside an lstlisting,
+        where pdflatex handles UTF-8 poorly.
+
+        Three defects found in the markdown example while working in it and
+        fixed: a duplicated `Talents: engineering` line, a missing blank line
+        before `## Writing Style`, and a missing blank line after the
+        What-You-Don't-Do preamble. The generator emits all three correctly.
+
+        CHANGELOG untouched, per the contract. No PR opened.

@@ -1,0 +1,12 @@
+results:
+    - mission: m-2026-08-01-004
+      round: 1
+      created_at: "2026-08-01T17:57:25Z"
+      author: claude
+      verdict: escalate
+      confidence: 1
+      files_changed: []
+      evidence:
+        - name: re-scope required before first commit
+          status: skip
+      prose: Re-scope needed before any commit can pass make check. Fixing djb finding 1 (probe a set so the legacy narrow .punt-labs/ethos/**/*.local.yaml rule reads NOT covered) forces flipping cmd/ethos/gitignore_local_ext_test.go:22, which currently asserts the fail-open behavior djb flagged ("legacy narrow rule -> nothing added"). That test file is outside m4's write-set, so make-check-green- per-commit is impossible as scoped. Recreated as m-2026-08-01-005 with cmd/ethos/gitignore_local_ext_test.go added to the write-set.

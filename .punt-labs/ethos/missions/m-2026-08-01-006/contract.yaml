@@ -1,0 +1,25 @@
+mission_id: m-2026-08-01-006
+status: closed
+type: implement
+created_at: "2026-08-01T17:57:38Z"
+updated_at: "2026-08-01T18:39:32Z"
+closed_at: "2026-08-01T18:39:32Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: djb
+    pinned_at: "2026-08-01T17:57:38Z"
+    hash: 19095bb477fb03f170676196565c083685e3346baca4f3aabae4314b6bec37c0
+inputs: {}
+write_set:
+    - internal/enable/gitignore.go
+    - internal/enable/gitignore_test.go
+    - internal/doctor/repo_only.go
+    - internal/doctor/repo_only_test.go
+    - cmd/ethos/gitignore_local_ext_test.go
+success_criteria:
+    - 'Fix djb''s three FAIL-OPEN findings on branch fix/gitignore-semantic-coverage (supersedes re-scoped m-2026-08-01-004). Invariant: NEVER report the machine-local ignore covered while a .local.* secret is stageable; fail CLOSED on ambiguity. (1) LocalIgnored (internal/enable/gitignore.go) probes a SET — at minimum a non-ethos subtree (.punt-labs/vox/x.local.md) AND a non-yaml variant — covered ONLY when EVERY probe is ignored; the legacy narrow .punt-labs/ethos/**/*.local.yaml must read NOT covered so the canonical .punt-labs/**/*.local.* is written. This flips the assertion at cmd/ethos/gitignore_local_ext_test.go:22 from ''nothing added'' to ''canonical rule appended'' (now in the write-set). (2) Coverage via git check-ignore -v, accepted ONLY when the matching source is inside the work tree (committed .gitignore / tracked nested .gitignore) — never .git/info/exclude or core.excludesFile. (3) doctor tracked-secret detector (internal/doctor/repo_only.go) scans canonical .punt-labs/**/*.local.* (share the constant) so a tracked non-ethos .local.* secret FAILs doctor. Make the literal check a genuine no-git fallback (or fix the comment) and ADD a test for the no-git/not-a-work-tree path. Verify djb repros: with ONLY the narrow rule, git add -A must NOT stage .punt-labs/vox/vox.local.md or .punt-labs/beadle/creds.local.json after the fix. make check green per commit; commit incrementally; no suppression. Escalate to re-scope if a fix needs a file outside this set.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
