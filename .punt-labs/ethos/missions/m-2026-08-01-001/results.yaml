@@ -1,0 +1,66 @@
+results:
+    - mission: m-2026-08-01-001
+      round: 1
+      created_at: "2026-08-01T17:33:24Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: cmd/ethos/gitignore_local_ext.go
+          added: 20
+          removed: 20
+        - path: cmd/ethos/gitignore_local_ext_test.go
+          added: 129
+          removed: 0
+        - path: internal/enable/gitignore.go
+          added: 152
+          removed: 38
+        - path: internal/enable/gitignore_test.go
+          added: 82
+          removed: 1
+      evidence:
+        - name: make check (both commits)
+          status: pass
+        - name: go test ./internal/enable/ ./cmd/ethos/ -race -count=1
+          status: pass
+        - name: dogfood — repo carrying only .punt-labs/**/*.local.*, `ethos enable` adds the two runtime zones only
+          status: pass
+        - name: dogfood — `ethos vendor bwk --apply` leaves .gitignore byte-identical (same md5 before and after)
+          status: pass
+        - name: dogfood — `ethos doctor` reports "Local extension files PASS" in both the canonical-rule repo and a freshly enabled bare repo
+          status: pass
+        - name: dogfood — second `ethos enable` reports "already ignores ethos runtime zones and machine-local files" (ethos-8s2z)
+          status: pass
+      open_questions:
+        - 'Three user-facing strings outside the write-set still name the narrow *.local.yaml rule: cmd/ethos/setup.go:360, cmd/ethos/vendor.go:120, and doctor''s WARN at internal/doctor/repo_only.go:159. The last one advises the operator to add the rule #422 removed. Re-scoped to m-2026-08-01-002.'
+        - CHANGELOG.md needs an Unreleased/Fixed entry; not in the write-set and authored by the leader.
+      prose: |
+        Coverage is now git's answer, not a string comparison. Both surfaces
+        ask `git check-ignore --no-index` about a probe path — a path git has
+        never seen, since check-ignore reports an indexed path as not ignored
+        — so any rule that already excludes machine-local files counts,
+        including the canonical .punt-labs/**/*.local.* from #422, a legacy
+        narrow rule, a whole-subtree rule, or one in .git/info/exclude. The
+        literal pattern line still counts on its own: when git cannot answer
+        (no git in PATH, not a work tree) it is all there is to go on, and it
+        keeps a re-run from appending a duplicate even if a probe is a poor
+        witness for its pattern.
+
+        enable's two runtime patterns and the canonical machine-local rule are
+        one rule table now, each rule carrying its probe and, where it needs
+        one, the comment written above it. The machine-local rule keeps its own
+        label — the runtime zones must stay untracked because the seal hook
+        rewrites them, this one because it may hold secrets, and one label for
+        both would mislead whoever reads the .gitignore next. For the same
+        reason the already-tracked warning still covers only the runtime zones:
+        a tracked .local file is a secret in git, which doctor FAILs on.
+
+        LocalIgnoreRule, LocalIgnoreNote, and LocalIgnored are exported from
+        internal/enable so setup, vendor, and enable share one predicate and
+        one spelling; cmd/ethos/gitignore_local_ext.go no longer imports
+        doctor.
+
+        Doctor needed no change — gitignoreCovers was already check-ignore —
+        so internal/doctor/doctor.go and internal/enable/enable.go went unused
+        in the write-set. Two commits, make check green on each:
+        34281fd (enable), fdbf4e1 (setup/vendor).

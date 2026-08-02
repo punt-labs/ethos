@@ -1,0 +1,23 @@
+mission_id: m-2026-08-01-002
+status: closed
+type: implement
+created_at: "2026-08-01T17:33:41Z"
+updated_at: "2026-08-01T17:41:34Z"
+closed_at: "2026-08-01T17:41:34Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: djb
+    pinned_at: "2026-08-01T17:33:41Z"
+    hash: 19095bb477fb03f170676196565c083685e3346baca4f3aabae4314b6bec37c0
+inputs: {}
+write_set:
+    - cmd/ethos/setup.go
+    - cmd/ethos/vendor.go
+    - internal/doctor/repo_only.go
+success_criteria:
+    - 'On branch fix/gitignore-semantic-coverage, fix the three user-facing strings that still name the retired narrow rule .punt-labs/ethos/**/*.local.yaml so all name the canonical .punt-labs/**/*.local.* form. (1) cmd/ethos/setup.go — the ''added: .gitignore rule for *.local.yaml'' stdout message. (2) cmd/ethos/vendor.go — the ''ethos: added the *.local.yaml rule to .gitignore'' stdout message. (3) internal/doctor/repo_only.go — doctor.GitignoreRule''s WARN text that advises the operator to add .punt-labs/ethos/**/*.local.yaml (the rule #422 removed); point it at the exported enable.LocalIgnoreRule constant so there is ONE canonical spelling shared with enable/setup/vendor, and keep the doctor test green. Prefer referencing enable.LocalIgnoreRule over a new literal wherever the canonical rule is named. make check green on each commit; commit incrementally.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

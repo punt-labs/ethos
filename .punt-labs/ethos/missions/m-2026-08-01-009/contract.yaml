@@ -1,0 +1,21 @@
+mission_id: m-2026-08-01-009
+status: closed
+type: implement
+created_at: "2026-08-01T21:27:20Z"
+updated_at: "2026-08-01T21:56:30Z"
+closed_at: "2026-08-01T21:56:30Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: djb
+    pinned_at: "2026-08-01T21:27:20Z"
+    hash: 19095bb477fb03f170676196565c083685e3346baca4f3aabae4314b6bec37c0
+inputs: {}
+write_set:
+    - .punt-labs/ethos/roles
+success_criteria:
+    - 'Grant dispatched specialists a SCOPED, INBOUND MCP tool set via their role tools: lists in the team submodule (.punt-labs/ethos -> punt-labs/team). This is a punt-labs/team change; open a PR there (branch protection applies). GRANT to every specialist role (every role file EXCEPT ceo.yaml and coo.yaml — leadership keeps the outbound set): the quarry MCP tools (find, remember, show, ingest, use, status, list — the memory+search set; omit destructive delete/register/deregister/sync unless trivially safe), biff plan + read_messages ONLY, and the ethos identity + session MCP tools ONLY. ADDITIONALLY grant the z-spec MCP tools (check, model_check, test, animate, browse, get_report) to the formal-methods roles ONLY (z-specialist, b-specialist). Use explicit full mcp__<server>__<tool> names (e.g. mcp__plugin_quarry_quarry__find); if you empirically confirm the mcp__<server>__* wildcard is honored in a sub-agent tools: list, you may use it, otherwise explicit names. HARD BOUNDARY — do NOT add any outbound/side-effecting tool to a specialist role: no biff write/wall/talk, no beadle (email) tools, no github tools, no ethos mission tool (mission dispatch stays leader-only), no lux. The leader-only boundary must be enforced purely by which names appear. VERIFY structurally: rebuild ethos, regenerate .claude/agents/ from the edited team data, and confirm (a) a specialist agent file (e.g. bwk) now lists the granted MCP tools and (b) NO specialist agent file lists any outbound tool. The LIVE demo (a specialist actually calling quarry over MCP in-session) is restart-gated and runs post-merge — note it, do not block on it. Commit incrementally in the submodule; open the punt-labs/team PR; report the PR + the structural verification. Escalate to re-scope if you need a file outside .punt-labs/ethos/roles.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

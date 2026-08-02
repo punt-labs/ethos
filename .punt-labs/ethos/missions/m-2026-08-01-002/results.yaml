@@ -1,0 +1,49 @@
+results:
+    - mission: m-2026-08-01-002
+      round: 1
+      created_at: "2026-08-01T17:40:22Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.97
+      files_changed:
+        - path: cmd/ethos/setup.go
+          added: 2
+          removed: 1
+        - path: cmd/ethos/vendor.go
+          added: 2
+          removed: 1
+        - path: internal/doctor/repo_only.go
+          added: 11
+          removed: 3
+      evidence:
+        - name: make check
+          status: pass
+        - name: go test ./internal/doctor/ -run TestCheckLocalExt (5 subtests, unedited test file)
+          status: pass
+        - name: dogfood — `ethos doctor` in an unprotected repo now WARNs "no .gitignore rule for .punt-labs/**/*.local.*"
+          status: pass
+        - name: 'dogfood — `ethos vendor bwk --apply` prints "ethos: added the .punt-labs/**/*.local.* rule to .gitignore", and doctor PASSes after it'
+          status: pass
+      prose: |
+        All three messages name enable.LocalIgnoreRule rather than a literal, so
+        there is one spelling of the canonical rule across enable, setup, vendor,
+        and doctor. doctor.GitignoreRule is now that constant: it is what doctor
+        ADVISES, never what doctor accepts — the check itself asks git, so any
+        rule that excludes the path still counts.
+
+        Doctor's WARN was the one that mattered. It told the operator to add
+        .punt-labs/ethos/**/*.local.yaml, the narrow rule #422 replaced, so
+        following the advice re-created the narrowness the canonical rule
+        removed. Verified end to end: an unprotected repo now WARNs with the
+        canonical rule, `vendor --apply` names the same rule when it writes it,
+        and doctor PASSes afterwards.
+
+        internal/doctor now imports internal/enable. No cycle: enable does not
+        import doctor, directly or through its dependencies. The doctor test file
+        is outside the write-set and needed no change — its three uses of
+        GitignoreRule pass unmodified, which is the check that the constant swap
+        is behaviour-preserving.
+
+        One commit, e1ce7ca, make check green. The pre-commit seal hook added a
+        sealed audit chunk to that commit; it is the hook's own artifact, not an
+        edit of mine.

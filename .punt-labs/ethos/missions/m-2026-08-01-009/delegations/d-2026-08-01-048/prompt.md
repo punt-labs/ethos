@@ -1,0 +1,12 @@
+You are the evaluator on mission m-2026-08-01-009. Review PR punt-labs/ethos#424 (branch grants scoped MCP tools to specialist roles). Get the diff: `git fetch origin && gh pr diff 424` (or `git diff origin/main...<branch>`). The change edits 37 role YAMLs in .punt-labs/ethos/roles/ to add MCP tool names to each specialist role's `tools:` list.
+
+THE SECURITY PROPERTY YOU GATE — the leader-only OUTBOUND boundary: NO outbound/side-effecting MCP tool may appear in ANY specialist role. Verify it INDEPENDENTLY, don't trust the worker's summary:
+- Regenerate the agent files from the branch's role data into a scratch dir (build .tmp/ethos, use hook.GenerateAgentFilesTo — do NOT make install, do NOT disturb the checkout), then enumerate EVERY `mcp__` name across all generated agent files.
+- Confirm the complete set is exactly the intended INBOUND grant and nothing else: quarry {find,remember,show,ingest,use,status,list}, biff {plan,read_messages}, ethos {identity,session}, and z-spec {check,model_check,test,animate,browse,get_report} on ONLY jms (z-specialist) and jra (b-specialist).
+- Confirm NONE of these appear anywhere: biff write/wall/talk/mesg/who/finger/last, any beadle/email tool, any github tool, `mcp__plugin_ethos_self__mission` (mission dispatch — leader-only), lux, vox. A single outbound name in a specialist role is a must-fix.
+
+RULE on this (the worker flagged it, correctly — you decide, don't inherit): MCP scoping is per-TOOL, not per-method. So three granted tools carry non-read methods — `ethos identity` has a `create` (writes an identity YAML), `ethos session` has `purge`, `biff plan` writes a status string. All three act on LOCAL or status state, not on another agent or an external service. Is granting them acceptable for a specialist, or should any be withheld? Note the tradeoff: dropping `ethos identity` loses a specialist's session-bound `whoami` (the main reason for the grant). Give your ruling with reasoning.
+
+Also confirm the grant matches intent (right tools, z-spec only on the two formal-methods roles) and `make check` is green at the tip.
+
+Deliver PASS or a specific must-fix list (file:line + the exact leak/issue). This gates the merge — I do not merge until you pass. Report via your return value AND submit the mission evaluation if the flow expects it. Change nothing in the repo.
