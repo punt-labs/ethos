@@ -67,13 +67,19 @@ Required fields:
 - `evaluator.handle` — the frozen reviewer (Step 3)
 - `inputs` — a map; `bead`, `files`, and `references` are optional
 - `write_set` — repo-relative paths; no absolute paths, no `..`
-  segments, at least one entry
+  segments, at least one entry. Scope it to the work's real breadth — a
+  spectrum, not a tight file list: a single file, a **directory prefix**
+  (e.g. `internal/foo/`, which authorizes modify+create anywhere under it),
+  or a glob. Declare the right breadth up front rather than a narrow list you
+  must widen via escalate→close→recreate when the work legitimately grows
 - `success_criteria` — at least one verifiable string
 - `budget.rounds` — integer in [1, 10]
 - `budget.reflection_after_each` — boolean
 
-Optional: `tools` (worker allowlist), `context` (free-text design
-notes), `session`, `repo`.
+Optional: `tools` (worker allowlist), `extract_into` (directory prefixes
+where the worker may **create** new files it can't name up front, decoupled
+from the modify write-set — DES-052), `context` (free-text design notes),
+`session`, `repo`.
 
 Do NOT populate these fields — the store overwrites them:
 `mission_id`, `status`, `created_at`, `updated_at`, `closed_at`,
