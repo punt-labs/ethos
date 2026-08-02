@@ -5665,6 +5665,30 @@ the org's `.envrc`/`.envrc.local` and `vox.md`/`vox.local.md` convention.
 - DES-008 is amended by reference (this record), matching how DES-022 and
   DES-044 extend it.
 
+### Implementation note (`ethos-8s2z`) — semantic, fail-closed `.local` coverage
+
+The "`.gitignore` covers it" guarantee above was first enforced by an
+exact-string match, which failed two ways: `setup`/`vendor` re-appended a narrow
+per-file rule even when a broader rule already covered the file (churn), and —
+worse — a repo carrying only the narrow `.punt-labs/ethos/**/*.local.yaml` rule
+read as "covered" while a `.punt-labs/vox/*.local.md` or `beadle/*.local.json`
+secret stayed stageable (fail-open). Coverage is now decided with `git
+check-ignore`, fail-closed: `enable`/`setup`/`vendor` probe a **set** of
+representative paths — including a non-ethos subtree and a non-`.yaml` variant —
+and treat the tree as covered only when *every* probe is ignored; a match counts
+only when its ignoring source travels with the repo: `core.excludesFile` is
+neutralized at the source with `-c core.excludesFile=<os.DevNull>` (the null
+device, portable across platforms), and a `.git/info/exclude` match is rejected
+because its source sits inside `.git` and does not travel — so a per-clone
+exclude cannot suppress writing the committed rule. `enable`,
+`setup`, `vendor`, and `doctor` share one exported `enable.LocalIgnoreRule`
+constant, so the rule `doctor` advises and the rule the write path emits cannot
+drift, and `doctor`'s tracked-secret scan covers the whole
+`.punt-labs/**/*.local.*` tree. The canonical `.gitignore` carries
+`.punt-labs/**/*.local.*` for `.local.*` files alongside `.punt-labs/**/local/**`
+for the DES-058 live zone, and the same fail-closed probe-set now guards that
+live-zone rule too. Shipped in PRs #421/#422/#423 (release v4.10.0).
+
 ### References
 
 Amends DES-008 (generic extension mechanism). Builds on DES-051 (three-layer
@@ -6951,3 +6975,75 @@ Seven fixes, each grounded in the shipped code:
   expansion auditable.
 - **Return the first identity match.** Rejected: an arbitrary answer to an
   ambiguous question is worse than a refusal that names the collision.
+
+## DES-068: Specialist sub-agents get a scoped inbound MCP tool set (SETTLED)
+
+**Status**: Settled. On `main` (PRs #424, #425, #426; `punt-labs/team` #28 for
+the shared registry); releasing in v4.10.0. Extends DES-005 (agent definition as
+a channel binding) and the role-based tool restrictions of the team model.
+
+### Problem
+
+A dispatched specialist (bwk, djb, adb, …) runs as a generated Claude Code
+sub-agent whose tools come from its role's `tools:` list — historically the six
+built-ins (Read/Write/Edit/Bash/Grep/Glob). Session-bound tools — quarry
+agent-scoped memory (`remember`/`find`), biff `plan`, ethos `identity`/`session`
+— do not work through the Bash CLI, because a shell subprocess does not carry
+the sub-agent's MCP session: nothing infers or enforces the agent's handle, so
+its memory can be mis-attributed and its identity cannot resolve in-session. A
+probe confirmed the gate: a scoped specialist holds no MCP tools and no
+ToolSearch at all — MCP access is controlled by the `tools:` allowlist, not
+ambient.
+
+### Decision
+
+Grant each specialist role a scoped **inbound** MCP set in its `tools:` list, so
+the generator writes those tools into the agent and the sub-agent can call them
+in its own session:
+
+- **The set**: quarry memory + search (`find`/`remember`/`show`/`ingest`/`use`/
+  `status`/`list`), biff `plan` + `read_messages`, ethos `identity` + `session`;
+  the formal-methods roles (`z-specialist`, `b-specialist`) additionally get the
+  z-spec toolchain.
+- **Enforced by the allowlist.** MCP access is gated by `tools:`, so the
+  leader-only boundary holds by *omission*: no biff write/wall/talk, no beadle,
+  no GitHub, no `mcp__plugin_ethos_self__mission` (mission dispatch), no lux —
+  those never appear in a specialist role, and the leader works on the ungated
+  main session. `ceo`/`coo` carry no `tools:` key.
+- **Explicit names, both plugin prefixes.** Each tool is named in full
+  (`mcp__plugin_<server>__<tool>`) under both the released and the `<tool>-dev`
+  plugin prefix — every repo declares its own checkout as a `<tool>-dev` plugin,
+  so released-only names silently miss inside that tool's own repo. No wildcards.
+- **Per-tool, not per-method.** MCP scoping is per tool: granting `identity` also
+  grants its `create`, `session` its roster-editing `iam`/`join`/`leave`, biff
+  `plan` its status-write. Accepted — all are local or status-only (a roster
+  self-edit is attribution, not privilege), never outbound coordination. The one
+  exception: `tech-writer`, the only role without `Bash`, omits `identity` — with
+  no CLI door, the MCP tool would be its sole route to ethos-mediated identity
+  creation, unwanted for a documentation role.
+- **The instructions/tools split is countered in the generated agent, not the
+  harness.** Claude Code injects every *connected* MCP server's instructions into
+  a session keyed to server connection, not the per-agent tool allowlist, so a
+  scoped specialist reads usage prose for tools it cannot call. The generator
+  writes a note into each agent: only its listed tools are callable, and it
+  should ignore instructions for a server *whose tools it does not hold* — scoped
+  per server, so a quarry-holding specialist still honors quarry's own rules.
+
+### Rejected alternatives
+
+- **`mcp__server__*` wildcard grants.** Rejected: the quarry wildcard would sweep
+  in the destructive `delete` and directory-registration tools deliberately
+  excluded; the boundary must be named, not globbed.
+- **ToolSearch-only access.** Rejected: ToolSearch reaches every connected
+  server's tools, so the leader-only boundary would be conventional, not
+  enforceable. The `tools:` allowlist makes it structural.
+- **Grant outbound tools conventionally.** Rejected: unlike a write-set (verified
+  in review), a live outbound tool call has no review gate; a specialist
+  accidentally dispatching a mission or emailing out is unrecoverable. Withhold
+  by omission.
+- **Fix the instructions/tools split in the harness.** Rejected: not ethos's
+  lever — the injection is Claude Code's, keyed to plugin enablement. The
+  generated-agent note is the only mechanism ethos owns.
+- **Justify the grant as raw capability ("Bash is broken").** Rejected as the
+  framing: the quarry CLI does work; the real value is *enforced* identity —
+  session-bound handle attribution the CLI can neither infer nor enforce.
