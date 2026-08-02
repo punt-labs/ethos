@@ -27,12 +27,14 @@ SessionStart; restart Claude Code to regenerate them after a team change.
 Scope the write-set to the work's real breadth so you don't have to widen it
 later. It is a spectrum, not a tight file list: a single file for a one-file
 fix; a **directory prefix** (e.g. `internal/enable/`) to authorize modify+create
-anywhere under it when you can't name every file up front; a **glob** where it
-fits; and `extract_into` for new files a worker creates while decomposing. The
-set is enforced at runtime — an edit outside it fails the mission — but it can
-be as broad as the work honestly needs. Prefer declaring the right breadth up
-front over declaring a tight list and paying the escalate→close→recreate
-re-scope when the work legitimately grows. Commit one logical step at a time.
+anywhere under it when you can't name every file up front; or a **glob** where
+it fits. The set is enforced at runtime — an edit outside it fails the mission —
+but it can be as broad as the work honestly needs. For new files a worker
+creates while decomposing, use the **separate** `extract_into` field (its own
+list of directory prefixes, decoupled from the modify write-set — DES-052), not
+a `write_set` entry. Prefer declaring the right breadth up front over a tight
+list you must widen via escalate→close→recreate when the work legitimately
+grows. Commit one logical step at a time.
 
 ## Audit
 
