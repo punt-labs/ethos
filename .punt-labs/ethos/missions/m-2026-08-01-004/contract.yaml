@@ -1,0 +1,24 @@
+mission_id: m-2026-08-01-004
+status: closed
+type: implement
+created_at: "2026-08-01T17:51:29Z"
+updated_at: "2026-08-01T17:57:25Z"
+closed_at: "2026-08-01T17:57:25Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: djb
+    pinned_at: "2026-08-01T17:51:29Z"
+    hash: 19095bb477fb03f170676196565c083685e3346baca4f3aabae4314b6bec37c0
+inputs: {}
+write_set:
+    - internal/enable/gitignore.go
+    - internal/enable/gitignore_test.go
+    - internal/doctor/repo_only.go
+    - internal/doctor/repo_only_test.go
+success_criteria:
+    - 'Fix djb''s three FAIL-OPEN security findings on branch fix/gitignore-semantic-coverage. Invariant: ethos must NEVER report the machine-local ignore as covered while a .local.* secret is stageable; fail CLOSED on any ambiguity (treat as uncovered, so the canonical rule is written / the operator is warned). (1) LocalIgnored in internal/enable/gitignore.go must probe a SET of representative paths — at minimum a NON-ethos subtree (.punt-labs/vox/x.local.md) AND a non-yaml variant — and report covered ONLY when EVERY probe is ignored. The legacy narrow .punt-labs/ethos/**/*.local.yaml rule (which every shipped doctor advised operators to add) must therefore read NOT covered, so setup/vendor/enable write the canonical .punt-labs/**/*.local.*. (2) Determine coverage with git check-ignore -v and accept the answer ONLY when the matching source is INSIDE the work tree (the committed .gitignore or a tracked nested .gitignore) — never .git/info/exclude or core.excludesFile, which do not travel with the repo, so a per-clone exclude cannot suppress writing the committed rule. (3) internal/doctor/repo_only.go: the tracked-secret detector must scan the widened canonical pattern .punt-labs/**/*.local.* (share the constant) so a tracked NON-ethos .local.* secret FAILs doctor — make the enable/gitignore.go:284 ''doctor FAILs on it'' claim actually true. Also make the literal-line check a genuine fallback used ONLY when git cannot answer (or correct the misleading comment), and ADD a test exercising the no-git / not-a-work-tree fallback. VERIFY by reproducing djb''s repros: with ONLY the narrow rule present, after the fix git add -A must NOT stage .punt-labs/vox/vox.local.md or .punt-labs/beadle/creds.local.json (because the canonical rule now gets written). make check green per commit; commit incrementally; no lint/type suppression. If a fix needs a file outside this write-set, escalate to re-scope.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

@@ -1,0 +1,26 @@
+mission_id: m-2026-08-01-001
+status: closed
+type: implement
+created_at: "2026-08-01T17:16:55Z"
+updated_at: "2026-08-01T17:34:24Z"
+closed_at: "2026-08-01T17:34:24Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: djb
+    pinned_at: "2026-08-01T17:16:55Z"
+    hash: 19095bb477fb03f170676196565c083685e3346baca4f3aabae4314b6bec37c0
+inputs: {}
+write_set:
+    - cmd/ethos/gitignore_local_ext.go
+    - cmd/ethos/gitignore_local_ext_test.go
+    - internal/enable/gitignore.go
+    - internal/enable/gitignore_test.go
+    - internal/enable/enable.go
+    - internal/doctor/doctor.go
+success_criteria:
+    - 'Make ethos''s .gitignore coverage checks SEMANTIC (git check-ignore) instead of exact-string match, so the canonical rule .punt-labs/**/*.local.* (now on main) is recognized and the narrow .punt-labs/ethos/**/*.local.yaml is NEVER re-appended by setup or vendor. (1) ensureLocalExtIgnored in cmd/ethos/gitignore_local_ext.go (invoked by setup and vendor --apply) must decide coverage by running git check-ignore on a representative .local file path, not by string-matching a specific rule; append only when a sample path is genuinely NOT ignored, and when appending write the canonical .punt-labs/**/*.local.* form. (2) The enable gitignore step (internal/enable/gitignore.go) must add/verify the same canonical rule so a freshly-enabled repo passes doctor''s Local-extension check — closes ethos-8s2z (enable said ''already'' while doctor WARNed). (3) Keep doctor''s check semantic and consistent (it already passes with the general rule). Tests: a repo whose .gitignore already has the general rule does NOT get the narrow rule re-added by setup or vendor (idempotent, clean tree); a repo with no covering rule gets the canonical rule added exactly once; doctor passes with the general rule. Commit incrementally — one commit per logical step, each passing make check; do not accumulate more than 30 minutes of uncommitted changes. No lint/type suppression. If the exact-match logic lives outside the write-set, escalate to re-scope rather than editing outside it.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

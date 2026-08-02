@@ -1,0 +1,12 @@
+reflections:
+    - mission: m-2026-08-02-003
+      round: 1
+      created_at: "2026-08-02T16:27:51Z"
+      author: claude
+      converging: true
+      signals:
+        - bwk delivered the doc corrections; byte-diffed the example against generated output
+        - 'evaluator mdm returned NOT-PASS with 2 must-fixes: (1) the tool-scope NOTE in generate_agents.go over-scopes — it tells agents to ignore instructions for servers whose tools they DO hold, discarding quarry''s real verbatim-output rule; (2) agent-definitions.md:89 skills row contradicts the .tex (''Always baseline-ops'')'
+        - 'cr-note code review PASS with one nit: a code comment cites a docs path that does not resolve as a workspace file'
+      recommendation: continue
+      reason: The change is fundamentally sound, but must-fix 1 lives in generate_agents.go, outside this mission's docs-only write-set, so both must-fixes cannot be fixed within m-003. Consolidating all evaluator and review findings into one cross-cutting review-cycle fix on the branch (the note in generate_agents.go + regenerate + the doc corrections + the comment nit), then re-review.
