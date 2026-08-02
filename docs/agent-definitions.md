@@ -69,8 +69,9 @@ model: "sonnet"              # when role defines a model
 ---
 ```
 
-Ethos generates `name`, `description`, and `tools` (from role). The
-body includes the personality opening line, the tool-scope note,
+Ethos generates `name`, `description`, `tools`, `model`, `skills`, and
+`hooks`; `model` and `hooks` appear only when the role calls for them.
+The body includes the personality opening line, the tool-scope note,
 personality content, writing style, role responsibilities,
 anti-responsibilities, safety constraints, talent slugs, and the role's
 output format. Body below has the full order.
@@ -81,12 +82,12 @@ generation):
 | Field | Source | Notes |
 |-------|--------|-------|
 | `name` | Identity handle | Generated. Case-sensitive, must match exactly |
-| `description` | Identity + role summary | Generated |
-| `tools` | Role definition | Generated. Explicit allowlist -- see Tool Restrictions |
+| `description` | Personality, first content sentence | Generated. The role contributes nothing |
+| `tools` | Role definition | Generated. Verbatim from the role, no default -- see Tool Restrictions |
 | `model` | Generated (from role, when set) | `sonnet`, `opus`, `haiku`, full ID, or `inherit` |
 | `effort` | Manual | `low`, `medium`, `high`, `max` |
 | `memory` | Manual | `user`, `project`, or `local` |
-| `skills` | Generated | Always includes `baseline-ops`; additional skills from role if defined |
+| `skills` | Generated | Always exactly `baseline-ops`. The role model has no skills field |
 | `hooks` | Generated from `role.tools` | `PostToolUse` hook on `Write\|Edit` runs `make check` for write-enabled roles; review-only roles emit no block |
 | `isolation` | Manual | `worktree` for git worktree isolation |
 | `maxTurns` | Manual | Cap on agentic turns |
@@ -96,9 +97,9 @@ generation):
 
 The body has nine sections, assembled in this order:
 
-**1. Opening line.** (generated) From the personality's first paragraph. Followed by "You report to [parent] ([parent role])."
+**1. Opening line.** (generated) From the personality's first paragraph. Followed by the reporting line, which is hardcoded to "You report to Claude Agento (COO/VP Engineering)." — it is not derived from the team graph.
 
-**2. Tool scope.** (generated, fixed text) A short prose block naming the `tools:` field as the only authority on which tools the agent has. Claude Code injects the instructions of every connected MCP server into a session, keyed to the server connection rather than the agent's tools allowlist, so a scoped specialist reads usage prose for servers it cannot call. This block is in the agent's own system prompt, so it outranks that ambient prose. It names a couple of servers as examples and does not enumerate the connected set.
+**2. Tool scope.** (generated, fixed text) A short prose block naming the `tools:` field as the only authority on which tools the agent has. Claude Code injects the instructions of every connected MCP server into a session, keyed to the server connection rather than the agent's tools allowlist, so a scoped specialist reads usage prose for servers it cannot call. This block is in the agent's own system prompt, so it outranks that ambient prose. It disowns those instructions server by server, not wholesale: a specialist does hold quarry, biff, and ethos tools, and their servers' instructions carry rules it must follow. It names a couple of servers as examples and does not enumerate the connected set.
 
 **3. Personality content.** (generated) Remaining personality markdown after the opening line, preserving its original headings (e.g., `## Core Principles`, `## Code Style`, `## Design`).
 
@@ -122,9 +123,9 @@ You report to Claude Agento (COO/VP Engineering).
 
 Only the tools listed in the `tools:` field above are available to you.
 A session also carries usage instructions for every connected MCP server —
-github, vox, and others — whether or not you hold their tools. Those
-instructions are not addressed to you. Ignore any direction to call a tool
-that is not on your list.
+github, vox, and others — whether or not you hold their tools. Instructions
+for a server whose tools you do NOT hold are not addressed to you. Ignore
+any direction to call a tool that is not on your list.
 
 ## Core Principles
 
