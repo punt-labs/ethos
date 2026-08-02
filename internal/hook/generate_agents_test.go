@@ -827,6 +827,37 @@ func TestGenerateAgentFiles(t *testing.T) {
 	}
 }
 
+// TestGenerateAgentFiles_ToolScopeNote pins the standing note that tells a
+// generated agent which tools are real. Claude Code injects every connected
+// MCP server's instructions regardless of the agent's tools allowlist, so a
+// scoped specialist must be told in its own prompt to trust the tools: field
+// and nothing else. The note is asserted verbatim and by position: after the
+// frontmatter, before the personality body.
+func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
+
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
+	require.NoError(t, err)
+	content := string(data)
+
+	assert.Contains(t, content, toolScopeNote, "generated agent must carry the tool-scope note")
+
+	// Position: below the opening identity lines and above the first
+	// personality heading, with one blank line on each side.
+	assert.Contains(t, content,
+		"You report to Claude Agento (COO/VP Engineering).\n\n"+toolScopeNote+"\n## Core Principles\n",
+		"note must sit between the opening lines and the personality body")
+
+	// The note is in the body, not the frontmatter — it must follow the
+	// closing --- delimiter.
+	frontmatterEnd := strings.Index(content, "\n---\n\n")
+	noteIdx := strings.Index(content, toolScopeNote)
+	require.True(t, frontmatterEnd >= 0 && noteIdx >= 0,
+		"frontmatter terminator and note must both be present")
+	assert.Less(t, frontmatterEnd, noteIdx, "note must appear after the frontmatter")
+}
+
 // TestGenerateAgentFiles_AntiResponsibilities covers the "## What You
 // Don't Do" section derived from reports_to edges (ethos-9ai.1).
 func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
