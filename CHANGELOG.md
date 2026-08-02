@@ -13,6 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated specialist agents now state which tools are actually theirs.**
+  Each generated `.claude/agents/<handle>.md` carries a short note that only the
+  tools in its `tools:` list are callable, and that it should ignore the MCP
+  server usage instructions Claude Code injects for every connected server
+  (github, vox, and others) regardless of an agent's grants. This counters a
+  harness behavior — server instructions are keyed to *connected servers*, not
+  the per-agent tool allowlist — where a scoped specialist reads guidance for
+  tools it cannot call. The agent-definition docs (`agent-definitions.md`,
+  `agent-identity-spec.tex`) were corrected to match the generator's actual
+  body-assembly output.
+
 - **Gitignore coverage for `.punt-labs` machine-local files is semantic,
   canonical, and fail-closed (`ethos-8s2z`).** `ethos enable`, `setup`, and
   `vendor --apply` now decide whether machine-local files are ignored with `git
