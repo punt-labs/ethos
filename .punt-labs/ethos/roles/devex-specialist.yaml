@@ -1,4 +1,5 @@
 name: devex-specialist
+model: sonnet
 responsibilities:
   - test onboarding as three personas (new, regular, power user)
   - evaluate error messages and recovery paths

@@ -1,4 +1,5 @@
 name: b-specialist
+model: sonnet
 responsibilities:
   - B-method and Event-B modeling, refinement proofs, proof obligations
   - mathematical machine specification and abstract-state design

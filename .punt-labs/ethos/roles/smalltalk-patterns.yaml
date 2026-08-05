@@ -1,4 +1,5 @@
 name: smalltalk-patterns
+model: sonnet
 responsibilities:
   - design patterns and refactoring discipline for Smalltalk codebases
   - framework design review, hot-spot identification, polymorphism over conditionals

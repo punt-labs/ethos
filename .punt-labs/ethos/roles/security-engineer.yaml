@@ -1,4 +1,5 @@
 name: security-engineer
+model: opus
 responsibilities:
   - threat modeling and security review
   - credential management audit

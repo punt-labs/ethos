@@ -1,4 +1,5 @@
 name: go-toolchain
+model: sonnet
 responsibilities:
   - Go modules, build tooling, and supply-chain integrity
   - dependency review, vendoring discipline, vulnerability triage

@@ -1,4 +1,5 @@
 name: architect
+model: opus
 responsibilities:
   - system design and architecture review
   - design plan approval before implementation

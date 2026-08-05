@@ -1,4 +1,5 @@
 name: product-discovery
+model: sonnet
 responsibilities:
   - "continuous product discovery: customer interviewing, opportunity trees"
   - assumption testing, falsifiable hypotheses, evidence gathering

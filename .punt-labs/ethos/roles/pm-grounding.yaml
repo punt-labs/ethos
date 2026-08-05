@@ -1,4 +1,5 @@
 name: pm-grounding
+model: sonnet
 responsibilities:
   - product management for grounding layer tools
   - Z Spec, PR/FAQ, Use Cases, Refactory, ReasonTrace

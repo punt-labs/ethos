@@ -1,4 +1,5 @@
 name: implementer
+model: sonnet
 responsibilities:
   - feature implementation with tests
   - complete builds over shortcuts
