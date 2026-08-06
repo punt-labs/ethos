@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/punt-labs/ethos/internal/mcpclass"
+)
 
 func TestClassifyMCPTools(t *testing.T) {
 	tests := []struct {
@@ -55,5 +59,27 @@ func TestClassifyMCPTools(t *testing.T) {
 				t.Errorf("classifyMCPTools(%v) fail=%v, want %v (results: %+v)", tt.roleTools, gotFail, tt.wantFail, results)
 			}
 		})
+	}
+}
+
+func TestClassifyMCPToolsAmbiguous(t *testing.T) {
+	const suffix = "fake__ambiguous"
+	mcpclass.ReadOnly[suffix] = "test fixture"
+	mcpclass.WritesInRepo[suffix] = "test fixture"
+	defer delete(mcpclass.ReadOnly, suffix)
+	defer delete(mcpclass.WritesInRepo, suffix)
+
+	roleTools := map[string][]string{
+		"go-specialist": {"mcp__plugin_fake_fake__ambiguous"},
+	}
+	results := classifyMCPTools(roleTools)
+	var found bool
+	for _, r := range results {
+		if !r.pass {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("classifyMCPTools(%v) = %+v, want a failure for a suffix classified in two maps", roleTools, results)
 	}
 }

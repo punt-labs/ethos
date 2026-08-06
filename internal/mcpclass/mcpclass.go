@@ -13,11 +13,14 @@ import (
 )
 
 // Suffix strips the "mcp__plugin_<name>[-dev]_<server>__" prefix from
-// an MCP tool name, returning the trailing "<server>__<method>" the
+// an MCP tool name, returning the trailing "<server>__<tool>" the
 // classification maps key on. Both the released plugin name and its
 // "-dev" counterpart collapse to the same suffix (DES-068's
 // double-listing pattern, DESIGN.md:7013-7016), so one entry covers
-// both. Returns "" for a non-MCP tool name.
+// both. For consolidated tools like self__identity and self__session,
+// the runtime method (e.g. "create") is a separate field in
+// toolInput, not part of this suffix. Returns "" for a non-MCP tool
+// name.
 func Suffix(toolName string) string {
 	const prefix = "mcp__plugin_"
 	if !strings.HasPrefix(toolName, prefix) {

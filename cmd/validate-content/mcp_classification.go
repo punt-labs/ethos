@@ -41,12 +41,17 @@ func classifyMCPTools(roleTools map[string][]string) []result {
 				nFail++
 				continue
 			}
-			_, ro := mcpclass.ReadOnly[suffix]
-			_, out := mcpclass.WritesOutsideRepo[suffix]
-			_, in := mcpclass.WritesInRepo[suffix]
-			if !ro && !out && !in {
+			classes := memberships(suffix)
+			switch len(classes) {
+			case 0:
 				results = append(results, fail("roles: unclassified mcp tool",
 					fmt.Sprintf("role %q grants %q (suffix %q) which is not in mcpclass.ReadOnly, mcpclass.WritesOutsideRepo, or mcpclass.WritesInRepo — classify it before granting", roleName, tool, suffix)))
+				nFail++
+			case 1:
+				// exactly one classification — the expected case
+			default:
+				results = append(results, fail("roles: ambiguous mcp tool classification",
+					fmt.Sprintf("tool %q (suffix %q) is classified in more than one of mcpclass.ReadOnly, mcpclass.WritesOutsideRepo, mcpclass.WritesInRepo: %s — remove it from all but one", tool, suffix, strings.Join(classes, ", "))))
 				nFail++
 			}
 		}
@@ -55,4 +60,21 @@ func classifyMCPTools(roleTools map[string][]string) []result {
 		results = append(results, pass(fmt.Sprintf("roles: mcp tool classification (%d grants checked)", nChecked)))
 	}
 	return results
+}
+
+// memberships names each of mcpclass's three classification maps that
+// contains suffix. A well-formed suffix belongs to exactly one; more
+// than one means the maps have drifted into an ambiguous state.
+func memberships(suffix string) []string {
+	var classes []string
+	if _, ok := mcpclass.ReadOnly[suffix]; ok {
+		classes = append(classes, "ReadOnly")
+	}
+	if _, ok := mcpclass.WritesOutsideRepo[suffix]; ok {
+		classes = append(classes, "WritesOutsideRepo")
+	}
+	if _, ok := mcpclass.WritesInRepo[suffix]; ok {
+		classes = append(classes, "WritesInRepo")
+	}
+	return classes
 }

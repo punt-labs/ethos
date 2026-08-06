@@ -73,14 +73,20 @@ func TestIdentityMethodsMatchGate(t *testing.T) {
 		}
 	}
 
-	// The gate itself: only "create" must deny.
-	for _, m := range []string{"whoami", "list", "get"} {
-		if _, deny := DenyReason("mcp__plugin_ethos_self__identity", map[string]any{"method": m}); deny {
-			t.Errorf("DenyReason denied method %q, want allow (only create writes)", m)
+	// The gate itself: every method discovered in the switch must be
+	// denied unless it's in the known-safe read set. This asserts
+	// DenyReason's behavior for each ACTUAL method, not just the
+	// fixed set above — a new write method added to handleIdentity
+	// without a matching DenyReason change fails here, fail-closed by
+	// construction, instead of being silently allowed.
+	safeReads := map[string]bool{"whoami": true, "list": true, "get": true}
+	for _, quoted := range methods {
+		m := quoted[1 : len(quoted)-1] // strip the surrounding quotes ast.BasicLit keeps
+		_, deny := DenyReason("mcp__plugin_ethos_self__identity", map[string]any{"method": m})
+		wantDeny := !safeReads[m]
+		if deny != wantDeny {
+			t.Errorf("DenyReason for self__identity method %q denied=%v, want %v (methods outside the known-safe read set %v must deny; update DenyReason's gate if %q is a genuine new read)", m, deny, wantDeny, safeReads, m)
 		}
-	}
-	if _, deny := DenyReason("mcp__plugin_ethos_self__identity", map[string]any{"method": "create"}); !deny {
-		t.Error("DenyReason allowed method create, want deny")
 	}
 }
 
