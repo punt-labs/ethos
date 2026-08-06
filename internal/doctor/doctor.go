@@ -188,7 +188,13 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 		members[m.Identity] = true
 	}
 
-	checklist := checklistAgentNames()
+	checklist, err := checklistAgentNames(seed.Agents, "sidecar/agents")
+	if err != nil {
+		// A broken embed is a build-time defect, not a runtime condition to
+		// swallow. Reporting it as an ordinary orphan FAIL would misdirect the
+		// operator toward deleting valid agent files; name the real cause.
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("could not read seeded agent list: %s", err)}
+	}
 
 	var orphaned []string
 	for _, path := range matches {
@@ -206,18 +212,25 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 	return Result{Name: name, Status: "FAIL", Detail: "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")}
 }
 
-// checklistAgentNames returns the handles of the seeded review-checklist
-// agents (DES-070): code-reviewer, silent-failure-hunter,
-// invariant-completeness-reviewer. These are read directly from
-// internal/seed's embedded sidecar/agents/ so the set can never drift from
-// what `ethos seed` actually deploys — a hardcoded duplicate list here would
-// silently stop matching the moment a seeded agent was added or renamed.
-// They carry no team membership by design (no persona, no identity), so the
-// orphan check must not flag them.
-func checklistAgentNames() map[string]bool {
-	entries, err := fs.ReadDir(seed.Agents, "sidecar/agents")
+// checklistAgentNames returns the handles this check exempts as seeded
+// review-checklist agents (DES-070): code-reviewer, silent-failure-hunter,
+// invariant-completeness-reviewer. The exemption is name-based, not
+// provenance-based: any repo-local .claude/agents/<name>.md matching one of
+// these handles is exempt, whether or not `ethos seed` actually put it
+// there. The name set itself is read directly from internal/seed's embedded
+// sidecar/agents/, so it can never drift from what `ethos seed` deploys —
+// but that guarantees the set of exempted *names*, not that every file
+// bearing one of those names on disk was seeded. They carry no team
+// membership by design (no persona, no identity), so the orphan check must
+// not flag them.
+//
+// fsys and root are parameterized (rather than reading seed.Agents
+// directly) so a test can inject a broken fs.FS and exercise the error path
+// without depending on an unreadable compile-time embed.
+func checklistAgentNames(fsys fs.FS, root string) (map[string]bool, error) {
+	entries, err := fs.ReadDir(fsys, root)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("reading embedded %s: %w", root, err)
 	}
 	names := make(map[string]bool, len(entries))
 	for _, e := range entries {
@@ -226,7 +239,7 @@ func checklistAgentNames() map[string]bool {
 		}
 		names[strings.TrimSuffix(e.Name(), ".md")] = true
 	}
-	return names
+	return names, nil
 }
 
 // CheckSealHook reports on the DES-058 audit-seal pre-commit hook, keyed on
