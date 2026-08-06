@@ -111,6 +111,10 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
 	}
 
+	if reason, deny := denyInRepoMCPWrite(toolName, toolInput); deny {
+		return json.NewEncoder(w).Encode(preToolUseDeny(reason))
+	}
+
 	target := extractTargetPath(toolName, toolInput)
 	if target == "" {
 		// Tool does not target a file path — allow unconditionally.
@@ -228,6 +232,58 @@ func targetExists(target string) (bool, error) {
 		return false, nil
 	}
 	return true, err
+}
+
+// mcpToolSuffix strips the "mcp__plugin_<name>[-dev]_<server>__"
+// prefix from an MCP tool name, returning the trailing
+// "<server>__<method>" the deny rules match against. Both the
+// released plugin name and its "-dev" counterpart collapse to the
+// same suffix, so one deny rule covers both (DES-068's
+// double-listing pattern, DESIGN.md:7013-7016). Returns "" for a
+// non-MCP tool name.
+func mcpToolSuffix(toolName string) string {
+	const prefix = "mcp__plugin_"
+	if !strings.HasPrefix(toolName, prefix) {
+		return ""
+	}
+	rest := toolName[len(prefix):]
+	// rest is "<name>[-dev]_<server>__<tool>"; the suffix we want
+	// starts at the last "_" before the "__" separator, i.e. the
+	// server name onward. Find "__" first, then walk back to the
+	// preceding "_" that separates plugin name from server name.
+	sep := strings.Index(rest, "__")
+	if sep < 0 {
+		return ""
+	}
+	pluginAndServer := rest[:sep]
+	underscore := strings.LastIndex(pluginAndServer, "_")
+	if underscore < 0 {
+		return ""
+	}
+	return pluginAndServer[underscore+1:] + rest[sep:]
+}
+
+// denyInRepoMCPWrite reports whether toolName is one of the two
+// in-repo MCP write families DES-069 denies in verifier spawns:
+// ethos identity create (internal/identity/layered.go:358-394 writes
+// a git-tracked .punt-labs/ethos/identities/<handle>.yaml) and the
+// z-spec report writers (punt_zspec/report.py:44-51 overwrites
+// <spec>.report.json / <spec>.fuzz.json beside the source). Matching
+// is a deny, not a path map — it needs no knowledge of the target
+// path, so it cannot rot and cannot fail open. Reveals the tool name
+// only, never a path.
+func denyInRepoMCPWrite(toolName string, toolInput map[string]any) (string, bool) {
+	suffix := mcpToolSuffix(toolName)
+	switch {
+	case suffix == "self__identity":
+		method, _ := toolInput["method"].(string)
+		if method == "create" {
+			return fmt.Sprintf("tool %q method %q writes inside the repo and is denied for verifier spawns (DES-069)", toolName, method), true
+		}
+	case suffix == "zspec__check", suffix == "zspec__model_check", suffix == "zspec__test", suffix == "zspec__animate":
+		return fmt.Sprintf("tool %q writes inside the repo and is denied for verifier spawns (DES-069)", toolName), true
+	}
+	return "", false
 }
 
 // extractTargetPath returns the file path a tool call targets for
