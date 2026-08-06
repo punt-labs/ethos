@@ -1281,8 +1281,10 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 //
 // Deliberately has no automatic age or delegation-count gate.
 // Staleness is a heuristic judgment, not a correctness invariant —
-// the leader consults mission show / mission list --stale-days
-// (Staleness, staleness.go) before deciding, and this method does not
+// the leader consults the Staleness signal (staleness.go; surfaced
+// via mission show / mission list --stale-days once that CLI surface
+// lands -- see docs/mission-force-release-write-set.md) before
+// deciding, and this method does not
 // re-derive or enforce that judgment. Its own gate covers only
 // correctness: the mission must be open, and there must be something
 // to release.
