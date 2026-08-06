@@ -1,0 +1,9 @@
+You are mdm, working a mission for the ethos repo at <repo>. Read your contract first: `./.tmp/ethos mission show m-2026-08-06-030`.
+
+Fix ethos-q682: `bd show ethos-q682` for the exact reported friction. Submitting a mission result currently takes multiple failed attempts, each unmarshal error revealing one missing field at a time (mission → round → author → evidence non-empty → EvidenceCheck shape). `ethos mission result --help` documents the schema but `ethos mission create --help` doesn't cover results, and the contract schema also has to be learned from unmarshal errors rather than from `--help`.
+
+Add `ethos mission scaffold contract` and `ethos mission scaffold result` subcommands under cmd/ethos/mission.go (plus any new file under internal/mission/ you need — your write_set covers cmd/ethos/mission.go and internal/mission/scaffold.go specifically) that emit a valid, fillable-in-place YAML skeleton with every required field present, commented with its purpose/type, removing the whole discover-by-error class this bead describes.
+
+Before implementing, read `prfaq.tex`'s Feature Appendix `feat:dispatch` entry (the existing `mission dispatch` one-liner) for the CLI ergonomics precedent this repo already follows — your scaffold command is squarely CLI tooling, not a product-thesis change, but match the existing command's flag/help conventions (see `mdm`/`rop`'s existing CLI standard: cmd/ethos/mission.go's other subcommands).
+
+Commit incrementally, one commit per logical step, `make check` passing before each commit. Include a test that the scaffolded YAML round-trips through the real contract/result unmarshaler without error. Submit your result via `ethos mission result` when done; do not close the mission yourself.

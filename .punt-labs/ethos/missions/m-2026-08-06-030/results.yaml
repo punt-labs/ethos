@@ -1,0 +1,67 @@
+results:
+    - mission: m-2026-08-06-030
+      round: 1
+      created_at: "2026-08-06T14:00:30Z"
+      author: mdm
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: cmd/ethos/mission.go
+          added: 84
+          removed: 0
+        - path: internal/mission/scaffold.go
+          added: 100
+          removed: 0
+      evidence:
+        - name: go test ./internal/mission/... -run Scaffold -v
+          status: pass
+        - name: go test ./internal/mission/...
+          status: pass
+        - name: go vet ./cmd/... ./internal/mission/...
+          status: pass
+        - name: golangci-lint run ./... (via PostToolUse hook, both edits)
+          status: pass
+        - name: manual dogfood — ethos mission scaffold --help / contract --help / result --help
+          status: pass
+        - name: manual dogfood — ethos mission scaffold contract, ethos mission scaffold result
+          status: pass
+        - name: make check
+          status: fail
+      open_questions:
+        - 'make check (full suite) is failing repo-wide for reasons entirely outside this mission''s write_set: internal/mcp has uncommitted, in-progress changes (mission_tools_test.go, internal/mission/conflict.go, conflict_test.go — appears to be a different in-flight fix, ethos-qs0v/mission-writeset-staleness) causing flaky integration-test failures ("transport error: transport closed"), and docs/spec-mission-lifecycle.md (untouched by me) fails markdownlint (MD041, MD038). Confirmed via `git stash` (reverts to a clean tree, all internal/mcp tests pass) that these failures predate and are unrelated to this change. Scoped verification (go build ./..., go vet on cmd/... and internal/mission/..., golangci-lint 0 issues on both touched files, full internal/mission suite green including 4 new scaffold tests) is clean. Leader should confirm the concurrent WIP in internal/mcp and docs/spec-mission-lifecycle.md before running a repo-wide make check gate.'
+      prose: |
+        Fixes ethos-q682. Added `ethos mission scaffold contract` and `ethos
+        mission scaffold result` under cmd/ethos/mission.go, backed by
+        internal/mission/scaffold.go (ScaffoldContractYAML,
+        ScaffoldResultYAML). Both print a commented, fillable-in-place YAML
+        skeleton to stdout — no flags, redirect to a file — with every field
+        the real strict decoder and Validate() require present and typed,
+        removing the discover-by-error class the bead reports (mission ->
+        round -> author -> evidence non-empty -> EvidenceCheck shape for
+        results; the parallel chain for contracts).
+
+        Server-computed contract fields (mission_id, status, timestamps,
+        evaluator.pinned_at/hash, current_round) are deliberately omitted
+        from the contract scaffold since `mission create` overwrites them
+        regardless of what the file supplies; advanced/rare fields
+        (pipeline, depends_on, extract_into, tools, preconditions,
+        delegations, session, repo) are named in a comment pointing to
+        `mission create --help` rather than scaffolded, to keep the skeleton
+        minimal.
+
+        internal/mission/scaffold_test.go proves both skeletons round-trip
+        through the real DecodeContractStrict/DecodeResultStrict unmarshaler
+        with zero errors, and that their own fields independently satisfy
+        Contract.Validate/Result.Validate (the contract test fills in the
+        server-computed fields the same way Store.Create does, matching
+        production behavior). Caught and fixed one real bug via dogfooding:
+        cobra panics if a non-root-child command sets GroupID for a group
+        only registered on rootCmd — missionScaffoldCmd is a child of
+        missionCmd, not rootCmd, so it must not set GroupID (matching every
+        other mission subcommand).
+
+        This mission's own write_set (cmd/ethos/mission.go,
+        internal/mission/scaffold.go) is fully clean under go vet,
+        golangci-lint, and go test. The one open item is the repo-wide
+        `make check` failure, which traces to unrelated concurrent
+        in-progress work outside this write_set — see open_questions.

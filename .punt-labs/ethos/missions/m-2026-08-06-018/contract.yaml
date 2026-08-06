@@ -1,0 +1,23 @@
+mission_id: m-2026-08-06-018
+status: closed
+type: implement
+created_at: "2026-08-06T11:24:10Z"
+updated_at: "2026-08-06T11:54:03Z"
+closed_at: "2026-08-06T11:54:03Z"
+leader: claude
+worker: adb
+evaluator:
+    handle: kth
+    pinned_at: "2026-08-06T11:24:10Z"
+    hash: a9aaec59016f51add2cc894b68a5bd68d2048fa66bc9f8b62f291ee36fa1f4a6
+inputs: {}
+write_set:
+    - CHANGELOG.md
+    - .claude-plugin/plugin.json
+    - README.md
+success_criteria:
+    - 'Cut release v4.11.0 following the exact pattern of PRs #429 (chore: release v4.10.0) and #430 (chore: post-release v4.10.0), which you can inspect via ''git show --stat 6708646'' and ''git show --stat 1ced464'' and ''gh pr view 429/430'' for reference. Steps: (1) On a new branch off main, move CHANGELOG.md''s [Unreleased] content under a new [4.11.0] - 2026-08-06 heading, leave a fresh empty [Unreleased] section above it. (2) Bump .claude-plugin/plugin.json version to 4.11.0. (3) Open a PR titled ''chore: release v4.11.0'', get it merged (it will trigger .github/workflows/release.yml on the v4.11.0 tag push once you tag). (4) Tag the merge commit v4.11.0 and push the tag — confirm the release workflow run succeeds and produces 4 binaries + checksums on the GitHub release. (5) Open a second post-release PR titled ''chore: post-release v4.11.0'' that restores any dev-plugin-only state (see #430 for the pattern of what gets restored, e.g. plugin.json back to -dev naming/version if that''s the established pattern, README install SHA bump). Follow this repo''s PR lifecycle exactly: make check clean, local review (code-reviewer, silent-failure-hunter, invariant-completeness-reviewer) clean, Copilot review requested, merge only when clean. Do NOT run ''make install'' or otherwise touch a locally-installed ethos binary anywhere in this process — that step is explicitly reserved for the human operator to run from their own shell.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

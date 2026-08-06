@@ -1,0 +1,8 @@
+id: d-2026-08-06-058
+tier: B
+mission: m-2026-08-06-030
+parent_session: e514e03e-1d41-4641-b621-f1d8669c3d1c
+agent_type: mdm
+created_at: "2026-08-06T13:40:55Z"
+closed_at: "2026-08-06T17:02:10Z"
+verdict: pass
