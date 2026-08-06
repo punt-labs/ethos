@@ -7053,11 +7053,12 @@ in its own session:
 **Status**: Settled. Resolves bead `ethos-7b6c`, raised during PR #424
 (DES-068). Amends the PreToolUse enforcement described in DES-035 and
 extended by DES-052. Implemented via mission `m-2026-08-06-002`
-(worker `bwk`, evaluator `djb`): `internal/hook/pretooluse.go`
-(R1 deny + tests), `cmd/validate-content/mcp_classification.go`
-(R2 classification + tests), `docs/workflow.md` and `CLAUDE.md`
-(R3 warning text). Design doc: `docs/mcp-write-set-gap.md`
-(commit `829eb42`).
+(worker `bwk`, evaluator `djb`): `internal/mcpclass/mcpclass.go`
+(shared classification/deny logic, the single source of truth for both
+checks below), `internal/hook/pretooluse.go` (R1 deny + tests),
+`cmd/validate-content/mcp_classification.go` (R2 classification +
+tests), `docs/workflow.md` and `CLAUDE.md` (R3 warning text). Design
+doc: `docs/mcp-write-set-gap.md` (commit `829eb42`).
 
 ### Problem
 
@@ -7096,18 +7097,27 @@ does not change that scope — see Consequences.
    cannot rot and cannot fail open. Matching is on the suffix after the
    `mcp__plugin_<name>[-dev]_<server>__` prefix, covering both plugin
    prefixes with one entry (DES-068's double-listing rule). Implemented
-   in `denyInRepoMCPWrite`/`mcpToolSuffix`
-   (`internal/hook/pretooluse.go`), checked before
-   `extractTargetPath` inside the existing `ETHOS_VERIFIER_ALLOWLIST`
-   branch so worker spawns (allowlist unset) are unaffected.
+   in `denyInRepoMCPWrite` (`internal/hook/pretooluse.go`), which
+   delegates to `mcpclass.DenyReason` (`internal/mcpclass/mcpclass.go`),
+   checked before `extractTargetPath` inside the existing
+   `ETHOS_VERIFIER_ALLOWLIST` branch so worker spawns (allowlist unset)
+   are unaffected. `DenyReason` fails closed: any `mcp__`-prefixed tool
+   that does not parse into a known classification is denied, not
+   silently allowed — closing a fail-open gap a local review round
+   caught before merge (an unclassified direct MCP tool, e.g.
+   `mcp__github__create_or_update_file`, must be denied, not passed
+   through).
 3. **Every MCP grant is classified, enforced by `make check`.**
    `cmd/validate-content` (`mcp_classification.go`) requires each
    `mcp__` tool name in any `roles/*.yaml` to appear in one of
-   `mcpReadOnly`, `mcpWritesOutsideRepo`, or `mcpWritesInRepo`; the
-   last implies the deny in (2), pinned by
-   `TestClassificationCoversR1DenyList`. An unclassified grant fails
-   the build with the offending role and tool named. Classification
-   entries cite file:line evidence in the tool's own repo.
+   `mcpclass.ReadOnly`, `mcpclass.WritesOutsideRepo`, or
+   `mcpclass.WritesInRepo`; the last implies the deny in (2), pinned by
+   `TestDenyReasonCoversWritesInRepo`. Both the runtime deny (2) and the
+   build-time classification (3) read the same `internal/mcpclass`
+   maps, so a new `writes-in-repo` entry cannot be added to one without
+   the other. An unclassified grant fails the build with the offending
+   role and tool named. Classification entries cite file:line evidence
+   in the tool's own repo.
 4. **Tools writing outside the repo are explicitly not gated.** quarry
    `remember`/`ingest`/`use`, ethos `session`, biff
    `plan`/`read_messages`: they cannot change a repo artifact, so they

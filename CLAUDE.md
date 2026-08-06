@@ -127,6 +127,7 @@ Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `she
 | `internal/adr/` | ADR model and storage backing the `adr` MCP tool |
 | `internal/ui/` | Localhost web UI for traceability data (`ethos ui`). Embedded Go HTTP server + html/template + Tailwind CDN. Reads missions, delegations, audit trails from `.punt-labs/ethos/`. |
 | `internal/mcp/` | MCP tool definitions and handlers (12 tools) |
+| `internal/mcpclass/` | MCP tool-name classification (read-only / writes-outside-repo / writes-in-repo); single source of truth shared by the DES-069 verifier deny (`internal/hook`) and the build-time grant check (`cmd/validate-content`) |
 
 ### Storage Layout
 
