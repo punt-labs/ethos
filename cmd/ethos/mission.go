@@ -929,11 +929,6 @@ func init() {
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,
 		"Print per-mission decisions to stdout")
 
-	missionScaffoldCmd.AddCommand(
-		missionScaffoldContractCmd,
-		missionScaffoldResultCmd,
-	)
-
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
@@ -948,7 +943,6 @@ func init() {
 		missionLogCmd,
 		missionExportCmd,
 		missionLintCmd,
-		missionScaffoldCmd,
 		missionDispatchCmd,
 		missionMigrateCmd,
 		missionClaimCmd,
@@ -1085,11 +1079,11 @@ func runMissionCreate() error {
 // overlap alone is not the misbinding risk: the ethos-z69l class is a
 // handle spawned under an ambiguous (mission_id, role) while touching
 // related work, so a handle shared with an open mission whose files
-// don't overlap carries no real risk (ethos-swoh) — before this
+// don't overlap carries no real risk (ethos-swoh) -- before this
 // check, sharing a handle with ANY other open mission warned,
-// including the mission the new one was replacing. Surfacing the
-// collision at create time lets the leader verify the intended
-// (mission_id, role) before dispatching.
+// including a mission whose write_set does not intersect the new
+// one's at all. Surfacing the collision at create time lets the
+// leader verify the intended (mission_id, role) before dispatching.
 //
 // The check never fails the create — handle reuse across missions is a
 // legitimate, common pattern (the same specialist as worker on A and
@@ -1145,7 +1139,7 @@ func warnHandleOverlap(ms *mission.Store, c *mission.Contract) {
 		// Handle overlap alone is not enough: the misbind risk only
 		// exists when the two missions also claim intersecting files
 		// (ethos-swoh). Skip the write_set check entirely when no
-		// handle overlaps — the common case — before paying for it.
+		// handle overlaps -- the common case -- before paying for it.
 		if len(hits) > 0 && mission.WriteSetsConflict(c.WriteSet, c.ExtractInto, other.WriteSet, other.ExtractInto) {
 			sort.Strings(hits)
 			overlaps = append(overlaps, overlap{mission: id, handles: hits})

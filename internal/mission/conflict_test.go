@@ -1252,11 +1252,10 @@ func TestSplitPathList(t *testing.T) {
 }
 
 // TestWriteSetsConflict covers ethos-swoh: a handle-overlap warning
-// must not fire on write_set intersection alone reporting an overlap
-// when the two missions' write_sets don't actually intersect. Rows
-// pair a false-positive shape (disjoint write_sets) against the
-// true-positive shape (overlapping write_sets) so a regression in
-// either direction surfaces as a named failure.
+// must not fire when the two missions' write_sets don't actually
+// intersect. Rows pair a false-positive shape (disjoint write_sets)
+// against the true-positive shape (overlapping write_sets) so a
+// regression in either direction surfaces as a named failure.
 func TestWriteSetsConflict(t *testing.T) {
 	tests := []struct {
 		name                    string
