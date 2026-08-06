@@ -1,13 +1,17 @@
 %
-% spec-mission-lifecycle.md
+% spec-mission-lifecycle.tex
 %
 % Mission Lifecycle: A Z Specification
 % A formal model of the mission-contract state machine implemented in
 % internal/mission (mission.go, store.go, validate.go), current as of
 % mission m-2026-08-06-032.
 %
-% Compile: pdflatex spec-mission-lifecycle.md (or rename to .tex; fuzz
-% and pdflatex read the content, not the extension)
+% Compile: pdflatex spec-mission-lifecycle.tex
+%
+% Must be .tex, not .md: fuzz and pdflatex read content regardless of
+% extension, but this repo's own z-spec tooling (file discovery for
+% /z-spec:test and friends) globs for .tex specifically -- a .md file
+% here is silently invisible to it and ProB reports 0 states.
 %
 
 \documentclass[a4paper,10pt,fleqn]{article}
@@ -261,7 +265,7 @@ status = stAbandoned \implies
   (delegationCount = 0 \land resultRounds = \emptyset)
 \end{schema}
 
-Four predicates, four invariants:
+Six predicates, grouped into three invariants:
 
 \begin{itemize}
   \item \field{budgetRounds} $\in 1 \upto \field{maxRounds}$ and
@@ -392,7 +396,7 @@ repoRootSet' = repoRootSet
 Models \field{Store.AppendResult} (store.go:2401--2517): a result is
 accepted only on an open mission, only for the current round, and
 never twice for the same round (store.go:2427--2445,
-2460--2467-region append-only check).
+the append-only check around store.go:2460--2467).
 
 \begin{schema}{SubmitResult}
 \Delta Mission \\
@@ -573,8 +577,15 @@ fuzz type-checks schemas; it does not discharge proof obligations.
 The following are claims about the operation set
 $\{\field{Init}, \field{Delegate}, \field{SubmitResult}, \field{Reflect},
 \field{AdvanceRound}, \field{Close}, \field{Abandon}\}$, each backed
-by inspection of the schemas above and confirmed by ProB animation
-(\S\ref{sec:validation}) rather than by proof:
+by inspection of the schemas above; two (\field{TerminalIsFinal},
+\field{AbandonSafety}) are additionally exercised by ProB animation
+(\S\ref{sec:validation}). \field{EvaluatorHashFrozen} is a syntactic
+guarantee of every operation's frame conjunct --- no reachable
+violation is even expressible, so animation would confirm nothing
+non-trivial. \field{CloseRequiresResult}'s justification is a
+file:line correspondence to the real Go source, which ProB cannot
+check --- it never reads Go code. None of the four claims are
+discharged by proof:
 
 \begin{center}
 \begin{tabularx}{\textwidth}{@{}lX@{}}
@@ -621,7 +632,7 @@ by inspection of the schemas above and confirmed by ProB animation
 % ===================================================================
 
 The mission brief asks for a concrete demonstration that this
-specification would have caught the bug fixed earlier this session
+specification would have caught the fail-open bug fixed in PR \#432 (commit 9a60b39)
 and regression-tested by
 \field{TestStore\_Abandon\_RefusesWhenRepoRootEmpty}
 (abandon\_test.go:151--179): the historical \field{Store.Abandon}
@@ -846,7 +857,7 @@ that is committed here.
 \field{Abandon} & \field{Store.Abandon} (store.go:1081--1237) &
   post-fix; see abandon\_test.go:151--179 \\
 \field{AbandonFailOpen} & historical \field{Store.Abandon}, fixed
-  earlier this session & not present in current code; modelled only
+  PR \#432 (9a60b39) & not present in current code; modelled only
   for \S\ref{sec:validation} \\
 \bottomrule
 \end{tabularx}
