@@ -21,7 +21,7 @@ func StatusMatches(filter, contractStatus string) bool {
 // loudly instead of silently returning an empty list.
 func IsValidStatusFilter(filter string) bool {
 	switch filter {
-	case StatusOpen, StatusClosed, StatusFailed, StatusEscalated, "all":
+	case StatusOpen, StatusClosed, StatusFailed, StatusEscalated, StatusAbandoned, "all":
 		return true
 	}
 	return false

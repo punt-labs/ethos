@@ -64,7 +64,7 @@ func init() {
 	findMissionsCmd.Flags().StringVar(&findMissionsWorker, "worker", "",
 		"Filter by worker handle")
 	findMissionsCmd.Flags().StringVar(&findMissionsStatus, "status", "",
-		"Filter by status (open, closed, failed, escalated)")
+		"Filter by status (open, closed, failed, escalated, abandoned)")
 	findMissionsCmd.Flags().StringVar(&findMissionsFormat, "format", "json",
 		"Output format: json, table, or paths")
 

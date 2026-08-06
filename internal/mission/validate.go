@@ -24,12 +24,13 @@ func PipelineIDValid(s string) bool {
 	return len(s) <= maxPipelineIDLen && pipelineIDPattern.MatchString(s)
 }
 
-// validStatuses lists the four allowed Status values.
+// validStatuses lists the five allowed Status values.
 var validStatuses = map[string]bool{
 	StatusOpen:      true,
 	StatusClosed:    true,
 	StatusFailed:    true,
 	StatusEscalated: true,
+	StatusAbandoned: true,
 }
 
 const (
@@ -44,12 +45,14 @@ const (
 // Validation rules (19 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
-//  2. status is one of {open, closed, failed, escalated}
+//  2. status is one of {open, closed, failed, escalated, abandoned}
 //  3. created_at is parseable as RFC3339
 //  4. updated_at is parseable as RFC3339
 //  5. status ↔ closed_at invariant:
 //     - status == open  → closed_at must be empty
 //     - status != open  → closed_at must be non-empty and RFC3339
+//     (abandoned is a terminal status for this rule, same as closed,
+//     failed, and escalated — see Store.Abandon)
 //  6. type: empty is accepted (defaulted by Store.Create / load);
 //     when set, must not contain control characters
 //  7. leader is non-empty and contains no control characters
@@ -113,7 +116,7 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 
 	// status
 	if !validStatuses[c.Status] {
-		return fmt.Errorf("invalid status %q: must be one of open, closed, failed, escalated", c.Status)
+		return fmt.Errorf("invalid status %q: must be one of open, closed, failed, escalated, abandoned", c.Status)
 	}
 
 	// created_at parseable as RFC3339

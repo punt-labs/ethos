@@ -765,6 +765,164 @@ func TestMissionClose_PrefixMatch(t *testing.T) {
 	assert.Equal(t, mission.StatusFailed, c.Status)
 }
 
+// --- abandon ---
+
+// TestMissionAbandon asserts the happy path: a mission created but
+// never dispatched (no delegations, no results) abandons cleanly and
+// the CLI echoes the reason back so the operator sees the audit line
+// land, not just a bare "ok".
+func TestMissionAbandon(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	stdout := captureStdoutE(t, func() error {
+		return runMissionAbandon(ids[0], "never dispatched, blocking write_set")
+	})
+	assert.Contains(t, stdout, "abandoned:")
+	assert.Contains(t, stdout, ids[0])
+	assert.Contains(t, stdout, "never dispatched, blocking write_set")
+
+	c, err := ms.Load(ids[0])
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusAbandoned, c.Status)
+	assert.NotEmpty(t, c.ClosedAt)
+}
+
+// TestMissionAbandon_RequiresReason asserts the CLI-level guard fires
+// before the store is touched — an empty --reason is refused with an
+// actionable message, and the mission stays open.
+func TestMissionAbandon_RequiresReason(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	err = runMissionAbandon(ids[0], "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reason is required")
+
+	c, err := ms.Load(ids[0])
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusOpen, c.Status)
+}
+
+// TestMissionAbandon_RefusesWithResult proves the CLI surfaces the
+// store's "any sign of work" refusal verbatim, pointing the operator
+// at close instead of silently no-opping.
+func TestMissionAbandon_RefusesWithResult(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	submitCLIResult(t, ids[0], 1)
+
+	err = runMissionAbandon(ids[0], "ignoring the submitted result")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "result artifact")
+
+	c, err := ms.Load(ids[0])
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusOpen, c.Status)
+}
+
+// TestMissionAbandon_PrefixMatch mirrors TestMissionClose_PrefixMatch:
+// an unambiguous ID prefix resolves the same as the full ID.
+func TestMissionAbandon_PrefixMatch(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	prefix := ids[0][:9]
+	captureStdoutE(t, func() error { return runMissionAbandon(prefix, "prefix match") })
+
+	c, err := ms.Load(ids[0])
+	require.NoError(t, err)
+	assert.Equal(t, mission.StatusAbandoned, c.Status)
+}
+
+// TestMissionAbandon_JSON asserts --json emits a machine-readable
+// payload carrying the mission ID, terminal status, and reason.
+func TestMissionAbandon_JSON(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+
+	jsonOutput = true
+	defer func() { jsonOutput = false }()
+	out := captureStdoutE(t, func() error { return runMissionAbandon(ids[0], "json path") })
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	assert.Equal(t, ids[0], payload["mission_id"])
+	assert.Equal(t, mission.StatusAbandoned, payload["status"])
+	assert.Equal(t, "json path", payload["reason"])
+}
+
+// TestMissionAbandon_ExcludedFromWriteSetConflicts is the CLI-level
+// end-to-end proof of the fix the mission was dispatched to deliver:
+// a dead mission (created, never dispatched) blocks a second create
+// with an overlapping write_set until it is abandoned.
+func TestMissionAbandon_ExcludedFromWriteSetConflicts(t *testing.T) {
+	missionTestEnv(t)
+	missionCreateFile = writeContractFileWithWriteSet(t, "internal/shared/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	deadID := ids[0]
+
+	missionCreateFile = writeContractFileWithWriteSet(t, "internal/shared/thing.go")
+	err = runMissionCreate()
+	require.Error(t, err, "an open dead mission must still block a conflicting create")
+
+	captureStdoutE(t, func() error {
+		return runMissionAbandon(deadID, "dead mission blocking real work")
+	})
+
+	missionCreateFile = writeContractFileWithWriteSet(t, "internal/shared/thing.go")
+	require.NoError(t, runMissionCreate(), "abandoning the dead mission must free its write_set")
+}
+
+// TestMissionAbandon_HelpDistinguishesFromClose asserts the CLI help
+// text is discoverable and explains abandon is not a Close bypass —
+// the leader hitting this at 11pm had no discoverable path except
+// manually inspecting the delegations directory by hand.
+func TestMissionAbandon_HelpDistinguishesFromClose(t *testing.T) {
+	missionTestEnv(t)
+	stdout, _, err := runCobra(t, "mission", "abandon", "--help")
+	require.NoError(t, err)
+	assert.Contains(t, stdout, "never actually dispatched")
+	assert.Contains(t, stdout, "reason")
+	assert.Contains(t, stdout, "close")
+}
+
 // --- 3.4: reflect, reflections, advance ---
 
 // writeReflectionFile drops a reflection YAML body into a temp file
