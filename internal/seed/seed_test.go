@@ -637,11 +637,14 @@ func TestSeedAgents_PreservesTrackedEdit(t *testing.T) {
 // test fails CI the moment the committed copy and the shipped source
 // diverge, so the two are edited together or not at all.
 func TestSeedAgents_CommittedCopyMatchesShippedSource(t *testing.T) {
-	for _, name := range []string{
-		"code-reviewer.md",
-		"silent-failure-hunter.md",
-		"invariant-completeness-reviewer.md",
-	} {
+	entries, err := fs.ReadDir(Agents, "sidecar/agents")
+	require.NoError(t, err)
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
+			continue
+		}
+		name := e.Name()
 		t.Run(name, func(t *testing.T) {
 			shipped, err := fs.ReadFile(Agents, "sidecar/agents/"+name)
 			require.NoError(t, err, "reading shipped %s from the embedded sidecar", name)
