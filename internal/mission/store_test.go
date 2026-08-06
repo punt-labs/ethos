@@ -2208,7 +2208,8 @@ func TestStore_EvaluatorHashFrozenAcrossTrajectory(t *testing.T) {
 	c.Evaluator.Hash = ""
 	c.Evaluator.PinnedAt = ""
 	sources := fakeHashSources(c.Evaluator.Handle)
-	require.NoError(t, s.ApplyServerFields(c, time.Now(), sources))
+	pinnedAt := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, s.ApplyServerFields(c, pinnedAt, sources))
 	require.NotEmpty(t, c.Evaluator.Hash, "ApplyServerFields must pin a hash before this test can prove anything")
 	require.NoError(t, s.Create(c))
 	pinnedHash := c.Evaluator.Hash
@@ -2228,8 +2229,8 @@ func TestStore_EvaluatorHashFrozenAcrossTrajectory(t *testing.T) {
 	loaded, err = s.Load(c.MissionID)
 	require.NoError(t, err)
 	assert.Equal(t, pinnedHash, loaded.Evaluator.Hash, "hash must survive AdvanceRound")
+	require.Equal(t, 2, loaded.CurrentRound, "AdvanceRound must persist the new round before the second AppendResult")
 
-	loaded.CurrentRound = 2
 	require.NoError(t, s.AppendResult(c.MissionID, resultFor(loaded, VerdictPass)))
 	loaded, err = s.Load(c.MissionID)
 	require.NoError(t, err)
