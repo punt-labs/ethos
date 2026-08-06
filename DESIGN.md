@@ -7166,3 +7166,92 @@ gate should bind workers is deferred to a separate ADR.
 - `quarry/src/quarry/config.py:27`
 - Bead `ethos-7b6c`; PR #424; mission `m-2026-08-05-001` (design),
   `m-2026-08-06-002` (implementation)
+
+## DES-070: Seeded review agents — a new sidecar category for personaless checklists (DRAFT)
+
+**Status**: Draft — design pending leader/operator ratification. Full design
+in `docs/seeded-review-agents.md`.
+
+### Problem
+
+Ethos seeds two persona-bound review roles (`reviewer`, `security-reviewer`)
+via `internal/seed/sidecar/roles/`, synthesized through
+`generate_agents.go`'s role → personality → writing-style → talent pipeline
+into named specialists for the mission worker/evaluator system. It ships
+zero narrow-mandate, structured-output, personaless review-checklist agents
+— the shape used by the third-party `pr-review-toolkit` plugin's
+`code-reviewer.md` and `silent-failure-hunter.md`, which every consuming
+repo (ethos included) currently depends on for local review Phase 5.
+During the DES-069 PR cycle, both third-party agents ran clean while
+GitHub Copilot/Bugbot caught three real defects, all in one dimension
+neither covers: unverified invariant/exhaustiveness/exclusivity claims. The
+leader wrote a third agent, `.claude/agents/invariant-completeness-
+reviewer.md`, repo-local to ethos only — proving the gap but not closing it
+for any other repo.
+
+### Decision
+
+- **Seed three review-checklist agents**, not four: a general
+  code-quality/CLAUDE.md-compliance agent (ported from `pr-review-toolkit`
+  code-reviewer), an error-handling/silent-failure agent (ported from
+  silent-failure-hunter), and the invariant/exhaustiveness/test-tautology
+  agent already written. A fourth candidate (test-coverage-gaps, per Qodo
+  2.0) is deferred — no incident has shown it slipping past the other three
+  or past existing coverage gates, and building it now risks the
+  overlapping-agents failure mode this design explicitly avoids.
+- **New seed category, `internal/seed/sidecar/agents/`**, bare markdown
+  files (Claude Code subagent frontmatter + system prompt) deployed
+  verbatim to `.claude/agents/` via the same `seedFS`/`decide`/`place`
+  machinery already used for `roles/`, `talents/`, `personalities/`, and
+  `writing-styles/`. No persona synthesis, no identity binding, no `tools:`
+  allowlist merge.
+- **Manifest-aware deploy, DES-065 semantics unchanged.** An operator may
+  hand-edit a seeded review agent's scope; unconditional overwrite would
+  silently discard that edit, same risk profile as a hand-edited persona
+  file, so `decide`'s tracked/edited/collision logic applies unmodified.
+- **No DES-052/DES-069 write-set or MCP-grant interaction.** These agents
+  are pure Claude Code subagent definitions, never dispatched via `ethos
+  mission`, never bound to an identity, and read-only by prompt convention
+  (matching the existing `safety_constraints` pattern in `reviewer.yaml`)
+  rather than by an ethos-enforced gate. DES-068's MCP-grant model exists
+  for the outbound-tool risk of a dispatched specialist in a live session;
+  an ad hoc, read-only review invocation carries none of that risk.
+- **`ethos seed` also deposits a CLAUDE.md pointer**, parallel to how
+  `internal/enable/deposit.go` writes vox's vendored guide and `@`-import:
+  an addition to the existing vendored `.punt-labs/ethos/CLAUDE.md` naming
+  the three agents and the Phase-5 sequence, so a leader discovers them
+  without hand-wiring.
+- **Ethos's own dogfooding transition runs the seeded agents in parallel
+  with `pr-review-toolkit` for one PR cycle**, diffs findings, then drops
+  the third-party dependency from this repo's own Phase 5 — not an
+  immediate cutover, since the ported prompts are new and unproven relative
+  to their originals.
+
+### Rejected alternatives
+
+- **Shoehorn into the role/archetype pipeline.** Would require a null-object
+  personality, a second output shape in `generate_agents.go` for
+  non-persona pass-through, and a fake identity binding for something that
+  is not an identity — more moving parts to produce output indistinguishable
+  from a flat file copy. Rejected.
+- **A simpler, non-manifest-aware deploy** on the premise that there's no
+  persona content to preserve. Rejected: the preservation need is the same
+  (protect operator hand-edits from silent overwrite), it just isn't
+  persona content — DES-065's logic still applies.
+- **Immediate cutover from `pr-review-toolkit`** in ethos's own workflow.
+  Rejected: trades a known-working dependency for unproven ported prompts
+  with no comparison window; the operator's goal is more coverage, not a
+  gap swapped for another gap.
+- **Build a fourth test-coverage-gaps agent now.** Rejected: no concrete
+  incident (unlike the invariant-completeness gap, which had one) and risks
+  overlapping with `code-reviewer`'s existing "inadequate test coverage"
+  bullet.
+
+### Open questions
+
+- Product-positioning: does ethos market "we ship code review agents" as a
+  capability, or is this framed purely as an artifact of dogfooding good
+  local review? Leader/operator call, not a technical one.
+- Product-positioning: does dropping `pr-review-toolkit` from ethos's own
+  CLAUDE.md constitute a deliberate competitive statement the operator
+  wants to make on purpose.
