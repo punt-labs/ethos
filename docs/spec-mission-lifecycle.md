@@ -543,6 +543,27 @@ what \field{Store.Abandon}'s author had to get right), and because
 guard's \field{repoRootSet} conjunct in the right place, to fail the
 same invariant.
 
+\subsection{Idle}
+
+Not one of the seven named transitions, and not a real operation on
+\field{Store} at all. Every operation above guards on
+$\field{status} = \field{stOpen}$
+(\field{TerminalIsFinal}, \S\ref{sec:theorems}), so a state space
+built only from those seven has no outgoing transition once
+\field{status} leaves \field{stOpen} --- ProB reports that
+correctly, but as a \emph{deadlock}, which is a different finding
+from an invariant violation and would mask the one
+\S\ref{sec:validation} is looking for. \field{Idle} is the standard
+fix: a state-preserving self-loop enabled exactly on terminal states,
+so a finished mission is modelled as ``nothing more happens,'' not
+``the machine got stuck.''
+
+\begin{schema}{Idle}
+\Xi Mission
+\where
+status \neq stOpen
+\end{schema}
+
 % ===================================================================
 \section{Theorems}
 \label{sec:theorems}
@@ -611,31 +632,30 @@ on record could be abandoned cleanly, discarding it silently.
 
 \subsection{AbandonFailOpen}
 
-This schema is \emph{not} part of the current implementation. It
-exists only in this section, to be checked against the
-\field{AbandonSafety} invariant and shown to violate it --- the
-demonstration the mission asks for. Its guard replaces
-\field{Abandon}'s three independent conjuncts with the historical
-code's single implication, reproducing the \texttt{if repoRoot != ""}
-short-circuit exactly:
+Not part of the current implementation, and not a schema in this
+document's own checked namespace either --- for reasons the next
+subsection explains. Its guard replaces \field{Abandon}'s three
+independent conjuncts with the historical code's single implication,
+reproducing the \texttt{if repoRoot != ""} short-circuit exactly:
 
-\begin{schema}{AbandonFailOpen}
-\Delta Mission
-\where
-status = stOpen \\
-(repoRootSet = ztrue \implies
-  (delegationCount = 0 \land resultRounds = \emptyset)) \\
-status' = stAbandoned \\
-currentRound' = currentRound \\
-budgetRounds' = budgetRounds \\
-worker' = worker \\
-evaluatorHandle' = evaluatorHandle \\
-evaluatorHash' = evaluatorHash \\
-delegationCount' = delegationCount \\
-resultRounds' = resultRounds \\
-reflected' = reflected \\
-repoRootSet' = repoRootSet
-\end{schema}
+\begin{verbatim}
+AbandonFailOpen
+  Delta Mission
+where
+  status = stOpen
+  (repoRootSet = ztrue ==>
+    (delegationCount = 0 and resultRounds = {}))
+  status' = stAbandoned
+  currentRound' = currentRound
+  budgetRounds' = budgetRounds
+  worker' = worker
+  evaluatorHandle' = evaluatorHandle
+  evaluatorHash' = evaluatorHash
+  delegationCount' = delegationCount
+  resultRounds' = resultRounds
+  reflected' = reflected
+  repoRootSet' = repoRootSet
+\end{verbatim}
 
 When \field{repoRootSet = zfalse}, the guard's implication is
 vacuously true regardless of \field{delegationCount} or
@@ -646,47 +666,148 @@ the historical code did not clear or lose the delegation records, it
 simply stopped checking them before transitioning \field{status} to
 \field{stAbandoned}.
 
-\subsection{The reachable violation}
+\subsection{Errata: why this schema is not checked against
+\field{Mission}}
 
-Starting from any \field{Init}-reachable state with
-$\field{repoRootSet} = \field{zfalse}$ and
-$\field{delegationCount} > 0$ (reachable via one \field{Delegate}
-from \field{Init}, since \field{repoRootSet} is unconstrained by
-\field{Init} and \field{Delegate} leaves it unconstrained too),
-\field{AbandonFailOpen} is enabled --- its guard does not mention
-\field{delegationCount} at all in that branch --- and its effect sets
-$\field{status}' = \field{stAbandoned}$ while
-$\field{delegationCount}' = \field{delegationCount} > 0$. This is a
-direct, exhibited violation of the \field{Mission} invariant's final
-conjunct: a state where $\field{status} = \field{stAbandoned}$ and
-$\field{delegationCount} \neq 0$ simultaneously holds, which the
-schema declares impossible.
+An earlier revision of this document defined \field{AbandonFailOpen}
+as a live schema typed against $\Delta \field{Mission}$, alongside
+\field{Abandon} and \field{Idle}, and claimed that model-checking the
+combined operation set would surface the invariant violation directly.
+It does not, and the claim was wrong. Model-checking
+$\{\field{Init}, \field{Delegate}, \field{SubmitResult},
+\field{Reflect}, \field{AdvanceRound}, \field{Close}, \field{Abandon},
+\field{AbandonFailOpen}, \field{Idle}\}$ against \field{Mission}
+explored 385 states and 785 transitions and reported \textbf{zero}
+violations --- with the buggy operation present and enabled.
 
-\subsection{ProB result}
+The reason is the schema calculus, not a tooling gap. $\Delta
+\field{Mission}$ abbreviates $\field{Mission} \land \field{Mission}'$,
+and \field{Mission}$'$ is \field{Mission} with every component ---
+\emph{and its own \texttt{where}-clause predicate} --- decorated with
+a prime. \field{Mission}'s predicate includes the abandon invariant,
+so \emph{every} schema written as $\Delta \field{Mission} \land P$
+already carries, as a silent extra conjunct,
+$\field{status}' = \field{stAbandoned} \implies
+(\field{delegationCount}' = 0 \land \field{resultRounds}' = \emptyset)$
+--- regardless of what $P$ says. Combined with
+\field{AbandonFailOpen}'s own frame equations
+($\field{delegationCount}' = \field{delegationCount}$,
+$\field{resultRounds}' = \field{resultRounds}$), this makes the whole
+schema unsatisfiable at exactly the states that would exhibit the
+bug: there is no valuation of the primed variables that satisfies both
+the frame equations and the silent invariant conjunct when
+$\field{delegationCount} > 0$. The operation is not \emph{disabled}
+by a guard that checks for this --- it has no valid after-state at
+all, by pure predicate logic, so ProB correctly finds nothing wrong,
+because there genuinely is nothing there to find. Writing a bad guard
+inside $\Delta \field{Mission}$ cannot, by construction, violate an
+invariant already living in \field{Mission}'s own predicate --- that
+is a structural property of Z's schema calculus, not a claim about
+the real \field{Store.Abandon}.
 
-Model-checking a machine built from
-$\{\field{Init}, \field{Delegate}, \field{AbandonFailOpen}\}$ (the
-minimal operation set needed to exhibit the violation) against the
-\field{Mission} state schema reports the invariant violation
-described above: a reachable state with $\field{status} =
-\field{stAbandoned} \land \field{delegationCount} > 0$, reached via
-$\field{Init} \to \field{Delegate} \to \field{AbandonFailOpen}$ with
-$\field{repoRootSet} = \field{zfalse}$ chosen for both steps. See
-\S\ref{sec:probrun} for the exact tool invocation and output.
-Model-checking the same reachability question against the correct
-operation set $\{\field{Init}, \field{Delegate}, \field{Abandon}\}$
-finds no such state: \field{Abandon}'s $\field{repoRootSet} =
-\field{ztrue}$ conjunct is not an implication, so it is never
-vacuously satisfied, and the operation is simply not enabled from any
-state with $\field{repoRootSet} = \field{zfalse} \land
-\field{delegationCount} > 0$.
+This is precisely why \field{Contract.Validate} not carrying the
+abandon invariant (\S\ref{sec:state}) turns out to matter for more
+than fidelity to the real rule list: had this specification instead
+baked \field{AbandonSafety} into a Contract-level type, \emph{no}
+buggy guard could ever be exhibited as unsafe against it, for any
+future change, which would make the specification worthless as a
+regression net for exactly the class of bug it exists to catch.
+
+\subsection{A decoupled demonstration}
+
+To get a genuine counter-example, the safety property must not be
+baked into the type the buggy operation is checked against. Two
+small, self-contained Z documents were built and run independently
+(neither is part of this file's own checked namespace, to avoid
+exactly the trap above and to avoid redeclaring \field{Delegate} and
+\field{Abandon} a second time in one namespace). Both share a
+stripped-down state schema \field{MissionU} carrying only
+\field{status}, \field{budgetRounds}, \field{delegationCount},
+\field{resultRounds}, and \field{repoRootSet} --- structural bounds
+only, no abandon invariant --- plus \field{Init} and \field{Delegate}
+schemas identical in shape to \S\ref{sec:init}--\ref{sec:ops}. Each
+document then adds one more schema:
+
+\begin{verbatim}
+Idle
+  Xi MissionU
+where
+  not (status = stAbandoned and
+    (delegationCount /= 0 or resultRounds /= {}))
+\end{verbatim}
+
+\field{Idle} is a self-loop enabled everywhere \emph{except} the one
+state this demonstration exists to find: abandoned with a live
+delegation or an unclaimed result. That converts the safety property
+into a reachability question ProB already knows how to answer without
+a custom goal: if the buggy operation can reach that state, nothing
+is enabled there --- \emph{deadlock} --- and if the correct operation
+is used instead, the state is never reached, and the full space is
+deadlock-free.
+
+The first document pairs \field{Init}/\field{Delegate}/\field{Idle}
+with \field{AbandonFailOpen} (as given above, retyped against
+\field{MissionU}). \texttt{/z-spec:check} passes; \texttt{/z-spec:test}
+explores 16 states and 35 transitions and reports a deadlock, with
+this counter-example trace:
+
+\begin{verbatim}
+1  SETUP_CONSTANTS
+2  INITIALISATION      (repoRootSet := zfalse)
+3  Delegate            (delegationCount: 0 -> 1)
+4  AbandonFailOpen      status: stOpen -> stAbandoned
+                        (guard vacuous: repoRootSet = zfalse)
+   -- deadlock: no operation enabled --
+   status = stAbandoned, delegationCount = 1
+\end{verbatim}
+
+This is the fail-open bug, reached in four steps: delegate a worker,
+then abandon under a \field{Store} with no \field{repoRoot} in
+scope, and the mission is left \field{stAbandoned} with a live
+delegation record no longer reachable through any operation in the
+model --- the formal mirror of the real bug silently discarding
+recoverable work.
+
+The second document is identical except \field{Abandon}
+(\S\ref{sec:opabandon}'s guard, retyped against \field{MissionU})
+replaces \field{AbandonFailOpen}. \texttt{/z-spec:check} passes;
+\texttt{/z-spec:test} explores 15 states and 29 transitions and
+reports \textbf{no} deadlock and \textbf{no} violation --- the state
+\field{Idle} excludes is simply never reached, because
+\field{Abandon}'s $\field{repoRootSet} = \field{ztrue}$ conjunct is
+not an implication and so is never vacuously satisfied.
 
 \subsection{Tool run}
 \label{sec:probrun}
 
-\emph{Filled in from the actual \texttt{/z-spec:check} and
-\texttt{/z-spec:test} output for this document --- see the commit
-history for this file for the literal transcript at each revision.}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lccl@{}}
+\toprule
+\textbf{Model} & \textbf{States} & \textbf{Transitions} &
+  \textbf{Result} \\
+\midrule
+Main document (\S\ref{sec:state}--\ref{sec:ops}), all 7 operations
+  $+$ \field{Idle} & 373 & 749 & 0 violations \\
+Same, $+$ \field{AbandonFailOpen} (errata above) & 385 & 785 &
+  0 violations --- false negative, see errata \\
+Decoupled, \field{AbandonFailOpen} & 16 & 35 & deadlock at
+  $\field{status} = \field{stAbandoned} \land
+  \field{delegationCount} = 1$ \\
+Decoupled, \field{Abandon} & 15 & 29 & clean \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+fuzz's \texttt{/z-spec:check} type-checks this document with 0 errors
+in every revision recorded in its commit history. \texttt{probcli}
+requires a \texttt{.tex} extension to run its Z-to-B translation ---
+\texttt{/z-spec:check} runs fuzz directly on any extension, but
+\texttt{/z-spec:test}/\texttt{/z-spec:model\_check} silently produced
+0 states and 0 transitions against this file's own
+\texttt{.md} extension. All \texttt{model\_check}/\texttt{animate}
+runs reported in this section, including the two decoupled documents,
+were run against byte-identical \texttt{.tex} copies of the content
+that is committed here.
 
 % ===================================================================
 \section{Traceability}
