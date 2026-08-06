@@ -3,8 +3,11 @@
 package mission
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,6 +37,56 @@ func TestStore_Abandon_SucceedsOnZeroDelegationMission(t *testing.T) {
 	require.Len(t, events, 2, "create + abandon, nothing else")
 	assert.Equal(t, "abandon", events[1].Event)
 	assert.Equal(t, "dead mission, never dispatched", events[1].Details["reason"])
+}
+
+// TestStore_Abandon_RedactsReasonInEventLog is the regression gate for
+// the code-reviewer finding on the mission-abandon review pass: the
+// abandon event's Details map wrote the operator-supplied reason raw,
+// with no pass through PathRedactor. The mission tree is git-tracked
+// and routinely pushed (CLAUDE.md's storage layout table), so a
+// reason naming an absolute path under the operator's home directory
+// leaked the username into shared history — the same defect class
+// WriteDelegationSkeleton was fixed for (ethos-ersr, ethos-n4np). The
+// assertion greps the raw bytes on disk for the home prefix, the way
+// that defect was actually found, so it fails for any future leak
+// path, not just the one field redacted today.
+func TestStore_Abandon_RedactsReasonInEventLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-08-06-095")
+	require.NoError(t, s.Create(c))
+
+	leakyReason := "superseded by the contract in " + filepath.Join(home, ".tmp", "missions", "x.yaml")
+	_, err := s.Abandon("m-2026-08-06-095", leakyReason)
+	require.NoError(t, err)
+
+	events, _, err := s.LoadEvents("m-2026-08-06-095")
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	abandonEvent := events[1]
+	require.Equal(t, "abandon", abandonEvent.Event)
+
+	persistedReason, _ := abandonEvent.Details["reason"].(string)
+	assert.NotContains(t, persistedReason, home,
+		"the persisted reason must not carry the raw home path")
+	assert.Equal(t, "superseded by the contract in ~/.tmp/missions/x.yaml", persistedReason)
+
+	// Regression gate at the byte level: grep the on-disk log file
+	// itself, not just the decoded struct, so a future leak path that
+	// bypasses Details still fails this test. This Store is two-tree
+	// (NewStoreWithRoots) with no session wired, so the append lands
+	// in the reserved-session live log (DES-058), not the tracked
+	// log.jsonl — audit.LiveMissionLogPath is the same helper
+	// appendLiveEventLocked itself resolves against.
+	logPath := audit.LiveMissionLogPath(repoRoot, "m-2026-08-06-095", sessionlessID)
+	raw, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), home,
+		"the on-disk event log must never carry the raw home path")
 }
 
 // TestStore_Abandon_RefusesWhenRepoRootEmpty is the regression test

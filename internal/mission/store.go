@@ -1171,13 +1171,28 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 		if err := s.writeContract(c); err != nil {
 			return err
 		}
+		// The mission tree is git-tracked and routinely pushed to a
+		// public repo (see the storage layout table in CLAUDE.md), and
+		// reason is operator-supplied free text — the same class of
+		// content WriteDelegationSkeleton redacts before it touches
+		// disk (see the rationale on NewPathRedactor). A reason like
+		// "superseded by the contract in /Users/alice/work/x.yaml"
+		// would otherwise leak the operator's home path and username
+		// into shared history. Redaction failure is fail-closed, not
+		// best-effort: an unresolvable $HOME means the write cannot be
+		// redacted, so Abandon refuses rather than write unredacted
+		// content, mirroring the empty-repoRoot refusal above.
+		redact, redactErr := NewPathRedactor(s.repoRoot)
+		if redactErr != nil {
+			return fmt.Errorf("abandon: building path redactor: %w", redactErr)
+		}
 		if err := s.appendEventLocked(missionID, Event{
 			TS:    now,
 			Event: "abandon",
 			Actor: c.Leader,
-			Details: map[string]any{
+			Details: redact.Map(map[string]any{
 				"reason": reason,
-			},
+			}),
 		}); err != nil {
 			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
 				return fmt.Errorf("abandon: event append failed: %w; rollback failed: %v", err, rbErr)
