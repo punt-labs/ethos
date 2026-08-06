@@ -114,6 +114,16 @@ A spec must include:
 - **Acceptance criteria** — measurable conditions for "done"
 - **Rules** — constraints (no cd, one command per Bash call, etc.)
 
+### What `write_set` does and does not enforce (DES-069)
+
+`write_set` is enforced mechanically only for **verifier** spawns, and
+only for the `Write` and `Edit` tools. It is not a sandbox. A worker's
+`Write`, any `Bash` command, and any MCP tool's write method are
+outside the mechanical gate — for workers the `write_set` is a
+contract term the worker is expected to honor and the reviewer checks
+in the diff, not a fence. Scope MCP grants and `Bash` on that
+assumption.
+
 ### What the COO does vs delegates
 
 | COO does directly | COO delegates to agents |

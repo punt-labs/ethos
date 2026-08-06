@@ -90,6 +90,11 @@ before code starts.
 the user journey. `make check` passing is necessary but not sufficient.
 A feature that fails when used is not shipped — it's fiction.
 
+**`write_set` is not a sandbox.** It is enforced mechanically only for
+verifier spawns, and only for `Write`/`Edit` — see DES-069 and
+`docs/workflow.md` §"What `write_set` does and does not enforce"
+before scoping an MCP grant or trusting a write-set to fence a worker.
+
 ## Quality Gates
 
 The Makefile is the source of truth (`make help`).
