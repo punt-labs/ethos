@@ -33,13 +33,6 @@ func TestHandlePreToolUse_NoAllowlist(t *testing.T) {
 	assert.Empty(t, result.HookSpecificOutput.PermissionDecisionReason)
 }
 
-// TestHandlePreToolUse_NoAllowlistWithExtractInto pins the worker
-// passthrough invariant: ETHOS_VERIFIER_ALLOWLIST gates the hook
-// firing at all, so a worker spawn that somehow has
-// ETHOS_VERIFIER_EXTRACT_INTO set in its environment (a mis-set
-// inherited variable, a test leak) must still pass every tool call
-// through. Workers are unconstrained by design — only verifier
-// spawns set the allowlist.
 // TestHandlePreToolUse_DenyInRepoMCPWrite pins DES-069: verifier
 // spawns deny the two in-repo MCP write families outright, before
 // any allowlist path check, and the deny survives both plugin-prefix
@@ -152,6 +145,13 @@ func TestHandlePreToolUse_DenyInRepoMCPWrite(t *testing.T) {
 	}
 }
 
+// TestHandlePreToolUse_NoAllowlistWithExtractInto pins the worker
+// passthrough invariant: ETHOS_VERIFIER_ALLOWLIST gates the hook
+// firing at all, so a worker spawn that somehow has
+// ETHOS_VERIFIER_EXTRACT_INTO set in its environment (a mis-set
+// inherited variable, a test leak) must still pass every tool call
+// through. Workers are unconstrained by design — only verifier
+// spawns set the allowlist.
 func TestHandlePreToolUse_NoAllowlistWithExtractInto(t *testing.T) {
 	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
 	t.Setenv("ETHOS_VERIFIER_EXTRACT_INTO", "internal/foo/:docs/")
