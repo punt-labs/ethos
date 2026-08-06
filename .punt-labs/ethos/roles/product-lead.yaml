@@ -1,5 +1,5 @@
 name: product-lead
-model: sonnet
+model: opus
 responsibilities:
   - product strategy and plan review
   - user problem validation

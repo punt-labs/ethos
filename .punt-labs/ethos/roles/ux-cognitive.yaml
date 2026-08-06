@@ -1,5 +1,5 @@
 name: ux-cognitive
-model: sonnet
+model: opus
 responsibilities:
   - "cognitive engineering: affordances, feedback loops, error recovery"
   - usability review of CLI, plugin, and dashboard surfaces
