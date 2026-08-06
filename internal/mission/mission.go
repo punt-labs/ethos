@@ -67,9 +67,21 @@ type Contract struct {
 	// any listed directory; existing path Write/Edit still requires
 	// ETHOS_VERIFIER_ALLOWLIST match. See DES-052 in DESIGN.md for full
 	// rationale and the cross-mission admission control table.
-	ExtractInto     []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`
-	Tools           []string `yaml:"tools,omitempty" json:"tools,omitempty"`
-	SuccessCriteria []string `yaml:"success_criteria" json:"success_criteria"`
+	ExtractInto []string `yaml:"extract_into,omitempty" json:"extract_into,omitempty"`
+	// WriteSetReleasedAt, when set, marks WriteSet/ExtractInto as
+	// released from admission control by Store.ForceReleaseWriteSet
+	// (RFC3339). The fields themselves are left untouched -- clearing
+	// them outright would fail validation for every archetype that
+	// requires a non-empty write_set (the majority; see rule 11 in
+	// validate.go), which is exactly the class of mission
+	// force-release exists to unblock. checkWriteSetConflicts skips
+	// any contract with this field set, so the admission-control
+	// claim stops blocking new missions while the declared write_set
+	// stays intact for validation and audit history. See
+	// docs/mission-force-release-write-set.md.
+	WriteSetReleasedAt string   `yaml:"write_set_released_at,omitempty" json:"write_set_released_at,omitempty"`
+	Tools              []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	SuccessCriteria    []string `yaml:"success_criteria" json:"success_criteria"`
 
 	Budget Budget `yaml:"budget" json:"budget"`
 

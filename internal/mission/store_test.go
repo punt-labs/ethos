@@ -4455,6 +4455,12 @@ func TestStore_TwoRoot_LegacyTraceRepoRootStaysFlat(t *testing.T) {
 func forceReleaseTestStore(t *testing.T, repoRoot, globalRoot string) *Store {
 	t.Helper()
 	writeArchetypeFile(t, globalRoot, "report", reportYAML)
+	// "implement" is the default Store.Create assigns to any contract
+	// whose Type is empty (newContract's shape), and the archetype
+	// the actual ethos-9x07 incident mission used -- registered here
+	// so tests can freely mix forceReleasableContract (report) with
+	// plain newContract (implement) in the same store.
+	writeArchetypeFile(t, globalRoot, "implement", implementYAML)
 	as := NewArchetypeStore("", globalRoot)
 	if repoRoot == "" {
 		return NewStore(globalRoot).WithArchetypeStore(as)
@@ -4463,9 +4469,14 @@ func forceReleaseTestStore(t *testing.T, repoRoot, globalRoot string) *Store {
 }
 
 // forceReleasableContract returns a valid "report"-typed contract
-// carrying a non-empty write_set — an archetype whose AllowEmptyWriteSet
-// means force-release will not immediately trip gate 3 (would-fail-
-// validation) or gate 2 (no-op) on the way to actually being released.
+// carrying a non-empty write_set. The archetype no longer matters for
+// force-release (it works for any archetype, including the default
+// implement type -- see TestStore_ForceReleaseWriteSet_SucceedsForImplementArchetype
+// and TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate, which
+// use plain newContract instead), but keeping one existing helper on
+// a non-default archetype exercises validateContract's archetype
+// resolution path rather than always falling through to the
+// type-less default.
 func forceReleasableContract(missionID string) *Contract {
 	c := newContract(missionID)
 	c.Type = "report"
@@ -4473,9 +4484,12 @@ func forceReleasableContract(missionID string) *Contract {
 }
 
 // TestStore_ForceReleaseWriteSet_Succeeds asserts the baseline: an
-// open mission's write_set and extract_into are cleared, its status
-// and every other field are untouched, and exactly one new event is
-// appended.
+// open mission's write_set and extract_into stay on the contract
+// unchanged (only WriteSetReleasedAt is set), status and every
+// planning field (success_criteria, budget, worker, evaluator) are
+// untouched, updated_at does change (releasing a claim is itself a
+// modification, like any other Store write), and exactly one new
+// event is appended.
 func TestStore_ForceReleaseWriteSet_Succeeds(t *testing.T) {
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
@@ -4483,20 +4497,34 @@ func TestStore_ForceReleaseWriteSet_Succeeds(t *testing.T) {
 	c := forceReleasableContract("m-2026-08-06-050")
 	c.ExtractInto = []string{"internal/mission/generated/"}
 	require.NoError(t, s.Create(c))
+	beforeUpdatedAt := c.UpdatedAt
+	beforeWriteSet := append([]string(nil), c.WriteSet...)
+	beforeExtractInto := append([]string(nil), c.ExtractInto...)
+	beforeSuccessCriteria := append([]string(nil), c.SuccessCriteria...)
+	beforeBudget := c.Budget
+	beforeWorker := c.Worker
+	beforeEvaluator := c.Evaluator
 
 	released, err := s.ForceReleaseWriteSet("m-2026-08-06-050", "worker session ended, blocking new work")
 	require.NoError(t, err)
 	require.NotNil(t, released)
 	assert.Equal(t, StatusOpen, released.Status, "force-release must not transition status")
-	assert.Empty(t, released.WriteSet)
-	assert.Empty(t, released.ExtractInto)
+	assert.Equal(t, beforeWriteSet, released.WriteSet, "write_set stays on the contract, unchanged")
+	assert.Equal(t, beforeExtractInto, released.ExtractInto, "extract_into stays on the contract, unchanged")
+	assert.NotEmpty(t, released.WriteSetReleasedAt)
 	assert.Empty(t, released.ClosedAt, "force-release is not a terminal transition")
+	assert.NotEqual(t, beforeUpdatedAt, released.UpdatedAt, "updated_at must advance -- releasing a claim is a modification")
+	assert.Equal(t, beforeSuccessCriteria, released.SuccessCriteria, "success_criteria is a planning field, not an admission-control claim")
+	assert.Equal(t, beforeBudget, released.Budget, "budget is a planning field, not an admission-control claim")
+	assert.Equal(t, beforeWorker, released.Worker)
+	assert.Equal(t, beforeEvaluator, released.Evaluator)
 
 	loaded, err := s.Load("m-2026-08-06-050")
 	require.NoError(t, err, "the released contract must still Load cleanly")
 	assert.Equal(t, StatusOpen, loaded.Status)
-	assert.Empty(t, loaded.WriteSet)
-	assert.Empty(t, loaded.ExtractInto)
+	assert.Equal(t, beforeWriteSet, loaded.WriteSet)
+	assert.Equal(t, beforeExtractInto, loaded.ExtractInto)
+	assert.Equal(t, released.WriteSetReleasedAt, loaded.WriteSetReleasedAt)
 
 	events, _, err := s.LoadEvents("m-2026-08-06-050")
 	require.NoError(t, err)
@@ -4505,20 +4533,20 @@ func TestStore_ForceReleaseWriteSet_Succeeds(t *testing.T) {
 	assert.Equal(t, "worker session ended, blocking new work", events[1].Details["reason"])
 }
 
-// TestStore_ForceReleaseWriteSet_RefusesRatherThanCorrupt is the
+// TestStore_ForceReleaseWriteSet_SucceedsForImplementArchetype is the
 // regression gate for the actual ethos-9x07 scenario: an ordinary
-// "implement"-typed mission — the default every mission gets, and the
-// one the bug report is about — cannot have its write_set literally
-// emptied, because Contract.Validate rule 11 requires a non-empty
-// write_set for any archetype that does not set AllowEmptyWriteSet.
-// Force-release must refuse cleanly here rather than write a contract
-// that fails validation on every subsequent Load — which would not
-// just fail to unblock ethos-9x07, it would permanently brick the
-// mission: mission show, mission list, and even a later Close or
-// Abandon on it would all error forever. The mission must remain
-// exactly as it was: fully loadable, write_set intact, no event
-// appended.
-func TestStore_ForceReleaseWriteSet_RefusesRatherThanCorrupt(t *testing.T) {
+// "implement"-typed mission -- the default every mission gets, and
+// the one the bug report is about. An earlier version of this method
+// tried to literally empty WriteSet/ExtractInto, which
+// Contract.Validate rule 11 refuses for any archetype that does not
+// set AllowEmptyWriteSet -- meaning that version could never release
+// an implement, test, investigate, or design mission, exactly the
+// archetypes almost every real mission uses, including the one
+// reported. This test proves the actual fix: WriteSet stays on the
+// contract (satisfying rule 11 unchanged) and WriteSetReleasedAt
+// marks the claim released, so checkWriteSetConflicts stops seeing
+// it -- for an implement-typed mission specifically.
+func TestStore_ForceReleaseWriteSet_SucceedsForImplementArchetype(t *testing.T) {
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
 	writeArchetypeFile(t, globalRoot, "implement", implementYAML)
@@ -4528,21 +4556,25 @@ func TestStore_ForceReleaseWriteSet_RefusesRatherThanCorrupt(t *testing.T) {
 	require.NoError(t, s.Create(c))
 	originalWriteSet := append([]string(nil), c.WriteSet...)
 
-	_, err := s.ForceReleaseWriteSet("m-2026-08-06-049", "worker session ended 6d ago")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot be force-released")
-	assert.Contains(t, err.Error(), "write_set must contain at least one entry")
+	released, err := s.ForceReleaseWriteSet("m-2026-08-06-049", "worker session ended 6d ago")
+	require.NoError(t, err, "force-release must succeed for the implement archetype -- this is the ethos-9x07 case")
+	require.NotNil(t, released)
+	assert.Equal(t, originalWriteSet, released.WriteSet, "write_set stays on the contract, unchanged")
+	assert.NotEmpty(t, released.WriteSetReleasedAt)
 
 	loaded, loadErr := s.Load("m-2026-08-06-049")
-	require.NoError(t, loadErr, "a refused force-release must never leave the contract unloadable")
+	require.NoError(t, loadErr, "the released contract must still Load cleanly")
 	assert.Equal(t, StatusOpen, loaded.Status)
-	assert.Equal(t, originalWriteSet, loaded.WriteSet,
-		"a refused force-release must leave write_set exactly as it was")
+	assert.Equal(t, originalWriteSet, loaded.WriteSet)
+	assert.Equal(t, released.WriteSetReleasedAt, loaded.WriteSetReleasedAt)
 
 	events, _, err := s.LoadEvents("m-2026-08-06-049")
 	require.NoError(t, err)
-	require.Len(t, events, 1, "only the original create event — no write_set_released event, no partial write")
-	assert.Equal(t, "create", events[0].Event)
+	require.Len(t, events, 2, "create + write_set_released")
+	assert.Equal(t, EventWriteSetReleased, events[1].Event)
+	writeSetAtRelease, ok := events[1].Details["write_set_at_release"].([]any)
+	require.True(t, ok, "write_set_at_release must round-trip through JSON as a list")
+	assert.ElementsMatch(t, originalWriteSet, writeSetAtRelease)
 }
 
 // TestStore_ForceReleaseWriteSet_RedactsReasonInEventLog is the
@@ -4709,12 +4741,13 @@ func TestStore_ForceReleaseWriteSet_RefusesAlreadyTerminal(t *testing.T) {
 }
 
 // TestStore_ForceReleaseWriteSet_EventCarriesFullAuditTrail asserts
-// the event Details shape the design specifies: the redacted reason,
-// the original write_set and extract_into (so the claim is never lost
-// to history even though the live contract no longer carries it), and
-// a staleness_snapshot recording what the leader knew at decision
-// time. delegation_count is a real int here because a delegation
-// record exists under the wired repoRoot.
+// the event Details shape: the redacted reason, a snapshot of
+// write_set/extract_into as they stood at release time (the live
+// contract still carries these fields unchanged -- this is a
+// point-in-time record for the audit trail, not a backup of
+// something deleted), and a staleness_snapshot recording what the
+// leader knew at decision time. delegation_count is a real int here
+// because a delegation record exists under the wired repoRoot.
 func TestStore_ForceReleaseWriteSet_EventCarriesFullAuditTrail(t *testing.T) {
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
@@ -4738,12 +4771,12 @@ func TestStore_ForceReleaseWriteSet_EventCarriesFullAuditTrail(t *testing.T) {
 	details := events[1].Details
 
 	assert.Equal(t, "worker gone, unblocking lux-uoy4", details["reason"])
-	oldWriteSet, ok := details["old_write_set"].([]any)
-	require.True(t, ok, "old_write_set must round-trip through JSON as a list")
-	assert.ElementsMatch(t, []any{"internal/mission/", "cmd/ethos/mission.go"}, oldWriteSet)
-	oldExtractInto, ok := details["old_extract_into"].([]any)
-	require.True(t, ok, "old_extract_into must round-trip through JSON as a list")
-	assert.Equal(t, []any{"internal/mission/generated/"}, oldExtractInto)
+	writeSetAtRelease, ok := details["write_set_at_release"].([]any)
+	require.True(t, ok, "write_set_at_release must round-trip through JSON as a list")
+	assert.ElementsMatch(t, []any{"internal/mission/", "cmd/ethos/mission.go"}, writeSetAtRelease)
+	extractIntoAtRelease, ok := details["extract_into_at_release"].([]any)
+	require.True(t, ok, "extract_into_at_release must round-trip through JSON as a list")
+	assert.Equal(t, []any{"internal/mission/generated/"}, extractIntoAtRelease)
 
 	snapshot, ok := details["staleness_snapshot"].(map[string]any)
 	require.True(t, ok, "staleness_snapshot must be present")
@@ -4777,19 +4810,24 @@ func TestStore_ForceReleaseWriteSet_ReportsUnknownDelegationCount(t *testing.T) 
 }
 
 // TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate is the
-// end-to-end proof of the actual bug fix (ethos-9x07): a mission with
-// an overlapping write_set, no visible progress, and (unlike Abandon's
+// end-to-end proof of the actual bug fix (ethos-9x07), using plain
+// newContract -- the default "implement" archetype every real mission
+// gets, and the one the reported incident was. A mission with an
+// overlapping write_set, no visible progress, and (unlike Abandon's
 // scenario) delegations that may exist, blocks a second Create until
-// its write_set is force-released — after which the second Create
-// succeeds, and the first mission is still open and still on record.
+// its write_set is force-released -- after which the second Create
+// succeeds, the first mission is still open, still on record, and
+// still carries its original write_set (only WriteSetReleasedAt
+// changed).
 func TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate(t *testing.T) {
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
 	s := forceReleaseTestStore(t, repoRoot, globalRoot)
 
-	a := forceReleasableContract("m-2026-08-06-080")
+	a := newContract("m-2026-08-06-080")
 	a.WriteSet = []string{"internal/shared/"}
 	require.NoError(t, s.Create(a))
+	originalWriteSet := append([]string(nil), a.WriteSet...)
 
 	_, err := WriteDelegationSkeleton(repoRoot, "m-2026-08-06-080", "d-2026-08-06-080", DelegationSkeleton{
 		Tier:      "b",
@@ -4797,7 +4835,7 @@ func TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	b := forceReleasableContract("m-2026-08-06-081")
+	b := newContract("m-2026-08-06-081")
 	b.WriteSet = []string{"internal/shared/thing.go"}
 	err = s.Create(b)
 	require.Error(t, err, "an open mission with a spawned worker must still block a conflicting create")
@@ -4810,4 +4848,6 @@ func TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate(t *testing.T) {
 	loaded, err := s.Load("m-2026-08-06-080")
 	require.NoError(t, err)
 	assert.Equal(t, StatusOpen, loaded.Status, "the original mission stays open, unlike Abandon's terminal transition")
+	assert.Equal(t, originalWriteSet, loaded.WriteSet, "write_set stays on the contract even after release")
+	assert.NotEmpty(t, loaded.WriteSetReleasedAt)
 }

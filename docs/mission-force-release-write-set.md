@@ -1,10 +1,12 @@
 # Mission Force-Release Write-Set
 
 `ethos mission force-release-write-set <id-or-prefix> --reason <text>`
-(CLI/MCP surface: follow-on, not yet available — see below) clears an
-open mission's `write_set` and `extract_into` so
-`checkWriteSetConflicts` stops treating it as claiming those paths,
-without changing the mission's status or any other field.
+(CLI/MCP surface: follow-on, not yet available — see below) marks an
+open mission's `write_set`/`extract_into` claim as released
+(`WriteSetReleasedAt`) so `checkWriteSetConflicts` stops treating it
+as claiming those paths. It does not clear the fields themselves or
+change the mission's status or any other field -- see "Design" below
+for why leaving `write_set` intact is the point, not an oversight.
 
 ## Problem
 
@@ -42,30 +44,42 @@ absence-of-evidence as evidence-of-absence).
 same shape as `Store.Abandon`: a distinct method
 (`Store.ForceReleaseWriteSet`) with its own gate, its own event type,
 a mandatory reason, and no override flag that weakens Abandon's
-existing gate. It does not fabricate a verdict, does not change
-`Status`, and does not touch any field besides `WriteSet` and
-`ExtractInto` — it revokes a *claim on future admission*, nothing
+existing gate. It does not fabricate a verdict and does not change
+`Status`, `SuccessCriteria`, `Budget`, `Worker`, `Evaluator`, or any
+other planning field — only `WriteSetReleasedAt` (the release marker)
+and `UpdatedAt` (releasing a claim is itself a modification, like any
+other Store write). It revokes a *claim on future admission*, nothing
 more. This keeps the operation inside the "convention, verified in
 review" frame `prfaq.tex` §`faq:not-building` describes for write-sets
 generally: ethos does not enforce write-sets at the filesystem level,
 and this operation doesn't change that — it only changes what the
 *admission check* sees as claimed.
 
+**Why `WriteSet`/`ExtractInto` stay on the contract, unchanged.** The
+first implementation of this method literally cleared both fields —
+and turned out to be unable to release the exact class of mission
+`ethos-9x07` reports: `Contract.Validate` rule 11 requires a non-empty
+`write_set` for every archetype except the read-only report/inbox
+ones, and `implement` (the default every mission gets, and what the
+reported incident mission was) is not one of them. A gate refusing to
+leave the contract unloadable is correct, but it meant force-release
+could only ever succeed for a minority of missions — not the incident
+it exists to fix. `WriteSetReleasedAt` solves this at the root: the
+declared `write_set` stays valid and on the record (rule 11 is
+satisfied unchanged, validation never has an emptied-field case to
+refuse), and `checkWriteSetConflicts` is the only place that treats a
+released mission differently — skipping it outright, the same way it
+already skips missions whose `Status != StatusOpen`.
+
 **The gate**, every failure before any mutation:
 
 1. The mission is currently `open` (a terminal mission's `write_set`
    is already excluded from `checkWriteSetConflicts`).
 2. `reason` is required, non-empty, control-character-free.
-3. `WriteSet` and `ExtractInto` are not both already empty (refuses a
-   no-op release rather than silently succeeding).
-4. Clearing `WriteSet`/`ExtractInto` on a hypothetical copy of the
-   contract must still pass validation. Most archetypes (implement,
-   test, investigate, ...) require a non-empty `write_set`; writing an
-   empty one for those would pass this write but fail every future
-   `Load` — `mission show`, `mission list`, even a later `Close` or
-   `Abandon` on this same mission would error forever. Checking this
-   before any mutation turns that into a clean refusal instead of a
-   silent, permanent bricking.
+3. The mission is not already released (`WriteSetReleasedAt` is
+   empty), and `WriteSet`/`ExtractInto` are not both already empty —
+   either case refuses a no-op release rather than silently
+   succeeding and writing a misleading event.
 
 **No automatic age or delegation-count gate**, deliberately: staleness
 is a heuristic judgment (how old is "too old" depends on the mission
@@ -84,8 +98,8 @@ actor: <leader handle>
 ts: <RFC3339>
 details:
   reason: <redacted reason text>
-  old_write_set: [<entries>]
-  old_extract_into: [<entries>]
+  write_set_at_release: [<entries>]
+  extract_into_at_release: [<entries>]
   staleness_snapshot:
     last_activity_at: <RFC3339>
     age_days: <int>
@@ -93,8 +107,10 @@ details:
     delegation_count: <int or "unknown">
 ```
 
-`old_write_set` / `old_extract_into` mean the original claim is never
-lost to history even though the live contract no longer carries it.
+`write_set_at_release` / `extract_into_at_release` are a point-in-time
+snapshot for the audit trail -- the live contract still carries these
+fields unchanged, so this is not a backup of something deleted, just
+a record of what was claimed at the moment the release happened.
 `staleness_snapshot` records the evidence the leader had at decision
 time — informational, not gating — so a later reader can judge whether
 the call was reasonable given what was known.

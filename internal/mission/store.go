@@ -1244,9 +1244,20 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 	return abandoned, nil
 }
 
-// ForceReleaseWriteSet clears an open mission's WriteSet and
-// ExtractInto so checkWriteSetConflicts no longer treats it as
-// claiming those paths, without touching Status or any other field.
+// ForceReleaseWriteSet marks an open mission's write_set/extract_into
+// as released from admission control (WriteSetReleasedAt), so
+// checkWriteSetConflicts stops treating it as claiming those paths.
+// It does NOT clear WriteSet or ExtractInto themselves: most
+// archetypes (implement, test, investigate, design, ...) require a
+// non-empty write_set (validate.go rule 11), so emptying it would
+// pass this write but fail every future Load -- mission show, mission
+// list, even a later Close or Abandon on this same mission would then
+// error forever. The declared write_set stays on the contract for
+// validation and audit history; only its effect on admission control
+// changes. Also does not touch Status, SuccessCriteria, Budget,
+// Worker, Evaluator, or any other planning field. UpdatedAt does
+// change -- releasing a claim is itself a modification, the same as
+// any other Store write.
 // It is a leader-invoked, explicit, audited release of an
 // admission-control claim — not a terminal transition, and not a
 // substitute for Abandon or Close. A leader who can already prove
@@ -1304,38 +1315,19 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 			)
 		}
 		// Gate 2: refuse a no-op release rather than silently succeed
-		// and write a misleading event.
+		// and write a misleading event -- either the mission was
+		// already released, or it never claimed anything to begin
+		// with.
+		if c.WriteSetReleasedAt != "" {
+			return fmt.Errorf(
+				"mission %q already has its write_set released (at %s); nothing to release",
+				missionID, c.WriteSetReleasedAt,
+			)
+		}
 		if len(c.WriteSet) == 0 && len(c.ExtractInto) == 0 {
 			return fmt.Errorf(
 				"mission %q already has an empty write_set and extract_into; nothing to release",
 				missionID,
-			)
-		}
-		// Gate 3: the contract must still validate once WriteSet and
-		// ExtractInto are cleared. Store.Load re-validates on every
-		// read (decodeAndValidate's "even on read, run Validate"
-		// comment) via s.validateContract, which resolves c.Type's
-		// archetype and enforces rule 11 (write_set non-empty) unless
-		// that archetype sets AllowEmptyWriteSet — true only for the
-		// read-only report/inbox archetypes. Writing an empty
-		// write_set for any other archetype (implement, test,
-		// investigate, ...) would pass this write but fail every
-		// future Load — mission show, mission list, and even a later
-		// Close or Abandon on this same mission would then error
-		// forever. Checking on an unpersisted copy before any mutation
-		// turns that into a clean, actionable refusal instead of a
-		// silent, permanent bricking — the same fail-closed posture
-		// Abandon's own gates use for the identical class of risk.
-		hypothetical := *c
-		hypothetical.WriteSet = nil
-		hypothetical.ExtractInto = nil
-		if err := s.validateContract(&hypothetical); err != nil {
-			return fmt.Errorf(
-				"mission %q cannot be force-released: clearing write_set and extract_into "+
-					"would leave the contract failing validation (%v) — this mission's "+
-					"archetype requires a non-empty write_set, so every future Load would "+
-					"fail; force-release-write-set is unavailable for this mission",
-				missionID, err,
 			)
 		}
 
@@ -1350,13 +1342,17 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 			n, dErr := countDelegations(s.repoRoot, missionID)
 			if dErr != nil {
 				delegationsKnown = false
+				fmt.Fprintf(os.Stderr, "ethos: mission %s: counting delegations for staleness snapshot: %v\n", missionID, dErr)
 			} else {
 				delegationCount = n
 			}
 		}
-		events, _, evErr := s.LoadEvents(missionID)
+		events, warnings, evErr := s.LoadEvents(missionID)
 		if evErr != nil {
 			return fmt.Errorf("force-release-write-set: loading events for %q: %w", missionID, evErr)
+		}
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", missionID, w)
 		}
 		results, rErr := s.loadResultsLocked(missionID)
 		if rErr != nil {
@@ -1365,22 +1361,17 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 		now := time.Now().UTC()
 		st := Staleness(c, events, results, delegationCount, delegationsKnown, now)
 
-		oldWriteSet := append([]string(nil), c.WriteSet...)
-		oldExtractInto := append([]string(nil), c.ExtractInto...)
+		writeSetAtRelease := append([]string(nil), c.WriteSet...)
+		extractIntoAtRelease := append([]string(nil), c.ExtractInto...)
 
 		nowStr := now.Format(time.RFC3339)
-		c.WriteSet = nil
-		c.ExtractInto = nil
+		c.WriteSetReleasedAt = nowStr
 		c.UpdatedAt = nowStr
-		// Not s.validateContract: that resolves c.Type's archetype (if
-		// any) and most archetypes require a non-empty write_set (rule
-		// 11), which this operation deliberately violates on purpose.
-		// Validate everything else the normal way by supplying a
-		// synthetic archetype with AllowEmptyWriteSet — the same
-		// mechanism the report/inbox archetypes already use for
-		// legitimately write-set-less contracts — so every other
-		// invariant still gates this write.
-		if err := c.ValidateWithArchetype(&Archetype{AllowEmptyWriteSet: true}); err != nil {
+		// WriteSet and ExtractInto are untouched, so the normal
+		// archetype-resolving validation path applies unchanged --
+		// releasing a claim never violates rule 11, since the
+		// write_set this rule checks was never cleared.
+		if err := s.validateContract(c); err != nil {
 			return fmt.Errorf("invalid contract after force-release-write-set: %w", err)
 		}
 		if err := s.writeContract(c); err != nil {
@@ -1395,9 +1386,9 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 			Event: EventWriteSetReleased,
 			Actor: c.Leader,
 			Details: redact.Map(map[string]any{
-				"reason":           reason,
-				"old_write_set":    oldWriteSet,
-				"old_extract_into": oldExtractInto,
+				"reason":                  reason,
+				"write_set_at_release":    writeSetAtRelease,
+				"extract_into_at_release": extractIntoAtRelease,
 				"staleness_snapshot": map[string]any{
 					"last_activity_at": st.LastActivityAt,
 					"age_days":         st.AgeDays,
@@ -2416,6 +2407,14 @@ func (s *Store) checkWriteSetConflicts(c *Contract) error {
 			continue
 		}
 		if existing.Status == StatusOpen {
+			// Skip a mission whose write_set claim was explicitly
+			// released (ForceReleaseWriteSet, ethos-9x07) -- the fields
+			// are still on disk for validation and audit history, but
+			// they no longer represent an active admission-control
+			// claim.
+			if existing.WriteSetReleasedAt != "" {
+				continue
+			}
 			// Skip missions in the same pipeline. Pipeline stages are
 			// expected to execute sequentially under the pipeline runner
 			// or leader's orchestration; write_set overlap within a pipeline
