@@ -7047,3 +7047,122 @@ in its own session:
 - **Justify the grant as raw capability ("Bash is broken").** Rejected as the
   framing: the quarry CLI does work; the real value is *enforced* identity —
   session-bound handle attribution the CLI can neither infer nor enforce.
+
+## DES-069: MCP write methods are outside the write-set gate (SETTLED)
+
+**Status**: Settled. Resolves bead `ethos-7b6c`, raised during PR #424
+(DES-068). Amends the PreToolUse enforcement described in DES-035 and
+extended by DES-052. Implemented via mission `m-2026-08-06-002`
+(worker `bwk`, evaluator `djb`): `internal/mcpclass/mcpclass.go`
+(shared classification/deny logic, the single source of truth for both
+checks below), `internal/hook/pretooluse.go` (R1 deny + tests),
+`cmd/validate-content/mcp_classification.go` (R2 classification +
+tests), `docs/workflow.md` and `CLAUDE.md` (R3 warning text). Design
+doc: `docs/mcp-write-set-gap.md` (commit `829eb42`).
+
+### Problem
+
+`internal/hook/pretooluse.go:237-251` derives an allowlist target path
+only for `Write` and `Edit`; every other tool returns `""`, which
+`:114-118` treats as allow-unconditionally. DES-068 granted 37 roles a
+scoped MCP set, and two of those tool families write inside the repo:
+`ethos_self__identity` with `method=create` (36 roles) reaches
+`LayeredStore.Save` (`internal/identity/layered.go:358-394`), which
+prefers the repo layer and writes a git-tracked
+`.punt-labs/ethos/identities/<handle>.yaml`; the z-spec
+`check`/`model_check`/`test`/`animate` tools (2 roles) write
+`<spec>.report.json` and `<spec>.fuzz.json` beside the spec source.
+Neither is checked against the mission `write_set`.
+
+A second, larger fact was confirmed while investigating: the gate binds
+**verifier** spawns only. `ETHOS_VERIFIER_ALLOWLIST` is set solely in
+the verifier-isolation branch at
+`internal/hook/subagent_start.go:179-194`, and `DESIGN.md`'s DES-052
+"Lessons" section (~line 4416-4420) already states the worker case is
+cooperative, not enforced. Workers are therefore ungated for `Write`,
+`Edit`, `Bash`, and MCP writes alike. Leaders scoping a `write_set`
+have been assuming a fence that does not exist for workers; this ADR
+does not change that scope — see Consequences.
+
+### Decision
+
+1. **`write_set` is a verifier control, and is documented as such.**
+   For workers it is a contract term checked by review, not a sandbox.
+   The leader-facing statement lands in `docs/workflow.md` and the repo
+   `CLAUDE.md`.
+2. **In verifier spawns, deny the in-repo MCP write tools outright** —
+   `_self__identity` with `method=create`, and `_zspec__check`,
+   `_zspec__model_check`, `_zspec__test`, `_zspec__animate`. A deny,
+   not a path map: it requires no knowledge of the target path, so it
+   cannot rot and cannot fail open. Matching is on the suffix after the
+   `mcp__plugin_<name>[-dev]_<server>__` prefix, covering both plugin
+   prefixes with one entry (DES-068's double-listing rule). Implemented
+   in `denyInRepoMCPWrite` (`internal/hook/pretooluse.go`), which
+   delegates to `mcpclass.DenyReason` (`internal/mcpclass/mcpclass.go`),
+   checked before `extractTargetPath` inside the existing
+   `ETHOS_VERIFIER_ALLOWLIST` branch so worker spawns (allowlist unset)
+   are unaffected. `DenyReason` fails closed: any `mcp__`-prefixed tool
+   that does not parse into a known classification is denied, not
+   silently allowed — closing a fail-open gap a local review round
+   caught before merge (an unclassified direct MCP tool, e.g.
+   `mcp__github__create_or_update_file`, must be denied, not passed
+   through).
+3. **Every MCP grant is classified, enforced by `make check`.**
+   `cmd/validate-content` (`mcp_classification.go`) requires each
+   `mcp__` tool name in any `roles/*.yaml` to appear in one of
+   `mcpclass.ReadOnly`, `mcpclass.WritesOutsideRepo`, or
+   `mcpclass.WritesInRepo`; the last implies the deny in (2), pinned by
+   `TestDenyReasonCoversWritesInRepo`. Both the runtime deny (2) and the
+   build-time classification (3) read the same `internal/mcpclass`
+   maps, so a new `writes-in-repo` entry cannot be added to one without
+   the other. An unclassified grant fails the build with the offending
+   role and tool named. Classification entries cite file:line evidence
+   in the tool's own repo.
+4. **Tools writing outside the repo are explicitly not gated.** quarry
+   `remember`/`ingest`/`use`, ethos `session`, biff
+   `plan`/`read_messages`: they cannot change a repo artifact, so they
+   cannot violate the invariant `write_set` protects.
+
+### Rejected alternatives
+
+- **Path-mapping every MCP write tool.** Fails open when the map is
+  stale; the map duplicates another repo's runtime path derivation
+  (`punt_zspec/report.py:44-51`); and 36 of 39 roles hold `Bash`, so
+  the same write is reachable via the CLI. False assurance is worse
+  than a documented gap.
+- **Blocking all non-`Write`/`Edit` MCP tools in mission-bound
+  sessions.** Removes the read halves DES-068 exists to provide while
+  leaving `Bash` open.
+- **A mandatory target-path resolver per grant.** Ethos does not own
+  the third-party MCP servers and cannot impose a convention; adopted
+  in weakened, fail-closed form as decision (3).
+- **Dropping `identity` from specialist roles.** MCP scoping is per
+  tool, not per method (DES-068), so this also drops `whoami`/`get`;
+  and `Bash` reaches `ethos identity create` regardless.
+- **Parsing `Bash` commands to gate them.** Unbounded; a wrong parser
+  fails open, a strict one breaks every worker.
+
+### Consequences
+
+Verifier sessions gain a fail-closed deny on the two in-repo MCP write
+families. Future grants cannot be added without classification, so the
+PR #424 miss (z-spec writers granted without anyone noting they write)
+becomes an unrepresentable state. Workers remain mechanically ungated —
+unchanged from DES-035, now stated rather than assumed. Whether the
+gate should bind workers is deferred to a separate ADR.
+
+### References
+
+- `internal/hook/pretooluse.go:109-151`, `:237-251`
+- `internal/hook/subagent_start.go:179-194`
+- `internal/identity/layered.go:358-394`
+- `internal/mcp/tools.go:164-197`
+- `DESIGN.md` DES-052 "PreToolUse enforcement" and "Lessons" sections,
+  DES-068 (~line 6979)
+- `.punt-labs/ethos/roles/*.yaml` (39 files)
+- `punt_zspec/report.py:44-51,77-89`,
+  `punt_zspec/commands/check.py`, `model_check.py`, `test.py`,
+  `animate.py` (z-spec 0.17.0)
+- `quarry/src/quarry/config.py:27`
+- Bead `ethos-7b6c`; PR #424; mission `m-2026-08-05-001` (design),
+  `m-2026-08-06-002` (implementation)

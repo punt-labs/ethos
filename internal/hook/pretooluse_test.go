@@ -33,6 +33,132 @@ func TestHandlePreToolUse_NoAllowlist(t *testing.T) {
 	assert.Empty(t, result.HookSpecificOutput.PermissionDecisionReason)
 }
 
+// TestHandlePreToolUse_DenyInRepoMCPWrite pins DES-069: verifier
+// spawns deny the two in-repo MCP write families outright, before
+// any allowlist path check, and the deny survives both plugin-prefix
+// variants (released and -dev). A worker spawn (no
+// ETHOS_VERIFIER_ALLOWLIST) must never see the deny.
+func TestHandlePreToolUse_DenyInRepoMCPWrite(t *testing.T) {
+	tests := []struct {
+		name       string
+		toolName   string
+		toolInput  map[string]any
+		verifier   bool
+		wantDecide string
+	}{
+		{
+			name:       "verifier: identity create denied, released prefix",
+			toolName:   "mcp__plugin_ethos_self__identity",
+			toolInput:  map[string]any{"method": "create"},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: identity create denied, dev prefix",
+			toolName:   "mcp__plugin_ethos-dev_self__identity",
+			toolInput:  map[string]any{"method": "create"},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: identity whoami allowed (not create)",
+			toolName:   "mcp__plugin_ethos_self__identity",
+			toolInput:  map[string]any{"method": "whoami"},
+			verifier:   true,
+			wantDecide: "allow",
+		},
+		{
+			name:       "verifier: zspec check denied, released prefix",
+			toolName:   "mcp__plugin_z-spec_zspec__check",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: zspec model_check denied, dev prefix",
+			toolName:   "mcp__plugin_z-spec-dev_zspec__model_check",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: zspec test denied",
+			toolName:   "mcp__plugin_z-spec_zspec__test",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: zspec animate denied",
+			toolName:   "mcp__plugin_z-spec_zspec__animate",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: zspec browse allowed (read-only)",
+			toolName:   "mcp__plugin_z-spec_zspec__browse",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "allow",
+		},
+		{
+			name:       "verifier: unclassified direct-server tool (mcp__github__create_or_update_file) denied fail-closed",
+			toolName:   "mcp__github__create_or_update_file",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: quarry__find (read-only) allowed",
+			toolName:   "mcp__plugin_quarry_quarry__find",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "allow",
+		},
+		{
+			name:       "worker: identity create passes through unaffected",
+			toolName:   "mcp__plugin_ethos_self__identity",
+			toolInput:  map[string]any{"method": "create"},
+			verifier:   false,
+			wantDecide: "allow",
+		},
+		{
+			name:       "worker: zspec check passes through unaffected",
+			toolName:   "mcp__plugin_z-spec_zspec__check",
+			toolInput:  map[string]any{},
+			verifier:   false,
+			wantDecide: "allow",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.verifier {
+				t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "internal/hook")
+			} else {
+				t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+			}
+
+			payload := map[string]any{
+				"tool_name":  tt.toolName,
+				"tool_input": tt.toolInput,
+			}
+			data, err := json.Marshal(payload)
+			require.NoError(t, err)
+
+			var out bytes.Buffer
+			require.NoError(t, HandlePreToolUse(strings.NewReader(string(data)), &out))
+			var r PreToolUseResult
+			require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+			assert.Equal(t, tt.wantDecide, r.HookSpecificOutput.PermissionDecision)
+			if tt.wantDecide == "deny" {
+				assert.Contains(t, r.HookSpecificOutput.PermissionDecisionReason, tt.toolName)
+				assert.NotContains(t, r.HookSpecificOutput.PermissionDecisionReason, "/")
+			}
+		})
+	}
+}
+
 // TestHandlePreToolUse_NoAllowlistWithExtractInto pins the worker
 // passthrough invariant: ETHOS_VERIFIER_ALLOWLIST gates the hook
 // firing at all, so a worker spawn that somehow has

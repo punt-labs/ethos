@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/mcpclass"
 	"github.com/punt-labs/ethos/internal/mission"
 )
 
@@ -109,6 +110,10 @@ func HandlePreToolUse(r io.Reader, w io.Writer) error {
 	allowlist := os.Getenv("ETHOS_VERIFIER_ALLOWLIST")
 	if allowlist == "" {
 		return json.NewEncoder(w).Encode(preToolUseAllow())
+	}
+
+	if reason, deny := denyInRepoMCPWrite(toolName, toolInput); deny {
+		return json.NewEncoder(w).Encode(preToolUseDeny(reason))
 	}
 
 	target := extractTargetPath(toolName, toolInput)
@@ -228,6 +233,16 @@ func targetExists(target string) (bool, error) {
 		return false, nil
 	}
 	return true, err
+}
+
+// denyInRepoMCPWrite reports whether toolName is one of the in-repo
+// MCP write families DES-069 denies in verifier spawns. It defers to
+// mcpclass.DenyReason, which classifies off the same WritesInRepo map
+// cmd/validate-content validates every role grant against — a tool
+// added there is denied here automatically, so the deny rule cannot
+// drift from the classification the build check enforces.
+func denyInRepoMCPWrite(toolName string, toolInput map[string]any) (string, bool) {
+	return mcpclass.DenyReason(toolName, toolInput)
 }
 
 // extractTargetPath returns the file path a tool call targets for

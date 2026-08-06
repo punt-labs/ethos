@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **DES-069: verifier spawns deny in-repo MCP write tools; every MCP grant is classified.** `internal/hook/pretooluse.go` now denies `ethos identity` calls with `method=create` and the z-spec `check`/`model_check`/`test`/`animate` tools outright in verifier spawns (`ETHOS_VERIFIER_ALLOWLIST` set), before any allowlist path check — a deny rather than a path map, so it needs no knowledge of the target path and cannot fail open. `cmd/validate-content` now requires every `mcp__` tool granted in any role's `tools:` list to be classified as read-only, writes-outside-repo, or writes-in-repo; an unclassified grant fails `make check`. `write_set` remains a worker-side contract term, not a mechanical gate — documented in `docs/workflow.md` and `CLAUDE.md`. See `docs/mcp-write-set-gap.md` and DESIGN.md's DES-069.
+
 ## [4.10.0] - 2026-08-02
 
 ### Added
