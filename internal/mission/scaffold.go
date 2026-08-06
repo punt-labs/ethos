@@ -26,7 +26,7 @@ package mission
 // CHANGE_ME markers need editing before `mission create` will accept
 // the result — see scaffold_test.go for the exact round-trip this
 // guarantees.
-func ScaffoldContractYAML() string {
+func ScaffoldContractYAML(leader string) string {
 	return `# ethos mission contract — fill in the CHANGE_ME values, then run:
 #   ethos mission create --file <this-file>
 #
@@ -37,7 +37,7 @@ func ScaffoldContractYAML() string {
 # depends_on, extract_into, tools, preconditions, delegations,
 # session, repo) are documented in "ethos mission create --help".
 
-leader: claude              # string, required — handle of the delegating leader
+leader: ` + leader + `              # string, required — handle of the delegating leader
 worker: CHANGE_ME           # string, required — handle of the specialist doing the work
 evaluator:
   handle: CHANGE_ME_EVAL    # string, required — reviewer handle; must differ from worker
@@ -91,7 +91,7 @@ author: CHANGE_ME           # string, required — handle of the worker submitti
 verdict: pass                # string, required — one of: pass, fail, escalate
 confidence: 0.9              # float, required — calibrated confidence in [0.0, 1.0]
 
-files_changed:                # list, required (empty only when the round changed no files)
+files_changed:                 # list, optional — omit or leave empty when the round changed no files
   - path: path/to/file.go     #   string, required — must live inside the contract's write_set
     added: 0                  #   int, required — lines added (non-negative)
     removed: 0                #   int, required — lines removed (non-negative)

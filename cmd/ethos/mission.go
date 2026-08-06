@@ -683,6 +683,9 @@ to a file and edit the CHANGE_ME markers in place:
   $EDITOR contract.yaml
   ethos mission create --file contract.yaml`,
 	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	},
 }
 
 var missionScaffoldContractCmd = &cobra.Command{
@@ -707,7 +710,7 @@ Example:
   ethos mission create --file contract.yaml`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		fmt.Print(mission.ScaffoldContractYAML())
+		fmt.Print(mission.ScaffoldContractYAML(resolveLeader()))
 		return nil
 	},
 }

@@ -11,7 +11,7 @@ import (
 // reports (an unmarshal error revealing one missing field at a time)
 // cannot recur against this exact output.
 func TestScaffoldContractYAML_Decodes(t *testing.T) {
-	_, err := DecodeContractStrict([]byte(ScaffoldContractYAML()), "scaffold")
+	_, err := DecodeContractStrict([]byte(ScaffoldContractYAML("claude")), "scaffold")
 	require.NoError(t, err)
 }
 
@@ -24,7 +24,7 @@ func TestScaffoldContractYAML_Decodes(t *testing.T) {
 // scaffold with only its CHANGE_ME markers edited is provably one
 // `ethos mission create --file` call away from a persisted contract.
 func TestScaffoldContractYAML_ValidatesOnceServerFieldsApplied(t *testing.T) {
-	c, err := DecodeContractStrict([]byte(ScaffoldContractYAML()), "scaffold")
+	c, err := DecodeContractStrict([]byte(ScaffoldContractYAML("claude")), "scaffold")
 	require.NoError(t, err)
 
 	c.MissionID = "m-2026-04-07-001"
