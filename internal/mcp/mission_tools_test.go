@@ -85,17 +85,28 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	root := s.Root()
-	// WithRepoRoot mirrors production wiring (missionStoreForCreate in
-	// cmd/ethos/mission.go, via resolve.StoreRepoRoot()): every real
-	// CLI and MCP entry point resolves a non-empty repoRoot when
-	// running inside a repo checkout, which is the only environment
-	// Abandon's delegations/ gate can safely evaluate in. A fixture
-	// with an empty repoRoot no longer exercises the delegations gate
-	// at all — Store.Abandon refuses outright when repoRoot is empty
-	// (see the comment on that check in internal/mission/store.go)
-	// rather than silently skipping it, so the fixture must supply one
-	// to reach the gate the abandon tests actually mean to cover.
-	ms := mission.NewStore(root).WithRepoRoot(t.TempDir())
+	// Deliberately single-tree: mission.NewStore(root), no repoRoot.
+	// Most tests in this file poke the on-disk layout directly
+	// (h.missionStore.Root(), h.missionStore.ContractPath(id)) and
+	// assume the legacy flat <root>/missions/<id>.{yaml,jsonl} shape;
+	// wiring a repoRoot here would flip Store.Create onto the DES-054
+	// two-tree layout (<repoRoot>/.punt-labs/ethos/missions/<id>/...)
+	// and break every one of those.
+	//
+	// The Abandon tests that need the delegations/ gate active (which
+	// requires a non-empty repoRoot — see the comment on that check in
+	// internal/mission/store.go) wire one directly on h.missionStore,
+	// scoped to just the Abandon call, and reset it to "" immediately
+	// after. Wiring repoRoot for the whole fixture — even via
+	// NewStore(root).WithRepoRoot(x), which leaves the two-tree layout
+	// inactive — makes every Create call through this fixture reach
+	// Store.withCreateLock's repoCreateLockPath with a non-empty
+	// repoRoot but an empty repoMissionsDir(), so it joins onto a bare
+	// ".create.lock" that resolves against the test binary's CWD
+	// instead of any temp dir (ethos-qs0v: leaked
+	// internal/mcp/.create.lock into the source tree on every `go
+	// test` run).
+	ms := mission.NewStore(root)
 
 	// Phase 3.3 (DES-033) requires the evaluator handle to resolve to
 	// real identity content at create time so the contract's evaluator
@@ -726,10 +737,20 @@ func TestHandleMission_CloseMissingID(t *testing.T) {
 }
 
 // TestHandleMission_Abandon asserts the happy path: a mission that was
-// created but never dispatched (no delegations, no results — the MCP
-// fixture wires a Store with no repoRoot, so the delegation gate is
-// inert here just as Store.Abandon documents) abandons cleanly and its
-// write_set becomes available to a new, overlapping Create.
+// created but never dispatched (no delegations, no results) abandons
+// cleanly and its write_set becomes available to a new, overlapping
+// Create.
+//
+// Store.Abandon's delegations/ gate refuses outright when repoRoot is
+// empty (it cannot tell "no delegations" from "didn't check" — see the
+// comment on that check in internal/mission/store.go), so this test
+// wires a repoRoot on h.missionStore for the abandon call only, then
+// clears it before the second Create. testHandlerWithMissions leaves
+// repoRoot unset by default: setting it for the whole fixture would
+// make every Create call reach Store.withCreateLock's
+// repoCreateLockPath with a non-empty repoRoot but no two-tree layout,
+// which resolves the create-lock file relative to the test binary's
+// CWD instead of a temp dir (ethos-qs0v).
 func TestHandleMission_Abandon(t *testing.T) {
 	h := testHandlerWithMissions(t)
 
@@ -741,11 +762,13 @@ func TestHandleMission_Abandon(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
+	h.missionStore.WithRepoRoot(t.TempDir())
 	abandonResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
 		"mission_id": created.MissionID,
 		"reason":     "never dispatched, blocking a real mission",
 	}))
+	h.missionStore.WithRepoRoot("")
 	require.NoError(t, err)
 	require.False(t, abandonResult.IsError, "abandon must succeed: %s", resultText(t, abandonResult))
 
@@ -822,6 +845,11 @@ func TestHandleMission_AbandonMissingReason(t *testing.T) {
 // TestHandleMission_AbandonRefusesWithResult proves the MCP surface
 // carries the same "any sign of work" refusal the store test does: a
 // submitted result means abandon must refuse in favor of close.
+//
+// The result-artifact gate is Gate 2 in Store.Abandon, evaluated only
+// after Gate 1's repoRoot check passes — so this test wires a repoRoot
+// on h.missionStore for the abandon call, same as TestHandleMission_Abandon
+// and for the same reason (ethos-qs0v).
 func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
 	h := testHandlerWithMissions(t)
 
@@ -834,11 +862,13 @@ func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 	submitResultForMCP(t, h, created.MissionID)
 
+	h.missionStore.WithRepoRoot(t.TempDir())
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
 		"mission_id": created.MissionID,
 		"reason":     "ignoring the submitted result",
 	}))
+	h.missionStore.WithRepoRoot("")
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "result artifact")
