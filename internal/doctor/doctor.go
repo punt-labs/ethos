@@ -4,6 +4,7 @@ package doctor
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
 	"github.com/punt-labs/ethos/internal/textscan"
@@ -186,12 +188,15 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 		members[m.Identity] = true
 	}
 
+	checklist := checklistAgentNames()
+
 	var orphaned []string
 	for _, path := range matches {
 		handle := strings.TrimSuffix(filepath.Base(path), ".md")
-		if !members[handle] {
-			orphaned = append(orphaned, handle)
+		if members[handle] || checklist[handle] {
+			continue
 		}
+		orphaned = append(orphaned, handle)
 	}
 
 	if len(orphaned) == 0 {
@@ -199,6 +204,29 @@ func CheckOrphanedAgentFiles(repoRoot, storeRoot string, teams *team.LayeredStor
 	}
 	sort.Strings(orphaned)
 	return Result{Name: name, Status: "FAIL", Detail: "orphaned agent files (not on any team): " + strings.Join(orphaned, ", ")}
+}
+
+// checklistAgentNames returns the handles of the seeded review-checklist
+// agents (DES-070): code-reviewer, silent-failure-hunter,
+// invariant-completeness-reviewer. These are read directly from
+// internal/seed's embedded sidecar/agents/ so the set can never drift from
+// what `ethos seed` actually deploys — a hardcoded duplicate list here would
+// silently stop matching the moment a seeded agent was added or renamed.
+// They carry no team membership by design (no persona, no identity), so the
+// orphan check must not flag them.
+func checklistAgentNames() map[string]bool {
+	entries, err := fs.ReadDir(seed.Agents, "sidecar/agents")
+	if err != nil {
+		return nil
+	}
+	names := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+			continue
+		}
+		names[strings.TrimSuffix(e.Name(), ".md")] = true
+	}
+	return names
 }
 
 // CheckSealHook reports on the DES-058 audit-seal pre-commit hook, keyed on
