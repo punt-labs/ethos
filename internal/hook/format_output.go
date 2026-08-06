@@ -746,6 +746,7 @@ func formatRoleShow(w io.Writer, result string) error {
 //	show          → a single Contract object
 //	list          → an array of {mission_id, status, leader, ...} summaries
 //	close         → {mission_id, status}
+//	abandon       → {mission_id, status, reason}
 //	reflect       → {mission_id, round, recommendation, created_at}
 //	reflections   → an array of Reflection objects (one per round)
 //	advance       → {mission_id, current_round}
@@ -761,6 +762,8 @@ func formatMission(w io.Writer, method, result string) error {
 		return formatMissionList(w, result)
 	case "close":
 		return formatMissionClose(w, result)
+	case "abandon":
+		return formatMissionAbandon(w, result)
 	case "reflect":
 		return formatMissionReflect(w, result)
 	case "reflections":
@@ -870,6 +873,8 @@ func summarizeEventDetailsRaw(evType string, details map[string]any) string {
 			eventKV("verdict", eventStr(details, "verdict")),
 			eventKVRound("round", eventRound(details, "round")),
 		)
+	case "abandon":
+		return eventKV("reason", eventStr(details, "reason"))
 	case "result":
 		return joinEventParts(
 			eventKVRound("round", eventRound(details, "round")),
@@ -1412,6 +1417,32 @@ func formatMissionClose(w io.Writer, result string) error {
 	writeMissionWarnings(&ctx, warnings)
 	// writeMissionWarnings separates its section from whatever precedes
 	// it; on a close nothing does, so drop the leading blank lines.
+	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
+}
+
+// formatMissionAbandon renders the abandon method's confirmation as a
+// single-line summary, plus a Warnings section when the payload carries
+// one. Parallels formatMissionClose — abandon is a terminal transition
+// like close, and shares the same sidecar-cleanup warning path
+// (ethos-jawp).
+func formatMissionAbandon(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	status, _ := c["status"].(string)
+	reason, _ := c["reason"].(string)
+	if missionID == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+	summary := fmt.Sprintf("Abandoned %s as %s: %s", missionID, status, reason)
+	warnings, _ := c["warnings"].([]any)
+	if len(warnings) == 0 {
+		return emitSimple(w, summary)
+	}
+	var ctx strings.Builder
+	writeMissionWarnings(&ctx, warnings)
 	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
 }
 

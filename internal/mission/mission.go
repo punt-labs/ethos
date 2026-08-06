@@ -12,6 +12,19 @@ const (
 	StatusClosed    = "closed"
 	StatusFailed    = "failed"
 	StatusEscalated = "escalated"
+	// StatusAbandoned marks a mission that was created but never
+	// dispatched to a worker — zero delegation records, zero result
+	// artifacts — and was retired via Store.Abandon rather than
+	// Store.Close. It is deliberately distinct from StatusClosed,
+	// StatusFailed, and StatusEscalated: those three all carry a
+	// verdict backed by a result artifact (Close's result gate,
+	// checkResultGateLocked, is unconditional), while "abandoned"
+	// means the opposite — there was never any work to render a
+	// verdict on. Keeping the value distinct lets an auditor reading
+	// `mission list` or the trace log tell "this mission finished"
+	// from "this mission never started" at a glance, without having
+	// to cross-reference the event log for every closed/failed row.
+	StatusAbandoned = "abandoned"
 )
 
 // Contract is the typed delegation artifact pinned at mission launch.

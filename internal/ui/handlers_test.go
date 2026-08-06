@@ -3,6 +3,10 @@
 package ui
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/mission"
@@ -44,6 +48,50 @@ func TestServerMissionStore_ReadsEventsFromCheckoutRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, bugEvents,
 		"without the checkout root the UI would show an empty timeline from a worktree")
+}
+
+// TestHandleDashboard_RendersAbandonedPill asserts an abandoned
+// mission row renders with the pill-abandoned CSS class, not an
+// unstyled bare pill. The status → CSS class mapping is dynamic
+// (`pill-{{.Status}}` in dashboard.html), so the only way this class
+// could be missing is if layout.html never defines `.pill-abandoned` —
+// exactly the enumeration gap djb's round-2 review caught.
+func TestHandleDashboard_RendersAbandonedPill(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	// readMissionsJSONL reads <storeRoot>/.punt-labs/ethos/missions.jsonl
+	// directly, so the fixture writes one abandoned-status line rather
+	// than driving a full Store.Abandon call — the handler test's
+	// concern is rendering, not the transition itself (that's covered
+	// in internal/mission).
+	jsonlPath := mission.RepoStatePath(storeRoot, "missions.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(jsonlPath), 0o755))
+	line := `{"id":"m-2026-08-06-090","status":"abandoned","leader":"claude","worker":"bwk","evaluator":"djb","created_at":"2026-08-06T00:00:00Z","closed_at":"2026-08-06T00:01:00Z"}` + "\n"
+	require.NoError(t, os.WriteFile(jsonlPath, []byte(line), 0o644))
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.handleDashboard(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, `pill-abandoned`, "abandoned mission row must render with the pill-abandoned class, got: %s", body)
+	assert.Contains(t, body, `>abandoned<`, "the status text itself must render")
+}
+
+// TestLayoutCSS_DefinesAbandonedPill pins the CSS rule directly, so a
+// future edit to layout.html that removes .pill-abandoned fails here
+// even if a dashboard fixture happens not to exercise it.
+func TestLayoutCSS_DefinesAbandonedPill(t *testing.T) {
+	data, err := templateFS.ReadFile("templates/layout.html")
+	require.NoError(t, err)
+	assert.Contains(t, string(data), ".pill-abandoned",
+		"layout.html must define a .pill-abandoned CSS rule, matching every other terminal status")
 }
 
 // uiTestContract returns a minimal valid open contract for id.

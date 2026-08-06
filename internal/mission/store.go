@@ -895,7 +895,13 @@ func (s *Store) Update(c *Contract) error {
 // appended. If the event append fails, the original contract bytes
 // are restored — a failed Close leaves the on-disk state unchanged.
 func (s *Store) Close(missionID, status string) (*Result, error) {
-	if !validStatuses[status] || status == StatusOpen {
+	// StatusAbandoned is excluded here on purpose: it is not a status a
+	// caller can request through Close. Abandon is a separate, more
+	// narrowly gated operation (see Store.Abandon below) — routing
+	// "abandoned" through Close would let a caller retire a mission
+	// with a real result artifact on record, which is exactly the
+	// case Abandon's gate exists to refuse.
+	if !validStatuses[status] || status == StatusOpen || status == StatusAbandoned {
 		return nil, fmt.Errorf("invalid close status %q: must be closed, failed, or escalated", status)
 	}
 	var satisfying *Result
@@ -1026,6 +1032,203 @@ func closeDelegationSkeletons(repoRoot, missionID, verdict, closedAt string) {
 			fmt.Fprintf(os.Stderr, "ethos: mission %s: closing delegation %s: %v\n", missionID, e.Name(), closeErr)
 		}
 	}
+}
+
+// Abandon retires a mission that was created but never actually
+// dispatched to a worker — zero delegation records under
+// delegations/, zero result artifacts for any round — into the
+// StatusAbandoned terminal state. It is a distinct, more narrowly
+// gated operation from Close, not a bypass of it.
+//
+// Close's result gate (checkResultGateLocked, see the comment above
+// Close) is intentionally unconditional: a mission cannot close
+// without a result artifact for the current round, because a
+// terminal verdict must be backed by structured worker output. That
+// invariant is correct and stays correct — Abandon does not weaken
+// it or add an override flag to Close.
+//
+// Abandon answers a different question: was there ever any work to
+// lose? A mission whose delegations/ directory is empty and whose
+// results file is empty never had a worker spawned against it — the
+// "create" event is the only entry in its event log. Retiring such a
+// mission cannot discard anything, so it does not need Close's
+// verdict gate. Any sign that work started — a delegation record
+// (even a still-open skeleton), or a result for any round, not only
+// the current one — refuses the transition and points the caller at
+// Close instead. There is no override flag here either, for the same
+// reason Close has none: the gate is the whole point.
+//
+// The distinct StatusAbandoned value (rather than reusing
+// StatusClosed) matters for the same reason Close's terminal states
+// are distinct from each other: an auditor reading `mission list` or
+// the trace log needs to tell "this mission produced a verdict" from
+// "this mission never started" without cross-referencing the event
+// log for every row.
+//
+// Excluding abandoned missions from checkWriteSetConflicts is
+// automatic and requires no change to that function: it only
+// considers missions with Status == StatusOpen, and Abandon moves the
+// mission's status to StatusAbandoned in the same locked section that
+// commits the abandon event. This is the actual fix for the blocking
+// bug the operator reported: a mission that was created via
+// dispatch/create but never had a worker spawned can now be retired,
+// which frees its write_set for a new Create the moment Abandon
+// commits.
+//
+// reason is required (non-empty after trimming) and is recorded on
+// the abandon event's Details map so the audit trail records why the
+// mission was retired, not just that it was.
+func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("abandon: reason is required")
+	}
+	if containsControlChar(reason) {
+		return nil, fmt.Errorf("abandon: reason contains control character")
+	}
+	var abandoned *Contract
+	err := s.withLock(missionID, func() error {
+		dest, err := s.contractPath(missionID)
+		if err != nil {
+			return err
+		}
+		c, oldData, err := s.loadLocked(missionID)
+		if err != nil {
+			return err
+		}
+		// Refuse an already-terminal mission for the same reason Close
+		// does: re-transitioning would silently overwrite the original
+		// closed_at timestamp and append a second terminal event to the
+		// JSONL log.
+		if c.Status != StatusOpen {
+			return fmt.Errorf(
+				"mission %q is already in terminal state %q; abandon only applies to open missions",
+				missionID, c.Status,
+			)
+		}
+		// Gate 1: zero delegation records. Any entry under
+		// delegations/ — open, closed, any verdict — means a worker
+		// was actually spawned against this contract. That is real
+		// work; Close's result gate, not Abandon, is the correct
+		// arbiter of whether it may retire.
+		//
+		// A missing repoRoot must REFUSE, not skip: an empty
+		// s.repoRoot means countDelegations has no directory to look
+		// under, so "no delegations found" would be indistinguishable
+		// from "delegations exist but we didn't check." djb's probe
+		// proved the earlier `if s.repoRoot != ""` guard let a mission
+		// with a real spawned worker abandon cleanly with no error
+		// when repoRoot was empty — silently trusting the absence of
+		// evidence as evidence of absence. Fail closed instead: the
+		// operator gets an actionable error naming the fix (run from
+		// inside the repo checkout), not a silently unsafe abandon.
+		if s.repoRoot == "" {
+			return fmt.Errorf(
+				"mission %q cannot be abandoned: no repo root in scope, so the "+
+					"delegations/ gate cannot be evaluated; run abandon from inside the repo checkout",
+				missionID,
+			)
+		}
+		n, dErr := countDelegations(s.repoRoot, missionID)
+		if dErr != nil {
+			return fmt.Errorf("abandon: checking delegations for %q: %w", missionID, dErr)
+		}
+		if n > 0 {
+			return fmt.Errorf(
+				"mission %q cannot be abandoned: %d delegation record(s) exist under delegations/; "+
+					"a worker was spawned, so this mission may have recoverable work — "+
+					"submit a result and run `ethos mission close %s` instead",
+				missionID, n, missionID,
+			)
+		}
+		// Gate 2: zero result artifacts, for any round — not only the
+		// mission's current round. A result recorded for an earlier
+		// round (e.g. the mission advanced past a round that still
+		// produced output) is exactly the recoverable-work case this
+		// gate exists to catch.
+		results, rErr := s.loadResultsLocked(missionID)
+		if rErr != nil {
+			return fmt.Errorf("abandon: loading results for %q: %w", missionID, rErr)
+		}
+		if len(results) > 0 {
+			rounds := make([]string, len(results))
+			for i, r := range results {
+				rounds[i] = fmt.Sprintf("%d", r.Round)
+			}
+			return fmt.Errorf(
+				"mission %q cannot be abandoned: result artifact(s) exist for round(s) %s; "+
+					"a result means the worker produced output — run `ethos mission close %s` instead",
+				missionID, strings.Join(rounds, ", "), missionID,
+			)
+		}
+
+		now := time.Now().UTC().Format(time.RFC3339)
+		c.Status = StatusAbandoned
+		c.ClosedAt = now
+		c.UpdatedAt = now
+		if err := s.validateContract(c); err != nil {
+			return fmt.Errorf("invalid contract after abandon: %w", err)
+		}
+		if err := s.writeContract(c); err != nil {
+			return err
+		}
+		if err := s.appendEventLocked(missionID, Event{
+			TS:    now,
+			Event: "abandon",
+			Actor: c.Leader,
+			Details: map[string]any{
+				"reason": reason,
+			},
+		}); err != nil {
+			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+				return fmt.Errorf("abandon: event append failed: %w; rollback failed: %v", err, rbErr)
+			}
+			return fmt.Errorf("abandon: event append failed, contract rolled back: %w", err)
+		}
+		abandoned = c
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	// Trace: append a summary line, mirroring Close. Non-fatal — the
+	// mission is already abandoned on disk; a trace failure must not
+	// roll back the transition. There is no satisfying result to pass
+	// through (that's the entire premise of Abandon), so the synthetic
+	// Result carries only the terminal-state verdict string for the
+	// trace log's benefit; buildTraceSummary otherwise reads the
+	// abandoned contract's own fields.
+	if err := s.appendTraceSummary(abandoned, &Result{Verdict: StatusAbandoned}); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
+	}
+	return abandoned, nil
+}
+
+// countDelegations returns the number of delegation record
+// subdirectories under the mission's delegations/ directory. Mirrors
+// the walk closeDelegationSkeletons uses, but only counts — Abandon's
+// gate does not care about verdict, only whether a worker was ever
+// spawned. A missing delegations/ directory (never created because no
+// worker was ever spawned — the common case) reports zero, not an
+// error.
+func countDelegations(repoRoot, missionID string) (int, error) {
+	delegationsDir := filepath.Join(
+		RepoStatePath(repoRoot, "missions"),
+		filepath.Base(missionID), "delegations",
+	)
+	entries, err := os.ReadDir(delegationsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // loadLocked reads a contract without acquiring the flock. Callers must
