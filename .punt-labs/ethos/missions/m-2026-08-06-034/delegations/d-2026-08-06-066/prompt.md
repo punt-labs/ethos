@@ -1,1 +1,0 @@
-Review the sole commit on branch fix/mcp-abandon-test-lock in <repo>/.claude/worktrees/mcp-abandon-lock (run `git show HEAD` there). Test-only fix to internal/mcp/mission_tools_test.go for ethos-qs0v (stray .create.lock file). Check for silent failures / error handling issues. Report under 150 words, or "clean" if none.

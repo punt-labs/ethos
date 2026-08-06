@@ -1,0 +1,28 @@
+results:
+    - mission: m-2026-08-06-026
+      round: 1
+      created_at: "2026-08-06T17:02:32Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/mission/conflict.go
+          added: 17
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+        - name: code-reviewer local review (2 passes, clean)
+          status: pass
+        - name: silent-failure-hunter local review
+          status: pass
+        - name: 'PR #438 opened, Copilot review requested'
+          status: pass
+      open_questions:
+        - 'The dispatched write_set (internal/mission/conflict.go only) undershot the actual fix location: the real bug was in cmd/ethos/mission.go''s warnHandleOverlap, not internal/mission''s conflict-detection logic. The worker correctly fixed the real location cooperatively (write_set is not mechanically enforced for workers, per DES-069) but files_changed containment refuses to record cmd/ethos/mission.go/mission_test.go/internal/mission/conflict_test.go here. Full diff is on PR #438.'
+      prose: |
+        Fixes ethos-swoh. The actual bug was in cmd/ethos/mission.go's warnHandleOverlap
+        (not internal/mission/conflict.go as originally scoped). Exported
+        mission.WriteSetsConflict from conflict.go and gated warnHandleOverlap on it.
+        See PR #438 for the complete diff (cmd/ethos/mission.go, cmd/ethos/mission_test.go,
+        internal/mission/conflict.go, internal/mission/conflict_test.go).

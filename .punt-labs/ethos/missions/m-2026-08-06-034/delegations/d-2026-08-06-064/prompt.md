@@ -1,1 +1,0 @@
-Review commit ddfc85d on branch fix/mission-scaffold in <repo>/.claude/worktrees/mission-scaffold (run `git show ddfc85d` there). Adds `ethos mission scaffold contract|result` printing YAML skeletons to stdout. Check for silent failures / error handling issues. Report under 150 words, or "clean" if none.

@@ -1,8 +1,9 @@
 mission_id: m-2026-08-06-027
-status: open
+status: abandoned
 type: report
 created_at: "2026-08-06T13:39:03Z"
-updated_at: "2026-08-06T13:39:03Z"
+updated_at: "2026-08-06T17:02:06Z"
+closed_at: "2026-08-06T17:02:06Z"
 leader: claude
 worker: bwk
 evaluator:
