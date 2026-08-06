@@ -1,0 +1,2 @@
+{"ts":"2026-08-06T13:39:12.309614Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"","worker":"bwk"}}
+{"ts":"2026-08-06T13:52:00.818696Z","event":"result","actor":"bwk","details":{"confidence":0.9,"evidence_entries":3,"files_changed":1,"round":1,"verdict":"pass"}}
