@@ -7220,7 +7220,12 @@ for any other repo.
   `internal/enable/deposit.go` writes vox's vendored guide and `@`-import:
   an addition to the existing vendored `.punt-labs/ethos/CLAUDE.md` naming
   the three agents and the Phase-5 sequence, so a leader discovers them
-  without hand-wiring.
+  without hand-wiring. The deposited text states plainly that these three
+  are checklist agents, not specialists — invoked directly as local review
+  passes, never via `ethos mission dispatch --worker <handle>` — since
+  `.claude/agents/` also holds persona-bound generated agents (`bwk.md`,
+  `reviewer.md`, `coo.md`) and nothing else in the directory distinguishes
+  the two kinds before a dispatch attempt fails downstream.
 - **Ethos's own dogfooding transition runs the seeded agents in parallel
   with `pr-review-toolkit` for one PR cycle**, diffs findings, then drops
   the third-party dependency from this repo's own Phase 5 — not an

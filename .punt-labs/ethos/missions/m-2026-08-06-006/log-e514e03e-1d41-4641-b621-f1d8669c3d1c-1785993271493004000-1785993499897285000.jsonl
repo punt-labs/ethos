@@ -1,0 +1,3 @@
+{"ts":"2026-08-06T05:14:31.493004Z","event":"result","actor":"bwk","details":{"confidence":0.85,"evidence_entries":1,"files_changed":1,"round":1,"verdict":"pass"}}
+{"ts":"2026-08-06T05:17:57.367706Z","event":"reflect","actor":"dna","details":{"converging":true,"recommendation":"pivot","round":1,"signal_count":6}}
+{"ts":"2026-08-06T05:18:19.897285Z","event":"round_advanced","actor":"claude","details":{"from_round":1,"recommendation":"pivot","to_round":2}}

@@ -237,7 +237,15 @@ implementation) also writes or upgrades a short vendored block in
 `@`-imports into the top-level CLAUDE.md per DES-057) naming the three
 agents and the Phase-5 sequence above, so a leader who has never seen
 this design still discovers the agents exist and how to sequence them.
-This is a smaller version of the same manifest-tracked vendored-zone
+The deposited text states plainly, in one sentence, that these three
+are checklist agents, not specialists: they are invoked directly as
+local review passes, never via `ethos mission dispatch --worker
+<handle>` — a distinction the file location alone cannot convey, since
+`.claude/agents/` also holds persona-bound generated agents like
+`bwk.md`, `reviewer.md`, and `coo.md`, and nothing in the directory
+listing tells a user which kind is dispatchable before a dispatch
+attempt fails downstream. This is a smaller version of the same
+manifest-tracked vendored-zone
 mechanism `enable` uses — not a new mechanism, an additional file
 seeded into the existing vendored `.punt-labs/ethos/CLAUDE.md`, which
 is already manifest-tracked and already `@`-imported from the
