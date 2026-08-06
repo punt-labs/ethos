@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.11.0] - 2026-08-06
+
 ### Added
 
 - **`ethos mission abandon <id> --reason <text>`.** Retires a mission that was created but never had a worker spawned against it (zero delegations, zero results for any round) — a real problem tonight: a stale open mission with a broad `write_set` permanently blocks any new mission whose `write_set` overlaps it, and `ethos mission close` correctly refuses without a result artifact, leaving no legitimate recovery path. Abandon is a new, separately-gated command, not a bypass of `close` — it fails closed (refuses, does not silently skip the check) when run outside a repo checkout, since the delegation gate can't be evaluated without a resolved repo root. See `docs/mission-abandon.md`.
@@ -2515,7 +2517,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP handlers receive `Store` via injection (no `os.Exit` in handler context)
 - ShellCheck added to CI and `make lint`
 
-[Unreleased]: https://github.com/punt-labs/ethos/compare/v3.6.0...HEAD
+[Unreleased]: https://github.com/punt-labs/ethos/compare/v4.11.0...HEAD
+[4.11.0]: https://github.com/punt-labs/ethos/compare/v4.10.0...v4.11.0
 [3.6.0]: https://github.com/punt-labs/ethos/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/punt-labs/ethos/compare/v3.4.0...v3.5.0
 [3.4.0]: https://github.com/punt-labs/ethos/compare/v3.3.0...v3.4.0
