@@ -2190,6 +2190,60 @@ func TestStore_AdvanceRound_LogsTransition(t *testing.T) {
 	assert.Equal(t, float64(2), events[2].Details["to_round"])
 }
 
+// TestStore_EvaluatorHashFrozenAcrossTrajectory guards the
+// EvaluatorHashFrozen theorem in docs/spec-mission-lifecycle.md
+// (S:Theorems): every mutating Store operation's frame includes
+// evaluatorHash' = evaluatorHash, so the pinned hash — "the trust
+// anchor" per store.go's own comment on Create — must be identical
+// before and after a realistic multi-round trajectory. Existing
+// hash tests cover pinning at Create and drift DETECTION for the
+// SubagentStart gate; none exercise a full AppendResult -> Reflect
+// -> AdvanceRound -> AppendResult -> Close sequence and assert the
+// already-pinned hash on disk never moves. A future refactor of any
+// one of those Store methods that stray-writes Contract.Evaluator
+// would pass every existing test and still break the trust anchor.
+func TestStore_EvaluatorHashFrozenAcrossTrajectory(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-04-08-999")
+	c.Evaluator.Hash = ""
+	c.Evaluator.PinnedAt = ""
+	sources := fakeHashSources(c.Evaluator.Handle)
+	pinnedAt := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, s.ApplyServerFields(c, pinnedAt, sources))
+	require.NotEmpty(t, c.Evaluator.Hash, "ApplyServerFields must pin a hash before this test can prove anything")
+	require.NoError(t, s.Create(c))
+	pinnedHash := c.Evaluator.Hash
+
+	require.NoError(t, s.AppendResult(c.MissionID, resultFor(c, VerdictFail)))
+	loaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, pinnedHash, loaded.Evaluator.Hash, "hash must survive AppendResult")
+
+	require.NoError(t, s.AppendReflection(c.MissionID, reflectionFor(c.MissionID, 1, RecommendationContinue)))
+	loaded, err = s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, pinnedHash, loaded.Evaluator.Hash, "hash must survive AppendReflection")
+
+	_, err = s.AdvanceRound(c.MissionID, "claude")
+	require.NoError(t, err)
+	loaded, err = s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, pinnedHash, loaded.Evaluator.Hash, "hash must survive AdvanceRound")
+	require.Equal(t, 2, loaded.CurrentRound, "AdvanceRound must persist the new round before the second AppendResult")
+
+	require.NoError(t, s.AppendResult(c.MissionID, resultFor(loaded, VerdictPass)))
+	loaded, err = s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, pinnedHash, loaded.Evaluator.Hash, "hash must survive a second AppendResult")
+
+	r, err := s.Close(c.MissionID, StatusClosed)
+	require.NoError(t, err)
+	require.NotNil(t, r)
+	loaded, err = s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Equal(t, pinnedHash, loaded.Evaluator.Hash, "hash must survive Close")
+}
+
 // TestStore_LoadReflections_EmptyForFreshMission asserts that a
 // brand-new mission has no reflections file on disk and
 // LoadReflections returns nil with no error.
