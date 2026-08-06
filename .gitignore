@@ -79,3 +79,7 @@ research/
 
 # ethos runtime (never track) — DES-058 live zone + mission locks
 .punt-labs/ethos/missions/**/*.lock
+
+# Store-level create locks (internal/mission, internal/mcp test fixtures) —
+# runtime artifacts, never source. See ethos-qs0v.
+**/.create.lock

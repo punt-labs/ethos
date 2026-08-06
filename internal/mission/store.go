@@ -436,12 +436,20 @@ func (s *Store) createLockPath() string {
 // repoCreateLockPath is the per-repo create lock acquired alongside
 // the global one during the DES-054 transition window. v3.13.0 drops
 // the global one and keeps only the repo lock. Returns empty when
-// repoRoot is unset (legacy single-tree mode).
+// repoRoot is unset (legacy single-tree mode) OR when repoMissionsDir
+// itself is empty (a "trace-only" WithRepoRoot setup that never
+// activated two-tree storage — see repoMissionsDir's doc comment).
+// The prior check only covered the first case: a Store built via
+// NewStore(x).WithRepoRoot(y) has repoRoot set but twoTreeStorage
+// false, so repoMissionsDir() correctly returns "" but this method
+// used to join it anyway, collapsing to a bare relative ".create.lock"
+// resolved against the caller's CWD instead of a real path (ethos-qs0v).
 func (s *Store) repoCreateLockPath() string {
-	if s.repoRoot == "" {
+	dir := s.repoMissionsDir()
+	if dir == "" {
 		return ""
 	}
-	return filepath.Join(s.repoMissionsDir(), ".create.lock")
+	return filepath.Join(dir, ".create.lock")
 }
 
 // logPath returns the JSONL event log path for a mission. Dispatches
