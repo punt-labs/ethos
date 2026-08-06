@@ -248,6 +248,23 @@ func main() {
 		results = append(results, pass(fmt.Sprintf("teams: structural validation (%d teams)", nTeams)))
 	}
 
+	// DES-069 R2: every mcp__ tool a role grants must be classified.
+	roleTools := make(map[string][]string)
+	roleNames, err := roleRepo.List()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "validate-content: listing roles: %v\n", err)
+		os.Exit(1)
+	}
+	for _, name := range roleNames {
+		r, loadErr := roleRepo.Load(name)
+		if loadErr != nil {
+			results = append(results, fail("roles: load", fmt.Sprintf("%s: %v", name, loadErr)))
+			continue
+		}
+		roleTools[name] = r.Tools
+	}
+	results = append(results, classifyMCPTools(roleTools)...)
+
 	// Seeded README fields tables must equal the registry MarkdownTable().
 	// This is a comparison, not a generation: a stale committed README fails
 	// the build the instant the registry changes.
