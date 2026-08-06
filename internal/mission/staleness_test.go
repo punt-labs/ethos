@@ -109,6 +109,20 @@ func TestStaleness(t *testing.T) {
 			},
 		},
 		{
+			name:             "future timestamp — clock skew clamps AgeDays at 0, not negative",
+			created:          "2026-08-07T00:00:00Z",
+			updated:          "2026-08-07T00:00:00Z",
+			delegationsKnown: true,
+			want: StalenessInfo{
+				LastActivityAt:   "2026-08-07T00:00:00Z",
+				AgeDays:          0,
+				AgeDaysKnown:     true,
+				HasResults:       false,
+				DelegationCount:  0,
+				DelegationsKnown: true,
+			},
+		},
+		{
 			name:             "all timestamps garbage — AgeDaysKnown false, not AgeDays 0",
 			created:          "not-a-time",
 			updated:          "also-not-a-time",

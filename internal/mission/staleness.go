@@ -48,7 +48,15 @@ func Staleness(c *Contract, events []Event, results []Result, delegationCount in
 		DelegationsKnown: delegationsKnown,
 	}
 	if t, err := time.Parse(time.RFC3339, last); err == nil {
-		info.AgeDays = int(now.Sub(t).Hours() / 24)
+		days := int(now.Sub(t).Hours() / 24)
+		if days < 0 {
+			// Clock skew or a hand-edited future timestamp -- clamp
+			// rather than report a negative "days since last activity",
+			// which would read as nonsense and could leak into a future
+			// --stale-days filter as a false "very fresh" signal.
+			days = 0
+		}
+		info.AgeDays = days
 		info.AgeDaysKnown = true
 	}
 	return info
