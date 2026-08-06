@@ -4,7 +4,8 @@
 % Mission Lifecycle: A Z Specification
 % A formal model of the mission-contract state machine implemented in
 % internal/mission (mission.go, store.go, validate.go), current as of
-% mission m-2026-08-06-032.
+% commit 9a60b39 (PR #432), the commit that last touched the lifecycle
+% logic modelled here.
 %
 % Compile: pdflatex spec-mission-lifecycle.tex
 %
@@ -814,11 +815,12 @@ in every revision recorded in its commit history. \texttt{probcli}
 requires a \texttt{.tex} extension to run its Z-to-B translation ---
 \texttt{/z-spec:check} runs fuzz directly on any extension, but
 \texttt{/z-spec:test}/\texttt{/z-spec:model\_check} silently produced
-0 states and 0 transitions against this file's own
-\texttt{.md} extension. All \texttt{model\_check}/\texttt{animate}
-runs reported in this section, including the two decoupled documents,
-were run against byte-identical \texttt{.tex} copies of the content
-that is committed here.
+0 states and 0 transitions when an earlier revision of this content
+was saved with a \texttt{.md} extension --- the file was renamed to
+\texttt{.tex} for exactly this reason before this document was first
+submitted for review. All \texttt{model\_check}/\texttt{animate} runs
+reported in this section, including the two decoupled documents, were
+run against the \texttt{.tex} file that is committed here.
 
 % ===================================================================
 \section{Traceability}
