@@ -95,6 +95,18 @@ verifier spawns, and only for `Write`/`Edit` — see DES-069 and
 `docs/workflow.md` §"What `write_set` does and does not enforce"
 before scoping an MCP grant or trusting a write-set to fence a worker.
 
+**Local review runs three agents, not two.** In addition to the org
+workflow's `feature-dev:code-reviewer` (style/bugs/CLAUDE.md compliance)
+and `pr-review-toolkit:silent-failure-hunter` (error handling), run
+`.claude/agents/invariant-completeness-reviewer.md` — it verifies
+claims a PR makes about itself (exclusivity, exhaustiveness, "cannot
+drift," a test that claims to guard a general case) against what the
+code actually does, a review dimension neither of the other two covers
+by design. Added after DES-069's PR #431 review cycle surfaced three
+real defects of exactly this shape that both existing local agents
+missed because the defects were outside their stated scope, not
+because of a capability gap.
+
 ## Quality Gates
 
 The Makefile is the source of truth (`make help`).
