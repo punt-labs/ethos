@@ -1,4 +1,5 @@
 name: cloud-native-engineer
+model: sonnet
 responsibilities:
   - "cloud-native infrastructure: Kubernetes, container orchestration"
   - declarative deployment and immutable infrastructure patterns

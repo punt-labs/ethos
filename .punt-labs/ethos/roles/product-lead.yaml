@@ -1,4 +1,5 @@
 name: product-lead
+model: sonnet
 responsibilities:
   - product strategy and plan review
   - user problem validation

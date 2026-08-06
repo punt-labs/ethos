@@ -1,4 +1,5 @@
 name: qa-engineer
+model: haiku
 responsibilities:
   - user-flow testing and verification
   - bug reproduction with evidence

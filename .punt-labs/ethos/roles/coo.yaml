@@ -1,4 +1,5 @@
 name: coo
+model: opus
 responsibilities:
   - execution quality and velocity across all engineering
   - sub-agent delegation and review

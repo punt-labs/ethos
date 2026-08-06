@@ -1,4 +1,5 @@
 name: security-architect
+model: opus
 responsibilities:
   - threat modeling at the system and protocol layer
   - cryptographic primitive selection and policy review

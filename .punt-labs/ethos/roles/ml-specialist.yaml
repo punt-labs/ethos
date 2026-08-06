@@ -1,4 +1,5 @@
 name: ml-specialist
+model: sonnet
 responsibilities:
   - ML inference pipeline design and implementation
   - provider selection, quantization strategies, hardware abstraction

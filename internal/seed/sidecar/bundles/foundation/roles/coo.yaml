@@ -1,4 +1,5 @@
 name: coo
+model: opus
 responsibilities:
   - run execution and delegate to specialists
   - review specialist output and report to the ceo

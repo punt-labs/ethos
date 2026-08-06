@@ -1,4 +1,5 @@
 name: web-javascript
+model: sonnet
 responsibilities:
   - JavaScript implementation, browser APIs, web standards
   - module systems, runtime semantics, performance characteristics

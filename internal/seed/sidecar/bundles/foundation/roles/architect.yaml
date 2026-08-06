@@ -1,4 +1,5 @@
 name: architect
+model: opus
 responsibilities:
   - design review and tradeoff evaluation
   - architecture decisions and documentation

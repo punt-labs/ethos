@@ -1,4 +1,5 @@
 name: ux-cognitive
+model: sonnet
 responsibilities:
   - "cognitive engineering: affordances, feedback loops, error recovery"
   - usability review of CLI, plugin, and dashboard surfaces

@@ -1,4 +1,5 @@
 name: ml-foundations
+model: sonnet
 responsibilities:
   - foundational review of model architectures and training paradigms
   - representation learning, self-supervised methods, and evaluation design
