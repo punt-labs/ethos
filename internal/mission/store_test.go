@@ -1504,6 +1504,28 @@ func TestApplyServerFields_PopulatesEvaluatorHash(t *testing.T) {
 	assert.Equal(t, expected, c.Evaluator.Hash)
 }
 
+// TestApplyServerFields_StripsCallerSuppliedWriteSetReleasedAt guards
+// against a mission born already exempt from checkWriteSetConflicts:
+// a caller-supplied write_set_released_at would let a hand-edited
+// contract file claim its write_set was released before Create ever
+// ran, defeating admission control silently -- no write_set_released
+// event, no genuine release, just an inert claim from the start.
+func TestApplyServerFields_StripsCallerSuppliedWriteSetReleasedAt(t *testing.T) {
+	s := testStore(t)
+	c := validContract()
+	c.MissionID = ""
+	c.CreatedAt = ""
+	c.UpdatedAt = ""
+	c.Evaluator.PinnedAt = ""
+	c.Evaluator.Hash = ""
+	c.WriteSetReleasedAt = "2020-01-01T00:00:00Z"
+
+	sources := fakeHashSources("djb")
+	require.NoError(t, s.ApplyServerFields(&c, time.Now(), sources))
+
+	assert.Empty(t, c.WriteSetReleasedAt, "ApplyServerFields must strip a caller-supplied write_set_released_at")
+}
+
 // TestApplyServerFields_DeterministicAcrossCalls asserts the
 // determinism invariant: two ApplyServerFields calls against
 // byte-identical sources yield byte-identical hashes. The mission_id

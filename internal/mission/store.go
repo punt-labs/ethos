@@ -306,6 +306,11 @@ func (s *Store) ContractPath(missionID string) (string, error) {
 //   - UpdatedAt: set equal to CreatedAt
 //   - ClosedAt: cleared (terminal-only field; Validate's status↔closed_at
 //     invariant would reject a non-empty value on an open contract anyway)
+//   - WriteSetReleasedAt: cleared. A caller-supplied value here would
+//     create a mission born already exempt from checkWriteSetConflicts
+//     (ForceReleaseWriteSet's admission-control skip) with no
+//     write_set_released event and no genuine release ever having
+//     happened -- silently defeating the write-set claim it declares.
 //   - Evaluator.PinnedAt: set equal to CreatedAt — the evaluator is
 //     pinned AT mission launch by definition; any caller-supplied
 //     timestamp would be incoherent
@@ -362,6 +367,7 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSource
 	c.CreatedAt = created
 	c.UpdatedAt = created
 	c.ClosedAt = ""
+	c.WriteSetReleasedAt = ""
 	c.Evaluator.PinnedAt = created
 	c.Evaluator.Hash = hash
 	return nil
