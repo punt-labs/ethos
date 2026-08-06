@@ -30,17 +30,8 @@ SessionStart; restart Claude Code to regenerate them after a team change.
 - `ethos mission pipeline list|show|instantiate <name>` — drive multi-stage
   work from a template.
 
-Scope the write-set to the work's real breadth so you don't have to widen it
-later. It is a spectrum, not a tight file list: a single file for a one-file
-fix; a **directory prefix** (e.g. `internal/enable/`) to authorize modify+create
-anywhere under it when you can't name every file up front; or a **glob** where
-it fits. The set is enforced at runtime — an edit outside it fails the mission —
-but it can be as broad as the work honestly needs. For new files a worker
-creates while decomposing, use the **separate** `extract_into` field (its own
-list of directory prefixes, decoupled from the modify write-set — DES-052), not
-a `write_set` entry. Prefer declaring the right breadth up front over a tight
-list you must widen via escalate→close→recreate when the work legitimately
-grows. Commit one logical step at a time.
+Commit one logical step at a time; the write-set is enforced at runtime, so
+an edit outside it fails the mission.
 
 ## Audit
 
@@ -53,6 +44,24 @@ grows. Commit one logical step at a time.
 
 - `ethos session` — the current roster.
 - `ethos session purge` — clear stale sessions.
+
+## Review agents
+
+`ethos seed` deploys three review-checklist agents to `.claude/agents/`:
+`code-reviewer` (general code-quality and CLAUDE.md-compliance),
+`silent-failure-hunter` (error handling, swallowed exceptions, fallback
+logic), and `invariant-completeness-reviewer` (verifies a claimed invariant,
+exhaustiveness property, or regression-guarding test actually holds, rather
+than trusting the prose that asserts it). These are checklist agents, not
+mission-dispatchable specialists: invoke them directly as local review
+passes, never via `ethos mission dispatch --worker <handle>`.
+
+Local review sequence, after `make check` passes:
+
+1. Run `code-reviewer` on the diff.
+2. Run `silent-failure-hunter` on the diff.
+3. Run `invariant-completeness-reviewer` on the diff.
+4. Fix all valid findings; re-run until all three return zero findings.
 
 ## Gotchas
 
