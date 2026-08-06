@@ -654,6 +654,91 @@ struct, not via the store.`,
 	},
 }
 
+// --- mission scaffold ---
+//
+// scaffold prints a fillable-in-place YAML skeleton to stdout — no
+// flags, no file argument. The Unix idiom is redirection:
+// `ethos mission scaffold contract > contract.yaml`. Fixes ethos-q682:
+// before this command, both the contract and result schemas were
+// learned by trial and error — one unmarshal error at a time (mission
+// -> round -> author -> evidence non-empty -> EvidenceCheck shape).
+// Every field the strict decoder and Validate require is present in
+// the emitted YAML with a comment naming its type and purpose.
+
+var missionScaffoldCmd = &cobra.Command{
+	Use:   "scaffold",
+	Short: "Print a fillable-in-place YAML skeleton",
+	Long: `Print a fillable-in-place YAML skeleton to stdout.
+
+Two skeletons are available:
+
+  ethos mission scaffold contract   # for "ethos mission create --file"
+  ethos mission scaffold result     # for "ethos mission result --file"
+
+Every field the strict decoder and Validate require is present with a
+placeholder value and a comment naming its type and purpose. Redirect
+to a file and edit the CHANGE_ME markers in place:
+
+  ethos mission scaffold contract > contract.yaml
+  $EDITOR contract.yaml
+  ethos mission create --file contract.yaml`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return cmd.Help()
+	},
+}
+
+var missionScaffoldContractCmd = &cobra.Command{
+	Use:   "contract",
+	Short: "Print a fillable mission contract skeleton",
+	Long: `Print a fillable mission contract skeleton to stdout.
+
+Every field "ethos mission create --file" requires (leader, worker,
+evaluator.handle, write_set, success_criteria, budget) is present with
+a placeholder value; commonly-used optional fields (context, inputs)
+are included too. Fields the store computes itself (mission_id,
+status, timestamps, evaluator.pinned_at, evaluator.hash, current_round)
+are omitted — "mission create" overwrites them regardless of what the
+file supplies. Advanced fields (pipeline, depends_on, extract_into,
+tools, preconditions, delegations, session, repo) are named in a
+trailing comment; see "ethos mission create --help" for their shape.
+
+Example:
+
+  ethos mission scaffold contract > contract.yaml
+  $EDITOR contract.yaml
+  ethos mission create --file contract.yaml`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Print(mission.ScaffoldContractYAML(resolveLeader()))
+		return nil
+	},
+}
+
+var missionScaffoldResultCmd = &cobra.Command{
+	Use:   "result",
+	Short: "Print a fillable mission result skeleton",
+	Long: `Print a fillable mission result skeleton to stdout.
+
+Every field "ethos mission result --file" requires (mission, round,
+author, verdict, confidence, files_changed, evidence) is present with
+a placeholder value, including the shape of an evidence entry (name +
+status) — the exact field the discover-by-error class in ethos-q682
+bottomed out on. Optional fields (open_questions, prose) are shown
+commented out.
+
+Example:
+
+  ethos mission scaffold result > result.yaml
+  $EDITOR result.yaml
+  ethos mission result m-2026-04-08-005 --file result.yaml`,
+	Args: cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		fmt.Print(mission.ScaffoldResultYAML())
+		return nil
+	},
+}
+
 // --- mission export ---
 
 var missionExportDir string
@@ -844,6 +929,11 @@ func init() {
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,
 		"Print per-mission decisions to stdout")
 
+	missionScaffoldCmd.AddCommand(
+		missionScaffoldContractCmd,
+		missionScaffoldResultCmd,
+	)
+
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
@@ -858,6 +948,7 @@ func init() {
 		missionLogCmd,
 		missionExportCmd,
 		missionLintCmd,
+		missionScaffoldCmd,
 		missionDispatchCmd,
 		missionMigrateCmd,
 		missionClaimCmd,
