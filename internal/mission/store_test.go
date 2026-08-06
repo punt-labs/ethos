@@ -4456,18 +4456,18 @@ func TestStore_TwoRoot_LegacyTraceRepoRootStaysFlat(t *testing.T) {
 // it must never refuse on that basis, only report honestly), and the
 // end-to-end proof that releasing unblocks a conflicting Create.
 //
-// Contract.Validate rule 11 (validate.go) requires a non-empty
-// write_set unless the resolved archetype sets AllowEmptyWriteSet —
-// true only for the read-only report/inbox archetypes. Every success
-// case below therefore wires an ArchetypeStore with the "report"
-// archetype (reportYAML, defined in archetype_test.go) and gives the
-// contract a non-empty write_set of its own, so clearing it exercises
-// a real release rather than the immediate no-op refusal. The
-// dedicated refusal test below proves the other half: for any
-// archetype that requires a non-empty write_set — implement, the
-// default every ordinary mission gets — force-release must refuse
-// cleanly rather than write a contract that fails validation on every
-// future Load.
+// ForceReleaseWriteSet never clears WriteSet/ExtractInto — it only
+// stamps WriteSetReleasedAt — so Contract.Validate rule 11's
+// non-empty-write_set requirement is satisfied unchanged after a
+// release, for every archetype, including "implement" (the default
+// every ordinary mission gets, and the archetype the actual
+// ethos-9x07 incident mission used).
+// TestStore_ForceReleaseWriteSet_SucceedsForImplementArchetype below
+// proves exactly that. The "report" archetype (reportYAML, defined in
+// archetype_test.go, AllowEmptyWriteSet: true) is still wired here so
+// the remaining tests can exercise archetype resolution and a
+// zero-length write_set/extract_into without that being conflated
+// with the WriteSetReleasedAt gate under test.
 
 // forceReleaseTestStore wires a Store with a "report" archetype
 // (AllowEmptyWriteSet: true) discoverable under globalRoot, mirroring
@@ -4689,11 +4689,14 @@ func TestStore_ForceReleaseWriteSet_RequiresReason(t *testing.T) {
 	assert.NotEmpty(t, loaded.WriteSet, "a refused force-release must not mutate the mission")
 }
 
-// TestStore_ForceReleaseWriteSet_RefusesNoOpRelease asserts gate 2:
-// a mission whose write_set and extract_into are already both empty
-// (a read-only archetype mission, or one already released) refuses
-// rather than silently succeed and write a misleading event.
-func TestStore_ForceReleaseWriteSet_RefusesNoOpRelease(t *testing.T) {
+// TestStore_ForceReleaseWriteSet_RefusesAlreadyReleased asserts the
+// first half of gate 2: a mission whose write_set was already
+// released refuses rather than silently succeed and write a
+// misleading second event. Asserts on "already has its write_set
+// released", the substring unique to this sub-condition, so this
+// test cannot pass by accident on the sibling empty-write_set
+// refusal below -- both errors share the "nothing to release" tail.
+func TestStore_ForceReleaseWriteSet_RefusesAlreadyReleased(t *testing.T) {
 	repoRoot := t.TempDir()
 	globalRoot := t.TempDir()
 	s := forceReleaseTestStore(t, repoRoot, globalRoot)
@@ -4705,11 +4708,36 @@ func TestStore_ForceReleaseWriteSet_RefusesNoOpRelease(t *testing.T) {
 
 	_, err = s.ForceReleaseWriteSet("m-2026-08-06-054", "second release attempt")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nothing to release")
+	assert.Contains(t, err.Error(), "already has its write_set released")
 
 	events, _, err := s.LoadEvents("m-2026-08-06-054")
 	require.NoError(t, err)
 	require.Len(t, events, 2, "the refused second call must not append another event")
+}
+
+// TestStore_ForceReleaseWriteSet_RefusesEmptyWriteSetAndExtractInto
+// asserts the second half of gate 2: a read-only-archetype mission
+// that never claimed a write_set or extract_into has nothing to
+// release. Asserts on "already has an empty write_set and
+// extract_into", the substring unique to this sub-condition -- distinct
+// from the already-released case above, which this contract never
+// reaches (WriteSetReleasedAt is still "" on the refused call).
+func TestStore_ForceReleaseWriteSet_RefusesEmptyWriteSetAndExtractInto(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+	c := forceReleasableContract("m-2026-08-06-064")
+	c.WriteSet = nil
+	c.ExtractInto = nil
+	require.NoError(t, s.Create(c))
+
+	_, err := s.ForceReleaseWriteSet("m-2026-08-06-064", "nothing was ever claimed")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already has an empty write_set and extract_into")
+
+	events, _, err := s.LoadEvents("m-2026-08-06-064")
+	require.NoError(t, err)
+	require.Len(t, events, 1, "only the create event -- the refused release must not append another")
 }
 
 // TestStore_ForceReleaseWriteSet_RefusesAlreadyTerminal covers all
@@ -4829,6 +4857,42 @@ func TestStore_ForceReleaseWriteSet_ReportsUnknownDelegationCount(t *testing.T) 
 	snapshot, ok := events[1].Details["staleness_snapshot"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "unknown", snapshot["delegation_count"])
+}
+
+// TestStore_ForceReleaseWriteSet_EventAppendFailureRollsBackContract
+// mirrors TestStore_CloseRollsBackOnEventAppendFailure /
+// TestStore_UpdateRollsBackOnEventAppendFailure: if appendEventLocked
+// fails after writeContract already stamped WriteSetReleasedAt on
+// disk, the contract bytes must be restored to their pre-release
+// state, not left half-released with no event to explain it.
+func TestStore_ForceReleaseWriteSet_EventAppendFailureRollsBackContract(t *testing.T) {
+	s := testStore(t)
+	c := newContract("m-2026-08-06-072")
+	require.NoError(t, s.Create(c))
+
+	contractPath := mustContractPath(t, s, c.MissionID)
+	originalBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+
+	// Sabotage the log path the same way as the Update/Close rollback
+	// tests: replace the log file with a directory so
+	// appendEventLocked's OpenFile(O_APPEND) call fails.
+	logPath := mustLogPath(t, s, c.MissionID)
+	require.NoError(t, os.Remove(logPath))
+	require.NoError(t, os.Mkdir(logPath, 0o700))
+
+	_, err = s.ForceReleaseWriteSet(c.MissionID, "this release must roll back")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event append failed")
+	assert.Contains(t, err.Error(), "contract rolled back")
+
+	restoredBytes, err := os.ReadFile(contractPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalBytes), string(restoredBytes), "contract bytes must be identical after rollback")
+
+	reloaded, err := s.Load(c.MissionID)
+	require.NoError(t, err)
+	assert.Empty(t, reloaded.WriteSetReleasedAt, "WriteSetReleasedAt must not survive a rolled-back release")
 }
 
 // TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate is the

@@ -1297,8 +1297,8 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 	}
 	// Built before the lock and before any mutation, for the same
 	// reason Abandon's redactor is: a construction failure here must
-	// never follow a writeContract call that already stamped the
-	// narrowed write_set on disk with no release event to explain it.
+	// never follow a writeContract call that already stamped
+	// WriteSetReleasedAt on disk with no release event to explain it.
 	redact, err := NewPathRedactor(s.repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("force-release-write-set: building path redactor: %w", err)
@@ -1340,10 +1340,15 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 		}
 
 		// The staleness snapshot recorded on the event is informational,
-		// not gating (see the doc comment above), so a failure to
-		// determine the delegation count downgrades to "unknown" rather
-		// than refusing the whole operation — unlike Abandon's gate 1,
-		// nothing here is deciding whether recoverable work exists.
+		// not gating (see the doc comment above): every input below
+		// degrades to "unknown" on failure rather than refusing the
+		// whole operation, unlike Abandon's gate 1. This matters most
+		// exactly when it is hardest to satisfy — a corrupt audit
+		// chunk or an oversized log is the kind of thing that leaves a
+		// mission stuck in the first place, and this method exists to
+		// unstick it; a hard error here would make ForceReleaseWriteSet
+		// unusable in precisely the scenario it is the recovery path
+		// for.
 		delegationsKnown := s.repoRoot != ""
 		delegationCount := 0
 		if delegationsKnown {
@@ -1355,16 +1360,26 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 				delegationCount = n
 			}
 		}
-		events, warnings, evErr := s.LoadEvents(missionID)
+		var events []Event
+		eventsKnown := true
+		loadedEvents, warnings, evErr := s.LoadEvents(missionID)
 		if evErr != nil {
-			return fmt.Errorf("force-release-write-set: loading events for %q: %w", missionID, evErr)
+			eventsKnown = false
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: loading events for staleness snapshot: %v\n", missionID, evErr)
+		} else {
+			events = loadedEvents
+			for _, w := range warnings {
+				fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", missionID, w)
+			}
 		}
-		for _, w := range warnings {
-			fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", missionID, w)
-		}
-		results, rErr := s.loadResultsLocked(missionID)
+		var results []Result
+		resultsKnown := true
+		loadedResults, rErr := s.loadResultsLocked(missionID)
 		if rErr != nil {
-			return fmt.Errorf("force-release-write-set: loading results for %q: %w", missionID, rErr)
+			resultsKnown = false
+			fmt.Fprintf(os.Stderr, "ethos: mission %s: loading results for staleness snapshot: %v\n", missionID, rErr)
+		} else {
+			results = loadedResults
 		}
 		now := time.Now().UTC()
 		st := Staleness(c, events, results, delegationCount, delegationsKnown, now)
@@ -1389,6 +1404,16 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 		if !delegationsKnown {
 			delegationDetail = "unknown"
 		}
+		lastActivityDetail := any(st.LastActivityAt)
+		ageDaysDetail := any(st.AgeDays)
+		if !eventsKnown || !st.AgeDaysKnown {
+			lastActivityDetail = "unknown"
+			ageDaysDetail = "unknown"
+		}
+		hasResultsDetail := any(st.HasResults)
+		if !resultsKnown {
+			hasResultsDetail = "unknown"
+		}
 		if err := s.appendEventLocked(missionID, Event{
 			TS:    nowStr,
 			Event: EventWriteSetReleased,
@@ -1398,9 +1423,9 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 				"write_set_at_release":    writeSetAtRelease,
 				"extract_into_at_release": extractIntoAtRelease,
 				"staleness_snapshot": map[string]any{
-					"last_activity_at": st.LastActivityAt,
-					"age_days":         st.AgeDays,
-					"has_results":      st.HasResults,
+					"last_activity_at": lastActivityDetail,
+					"age_days":         ageDaysDetail,
+					"has_results":      hasResultsDetail,
 					"delegation_count": delegationDetail,
 				},
 			}),

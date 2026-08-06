@@ -149,6 +149,18 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		}
 	}
 
+	// write_set_released_at: empty is the common case (never released).
+	// When set, must parse as RFC3339 -- this is a git-tracked YAML
+	// field a human or another tool can hand-edit outside Store's API,
+	// and a malformed value would otherwise pass Load/Validate silently
+	// and only surface once a future consumer (mission show, a
+	// --stale-days surface) tries to parse or display it.
+	if c.WriteSetReleasedAt != "" {
+		if _, err := time.Parse(time.RFC3339, c.WriteSetReleasedAt); err != nil {
+			return fmt.Errorf("invalid write_set_released_at %q: %w", c.WriteSetReleasedAt, err)
+		}
+	}
+
 	// type: empty is accepted (Store.Create and decodeAndValidate
 	// default it to "implement"); when set, reject control characters.
 	if c.Type != "" && containsControlChar(c.Type) {

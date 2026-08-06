@@ -7,7 +7,8 @@ import "time"
 // projection: nothing here mutates a contract or triggers an action.
 type StalenessInfo struct {
 	LastActivityAt   string // RFC3339; max(created_at, updated_at, latest event ts)
-	AgeDays          int    // days since LastActivityAt, floor
+	AgeDays          int    // days since LastActivityAt, floor; meaningless when AgeDaysKnown is false
+	AgeDaysKnown     bool   // false when LastActivityAt did not parse as RFC3339
 	HasResults       bool   // len(results) > 0, any round
 	DelegationCount  int    // entries under delegations/, best-effort
 	DelegationsKnown bool   // false when repoRoot is unset and the count could not be checked
@@ -48,6 +49,7 @@ func Staleness(c *Contract, events []Event, results []Result, delegationCount in
 	}
 	if t, err := time.Parse(time.RFC3339, last); err == nil {
 		info.AgeDays = int(now.Sub(t).Hours() / 24)
+		info.AgeDaysKnown = true
 	}
 	return info
 }

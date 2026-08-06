@@ -33,6 +33,7 @@ func TestStaleness(t *testing.T) {
 			want: StalenessInfo{
 				LastActivityAt:   "2026-08-01T00:00:00Z",
 				AgeDays:          5,
+				AgeDaysKnown:     true,
 				HasResults:       false,
 				DelegationCount:  0,
 				DelegationsKnown: true,
@@ -50,6 +51,7 @@ func TestStaleness(t *testing.T) {
 			want: StalenessInfo{
 				LastActivityAt:   "2026-07-31T00:05:00Z",
 				AgeDays:          6,
+				AgeDaysKnown:     true,
 				HasResults:       false,
 				DelegationCount:  0,
 				DelegationsKnown: true,
@@ -67,6 +69,7 @@ func TestStaleness(t *testing.T) {
 			want: StalenessInfo{
 				LastActivityAt:   "2026-08-06T06:00:00Z",
 				AgeDays:          0,
+				AgeDaysKnown:     true,
 				HasResults:       true,
 				DelegationCount:  1,
 				DelegationsKnown: true,
@@ -81,6 +84,7 @@ func TestStaleness(t *testing.T) {
 			want: StalenessInfo{
 				LastActivityAt:   "2026-08-06T00:00:00Z",
 				AgeDays:          0,
+				AgeDaysKnown:     true,
 				HasResults:       false,
 				DelegationCount:  0,
 				DelegationsKnown: false,
@@ -98,6 +102,21 @@ func TestStaleness(t *testing.T) {
 			want: StalenessInfo{
 				LastActivityAt:   "2026-08-04T00:00:00Z",
 				AgeDays:          2,
+				AgeDaysKnown:     true,
+				HasResults:       false,
+				DelegationCount:  0,
+				DelegationsKnown: true,
+			},
+		},
+		{
+			name:             "all timestamps garbage — AgeDaysKnown false, not AgeDays 0",
+			created:          "not-a-time",
+			updated:          "also-not-a-time",
+			delegationsKnown: true,
+			want: StalenessInfo{
+				LastActivityAt:   "not-a-time",
+				AgeDays:          0,
+				AgeDaysKnown:     false,
 				HasResults:       false,
 				DelegationCount:  0,
 				DelegationsKnown: true,

@@ -112,6 +112,13 @@ func TestValidate(t *testing.T) {
 			wantErr: "invalid closed_at",
 		},
 
+		// write_set_released_at: parseable as RFC3339 when set
+		{
+			name:    "malformed write_set_released_at",
+			mutate:  func(c *Contract) { c.WriteSetReleasedAt = "not-a-time" },
+			wantErr: "invalid write_set_released_at",
+		},
+
 		// Rule 2: status enum
 		{
 			name:    "rule 2: empty status",

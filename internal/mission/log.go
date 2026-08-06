@@ -40,7 +40,9 @@ type Event struct {
 }
 
 // EventWriteSetReleased is the event type Store.ForceReleaseWriteSet
-// appends when it clears a mission's write_set and extract_into.
+// appends when it marks a mission's write_set/extract_into claim
+// released from admission control (WriteSetReleasedAt) -- the fields
+// themselves are left untouched.
 // Every other event type in this package is a raw string literal at
 // its call site; this one is named because both the writer
 // (Store.ForceReleaseWriteSet) and any future reader keying off the
