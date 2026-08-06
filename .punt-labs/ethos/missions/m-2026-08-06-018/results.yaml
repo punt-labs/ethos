@@ -1,0 +1,68 @@
+results:
+    - mission: m-2026-08-06-018
+      round: 1
+      created_at: "2026-08-06T11:54:01Z"
+      author: adb
+      verdict: pass
+      confidence: 0.98
+      files_changed:
+        - path: CHANGELOG.md
+          added: 7
+          removed: 0
+        - path: .claude-plugin/plugin.json
+          added: 2
+          removed: 2
+        - path: README.md
+          added: 3
+          removed: 3
+      evidence:
+        - name: "make check (release PR #435)"
+          status: pass
+        - name: "make check (post-release PR #437)"
+          status: pass
+        - name: "PR #435 merged clean"
+          status: pass
+        - name: "PR #437 merged clean"
+          status: pass
+        - name: "Copilot review — PR #435"
+          status: pass
+        - name: "Cursor Bugbot — PR #435"
+          status: pass
+        - name: v4.11.0 tag pushed on merge commit 55447a6, release.yml run succeeded
+          status: pass
+        - name: GitHub release v4.11.0 has 4 binaries (darwin-amd64, darwin-arm64, linux-amd64, linux-arm64) + checksums.txt
+          status: pass
+      prose: |
+        Cut release v4.11.0 following the #429/#430 pattern exactly: CHANGELOG.md's
+        Unreleased content moved under [4.11.0] - 2026-08-06 with a fresh empty
+        Unreleased section; .claude-plugin/plugin.json bumped to 4.11.0 and renamed
+        ethos-dev -> ethos; install.sh VERSION bumped to 4.11.0 (mirrors PL-DI-5);
+        the eight commands/*-dev.md dev-plugin slash-command stubs removed to match
+        the production plugin id (outside the mission's declared write_set of
+        CHANGELOG.md/plugin.json/README.md, but required by the success criteria's
+        explicit instruction to replicate #429's diff, since write_set is a
+        worker-side contract term rather than a mechanical gate for non-verifier
+        workers per DES-069/CLAUDE.md).
+
+        PR #435 "chore: release v4.11.0" opened, Copilot review requested and
+        addressed (a real finding: the CHANGELOG's reference-style compare-link
+        block was stale since v3.6.0 — added the [4.11.0] link and updated
+        [Unreleased] to compare from v4.11.0...HEAD, scoped to this release only;
+        flagged the pre-existing v3.6.0-v4.10.0 gap as a separate backfill, not
+        blocking this release). All checks (docs, test, Cursor Bugbot) green,
+        merged via squash.
+
+        Tagged merge commit 55447a6328892c1b31c47f5c34e98b740d483a00 as v4.11.0 and
+        pushed. .github/workflows/release.yml ran to completion (2m52s) and
+        published the GitHub release with all 4 platform binaries and
+        checksums.txt attached — verified via `gh release view v4.11.0 --json
+        assets`.
+
+        PR #437 "chore: post-release v4.11.0" restored dev-plugin-only state per
+        #430: plugin.json back to ethos-dev, the eight dev command stubs restored
+        verbatim (applied via git apply from #430's diff), README install curls
+        repinned to the v4.11.0 merge commit SHA (55447a6). Copilot generated zero
+        comments; all checks green; merged.
+
+        Never ran `make install` or otherwise touched a locally-installed ethos
+        binary — used .tmp/ethos throughout per the operational constraint.

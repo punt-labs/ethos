@@ -1,0 +1,62 @@
+results:
+    - mission: m-2026-08-06-032
+      round: 1
+      created_at: "2026-08-06T14:20:27Z"
+      author: jms
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: docs/spec-mission-lifecycle.md
+          added: 855
+          removed: 0
+      evidence:
+        - name: /z-spec:check (fuzz type-check)
+          status: pass
+        - name: /z-spec:test on main 7-op+Idle model (373 states, 749 transitions)
+          status: pass
+        - name: decoupled ProB demo, AbandonFailOpen guard (16 states, 35 transitions)
+          status: fail
+        - name: decoupled ProB demo, correct Abandon guard (15 states, 29 transitions)
+          status: pass
+      open_questions:
+        - docs/spec-mission-lifecycle.md is a .md file per the mission's fixed write_set, but probcli's Z-to-B translation only runs against a .tex extension (fuzz itself is extension-agnostic). All /z-spec:test/model_check runs in this result were performed against byte-identical .tex copies of the committed content, documented in the spec's own Tool Run section (S8.4) -- worth a standing note for future z-spec missions with an .md-only write_set.
+        - My two commits (d2c72df, c7e5580) were dropped from main's tip by a concurrent git reset to origin/main mid-session (not caused by me). The coordinator (claude) caught this, moved d2c72df onto a new branch docs/z-spec-mission-lifecycle, and instructed me to continue there. I had already made a third commit (5a4e2e5) directly on main after the reset, before seeing that instruction -- I've since verified its content is byte-identical to what's now on docs/z-spec-mission-lifecycle (d2c72df + 49fc254), reset local main back to match origin/main (no direct commits remain on main), and confirmed the branch's tip type-checks clean with fuzz. The branch is ready for a PR; I did not open one, since PR creation is outside a design-only write_set and I understood the coordinator to be finishing branch/PR setup themselves.
+      prose: |
+        Z specification of the mission-contract lifecycle as implemented today
+        in internal/mission (mission.go, store.go, validate.go): five statuses,
+        the seven named transitions (create, delegate, submit-result, reflect,
+        advance-round, close, abandon), and the invariants they must jointly
+        preserve (round budget, evaluator-hash pinning, close-requires-result,
+        abandon-requires-no-work). Every predicate is cited to its Go source
+        location; a Non-goals section and a Traceability table make the scope
+        and the mapping explicit.
+
+        The mission's central validation ask -- confirm the spec's invariants
+        would flag the fail-open abandon bug (abandon_test.go's
+        TestStore_Abandon_RefusesWhenRepoRootEmpty) as a violation -- required
+        correcting my own first attempt. Typing a buggy AbandonFailOpen
+        operation directly against \Delta Mission, with the safety invariant
+        baked into Mission's own predicate, does NOT surface a violation: Z's
+        schema calculus silently folds the invariant into every \Delta Mission
+        operation's precondition, so ProB reports 0 violations across 385
+        states regardless of how badly the guard is written -- a false
+        negative I discovered empirically, not a mechanism I predicted in
+        advance. This is documented as an erratum in the spec itself (S8.3),
+        not smoothed over.
+
+        The working demonstration decouples the safety property from the
+        type: two small self-contained Z documents share a stripped-down
+        MissionU state schema with no baked-in invariant, plus an Idle
+        self-loop excluded exactly from the unsafe region, turning the
+        safety property into a deadlock question ProB can answer directly.
+        The fail-open guard reaches a genuine, reproducible deadlock (16
+        states, 35 transitions, trace: Init -> Delegate -> AbandonFailOpen
+        -> stuck at status=stAbandoned, delegationCount=1); the correct
+        guard does not (15 states, 29 transitions, clean). Both documents
+        and their exact ProB output are reproduced in full inside the
+        committed spec's Validation section, so a future reader can rerun
+        them without access to my scratch files.
+
+        Every commit type-checks clean with fuzz (0 errors). Committed in
+        two logical steps on docs/z-spec-mission-lifecycle: state
+        space/transitions, then invariants/validation/traceability.
