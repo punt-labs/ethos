@@ -7,14 +7,15 @@ member assignments.
 Roles are deployed by the installer to `~/.punt-labs/ethos/roles/`.
 Teams override or extend with project-specific roles.
 
-`model` (and every other field) is a one-time starter default, not a
-synced value. `ethos seed` writes these files once; a file the user
-has since edited is preserved on every later seed run (see
-`internal/seed/seed.go`'s upgrade-vs-edited distinction). This repo's
-own `.punt-labs/ethos/roles/` happens to agree with these defaults for
-several role names today, but nothing enforces that: this repo tunes
-its own model tiers independently, same as any other repo seeded from
-this content. Do not add a test coupling the two.
+`model` (and every other field) is a starter default, not a synced
+value. `ethos seed` deploys these files as-is; a later seed run
+upgrades a file only if it is untouched since the last seed wrote it,
+and preserves a file the user has edited — it never overwrites an
+edit silently (see `internal/seed/seed.go`'s `decide` function). This
+repo's own `.punt-labs/ethos/roles/` happens to agree with these
+defaults for several role names today, but nothing enforces that: this
+repo tunes its own model tiers independently, same as any other repo
+seeded from this content. Do not add a test coupling the two.
 
 See [ETHOS-ROADMAP.md](../../docs/ETHOS-ROADMAP.md) for context on
 role archetypes and the persona/role/mission model.
