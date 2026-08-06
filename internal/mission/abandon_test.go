@@ -89,6 +89,49 @@ func TestStore_Abandon_RedactsReasonInEventLog(t *testing.T) {
 		"the on-disk event log must never carry the raw home path")
 }
 
+// TestStore_Abandon_RedactorFailureLeavesMissionOpen is the
+// regression gate for the ordering bug in the redaction fix's
+// review pass: NewPathRedactor used to be constructed inside the
+// locked section, AFTER writeContract had already stamped
+// status: abandoned and closed_at on disk. If redactor construction
+// failed there, Abandon returned an error but the contract on disk
+// was already permanently terminal with no abandon event ever
+// appended — a retry hit "already in terminal state" with no way
+// back to open, and mission log never recorded why.
+//
+// The fix hoists NewPathRedactor above s.withLock, before any
+// mutation, so this test asserts BOTH halves of the fix: Abandon
+// must error, AND the mission must still be observably open
+// afterward — a fail-open on either axis is the defect.
+func TestStore_Abandon_RedactorFailureLeavesMissionOpen(t *testing.T) {
+	// A relative $HOME is exactly the shape usablePrefix rejects
+	// (NewPathRedactor requires an absolute path below the root), so
+	// this reproduces "redactor construction fails" without needing
+	// to fake a broken os.UserHomeDir.
+	t.Setenv("HOME", "relative/path")
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+	c := newContract("m-2026-08-06-097")
+	require.NoError(t, s.Create(c))
+
+	_, err := s.Abandon("m-2026-08-06-097", "should never land on disk")
+	require.Error(t, err, "Abandon must refuse when the redactor cannot be built")
+	assert.Contains(t, err.Error(), "building path redactor")
+
+	loaded, loadErr := s.Load("m-2026-08-06-097")
+	require.NoError(t, loadErr)
+	assert.Equal(t, StatusOpen, loaded.Status,
+		"a refused abandon must leave the mission open, not wedged in a half-written terminal state")
+	assert.Empty(t, loaded.ClosedAt, "closed_at must not be stamped when abandon never completes")
+
+	events, _, err := s.LoadEvents("m-2026-08-06-097")
+	require.NoError(t, err)
+	require.Len(t, events, 1, "only the original create event — no abandon event, no partial write")
+	assert.Equal(t, "create", events[0].Event)
+}
+
 // TestStore_Abandon_RefusesWhenRepoRootEmpty is the regression test
 // for djb's round-2 probe: a Store with no repoRoot in scope must
 // REFUSE abandon, not silently skip the delegations/ gate. The
