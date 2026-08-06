@@ -39,6 +39,15 @@ type Event struct {
 	Details map[string]any `json:"details,omitempty"`
 }
 
+// EventWriteSetReleased is the event type Store.ForceReleaseWriteSet
+// appends when it clears a mission's write_set and extract_into.
+// Every other event type in this package is a raw string literal at
+// its call site; this one is named because both the writer
+// (Store.ForceReleaseWriteSet) and any future reader keying off the
+// type (mission log rendering, a --stale-days follow-on) need to
+// agree on the exact string without copying it by hand.
+const EventWriteSetReleased = "write_set_released"
+
 // Event log writes:
 //
 // Each event is encoded as one complete JSON line via json.Marshal

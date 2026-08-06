@@ -1244,6 +1244,182 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 	return abandoned, nil
 }
 
+// ForceReleaseWriteSet clears an open mission's WriteSet and
+// ExtractInto so checkWriteSetConflicts no longer treats it as
+// claiming those paths, without touching Status or any other field.
+// It is a leader-invoked, explicit, audited release of an
+// admission-control claim — not a terminal transition, and not a
+// substitute for Abandon or Close. A leader who can already prove
+// zero delegations and zero results should use Abandon instead: that
+// is a real terminal state, not a half-measure. See
+// docs/mission-force-release-write-set.md.
+//
+// Modeled directly on Store.Abandon: same locking discipline
+// (withLock), same NewPathRedactor-before-lock construction for
+// reason — the rationale at Abandon's definition applies unchanged
+// here, since reason is leader-supplied free text landing in a
+// git-tracked, publicly-pushed event log — and the same
+// every-failure-before-any-mutation discipline, so a refusal never
+// leaves a half-mutated contract on disk.
+//
+// Deliberately has no automatic age or delegation-count gate.
+// Staleness is a heuristic judgment, not a correctness invariant —
+// the leader consults mission show / mission list --stale-days
+// (Staleness, staleness.go) before deciding, and this method does not
+// re-derive or enforce that judgment. Its own gate covers only
+// correctness: the mission must be open, and there must be something
+// to release.
+func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("force-release-write-set: reason is required")
+	}
+	if containsControlChar(reason) {
+		return nil, fmt.Errorf("force-release-write-set: reason contains control character")
+	}
+	// Built before the lock and before any mutation, for the same
+	// reason Abandon's redactor is: a construction failure here must
+	// never follow a writeContract call that already stamped the
+	// narrowed write_set on disk with no release event to explain it.
+	redact, err := NewPathRedactor(s.repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("force-release-write-set: building path redactor: %w", err)
+	}
+	var released *Contract
+	err = s.withLock(missionID, func() error {
+		dest, err := s.contractPath(missionID)
+		if err != nil {
+			return err
+		}
+		c, oldData, err := s.loadLocked(missionID)
+		if err != nil {
+			return err
+		}
+		// Gate 1: mission must be open. A terminal mission's write_set
+		// is already excluded from checkWriteSetConflicts by virtue of
+		// Status != StatusOpen, so there is nothing to release.
+		if c.Status != StatusOpen {
+			return fmt.Errorf(
+				"mission %q is already in terminal state %q; force-release-write-set only applies to open missions",
+				missionID, c.Status,
+			)
+		}
+		// Gate 2: refuse a no-op release rather than silently succeed
+		// and write a misleading event.
+		if len(c.WriteSet) == 0 && len(c.ExtractInto) == 0 {
+			return fmt.Errorf(
+				"mission %q already has an empty write_set and extract_into; nothing to release",
+				missionID,
+			)
+		}
+		// Gate 3: the contract must still validate once WriteSet and
+		// ExtractInto are cleared. Store.Load re-validates on every
+		// read (decodeAndValidate's "even on read, run Validate"
+		// comment) via s.validateContract, which resolves c.Type's
+		// archetype and enforces rule 11 (write_set non-empty) unless
+		// that archetype sets AllowEmptyWriteSet — true only for the
+		// read-only report/inbox archetypes. Writing an empty
+		// write_set for any other archetype (implement, test,
+		// investigate, ...) would pass this write but fail every
+		// future Load — mission show, mission list, and even a later
+		// Close or Abandon on this same mission would then error
+		// forever. Checking on an unpersisted copy before any mutation
+		// turns that into a clean, actionable refusal instead of a
+		// silent, permanent bricking — the same fail-closed posture
+		// Abandon's own gates use for the identical class of risk.
+		hypothetical := *c
+		hypothetical.WriteSet = nil
+		hypothetical.ExtractInto = nil
+		if err := s.validateContract(&hypothetical); err != nil {
+			return fmt.Errorf(
+				"mission %q cannot be force-released: clearing write_set and extract_into "+
+					"would leave the contract failing validation (%v) — this mission's "+
+					"archetype requires a non-empty write_set, so every future Load would "+
+					"fail; force-release-write-set is unavailable for this mission",
+				missionID, err,
+			)
+		}
+
+		// The staleness snapshot recorded on the event is informational,
+		// not gating (see the doc comment above), so a failure to
+		// determine the delegation count downgrades to "unknown" rather
+		// than refusing the whole operation — unlike Abandon's gate 1,
+		// nothing here is deciding whether recoverable work exists.
+		delegationsKnown := s.repoRoot != ""
+		delegationCount := 0
+		if delegationsKnown {
+			n, dErr := countDelegations(s.repoRoot, missionID)
+			if dErr != nil {
+				delegationsKnown = false
+			} else {
+				delegationCount = n
+			}
+		}
+		events, _, evErr := s.LoadEvents(missionID)
+		if evErr != nil {
+			return fmt.Errorf("force-release-write-set: loading events for %q: %w", missionID, evErr)
+		}
+		results, rErr := s.loadResultsLocked(missionID)
+		if rErr != nil {
+			return fmt.Errorf("force-release-write-set: loading results for %q: %w", missionID, rErr)
+		}
+		now := time.Now().UTC()
+		st := Staleness(c, events, results, delegationCount, delegationsKnown, now)
+
+		oldWriteSet := append([]string(nil), c.WriteSet...)
+		oldExtractInto := append([]string(nil), c.ExtractInto...)
+
+		nowStr := now.Format(time.RFC3339)
+		c.WriteSet = nil
+		c.ExtractInto = nil
+		c.UpdatedAt = nowStr
+		// Not s.validateContract: that resolves c.Type's archetype (if
+		// any) and most archetypes require a non-empty write_set (rule
+		// 11), which this operation deliberately violates on purpose.
+		// Validate everything else the normal way by supplying a
+		// synthetic archetype with AllowEmptyWriteSet — the same
+		// mechanism the report/inbox archetypes already use for
+		// legitimately write-set-less contracts — so every other
+		// invariant still gates this write.
+		if err := c.ValidateWithArchetype(&Archetype{AllowEmptyWriteSet: true}); err != nil {
+			return fmt.Errorf("invalid contract after force-release-write-set: %w", err)
+		}
+		if err := s.writeContract(c); err != nil {
+			return err
+		}
+		delegationDetail := any(delegationCount)
+		if !delegationsKnown {
+			delegationDetail = "unknown"
+		}
+		if err := s.appendEventLocked(missionID, Event{
+			TS:    nowStr,
+			Event: EventWriteSetReleased,
+			Actor: c.Leader,
+			Details: redact.Map(map[string]any{
+				"reason":           reason,
+				"old_write_set":    oldWriteSet,
+				"old_extract_into": oldExtractInto,
+				"staleness_snapshot": map[string]any{
+					"last_activity_at": st.LastActivityAt,
+					"age_days":         st.AgeDays,
+					"has_results":      st.HasResults,
+					"delegation_count": delegationDetail,
+				},
+			}),
+		}); err != nil {
+			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+				return fmt.Errorf("force-release-write-set: event append failed: %w; rollback failed: %v", err, rbErr)
+			}
+			return fmt.Errorf("force-release-write-set: event append failed, contract rolled back: %w", err)
+		}
+		released = c
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return released, nil
+}
+
 // countDelegations returns the number of delegation record
 // subdirectories under the mission's delegations/ directory. Mirrors
 // the walk closeDelegationSkeletons uses, but only counts — Abandon's

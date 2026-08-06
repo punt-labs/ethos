@@ -4423,3 +4423,391 @@ func TestStore_TwoRoot_LegacyTraceRepoRootStaysFlat(t *testing.T) {
 	assert.True(t, os.IsNotExist(err),
 		"WithRepoRoot must not create the two-tree per-mission dir")
 }
+
+// --- ForceReleaseWriteSet (ethos-9x07 part 2) ---
+//
+// Mirrors the Abandon test coverage above: baseline success, the
+// reason-redaction regression gate, the redactor-failure ordering
+// fix, empty-reason refusal, the no-op refusal, an already-terminal
+// mission, event content (including the "unknown" delegation count
+// when repoRoot is unset — force-release has no delegations gate, so
+// it must never refuse on that basis, only report honestly), and the
+// end-to-end proof that releasing unblocks a conflicting Create.
+//
+// Contract.Validate rule 11 (validate.go) requires a non-empty
+// write_set unless the resolved archetype sets AllowEmptyWriteSet —
+// true only for the read-only report/inbox archetypes. Every success
+// case below therefore wires an ArchetypeStore with the "report"
+// archetype (reportYAML, defined in archetype_test.go) and gives the
+// contract a non-empty write_set of its own, so clearing it exercises
+// a real release rather than the immediate no-op refusal. The
+// dedicated refusal test below proves the other half: for any
+// archetype that requires a non-empty write_set — implement, the
+// default every ordinary mission gets — force-release must refuse
+// cleanly rather than write a contract that fails validation on every
+// future Load.
+
+// forceReleaseTestStore wires a Store with a "report" archetype
+// (AllowEmptyWriteSet: true) discoverable under globalRoot, mirroring
+// how cmd/ethos/mission.go wires a real ArchetypeStore in production.
+// An empty repoRoot builds a legacy single-tree Store, matching
+// NewStore's shape.
+func forceReleaseTestStore(t *testing.T, repoRoot, globalRoot string) *Store {
+	t.Helper()
+	writeArchetypeFile(t, globalRoot, "report", reportYAML)
+	as := NewArchetypeStore("", globalRoot)
+	if repoRoot == "" {
+		return NewStore(globalRoot).WithArchetypeStore(as)
+	}
+	return NewStoreWithRoots(repoRoot, globalRoot).WithArchetypeStore(as)
+}
+
+// forceReleasableContract returns a valid "report"-typed contract
+// carrying a non-empty write_set — an archetype whose AllowEmptyWriteSet
+// means force-release will not immediately trip gate 3 (would-fail-
+// validation) or gate 2 (no-op) on the way to actually being released.
+func forceReleasableContract(missionID string) *Contract {
+	c := newContract(missionID)
+	c.Type = "report"
+	return c
+}
+
+// TestStore_ForceReleaseWriteSet_Succeeds asserts the baseline: an
+// open mission's write_set and extract_into are cleared, its status
+// and every other field are untouched, and exactly one new event is
+// appended.
+func TestStore_ForceReleaseWriteSet_Succeeds(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+	c := forceReleasableContract("m-2026-08-06-050")
+	c.ExtractInto = []string{"internal/mission/generated/"}
+	require.NoError(t, s.Create(c))
+
+	released, err := s.ForceReleaseWriteSet("m-2026-08-06-050", "worker session ended, blocking new work")
+	require.NoError(t, err)
+	require.NotNil(t, released)
+	assert.Equal(t, StatusOpen, released.Status, "force-release must not transition status")
+	assert.Empty(t, released.WriteSet)
+	assert.Empty(t, released.ExtractInto)
+	assert.Empty(t, released.ClosedAt, "force-release is not a terminal transition")
+
+	loaded, err := s.Load("m-2026-08-06-050")
+	require.NoError(t, err, "the released contract must still Load cleanly")
+	assert.Equal(t, StatusOpen, loaded.Status)
+	assert.Empty(t, loaded.WriteSet)
+	assert.Empty(t, loaded.ExtractInto)
+
+	events, _, err := s.LoadEvents("m-2026-08-06-050")
+	require.NoError(t, err)
+	require.Len(t, events, 2, "create + write_set_released, nothing else")
+	assert.Equal(t, EventWriteSetReleased, events[1].Event)
+	assert.Equal(t, "worker session ended, blocking new work", events[1].Details["reason"])
+}
+
+// TestStore_ForceReleaseWriteSet_RefusesRatherThanCorrupt is the
+// regression gate for the actual ethos-9x07 scenario: an ordinary
+// "implement"-typed mission — the default every mission gets, and the
+// one the bug report is about — cannot have its write_set literally
+// emptied, because Contract.Validate rule 11 requires a non-empty
+// write_set for any archetype that does not set AllowEmptyWriteSet.
+// Force-release must refuse cleanly here rather than write a contract
+// that fails validation on every subsequent Load — which would not
+// just fail to unblock ethos-9x07, it would permanently brick the
+// mission: mission show, mission list, and even a later Close or
+// Abandon on it would all error forever. The mission must remain
+// exactly as it was: fully loadable, write_set intact, no event
+// appended.
+func TestStore_ForceReleaseWriteSet_RefusesRatherThanCorrupt(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	writeArchetypeFile(t, globalRoot, "implement", implementYAML)
+	s := NewStoreWithRoots(repoRoot, globalRoot).WithArchetypeStore(NewArchetypeStore("", globalRoot))
+
+	c := newContract("m-2026-08-06-049")
+	require.NoError(t, s.Create(c))
+	originalWriteSet := append([]string(nil), c.WriteSet...)
+
+	_, err := s.ForceReleaseWriteSet("m-2026-08-06-049", "worker session ended 6d ago")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be force-released")
+	assert.Contains(t, err.Error(), "write_set must contain at least one entry")
+
+	loaded, loadErr := s.Load("m-2026-08-06-049")
+	require.NoError(t, loadErr, "a refused force-release must never leave the contract unloadable")
+	assert.Equal(t, StatusOpen, loaded.Status)
+	assert.Equal(t, originalWriteSet, loaded.WriteSet,
+		"a refused force-release must leave write_set exactly as it was")
+
+	events, _, err := s.LoadEvents("m-2026-08-06-049")
+	require.NoError(t, err)
+	require.Len(t, events, 1, "only the original create event — no write_set_released event, no partial write")
+	assert.Equal(t, "create", events[0].Event)
+}
+
+// TestStore_ForceReleaseWriteSet_RedactsReasonInEventLog is the
+// force-release counterpart to TestStore_Abandon_RedactsReasonInEventLog:
+// reason is operator-supplied free text landing in a git-tracked,
+// publicly-pushed event log, so an absolute path under the operator's
+// home directory must never reach disk unredacted.
+func TestStore_ForceReleaseWriteSet_RedactsReasonInEventLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+	c := forceReleasableContract("m-2026-08-06-051")
+	require.NoError(t, s.Create(c))
+
+	leakyReason := "stale, see notes in " + filepath.Join(home, ".tmp", "notes.md")
+	_, err := s.ForceReleaseWriteSet("m-2026-08-06-051", leakyReason)
+	require.NoError(t, err)
+
+	events, _, err := s.LoadEvents("m-2026-08-06-051")
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	released := events[1]
+	require.Equal(t, EventWriteSetReleased, released.Event)
+
+	persistedReason, _ := released.Details["reason"].(string)
+	assert.NotContains(t, persistedReason, home,
+		"the persisted reason must not carry the raw home path")
+	assert.Equal(t, "stale, see notes in ~/.tmp/notes.md", persistedReason)
+
+	logPath := audit.LiveMissionLogPath(repoRoot, "m-2026-08-06-051", sessionlessID)
+	raw, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), home,
+		"the on-disk event log must never carry the raw home path")
+}
+
+// TestStore_ForceReleaseWriteSet_RedactorFailureLeavesMissionUnchanged
+// is the force-release counterpart to
+// TestStore_Abandon_RedactorFailureLeavesMissionOpen: NewPathRedactor
+// is built before the lock and before any mutation, so a construction
+// failure must leave the contract exactly as it was — write_set and
+// extract_into intact, no event appended.
+func TestStore_ForceReleaseWriteSet_RedactorFailureLeavesMissionUnchanged(t *testing.T) {
+	t.Setenv("HOME", "relative/path")
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+	c := forceReleasableContract("m-2026-08-06-052")
+	require.NoError(t, s.Create(c))
+	originalWriteSet := append([]string(nil), c.WriteSet...)
+
+	_, err := s.ForceReleaseWriteSet("m-2026-08-06-052", "should never land on disk")
+	require.Error(t, err, "force-release must refuse when the redactor cannot be built")
+	assert.Contains(t, err.Error(), "building path redactor")
+
+	loaded, loadErr := s.Load("m-2026-08-06-052")
+	require.NoError(t, loadErr)
+	assert.Equal(t, StatusOpen, loaded.Status)
+	assert.Equal(t, originalWriteSet, loaded.WriteSet,
+		"a refused force-release must leave write_set exactly as it was")
+
+	events, _, err := s.LoadEvents("m-2026-08-06-052")
+	require.NoError(t, err)
+	require.Len(t, events, 1, "only the original create event")
+	assert.Equal(t, "create", events[0].Event)
+}
+
+// TestStore_ForceReleaseWriteSet_RequiresReason asserts the CLI/MCP-
+// visible contract: an empty or whitespace-only reason is refused
+// before any disk mutation.
+func TestStore_ForceReleaseWriteSet_RequiresReason(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+	c := forceReleasableContract("m-2026-08-06-053")
+	require.NoError(t, s.Create(c))
+
+	for _, reason := range []string{"", "   ", "\t\n"} {
+		_, err := s.ForceReleaseWriteSet("m-2026-08-06-053", reason)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "reason is required")
+	}
+
+	loaded, err := s.Load("m-2026-08-06-053")
+	require.NoError(t, err)
+	assert.NotEmpty(t, loaded.WriteSet, "a refused force-release must not mutate the mission")
+}
+
+// TestStore_ForceReleaseWriteSet_RefusesNoOpRelease asserts gate 2:
+// a mission whose write_set and extract_into are already both empty
+// (a read-only archetype mission, or one already released) refuses
+// rather than silently succeed and write a misleading event.
+func TestStore_ForceReleaseWriteSet_RefusesNoOpRelease(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+	c := forceReleasableContract("m-2026-08-06-054")
+	require.NoError(t, s.Create(c))
+
+	_, err := s.ForceReleaseWriteSet("m-2026-08-06-054", "first release")
+	require.NoError(t, err)
+
+	_, err = s.ForceReleaseWriteSet("m-2026-08-06-054", "second release attempt")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nothing to release")
+
+	events, _, err := s.LoadEvents("m-2026-08-06-054")
+	require.NoError(t, err)
+	require.Len(t, events, 2, "the refused second call must not append another event")
+}
+
+// TestStore_ForceReleaseWriteSet_RefusesAlreadyTerminal covers all
+// four terminal states — closed, failed, escalated, and abandoned —
+// none of which may have their write_set force-released; a terminal
+// mission's write_set is already excluded from conflict scans, so
+// there is nothing to do, and the refusal keeps the operation from
+// masquerading as a status change.
+func TestStore_ForceReleaseWriteSet_RefusesAlreadyTerminal(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+
+	cases := map[string]func(id string, c *Contract){
+		StatusClosed: func(id string, c *Contract) {
+			submitRoundResult(t, s, c, VerdictPass)
+			_, err := s.Close(id, StatusClosed)
+			require.NoError(t, err)
+		},
+		StatusFailed: func(id string, c *Contract) {
+			submitRoundResult(t, s, c, VerdictFail)
+			_, err := s.Close(id, StatusFailed)
+			require.NoError(t, err)
+		},
+		StatusEscalated: func(id string, c *Contract) {
+			submitRoundResult(t, s, c, VerdictEscalate)
+			_, err := s.Close(id, StatusEscalated)
+			require.NoError(t, err)
+		},
+		StatusAbandoned: func(id string, _ *Contract) {
+			_, err := s.Abandon(id, "never dispatched")
+			require.NoError(t, err)
+		},
+	}
+
+	i := 0
+	for status, setup := range cases {
+		i++
+		id := "m-2026-08-06-" + []string{"", "060", "061", "062", "063"}[i]
+		t.Run(status, func(t *testing.T) {
+			c := forceReleasableContract(id)
+			c.WriteSet = []string{"tests/" + id + "/"}
+			require.NoError(t, s.Create(c))
+			setup(id, c)
+
+			_, err := s.ForceReleaseWriteSet(id, "trying to release a terminal mission")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "already in terminal state")
+		})
+	}
+}
+
+// TestStore_ForceReleaseWriteSet_EventCarriesFullAuditTrail asserts
+// the event Details shape the design specifies: the redacted reason,
+// the original write_set and extract_into (so the claim is never lost
+// to history even though the live contract no longer carries it), and
+// a staleness_snapshot recording what the leader knew at decision
+// time. delegation_count is a real int here because a delegation
+// record exists under the wired repoRoot.
+func TestStore_ForceReleaseWriteSet_EventCarriesFullAuditTrail(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+	c := forceReleasableContract("m-2026-08-06-070")
+	c.ExtractInto = []string{"internal/mission/generated/"}
+	require.NoError(t, s.Create(c))
+
+	_, err := WriteDelegationSkeleton(repoRoot, "m-2026-08-06-070", "d-2026-08-06-070", DelegationSkeleton{
+		Tier:      "b",
+		AgentType: "bwk",
+	})
+	require.NoError(t, err)
+
+	_, err = s.ForceReleaseWriteSet("m-2026-08-06-070", "worker gone, unblocking lux-uoy4")
+	require.NoError(t, err)
+
+	events, _, err := s.LoadEvents("m-2026-08-06-070")
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	details := events[1].Details
+
+	assert.Equal(t, "worker gone, unblocking lux-uoy4", details["reason"])
+	oldWriteSet, ok := details["old_write_set"].([]any)
+	require.True(t, ok, "old_write_set must round-trip through JSON as a list")
+	assert.ElementsMatch(t, []any{"internal/mission/", "cmd/ethos/mission.go"}, oldWriteSet)
+	oldExtractInto, ok := details["old_extract_into"].([]any)
+	require.True(t, ok, "old_extract_into must round-trip through JSON as a list")
+	assert.Equal(t, []any{"internal/mission/generated/"}, oldExtractInto)
+
+	snapshot, ok := details["staleness_snapshot"].(map[string]any)
+	require.True(t, ok, "staleness_snapshot must be present")
+	assert.Equal(t, false, snapshot["has_results"])
+	assert.Equal(t, float64(1), snapshot["delegation_count"],
+		"a real delegation record must report a real count, not unknown")
+	assert.NotEmpty(t, snapshot["last_activity_at"])
+}
+
+// TestStore_ForceReleaseWriteSet_ReportsUnknownDelegationCount asserts
+// that a Store with no repoRoot in scope — the same misconfiguration
+// Abandon's fail-closed gate refuses outright — does not silently
+// report zero delegations in the audit event. Force-release has no
+// delegations gate to fail closed on, so it proceeds, but the
+// snapshot must say "unknown," never a number it never checked.
+func TestStore_ForceReleaseWriteSet_ReportsUnknownDelegationCount(t *testing.T) {
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, "", globalRoot)
+	c := forceReleasableContract("m-2026-08-06-071")
+	require.NoError(t, s.Create(c))
+
+	_, err := s.ForceReleaseWriteSet("m-2026-08-06-071", "no repo root wired, releasing anyway")
+	require.NoError(t, err)
+
+	events, _, err := s.LoadEvents("m-2026-08-06-071")
+	require.NoError(t, err)
+	require.Len(t, events, 2)
+	snapshot, ok := events[1].Details["staleness_snapshot"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "unknown", snapshot["delegation_count"])
+}
+
+// TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate is the
+// end-to-end proof of the actual bug fix (ethos-9x07): a mission with
+// an overlapping write_set, no visible progress, and (unlike Abandon's
+// scenario) delegations that may exist, blocks a second Create until
+// its write_set is force-released — after which the second Create
+// succeeds, and the first mission is still open and still on record.
+func TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := forceReleaseTestStore(t, repoRoot, globalRoot)
+
+	a := forceReleasableContract("m-2026-08-06-080")
+	a.WriteSet = []string{"internal/shared/"}
+	require.NoError(t, s.Create(a))
+
+	_, err := WriteDelegationSkeleton(repoRoot, "m-2026-08-06-080", "d-2026-08-06-080", DelegationSkeleton{
+		Tier:      "b",
+		AgentType: "bwk",
+	})
+	require.NoError(t, err)
+
+	b := forceReleasableContract("m-2026-08-06-081")
+	b.WriteSet = []string{"internal/shared/thing.go"}
+	err = s.Create(b)
+	require.Error(t, err, "an open mission with a spawned worker must still block a conflicting create")
+
+	_, err = s.ForceReleaseWriteSet("m-2026-08-06-080", "stale, worker session ended 6d ago")
+	require.NoError(t, err)
+
+	require.NoError(t, s.Create(b), "releasing the write_set must free the conflict, unlike abandon this mission stays on record")
+
+	loaded, err := s.Load("m-2026-08-06-080")
+	require.NoError(t, err)
+	assert.Equal(t, StatusOpen, loaded.Status, "the original mission stays open, unlike Abandon's terminal transition")
+}
