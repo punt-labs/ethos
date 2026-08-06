@@ -85,7 +85,17 @@ func testHandlerWithMissions(t *testing.T) *Handler {
 	dir := t.TempDir()
 	s := identity.NewStore(dir)
 	root := s.Root()
-	ms := mission.NewStore(root)
+	// WithRepoRoot mirrors production wiring (missionStoreForCreate in
+	// cmd/ethos/mission.go, via resolve.StoreRepoRoot()): every real
+	// CLI and MCP entry point resolves a non-empty repoRoot when
+	// running inside a repo checkout, which is the only environment
+	// Abandon's delegations/ gate can safely evaluate in. A fixture
+	// with an empty repoRoot no longer exercises the delegations gate
+	// at all — Store.Abandon refuses outright when repoRoot is empty
+	// (see the comment on that check in internal/mission/store.go)
+	// rather than silently skipping it, so the fixture must supply one
+	// to reach the gate the abandon tests actually mean to cover.
+	ms := mission.NewStore(root).WithRepoRoot(t.TempDir())
 
 	// Phase 3.3 (DES-033) requires the evaluator handle to resolve to
 	// real identity content at create time so the contract's evaluator
@@ -713,6 +723,125 @@ func TestHandleMission_CloseMissingID(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "mission_id is required")
+}
+
+// TestHandleMission_Abandon asserts the happy path: a mission that was
+// created but never dispatched (no delegations, no results — the MCP
+// fixture wires a Store with no repoRoot, so the delegation gate is
+// inert here just as Store.Abandon documents) abandons cleanly and its
+// write_set becomes available to a new, overlapping Create.
+func TestHandleMission_Abandon(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	abandonResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "never dispatched, blocking a real mission",
+	}))
+	require.NoError(t, err)
+	require.False(t, abandonResult.IsError, "abandon must succeed: %s", resultText(t, abandonResult))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, abandonResult)), &payload))
+	assert.Equal(t, mission.StatusAbandoned, payload["status"])
+	assert.Equal(t, "never dispatched, blocking a real mission", payload["reason"])
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var loaded mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+	assert.Equal(t, mission.StatusAbandoned, loaded.Status)
+
+	// The actual bug fix, end to end: an overlapping Create now
+	// succeeds because the write_set-conflict scan only considers
+	// StatusOpen missions.
+	secondResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, secondResult.IsError, "abandoning the dead mission must free its write_set: %s", resultText(t, secondResult))
+}
+
+// TestHandleMission_AbandonMissingID mirrors
+// TestHandleMission_CloseMissingID: abandon requires mission_id.
+func TestHandleMission_AbandonMissingID(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method": "abandon",
+		"reason": "doesn't matter, no id",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "mission_id is required")
+}
+
+// TestHandleMission_AbandonMissingReason asserts the audit-trail
+// requirement is enforced at the MCP boundary, not only in the CLI:
+// abandon without a reason is refused before the store is touched.
+func TestHandleMission_AbandonMissingReason(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "reason is required")
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	var loaded mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &loaded))
+	assert.Equal(t, mission.StatusOpen, loaded.Status, "a refused abandon must not mutate the mission")
+}
+
+// TestHandleMission_AbandonRefusesWithResult proves the MCP surface
+// carries the same "any sign of work" refusal the store test does: a
+// submitted result means abandon must refuse in favor of close.
+func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
+	h := testHandlerWithMissions(t)
+
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "abandon",
+		"mission_id": created.MissionID,
+		"reason":     "ignoring the submitted result",
+	}))
+	require.NoError(t, err)
+	assert.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "result artifact")
 }
 
 func TestHandleMission_UnknownMethod(t *testing.T) {

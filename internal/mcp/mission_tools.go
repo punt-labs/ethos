@@ -20,13 +20,13 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, reflect, reflections, advance, result, results, log. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, abandon, reflect, reflections, advance, result, results, log. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Abandon retires a mission that was created but never had a worker actually spawned — it refuses if any delegation record or result artifact exists, at any round; use close (after a result is submitted) for missions with real work. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("create", "show", "list", "close", "reflect", "reflections", "advance", "result", "results", "log"),
+			mcplib.Enum("create", "show", "list", "close", "abandon", "reflect", "reflections", "advance", "result", "results", "log"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("mission_id",
-			mcplib.Description("Mission ID or unique prefix. Required for show, close, reflect, reflections, advance, result, results, and log."),
+			mcplib.Description("Mission ID or unique prefix. Required for show, close, abandon, reflect, reflections, advance, result, results, and log."),
 		),
 		mcplib.WithString("contract",
 			mcplib.Description("Full contract YAML body. Required for create."),
@@ -42,11 +42,16 @@ func (h *Handler) missionTool() mcplib.Tool {
 		),
 		mcplib.WithString("status",
 			// No enum constraint: the valid values differ per method
-			// (list accepts "open|closed|failed|escalated|all",
-			// close accepts "closed|failed|escalated" only). A shared
-			// enum would advertise "open" and "all" as valid for close,
-			// which is wrong. Each handler validates its own input.
-			mcplib.Description("Filter for list (open|closed|failed|escalated|all) or terminal status for close (closed|failed|escalated)."),
+			// (list accepts "open|closed|failed|escalated|abandoned|
+			// all", close accepts "closed|failed|escalated" only —
+			// "abandoned" is deliberately not a valid close status,
+			// see Store.Close). A shared enum would advertise "open"
+			// and "all" as valid for close, which is wrong. Each
+			// handler validates its own input.
+			mcplib.Description("Filter for list (open|closed|failed|escalated|abandoned|all) or terminal status for close (closed|failed|escalated)."),
+		),
+		mcplib.WithString("reason",
+			mcplib.Description("Why the mission is being retired without a worker ever spawning. Required for abandon."),
 		),
 		mcplib.WithString("event",
 			mcplib.Description("Optional comma-separated list of event types for log (e.g. create,close). Unknown types are accepted and return empty."),
@@ -74,6 +79,8 @@ func (h *Handler) handleMission(_ context.Context, req mcplib.CallToolRequest) (
 		return h.handleListMissions(req)
 	case "close":
 		return h.handleCloseMission(req)
+	case "abandon":
+		return h.handleAbandonMission(req)
 	case "reflect":
 		return h.handleReflectMission(req)
 	case "reflections":
@@ -196,7 +203,7 @@ func (h *Handler) handleListMissions(req mcplib.CallToolRequest) (*mcplib.CallTo
 	status := stringArg(req, "status", "open")
 	if !mission.IsValidStatusFilter(status) {
 		return mcplib.NewToolResultError(fmt.Sprintf(
-			"invalid status filter %q: must be one of open, closed, failed, escalated, all",
+			"invalid status filter %q: must be one of open, closed, failed, escalated, abandoned, all",
 			status,
 		)), nil
 	}
@@ -249,6 +256,41 @@ func (h *Handler) handleCloseMission(req mcplib.CallToolRequest) (*mcplib.CallTo
 	// MCP used to skip this, leaving the active-mission sidecar in place
 	// and the commit-msg hook tagging later missionless commits with the
 	// closed mission (ethos-jawp).
+	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	return jsonResult(payload)
+}
+
+// handleAbandonMission resolves the mission by ID or prefix and
+// retires it via Store.Abandon — a distinct, more narrowly gated
+// operation from Close (see the Abandon doc comment in
+// internal/mission/store.go). reason is required.
+func (h *Handler) handleAbandonMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	idArg := stringArg(req, "mission_id", "")
+	if idArg == "" {
+		return mcplib.NewToolResultError("mission_id is required for abandon"), nil
+	}
+	reason := stringArg(req, "reason", "")
+	if strings.TrimSpace(reason) == "" {
+		return mcplib.NewToolResultError("reason is required for abandon"), nil
+	}
+
+	id, err := h.missionStore.MatchByPrefix(idArg)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	c, err := h.missionStore.Abandon(id, reason)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to abandon mission: %v", err)), nil
+	}
+	payload := map[string]any{
+		"mission_id": id,
+		"status":     c.Status,
+		"reason":     reason,
+	}
+	// Parity with close: a terminal transition ends this session's work
+	// on the mission, so clear its sidecars.
 	if warnings := h.clearClosedMissionBindings(id); len(warnings) > 0 {
 		payload["warnings"] = warnings
 	}

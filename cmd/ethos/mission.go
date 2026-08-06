@@ -281,9 +281,10 @@ var missionListCmd = &cobra.Command{
 	Long: `List mission contracts.
 
 Filters by --status (default "open"). Pass --status all to include
-closed, failed, and escalated missions alongside open ones. Pass
---pipeline <id> to show only missions in that pipeline, sorted in
-dependency order. Pass --json for a machine-readable summary.`,
+closed, failed, escalated, and abandoned missions alongside open
+ones. Pass --pipeline <id> to show only missions in that pipeline,
+sorted in dependency order. Pass --json for a machine-readable
+summary.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runMissionList(missionListStatus, missionListPipeline)
@@ -312,6 +313,50 @@ closing; see "ethos mission result --help" for the required YAML shape.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runMissionClose(args[0], missionCloseStatus)
+	},
+}
+
+// --- mission abandon ---
+
+var missionAbandonReason string
+
+var missionAbandonCmd = &cobra.Command{
+	Use:   "abandon <id-or-prefix>",
+	Short: "Retire a mission that never had a worker spawned",
+	Long: `Retire a mission that was created but never actually dispatched to
+a worker, freeing its write_set for a new mission.
+
+Abandon is NOT a bypass of "ethos mission close" — it is a separate,
+more narrowly gated command for a different situation. Close requires
+a result artifact for the current round and refuses without one, by
+design: a terminal verdict must be backed by structured worker
+output. Abandon exists for the case where there is no work to have a
+verdict on at all — a mission contract was written (via "mission
+create" or "mission dispatch") but the worker was never actually
+spawned, so there are zero delegation records and zero result
+artifacts on disk.
+
+Abandon refuses, with no override, if:
+  - the mission is already in a terminal state (closed, failed,
+    escalated, or already abandoned)
+  - any delegation record exists under the mission's delegations/
+    directory, at any verdict
+  - a result artifact exists for any round
+
+Any of those conditions means real work may exist; retire the mission
+with "ethos mission close" once a result has been submitted instead.
+
+--reason is required and is recorded on the abandon event so the
+audit trail explains why the mission was retired, not just that it
+was.
+
+The abandoned status is distinct from closed/failed/escalated: an
+open mission created with an overlapping write_set is blocked only by
+OTHER OPEN missions, so abandoning a dead mission immediately frees
+its write_set for a new "mission create".`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runMissionAbandon(args[0], missionAbandonReason)
 	},
 }
 
@@ -754,12 +799,15 @@ func init() {
 	_ = missionCreateCmd.MarkFlagRequired("file")
 
 	missionListCmd.Flags().StringVar(&missionListStatus, "status", "open",
-		"Filter by status (open|closed|failed|escalated|all)")
+		"Filter by status (open|closed|failed|escalated|abandoned|all)")
 	missionListCmd.Flags().StringVar(&missionListPipeline, "pipeline", "",
 		"Filter by pipeline ID")
 
 	missionCloseCmd.Flags().StringVar(&missionCloseStatus, "status", mission.StatusClosed,
 		"Terminal status (closed|failed|escalated)")
+
+	missionAbandonCmd.Flags().StringVar(&missionAbandonReason, "reason", "", "Why this mission is being retired without a worker ever spawning (required)")
+	_ = missionAbandonCmd.MarkFlagRequired("reason")
 
 	missionReflectCmd.Flags().StringVarP(&missionReflectFile, "file", "f", "", "Read reflection YAML from file (required)")
 	_ = missionReflectCmd.MarkFlagRequired("file")
@@ -801,6 +849,7 @@ func init() {
 		missionShowCmd,
 		missionListCmd,
 		missionCloseCmd,
+		missionAbandonCmd,
 		missionReflectCmd,
 		missionReflectionsCmd,
 		missionAdvanceCmd,
@@ -1149,7 +1198,7 @@ func runMissionList(status, pipeline string) error {
 	// --status bogus` returns an explicit error instead of an empty
 	// table. Symmetric with the MCP handler's defense.
 	if !mission.IsValidStatusFilter(status) {
-		return fmt.Errorf("mission list: invalid --status %q: must be one of open, closed, failed, escalated, all", status)
+		return fmt.Errorf("mission list: invalid --status %q: must be one of open, closed, failed, escalated, abandoned, all", status)
 	}
 	ms := missionStore()
 	ids, err := ms.List()
@@ -1280,6 +1329,50 @@ func runMissionClose(idOrPrefix, status string) error {
 	// summarizeEventDetails so CLI echo and audit log read the same.
 	fmt.Printf("closed: %s round=%d verdict=%s status=%s\n",
 		id, r.Round, r.Verdict, status)
+	return nil
+}
+
+// runMissionAbandon handles `ethos mission abandon <id> --reason <text>`.
+//
+// Deliberately does NOT call Store.Close and does not go through the
+// result gate — Abandon is Store's own, more narrowly gated
+// operation. See the Abandon doc comment in internal/mission/store.go
+// for the full rationale.
+func runMissionAbandon(idOrPrefix, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("mission abandon: --reason is required")
+	}
+	ms := missionStore()
+	id, err := ms.MatchByPrefix(idOrPrefix)
+	if err != nil {
+		return fmt.Errorf("mission abandon: %w", err)
+	}
+	c, err := ms.Abandon(id, reason)
+	if err != nil {
+		return fmt.Errorf("mission abandon: %w", err)
+	}
+	// Parity with close: seal the checkout's mission-log tail so the
+	// abandon event is complete on disk even if no commit immediately
+	// follows. Non-fatal — the mission is already abandoned.
+	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: mission abandon: sealing mission log: %v\n", sErr)
+		}
+	}
+	// A terminal transition ends this session's work on the mission, so
+	// clear its sidecars the same way close does — otherwise the
+	// commit-msg hook keeps tagging later missionless commits with the
+	// now-abandoned mission.
+	clearClosedSessionBindings(id)
+	if jsonOutput {
+		printJSON(map[string]any{
+			"mission_id": id,
+			"status":     c.Status,
+			"reason":     reason,
+		})
+		return nil
+	}
+	fmt.Printf("abandoned: %s reason=%q\n", id, reason)
 	return nil
 }
 
@@ -2305,6 +2398,8 @@ func summarizeDetails(evType string, details map[string]any) string {
 			kv("verdict", detailStr(details, "verdict")),
 			kvRound("round", detailRound(details, "round")),
 		)
+	case "abandon":
+		return kv("reason", detailStr(details, "reason"))
 	case "result":
 		return joinParts(
 			kvRound("round", detailRound(details, "round")),
