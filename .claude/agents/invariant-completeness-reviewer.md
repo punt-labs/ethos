@@ -30,7 +30,7 @@ assistant: "I'll run the invariant-completeness-reviewer agent to confirm the 'c
 "Cannot drift" is exactly the kind of claim that sounds true, compiles, and passes tests today, while being false the moment someone edits one copy and not the other. This agent's job is to falsify or confirm that specific claim by reading the code, not to trust the comment.
 </commentary>
 </example>
-model: opus
+model: inherit
 color: purple
 ---
 
