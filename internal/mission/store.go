@@ -1303,140 +1303,151 @@ func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error
 	if err != nil {
 		return nil, fmt.Errorf("force-release-write-set: building path redactor: %w", err)
 	}
+	// Wrapped in the create lock, same nesting order Create uses
+	// (create lock -> per-mission lock), so a concurrent Create's
+	// cross-mission conflict scan can never observe the brief window
+	// between writeContract stamping WriteSetReleasedAt and
+	// appendEventLocked confirming it. Without this, Create could
+	// admit an overlapping mission against a release that later rolls
+	// back on event-append failure, leaving two open missions with
+	// intersecting write_sets on disk -- exactly what admission
+	// control exists to prevent.
 	var released *Contract
-	err = s.withLock(missionID, func() error {
-		dest, err := s.contractPath(missionID)
-		if err != nil {
-			return err
-		}
-		c, oldData, err := s.loadLocked(missionID)
-		if err != nil {
-			return err
-		}
-		// Gate 1: mission must be open. A terminal mission's write_set
-		// is already excluded from checkWriteSetConflicts by virtue of
-		// Status != StatusOpen, so there is nothing to release.
-		if c.Status != StatusOpen {
-			return fmt.Errorf(
-				"mission %q is already in terminal state %q; force-release-write-set only applies to open missions",
-				missionID, c.Status,
-			)
-		}
-		// Gate 2: refuse a no-op release rather than silently succeed
-		// and write a misleading event -- either the mission was
-		// already released, or it never claimed anything to begin
-		// with.
-		if c.WriteSetReleasedAt != "" {
-			return fmt.Errorf(
-				"mission %q already has its write_set released (at %s); nothing to release",
-				missionID, c.WriteSetReleasedAt,
-			)
-		}
-		if len(c.WriteSet) == 0 && len(c.ExtractInto) == 0 {
-			return fmt.Errorf(
-				"mission %q already has an empty write_set and extract_into; nothing to release",
-				missionID,
-			)
-		}
+	err = s.withCreateLock(func() error {
+		return s.withLock(missionID, func() error {
+			dest, err := s.contractPath(missionID)
+			if err != nil {
+				return err
+			}
+			c, oldData, err := s.loadLocked(missionID)
+			if err != nil {
+				return err
+			}
+			// Gate 1: mission must be open. A terminal mission's write_set
+			// is already excluded from checkWriteSetConflicts by virtue of
+			// Status != StatusOpen, so there is nothing to release.
+			if c.Status != StatusOpen {
+				return fmt.Errorf(
+					"mission %q is already in terminal state %q; force-release-write-set only applies to open missions",
+					missionID, c.Status,
+				)
+			}
+			// Gate 2: refuse a no-op release rather than silently succeed
+			// and write a misleading event -- either the mission was
+			// already released, or it never claimed anything to begin
+			// with.
+			if c.WriteSetReleasedAt != "" {
+				return fmt.Errorf(
+					"mission %q already has its write_set released (at %s); nothing to release",
+					missionID, c.WriteSetReleasedAt,
+				)
+			}
+			if len(c.WriteSet) == 0 && len(c.ExtractInto) == 0 {
+				return fmt.Errorf(
+					"mission %q already has an empty write_set and extract_into; nothing to release",
+					missionID,
+				)
+			}
 
-		// The staleness snapshot recorded on the event is informational,
-		// not gating (see the doc comment above): every input below
-		// degrades to "unknown" on failure rather than refusing the
-		// whole operation, unlike Abandon's gate 1. This matters most
-		// exactly when it is hardest to satisfy — a corrupt audit
-		// chunk or an oversized log is the kind of thing that leaves a
-		// mission stuck in the first place, and this method exists to
-		// unstick it; a hard error here would make ForceReleaseWriteSet
-		// unusable in precisely the scenario it is the recovery path
-		// for.
-		delegationsKnown := s.repoRoot != ""
-		delegationCount := 0
-		if delegationsKnown {
-			n, dErr := countDelegations(s.repoRoot, missionID)
-			if dErr != nil {
-				delegationsKnown = false
-				fmt.Fprintf(os.Stderr, "ethos: mission %s: counting delegations for staleness snapshot: %v\n", missionID, dErr)
+			// The staleness snapshot recorded on the event is informational,
+			// not gating (see the doc comment above): every input below
+			// degrades to "unknown" on failure rather than refusing the
+			// whole operation, unlike Abandon's gate 1. This matters most
+			// exactly when it is hardest to satisfy — a corrupt audit
+			// chunk or an oversized log is the kind of thing that leaves a
+			// mission stuck in the first place, and this method exists to
+			// unstick it; a hard error here would make ForceReleaseWriteSet
+			// unusable in precisely the scenario it is the recovery path
+			// for.
+			delegationsKnown := s.repoRoot != ""
+			delegationCount := 0
+			if delegationsKnown {
+				n, dErr := countDelegations(s.repoRoot, missionID)
+				if dErr != nil {
+					delegationsKnown = false
+					fmt.Fprintf(os.Stderr, "ethos: mission %s: counting delegations for staleness snapshot: %v\n", missionID, dErr)
+				} else {
+					delegationCount = n
+				}
+			}
+			var events []Event
+			eventsKnown := true
+			loadedEvents, warnings, evErr := s.LoadEvents(missionID)
+			if evErr != nil {
+				eventsKnown = false
+				fmt.Fprintf(os.Stderr, "ethos: mission %s: loading events for staleness snapshot: %v\n", missionID, evErr)
 			} else {
-				delegationCount = n
+				events = loadedEvents
+				for _, w := range warnings {
+					fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", missionID, w)
+				}
 			}
-		}
-		var events []Event
-		eventsKnown := true
-		loadedEvents, warnings, evErr := s.LoadEvents(missionID)
-		if evErr != nil {
-			eventsKnown = false
-			fmt.Fprintf(os.Stderr, "ethos: mission %s: loading events for staleness snapshot: %v\n", missionID, evErr)
-		} else {
-			events = loadedEvents
-			for _, w := range warnings {
-				fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", missionID, w)
+			var results []Result
+			resultsKnown := true
+			loadedResults, rErr := s.loadResultsLocked(missionID)
+			if rErr != nil {
+				resultsKnown = false
+				fmt.Fprintf(os.Stderr, "ethos: mission %s: loading results for staleness snapshot: %v\n", missionID, rErr)
+			} else {
+				results = loadedResults
 			}
-		}
-		var results []Result
-		resultsKnown := true
-		loadedResults, rErr := s.loadResultsLocked(missionID)
-		if rErr != nil {
-			resultsKnown = false
-			fmt.Fprintf(os.Stderr, "ethos: mission %s: loading results for staleness snapshot: %v\n", missionID, rErr)
-		} else {
-			results = loadedResults
-		}
-		now := time.Now().UTC()
-		st := Staleness(c, events, results, delegationCount, delegationsKnown, now)
+			now := time.Now().UTC()
+			st := Staleness(c, events, results, delegationCount, delegationsKnown, now)
 
-		writeSetAtRelease := append([]string(nil), c.WriteSet...)
-		extractIntoAtRelease := append([]string(nil), c.ExtractInto...)
+			writeSetAtRelease := append([]string(nil), c.WriteSet...)
+			extractIntoAtRelease := append([]string(nil), c.ExtractInto...)
 
-		nowStr := now.Format(time.RFC3339)
-		c.WriteSetReleasedAt = nowStr
-		c.UpdatedAt = nowStr
-		// WriteSet and ExtractInto are untouched, so the normal
-		// archetype-resolving validation path applies unchanged --
-		// releasing a claim never violates rule 11, since the
-		// write_set this rule checks was never cleared.
-		if err := s.validateContract(c); err != nil {
-			return fmt.Errorf("invalid contract after force-release-write-set: %w", err)
-		}
-		if err := s.writeContract(c); err != nil {
-			return err
-		}
-		delegationDetail := any(delegationCount)
-		if !delegationsKnown {
-			delegationDetail = "unknown"
-		}
-		lastActivityDetail := any(st.LastActivityAt)
-		ageDaysDetail := any(st.AgeDays)
-		if !eventsKnown || !st.AgeDaysKnown {
-			lastActivityDetail = "unknown"
-			ageDaysDetail = "unknown"
-		}
-		hasResultsDetail := any(st.HasResults)
-		if !resultsKnown {
-			hasResultsDetail = "unknown"
-		}
-		if err := s.appendEventLocked(missionID, Event{
-			TS:    nowStr,
-			Event: EventWriteSetReleased,
-			Actor: c.Leader,
-			Details: redact.Map(map[string]any{
-				"reason":                  reason,
-				"write_set_at_release":    writeSetAtRelease,
-				"extract_into_at_release": extractIntoAtRelease,
-				"staleness_snapshot": map[string]any{
-					"last_activity_at": lastActivityDetail,
-					"age_days":         ageDaysDetail,
-					"has_results":      hasResultsDetail,
-					"delegation_count": delegationDetail,
-				},
-			}),
-		}); err != nil {
-			if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
-				return fmt.Errorf("force-release-write-set: event append failed: %w; rollback failed: %v", err, rbErr)
+			nowStr := now.Format(time.RFC3339)
+			c.WriteSetReleasedAt = nowStr
+			c.UpdatedAt = nowStr
+			// WriteSet and ExtractInto are untouched, so the normal
+			// archetype-resolving validation path applies unchanged --
+			// releasing a claim never violates rule 11, since the
+			// write_set this rule checks was never cleared.
+			if err := s.validateContract(c); err != nil {
+				return fmt.Errorf("invalid contract after force-release-write-set: %w", err)
 			}
-			return fmt.Errorf("force-release-write-set: event append failed, contract rolled back: %w", err)
-		}
-		released = c
-		return nil
+			if err := s.writeContract(c); err != nil {
+				return err
+			}
+			delegationDetail := any(delegationCount)
+			if !delegationsKnown {
+				delegationDetail = "unknown"
+			}
+			lastActivityDetail := any(st.LastActivityAt)
+			ageDaysDetail := any(st.AgeDays)
+			if !eventsKnown || !st.AgeDaysKnown {
+				lastActivityDetail = "unknown"
+				ageDaysDetail = "unknown"
+			}
+			hasResultsDetail := any(st.HasResults)
+			if !resultsKnown {
+				hasResultsDetail = "unknown"
+			}
+			if err := s.appendEventLocked(missionID, Event{
+				TS:    nowStr,
+				Event: EventWriteSetReleased,
+				Actor: c.Leader,
+				Details: redact.Map(map[string]any{
+					"reason":                  reason,
+					"write_set_at_release":    writeSetAtRelease,
+					"extract_into_at_release": extractIntoAtRelease,
+					"staleness_snapshot": map[string]any{
+						"last_activity_at": lastActivityDetail,
+						"age_days":         ageDaysDetail,
+						"has_results":      hasResultsDetail,
+						"delegation_count": delegationDetail,
+					},
+				}),
+			}); err != nil {
+				if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+					return fmt.Errorf("force-release-write-set: event append failed: %w; rollback failed: %v", err, rbErr)
+				}
+				return fmt.Errorf("force-release-write-set: event append failed, contract rolled back: %w", err)
+			}
+			released = c
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, err

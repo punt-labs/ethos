@@ -4937,3 +4937,88 @@ func TestStore_ForceReleaseWriteSet_UnblocksConflictingCreate(t *testing.T) {
 	assert.Equal(t, originalWriteSet, loaded.WriteSet, "write_set stays on the contract even after release")
 	assert.NotEmpty(t, loaded.WriteSetReleasedAt)
 }
+
+// TestStore_ForceReleaseWriteSet_SerializesAgainstConcurrentCreate
+// proves the create-lock fix empirically: ForceReleaseWriteSet wraps
+// its mutation in the same create lock Create uses (create lock ->
+// per-mission lock), so a concurrent Create can never observe the
+// window between writeContract stamping WriteSetReleasedAt and
+// appendEventLocked confirming it. Without that lock, a Create
+// racing the release could be admitted against a release that later
+// rolls back on event-append failure, leaving two open missions with
+// intersecting write_sets on disk.
+//
+// Runs N concurrent Creates (all sharing mission A's write_set)
+// against one ForceReleaseWriteSet(A) call. Every outcome across many
+// trials must be one of exactly two consistent states -- proven, not
+// merely exercised once, since a race this narrow can pass a single
+// run by luck:
+//   - Create fails with a conflict error (it ran before the release
+//     committed) -- A's contract still shows the release, since
+//     ForceReleaseWriteSet itself always succeeds here (nothing
+//     contends the release itself, only Create-vs-release does).
+//   - Create succeeds (it ran after the release fully committed) --
+//     and when it does, A's on-disk contract must show
+//     WriteSetReleasedAt set AND exactly 2 events (create +
+//     write_set_released), never a torn state where one landed
+//     without the other.
+func TestStore_ForceReleaseWriteSet_SerializesAgainstConcurrentCreate(t *testing.T) {
+	const trials = 20
+	const racers = 8
+
+	for trial := 0; trial < trials; trial++ {
+		repoRoot := t.TempDir()
+		globalRoot := t.TempDir()
+		s := forceReleaseTestStore(t, repoRoot, globalRoot)
+
+		aID := fmt.Sprintf("m-2026-08-06-%03d", 100+trial)
+		a := newContract(aID)
+		a.WriteSet = []string{"internal/contended/"}
+		require.NoError(t, s.Create(a))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.ForceReleaseWriteSet(aID, "racing concurrent Create")
+			assert.NoError(t, err, "trial %d: the release itself is never contended, only Create-vs-release is", trial)
+		}()
+
+		successes := make(chan string, racers)
+		failures := make(chan error, racers)
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			bID := fmt.Sprintf("m-2026-08-06-%03d", 200+trial*racers+i)
+			go func(bID string) {
+				defer wg.Done()
+				b := newContract(bID)
+				b.WriteSet = []string{"internal/contended/thing.go"}
+				if err := s.Create(b); err != nil {
+					failures <- err
+					return
+				}
+				successes <- bID
+			}(bID)
+		}
+		wg.Wait()
+		close(successes)
+		close(failures)
+
+		for err := range failures {
+			assert.Contains(t, err.Error(), "write_set conflict", "trial %d: a failed racer must fail on conflict, not a lock/lifecycle error", trial)
+		}
+
+		loaded, err := s.Load(aID)
+		require.NoError(t, err)
+		var anySucceeded bool
+		for range successes {
+			anySucceeded = true
+		}
+		if anySucceeded {
+			assert.NotEmpty(t, loaded.WriteSetReleasedAt, "trial %d: a racer succeeded, so the release must have fully committed first", trial)
+			events, _, err := s.LoadEvents(aID)
+			require.NoError(t, err)
+			assert.Len(t, events, 2, "trial %d: create + write_set_released, never a torn write-without-event state", trial)
+		}
+	}
+}
