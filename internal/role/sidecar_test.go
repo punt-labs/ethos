@@ -70,6 +70,38 @@ func TestSidecarRolesLoad(t *testing.T) {
 	assert.ElementsMatch(t, expected, listed)
 }
 
+// TestBundleRolesHaveModel verifies every bundle-seeded role carries a
+// model tier. Bundle roles ship as an alternative starter set (gstack,
+// foundation) alongside the top-level sidecar roles; a role missing
+// model here means a repo seeded from that bundle gets no cost tiering
+// at all, silently, until someone notices the bill.
+func TestBundleRolesHaveModel(t *testing.T) {
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	bundlesRoot := filepath.Join(wd, "..", "..", "internal", "seed", "sidecar", "bundles")
+
+	bundles, err := os.ReadDir(bundlesRoot)
+	require.NoError(t, err)
+
+	for _, b := range bundles {
+		if !b.IsDir() {
+			continue
+		}
+		bundle := b.Name()
+		store := NewStore(filepath.Join(bundlesRoot, bundle))
+		names, err := store.List()
+		require.NoError(t, err)
+		for _, name := range names {
+			t.Run(bundle+"/"+name, func(t *testing.T) {
+				r, err := store.Load(name)
+				require.NoError(t, err)
+				assert.NotEmpty(t, r.Model, "bundle %q role %q should have a model", bundle, name)
+				assert.NoError(t, ValidateModel(r.Model), "bundle %q role %q has invalid model", bundle, name)
+			})
+		}
+	}
+}
+
 func TestSidecarRolesToolRestrictions(t *testing.T) {
 	store := NewStore(sidecarRoot(t))
 

@@ -1,4 +1,5 @@
 name: security-reviewer
+model: opus
 responsibilities:
   - security audit against OWASP Top 10
   - secrets and credential scanning
