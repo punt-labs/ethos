@@ -183,7 +183,7 @@ func TestSeed_PostSeedInvariant(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()
 
-	result, err := SeedVersion(dest, skills, "4.7.0", false)
+	result, err := SeedVersion(dest, skills, "", "4.7.0", false)
 	require.NoError(t, err)
 	require.Empty(t, result.Errors)
 	require.NotEmpty(t, result.Deployed)
