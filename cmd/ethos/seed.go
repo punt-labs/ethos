@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/spf13/cobra"
 )
@@ -34,7 +35,16 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	destRoot := filepath.Join(home, ".punt-labs", "ethos")
 	skillsRoot := filepath.Join(home, ".claude", "skills")
 
-	result, err := seed.SeedVersion(destRoot, skillsRoot, version, seedForce)
+	// agentsRoot is repo-local, not under destRoot: the seeded review-checklist
+	// agents (DES-070) are Claude Code subagent definitions that belong to
+	// whichever repo `ethos seed` runs in. Outside a repo there is nowhere to
+	// put them, so the category is skipped rather than guessed.
+	var agentsRoot string
+	if repoRoot := resolve.FindRepoRoot(); repoRoot != "" {
+		agentsRoot = filepath.Join(repoRoot, ".claude", "agents")
+	}
+
+	result, err := seed.SeedVersion(destRoot, skillsRoot, agentsRoot, version, seedForce)
 	if err != nil {
 		if result != nil {
 			for _, e := range result.Errors {

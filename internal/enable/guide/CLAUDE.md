@@ -39,6 +39,24 @@ an edit outside it fails the mission.
 - `ethos session` — the current roster.
 - `ethos session purge` — clear stale sessions.
 
+## Review agents
+
+`ethos seed` deploys three review-checklist agents to `.claude/agents/`:
+`code-reviewer` (general code-quality and CLAUDE.md-compliance),
+`silent-failure-hunter` (error handling, swallowed exceptions, fallback
+logic), and `invariant-completeness-reviewer` (verifies a claimed invariant,
+exhaustiveness property, or regression-guarding test actually holds, rather
+than trusting the prose that asserts it). These are checklist agents, not
+mission-dispatchable specialists: invoke them directly as local review
+passes, never via `ethos mission dispatch --worker <handle>`.
+
+Local review sequence, after `make check` passes:
+
+1. Run `code-reviewer` on the diff.
+2. Run `silent-failure-hunter` on the diff.
+3. Run `invariant-completeness-reviewer` on the diff.
+4. Fix all valid findings; re-run until all three return zero findings.
+
 ## Gotchas
 
 - Never run `make install` from inside Claude Code — the running binary

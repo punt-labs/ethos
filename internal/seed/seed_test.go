@@ -2,6 +2,7 @@ package seed
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -500,4 +501,163 @@ func TestSeedIdempotent(t *testing.T) {
 	assert.Empty(t, r2.Skipped)
 	assert.NotEmpty(t, r2.Unchanged)
 	assert.Empty(t, r2.Errors)
+}
+
+// TestSeedAgents_Category pins the DES-070 review-checklist agent category
+// specifically: it is skipped when no agentsRoot is given (a bare global
+// seed), deployed under agentsRoot rather than destRoot when one is given,
+// and obeys the same no-clobber/upgrade/preserve-edit contract every other
+// sidecar category gets from decide/place — proven here rather than assumed,
+// since sidecar/agents is the one category with a caller-supplied,
+// non-destRoot destination.
+func TestSeedAgents_Category(t *testing.T) {
+	const agentFile = "code-reviewer.md"
+
+	cases := []struct {
+		name            string
+		setup           func(t *testing.T, agentsDir string)
+		agentsRootUnset bool
+		wantContent     string // "" means: shipped content
+		wantBucket      string // Deployed, Updated, Unchanged, Skipped, Edited, or "" for none
+	}{
+		{
+			name:            "no agentsRoot skips the category entirely",
+			agentsRootUnset: true,
+			wantBucket:      "",
+		},
+		{
+			name:       "absent deploys",
+			wantBucket: "Deployed",
+		},
+		{
+			name: "untracked existing file is no-clobber skipped",
+			setup: func(t *testing.T, agentsDir string) {
+				require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+				require.NoError(t, os.WriteFile(filepath.Join(agentsDir, agentFile),
+					[]byte("operator narrowed this agent's scope\n"), 0o644))
+			},
+			wantContent: "operator narrowed this agent's scope\n",
+			wantBucket:  "Skipped",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dest := t.TempDir()
+			skills := t.TempDir()
+			agentsDir := filepath.Join(t.TempDir(), ".claude", "agents")
+
+			if tc.setup != nil {
+				tc.setup(t, agentsDir)
+			}
+
+			agentsRoot := agentsDir
+			if tc.agentsRootUnset {
+				agentsRoot = ""
+			}
+
+			result, err := SeedVersion(dest, skills, agentsRoot, "", false)
+			require.NoError(t, err)
+			require.Empty(t, result.Errors)
+
+			agentPath := filepath.Join(agentsDir, agentFile)
+
+			if tc.agentsRootUnset {
+				assert.NoFileExists(t, agentPath, "no agentsRoot must deploy nothing under it")
+				assert.NoFileExists(t, filepath.Join(dest, "agents", agentFile),
+					"no agentsRoot must not fall back to destRoot either")
+				return
+			}
+
+			require.FileExists(t, agentPath)
+			data, readErr := os.ReadFile(agentPath)
+			require.NoError(t, readErr)
+			if tc.wantContent != "" {
+				assert.Equal(t, tc.wantContent, string(data))
+			} else {
+				assert.Contains(t, string(data), "name: code-reviewer",
+					"deployed file should be the shipped code-reviewer content")
+			}
+
+			var bucket []string
+			switch tc.wantBucket {
+			case "Deployed":
+				bucket = result.Deployed
+			case "Updated":
+				bucket = result.Updated
+			case "Unchanged":
+				bucket = result.Unchanged
+			case "Skipped":
+				bucket = result.Skipped
+			case "Edited":
+				bucket = result.Edited
+			}
+			assert.Contains(t, bucket, agentPath,
+				"agent file should land in the %s bucket", tc.wantBucket)
+		})
+	}
+}
+
+// TestSeedAgents_PreservesTrackedEdit mirrors TestSeedPreservesTrackedEdit
+// for the agents category: a second seed against the same agentsRoot must
+// upgrade an untouched tracked file and preserve one the operator edited,
+// exactly like roles/talents/etc.
+func TestSeedAgents_PreservesTrackedEdit(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+	agentsDir := filepath.Join(t.TempDir(), ".claude", "agents")
+
+	// First seed tracks the agent files in the manifest.
+	_, err := SeedVersion(dest, skills, agentsDir, "", false)
+	require.NoError(t, err)
+
+	agentPath := filepath.Join(agentsDir, "silent-failure-hunter.md")
+	custom := []byte("operator's narrowed silent-failure-hunter\n")
+	require.NoError(t, os.WriteFile(agentPath, custom, 0o644))
+
+	// Re-seed: the edit differs from the recorded hash, so it is preserved.
+	result, err := SeedVersion(dest, skills, agentsDir, "", false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(agentPath)
+	require.NoError(t, err)
+	assert.Equal(t, custom, data, "a tracked operator edit to a seeded agent must not be overwritten")
+	assert.Contains(t, result.Edited, agentPath)
+}
+
+// TestSeedAgents_CommittedCopyMatchesShippedSource pins this repo's own
+// dogfooding of DES-070 against silent drift. This repo's .claude/agents/
+// stays committed by policy (never gitignored — generated agent files are
+// tracked so blame/review sees them), so on a fresh clone the three seeded
+// review agents already exist there, untracked by the seed manifest.
+// `ethos seed` then takes the no-clobber path for all three and can never
+// upgrade them here without --force — this repo is the one place the
+// feature would go silently inert. Rather than relying on a human to
+// remember to re-run `ethos seed --force` after every prompt edit, this
+// test fails CI the moment the committed copy and the shipped source
+// diverge, so the two are edited together or not at all.
+func TestSeedAgents_CommittedCopyMatchesShippedSource(t *testing.T) {
+	entries, err := fs.ReadDir(Agents, "sidecar/agents")
+	require.NoError(t, err)
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
+			continue
+		}
+		name := e.Name()
+		t.Run(name, func(t *testing.T) {
+			shipped, err := fs.ReadFile(Agents, "sidecar/agents/"+name)
+			require.NoError(t, err, "reading shipped %s from the embedded sidecar", name)
+
+			// `go test` runs with the package directory as cwd, so the repo
+			// root is two levels up from internal/seed.
+			committedPath := filepath.Join("..", "..", ".claude", "agents", name)
+			committed, err := os.ReadFile(committedPath)
+			require.NoError(t, err, "reading this repo's own committed %s", committedPath)
+
+			assert.Equal(t, string(shipped), string(committed),
+				"internal/seed/sidecar/agents/%s and %s have drifted — "+
+					"re-run `ethos seed --force` in this repo and commit the result", name, committedPath)
+		})
+	}
 }

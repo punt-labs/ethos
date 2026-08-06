@@ -121,6 +121,13 @@ works. If you build from source or run `setup` on a machine that was
 never seeded, run `ethos seed` first — `setup` otherwise fails with an
 error naming the missing attribute and telling you to seed.
 
+Run inside a repo, `ethos seed` also deploys three review-checklist
+agents to that repo's `.claude/agents/`: `code-reviewer`,
+`silent-failure-hunter`, and `invariant-completeness-reviewer`. These
+are personaless Claude Code subagents for local review — invoke them
+directly on a diff, never via `ethos mission dispatch`. Outside a repo,
+`ethos seed` deploys only the global content above.
+
 ## Features
 
 | Feature | What it does |

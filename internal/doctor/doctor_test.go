@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
 	"github.com/stretchr/testify/assert"
@@ -804,4 +807,92 @@ func TestCheckOrphanedAgentFiles_ResolvesTeamFromStoreRoot(t *testing.T) {
 	buggy := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams)
 	assert.Equal(t, "FAIL", buggy.Status,
 		"resolving the team from the checkout root falsely flags bwk as orphaned")
+}
+
+// TestCheckOrphanedAgentFiles_ChecklistAgents pins the DES-070 exemption:
+// the three seeded review-checklist agents (code-reviewer,
+// silent-failure-hunter, invariant-completeness-reviewer) carry no team
+// membership by design and must not be flagged orphaned, while a genuine
+// orphan alongside them is still caught.
+func TestCheckOrphanedAgentFiles_ChecklistAgents(t *testing.T) {
+	cases := []struct {
+		name       string
+		agentFiles []string
+		wantStatus string
+		wantDetail string
+	}{
+		{
+			name:       "a seeded checklist agent alone passes",
+			agentFiles: []string{"code-reviewer.md"},
+			wantStatus: "PASS",
+		},
+		{
+			name:       "all three seeded checklist agents pass",
+			agentFiles: []string{"code-reviewer.md", "silent-failure-hunter.md", "invariant-completeness-reviewer.md"},
+			wantStatus: "PASS",
+		},
+		{
+			name:       "a genuine orphan alongside a checklist agent is still flagged",
+			agentFiles: []string{"code-reviewer.md", "not-a-real-handle.md"},
+			wantStatus: "FAIL",
+			wantDetail: "not-a-real-handle",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			checkoutRoot := t.TempDir()
+			agentsDir := filepath.Join(checkoutRoot, ".claude", "agents")
+			require.NoError(t, os.MkdirAll(agentsDir, 0o755))
+			for _, f := range tc.agentFiles {
+				require.NoError(t, os.WriteFile(filepath.Join(agentsDir, f), []byte("---\nname: x\n---\nbody\n"), 0o644))
+			}
+			require.NoError(t, os.MkdirAll(filepath.Join(checkoutRoot, ".punt-labs"), 0o755))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(checkoutRoot, ".punt-labs", "ethos.yaml"), []byte("team: solo\n"), 0o644))
+
+			ethosDir := filepath.Join(checkoutRoot, ".punt-labs", "ethos")
+			require.NoError(t, os.MkdirAll(filepath.Join(ethosDir, "teams"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(ethosDir, "teams", "solo.yaml"),
+				[]byte("name: solo\nmembers:\n  - identity: someone-else\n    role: other\n"), 0o644))
+			teams := team.NewLayeredStore(ethosDir, ethosDir)
+
+			res := CheckOrphanedAgentFiles(checkoutRoot, checkoutRoot, teams)
+			assert.Equal(t, tc.wantStatus, res.Status, "detail: %s", res.Detail)
+			if tc.wantDetail != "" {
+				assert.Contains(t, res.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+// brokenFS.ReadDir always fails, simulating a build-broken embed.
+type brokenFS struct{}
+
+func (brokenFS) Open(string) (fs.File, error) {
+	return nil, errors.New("broken fs")
+}
+
+// TestChecklistAgentNames_ReadError pins the fix for the silent-failure
+// finding: a ReadDir failure must surface as an error the caller reports
+// plainly, not be swallowed into an empty set that masquerades as "no
+// exemptions" and produces a misleading orphan FAIL.
+func TestChecklistAgentNames_ReadError(t *testing.T) {
+	names, err := checklistAgentNames(brokenFS{}, "sidecar/agents")
+	require.Error(t, err)
+	assert.Nil(t, names)
+}
+
+// TestChecklistAgentNames_Real pins the production call site against the
+// actual embedded seed.Agents: the three seeded handles resolve, and the
+// name set can never drift from what `ethos seed` deploys because both
+// read the same embed.FS.
+func TestChecklistAgentNames_Real(t *testing.T) {
+	names, err := checklistAgentNames(seed.Agents, "sidecar/agents")
+	require.NoError(t, err)
+	assert.Contains(t, names, "code-reviewer")
+	assert.Contains(t, names, "silent-failure-hunter")
+	assert.Contains(t, names, "invariant-completeness-reviewer")
+	assert.NotContains(t, names, "README",
+		"README.md must not be treated as an exempted agent handle")
 }
