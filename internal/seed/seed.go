@@ -33,12 +33,17 @@ type Result struct {
 // version provenance. It is SeedVersion with an empty version, kept so callers
 // without a version string need not supply one.
 func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
-	return SeedVersion(destRoot, skillsRoot, "", force)
+	return SeedVersion(destRoot, skillsRoot, "", "", force)
 }
 
 // SeedVersion deploys embedded sidecar content to the destination root.
 // destRoot is typically ~/.punt-labs/ethos/.
 // skillsRoot is typically ~/.claude/skills/.
+// agentsRoot is typically <repo>/.claude/agents/ — a per-repo destination,
+// not under destRoot, since the seeded review-checklist agents (DES-070) are
+// Claude Code subagent definitions local to a repo's own checkout. An empty
+// agentsRoot skips this category entirely — a caller with no repo in scope
+// (e.g. a bare global seed) leaves it unseeded rather than guessing a path.
 // version stamps each manifest entry as provenance.
 //
 // New upgrade behavior applies only to files the manifest already tracks: a
@@ -48,7 +53,7 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 // era is entered by the first seed that writes a file (or by a one-time
 // `--force`). If force is true, every differing file is overwritten with the
 // shipped content.
-func SeedVersion(destRoot, skillsRoot, version string, force bool) (*Result, error) {
+func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (*Result, error) {
 	mf, err := loadManifest(destRoot)
 	if err != nil {
 		// A present-but-unreadable or corrupt manifest must not be treated as a
@@ -60,6 +65,7 @@ func SeedVersion(destRoot, skillsRoot, version string, force bool) (*Result, err
 	s := &seeder{
 		destRoot:   destRoot,
 		skillsRoot: skillsRoot,
+		agentsRoot: agentsRoot,
 		version:    version,
 		force:      force,
 		mf:         mf,
@@ -83,6 +89,13 @@ func SeedVersion(destRoot, skillsRoot, version string, force bool) (*Result, err
 
 	// Pipelines
 	s.seedFS(Pipelines, "sidecar/pipelines", filepath.Join(destRoot, "pipelines"), ".yaml")
+
+	// Review-checklist agents (DES-070): personaless Claude Code subagent
+	// definitions, deployed to the caller's repo-local .claude/agents/
+	// rather than under destRoot — see SeedVersion's agentsRoot doc.
+	if s.agentsRoot != "" {
+		s.seedFS(Agents, "sidecar/agents", s.agentsRoot, ".md")
+	}
 
 	// Skills
 	s.seedFile(Skills, "sidecar/skills/baseline-ops/SKILL.md",
@@ -115,6 +128,7 @@ func SeedVersion(destRoot, skillsRoot, version string, force bool) (*Result, err
 type seeder struct {
 	destRoot   string
 	skillsRoot string
+	agentsRoot string
 	version    string
 	force      bool
 	mf         *Manifest

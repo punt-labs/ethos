@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`ethos mission abandon <id> --reason <text>`.** Retires a mission that was created but never had a worker spawned against it (zero delegations, zero results for any round) — a real problem tonight: a stale open mission with a broad `write_set` permanently blocks any new mission whose `write_set` overlaps it, and `ethos mission close` correctly refuses without a result artifact, leaving no legitimate recovery path. Abandon is a new, separately-gated command, not a bypass of `close` — it fails closed (refuses, does not silently skip the check) when run outside a repo checkout, since the delegation gate can't be evaluated without a resolved repo root. See `docs/mission-abandon.md`.
 - **DES-069: verifier spawns deny in-repo MCP write tools; every MCP grant is classified.** `internal/hook/pretooluse.go` now denies `ethos identity` calls with `method=create` and the z-spec `check`/`model_check`/`test`/`animate` tools outright in verifier spawns (`ETHOS_VERIFIER_ALLOWLIST` set), before any allowlist path check — a deny rather than a path map, so it needs no knowledge of the target path and cannot fail open. `cmd/validate-content` now requires every `mcp__` tool granted in any role's `tools:` list to be classified as read-only, writes-outside-repo, or writes-in-repo; an unclassified grant fails `make check`. `write_set` remains a worker-side contract term, not a mechanical gate — documented in `docs/workflow.md` and `CLAUDE.md`. See `docs/mcp-write-set-gap.md` and DESIGN.md's DES-069.
+- **`ethos seed` deploys three review-checklist agents.** A new
+  `internal/seed/sidecar/agents/` category deploys `code-reviewer`,
+  `silent-failure-hunter`, and `invariant-completeness-reviewer` to a
+  repo's `.claude/agents/` (DES-070) — personaless, structured-output
+  Claude Code subagents for local review, ported near-verbatim from the
+  `pr-review-toolkit` plugin's two agents plus the invariant-completeness
+  checker this repo already wrote ad hoc. They deploy only when `ethos
+  seed` runs inside a repo (a repo-local `.claude/agents/` destination,
+  not the global `~/.punt-labs/ethos/` root) and are tracked in the seed
+  manifest like every other seeded category, so a hand-edited agent
+  scope survives the next `ethos seed`. `ethos doctor`'s orphaned-agent
+  check no longer flags them — they carry no team membership by design.
 
 ## [4.10.0] - 2026-08-02
 

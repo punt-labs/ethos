@@ -95,6 +95,30 @@ verifier spawns, and only for `Write`/`Edit` — see DES-069 and
 `docs/workflow.md` §"What `write_set` does and does not enforce"
 before scoping an MCP grant or trusting a write-set to fence a worker.
 
+**Local review runs three ethos-seeded agents.** `ethos seed` deploys
+`code-reviewer` (style/bugs/CLAUDE.md compliance), `silent-failure-hunter`
+(error handling), and `invariant-completeness-reviewer` to
+`.claude/agents/` (DES-070). Run all three on every diff before opening a
+PR:
+
+1. `code-reviewer` — style, bugs, CLAUDE.md-rule compliance.
+2. `silent-failure-hunter` — swallowed errors, unjustified fallbacks,
+   inadequate logging.
+3. `invariant-completeness-reviewer` — verifies claims a PR makes about
+   itself (exclusivity, exhaustiveness, "cannot drift," a test that
+   claims to guard a general case) against what the code actually does,
+   a review dimension neither of the other two covers by design. Added
+   after DES-069's PR #431 review cycle surfaced three real defects of
+   exactly this shape that both third-party local agents missed because
+   the defects were outside their stated scope, not because of a
+   capability gap.
+
+We now use our own seeded agents rather than the third-party
+`pr-review-toolkit` plugin for this repo's local review pass — a
+dogfooding change, not a claim that ours are better. Both are being run
+for one PR cycle (DES-070's transition plan) before the plugin dependency
+is dropped from this repo.
+
 ## Quality Gates
 
 The Makefile is the source of truth (`make help`).
