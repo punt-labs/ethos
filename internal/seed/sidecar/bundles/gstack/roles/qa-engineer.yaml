@@ -1,4 +1,5 @@
 name: qa-engineer
+model: sonnet
 responsibilities:
   - user-flow testing and verification
   - bug reproduction with evidence

@@ -1,4 +1,5 @@
 name: finance-ops
+model: sonnet
 responsibilities:
   - accounting and bookkeeping
   - tax compliance and government filings

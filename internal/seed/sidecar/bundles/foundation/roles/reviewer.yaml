@@ -1,4 +1,5 @@
 name: reviewer
+model: opus
 responsibilities:
   - code review with severity-rated findings
   - correctness, performance, and maintainability assessment

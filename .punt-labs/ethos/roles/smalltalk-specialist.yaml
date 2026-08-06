@@ -1,4 +1,5 @@
 name: smalltalk-specialist
+model: sonnet
 responsibilities:
   - Smalltalk package implementation with tests
   - code review for Smalltalk projects

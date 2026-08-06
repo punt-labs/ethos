@@ -1,4 +1,5 @@
 name: infra-engineer
+model: sonnet
 responsibilities:
   - CI/CD pipeline design and maintenance
   - cross-repo tooling and deployment

@@ -1,4 +1,5 @@
 name: python-language-design
+model: sonnet
 responsibilities:
   - Python language-design judgment on protocols, typing, and PEP-aligned idioms
   - review of Python public API surfaces for clarity and consistency

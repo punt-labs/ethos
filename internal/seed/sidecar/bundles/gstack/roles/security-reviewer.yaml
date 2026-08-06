@@ -1,4 +1,5 @@
 name: security-reviewer
+model: opus
 responsibilities:
   - OWASP Top 10 and STRIDE threat modeling
   - trust boundary and input validation audit

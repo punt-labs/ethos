@@ -1,4 +1,5 @@
 name: tech-writer
+model: haiku
 responsibilities:
   - update documentation after code changes
   - write changelogs for users, not developers

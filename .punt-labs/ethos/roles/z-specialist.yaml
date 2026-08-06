@@ -1,4 +1,5 @@
 name: z-specialist
+model: sonnet
 responsibilities:
   - "Z notation authoring: schemas, operators, conventions, idioms"
   - Type-checking with fuzz, animation with probcli

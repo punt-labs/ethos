@@ -1,4 +1,5 @@
 name: web-typescript
+model: sonnet
 responsibilities:
   - TypeScript type-system design and review
   - modeling of generic, conditional, and mapped types for API surfaces

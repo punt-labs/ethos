@@ -1,4 +1,5 @@
 name: cli-specialist
+model: sonnet
 responsibilities:
   - CLI command structure and help text design
   - composability and output formatting

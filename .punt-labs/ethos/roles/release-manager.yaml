@@ -1,4 +1,5 @@
 name: release-manager
+model: sonnet
 responsibilities:
   - coordinate review, test, security, ship sequence
   - version management and changelog

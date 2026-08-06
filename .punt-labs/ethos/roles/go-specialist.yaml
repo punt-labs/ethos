@@ -1,4 +1,5 @@
 name: go-specialist
+model: sonnet
 responsibilities:
   - Go package implementation with tests
   - code review for Go projects

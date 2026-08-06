@@ -1,4 +1,5 @@
 name: swift-specialist
+model: sonnet
 responsibilities:
   - "Swift implementation: types, protocols, generics, concurrency"
   - SwiftUI and Combine review on Apple platforms

@@ -1,4 +1,5 @@
 name: swift-platforms
+model: sonnet
 responsibilities:
   - "Apple-platform integration: AppKit, Foundation, Cocoa interop"
   - Objective-C bridging, sandbox, entitlement, and codesign review
