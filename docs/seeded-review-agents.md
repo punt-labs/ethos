@@ -1,6 +1,8 @@
 # Seeded review agents
 
-Design for DES-070. This is design only — no code changes in this round.
+Design for DES-070. Implemented — see `internal/seed/sidecar/agents/` for
+the three seeded agents and `internal/seed/seed.go` for the deploy
+mechanism.
 
 ## The gap
 

@@ -893,4 +893,6 @@ func TestChecklistAgentNames_Real(t *testing.T) {
 	assert.Contains(t, names, "code-reviewer")
 	assert.Contains(t, names, "silent-failure-hunter")
 	assert.Contains(t, names, "invariant-completeness-reviewer")
+	assert.NotContains(t, names, "README",
+		"README.md must not be treated as an exempted agent handle")
 }

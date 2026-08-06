@@ -234,7 +234,7 @@ func checklistAgentNames(fsys fs.FS, root string) (map[string]bool, error) {
 	}
 	names := make(map[string]bool, len(entries))
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
 			continue
 		}
 		names[strings.TrimSuffix(e.Name(), ".md")] = true

@@ -7167,10 +7167,11 @@ gate should bind workers is deferred to a separate ADR.
 - Bead `ethos-7b6c`; PR #424; mission `m-2026-08-05-001` (design),
   `m-2026-08-06-002` (implementation)
 
-## DES-070: Seeded review agents — a new sidecar category for personaless checklists (DRAFT)
+## DES-070: Seeded review agents — a new sidecar category for personaless checklists (IMPLEMENTED)
 
-**Status**: Draft — design pending leader/operator ratification. Full design
-in `docs/seeded-review-agents.md`.
+**Status**: Implemented. Full design in `docs/seeded-review-agents.md`; the
+three agents live in `internal/seed/sidecar/agents/`, deployed via
+`internal/seed/seed.go`'s `agentsRoot` parameter and `cmd/ethos/seed.go`.
 
 ### Problem
 
@@ -7252,11 +7253,16 @@ for any other repo.
   overlapping with `code-reviewer`'s existing "inadequate test coverage"
   bullet.
 
-### Open questions
+### Open questions — ruled
 
 - Product-positioning: does ethos market "we ship code review agents" as a
   capability, or is this framed purely as an artifact of dogfooding good
-  local review? Leader/operator call, not a technical one.
+  local review? **Ruled: yes, market it as a real product capability**
+  alongside identity, missions, and audit. `prfaq.tex` treatment is a
+  separate follow-up, not part of this implementation.
 - Product-positioning: does dropping `pr-review-toolkit` from ethos's own
   CLAUDE.md constitute a deliberate competitive statement the operator
-  wants to make on purpose.
+  wants to make on purpose. **Ruled: no — incidental dogfooding framing**
+  ("we now use our own seeded agents"), not a competitive claim.
+  `pr-review-toolkit` stays listed in the Plugins section for one PR cycle
+  per the transition plan before it's dropped.
