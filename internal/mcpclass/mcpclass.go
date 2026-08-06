@@ -79,18 +79,31 @@ var WritesInRepo = map[string]string{
 
 // DenyReason reports whether toolName is one of the in-repo MCP
 // write families DES-069 denies in verifier spawns. self__identity
-// is only a write on method=create (Save() also serves read-modify
-// call sites that do not create a new repo file); the zspec report
-// writers have no benign method, so any call is denied. Matching
-// keys off WritesInRepo means a tool added there is denied here
-// automatically — the deny rule cannot drift from the classification
-// the build check validates. Returns the tool name only in the
-// reason, never a path.
+// is only a write on method=create — see internal/mcp/tools.go's
+// handleIdentity switch (case "whoami", "list", "get", "create"):
+// only "create" writes a new repo file, the rest are reads. If that
+// switch grows a write method (e.g. "update", "delete"), this gate
+// must be updated to match or it will silently allow the new write;
+// internal/hook's TestIdentityMethodsMatchGate fails loudly when the
+// two drift. The zspec report writers have no benign method, so any
+// call is denied. Matching keys off WritesInRepo means a tool added
+// there is denied here automatically — the deny rule cannot drift
+// from the classification the build check validates.
+//
+// A tool named "mcp__..." that fails to classify at all — not in
+// ReadOnly, WritesOutsideRepo, or WritesInRepo — is denied by
+// default (fail closed), matching cmd/validate-content's
+// classifyMCPTools, which fails the build on the same condition. A
+// direct, non-plugin-prefixed MCP tool (e.g.
+// mcp__github__create_or_update_file) parses to an empty Suffix and
+// must never be silently allowed just because it isn't a
+// WritesInRepo key. Returns the tool name only in the reason, never
+// a path.
 func DenyReason(toolName string, toolInput map[string]any) (string, bool) {
-	suffix := Suffix(toolName)
-	if _, in := WritesInRepo[suffix]; !in {
+	if !strings.HasPrefix(toolName, "mcp__") {
 		return "", false
 	}
+	suffix := Suffix(toolName)
 	if suffix == "self__identity" {
 		method, _ := toolInput["method"].(string)
 		if method != "create" {
@@ -98,5 +111,14 @@ func DenyReason(toolName string, toolInput map[string]any) (string, bool) {
 		}
 		return fmt.Sprintf("tool %q method %q writes inside the repo and is denied for verifier spawns (DES-069)", toolName, method), true
 	}
-	return fmt.Sprintf("tool %q writes inside the repo and is denied for verifier spawns (DES-069)", toolName), true
+	if _, in := WritesInRepo[suffix]; in {
+		return fmt.Sprintf("tool %q writes inside the repo and is denied for verifier spawns (DES-069)", toolName), true
+	}
+	if _, ro := ReadOnly[suffix]; ro {
+		return "", false
+	}
+	if _, out := WritesOutsideRepo[suffix]; out {
+		return "", false
+	}
+	return fmt.Sprintf("tool %q has no mcpclass classification — denied for verifier spawns until classified (DES-069)", toolName), true
 }

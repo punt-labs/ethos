@@ -103,6 +103,20 @@ func TestHandlePreToolUse_DenyInRepoMCPWrite(t *testing.T) {
 			wantDecide: "allow",
 		},
 		{
+			name:       "verifier: unclassified direct-server tool (mcp__github__create_or_update_file) denied fail-closed",
+			toolName:   "mcp__github__create_or_update_file",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "deny",
+		},
+		{
+			name:       "verifier: quarry__find (read-only) allowed",
+			toolName:   "mcp__plugin_quarry_quarry__find",
+			toolInput:  map[string]any{},
+			verifier:   true,
+			wantDecide: "allow",
+		},
+		{
 			name:       "worker: identity create passes through unaffected",
 			toolName:   "mcp__plugin_ethos_self__identity",
 			toolInput:  map[string]any{"method": "create"},

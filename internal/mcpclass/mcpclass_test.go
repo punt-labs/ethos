@@ -1,6 +1,88 @@
 package mcpclass
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"sort"
+	"testing"
+)
+
+// TestIdentityMethodsMatchGate pins DenyReason's hardcoded
+// method=="create" gate to the actual set of methods
+// internal/mcp/tools.go's handleIdentity dispatches. It parses the
+// switch statement's case labels directly from source, so a new
+// method added there (e.g. "update", "delete") without a matching
+// change here fails this test loudly instead of silently being
+// allowed by DenyReason.
+//
+// "create" is the only method assumed to write; every other case is
+// assumed read-only. If handleIdentity ever gains a second
+// write method, this test's wantMethods and the "create"-only check
+// in DenyReason both need updating together.
+func TestIdentityMethodsMatchGate(t *testing.T) {
+	fset := token.NewFileSet()
+	src := filepath.Join("..", "mcp", "tools.go")
+	f, err := parser.ParseFile(fset, src, nil, 0)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", src, err)
+	}
+
+	var methods []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "handleIdentity" {
+			return true
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			sw, ok := n.(*ast.SwitchStmt)
+			if !ok {
+				return true
+			}
+			for _, stmt := range sw.Body.List {
+				cc, ok := stmt.(*ast.CaseClause)
+				if !ok {
+					continue
+				}
+				for _, expr := range cc.List {
+					lit, ok := expr.(*ast.BasicLit)
+					if !ok || lit.Kind != token.STRING {
+						continue
+					}
+					methods = append(methods, lit.Value)
+				}
+			}
+			return false
+		})
+		return false
+	})
+
+	if methods == nil {
+		t.Fatalf("handleIdentity not found (or has no switch) in %s — mcpclass's self__identity gate can no longer be checked against source", src)
+	}
+	sort.Strings(methods)
+
+	wantMethods := []string{`"create"`, `"get"`, `"list"`, `"whoami"`}
+	if len(methods) != len(wantMethods) {
+		t.Fatalf("handleIdentity dispatches methods %v, want %v — update internal/mcp/tools.go's handleIdentity switch review and internal/mcpclass.DenyReason's self__identity gate together (DES-069)", methods, wantMethods)
+	}
+	for i, m := range methods {
+		if m != wantMethods[i] {
+			t.Fatalf("handleIdentity dispatches methods %v, want %v — update internal/mcp/tools.go's handleIdentity switch review and internal/mcpclass.DenyReason's self__identity gate together (DES-069)", methods, wantMethods)
+		}
+	}
+
+	// The gate itself: only "create" must deny.
+	for _, m := range []string{"whoami", "list", "get"} {
+		if _, deny := DenyReason("mcp__plugin_ethos_self__identity", map[string]any{"method": m}); deny {
+			t.Errorf("DenyReason denied method %q, want allow (only create writes)", m)
+		}
+	}
+	if _, deny := DenyReason("mcp__plugin_ethos_self__identity", map[string]any{"method": "create"}); !deny {
+		t.Error("DenyReason allowed method create, want deny")
+	}
+}
 
 func TestSuffix(t *testing.T) {
 	tests := []struct {
@@ -55,6 +137,8 @@ func TestDenyReason(t *testing.T) {
 		{"zspec check denied", "mcp__plugin_z-spec_zspec__check", map[string]any{}, true},
 		{"zspec browse allowed (read-only, not in WritesInRepo)", "mcp__plugin_z-spec_zspec__browse", map[string]any{}, false},
 		{"non-mcp tool allowed", "Write", map[string]any{}, false},
+		{"unclassified direct-server mcp tool denied fail-closed", "mcp__github__create_or_update_file", map[string]any{}, true},
+		{"unparseable mcp__-prefixed tool denied fail-closed", "mcp__plugin_ethos", map[string]any{}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
