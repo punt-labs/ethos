@@ -84,7 +84,7 @@ var WritesInRepo = map[string]string{
 // only "create" writes a new repo file, the rest are reads. If that
 // switch grows a write method (e.g. "update", "delete"), this gate
 // must be updated to match or it will silently allow the new write;
-// internal/hook's TestIdentityMethodsMatchGate fails loudly when the
+// mcpclass_test.go's TestIdentityMethodsMatchGate fails loudly when the
 // two drift. The zspec report writers have no benign method, so any
 // call is denied. Matching keys off WritesInRepo means a tool added
 // there is denied here automatically — the deny rule cannot drift
