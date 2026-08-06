@@ -16,19 +16,17 @@ results:
           added: 3
           removed: 3
       evidence:
-        - name: make check (release PR
+        - name: "make check (release PR #435)"
           status: pass
-        - name: make check (release PR
+        - name: "make check (post-release PR #437)"
           status: pass
-        - name: make check (post-release PR
+        - name: "PR #435 merged clean"
           status: pass
-        - name: PR
+        - name: "PR #437 merged clean"
           status: pass
-        - name: PR
+        - name: "Copilot review — PR #435"
           status: pass
-        - name: Copilot review —
-          status: pass
-        - name: Cursor Bugbot —
+        - name: "Cursor Bugbot — PR #435"
           status: pass
         - name: v4.11.0 tag pushed on merge commit 55447a6, release.yml run succeeded
           status: pass
