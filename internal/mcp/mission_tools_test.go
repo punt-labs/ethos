@@ -763,7 +763,7 @@ func TestHandleMission_Abandon(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
 	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
-	t.Cleanup(func() { h.missionStore.WithRepoRoot("") })
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 	abandonResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
 		"mission_id": created.MissionID,
@@ -863,7 +863,7 @@ func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
 	submitResultForMCP(t, h, created.MissionID)
 
 	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
-	t.Cleanup(func() { h.missionStore.WithRepoRoot("") })
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
 		"mission_id": created.MissionID,
