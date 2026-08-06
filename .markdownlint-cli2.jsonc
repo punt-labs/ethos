@@ -1,3 +1,3 @@
 {
-  "ignores": [".beads/", ".claude/", ".venv/", ".tmp/", ".worktrees/", ".punt-labs/ethos/agents/", ".punt-labs/ethos/missions/", ".punt-labs/quarry/", "research/", "internal/seed/sidecar/agents/code-reviewer.md", "internal/seed/sidecar/agents/silent-failure-hunter.md", "internal/seed/sidecar/agents/invariant-completeness-reviewer.md"]
+  "ignores": [".beads/", ".claude/", ".venv/", ".tmp/", ".worktrees/", ".punt-labs/ethos/agents/", ".punt-labs/ethos/missions/", ".punt-labs/quarry/", "research/", "internal/seed/sidecar/agents/code-reviewer.md", "internal/seed/sidecar/agents/silent-failure-hunter.md", "internal/seed/sidecar/agents/invariant-completeness-reviewer.md", "docs/spec-*.md"]
 }
