@@ -1,0 +1,20 @@
+mission_id: m-2026-08-06-029
+status: open
+type: implement
+created_at: "2026-08-06T13:39:12Z"
+updated_at: "2026-08-06T13:39:12Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-06T13:39:12Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - docs/mission-writeset-staleness.md
+success_criteria:
+    - 'Design-only (write_set is docs/mission-writeset-staleness.md). Fix ethos-9x07 (P1, actively blocking new mission creation in the lux repo right now — a mission with an overly broad write_set and zero activity for 6 days blocks all unrelated work touching the same tree) and ethos-swoh''s underlying mechanism gap in internal/mission (conflict.go / store.go). Read the full bead text via ''bd show ethos-9x07'' and ''bd show ethos-swoh'' in this repo for the exact reported failure modes before designing anything. Design: (1) staleness detection — a threshold (e.g. last-activity age with zero results) surfaced as a warning or queryable state, not auto-action; (2) a safe operator-invoked ''force-release write_set'' or narrower ''mission reflect --write-set'' operation distinct from close/abandon, with an audit trail, for the case where a worker is gone but the leader can''t prove zero delegations (abandon''s existing zero-delegation gate does not cover this case); (3) fix the handle-overlap false-positive from ethos-swoh in the same design pass since it''s the same conflict-detection code path. Cite internal/mission/conflict.go and internal/mission/store.go by file:line for the current behavior. List rejected alternatives. This affects the mission trust model — the leader (me) will review this design and escalate any substantive concerns to the operator before implementation is dispatched, per this repo''s own CLAUDE.md workflow gate. Commit the design doc; markdownlint clean.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

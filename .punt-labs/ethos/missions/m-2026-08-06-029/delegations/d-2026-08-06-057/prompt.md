@@ -1,0 +1,7 @@
+You are bwk, working a mission for the ethos repo at <repo>. Read your contract first: `./.tmp/ethos mission show m-2026-08-06-026`.
+
+Fix ethos-swoh: `bd show ethos-swoh` for the exact reported bug. The handle-overlap warning (from ethos-z69l) fires even when the overlapping mission's write_set does not actually intersect the new mission's write_set — a false positive in internal/mission/conflict.go's overlap-detection logic. Read that file plus its test file to find the actual bug: the warning path is checking handle overlap without also checking whether the write_sets genuinely conflict.
+
+Before writing the fix, read `prfaq.tex`'s `feat:writeset` Feature Appendix entry ("segment-prefix conflict scan refuses overlapping file claims between open missions") to confirm you understand the INTENDED behavior you're restoring, not inventing new behavior — this is a pure bug fix to existing, shipped conflict-detection logic. It does not touch the runtime-enforcement boundary (write-sets are still declared conventions verified in review, not filesystem-enforced) — this fix only makes the CREATE-TIME admission check accurate.
+
+Commit incrementally, one commit per logical step, `make check` passing before each commit. Add a regression test that reproduces the false positive (same handle, non-overlapping write_sets → no warning) and confirms the true-positive case still fires (same handle, overlapping write_sets → warning). Submit your result via `ethos mission result` when done; do not close the mission yourself.

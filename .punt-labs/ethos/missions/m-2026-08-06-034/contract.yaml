@@ -1,0 +1,27 @@
+mission_id: m-2026-08-06-034
+status: open
+type: implement
+created_at: "2026-08-06T13:55:38Z"
+updated_at: "2026-08-06T13:55:38Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-06T13:55:38Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - internal/mission/staleness.go
+    - internal/mission/staleness_test.go
+    - internal/mission/store.go
+    - internal/mission/store_test.go
+    - internal/mission/mission.go
+    - internal/mission/log.go
+    - docs/mission-force-release-write-set.md
+    - CHANGELOG.md
+success_criteria:
+    - 'Implement the CORE MECHANISM from docs/mission-writeset-staleness.md (ethos-9x07, P1) — read it in full first. This mission covers only internal/mission (not the CLI/MCP surface, which is a separate follow-on mission dispatched once two other in-flight missions release cmd/ethos/mission.go and internal/mcp). Implement: (1) mission.Staleness(c *Contract, events []Event, results []Result, delegationCount int, delegationsKnown bool, now time.Time) StalenessInfo per the design''s exact signature and field semantics (LastActivityAt as max of CreatedAt/UpdatedAt/every event TS — this is the fix for reflect-only missions whose UpdatedAt never moves). (2) Store.ForceReleaseWriteSet(missionID, reason string) (*Contract, error) modeled on Store.Abandon — same locking discipline, same NewPathRedactor-before-lock pattern, same fail-before-mutation gate discipline. Does NOT change Status (mission stays open), only clears WriteSet/ExtractInto, requires non-empty reason (trimmed, no control chars), refuses a no-op release (both fields already empty), emits a new write_set_released event type with full Details (reason, old_write_set, old_extract_into, staleness_snapshot: last_activity_at/age_days/has_results/delegation_count-or-unknown) per the design''s exact event shape. Do NOT touch internal/mission/conflict.go, warnHandleOverlap, or checkRoleOverlap — ethos-swoh is being fixed independently on that file. Do NOT add any automatic staleness threshold, cron, hook, or auto-abandon/auto-narrowing — this is a leader-invoked, judgment-based operation only, never automatic (prfaq.tex constraint the design cites). Tests: table-driven Staleness() unit tests (zero events, reflect-only mission, results present, delegationsKnown=false) and Store.ForceReleaseWriteSet tests mirroring store_test.go''s existing Abandon coverage (open/terminal mission, empty reason, no-op refusal, event content, redactor-failure-leaves-mission-open per this session''s earlier PII-leak precedent in Abandon). Write docs/mission-force-release-write-set.md mirroring docs/mission-abandon.md''s structure — note in it that the CLI/MCP surface lands in a follow-on PR. Add a CHANGELOG entry under Unreleased. Commit incrementally, make check passing before each commit, no more than 30 minutes of uncommitted changes.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

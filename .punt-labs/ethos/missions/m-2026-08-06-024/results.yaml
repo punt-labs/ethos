@@ -1,0 +1,94 @@
+results:
+    - mission: m-2026-08-06-024
+      round: 1
+      created_at: "2026-08-06T14:00:39Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/mcp/mission_tools_test.go
+          added: 45
+          removed: 15
+      evidence:
+        - name: 'go test ./internal/mcp/ -run Abandon -v, before fix: .create.lock regenerated in source tree, reproducing ethos-qs0v'
+          status: fail
+        - name: go test ./internal/mission/... ./internal/mcp/... -count=1, after fix
+          status: pass
+        - name: 'git status --porcelain internal/mcp/.create.lock after fix: empty, no leaked file'
+          status: pass
+        - name: go vet ./internal/mcp/...
+          status: pass
+        - name: go build ./...
+          status: pass
+        - name: 'golangci-lint run ./... (via make lint): 0 issues'
+          status: pass
+      prose: |
+        Root cause (ethos-qs0v): testHandlerWithMissions in
+        internal/mcp/mission_tools_test.go built its mission.Store via
+        mission.NewStore(root).WithRepoRoot(t.TempDir()) — the "trace-only"
+        constructor pattern cmd/ethos/mission.go's missionStore doc comment
+        explicitly warns against (m-2026-05-23-004 escalation). That pattern
+        sets Store.repoRoot without activating the DES-054 two-tree storage
+        layout (twoTreeStorage stays false). Store.withCreateLock's
+        repoCreateLockPath then computes filepath.Join(s.repoMissionsDir(),
+        ".create.lock"), and repoMissionsDir() returns "" whenever
+        twoTreeStorage is false — regardless of repoRoot — so the joined
+        path collapses to a bare relative ".create.lock". Every Store.Create
+        call through that fixture then opened/locked that relative path
+        against the test binary's CWD (the internal/mcp package directory),
+        leaking internal/mcp/.create.lock into the source tree.
+
+        I first tried switching the shared fixture to
+        mission.NewStoreWithRoots(t.TempDir(), root), which activates the
+        two-tree layout and closes the relative-path hole — this matches
+        production wiring (missionStoreForCreate) exactly. That broke three
+        unrelated tests (TestHandleMission_Show_SurfacesCorruptResultsAsWarnings,
+        TestHandleMission_Log_UnparseableLinesCarryWarnings,
+        TestHandleMission_Log_WarningsNoRawControlBytes), which corrupt
+        on-disk sibling files directly at the legacy flat
+        <root>/missions/<id>.{yaml,jsonl} paths — a real behavior change,
+        not just hygiene, so I reverted it.
+
+        Final fix, scoped to test hygiene only: testHandlerWithMissions goes
+        back to plain mission.NewStore(root) with no repoRoot at all, so the
+        default fixture used by ~50 other tests keeps its single-tree
+        layout untouched. The two Abandon tests whose assertions actually
+        require the delegations/ gate to be reachable
+        (TestHandleMission_Abandon, TestHandleMission_AbandonRefusesWithResult
+        — Store.Abandon refuses outright with "no repo root in scope" when
+        repoRoot is empty) now call h.missionStore.WithRepoRoot(t.TempDir())
+        immediately before the abandon call and h.missionStore.WithRepoRoot("")
+        immediately after, so repoRoot is only non-empty for the Abandon
+        call itself, never for a Create call. TestHandleMission_AbandonMissingID
+        and TestHandleMission_AbandonMissingReason fail before reaching
+        Store.Abandon's repoRoot check (validated in the MCP handler layer
+        first), so they needed no change. Also corrected a stale doc comment
+        on TestHandleMission_Abandon that claimed "the MCP fixture wires a
+        Store with no repoRoot, so the delegation gate is inert" — the gate
+        actually refuses (errors), it does not go inert, when repoRoot is
+        empty.
+
+        No product code changed (internal/mission untouched by this fix);
+        purely a test-fixture correction inside internal/mcp, matching the
+        write_set.
+
+        Confirmed by reproducing the bug per ethos-qs0v's steps (delete
+        internal/mcp/.create.lock, run go test ./internal/mcp/ -run Abandon
+        alone — it regenerated) before the fix, and confirming
+        git status --porcelain internal/mcp/.create.lock is empty after
+        running the same isolated command and the full internal/mission +
+        internal/mcp suite post-fix.
+
+        Separate, out-of-scope finding to flag: make check currently fails
+        on main independent of this fix — markdownlint rejects
+        docs/spec-mission-lifecycle.md (MD041 missing H1, MD038 code-span
+        spacing) because that file is a Z specification written in LaTeX
+        with a .md extension (introduced by commit d2c72df, unrelated to
+        ethos-qs0v). It is swept by the markdownlint glob along with real
+        Markdown docs. Fixing it means either excluding it from the
+        markdownlint glob (like the existing internal/seed/sidecar/agents/*
+        exclusions) or renaming/relocating it — an infra/lint-config
+        decision outside internal/mcp and outside this mission's write_set.
+        I did not touch it. go vet, staticcheck/golangci-lint, shellcheck,
+        and go test all pass; only this doc-lint step blocks a clean
+        `make check` run, and it is unrelated to any file in this diff.

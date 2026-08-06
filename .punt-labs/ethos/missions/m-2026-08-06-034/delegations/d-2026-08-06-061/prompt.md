@@ -1,0 +1,9 @@
+You are bwk, working a mission for the ethos repo at <repo>. Read your contract first: `./.tmp/ethos mission show m-2026-08-06-034`.
+
+Read `docs/mission-writeset-staleness.md` in full — that's the design you're implementing (ethos-9x07, P1). It was written by another bwk instance and already reviewed by the leader; implement it as designed, don't re-derive the design.
+
+Your write_set is scoped to internal/mission (staleness.go, staleness_test.go, store.go, store_test.go, mission.go, log.go) plus docs/mission-force-release-write-set.md and CHANGELOG.md — the CLI (cmd/ethos/mission.go) and MCP (internal/mcp) surface are explicitly OUT of scope for this mission; two other missions currently hold those files and a follow-on mission will wire the CLI/MCP surface once they release. Do not touch internal/mission/conflict.go — a parallel mission (ethos-swoh) owns it.
+
+Implement exactly what your dispatch criteria and the design doc specify: the `Staleness()` pure function and `Store.ForceReleaseWriteSet` method, modeled on the existing `Store.Abandon` (same file, same locking pattern, same redaction-before-lock pattern for the `reason` field — read `Store.Abandon` first as your template). No automatic thresholds, no cron, no auto-action of any kind — this stays a leader-invoked, judgment-based operation per the design's explicit rejection of mechanical enforcement (grounded in this repo's prfaq.tex).
+
+You're in an isolated git worktree, so you won't collide with the other missions running concurrently in the main checkout on cmd/ethos/mission.go and internal/mcp. Commit incrementally — one commit per logical step (staleness signal, then force-release method + tests, then docs, then CHANGELOG), `make check` passing before each commit. Submit your result via `ethos mission result` when done; do not close the mission yourself.

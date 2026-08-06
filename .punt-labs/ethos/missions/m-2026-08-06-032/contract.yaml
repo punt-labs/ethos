@@ -1,0 +1,20 @@
+mission_id: m-2026-08-06-032
+status: open
+type: implement
+created_at: "2026-08-06T13:41:59Z"
+updated_at: "2026-08-06T13:41:59Z"
+leader: claude
+worker: jms
+evaluator:
+    handle: jra
+    pinned_at: "2026-08-06T13:41:59Z"
+    hash: f645be1a2f7cfb361d3822a090b08c0e454d7148eb0a8b52814c38638b3cd9be
+inputs: {}
+write_set:
+    - docs/spec-mission-lifecycle.md
+success_criteria:
+    - 'Design-only, write_set is docs/spec-mission-lifecycle.md. Produce a Z specification (zed/schema/axdef environments in a .tex-embedded doc, per this repo''s z-spec convention) modeling the EXISTING mission lifecycle as implemented today in internal/mission — do not invent new behavior. Read internal/mission/mission.go, store.go, validate.go, and abandon_test.go before modeling anything. Model: (1) the state space (StatusOpen, StatusInProgress, StatusClosed, StatusAbandoned, and any others in validStatuses); (2) valid transitions (create, delegate, submit-result, reflect, advance-round, close, abandon) and which states each is legal from; (3) invariants that must hold across all transitions — close requires a valid result artifact for the current round; abandon requires zero delegations AND zero results for any round; round number never exceeds budget.rounds; the evaluator''s content hash, once pinned at launch, never changes. Type-check with fuzz (/z-spec:check) and model-check with ProB (/z-spec:test). As a concrete validation of the spec''s value: specifically model-check the abandon-with-empty-repo-root case that a live adversarial probe found fail-open earlier this session (internal/mission/abandon_test.go''s TestStore_Abandon_RefusesWhenRepoRootEmpty documents the now-fixed behavior) — confirm the spec''s invariants would flag the fail-open behavior as a violation, demonstrating the spec has teeth, not just documents the happy path. This is a standing artifact independent of any specific feature — it models the lifecycle as it exists, to give future changes (like the ethos-9x07 staleness/force-release design currently in progress under a separate mission) an invariant baseline they must not violate. Commit incrementally; each commit passes fuzz type-check at minimum.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

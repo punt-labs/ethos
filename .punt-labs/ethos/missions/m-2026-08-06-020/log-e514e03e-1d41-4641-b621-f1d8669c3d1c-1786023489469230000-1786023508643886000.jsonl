@@ -1,0 +1,2 @@
+{"ts":"2026-08-06T13:38:09.46923Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"","worker":"bwk"}}
+{"ts":"2026-08-06T13:38:28.643886Z","event":"abandon","actor":"claude","details":{"reason":"pipeline instantiation failed at test stage validation; re-instantiating with corrected target"}}
