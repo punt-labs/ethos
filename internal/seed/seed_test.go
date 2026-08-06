@@ -2,6 +2,7 @@ package seed
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -622,4 +623,38 @@ func TestSeedAgents_PreservesTrackedEdit(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, custom, data, "a tracked operator edit to a seeded agent must not be overwritten")
 	assert.Contains(t, result.Edited, agentPath)
+}
+
+// TestSeedAgents_CommittedCopyMatchesShippedSource pins this repo's own
+// dogfooding of DES-070 against silent drift. This repo's .claude/agents/
+// stays committed by policy (never gitignored — generated agent files are
+// tracked so blame/review sees them), so on a fresh clone the three seeded
+// review agents already exist there, untracked by the seed manifest.
+// `ethos seed` then takes the no-clobber path for all three and can never
+// upgrade them here without --force — this repo is the one place the
+// feature would go silently inert. Rather than relying on a human to
+// remember to re-run `ethos seed --force` after every prompt edit, this
+// test fails CI the moment the committed copy and the shipped source
+// diverge, so the two are edited together or not at all.
+func TestSeedAgents_CommittedCopyMatchesShippedSource(t *testing.T) {
+	for _, name := range []string{
+		"code-reviewer.md",
+		"silent-failure-hunter.md",
+		"invariant-completeness-reviewer.md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			shipped, err := fs.ReadFile(Agents, "sidecar/agents/"+name)
+			require.NoError(t, err, "reading shipped %s from the embedded sidecar", name)
+
+			// `go test` runs with the package directory as cwd, so the repo
+			// root is two levels up from internal/seed.
+			committedPath := filepath.Join("..", "..", ".claude", "agents", name)
+			committed, err := os.ReadFile(committedPath)
+			require.NoError(t, err, "reading this repo's own committed %s", committedPath)
+
+			assert.Equal(t, string(shipped), string(committed),
+				"internal/seed/sidecar/agents/%s and %s have drifted — "+
+					"re-run `ethos seed --force` in this repo and commit the result", name, committedPath)
+		})
+	}
 }
