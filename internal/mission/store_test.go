@@ -5022,3 +5022,77 @@ func TestStore_ForceReleaseWriteSet_SerializesAgainstConcurrentCreate(t *testing
 		}
 	}
 }
+
+// TestStore_ForceReleaseWriteSet_SerializesAgainstConcurrentCreate_RollbackForced
+// closes the gap the happy-path race test above cannot: that test's
+// release always succeeds, so a passing run proves nothing about
+// whether the create lock actually protects the failure window (a
+// racer could win by luck even without the lock, since the release
+// commits so fast in-process). Here the event log is sabotaged before
+// the race starts, so ForceReleaseWriteSet's appendEventLocked call
+// deterministically fails and rolls back on every trial -- giving any
+// racing Create a real, non-transient window to observe the
+// written-then-rolled-back WriteSetReleasedAt if the create lock
+// isn't actually serializing against it. Every racer must fail on
+// conflict, every trial, since the mission was never actually
+// released.
+func TestStore_ForceReleaseWriteSet_SerializesAgainstConcurrentCreate_RollbackForced(t *testing.T) {
+	const trials = 20
+	const racers = 8
+
+	for trial := 0; trial < trials; trial++ {
+		s := testStore(t)
+
+		aID := fmt.Sprintf("m-2026-08-06-%03d", 300+trial)
+		a := newContract(aID)
+		a.WriteSet = []string{"internal/contended/"}
+		require.NoError(t, s.Create(a))
+
+		// Sabotage: replace the log file with a directory so
+		// appendEventLocked's OpenFile(O_APPEND) call fails every
+		// time, forcing ForceReleaseWriteSet to roll back on every
+		// trial -- the same technique
+		// TestStore_ForceReleaseWriteSet_EventAppendFailureRollsBackContract
+		// uses, applied here under concurrent load.
+		logPath := mustLogPath(t, s, aID)
+		require.NoError(t, os.Remove(logPath))
+		require.NoError(t, os.Mkdir(logPath, 0o700))
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.ForceReleaseWriteSet(aID, "sabotaged release racing concurrent Create")
+			assert.Error(t, err, "trial %d: the sabotaged log must force every release to fail", trial)
+		}()
+
+		failures := make(chan error, racers)
+		successes := make(chan string, racers)
+		for i := 0; i < racers; i++ {
+			wg.Add(1)
+			bID := fmt.Sprintf("m-2026-08-06-%03d", 400+trial*racers+i)
+			go func(bID string) {
+				defer wg.Done()
+				b := newContract(bID)
+				b.WriteSet = []string{"internal/contended/thing.go"}
+				if err := s.Create(b); err != nil {
+					failures <- err
+					return
+				}
+				successes <- bID
+			}(bID)
+		}
+		wg.Wait()
+		close(successes)
+		close(failures)
+
+		require.Empty(t, successes, "trial %d: no racer may succeed against a release that never actually committed", trial)
+		for err := range failures {
+			assert.Contains(t, err.Error(), "write_set conflict", "trial %d: every racer must fail on conflict, not a lock/lifecycle error", trial)
+		}
+
+		loaded, err := s.Load(aID)
+		require.NoError(t, err)
+		assert.Empty(t, loaded.WriteSetReleasedAt, "trial %d: the rolled-back release must leave no trace on disk", trial)
+	}
+}
