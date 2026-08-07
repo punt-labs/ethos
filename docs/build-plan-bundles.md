@@ -156,8 +156,11 @@ ethos team activate <name>                      Set active_bundle in repo config
 ethos team active                               Show current active bundle
 ethos team deactivate                           Remove activation
 ethos team add-bundle <git-url> [--name <x>]    Submodule add to ethos-bundles/
-ethos team migrate                              Convert legacy submodule to bundle
 ```
+
+`ethos team migrate` shipped here and was removed post-ship (see
+DESIGN.md's DES-051 reversal note) -- a one-time internal rollout tool,
+not a permanent surface.
 
 Example session:
 
@@ -189,8 +192,10 @@ submodule of `punt-labs/team`) keeps working unchanged:
   current behavior.
 - Nothing breaks. Nothing requires migration.
 
-Migration is opt-in via `ethos team migrate` (PR 6). Users who
-never run it are unaffected.
+Migration was opt-in via `ethos team migrate` (PR 6). That command was
+removed post-ship (see DESIGN.md's DES-051 reversal note); there is no
+migration command today. Users on the legacy pattern are unaffected --
+it is simply left in place.
 
 ## Rejected alternatives
 
@@ -213,13 +218,17 @@ never run it are unaffected.
 
 ### Profile A — Punt Labs employee with existing checkout
 
+`ethos team migrate` was removed post-ship (see DESIGN.md's DES-051
+reversal note) -- this profile is historical, describing PR 6's
+one-time internal rollout, not a command available today.
+
 Before:
 
 ```text
 .punt-labs/ethos/   (submodule of punt-labs/team)
 ```
 
-After `ethos team migrate --apply`:
+After `ethos team migrate --apply` (removed; see note above):
 
 ```text
 .punt-labs/ethos-bundles/punt-labs/   (submodule of punt-labs/team)
@@ -305,8 +314,10 @@ Test pyramid:
   [`cmd/ethos/subprocess_test.go`](../cmd/ethos/subprocess_test.go):
   seed gstack → activate → `ethos show <identity>` → assert
   resolution succeeds from the bundle layer.
-- **Migration** — test fixture repo with a mock legacy submodule;
-  `migrate --apply` produces the expected new layout.
+- **Migration** (historical, no longer applicable) — `ethos team
+  migrate` shipped with a test fixture repo exercising a mock legacy
+  submodule; the command and its tests were removed post-ship (see
+  DESIGN.md's DES-051 reversal note).
 
 Patterns to reuse (do not reimplement):
 

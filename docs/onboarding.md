@@ -765,13 +765,16 @@ submodule. If it detects a legacy submodule, it prints:
 
 ```text
 ethos: setup: legacy submodule detected at .punt-labs/ethos/
-Run "ethos team migrate" to convert to the bundles layout.
+No action needed -- the legacy layout keeps working unchanged.
 ```
 
-Migration remains a separate command (`ethos team migrate`) because
-it modifies git history (deinit + rm + submodule add). Mixing git
-submodule operations into a setup wizard is a surprise the user did
-not sign up for.
+No migration command exists. The resolver falls back to two-layer
+behavior (repo + global) whenever `active_bundle` is unset (DES-051),
+so the legacy pattern is simply left in place -- there is nothing to
+convert. An earlier `ethos team migrate` command did this conversion
+by modifying git history (deinit + rm + submodule add); it was a
+one-time internal-fleet tool and was removed post-ship (see
+DESIGN.md's DES-051 reversal note).
 
 ### Existing users with gstack active
 

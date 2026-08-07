@@ -34,8 +34,9 @@ git submodule add git@github.com:punt-labs/team.git .punt-labs/ethos
 ```
 
 For an existing clone, run `git submodule init && git submodule update`.
-To convert a legacy submodule to the bundles layout, use
-`ethos team migrate` (dry-run by default; `--apply` to execute).
+No conversion is needed: the resolver falls back to two-layer behavior
+(repo-local → global) when `active_bundle` is unset in
+`.punt-labs/ethos.yaml`, so a legacy submodule keeps working as-is.
 
 Then restart Claude Code to trigger the SessionStart hook. Verify with
 `ls .claude/agents/` — you should see one `.md` file per agent identity

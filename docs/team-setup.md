@@ -319,8 +319,10 @@ git commit -m "chore: update team submodule"
 The `.punt-labs/ethos.yaml` config file lives in each project (not in
 the submodule) because `agent` and `team` bindings are repo-specific.
 
-To move a legacy submodule to the bundles layout, run
-`ethos team migrate` (dry-run by default; `--apply` to execute).
+There is no command to move a legacy submodule to the bundles layout.
+The legacy pattern above keeps working unchanged -- the resolver
+falls back to two-layer behavior (repo + global) whenever
+`active_bundle` is unset (DES-051). No action is required.
 
 ## What Happens Automatically
 
