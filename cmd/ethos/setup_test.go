@@ -938,7 +938,7 @@ handle: legacy-user
 	_, stderr, err := execHandler(t, "setup", "--file", cfgPath)
 	require.NoError(t, err)
 	assert.Contains(t, stderr, "legacy submodule detected")
-	assert.Contains(t, stderr, "ethos team migrate")
+	assert.Contains(t, stderr, "No action needed")
 }
 
 // TestWritingStyleMenu_SurfacesWarnings pins the S4 fix: the wizard's

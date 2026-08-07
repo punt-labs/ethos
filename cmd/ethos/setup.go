@@ -253,11 +253,13 @@ func runSetup(cmd *cobra.Command) error {
 			"with a .punt-labs/ethos store")
 	}
 
-	// Legacy submodule check (the shared .punt-labs/ethos submodule; the
-	// remedy `ethos team migrate` operates on the store).
+	// Legacy submodule check (the shared .punt-labs/ethos submodule). No
+	// migration command exists — the resolver falls back to two-layer
+	// behavior (repo + global) whenever active_bundle is unset, so the
+	// legacy layout keeps working with no action required (DES-051).
 	if hasLegacySubmodule(storeRoot) {
 		fmt.Fprintln(errw, "ethos: setup: legacy submodule detected at .punt-labs/ethos/")
-		fmt.Fprintln(errw, `Run "ethos team migrate" to convert to the bundles layout.`)
+		fmt.Fprintln(errw, "No action needed -- the legacy layout keeps working unchanged.")
 	}
 
 	// Write repo config to the store, merging with any existing values.
