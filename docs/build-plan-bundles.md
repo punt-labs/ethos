@@ -315,7 +315,8 @@ Test pyramid:
   seed gstack → activate → `ethos show <identity>` → assert
   resolution succeeds from the bundle layer.
 - **Migration** — test fixture repo with a mock legacy submodule;
-  `migrate --apply` produces the expected new layout.
+  `migrate --apply` produces the expected new layout. (`migrate`
+  removed post-ship, see DESIGN.md's DES-051 reversal note.)
 
 Patterns to reuse (do not reimplement):
 

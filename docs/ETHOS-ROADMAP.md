@@ -224,8 +224,8 @@ ethos content, activated via `active_bundle` in
 (repo -> active bundle -> global) extends the prior two-layer chain;
 existing repos keep working unchanged when no bundle is active.
 Gstack ships embedded and deploys on `ethos seed`. `ethos team
-migrate` converts legacy `.punt-labs/ethos/` submodules to the new
-layout.
+migrate` converted legacy `.punt-labs/ethos/` submodules to the new
+layout (removed post-ship, see DESIGN.md's DES-051 reversal note).
 
 Phase 6.2 (agent marketplace) remains future work.
 
