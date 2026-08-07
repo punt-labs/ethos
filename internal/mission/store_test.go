@@ -737,6 +737,56 @@ func TestStore_UpdateSuccessReflectsUpdatedAt(t *testing.T) {
 	assert.NotEqual(t, originalUpdatedAt, loaded.UpdatedAt, "UpdatedAt must advance on success")
 }
 
+// TestStore_UpdatePreservesWriteSetReleasedAtFromDisk asserts that
+// Update cannot be used to bypass ForceReleaseWriteSet's audit trail:
+// a caller-supplied WriteSetReleasedAt (set or cleared) is silently
+// discarded in favor of whatever is already on disk, since Update has
+// no dedicated event or required reason the way ForceReleaseWriteSet
+// does. Found by Copilot review on PR #444.
+func TestStore_UpdatePreservesWriteSetReleasedAtFromDisk(t *testing.T) {
+	t.Run("cannot set it via Update", func(t *testing.T) {
+		s := testStore(t)
+		c := newContract("m-2026-08-07-001")
+		require.NoError(t, s.Create(c))
+
+		loaded, err := s.Load("m-2026-08-07-001")
+		require.NoError(t, err)
+		require.Empty(t, loaded.WriteSetReleasedAt)
+
+		loaded.WriteSetReleasedAt = "2026-08-07T00:00:00Z"
+		require.NoError(t, s.Update(loaded))
+
+		reloaded, err := s.Load("m-2026-08-07-001")
+		require.NoError(t, err)
+		assert.Empty(t, reloaded.WriteSetReleasedAt, "Update must not let a caller set write_set_released_at")
+
+		events, _, err := s.LoadEvents("m-2026-08-07-001")
+		require.NoError(t, err)
+		require.Len(t, events, 2, "create + update, never a write_set_released event from this path")
+		assert.Equal(t, "update", events[1].Event)
+	})
+
+	t.Run("cannot clear it via Update", func(t *testing.T) {
+		repoRoot := t.TempDir()
+		globalRoot := t.TempDir()
+		s := forceReleaseTestStore(t, repoRoot, globalRoot)
+		c := newContract("m-2026-08-07-002")
+		require.NoError(t, s.Create(c))
+		released, err := s.ForceReleaseWriteSet("m-2026-08-07-002", "worker session ended")
+		require.NoError(t, err)
+		require.NotEmpty(t, released.WriteSetReleasedAt)
+
+		loaded, err := s.Load("m-2026-08-07-002")
+		require.NoError(t, err)
+		loaded.WriteSetReleasedAt = ""
+		require.NoError(t, s.Update(loaded))
+
+		reloaded, err := s.Load("m-2026-08-07-002")
+		require.NoError(t, err)
+		assert.Equal(t, released.WriteSetReleasedAt, reloaded.WriteSetReleasedAt, "Update must not let a caller re-claim a released write_set")
+	})
+}
+
 func TestStore_Close(t *testing.T) {
 	s := testStore(t)
 	c := newContract("m-2026-04-07-003")

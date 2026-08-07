@@ -860,7 +860,21 @@ func (s *Store) Update(c *Contract) error {
 			}
 			return fmt.Errorf("reading mission %q: %w", c.MissionID, err)
 		}
+		// WriteSetReleasedAt is preserved from disk, never taken from
+		// the caller -- the same reasoning as ApplyServerFields'
+		// create-time strip, applied here to the update path (found
+		// by Copilot review). Update has no dedicated audit event or
+		// required reason the way ForceReleaseWriteSet does; letting
+		// a caller set or clear the field through Update would let
+		// admission control be bypassed silently under a generic
+		// "update" event, undermining the recovery-only semantics
+		// ForceReleaseWriteSet exists to enforce.
+		onDisk, err := DecodeContractStrict(oldData, c.MissionID)
+		if err != nil {
+			return fmt.Errorf("reading mission %q: %w", c.MissionID, err)
+		}
 		updated := *c
+		updated.WriteSetReleasedAt = onDisk.WriteSetReleasedAt
 		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := s.validateContract(&updated); err != nil {
 			return fmt.Errorf("invalid contract: %w", err)
