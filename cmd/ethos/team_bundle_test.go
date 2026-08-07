@@ -349,14 +349,6 @@ func TestTeamAddBundle_InvalidName(t *testing.T) {
 
 // --- legacySubmoduleURL ---
 
-// writeGitmodulesLegacy writes a .gitmodules at repo root with a single
-// legacy entry pointing .punt-labs/ethos at url.
-func writeGitmodulesLegacy(t *testing.T, repo, url string) {
-	t.Helper()
-	body := "[submodule \".punt-labs/ethos\"]\n\tpath = .punt-labs/ethos\n\turl = " + url + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitmodules"), []byte(body), 0o644))
-}
-
 // TestLegacySubmoduleURL_URLBeforePath verifies that the parser finds
 // the url even when it appears before path within a section. Git config
 // format does not mandate key order.

@@ -25,7 +25,7 @@ bundle), 10 archetypes, 2 embedded bundles (gstack, foundation). Phase 2.6
 | **Phase 4 — Operational Excellence** | **SHIPPED** | SessionStart working context (PR #205), role-based safety constraints + session audit logging (PR #207). Beads `ethos-gcq.1`–`.3`, all closed. |
 | **Post-Phase 4** | **SHIPPED** | Archetypes, pipelines, pipeline instantiate, automatic traceability (v3.2.0–v3.5.0). See details below. |
 | **Phase 5 — Reliability & Friction** | **SHIPPED** | Mission dispatch one-liner, agent regen diff logging, doctor orphan check, inputs.trigger schema, deprecation migration tooling |
-| **Phase 6.1 — Team Bundle Activation** | **SHIPPED** | Switchable starter teams; embedded gstack bundle; `team available/activate/deactivate/add-bundle/migrate`; three-layer resolution (repo -> active bundle -> global). DES-051, epic `ethos-2hh`. |
+| **Phase 6.1 — Team Bundle Activation** | **SHIPPED** | Switchable starter teams; embedded gstack bundle; `team available/activate/deactivate/add-bundle` (`migrate` shipped here too but removed post-ship, see DESIGN.md's DES-051 reversal note); three-layer resolution (repo -> active bundle -> global). DES-051, epic `ethos-2hh`. |
 | **DES-054 — Audited Delegation** | **SHIPPED** | Three-phase rollout: storage foundations (PR #326), PreToolUse-on-Agent dispatch (PR #327), preconditions + migration + queries + commit-msg trailers (PR #328). Epic `ethos-98u9`. |
 | **Phase 6 — Ecosystem (remaining)** | FUTURE | Agent marketplace (6.2), cross-tool integration (6.3) |
 

@@ -501,7 +501,7 @@ func runTeamAddBundle(cmd *cobra.Command, url string) error {
 	return nil
 }
 
-// --- migrate ---
+// --- legacy submodule detection ---
 
 // legacySubmoduleURL scans .gitmodules under repoRoot for an entry
 // whose path is .punt-labs/ethos and returns its url. Returns "" if no
