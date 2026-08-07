@@ -25,9 +25,6 @@ var (
 	addBundleName   string
 	addBundleGlobal bool
 	addBundleApply  bool
-
-	migrateName  string
-	migrateApply bool
 )
 
 // --- commands ---
@@ -77,22 +74,10 @@ var teamAddBundleCmd = &cobra.Command{
 	},
 }
 
-var teamMigrateCmd = &cobra.Command{
-	Use:   "migrate",
-	Short: "Convert a legacy .punt-labs/ethos submodule to the bundles layout",
-	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runTeamMigrate(cmd)
-	},
-}
-
 func init() {
 	teamAddBundleCmd.Flags().StringVar(&addBundleName, "name", "", "Bundle name (defaults to last URL path segment)")
 	teamAddBundleCmd.Flags().BoolVar(&addBundleGlobal, "global", false, "Install into ~/.punt-labs/ethos/bundles/ via git clone")
 	teamAddBundleCmd.Flags().BoolVar(&addBundleApply, "apply", false, "Execute the git commands (default: dry-run)")
-
-	teamMigrateCmd.Flags().StringVar(&migrateName, "name", "", "Target bundle name (defaults to submodule URL's last path segment)")
-	teamMigrateCmd.Flags().BoolVar(&migrateApply, "apply", false, "Execute the migration (default: dry-run)")
 
 	teamCmd.AddCommand(
 		teamAvailableCmd,
@@ -100,7 +85,6 @@ func init() {
 		teamActiveCmd,
 		teamDeactivateCmd,
 		teamAddBundleCmd,
-		teamMigrateCmd,
 	)
 }
 
@@ -578,86 +562,4 @@ func legacySubmoduleURL(repoRoot string) (string, error) {
 		}
 	}
 	return "", nil
-}
-
-func runTeamMigrate(cmd *cobra.Command) error {
-	repoRoot := resolve.StoreRepoRoot()
-	if repoRoot == "" {
-		return fmt.Errorf("not in a git repository")
-	}
-	out := cmd.OutOrStdout()
-
-	legacyDir := filepath.Join(repoRoot, ".punt-labs", "ethos")
-	info, err := os.Stat(legacyDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Fprintln(out, "no legacy submodule detected at .punt-labs/ethos/ — nothing to migrate")
-			return nil
-		}
-		return fmt.Errorf("stat %s: %w", legacyDir, err)
-	}
-	if !info.IsDir() {
-		fmt.Fprintln(out, "no legacy submodule detected at .punt-labs/ethos/ — nothing to migrate")
-		return nil
-	}
-
-	url, err := legacySubmoduleURL(repoRoot)
-	if err != nil {
-		return err
-	}
-	if url == "" {
-		fmt.Fprintln(out, "no legacy submodule detected at .punt-labs/ethos/ — nothing to migrate")
-		return nil
-	}
-
-	name := migrateName
-	if name == "" {
-		name = bundleNameFromURL(url)
-	}
-	if !bundle.ValidName.MatchString(name) {
-		return fmt.Errorf("invalid bundle name %q (must match %s); use --name to override", name, bundle.ValidName.String())
-	}
-
-	targetDir := filepath.Join(repoRoot, ".punt-labs", "ethos-bundles", name)
-	relTarget := filepath.Join(".punt-labs", "ethos-bundles", name)
-	if info, err := os.Stat(targetDir); err == nil && info.IsDir() {
-		fmt.Fprintf(out, "bundle already exists at %s — migration already done\n", targetDir)
-		return nil
-	}
-
-	steps := [][]string{
-		{"git", "submodule", "deinit", "-f", ".punt-labs/ethos"},
-		{"git", "rm", "-f", ".punt-labs/ethos"},
-		{"git", "submodule", "add", url, relTarget},
-	}
-
-	if !migrateApply {
-		fmt.Fprintln(out, "Would run:")
-		for _, s := range steps {
-			fmt.Fprintf(out, "  %s\n", strings.Join(s, " "))
-		}
-		fmt.Fprintf(out, "  (write active_bundle: %s to .punt-labs/ethos.yaml)\n", name)
-		fmt.Fprintln(out, "Re-run with --apply to execute.")
-		return nil
-	}
-
-	for i, s := range steps {
-		c := exec.Command(s[0], s[1:]...)
-		c.Dir = repoRoot
-		c.Stdout = out
-		c.Stderr = cmd.ErrOrStderr()
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("step %d (%s) failed: %w\n"+
-				"recovery: inspect repo state with `git status` and `git submodule status`; "+
-				"if the legacy submodule is partially removed, restore with `git submodule update --init .punt-labs/ethos` and re-run",
-				i+1, strings.Join(s, " "), err)
-		}
-	}
-
-	if err := setConfigKey(repoRoot, "active_bundle", name); err != nil {
-		return fmt.Errorf("writing active_bundle to config: %w", err)
-	}
-
-	fmt.Fprintf(out, "migrated: .punt-labs/ethos → %s (active_bundle: %s)\n", relTarget, name)
-	return nil
 }
