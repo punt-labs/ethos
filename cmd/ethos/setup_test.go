@@ -922,6 +922,14 @@ handle: merge-user
 	assert.Contains(t, string(configData), "active_bundle: foundation")
 }
 
+// writeGitmodulesLegacy writes a .gitmodules at repo root with a single
+// legacy entry pointing .punt-labs/ethos at url.
+func writeGitmodulesLegacy(t *testing.T, repo, url string) {
+	t.Helper()
+	body := "[submodule \".punt-labs/ethos\"]\n\tpath = .punt-labs/ethos\n\turl = " + url + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitmodules"), []byte(body), 0o644))
+}
+
 func TestSetup_LegacySubmoduleDetected(t *testing.T) {
 	_, repo := setupTestEnv(t)
 
