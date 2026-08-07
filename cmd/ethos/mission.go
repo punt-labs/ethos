@@ -929,6 +929,11 @@ func init() {
 	missionMigrateCmd.Flags().BoolVar(&missionMigrateVerbose, "verbose", false,
 		"Print per-mission decisions to stdout")
 
+	missionScaffoldCmd.AddCommand(
+		missionScaffoldContractCmd,
+		missionScaffoldResultCmd,
+	)
+
 	missionCmd.AddCommand(
 		missionCreateCmd,
 		missionShowCmd,
@@ -947,6 +952,7 @@ func init() {
 		missionMigrateCmd,
 		missionClaimCmd,
 		missionReleaseCmd,
+		missionScaffoldCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
