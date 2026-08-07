@@ -289,6 +289,35 @@ budget:
 	return path
 }
 
+// writeContractFileWithPipelineAndWriteSet writes a contract file with
+// the shared bwk/djb fixture handles, a caller-supplied pipeline ID,
+// and a single write_set entry. Sharing a pipeline is what lets two
+// contracts declare an overlapping write_set and both still pass the
+// Phase 3.2 cross-mission conflict check — sequential pipeline stages
+// are expected to touch the same files.
+func writeContractFileWithPipelineAndWriteSet(t *testing.T, pipeline, writeSet string) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "contract.yaml")
+	body := fmt.Sprintf(`leader: claude
+worker: bwk
+evaluator:
+  handle: djb
+inputs:
+  bead: ethos-07m.5
+pipeline: %s
+write_set:
+  - %s
+success_criteria:
+  - make check passes
+budget:
+  rounds: 3
+  reflection_after_each: true
+`, pipeline, writeSet)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	return path
+}
+
 // runCobra runs a command through the rootCmd Execute path with the
 // given args, capturing both stdout and stderr. Used for tests that
 // exercise cobra's flag parsing and subcommand dispatch.
@@ -432,17 +461,24 @@ func TestMissionCreate_RequiresFile(t *testing.T) {
 
 // TestMissionCreate_WarnsOnHandleOverlap pins the ethos-z69l advisory:
 // creating a mission whose worker/evaluator handle overlaps an OPEN
-// mission's handles prints a non-fatal warning that names the colliding
+// mission's handles, AND whose write_set intersects that mission's
+// write_set, prints a non-fatal warning that names the colliding
 // mission and the shared handles — and still creates the mission. The
 // warning lets the leader catch a spawn-misbinding collision before
 // dispatch, without blocking the legitimate handle-reuse pattern.
+//
+// The two contracts share a pipeline so the overlapping write_set does
+// not trip the hard Phase 3.2 cross-mission conflict check — sequential
+// pipeline stages are expected to touch the same files (one stage's
+// writes are the next stage's inputs), and that is precisely the shape
+// where the same handle spawned as worker on one stage and evaluator
+// on another carries real misbind risk.
 func TestMissionCreate_WarnsOnHandleOverlap(t *testing.T) {
 	missionTestEnv(t)
 
 	// First open mission: worker bwk, evaluator djb (the shared fixture
-	// handles). Disjoint write_set so the second create is not rejected
-	// by the Phase 3.2 cross-mission conflict check.
-	missionCreateFile = writeContractFileWithWriteSet(t, "tests/overlap-a/")
+	// handles).
+	missionCreateFile = writeContractFileWithPipelineAndWriteSet(t, "pl-swoh", "internal/mission/")
 	captureStdoutE(t, func() error { return runMissionCreate() })
 
 	ms := missionStore()
@@ -451,8 +487,9 @@ func TestMissionCreate_WarnsOnHandleOverlap(t *testing.T) {
 	require.Len(t, ids, 1)
 	firstID := ids[0]
 
-	// Second mission reuses both handles; create must still succeed.
-	missionCreateFile = writeContractFileWithWriteSet(t, "tests/overlap-b/")
+	// Second mission reuses both handles and overlaps the first
+	// mission's write_set; create must still succeed (same pipeline).
+	missionCreateFile = writeContractFileWithPipelineAndWriteSet(t, "pl-swoh", "internal/mission/store.go")
 	var stdout string
 	stderr := captureStderrFn(t, func() {
 		stdout = captureStdoutE(t, func() error { return runMissionCreate() })
@@ -471,6 +508,35 @@ func TestMissionCreate_WarnsOnHandleOverlap(t *testing.T) {
 		"warning must name the overlapping worker handle")
 	assert.Contains(t, stderr, "djb",
 		"warning must name the overlapping evaluator handle")
+}
+
+// TestMissionCreate_NoOverlapWarningWhenWriteSetsDisjoint pins the
+// ethos-swoh fix: creating a mission whose worker/evaluator handle
+// overlaps an OPEN mission's handles, but whose write_set does NOT
+// intersect that mission's write_set, must not print the advisory.
+// Handle reuse across unrelated missions is a legitimate, common
+// pattern — before this fix, the warning fired on handle overlap
+// alone, including when the "overlapping" mission touched none of the
+// new mission's files.
+func TestMissionCreate_NoOverlapWarningWhenWriteSetsDisjoint(t *testing.T) {
+	missionTestEnv(t)
+
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/disjoint-write-set-a/")
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	// Second mission reuses both handles (bwk/djb) but claims a
+	// disjoint write_set — no pipeline, so a real overlap would trip
+	// the hard conflict check; a disjoint write_set trips neither that
+	// check nor the advisory.
+	missionCreateFile = writeContractFileWithWriteSet(t, "tests/disjoint-write-set-b/")
+	var stdout string
+	stderr := captureStderrFn(t, func() {
+		stdout = captureStdoutE(t, func() error { return runMissionCreate() })
+	})
+
+	assert.Contains(t, stdout, "created:")
+	assert.NotContains(t, stderr, "handle overlap",
+		"disjoint write_sets must not trigger the overlap advisory, even with a shared handle")
 }
 
 // TestMissionCreate_NoOverlapWarningWhenHandlesDisjoint pins the quiet

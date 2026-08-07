@@ -1250,3 +1250,60 @@ func TestSplitPathList(t *testing.T) {
 		})
 	}
 }
+
+// TestWriteSetsConflict covers ethos-swoh: a handle-overlap warning
+// must not fire when the two missions' write_sets don't actually
+// intersect. Rows pair a false-positive shape (disjoint write_sets)
+// against the true-positive shape (overlapping write_sets) so a
+// regression in either direction surfaces as a named failure.
+func TestWriteSetsConflict(t *testing.T) {
+	tests := []struct {
+		name                    string
+		aWriteSet, aExtractInto []string
+		bWriteSet, bExtractInto []string
+		want                    bool
+	}{
+		{
+			name:      "disjoint write_sets do not conflict (ethos-swoh false positive)",
+			aWriteSet: []string{"internal/mission/conflict.go"},
+			bWriteSet: []string{"cmd/ethos/serve.go"},
+			want:      false,
+		},
+		{
+			name:      "overlapping write_sets conflict",
+			aWriteSet: []string{"internal/mission/conflict.go"},
+			bWriteSet: []string{"internal/mission/"},
+			want:      true,
+		},
+		{
+			name:      "exact match conflicts",
+			aWriteSet: []string{"internal/mission/store.go"},
+			bWriteSet: []string{"internal/mission/store.go"},
+			want:      true,
+		},
+		{
+			name:      "both empty does not conflict",
+			aWriteSet: nil,
+			bWriteSet: nil,
+			want:      false,
+		},
+		{
+			name:         "extract_into on one side, overlapping write_set on the other, conflicts",
+			aWriteSet:    []string{"internal/mission/store.go"},
+			bExtractInto: []string{"internal/mission/"},
+			want:         true,
+		},
+		{
+			name:         "extract_into vs extract_into never conflicts, even when identical",
+			aExtractInto: []string{"internal/mission/"},
+			bExtractInto: []string{"internal/mission/"},
+			want:         false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := WriteSetsConflict(tt.aWriteSet, tt.aExtractInto, tt.bWriteSet, tt.bExtractInto)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
