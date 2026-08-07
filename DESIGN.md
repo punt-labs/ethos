@@ -4337,6 +4337,31 @@ is byte-identical to the current two-layer implementation. A new
 - Ships in v3.7.0. This ADR moves to SETTLED when the feature
   lands.
 
+**Reversal (2026-08-07)**: `ethos team migrate` (referenced above and
+in the Implications, Reasoning, and Rejected-alternatives sections)
+was removed post-ship, by operator ruling, under bead `ethos-mvum`.
+The rest of DES-051 — bundles, three-layer resolution, `active_bundle`,
+and the `available`/`activate`/`active`/`deactivate`/`add-bundle`
+subcommands — is unaffected and remains SETTLED.
+
+`migrate` existed to move Punt Labs' own internal repo fleet off the
+legacy `.punt-labs/ethos/` submodule pattern onto the bundle layout —
+a real, one-time need, not a hypothetical one. But a one-time internal
+rollout did not warrant a permanent, `--apply`-flagged CLI command. It
+shipped two defects: a P0 where `git submodule deinit -f` silently
+destroyed untracked mission records in repos that had them (closed
+won't-fix, `ethos-0s2i`), and a P2 where the command gave no warning
+that it restructures the repo before doing so (closed won't-fix,
+`ethos-fblk`). Operator: "That should have never ever been built.
+Remove it."
+
+No replacement command exists. The legacy submodule pattern keeps
+working exactly as this ADR's Reasoning always intended: the resolver
+falls back to two-layer behavior (repo-local → global) whenever
+`active_bundle` is unset, "byte-identical to the current two-layer
+implementation." Repos on the legacy pattern take no action and lose
+nothing.
+
 ## DES-052: Separate `extract_into` axis for new-file creation (SETTLED)
 
 **Status**: Settled. Implemented 2026-05-21 as bead `ethos-3emm`,
