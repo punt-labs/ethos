@@ -115,7 +115,7 @@ You can activate a team later when you want more.
 ### 6. Does this work with existing projects that use `.punt-labs/ethos/` as a submodule?
 
 Yes. `ethos setup` detects the legacy submodule layout and prints a
-message pointing to `ethos team migrate`. The legacy layout keeps
+message confirming no action is needed. The legacy layout keeps
 working unchanged -- the two-layer resolver (repo + global) still
 applies.
 The three-layer resolver (repo + bundle + global) activates only when

@@ -186,7 +186,7 @@ Added `-coverprofile=coverage.out` to `make test` and CI summary reporting. Cove
 
 **v3.6.0** (April 15, 2026) shipped mission dispatch one-liner, resilient conflict scan, `inputs.trigger` schema, and doctor orphan check (Phase 5 items).
 
-**v3.7.0** (April 15, 2026) shipped team bundle activation (Phase 6.1): three-layer stores (repo, active bundle, global), bundle resolver, five CLI commands (`available`, `activate`, `active`, `deactivate`, `add-bundle`), embedded gstack bundle (5 pipeline templates), and `ethos team migrate`.
+**v3.7.0** (April 15, 2026) shipped team bundle activation (Phase 6.1): three-layer stores (repo, active bundle, global), bundle resolver, five CLI commands (`available`, `activate`, `active`, `deactivate`, `add-bundle`), embedded gstack bundle (5 pipeline templates), and `ethos team migrate` (removed post-ship, see DESIGN.md's DES-051 reversal note).
 
 **v3.8.0** (April 15, 2026) fixed all core pipelines' review stages to use the `report` archetype.
 

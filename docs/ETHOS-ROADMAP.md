@@ -119,7 +119,7 @@ automatic traceability.
 - Three-layer resolution: repo → active bundle → global
 - Bundle resolver, embedded gstack bundle (5 pipeline templates), `ethos seed` deploys gstack
 - Five CLI commands: `team available`, `activate`, `active`, `deactivate`, `add-bundle`
-- `ethos team migrate` converts legacy submodule layouts to bundles
+- `ethos team migrate` converted legacy submodule layouts to bundles (removed post-ship, see DESIGN.md's DES-051 reversal note)
 
 ### v3.8.0 (April 15, 2026)
 
@@ -999,7 +999,7 @@ Phase 6.1 (Team Bundles, v3.7.0)         ← SHIPPED
 ├── Three-layer resolution (repo → active bundle → global)
 ├── Bundle resolver and embedded gstack (5 pipeline templates)
 ├── CLI: available/activate/active/deactivate/add-bundle
-└── ethos team migrate
+└── ethos team migrate (removed post-ship, see DES-051 reversal note)
 
 Phase 6 (Ecosystem, remaining)            ← FUTURE
 ├── 6.2 Agent marketplace
