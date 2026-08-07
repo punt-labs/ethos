@@ -4338,8 +4338,8 @@ is byte-identical to the current two-layer implementation. A new
   lands.
 
 **Reversal (2026-08-07)**: `ethos team migrate` (referenced above in
-the Decision, Reasoning, and Implications sections) was removed
-post-ship, by operator ruling, under bead `ethos-mvum`. The rest of
+the Decision and Reasoning sections) was removed post-ship, by
+operator ruling, under bead `ethos-mvum`. The rest of
 DES-051 — bundles, three-layer resolution, `active_bundle`, and the
 `available`/`activate`/`active`/`deactivate`/`add-bundle` subcommands
 — is unaffected and remains SETTLED.
