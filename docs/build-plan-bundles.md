@@ -314,9 +314,10 @@ Test pyramid:
   [`cmd/ethos/subprocess_test.go`](../cmd/ethos/subprocess_test.go):
   seed gstack → activate → `ethos show <identity>` → assert
   resolution succeeds from the bundle layer.
-- **Migration** — test fixture repo with a mock legacy submodule;
-  `migrate --apply` produces the expected new layout. (`migrate`
-  removed post-ship, see DESIGN.md's DES-051 reversal note.)
+- **Migration** (historical, no longer applicable) — `ethos team
+  migrate` shipped with a test fixture repo exercising a mock legacy
+  submodule; the command and its tests were removed post-ship (see
+  DESIGN.md's DES-051 reversal note).
 
 Patterns to reuse (do not reimplement):
 
