@@ -755,6 +755,7 @@ func TestStore_UpdatePreservesWriteSetReleasedAtFromDisk(t *testing.T) {
 
 		loaded.WriteSetReleasedAt = "2026-08-07T00:00:00Z"
 		require.NoError(t, s.Update(loaded))
+		assert.Empty(t, loaded.WriteSetReleasedAt, "Update must reflect the disk-preserved value back to the caller, not leave their discarded input in place")
 
 		reloaded, err := s.Load("m-2026-08-07-001")
 		require.NoError(t, err)
@@ -780,6 +781,7 @@ func TestStore_UpdatePreservesWriteSetReleasedAtFromDisk(t *testing.T) {
 		require.NoError(t, err)
 		loaded.WriteSetReleasedAt = ""
 		require.NoError(t, s.Update(loaded))
+		assert.Equal(t, released.WriteSetReleasedAt, loaded.WriteSetReleasedAt, "Update must reflect the disk-preserved value back to the caller, not leave their discarded input in place")
 
 		reloaded, err := s.Load("m-2026-08-07-002")
 		require.NoError(t, err)

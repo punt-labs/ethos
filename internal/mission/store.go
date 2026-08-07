@@ -892,10 +892,14 @@ func (s *Store) Update(c *Contract) error {
 			}
 			return fmt.Errorf("update: event append failed, contract rolled back: %w", err)
 		}
-		// Success: reflect the new UpdatedAt back to the caller — this
-		// mutation happens only after the event log commits, so a
-		// failed Update leaves the caller's struct unchanged.
+		// Success: reflect server-owned fields back to the caller --
+		// this mutation happens only after the event log commits, so
+		// a failed Update leaves the caller's struct unchanged.
+		// WriteSetReleasedAt is included alongside UpdatedAt so a
+		// caller that tried to set or clear it sees the disk-preserved
+		// value it actually got, not its own discarded input.
 		c.UpdatedAt = updated.UpdatedAt
+		c.WriteSetReleasedAt = updated.WriteSetReleasedAt
 		return nil
 	})
 }
