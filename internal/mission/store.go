@@ -306,6 +306,11 @@ func (s *Store) ContractPath(missionID string) (string, error) {
 //   - UpdatedAt: set equal to CreatedAt
 //   - ClosedAt: cleared (terminal-only field; Validate's status↔closed_at
 //     invariant would reject a non-empty value on an open contract anyway)
+//   - WriteSetReleasedAt: cleared. A caller-supplied value here would
+//     create a mission born already exempt from checkWriteSetConflicts
+//     (ForceReleaseWriteSet's admission-control skip) with no
+//     write_set_released event and no genuine release ever having
+//     happened -- silently defeating the write-set claim it declares.
 //   - Evaluator.PinnedAt: set equal to CreatedAt — the evaluator is
 //     pinned AT mission launch by definition; any caller-supplied
 //     timestamp would be incoherent
@@ -362,6 +367,7 @@ func (s *Store) ApplyServerFields(c *Contract, now time.Time, sources HashSource
 	c.CreatedAt = created
 	c.UpdatedAt = created
 	c.ClosedAt = ""
+	c.WriteSetReleasedAt = ""
 	c.Evaluator.PinnedAt = created
 	c.Evaluator.Hash = hash
 	return nil
@@ -854,7 +860,21 @@ func (s *Store) Update(c *Contract) error {
 			}
 			return fmt.Errorf("reading mission %q: %w", c.MissionID, err)
 		}
+		// WriteSetReleasedAt is preserved from disk, never taken from
+		// the caller -- the same reasoning as ApplyServerFields'
+		// create-time strip, applied here to the update path (found
+		// by Copilot review). Update has no dedicated audit event or
+		// required reason the way ForceReleaseWriteSet does; letting
+		// a caller set or clear the field through Update would let
+		// admission control be bypassed silently under a generic
+		// "update" event, undermining the recovery-only semantics
+		// ForceReleaseWriteSet exists to enforce.
+		onDisk, err := DecodeContractStrict(oldData, c.MissionID)
+		if err != nil {
+			return fmt.Errorf("reading mission %q: %w", c.MissionID, err)
+		}
 		updated := *c
+		updated.WriteSetReleasedAt = onDisk.WriteSetReleasedAt
 		updated.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := s.validateContract(&updated); err != nil {
 			return fmt.Errorf("invalid contract: %w", err)
@@ -872,10 +892,14 @@ func (s *Store) Update(c *Contract) error {
 			}
 			return fmt.Errorf("update: event append failed, contract rolled back: %w", err)
 		}
-		// Success: reflect the new UpdatedAt back to the caller — this
-		// mutation happens only after the event log commits, so a
-		// failed Update leaves the caller's struct unchanged.
+		// Success: reflect server-owned fields back to the caller --
+		// this mutation happens only after the event log commits, so
+		// a failed Update leaves the caller's struct unchanged.
+		// WriteSetReleasedAt is included alongside UpdatedAt so a
+		// caller that tried to set or clear it sees the disk-preserved
+		// value it actually got, not its own discarded input.
 		c.UpdatedAt = updated.UpdatedAt
+		c.WriteSetReleasedAt = updated.WriteSetReleasedAt
 		return nil
 	})
 }
@@ -1242,6 +1266,211 @@ func (s *Store) Abandon(missionID, reason string) (*Contract, error) {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
 	}
 	return abandoned, nil
+}
+
+// ForceReleaseWriteSet marks an open mission's write_set/extract_into
+// as released from admission control (WriteSetReleasedAt), so
+// checkWriteSetConflicts stops treating it as claiming those paths.
+// It does NOT clear WriteSet or ExtractInto themselves: most
+// archetypes (implement, test, investigate, design, ...) require a
+// non-empty write_set (validate.go rule 11), so emptying it would
+// pass this write but fail every future Load -- mission show, mission
+// list, even a later Close or Abandon on this same mission would then
+// error forever. The declared write_set stays on the contract for
+// validation and audit history; only its effect on admission control
+// changes. Also does not touch Status, SuccessCriteria, Budget,
+// Worker, Evaluator, or any other planning field. UpdatedAt does
+// change -- releasing a claim is itself a modification, the same as
+// any other Store write.
+// It is a leader-invoked, explicit, audited release of an
+// admission-control claim — not a terminal transition, and not a
+// substitute for Abandon or Close. A leader who can already prove
+// zero delegations and zero results should use Abandon instead: that
+// is a real terminal state, not a half-measure. See
+// docs/mission-force-release-write-set.md.
+//
+// Modeled directly on Store.Abandon: same locking discipline
+// (withLock), same NewPathRedactor-before-lock construction for
+// reason — the rationale at Abandon's definition applies unchanged
+// here, since reason is leader-supplied free text landing in a
+// git-tracked, publicly-pushed event log — and the same
+// every-failure-before-any-mutation discipline, so a refusal never
+// leaves a half-mutated contract on disk.
+//
+// Deliberately has no automatic age or delegation-count gate.
+// Staleness is a heuristic judgment, not a correctness invariant —
+// the leader consults the Staleness signal (staleness.go; surfaced
+// via mission show / mission list --stale-days once that CLI surface
+// lands -- see docs/mission-force-release-write-set.md) before
+// deciding, and this method does not
+// re-derive or enforce that judgment. Its own gate covers only
+// correctness: the mission must be open, and there must be something
+// to release.
+func (s *Store) ForceReleaseWriteSet(missionID, reason string) (*Contract, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, fmt.Errorf("force-release-write-set: reason is required")
+	}
+	if containsControlChar(reason) {
+		return nil, fmt.Errorf("force-release-write-set: reason contains control character")
+	}
+	// Built before the lock and before any mutation, for the same
+	// reason Abandon's redactor is: a construction failure here must
+	// never follow a writeContract call that already stamped
+	// WriteSetReleasedAt on disk with no release event to explain it.
+	redact, err := NewPathRedactor(s.repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("force-release-write-set: building path redactor: %w", err)
+	}
+	// Wrapped in the create lock, same nesting order Create uses
+	// (create lock -> per-mission lock), so a concurrent Create's
+	// cross-mission conflict scan can never observe the brief window
+	// between writeContract stamping WriteSetReleasedAt and
+	// appendEventLocked confirming it. Without this, Create could
+	// admit an overlapping mission against a release that later rolls
+	// back on event-append failure, leaving two open missions with
+	// intersecting write_sets on disk -- exactly what admission
+	// control exists to prevent.
+	var released *Contract
+	err = s.withCreateLock(func() error {
+		return s.withLock(missionID, func() error {
+			dest, err := s.contractPath(missionID)
+			if err != nil {
+				return err
+			}
+			c, oldData, err := s.loadLocked(missionID)
+			if err != nil {
+				return err
+			}
+			// Gate 1: mission must be open. A terminal mission's write_set
+			// is already excluded from checkWriteSetConflicts by virtue of
+			// Status != StatusOpen, so there is nothing to release.
+			if c.Status != StatusOpen {
+				return fmt.Errorf(
+					"mission %q is already in terminal state %q; force-release-write-set only applies to open missions",
+					missionID, c.Status,
+				)
+			}
+			// Gate 2: refuse a no-op release rather than silently succeed
+			// and write a misleading event -- either the mission was
+			// already released, or it never claimed anything to begin
+			// with.
+			if c.WriteSetReleasedAt != "" {
+				return fmt.Errorf(
+					"mission %q already has its write_set released (at %s); nothing to release",
+					missionID, c.WriteSetReleasedAt,
+				)
+			}
+			if len(c.WriteSet) == 0 && len(c.ExtractInto) == 0 {
+				return fmt.Errorf(
+					"mission %q already has an empty write_set and extract_into; nothing to release",
+					missionID,
+				)
+			}
+
+			// The staleness snapshot recorded on the event is informational,
+			// not gating (see the doc comment above): every input below
+			// degrades to "unknown" on failure rather than refusing the
+			// whole operation, unlike Abandon's gate 1. This matters most
+			// exactly when it is hardest to satisfy — a corrupt audit
+			// chunk or an oversized log is the kind of thing that leaves a
+			// mission stuck in the first place, and this method exists to
+			// unstick it; a hard error here would make ForceReleaseWriteSet
+			// unusable in precisely the scenario it is the recovery path
+			// for.
+			delegationsKnown := s.repoRoot != ""
+			delegationCount := 0
+			if delegationsKnown {
+				n, dErr := countDelegations(s.repoRoot, missionID)
+				if dErr != nil {
+					delegationsKnown = false
+					fmt.Fprintf(os.Stderr, "ethos: mission %s: counting delegations for staleness snapshot: %v\n", missionID, dErr)
+				} else {
+					delegationCount = n
+				}
+			}
+			var events []Event
+			eventsKnown := true
+			loadedEvents, warnings, evErr := s.LoadEvents(missionID)
+			if evErr != nil {
+				eventsKnown = false
+				fmt.Fprintf(os.Stderr, "ethos: mission %s: loading events for staleness snapshot: %v\n", missionID, evErr)
+			} else {
+				events = loadedEvents
+				for _, w := range warnings {
+					fmt.Fprintf(os.Stderr, "ethos: mission %s: %s\n", missionID, w)
+				}
+			}
+			var results []Result
+			resultsKnown := true
+			loadedResults, rErr := s.loadResultsLocked(missionID)
+			if rErr != nil {
+				resultsKnown = false
+				fmt.Fprintf(os.Stderr, "ethos: mission %s: loading results for staleness snapshot: %v\n", missionID, rErr)
+			} else {
+				results = loadedResults
+			}
+			now := time.Now().UTC()
+			st := Staleness(c, events, results, delegationCount, delegationsKnown, now)
+
+			writeSetAtRelease := append([]string(nil), c.WriteSet...)
+			extractIntoAtRelease := append([]string(nil), c.ExtractInto...)
+
+			nowStr := now.Format(time.RFC3339)
+			c.WriteSetReleasedAt = nowStr
+			c.UpdatedAt = nowStr
+			// WriteSet and ExtractInto are untouched, so the normal
+			// archetype-resolving validation path applies unchanged --
+			// releasing a claim never violates rule 11, since the
+			// write_set this rule checks was never cleared.
+			if err := s.validateContract(c); err != nil {
+				return fmt.Errorf("invalid contract after force-release-write-set: %w", err)
+			}
+			if err := s.writeContract(c); err != nil {
+				return err
+			}
+			delegationDetail := any(delegationCount)
+			if !delegationsKnown {
+				delegationDetail = "unknown"
+			}
+			lastActivityDetail := any(st.LastActivityAt)
+			ageDaysDetail := any(st.AgeDays)
+			if !eventsKnown || !st.AgeDaysKnown {
+				lastActivityDetail = "unknown"
+				ageDaysDetail = "unknown"
+			}
+			hasResultsDetail := any(st.HasResults)
+			if !resultsKnown {
+				hasResultsDetail = "unknown"
+			}
+			if err := s.appendEventLocked(missionID, Event{
+				TS:    nowStr,
+				Event: EventWriteSetReleased,
+				Actor: c.Leader,
+				Details: redact.Map(map[string]any{
+					"reason":                  reason,
+					"write_set_at_release":    writeSetAtRelease,
+					"extract_into_at_release": extractIntoAtRelease,
+					"staleness_snapshot": map[string]any{
+						"last_activity_at": lastActivityDetail,
+						"age_days":         ageDaysDetail,
+						"has_results":      hasResultsDetail,
+						"delegation_count": delegationDetail,
+					},
+				}),
+			}); err != nil {
+				if rbErr := s.restoreContract(dest, oldData); rbErr != nil {
+					return fmt.Errorf("force-release-write-set: event append failed: %w; rollback failed: %v", err, rbErr)
+				}
+				return fmt.Errorf("force-release-write-set: event append failed, contract rolled back: %w", err)
+			}
+			released = c
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return released, nil
 }
 
 // countDelegations returns the number of delegation record
@@ -2240,6 +2469,14 @@ func (s *Store) checkWriteSetConflicts(c *Contract) error {
 			continue
 		}
 		if existing.Status == StatusOpen {
+			// Skip a mission whose write_set claim was explicitly
+			// released (ForceReleaseWriteSet, ethos-9x07) -- the fields
+			// are still on disk for validation and audit history, but
+			// they no longer represent an active admission-control
+			// claim.
+			if existing.WriteSetReleasedAt != "" {
+				continue
+			}
 			// Skip missions in the same pipeline. Pipeline stages are
 			// expected to execute sequentially under the pipeline runner
 			// or leader's orchestration; write_set overlap within a pipeline

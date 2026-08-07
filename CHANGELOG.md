@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mission staleness signal and `Store.ForceReleaseWriteSet`.** Fixes ethos-9x07 (P1): a mission with an overly broad `write_set` and no visible activity for six days blocked all new mission creation touching the same tree in a real, concurrent-repo incident, and the leader had no way to check whether it was safe to `mission abandon` (delegations may exist) or get unblocked at all. `mission.Staleness` computes a mission's true last-activity age from the event log, not just `updated_at` (which `AppendReflection` never touches). `Store.ForceReleaseWriteSet`, modeled on `Store.Abandon`, is a leader-invoked, audited operation that marks a mission's `write_set`/`extract_into` claim released from admission control (`WriteSetReleasedAt`) without clearing the fields themselves, touching its status, or fabricating a verdict -- staleness stays a judgment input, never an automatic gate, per this project's write-sets-are-a-convention design (`prfaq.tex`). This PR ships the store-level mechanism and its tests; the CLI (`ethos mission force-release-write-set`) and MCP surface land in a follow-on. See `docs/mission-force-release-write-set.md`.
+
 ### Fixed
 
 - **Handle-overlap advisory no longer fires on non-intersecting write_sets.** `ethos mission create`'s advisory warning (ethos-z69l) fired whenever a worker/evaluator handle appeared on any other open mission, even when the two missions' `write_set`s shared no files -- a false positive (ethos-swoh). It now also checks that the two missions' `write_set`/`extract_into` declarations actually intersect (`internal/mission.WriteSetsConflict`, reusing the existing segment-prefix admission-control rules) before warning.
