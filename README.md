@@ -60,7 +60,7 @@ configuration is reusable, measurable, and improvable.
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/55447a6/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8b04ad0/install.sh | sh
 ```
 
 Then set up your identity and team:
@@ -74,13 +74,13 @@ harness, or a Claude install where org policy blocks plugins — pass
 `--no-plugin`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/55447a6/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8b04ad0/install.sh | sh -s -- --no-plugin
 ```
 
 Or, where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/55447a6/install.sh | ETHOS_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8b04ad0/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 `--no-plugin` skips only the marketplace-register and plugin-install
