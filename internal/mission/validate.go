@@ -42,7 +42,7 @@ const (
 // Called by Store.Create and Store.Update before writing to disk,
 // and defensively on every read (Load, loadLocked).
 //
-// Validation rules (19 total — must match the numbered list below
+// Validation rules (20 total — must match the numbered list below
 // exactly; keep the count updated when rules are added or removed):
 //  1. mission_id matches `^m-\d{4}-\d{2}-\d{2}-\d{3}$`
 //  2. status is one of {open, closed, failed, escalated, abandoned}
@@ -94,6 +94,8 @@ const (
 //     malformed regex surfaces with the pattern and the Go regexp
 //     parser error — admission-time so the operator sees the
 //     diagnostic before any spawn fires. DES-054 phase 3.
+//  20. write_set_released_at: empty is the common case (never
+//     released); when set, must be parseable as RFC3339. Ethos-9x07.
 //
 // Validate does NOT check that handles resolve to real identities.
 // That's a runtime concern handled by 3.5 (verifier launch).
@@ -146,6 +148,18 @@ func (c *Contract) ValidateWithArchetype(a *Archetype) error {
 		}
 		if _, err := time.Parse(time.RFC3339, c.ClosedAt); err != nil {
 			return fmt.Errorf("invalid closed_at %q: %w", c.ClosedAt, err)
+		}
+	}
+
+	// write_set_released_at: empty is the common case (never released).
+	// When set, must parse as RFC3339 -- this is a git-tracked YAML
+	// field a human or another tool can hand-edit outside Store's API,
+	// and a malformed value would otherwise pass Load/Validate silently
+	// and only surface once a future consumer (mission show, a
+	// --stale-days surface) tries to parse or display it.
+	if c.WriteSetReleasedAt != "" {
+		if _, err := time.Parse(time.RFC3339, c.WriteSetReleasedAt); err != nil {
+			return fmt.Errorf("invalid write_set_released_at %q: %w", c.WriteSetReleasedAt, err)
 		}
 	}
 
