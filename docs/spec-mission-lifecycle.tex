@@ -1,0 +1,868 @@
+%
+% spec-mission-lifecycle.tex
+%
+% Mission Lifecycle: A Z Specification
+% A formal model of the mission-contract state machine implemented in
+% internal/mission (mission.go, store.go, validate.go), current as of
+% commit 9a60b39 (PR #432), the commit that last touched the lifecycle
+% logic modelled here.
+%
+% Compile: pdflatex spec-mission-lifecycle.tex
+%
+% Must be .tex, not .md: fuzz and pdflatex read content regardless of
+% extension, but this repo's own z-spec tooling (file discovery for
+% /z-spec:test and friends) globs for .tex specifically -- a .md file
+% here is silently invisible to it and ProB reports 0 states.
+%
+
+\documentclass[a4paper,10pt,fleqn]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fuzz}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\fpath}[1]{\texttt{#1}}
+\newcommand{\field}[1]{\texttt{#1}}
+
+\begin{document}
+
+\title{Mission Lifecycle: A Z Specification}
+\author{Mike S, for Punt Labs}
+\date{August 2026}
+\hypersetup{
+  pdftitle={Mission Lifecycle: A Z Specification},
+  pdfauthor={Punt Labs},
+  pdfsubject={Z Specification},
+  pdfcreator={fuzz/probcli}
+}
+\maketitle
+\tableofcontents
+\newpage
+
+% ===================================================================
+\section{Scope}
+\label{sec:scope}
+% ===================================================================
+
+This specification models the mission-contract lifecycle as it is
+implemented today in \fpath{internal/mission}: the status values a
+contract can hold (\field{validStatuses}, mission.go:10--28), the seven
+transitions named in the mission brief --- create, delegate,
+submit-result, reflect, advance-round, close, abandon --- and the
+invariants those transitions must jointly preserve. It is a baseline,
+not a design proposal: every predicate below is read off existing
+code, cited by file and line, and the point of writing it down is to
+give a fixed target that future changes (staleness detection,
+force-release, or any other mission-lifecycle feature) must not
+violate without a deliberate, reviewed amendment to this document.
+
+\subsection{Modelling choice: one mission at a time}
+
+The real \field{Store} manages many contracts concurrently, each
+under its own per-mission \field{flock} (store.go:416--422,
+1531--1571). Every transition in this specification --- Create,
+Delegate, SubmitResult, Reflect, AdvanceRound, Close, Abandon --- is
+likewise a lock-scoped operation on a single contract in the real
+code: \field{Store.Close}, for instance, loads, mutates, and writes
+back exactly one contract file under exactly one lock
+(store.go:909--977). Nothing in the seven named transitions reads or
+writes a \emph{second} mission's state. The one exception is
+\field{Store.Create}'s cross-mission write-set conflict scan
+(\field{checkWriteSetConflicts}, store.go:2214--2252), which is
+explicitly out of scope --- see \S\ref{sec:nongoals}.
+
+This licenses the central simplification of the model: the state
+schema \field{Mission} (\S\ref{sec:state}) describes \emph{one}
+contract's lifecycle-relevant state, not a store-wide partial
+function from mission identifiers to contracts. Nothing here would
+change if it were promoted to $\field{MISSIONID} \pfun \field{Mission}$
+--- every transition still touches exactly one point in that
+function --- so the identifier type is omitted for economy.
+
+\subsection{Non-goals}
+\label{sec:nongoals}
+
+The following are deliberately excluded. Each is a real mechanism in
+\fpath{internal/mission}, but none of them bears on the four
+invariants the mission brief asks this specification to check
+(result gate, abandon gate, round budget, evaluator-hash pinning),
+and including them would obscure rather than sharpen the model:
+
+\begin{itemize}
+  \item \textbf{Cross-mission write-set conflicts} ---
+    \field{checkWriteSetConflicts} (store.go:2214) and
+    \field{findWriteSetConflicts} compare a new contract's
+    \field{write\_set} against every other \emph{open} mission's.
+    This is a Create-time admission check over the whole store, not a
+    property of one mission's lifecycle.
+  \item \textbf{Role overlap} --- \field{checkRoleOverlap}
+    (store.go:2085) refuses a contract whose worker and evaluator
+    share a team role binding. It depends on an external
+    \field{RoleLister} and is opt-in (nil disables it); it is an
+    identity-system concern, not a lifecycle-state concern.
+  \item \textbf{Generic \field{Store.Update}} (store.go:832) lets a
+    caller rewrite an arbitrary field of an open contract. It is not
+    one of the seven named transitions and none of the CLI/MCP
+    surfaces route ordinary lifecycle events through it.
+  \item \textbf{Pipelines, \field{depends\_on}, delegation-inheritance
+    templates, and preconditions} (\field{Contract} fields
+    \field{Pipeline}, \field{DependsOn}, \field{Delegations},
+    \field{Preconditions} --- mission.go:99--161) are advisory or
+    admission-control concerns layered on top of the status machine;
+    they do not change which statuses exist or which transitions
+    between them are legal.
+  \item \textbf{\field{Abandon}'s \field{reason} argument}
+    (store.go:1081--1098) is validated for non-emptiness, absence of
+    control characters, and path-redaction --- all data-hygiene
+    concerns with no bearing on any state invariant. Modelled here
+    only as a side condition in prose, not as a schema component.
+\end{itemize}
+
+% ===================================================================
+\section{Basic Types}
+\label{sec:basic}
+% ===================================================================
+
+Two given sets carry no internal structure relevant to the lifecycle:
+identities (leader, worker, evaluator handles all draw from the same
+set in the real code --- \field{Contract.Leader},
+\field{Contract.Worker}, \field{Contract.Evaluator.Handle} are all
+plain \field{string} handles, mission.go:52--54) and the evaluator's
+pinned content hash (a SHA-256 hex digest, \field{Evaluator.Hash},
+mission.go:211).
+
+\begin{zed}
+[HANDLE, HASH]
+\end{zed}
+
+\field{Leader} is carried on every event as the acting identity
+(store.go:699, 860, 962, 1207) but plays no role in any lifecycle
+invariant, so it is omitted from the state schema for economy --- see
+\S\ref{sec:state}.
+
+% ===================================================================
+\section{Free Types}
+\label{sec:freetypes}
+% ===================================================================
+
+\subsection{Status}
+
+The five values of \field{validStatuses} (mission.go:10--28,
+validate.go:28--34), prefixed \texttt{st} to keep the constructors
+distinct from any B keyword ProB might reserve:
+
+\begin{zed}
+Status ::= stOpen | stClosed | stFailed | stEscalated | stAbandoned
+\end{zed}
+
+\field{stClosed}, \field{stFailed}, and \field{stEscalated} are the
+three statuses \field{Store.Close} can produce
+(store.go:904--905: ``\emph{must be closed, failed, or escalated}'').
+\field{stAbandoned} is reachable only through \field{Store.Abandon}
+(store.go:1081--1237) and is explicitly excluded from \field{Close}'s
+own range (store.go:898--905, comment: ``\emph{StatusAbandoned is
+excluded here on purpose}'').
+
+\begin{axdef}
+CloseableStatus : \power Status
+\where
+CloseableStatus = \{ stClosed, stFailed, stEscalated \}
+\end{axdef}
+
+\subsection{Recommendation}
+
+The five values of \field{validRecommendations}
+(reflection.go:81--103), governing whether \field{AdvanceRound} may
+fire (store.go:1997--2002, \field{IsTerminalRecommendation}):
+
+\begin{zed}
+Recommendation ::= recContinue | recAdvance | recPivot
+                  | recStop | recEscalate
+\end{zed}
+
+\begin{axdef}
+TerminalRecommendation : \power Recommendation
+\where
+TerminalRecommendation = \{ recStop, recEscalate \}
+\end{axdef}
+
+\field{recContinue} and \field{recAdvance} are synonyms in the real
+code (reflection.go:85--88: ``\emph{continue and advance are synonyms
+for `advance permitted, same approach'}''); both are excluded from
+\field{TerminalRecommendation}, matching
+\field{IsTerminalRecommendation}'s two-value check exactly
+(reflection.go:111--113).
+
+\subsection{ZBOOL}
+
+fuzz has no built-in boolean, and \field{BOOL}/\field{true}/
+\field{false} collide with B keywords under ProB's translation:
+
+\begin{zed}
+ZBOOL ::= ztrue | zfalse
+\end{zed}
+
+This carries one piece of state-external configuration: whether the
+\field{Store} the mission is operating under was constructed with a
+non-empty \field{repoRoot} (store.go:41--52, 123--129). This is a
+property of the \emph{Store instance}, not of the contract on disk
+--- the same contract can be abandoned successfully by one caller and
+refused by another, depending only on how each caller's \field{Store}
+was built. \S\ref{sec:validation} depends on this distinction being
+explicit.
+
+% ===================================================================
+\section{Global Constants}
+\label{sec:constants}
+% ===================================================================
+
+The real \field{minRounds}/\field{maxRounds} bound is $[1, 10]$
+(validate.go:36--39). This specification uses a smaller bound purely
+to keep the state space finite for ProB (per the z-spec ProB-compatibility
+guidance on bounding numeric variables) --- the shape of every invariant
+below is independent of the concrete value.
+
+\begin{axdef}
+maxRounds : \nat
+\where
+maxRounds = 3
+\end{axdef}
+
+There is no real analogue of a maximum delegation count in the code
+--- \field{countDelegations} (store.go:1246--1265) is unbounded. This
+specification bounds it only so ProB can enumerate the state space;
+the invariant in \S\ref{sec:state} does not depend on the bound's
+value, only on the fact that \emph{some} finite count is tracked.
+
+\begin{axdef}
+maxDelegations : \nat
+\where
+maxDelegations = 2
+\end{axdef}
+
+% ===================================================================
+\section{State}
+\label{sec:state}
+% ===================================================================
+
+\begin{schema}{Mission}
+status : Status \\
+currentRound : \nat \\
+budgetRounds : \nat \\
+worker, evaluatorHandle : HANDLE \\
+evaluatorHash : HASH \\
+delegationCount : \nat \\
+resultRounds : \finset \nat \\
+reflected : \nat \pfun Recommendation \\
+repoRootSet : ZBOOL
+\where
+budgetRounds \in 1 \upto maxRounds \\
+currentRound \in 1 \upto budgetRounds \\
+delegationCount \leq maxDelegations \\
+resultRounds \subseteq 1 \upto budgetRounds \\
+\dom reflected \subseteq 1 \upto budgetRounds \\
+status = stAbandoned \implies
+  (delegationCount = 0 \land resultRounds = \emptyset)
+\end{schema}
+
+Six predicates, grouped into three invariants:
+
+\begin{itemize}
+  \item \field{budgetRounds} $\in 1 \upto \field{maxRounds}$ and
+    \field{currentRound} $\in 1 \upto \field{budgetRounds}$ together
+    are validate.go rule~12 (\field{budget.rounds} $\in [1,10]$) and
+    rule~14 (\field{current\_round} $\in [1,\field{budget.rounds}]$,
+    validate.go:229--239) --- \textbf{round number never exceeds the
+    budget}.
+  \item \field{delegationCount} $\leq \field{maxDelegations}$ and the
+    \field{resultRounds}/\field{reflected} domain bounds are ProB
+    animatability conditions with no code counterpart --- they only
+    keep the state space finite.
+  \item The final line is the \textbf{abandon invariant}: a mission
+    in state \field{stAbandoned} has no delegations and no results
+    for any round. This is the property store.go:1037--1080's long
+    comment states as Abandon's premise (``\emph{was there ever any
+    work to lose?}'') and store.go:1173--1177 checks for \emph{every}
+    round, not only the current one.
+\end{itemize}
+
+Two invariants from the brief are \emph{not} state predicates and so
+do not appear in this schema:
+
+\begin{itemize}
+  \item \textbf{Close requires a result for the current round.} This
+    is a precondition on the \emph{transition into} a terminal
+    status, not a property every reachable state must satisfy in
+    isolation (an open mission with no result yet is perfectly
+    valid). It appears as a guard on \field{Close}
+    (\S\ref{sec:opclose}).
+  \item \textbf{The evaluator hash never changes.} This is a
+    property of a \emph{trajectory} through the state space (every
+    operation's after-state agrees with its before-state on
+    \field{evaluatorHash}), not a property of any single state. Z has
+    no first-class temporal-invariant construct; it is stated as an
+    explicit frame conjunct, \field{evaluatorHash}$'$ =
+    \field{evaluatorHash}, in every operation below, and recorded as
+    a theorem in \S\ref{sec:theorems}.
+\end{itemize}
+
+\field{worker} $\neq$ \field{evaluatorHandle} is likewise absent from
+this schema. \field{checkSelfVerification} (store.go:2047--2061)
+enforces it, but only at \field{Store.Create} --- it is not one of
+\field{Contract.Validate}'s 19 rules (validate.go:41--97), so a
+hand-edited on-disk contract with \field{worker} = \field{evaluator}
+would load without error. Encoding it as a standing schema invariant
+would overstate what the real code guarantees. It appears instead as
+a guard on \field{Init} only (\S\ref{sec:init}); every other
+operation below leaves \field{worker} and \field{evaluatorHandle}
+unchanged, so the property, once established at creation, survives
+every transition this specification models --- but that is a fact
+about which operations exist, not a checked invariant.
+
+% ===================================================================
+\section{Initialization}
+\label{sec:init}
+% ===================================================================
+
+\field{Init} corresponds to \field{Store.Create}
+(store.go:585--728) as prepared by \field{ApplyServerFields}
+(store.go:292--368): a freshly created mission is always
+\field{stOpen}, at round~1, with zero delegations and zero results.
+
+\begin{schema}{Init}
+Mission'
+\where
+status' = stOpen \\
+currentRound' = 1 \\
+worker' \neq evaluatorHandle' \\
+delegationCount' = 0 \\
+resultRounds' = \emptyset \\
+reflected' = \emptyset
+\end{schema}
+
+\field{budgetRounds}$'$, \field{evaluatorHash}$'$, and
+\field{repoRootSet}$'$ are left unconstrained by \field{Init} beyond
+\field{Mission}'s own type and range predicates: the caller chooses
+the round budget (mission.go:241--243), the hash is computed from
+live identity data before \field{Create} is even called
+(store.go:331--345), and \field{repoRootSet} reflects how the caller
+built their \field{Store}, not a choice \field{Create} itself makes.
+
+% ===================================================================
+\section{Operations}
+\label{sec:ops}
+% ===================================================================
+
+Every operation below requires \field{status = stOpen} as a
+precondition. This is not incidental repetition: it is the single
+fact from which \textbf{terminal states are final} follows ---
+\field{Store.Update}, \field{AppendResult}, \field{AppendReflection},
+\field{AdvanceRound}, \field{Close}, and \field{Abandon} all begin
+with the same shape of check (``\emph{mission \%q is in terminal
+state \%q}'', store.go:926--928, 1132--1136, 1966--1968, 2427--2429,
+1802--1804). Once a mission leaves \field{stOpen}, nothing in this
+specification --- and nothing in the real \field{Store} --- can move
+it again.
+
+\subsection{Delegate}
+
+Models a worker spawn recorded via \field{WriteDelegationSkeleton}
+(delegation.go:309). The real function has no status check of its
+own --- it is called by the leader's orchestration, not gated by the
+store --- so the \field{status = stOpen} guard here is a modelling
+choice: it is not sound, operationally, to spawn a worker against a
+mission that is already closed, and every real call site only ever
+delegates against an open mission.
+
+\begin{schema}{Delegate}
+\Delta Mission
+\where
+status = stOpen \\
+delegationCount < maxDelegations \\
+status' = status \\
+currentRound' = currentRound \\
+budgetRounds' = budgetRounds \\
+worker' = worker \\
+evaluatorHandle' = evaluatorHandle \\
+evaluatorHash' = evaluatorHash \\
+delegationCount' = delegationCount + 1 \\
+resultRounds' = resultRounds \\
+reflected' = reflected \\
+repoRootSet' = repoRootSet
+\end{schema}
+
+\subsection{SubmitResult}
+
+Models \field{Store.AppendResult} (store.go:2401--2517): a result is
+accepted only on an open mission, only for the current round, and
+never twice for the same round (store.go:2427--2445,
+the append-only check around store.go:2460--2467).
+
+\begin{schema}{SubmitResult}
+\Delta Mission \\
+round? : \nat
+\where
+status = stOpen \\
+round? = currentRound \\
+round? \notin resultRounds \\
+status' = status \\
+currentRound' = currentRound \\
+budgetRounds' = budgetRounds \\
+worker' = worker \\
+evaluatorHandle' = evaluatorHandle \\
+evaluatorHash' = evaluatorHash \\
+delegationCount' = delegationCount \\
+resultRounds' = resultRounds \cup \{ round? \} \\
+reflected' = reflected \\
+repoRootSet' = repoRootSet
+\end{schema}
+
+\subsection{Reflect}
+
+Models \field{Store.AppendReflection} (store.go:1778--1882): same
+shape as \field{SubmitResult} --- open mission, current round only,
+append-only (store.go:1799--1819).
+
+\begin{schema}{Reflect}
+\Delta Mission \\
+round? : \nat \\
+rec? : Recommendation
+\where
+status = stOpen \\
+round? = currentRound \\
+round? \notin \dom reflected \\
+status' = status \\
+currentRound' = currentRound \\
+budgetRounds' = budgetRounds \\
+worker' = worker \\
+evaluatorHandle' = evaluatorHandle \\
+evaluatorHash' = evaluatorHash \\
+delegationCount' = delegationCount \\
+resultRounds' = resultRounds \\
+reflected' = reflected \cup \{ round? \mapsto rec? \} \\
+repoRootSet' = repoRootSet
+\end{schema}
+
+\subsection{AdvanceRound}
+
+Models \field{Store.AdvanceRound} (store.go:1953--2038): the budget
+check comes first in the real code (``\emph{the operator sees the
+right diagnostic}'', store.go:1969--1979), then the reflection-exists
+check, then the terminal-recommendation refusal
+(store.go:1991--2002).
+
+\begin{schema}{AdvanceRound}
+\Delta Mission
+\where
+status = stOpen \\
+currentRound < budgetRounds \\
+currentRound \in \dom reflected \\
+reflected(currentRound) \notin TerminalRecommendation \\
+status' = status \\
+currentRound' = currentRound + 1 \\
+budgetRounds' = budgetRounds \\
+worker' = worker \\
+evaluatorHandle' = evaluatorHandle \\
+evaluatorHash' = evaluatorHash \\
+delegationCount' = delegationCount \\
+resultRounds' = resultRounds \\
+reflected' = reflected \\
+repoRootSet' = repoRootSet
+\end{schema}
+
+\subsection{Close}
+\label{sec:opclose}
+
+Models \field{Store.Close} (store.go:897--1002). The result gate,
+\field{checkResultGateLocked} (store.go:2583--2600), is the
+\textbf{close-requires-a-result} invariant from the brief: it refuses
+unconditionally unless a result exists for exactly the mission's
+current round (store.go:2588--2590: ``\emph{Round == c.CurrentRound}'').
+
+\begin{schema}{Close}
+\Delta Mission \\
+newStatus? : Status
+\where
+status = stOpen \\
+newStatus? \in CloseableStatus \\
+currentRound \in resultRounds \\
+status' = newStatus? \\
+currentRound' = currentRound \\
+budgetRounds' = budgetRounds \\
+worker' = worker \\
+evaluatorHandle' = evaluatorHandle \\
+evaluatorHash' = evaluatorHash \\
+delegationCount' = delegationCount \\
+resultRounds' = resultRounds \\
+reflected' = reflected \\
+repoRootSet' = repoRootSet
+\end{schema}
+
+\subsection{Abandon}
+\label{sec:opabandon}
+
+Models \field{Store.Abandon} (store.go:1081--1237) as it stands
+\emph{today} --- after the fix documented at store.go:1144--1160 and
+tested by \field{TestStore\_Abandon\_RefusesWhenRepoRootEmpty}
+(abandon\_test.go:151--179). Three conjuncts, three gates in the real
+code:
+
+\begin{itemize}
+  \item \field{repoRootSet = ztrue} --- store.go:1154--1160: an empty
+    \field{repoRoot} \textbf{refuses}, unconditionally, before either
+    of the other two gates is even evaluated.
+  \item \field{delegationCount = 0} --- Gate~1, store.go:1138--1172.
+  \item \field{resultRounds = \emptyset} --- Gate~2, store.go:1173
+    --1192, checked for \emph{every} round on record, not only the
+    current one (store.go:1173--1177).
+\end{itemize}
+
+\begin{schema}{Abandon}
+\Delta Mission
+\where
+status = stOpen \\
+repoRootSet = ztrue \\
+delegationCount = 0 \\
+resultRounds = \emptyset \\
+status' = stAbandoned \\
+currentRound' = currentRound \\
+budgetRounds' = budgetRounds \\
+worker' = worker \\
+evaluatorHandle' = evaluatorHandle \\
+evaluatorHash' = evaluatorHash \\
+delegationCount' = delegationCount \\
+resultRounds' = resultRounds \\
+reflected' = reflected \\
+repoRootSet' = repoRootSet
+\end{schema}
+
+The \field{Mission} state invariant already requires
+$\field{status}' = \field{stAbandoned} \implies
+(\field{delegationCount}' = 0 \land \field{resultRounds}' = \emptyset)$;
+\field{Abandon}'s own guard is not logically necessary given that
+invariant and the frame equations above --- it is written out anyway,
+because the guard is the design step (precondition calculation is
+what \field{Store.Abandon}'s author had to get right), and because
+\S\ref{sec:validation} needs a second operation, \emph{without} the
+guard's \field{repoRootSet} conjunct in the right place, to fail the
+same invariant.
+
+\subsection{Idle}
+
+Not one of the seven named transitions, and not a real operation on
+\field{Store} at all. Every operation above guards on
+$\field{status} = \field{stOpen}$
+(\field{TerminalIsFinal}, \S\ref{sec:theorems}), so a state space
+built only from those seven has no outgoing transition once
+\field{status} leaves \field{stOpen} --- ProB reports that
+correctly, but as a \emph{deadlock}, which is a different finding
+from an invariant violation and would mask the one
+\S\ref{sec:validation} is looking for. \field{Idle} is the standard
+fix: a state-preserving self-loop enabled exactly on terminal states,
+so a finished mission is modelled as ``nothing more happens,'' not
+``the machine got stuck.''
+
+\begin{schema}{Idle}
+\Xi Mission
+\where
+status \neq stOpen
+\end{schema}
+
+% ===================================================================
+\section{Theorems}
+\label{sec:theorems}
+% ===================================================================
+
+fuzz type-checks schemas; it does not discharge proof obligations.
+The following are claims about the operation set
+$\{\field{Init}, \field{Delegate}, \field{SubmitResult}, \field{Reflect},
+\field{AdvanceRound}, \field{Close}, \field{Abandon}\}$, each backed
+by inspection of the schemas above; two (\field{TerminalIsFinal},
+\field{AbandonSafety}) are additionally exercised by ProB animation
+(\S\ref{sec:validation}). \field{EvaluatorHashFrozen} is a syntactic
+guarantee of every operation's frame conjunct --- no reachable
+violation is even expressible, so animation would confirm nothing
+non-trivial. \field{CloseRequiresResult}'s justification is a
+file:line correspondence to the real Go source, which ProB cannot
+check --- it never reads Go code. None of the four claims are
+discharged by proof:
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Theorem} & \textbf{Justification} \\
+\midrule
+\field{EvaluatorHashFrozen} &
+  Every operation's predicate includes
+  $\field{evaluatorHash}' = \field{evaluatorHash}$. No operation in
+  the set assigns any other value, so \field{evaluatorHash} is
+  constant on every reachable trajectory from \field{Init}. Matches
+  store.go:309--316's comment that the hash is ``\emph{the trust
+  anchor}'' pinned once at launch. \\
+\field{TerminalIsFinal} &
+  \field{Delegate}, \field{SubmitResult}, \field{Reflect},
+  \field{AdvanceRound}, \field{Close}, and \field{Abandon} all guard
+  on $\field{status} = \field{stOpen}$. Once $\field{status}' \neq
+  \field{stOpen}$ (via \field{Close} or \field{Abandon}), no
+  operation in the set is enabled again --- \field{status} is
+  absorbing at every value in \field{CloseableStatus} $\cup \{
+  \field{stAbandoned} \}$. \\
+\field{CloseRequiresResult} &
+  \field{Close}'s guard $\field{currentRound} \in
+  \field{resultRounds}$ is exactly the calculated precondition of
+  \field{checkResultGateLocked} (store.go:2583--2600): the gate holds
+  iff a result was recorded for the round the mission is closing
+  \emph{from}. \\
+\field{AbandonSafety} &
+  The \field{Mission} invariant's final conjunct
+  ($\field{status} = \field{stAbandoned} \implies
+  \field{delegationCount} = 0 \land \field{resultRounds} = \emptyset$)
+  holds in \field{Init}'s image and is preserved by every operation
+  in the correct set --- \field{Abandon} because its guard entails
+  the consequent directly, every other operation because it either
+  leaves \field{status} at \field{stOpen} or does not touch
+  \field{status} at \field{stAbandoned} at all. \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% ===================================================================
+\section{Validation: the abandon fail-open regression}
+\label{sec:validation}
+% ===================================================================
+
+The mission brief asks for a concrete demonstration that this
+specification would have caught the fail-open bug fixed in PR \#432 (commit 9a60b39)
+and regression-tested by
+\field{TestStore\_Abandon\_RefusesWhenRepoRootEmpty}
+(abandon\_test.go:151--179): the historical \field{Store.Abandon}
+guarded Gate~1 and Gate~2 with \texttt{if s.repoRoot != ""}, so when
+\field{repoRoot} was empty, the delegation and result checks were
+\emph{skipped}, not refused --- a mission with real, recoverable work
+on record could be abandoned cleanly, discarding it silently.
+
+\subsection{AbandonFailOpen}
+
+Not part of the current implementation, and not a schema in this
+document's own checked namespace either --- for reasons the next
+subsection explains. Its guard replaces \field{Abandon}'s three
+independent conjuncts with the historical code's single implication,
+reproducing the \texttt{if repoRoot != ""} short-circuit exactly:
+
+\begin{verbatim}
+AbandonFailOpen
+  Delta Mission
+where
+  status = stOpen
+  (repoRootSet = ztrue ==>
+    (delegationCount = 0 and resultRounds = {}))
+  status' = stAbandoned
+  currentRound' = currentRound
+  budgetRounds' = budgetRounds
+  worker' = worker
+  evaluatorHandle' = evaluatorHandle
+  evaluatorHash' = evaluatorHash
+  delegationCount' = delegationCount
+  resultRounds' = resultRounds
+  reflected' = reflected
+  repoRootSet' = repoRootSet
+\end{verbatim}
+
+When \field{repoRootSet = zfalse}, the guard's implication is
+vacuously true regardless of \field{delegationCount} or
+\field{resultRounds} --- exactly the fail-open condition djb's probe
+found. The frame equations carry \field{delegationCount} and
+\field{resultRounds} through \emph{unchanged}, matching the real bug:
+the historical code did not clear or lose the delegation records, it
+simply stopped checking them before transitioning \field{status} to
+\field{stAbandoned}.
+
+\subsection{Errata: why this schema is not checked against
+\field{Mission}}
+
+An earlier revision of this document defined \field{AbandonFailOpen}
+as a live schema typed against $\Delta \field{Mission}$, alongside
+\field{Abandon} and \field{Idle}, and claimed that model-checking the
+combined operation set would surface the invariant violation directly.
+It does not, and the claim was wrong. Model-checking
+$\{\field{Init}, \field{Delegate}, \field{SubmitResult},
+\field{Reflect}, \field{AdvanceRound}, \field{Close}, \field{Abandon},
+\field{AbandonFailOpen}, \field{Idle}\}$ against \field{Mission}
+explored 385 states and 785 transitions and reported \textbf{zero}
+violations --- with the buggy operation present and enabled.
+
+The reason is the schema calculus, not a tooling gap. $\Delta
+\field{Mission}$ abbreviates $\field{Mission} \land \field{Mission}'$,
+and \field{Mission}$'$ is \field{Mission} with every component ---
+\emph{and its own \texttt{where}-clause predicate} --- decorated with
+a prime. \field{Mission}'s predicate includes the abandon invariant,
+so \emph{every} schema written as $\Delta \field{Mission} \land P$
+already carries, as a silent extra conjunct,
+$\field{status}' = \field{stAbandoned} \implies
+(\field{delegationCount}' = 0 \land \field{resultRounds}' = \emptyset)$
+--- regardless of what $P$ says. Combined with
+\field{AbandonFailOpen}'s own frame equations
+($\field{delegationCount}' = \field{delegationCount}$,
+$\field{resultRounds}' = \field{resultRounds}$), this makes the whole
+schema unsatisfiable at exactly the states that would exhibit the
+bug: there is no valuation of the primed variables that satisfies both
+the frame equations and the silent invariant conjunct when
+$\field{delegationCount} > 0$. The operation is not \emph{disabled}
+by a guard that checks for this --- it has no valid after-state at
+all, by pure predicate logic, so ProB correctly finds nothing wrong,
+because there genuinely is nothing there to find. Writing a bad guard
+inside $\Delta \field{Mission}$ cannot, by construction, violate an
+invariant already living in \field{Mission}'s own predicate --- that
+is a structural property of Z's schema calculus, not a claim about
+the real \field{Store.Abandon}.
+
+This is precisely why \field{Contract.Validate} not carrying the
+abandon invariant (\S\ref{sec:state}) turns out to matter for more
+than fidelity to the real rule list: had this specification instead
+baked \field{AbandonSafety} into a Contract-level type, \emph{no}
+buggy guard could ever be exhibited as unsafe against it, for any
+future change, which would make the specification worthless as a
+regression net for exactly the class of bug it exists to catch.
+
+\subsection{A decoupled demonstration}
+
+To get a genuine counter-example, the safety property must not be
+baked into the type the buggy operation is checked against. Two
+small, self-contained Z documents were built and run independently
+(neither is part of this file's own checked namespace, to avoid
+exactly the trap above and to avoid redeclaring \field{Delegate} and
+\field{Abandon} a second time in one namespace). Both share a
+stripped-down state schema \field{MissionU} carrying only
+\field{status}, \field{budgetRounds}, \field{delegationCount},
+\field{resultRounds}, and \field{repoRootSet} --- structural bounds
+only, no abandon invariant --- plus \field{Init} and \field{Delegate}
+schemas identical in shape to \S\ref{sec:init}--\ref{sec:ops}. Each
+document then adds one more schema:
+
+\begin{verbatim}
+Idle
+  Xi MissionU
+where
+  not (status = stAbandoned and
+    (delegationCount /= 0 or resultRounds /= {}))
+\end{verbatim}
+
+\field{Idle} is a self-loop enabled everywhere \emph{except} the one
+state this demonstration exists to find: abandoned with a live
+delegation or an unclaimed result. That converts the safety property
+into a reachability question ProB already knows how to answer without
+a custom goal: if the buggy operation can reach that state, nothing
+is enabled there --- \emph{deadlock} --- and if the correct operation
+is used instead, the state is never reached, and the full space is
+deadlock-free.
+
+The first document pairs \field{Init}/\field{Delegate}/\field{Idle}
+with \field{AbandonFailOpen} (as given above, retyped against
+\field{MissionU}). \texttt{/z-spec:check} passes; \texttt{/z-spec:test}
+explores 16 states and 35 transitions and reports a deadlock, with
+this counter-example trace:
+
+\begin{verbatim}
+1  SETUP_CONSTANTS
+2  INITIALISATION      (repoRootSet := zfalse)
+3  Delegate            (delegationCount: 0 -> 1)
+4  AbandonFailOpen      status: stOpen -> stAbandoned
+                        (guard vacuous: repoRootSet = zfalse)
+   -- deadlock: no operation enabled --
+   status = stAbandoned, delegationCount = 1
+\end{verbatim}
+
+This is the fail-open bug, reached in four steps: delegate a worker,
+then abandon under a \field{Store} with no \field{repoRoot} in
+scope, and the mission is left \field{stAbandoned} with a live
+delegation record no longer reachable through any operation in the
+model --- the formal mirror of the real bug silently discarding
+recoverable work.
+
+The second document is identical except \field{Abandon}
+(\S\ref{sec:opabandon}'s guard, retyped against \field{MissionU})
+replaces \field{AbandonFailOpen}. \texttt{/z-spec:check} passes;
+\texttt{/z-spec:test} explores 15 states and 29 transitions and
+reports \textbf{no} deadlock and \textbf{no} violation --- the state
+\field{Idle} excludes is simply never reached, because
+\field{Abandon}'s $\field{repoRootSet} = \field{ztrue}$ conjunct is
+not an implication and so is never vacuously satisfied.
+
+\subsection{Tool run}
+\label{sec:probrun}
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lccl@{}}
+\toprule
+\textbf{Model} & \textbf{States} & \textbf{Transitions} &
+  \textbf{Result} \\
+\midrule
+Main document (\S\ref{sec:state}--\ref{sec:ops}), all 7 operations
+  $+$ \field{Idle} & 373 & 749 & 0 violations \\
+Same, $+$ \field{AbandonFailOpen} (errata above) & 385 & 785 &
+  0 violations --- false negative, see errata \\
+Decoupled, \field{AbandonFailOpen} & 16 & 35 & deadlock at
+  $\field{status} = \field{stAbandoned} \land
+  \field{delegationCount} = 1$ \\
+Decoupled, \field{Abandon} & 15 & 29 & clean \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+fuzz's \texttt{/z-spec:check} type-checks this document with 0 errors
+in every revision recorded in its commit history. \texttt{probcli}
+requires a \texttt{.tex} extension to run its Z-to-B translation ---
+\texttt{/z-spec:check} runs fuzz directly on any extension, but
+\texttt{/z-spec:test}/\texttt{/z-spec:model\_check} silently produced
+0 states and 0 transitions when an earlier revision of this content
+was saved with a \texttt{.md} extension --- the file was renamed to
+\texttt{.tex} for exactly this reason before this document was first
+submitted for review. All \texttt{model\_check}/\texttt{animate} runs
+reported in this section, including the two decoupled documents, were
+run against the \texttt{.tex} file that is committed here.
+
+% ===================================================================
+\section{Traceability}
+\label{sec:trace}
+% ===================================================================
+
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+\textbf{Z construct} & \textbf{Go source} & \textbf{Note} \\
+\midrule
+\field{Status} & mission.go:10--28 & \field{validStatuses},
+  validate.go:28--34 \\
+\field{Recommendation} & reflection.go:81--103 &
+  \field{validRecommendations} \\
+\field{Mission} & \field{Contract} (mission.go:35--162) $+$
+  delegation count $+$ result/reflection round sets & the real
+  \field{Contract} struct does not itself carry delegation or result
+  data --- those live in sibling files (store.go:503--536) --- but
+  the lifecycle invariants span all three, so the model's state
+  includes them \\
+\field{Init} & \field{Store.Create}
+  (store.go:585--728) via \field{ApplyServerFields}
+  (store.go:292--368) & \\
+\field{Delegate} & \field{WriteDelegationSkeleton}
+  (delegation.go:309) & status guard is a modelling choice, see
+  \S\ref{sec:ops} \\
+\field{SubmitResult} & \field{Store.AppendResult}
+  (store.go:2401--2517) & \\
+\field{Reflect} & \field{Store.AppendReflection}
+  (store.go:1778--1882) & \\
+\field{AdvanceRound} & \field{Store.AdvanceRound}
+  (store.go:1953--2038) & \\
+\field{Close} & \field{Store.Close} (store.go:897--1002) via
+  \field{checkResultGateLocked} (store.go:2583--2600) & \\
+\field{Abandon} & \field{Store.Abandon} (store.go:1081--1237) &
+  post-fix; see abandon\_test.go:151--179 \\
+\field{AbandonFailOpen} & historical \field{Store.Abandon}, fixed
+  PR \#432 (9a60b39) & not present in current code; modelled only
+  for \S\ref{sec:validation} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\end{document}
