@@ -121,6 +121,23 @@ func findWriteSetConflicts(newWriteSet, newExtractInto []string, existing []*Con
 	return conflicts
 }
 
+// WriteSetsConflict reports whether two contracts' write_set and
+// extract_into declarations claim overlapping write territory, under
+// the same segment-prefix rules findWriteSetConflicts uses at create
+// time. It answers a plain yes/no for callers that only need the
+// decision, not the per-path diagnostic Conflict carries.
+//
+// This is the primitive an advisory check (e.g. a handle-overlap
+// warning) needs to distinguish a real misbind risk — two open
+// missions that share a handle AND claim intersecting files — from
+// two unrelated missions that merely share a handle. Handle overlap
+// alone is not a conflict; feat:writeset's conflict scan is about
+// file claims, not handles (ethos-swoh).
+func WriteSetsConflict(aWriteSet, aExtractInto, bWriteSet, bExtractInto []string) bool {
+	other := &Contract{WriteSet: bWriteSet, ExtractInto: bExtractInto}
+	return len(findWriteSetConflicts(aWriteSet, aExtractInto, []*Contract{other})) > 0
+}
+
 // sortConflictPaths orders ConflictPath values primarily by Source —
 // write_set first, then extract_into — and within each group by Path
 // lexicographically. The grouping keeps the error message readable:

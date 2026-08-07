@@ -948,11 +948,11 @@ func init() {
 		missionLogCmd,
 		missionExportCmd,
 		missionLintCmd,
-		missionScaffoldCmd,
 		missionDispatchCmd,
 		missionMigrateCmd,
 		missionClaimCmd,
 		missionReleaseCmd,
+		missionScaffoldCmd,
 	)
 	rootCmd.AddCommand(missionCmd)
 }
@@ -1080,11 +1080,15 @@ func runMissionCreate() error {
 
 // warnHandleOverlap prints an advisory (non-fatal) stderr warning when
 // the new contract's worker or evaluator handle also appears as the
-// worker or evaluator of an OPEN mission. Overlap is the precondition
-// for the ethos-z69l misbinding class: a handle that is worker on one
-// open mission and evaluator on another can be spawned under an
-// ambiguous role, and the SubagentStart gate binds by the spawn's
-// declared MISSION_ID. Surfacing the collision at create time lets the
+// worker or evaluator of an OPEN mission AND the two missions'
+// write_set/extract_into declarations actually intersect. Handle
+// overlap alone is not the misbinding risk: the ethos-z69l class is a
+// handle spawned under an ambiguous (mission_id, role) while touching
+// related work, so a handle shared with an open mission whose files
+// don't overlap carries no real risk (ethos-swoh) -- before this
+// check, sharing a handle with ANY other open mission warned,
+// including a mission whose write_set does not intersect the new
+// one's at all. Surfacing the collision at create time lets the
 // leader verify the intended (mission_id, role) before dispatching.
 //
 // The check never fails the create — handle reuse across missions is a
@@ -1138,7 +1142,11 @@ func warnHandleOverlap(ms *mission.Store, c *mission.Contract) {
 			seen[h] = struct{}{}
 			hits = append(hits, h)
 		}
-		if len(hits) > 0 {
+		// Handle overlap alone is not enough: the misbind risk only
+		// exists when the two missions also claim intersecting files
+		// (ethos-swoh). Skip the write_set check entirely when no
+		// handle overlaps -- the common case -- before paying for it.
+		if len(hits) > 0 && mission.WriteSetsConflict(c.WriteSet, c.ExtractInto, other.WriteSet, other.ExtractInto) {
 			sort.Strings(hits)
 			overlaps = append(overlaps, overlap{mission: id, handles: hits})
 		}

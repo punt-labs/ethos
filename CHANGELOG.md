@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Handle-overlap advisory no longer fires on non-intersecting write_sets.** `ethos mission create`'s advisory warning (ethos-z69l) fired whenever a worker/evaluator handle appeared on any other open mission, even when the two missions' `write_set`s shared no files -- a false positive (ethos-swoh). It now also checks that the two missions' `write_set`/`extract_into` declarations actually intersect (`internal/mission.WriteSetsConflict`, reusing the existing segment-prefix admission-control rules) before warning.
+
 ## [4.11.0] - 2026-08-06
 
 ### Added
