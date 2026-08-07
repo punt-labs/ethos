@@ -80,7 +80,7 @@ before code starts.
 | Infra / CI / release / homebrew tap | `adb` (Lovelace) | `kth` (Hightower) |
 | Mission / pipeline schema design | `claude` (leader) | `mcg` (Cagan) — frameworks for empowered teams |
 | Onboarding / `ethos seed` / first-run UX | `claude` (leader) | `dna` (Norman) — affordances, mental models |
-| `ethos team migrate` / bundle layout | `bwk` | `rsc` (compatibility / migration cost) |
+| Bundle layout / resolution | `bwk` | `rsc` (compatibility / migration cost) |
 | Persona-animation (SessionStart, PreCompact) | `bwk` | `mdm` |
 | Z spec for the contract or session schemas | `jms` (Spivey) | `jra` (Abrial) |
 
