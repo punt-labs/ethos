@@ -762,13 +762,13 @@ func TestHandleMission_Abandon(t *testing.T) {
 	var created mission.Contract
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 
-	h.missionStore.WithRepoRoot(t.TempDir())
+	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 	abandonResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
 		"mission_id": created.MissionID,
 		"reason":     "never dispatched, blocking a real mission",
 	}))
-	h.missionStore.WithRepoRoot("")
 	require.NoError(t, err)
 	require.False(t, abandonResult.IsError, "abandon must succeed: %s", resultText(t, abandonResult))
 
@@ -862,13 +862,13 @@ func TestHandleMission_AbandonRefusesWithResult(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 	submitResultForMCP(t, h, created.MissionID)
 
-	h.missionStore.WithRepoRoot(t.TempDir())
+	h.missionStore = h.missionStore.WithRepoRoot(t.TempDir())
+	t.Cleanup(func() { h.missionStore = h.missionStore.WithRepoRoot("") })
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
 		"method":     "abandon",
 		"mission_id": created.MissionID,
 		"reason":     "ignoring the submitted result",
 	}))
-	h.missionStore.WithRepoRoot("")
 	require.NoError(t, err)
 	assert.True(t, result.IsError)
 	assert.Contains(t, resultText(t, result), "result artifact")
