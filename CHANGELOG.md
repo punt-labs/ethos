@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`ethos team migrate`.** Removed by operator ruling (`ethos-mvum`). The command existed to move Punt Labs' own internal repo fleet off the legacy `.punt-labs/ethos/` submodule pattern onto the bundle layout -- a real, one-time need that did not warrant a permanent, `--apply`-flagged CLI surface. It shipped a P0 (`git submodule deinit -f` silently destroyed untracked mission records, `ethos-0s2i`) and a P2 (no warning that it restructures the repo, `ethos-fblk`), both closed won't-fix. No replacement command exists: the legacy submodule pattern keeps working unchanged, since the resolver already falls back to two-layer behavior (repo-local → global) whenever `active_bundle` is unset (DES-051). See DESIGN.md's DES-051 reversal note.
+
 ## [4.12.0] - 2026-08-07
 
 ### Added
