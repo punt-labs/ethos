@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Stopped tracking the leaked quarry capture, `.punt-labs/quarry/captures/session-c7e50ab0.md`.** A raw quarry session-transcript capture — runtime dev-tool state, not source — was committed and pushed to this public repo's `origin/main` via release commits c5764fb (#359) and 7759dd5 (#418, pkit-kcps). `.gitignore` gains `.punt-labs/quarry/captures/`, matching the same rule already in `punt-labs/{biff,lux}`'s `.gitignore`, and the file is `git rm --cached` in this commit. Two other capture files (`session-ca0bdb10.md`, `session-f8f75233.md`) were already removed from the tree by #352 but remain recoverable from git history — a `git filter-repo` + force-push purge, out of scope here and tracked separately as an operator-gated follow-up.
+
 ### Removed
 
 - **`ethos team migrate`.** Removed by operator ruling (`ethos-mvum`). The command existed to move Punt Labs' own internal repo fleet off the legacy `.punt-labs/ethos/` submodule pattern onto the bundle layout -- a real, one-time need that did not warrant a permanent, `--apply`-flagged CLI surface. It shipped a P0 (`git submodule deinit -f` silently destroyed untracked mission records, `ethos-0s2i`) and a P2 (no warning that it restructures the repo, `ethos-fblk`), both closed won't-fix. No replacement command exists: the legacy submodule pattern keeps working unchanged, since the resolver already falls back to two-layer behavior (repo-local → global) whenever `active_bundle` is unset (DES-051). See DESIGN.md's DES-051 reversal note.
