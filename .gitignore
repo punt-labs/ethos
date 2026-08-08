@@ -23,6 +23,12 @@ coverage.out
 # a per-tool nested .gitignore.
 .punt-labs/**/*.local.*
 
+# Quarry session-transcript captures: runtime dev-tool state (raw agent
+# transcripts), never source. Matches biff/lux .gitignore phrasing for
+# the same tool. A capture leaked to this repo's public history via
+# release commits c5764fb/7759dd5 (pkit-kcps) before this rule existed.
+.punt-labs/quarry/captures/
+
 # Claude local settings
 .claude/settings.local.json
 .claude/*.local.md
