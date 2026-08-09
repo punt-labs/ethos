@@ -810,7 +810,7 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Contains(t, r.Detail, "unterminated here-document")
 	})
 
-	t.Run("unreadable hook file -> FAIL with remedy", func(t *testing.T) {
+	t.Run("unreadable hook file -> FAIL with permission remedy", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses file permissions")
 		}
@@ -823,6 +823,21 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "cannot read")
 		assert.Contains(t, r.Detail, "check file permissions")
+	})
+
+	// A non-permission read error (here, the hook path is a directory —
+	// os.ErrIsDir) must not carry the permission-specific remedy: "check
+	// file permissions" would misdirect an operator debugging EISDIR,
+	// ELOOP, or another I/O failure.
+	t.Run("non-permission read error -> FAIL with neutral remedy", func(t *testing.T) {
+		dir := currencyRepo(t)
+		path := hookPath(dir)
+		require.NoError(t, os.MkdirAll(path, 0o755))
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "cannot read")
+		assert.Contains(t, r.Detail, "inspect the file manually")
+		assert.NotContains(t, r.Detail, "check file permissions")
 	})
 }
 

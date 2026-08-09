@@ -477,7 +477,11 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
 		if os.IsNotExist(err) {
 			return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
 		}
-		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v — check file permissions", hookPath, err)}
+		remedy := " — inspect the file manually"
+		if os.IsPermission(err) {
+			remedy = " — check file permissions"
+		}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hookPath, err, remedy)}
 	}
 
 	// A host ending inside an unterminated heredoc masks its trailing lines
