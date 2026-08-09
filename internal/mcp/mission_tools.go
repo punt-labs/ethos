@@ -185,19 +185,29 @@ type createMissionResponse struct {
 // mission on someone's behalf must not turn on commit trailers for
 // this session; only an explicit `ethos mission claim` does that.
 //
-// Every step is advisory, like the CLI's: no session store wired, or
-// no session in context, is the ordinary case for many MCP callers,
-// and a mission that was created stays created regardless of whether
-// the rebind below succeeds. Failures are returned as strings for the
+// Every step is advisory: a mission that was created stays created
+// regardless of whether the rebind below succeeds. But "advisory"
+// means the create call does not fail -- it does not mean the caller
+// is left with no signal. No session store wired, or no session in
+// context, means the rebind is skipped, and a warning says so: an MCP
+// client that trusts "creating a mission binds the session" has no
+// other way to distinguish "rebind happened" from "silently
+// skipped." Failures and skips alike are returned as strings for the
 // caller to fold into the result's warnings array -- MCP has no
 // stderr channel to print the CLI's line to.
 func (h *Handler) bindDispatchedMission(missionID string) []string {
 	if h.sessionStore == nil {
-		return nil
+		return []string{
+			"binding mission: no session store wired -- active-mission sidecar not updated; " +
+				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
+		}
 	}
 	sessionID, _ := resolve.SessionID(h.sessionStore)
 	if sessionID == "" {
-		return nil
+		return []string{
+			"binding mission: no session in context -- active-mission sidecar not updated; " +
+				"a subsequent Agent() spawn may still attribute under a previous MISSION_ID",
+		}
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {

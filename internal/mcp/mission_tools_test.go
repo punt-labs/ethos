@@ -265,11 +265,16 @@ func TestHandleMission_CreateBindsActiveMission(t *testing.T) {
 		"the create-time binding must be dispatch origin, not claim — create must not turn on commit trailers")
 }
 
-// TestHandleMission_CreateNoSessionIsNoOp asserts the advisory
-// contract: an MCP call with no session store wired (or no session in
-// context) must not fail the create — mirrors the CLI's
-// bindDispatchedMission, which returns silently on errNoSession.
-func TestHandleMission_CreateNoSessionIsNoOp(t *testing.T) {
+// TestHandleMission_CreateNoSessionWarns asserts the advisory
+// contract: an MCP call with no session store wired must not fail the
+// create — mirrors the CLI's bindDispatchedMission, which proceeds
+// silently past errNoSession. But "advisory" governs whether create
+// fails, not whether the caller is told anything: a warning must
+// still say the sidecar rebind was skipped, so an MCP client cannot
+// mistake "no session store wired" for "rebind happened" (round-2
+// re-review finding #1 — the prior no-warning behavior was the exact
+// silent-failure shape ethos-5jsf exists to close, one layer removed).
+func TestHandleMission_CreateNoSessionWarns(t *testing.T) {
 	h := testHandlerWithMissions(t) // no WithSessionStore
 
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -281,7 +286,40 @@ func TestHandleMission_CreateNoSessionIsNoOp(t *testing.T) {
 
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
-	assert.NotContains(t, payload, "warnings", "no session store wired must not warn")
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "no session store wired must still warn; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "no session store wired")
+	assert.Contains(t, warnings[0], "not updated")
+}
+
+// TestHandleMission_CreateNoSessionInContextWarns is the sibling of
+// TestHandleMission_CreateNoSessionWarns: a session store is wired,
+// but resolve.SessionID finds nothing to key off of (no session in
+// context). Same silent-no-op shape, same fix — round-2 re-review
+// finding #1.
+func TestHandleMission_CreateNoSessionInContextWarns(t *testing.T) {
+	// Explicit empty ETHOS_SESSION, not just "unset" -- this process may
+	// itself be running inside a Claude Code session that already has
+	// ETHOS_SESSION set in its real environment, and t.Setenv("", "")
+	// scopes the override to this test only.
+	t.Setenv("ETHOS_SESSION", "")
+	h := testHandlerWithSessions(t)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "no session in context must still warn; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "no session in context")
+	assert.Contains(t, warnings[0], "not updated")
 }
 
 // TestHandleMission_CreateRebindsWarnsOnDifferentMission mirrors the
