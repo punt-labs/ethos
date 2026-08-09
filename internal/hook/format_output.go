@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -1176,9 +1177,12 @@ func writeMissionWarnings(ctx *strings.Builder, raw any) {
 	}
 	ctx.WriteString("\n\nWarnings:")
 	for _, e := range entries {
-		if s, ok := e.(string); ok {
-			ctx.WriteString("\n  - " + s)
+		s, ok := e.(string)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "ethos: warnings entry is %T, not a string, dropping: %v\n", e, e)
+			continue
 		}
+		ctx.WriteString("\n  - " + s)
 	}
 }
 
