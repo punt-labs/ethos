@@ -402,7 +402,9 @@ How an agent drives ethos — not how to develop ethos itself.
 ## Gotchas
 - Never run `make install` from inside Claude Code (running binary)
 - Agent types are discovered at SessionStart — restart after adding one
-- `ethos doctor` checks the seal hook only when ethos is enabled here
+- `ethos doctor` checks seal-hook presence only when ethos is enabled
+  here, but its hook currency checks run unconditionally, on dormant
+  repos too
 ```
 
 Final prose is a follow-up implementation task; this outline fixes scope
