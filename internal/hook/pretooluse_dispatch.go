@@ -127,10 +127,30 @@ func staleBindingReason(missionID string) string {
 	if err != nil {
 		return ""
 	}
-	if c.Status != mission.StatusOpen {
-		return fmt.Sprintf("that mission is %s", c.Status)
+	return nonOpenReason(c.Status)
+}
+
+// nonOpenReason reports why a mission cannot take a new delegation —
+// "" when status is open. Shared by case 2's staleBindingReason (the
+// active-mission sidecar) and case 1's dispatchTierB (the MISSION_ID
+// env var, both on first Load and on the pre-write TOCTOU re-check)
+// so every non-open source produces identical wording.
+func nonOpenReason(status string) string {
+	if status == mission.StatusOpen {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("that mission is %s", status)
+}
+
+// warnNonOpenMissionID writes the case-1 counterpart of
+// readActiveMissionForDispatch's stale-sidecar warning: same shape
+// (names the session, the mission, and the remedy), worded for an
+// explicit MISSION_ID rather than a claimed sidecar.
+func warnNonOpenMissionID(sessionID, missionID, reason string) {
+	fmt.Fprintf(os.Stderr,
+		"ethos: pre-tool-use: MISSION_ID: session %q named %s but %s; "+
+			"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
+		sessionID, missionID, reason)
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
@@ -197,15 +217,41 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 // repoRoot resolution uses resolve.FindRepoRoot — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
+//
+// dispatchTierBConfirmedOpen is a test-only synchronization hook,
+// invoked immediately after the status check above confirms the
+// mission is open, right before the call that blocks acquiring the
+// shared mission lock. Its zero value is a no-op with negligible
+// production cost; tests that need to race a concurrent Close against
+// this exact moment override it to signal a channel, replacing a
+// blind time.Sleep guess with a real synchronization point (round-2
+// re-review finding #6 on the delegation-lifecycle TOCTOU test).
+var dispatchTierBConfirmedOpen = func() {}
+
 func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any) error {
 	store, err := tierBMissionStore()
 	if err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: resolving mission store: %v", err))
 	}
-	if _, err := store.Load(missionID); err != nil {
+	c, err := store.Load(missionID)
+	if err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err))
+	}
+	// Case-1 status re-check (docs/design-delegation-lifecycle.md
+	// facet 2): a MISSION_ID env value is inherited by ordinary OS
+	// process-environment inheritance across every subsequent tool
+	// call a resumed subagent process makes — including calls made
+	// long after the mission it names has closed. Case 2's
+	// staleBindingReason already refuses a stale sidecar; case 1 must
+	// refuse identically rather than trust the mere presence of the
+	// env var. Non-open falls through to Tier A (or inheritance) —
+	// never a blocked spawn, matching every other attribution
+	// fallback in this file.
+	if reason := nonOpenReason(c.Status); reason != "" {
+		warnNonOpenMissionID(sessionID, missionID, reason)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 
 	delegationID, releaseID, err := mission.NewID(mission.NamespaceDelegations, time.Now())
@@ -223,6 +269,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	defer func() { releaseID(success) }()
 
 	repoRoot := tierBStoreRoot()
+	dispatchTierBConfirmedOpen()
 	releaseMission, err := mission.AcquireMissionLock(repoRoot, missionID)
 	if err != nil {
 		return writeAgentBlock(w,
@@ -241,6 +288,36 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 			fmt.Sprintf("ethos pre-tool-use: acquiring delegation lock for %q: %v", delegationID, err))
 	}
 	defer releaseDelegation()
+
+	// TOCTOU re-check (docs/design-delegation-lifecycle.md facet 2):
+	// re-Load the contract while both AcquireMissionLock (shared) and
+	// AcquireDelegationLock (exclusive, just acquired above) are held.
+	// Store.Close takes AcquireMissionLockExclusive around its
+	// delegation sweep, so a concurrent Close either committed before
+	// this shared holder was admitted (caught here) or is blocked
+	// waiting for this shared holder to release (and will sweep the
+	// skeleton this call is about to write). Either way the mission
+	// can never end up closed with an open delegation record this
+	// dispatch wrote after the fact.
+	//
+	// A reload error falls through to Tier A/B fallback rather than to
+	// WriteDelegationSkeleton — asymmetric treatment of the recheck vs.
+	// the first Load above (which blocks the spawn outright on error)
+	// would let an error the first check would have refused silently
+	// authorize the write here. Neither Load failing is evidence the
+	// mission is open; only a successful Load reporting status: open is.
+	recheck, err := store.Load(missionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: MISSION_ID: session %q, mission %s: TOCTOU re-check Load failed: %v; "+
+				"falling through to Tier A/B fallback rather than writing a delegation on unverified status\n",
+			sessionID, missionID, err)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
+	}
+	if reason := nonOpenReason(recheck.Status); reason != "" {
+		warnNonOpenMissionID(sessionID, missionID, reason)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
+	}
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
 	agentType, _ := toolInput["subagent_type"].(string)

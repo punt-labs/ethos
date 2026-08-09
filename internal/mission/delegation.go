@@ -432,6 +432,34 @@ func writeAtomicFile(dir, pattern, destPath string, data []byte) error {
 // On flock error the file descriptor is closed before return — no
 // leaked fd on the error path.
 func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
+	return acquireMissionLock(repoRoot, missionID, syscall.LOCK_SH, "shared")
+}
+
+// AcquireMissionLockExclusive opens the same per-mission lock file as
+// AcquireMissionLock but acquires it exclusively (LOCK_EX). This is
+// the caller AcquireMissionLock's own doc comment anticipated: "a
+// separate writer that needs the mission tree quiescent — for
+// example a hypothetical mission close that wants no in-flight
+// skeletons — can take LOCK_EX on the same file and will wait for
+// every shared holder to release."
+//
+// Store.Close uses this around closeDelegationSkeletons so a
+// concurrent dispatchTierB (a shared AcquireMissionLock holder)
+// finishes its WriteDelegationSkeleton call — and is caught by its
+// own status re-check if the mission has just closed — before the
+// sweep enumerates delegations/ (docs/design-delegation-lifecycle.md
+// facet 1).
+func AcquireMissionLockExclusive(repoRoot, missionID string) (func(), error) {
+	return acquireMissionLock(repoRoot, missionID, syscall.LOCK_EX, "exclusive")
+}
+
+// acquireMissionLock is the shared implementation behind
+// AcquireMissionLock and AcquireMissionLockExclusive: same lock file,
+// same directory creation, same idempotent release — only the flock
+// mode differs. label names the mode in error messages so a failure
+// reads "acquiring shared mission lock" or "acquiring exclusive
+// mission lock" rather than an ambiguous generic message.
+func acquireMissionLock(repoRoot, missionID string, mode int, label string) (func(), error) {
 	if strings.TrimSpace(repoRoot) == "" {
 		return nil, fmt.Errorf("repoRoot is required for mission lock")
 	}
@@ -447,9 +475,9 @@ func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening mission lock %s: %w", lockPath, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH); err != nil {
+	if err := syscall.Flock(int(f.Fd()), mode); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("acquiring shared mission lock %s: %w", lockPath, err)
+		return nil, fmt.Errorf("acquiring %s mission lock %s: %w", label, lockPath, err)
 	}
 	released := false
 	release := func() {
@@ -457,8 +485,17 @@ func AcquireMissionLock(repoRoot, missionID string) (func(), error) {
 			return
 		}
 		released = true
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
+		// A long-lived MCP-server process holds this lock across a
+		// request; a leaked flock or fd here hangs every subsequent
+		// AcquireMissionLock/AcquireMissionLockExclusive on this
+		// mission until the process restarts. Log rather than swallow
+		// so an operator can correlate a hang with its cause.
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: releasing %s mission lock %s: %v\n", label, lockPath, err)
+		}
+		if err := f.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: closing %s mission lock %s: %v\n", label, lockPath, err)
+		}
 	}
 	return release, nil
 }

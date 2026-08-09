@@ -223,6 +223,149 @@ func TestHandleMission_CreateWarnsOnBead(t *testing.T) {
 	assert.Contains(t, out, "ethos-07m.5")
 }
 
+// TestHandleMission_CreateBindsActiveMission asserts ethos-5jsf: the
+// MCP create surface rebinds the session's active-mission sidecar the
+// instant a fresh mission is minted, mirroring the CLI's
+// bindDispatchedMission (cmd/ethos/mission.go:2023). Before this fix
+// handleCreateMission ended at Store.Create with no sidecar write, so
+// a resumed Agent() spawn in the same session still wrote its
+// delegation under whatever mission the sidecar happened to name a
+// moment ago — d-040's exact pattern, reachable through the MCP
+// surface even after facet 2's dispatchTierB status re-check ships
+// (docs/design-delegation-lifecycle.md, "ethos-5jsf — same root-cause
+// family, and a real dependency").
+func TestHandleMission_CreateBindsActiveMission(t *testing.T) {
+	const sess = "sess-mcp-create-bind"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+
+	var c mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &c))
+	require.NotEmpty(t, c.MissionID)
+
+	got, err := mission.ReadActiveMission(globalRoot, sess)
+	require.NoError(t, err)
+	assert.Equal(t, c.MissionID, got,
+		"handleCreateMission must write the active-mission sidecar just like the CLI does")
+
+	binding, err := mission.ReadActiveMissionBinding(globalRoot, sess)
+	require.NoError(t, err)
+	assert.Equal(t, mission.BindOriginDispatch, binding.Origin,
+		"the create-time binding must be dispatch origin, not claim — create must not turn on commit trailers")
+}
+
+// TestHandleMission_CreateNoSessionWarns asserts the advisory
+// contract: an MCP call with no session store wired must not fail the
+// create — mirrors the CLI's bindDispatchedMission, which proceeds
+// silently past errNoSession. But "advisory" governs whether create
+// fails, not whether the caller is told anything: a warning must
+// still say the sidecar rebind was skipped, so an MCP client cannot
+// mistake "no session store wired" for "rebind happened" (round-2
+// re-review finding #1 — the prior no-warning behavior was the exact
+// silent-failure shape ethos-5jsf exists to close, one layer removed).
+func TestHandleMission_CreateNoSessionWarns(t *testing.T) {
+	h := testHandlerWithMissions(t) // no WithSessionStore
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "no session store wired must still warn; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "no session store wired")
+	assert.Contains(t, warnings[0], "not updated")
+}
+
+// TestHandleMission_CreateNoSessionInContextWarns is the sibling of
+// TestHandleMission_CreateNoSessionWarns: a session store is wired,
+// but resolve.SessionID finds nothing to key off of (no session in
+// context). Same silent-no-op shape, same fix — round-2 re-review
+// finding #1.
+func TestHandleMission_CreateNoSessionInContextWarns(t *testing.T) {
+	// Explicit empty ETHOS_SESSION, not just "unset" -- this process may
+	// itself be running inside a Claude Code session that already has
+	// ETHOS_SESSION set in its real environment, and t.Setenv("", "")
+	// scopes the override to this test only.
+	t.Setenv("ETHOS_SESSION", "")
+	h := testHandlerWithSessions(t)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "no session in context must still warn; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "no session in context")
+	assert.Contains(t, warnings[0], "not updated")
+}
+
+// TestHandleMission_CreateRebindsWarnsOnDifferentMission mirrors the
+// CLI's bindDispatchedMission rebind warning (mission.go:2061): a
+// session already bound to a different, still-open mission gets
+// rebound on disk to the freshly created mission, and the response
+// carries a warning naming the old mission, the new mission, and the
+// remedy (`ethos mission claim`) — MCP has no stderr channel to print
+// the CLI's line to, so it rides in the payload's warnings array, the
+// same convention handleCloseMission already uses.
+func TestHandleMission_CreateRebindsWarnsOnDifferentMission(t *testing.T) {
+	const sess = "sess-mcp-create-rebind"
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("ETHOS_SESSION", sess)
+
+	h := testHandlerWithSessions(t)
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	const previous = "m-2026-07-30-501"
+	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, previous))
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "create must succeed: %s", resultText(t, result))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	missionID, _ := payload["mission_id"].(string)
+	require.NotEmpty(t, missionID)
+
+	warnings, ok := payload["warnings"].([]any)
+	require.True(t, ok, "warnings must be a top-level array; got %#v", payload["warnings"])
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], previous)
+	assert.Contains(t, warnings[0], missionID)
+	assert.Contains(t, warnings[0], "ethos mission claim")
+
+	got, err := mission.ReadActiveMission(globalRoot, sess)
+	require.NoError(t, err)
+	assert.Equal(t, missionID, got, "rebind must still move the sidecar to the new mission")
+}
+
 func TestHandleMission_CreateMissingContract(t *testing.T) {
 	h := testHandlerWithMissions(t)
 	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -517,28 +660,6 @@ func TestHandleMission_Close(t *testing.T) {
 	assert.Equal(t, mission.StatusClosed, loaded.Status)
 }
 
-// closeViaMCP creates a mission, submits a satisfying result, and closes
-// it through the MCP close method. Returns the mission ID.
-func closeViaMCP(t *testing.T, h *Handler, contract string) string {
-	t.Helper()
-	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
-		"method":   "create",
-		"contract": contract,
-	}))
-	require.NoError(t, err)
-	var created mission.Contract
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
-	submitResultForMCP(t, h, created.MissionID)
-
-	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
-		"method":     "close",
-		"mission_id": created.MissionID,
-	}))
-	require.NoError(t, err)
-	require.False(t, closeResult.IsError, "close must succeed: %s", resultText(t, closeResult))
-	return created.MissionID
-}
-
 // TestHandleMission_CloseClearsActiveMission asserts the MCP close path
 // clears the active-mission sidecar, matching the CLI. Closing via MCP
 // used to skip the cleanup entirely, so the commit-msg hook kept tagging
@@ -586,6 +707,14 @@ func TestHandleMission_CloseClearsActiveMission(t *testing.T) {
 // TestHandleMission_CloseLeavesOtherMissionActive asserts the MCP clear
 // is scoped the same way the CLI's is: a sidecar naming a different,
 // still-open mission survives the close.
+//
+// The `holding` binding is written AFTER creating and submitting a
+// result for the mission under test, not before — create's own rebind
+// (ethos-5jsf, TestHandleMission_CreateBindsActiveMission) would
+// otherwise immediately overwrite it, which is the correct create-time
+// behavior but not what this test wants to exercise. This models the
+// operator moving on to a different (claimed) mission between
+// submitting the result and closing the first one.
 func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
 	const sess = "sess-mcp-other"
 	home := t.TempDir()
@@ -595,11 +724,24 @@ func TestHandleMission_CloseLeavesOtherMissionActive(t *testing.T) {
 	h := testHandlerWithSessions(t)
 	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
 
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
 	const holding = "m-2026-07-30-999"
 	require.NoError(t, mission.WriteActiveMission(globalRoot, sess, holding))
 
-	id := closeViaMCP(t, h, validContractYAML)
-	require.NotEqual(t, holding, id)
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError, "close must succeed: %s", resultText(t, closeResult))
 
 	data, err := os.ReadFile(mission.ActiveMissionPath(globalRoot, sess))
 	require.NoError(t, err, "closing one mission must not clear a claim on another")
@@ -628,8 +770,14 @@ func TestHandleMission_CloseWarnsOnUnreadableSidecar(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 	submitResultForMCP(t, h, created.MissionID)
 
-	// A directory where the sidecar belongs makes os.ReadFile fail with
-	// EISDIR — a real error, portably distinct from "no sidecar".
+	// create's own rebind (ethos-5jsf) already wrote the sidecar as a
+	// plain file — remove it before corrupting the path into a
+	// directory, or MkdirAll fails outright ("not a directory") instead
+	// of modeling a sidecar that turned unreadable sometime after
+	// creation. A directory where the sidecar belongs makes
+	// os.ReadFile fail with EISDIR — a real error, portably distinct
+	// from "no sidecar".
+	require.NoError(t, os.RemoveAll(mission.ActiveMissionPath(globalRoot, sess)))
 	require.NoError(t, os.MkdirAll(mission.ActiveMissionPath(globalRoot, sess), 0o700))
 
 	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -672,6 +820,11 @@ func TestHandleMission_CloseWarnsPerCause(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
 	submitResultForMCP(t, h, created.MissionID)
 
+	// create's own rebind (ethos-5jsf) already wrote the active-mission
+	// sidecar as a plain file — remove it first so the directory
+	// corruption below models a sidecar that turned unreadable, not a
+	// mkdir failing outright over an existing file.
+	require.NoError(t, os.RemoveAll(mission.ActiveMissionPath(globalRoot, sess)))
 	require.NoError(t, os.MkdirAll(mission.ActiveMissionPath(globalRoot, sess), 0o700))
 	require.NoError(t, os.MkdirAll(mission.DelegationBindingPath(globalRoot, sess), 0o700))
 

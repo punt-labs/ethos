@@ -1,0 +1,222 @@
+results:
+    - mission: m-2026-08-09-024
+      round: 1
+      created_at: "2026-08-09T15:24:34Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.93
+      files_changed:
+        - path: internal/mission/delegation.go
+          added: 30
+          removed: 2
+        - path: internal/mission/delegation_test.go
+          added: 93
+          removed: 0
+        - path: internal/mission/store.go
+          added: 30
+          removed: 1
+        - path: internal/mission/store_test.go
+          added: 74
+          removed: 0
+        - path: internal/hook/pretooluse_dispatch.go
+          added: 58
+          removed: 4
+        - path: internal/hook/pretooluse_dispatch_test.go
+          added: 208
+          removed: 0
+        - path: internal/mcp/mission_tools.go
+          added: 83
+          removed: 0
+        - path: internal/mcp/mission_tools_test.go
+          added: 141
+          removed: 26
+        - path: CHANGELOG.md
+          added: 4
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+        - name: go test -race -count=1 ./internal/mission/... ./internal/hook/... ./internal/mcp/...
+          status: pass
+      prose: |
+        Implements docs/design-delegation-lifecycle.md, strict TDD throughout
+        (each fix committed only after its test was confirmed red for the
+        right reason, then green).
+
+        Facet 1 (lifecycle hardening): added AcquireMissionLockExclusive to
+        internal/mission/delegation.go, sharing its body with the existing
+        AcquireMissionLock via a new unexported acquireMissionLock(mode)
+        helper. Store.Close now takes the exclusive lock around
+        closeDelegationSkeletons -- but only when the repo-tree per-mission
+        directory already exists, so closing a mission whose data lives
+        entirely in the legacy global tree still creates no repo-tree
+        footprint (preserves TestStore_TwoRoot_CloseStaysInItsLayer).
+        TestStore_Close_WaitsForInFlightDelegationWrite proves the ordering:
+        a goroutine holding the shared lock while writing a delegation
+        skeleton blocks Close's sweep until it releases, so the record is
+        never left at verdict=open by a sweep that ran too early.
+
+        Facet 2 (attribution, ethos-14r7): dispatchTierB (the MISSION_ID-env
+        path) now re-checks mission status via a new nonOpenReason helper
+        shared with staleBindingReason (case 2's existing check) -- once
+        right after the first Load, and again immediately before
+        WriteDelegationSkeleton while holding both the mission and
+        delegation locks, closing the TOCTOU window against a concurrent
+        Close. Both non-open outcomes fall through to Tier A with a stderr
+        warning matching readActiveMissionForDispatch's existing shape,
+        never a blocked spawn. TestDispatchAgent_EnvMissionIDStatusRecheck
+        is table-driven across all four terminal states (closed, failed,
+        escalated, abandoned), each driven to that status through the real
+        store lifecycle (Close or Abandon, not a hand-edited fixture).
+        TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU pins the second
+        check specifically: it holds AcquireMissionLockExclusive itself to
+        block dispatch's shared-lock acquisition after its first Load
+        succeeds, runs a concurrent Close whose contract transition commits
+        during that window (Close's transition uses a different, unrelated
+        lock), then releases the hold and asserts dispatch falls through to
+        Tier A with no delegation record written -- reverting the
+        dispatchTierB fix reproduces the leaked record and fails the
+        assertion for the right reason (verified manually before writing
+        the fix).
+
+        ethos-5jsf (MCP parity): handleCreateMission now calls a new
+        bindDispatchedMission method mirroring the CLI's
+        bindDispatchedMission (cmd/ethos/mission.go:2023) -- rebinds the
+        session's active-mission sidecar with dispatch origin the instant a
+        fresh mission is minted, and returns a warnings array (MCP has no
+        stderr channel) when a rebind displaces a different mission's
+        binding, matching handleCloseMission's existing warnings
+        convention. Three existing close-path tests
+        (TestHandleMission_CloseLeavesOtherMissionActive,
+        TestHandleMission_CloseWarnsOnUnreadableSidecar,
+        TestHandleMission_CloseWarnsPerCause) assumed create wrote no
+        sidecar file; their fixtures are updated to account for the new
+        create-time write without changing what each test actually proves.
+
+        Test-file placement note: the mission's write-set names
+        internal/hook/pretooluse_dispatch_test.go; the two new facet-2 tests
+        and their shared stageMissionInStatus helper were first added to
+        the existing internal/hook/pretooluse_test.go (where every sibling
+        case-1/case-2 dispatch test already lives) for convention
+        consistency, then moved verbatim into the write-set's literal
+        filename once `ethos mission result --verify`'s write-set check
+        made the mismatch concrete -- pretooluse_test.go is now
+        byte-identical to its pre-mission content.
+
+        format_output.go (CLI/MCP-hook rendering of tool results) is
+        outside this mission's write-set and was not touched. Its
+        formatMissionCreate does not currently render a `warnings` field the
+        way formatMissionShow/formatMissionClose do, so a create-time rebind
+        warning is present in the raw JSON result but not yet rendered in
+        the pretty-printed hook output. Flagging as a known follow-up gap,
+        not fixed here.
+
+        Every commit passed `make check` (including go test -race) before
+        the next one started; six commits total, one per logical step per
+        the mission's commit-per-step criterion.
+    - mission: m-2026-08-09-024
+      round: 2
+      created_at: "2026-08-09T16:31:58Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: internal/hook/pretooluse_dispatch.go
+          added: 19
+          removed: 8
+        - path: internal/hook/pretooluse_dispatch_test.go
+          added: 84
+          removed: 0
+        - path: internal/mission/store.go
+          added: 47
+          removed: 18
+        - path: internal/mission/store_test.go
+          added: 73
+          removed: 0
+        - path: internal/mission/delegation.go
+          added: 11
+          removed: 2
+      evidence:
+        - name: make check
+          status: pass
+        - name: go test -race -count=1 ./internal/mission/... ./internal/hook/...
+          status: pass
+      open_questions:
+        - 'internal/hook/format_output.go and format_output_test.go (finding #1) are outside this mission''s write_set. Committed separately per the leader''s explicit instruction; commit 00fdb15 discloses the scope expansion in its message.'
+        - 'docs/design-delegation-lifecycle.md (finding #5) is also outside this mission''s write_set -- the leader''s task did not flag it, but the contract''s write_set does not list it either. Committed separately (3589178), same disclosure treatment as finding #1.'
+        - 'Finding #7 (Store.Abandon has the same countDelegations-vs-concurrent- dispatch race class facet 1 closed for Close, at store.go:1222) was explicitly scoped out of this round by the leader''s instruction. Not touched. Recommend a follow-up bead: Abandon''s countDelegations walks delegations/ without the exclusive lock that Close now takes, so a concurrent dispatchTierB can still write a skeleton after countDelegations returns zero, producing verdict: open under StatusAbandoned.'
+      prose: |
+        Six findings from the round-1 local review (code-reviewer,
+        silent-failure-hunter, invariant-completeness-reviewer running in
+        parallel), fixed in order, one commit per finding, make check green at
+        every commit.
+
+        1. formatMissionCreate never rendered the top-level `warnings` field
+           handleCreateMission populates on a sidecar rebind (ethos-5jsf) -- every
+           rebind notice reached JSON but no rendered surface. Mirrored
+           formatMissionShow's handling: extract warnings, call
+           writeMissionWarnings before emit. New test:
+           TestFormatOutput_Mission_Create_Warnings. Outside the mission's
+           write_set -- committed separately (00fdb15), disclosed above.
+
+        2 and 3 (same code block, one commit, 2098d80). Store.Close's
+        delegation-sweep gate had two related silent-failure gaps:
+        - A lock-acquire failure on AcquireMissionLockExclusive skipped the sweep
+          outright -- the exact bug this round's mechanism exists to close, via a
+          new path. Now falls back to the pre-fix unlocked sweep with a stderr
+          warning naming the residual TOCTOU risk.
+        - The stat check deciding whether to skip locking used a bare "err !=
+          nil" test, so EACCES/EIO/ELOOP all took the unlocked bare path meant
+          only for a legitimately-absent directory. Extracted as
+          missingRepoTreeDir(statErr) -- only os.IsNotExist satisfies it; every
+          other stat error now falls through to attempt the lock (and, on lock
+          failure, fix 2's fallback).
+        New tests: TestMissingRepoTreeDir (table-driven: nil, ENOENT, wrapped
+        ENOENT, EACCES, EIO, ELOOP, arbitrary error) and
+        TestStore_Close_LockFailureFallsBackToUnlockedSweep (synthetic
+        lock-acquire failure via a directory pre-occupying the lock file's path;
+        confirms the delegation still closes and the exact warning text fires).
+
+        4. dispatchTierB's TOCTOU re-check used `if recheck, err :=
+           store.Load(missionID); err == nil { ... }` -- a re-check Load error
+           silently fell through to WriteDelegationSkeleton, asymmetric with the
+           first Load (which blocks on error). Neither Load failing is evidence
+           the mission is open; only a successful Load reporting status: open is.
+           Now a re-check failure warns (session, mission, error) and falls
+           through to Tier A/B fallback, same as the non-open case. New test:
+           TestDispatchAgent_EnvMissionIDStatusRecheck_LoadErrorFallsThrough --
+           blocks dispatch on AcquireMissionLock via a held exclusive lock
+           (mirroring the existing TOCTOU test), deletes the on-disk contract
+           while dispatch is blocked so the re-check Load fails with a real read
+           error, asserts the spawn falls through with no delegation record
+           written.
+
+        5. docs/design-delegation-lifecycle.md's Summary and Facet 1
+           Recommendation overstated the guarantee as "nothing can be written to
+           a closed mission's delegations/ directory after this fix ships." The
+           code actually guarantees a weaker but audit-adequate invariant: no
+           open-verdict delegation record persists under a closed mission, via a
+           write-either-refuses-or-is-swept pairing (the narrow window where
+           dispatch already holds the shared lock when Close starts its
+           exclusive-lock acquisition lets a skeleton briefly land, but Close's
+           own subsequent sweep catches it). Reworded both spots. Docs-only, no
+           code change. Outside the write_set -- committed separately (3589178),
+           disclosed above.
+
+        6. acquireMissionLock's release closure discarded LOCK_UN and Close
+           errors with "_ =". This path now backs the exclusive-lock sweep used
+           by Store.Close inside long-lived MCP-server processes -- a leaked
+           flock or fd hangs every subsequent AcquireMissionLock/
+           AcquireMissionLockExclusive on that mission until the process
+           restarts, with no operator-visible signal. Now logs both failures to
+           stderr. No dedicated failure-injection test: the release closure does
+           not expose the underlying *os.File to a test, so there is no seam to
+           force LOCK_UN or Close to fail without reaching into unexported state;
+           the existing acquire/release unit tests continue to cover the success
+           path.
+
+        Every commit passed `make check` (go vet, staticcheck, shellcheck,
+        markdownlint, go test -race -count=1 ./..., validate-content) before the
+        next commit started. Six commits total (fix 2+3 share one commit since
+        they touch the same code block), matching the mission's commit-per-step
+        criterion.

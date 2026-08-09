@@ -1,0 +1,29 @@
+results:
+    - mission: m-2026-08-09-019
+      round: 1
+      created_at: "2026-08-09T14:20:04Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs/design-delegation-lifecycle.md
+          added: 441
+          removed: 0
+      evidence:
+        - name: leader verified every cited code location exists (closeDelegationSkeletons at store.go:1024,1038; dispatchTierB at pretooluse_dispatch.go:200; staleBindingReason at pretooluse_dispatch.go:121; bindDispatchedMission at cmd/ethos/mission.go:2023 called from CLI create/dispatch but not from MCP handleCreateMission)
+          status: pass
+        - name: design corrected the bead's original framing (facet 1 is a write-time bug, not a close-time sweep failure — the sweep already exists and works, shipped PR
+          status: pass
+        - name: correctly identified ethos-5jsf as the same root-cause family (session-sidecar attribution requires every mint-a-new-mission surface to rebind, MCP handleCreateMission doesn't) and flagged it as a real dependency for full facet-2 coverage
+          status: pass
+        - name: respected Z spec's terminal-states-are-final theorem — the fix touches only delegation record files, never mutates Mission.status after Close commits
+          status: pass
+      prose: |
+        Design correctly re-frames facet 1 (existing sweep is fine; the bug
+        is a write-time gap that lets a delegation record land in a closed
+        mission's directory after the one-shot sweep already ran), and gives
+        a single mechanical fix for facet 2 (case 1 of dispatchAgent lacks
+        the status re-check case 2 already has, plus a TOCTOU-close lock
+        ordering between Close and dispatchTierB). Recommends ethos-5jsf ship
+        alongside for MCP-surface completeness. Forward-fix only, existing
+        freeze records stay as-written. Ready for implementation dispatch.

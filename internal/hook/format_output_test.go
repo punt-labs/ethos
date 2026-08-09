@@ -3,6 +3,7 @@ package hook
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -748,6 +749,54 @@ func TestFormatOutput_Mission_Create(t *testing.T) {
 	// Raw RFC3339 timestamp should not appear — FormatLocalTime
 	// converts it.
 	assert.NotContains(t, ctx, "2026-04-07T21:30:00Z")
+}
+
+// TestFormatOutput_Mission_Create_Warnings asserts the create formatter
+// renders a `warnings` array under a Warnings header. handleCreateMission
+// carries a rebind notice here (ethos-5jsf) when minting a fresh mission
+// displaces an already-bound active-mission sidecar; before this fix the
+// notice reached JSON in createMissionResponse.Warnings but no rendered
+// surface, so the operator never saw it.
+func TestFormatOutput_Mission_Create_Warnings(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","status":"open",` +
+		`"leader":"claude","worker":"bwk",` +
+		`"warnings":["rebound active mission from m-2026-04-06-002 to m-2026-04-07-001"]}`
+	payload := makeToolPayload("mission", "create", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Created m-2026-04-07-001", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Warnings:\n  - rebound active mission from m-2026-04-06-002 to m-2026-04-07-001")
+}
+
+// TestWriteMissionWarnings_DropsNonStringEntry asserts a non-string
+// warnings entry is dropped from the rendered section and logged to
+// stderr with the caller label that produced it — the label is the
+// only way to trace a dropped entry back to one of the six shared
+// call sites (silent-failure-hunter finding on PR #437's follow-up).
+func TestWriteMissionWarnings_DropsNonStringEntry(t *testing.T) {
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+
+	var ctx strings.Builder
+	writeMissionWarnings(&ctx, []any{"a real warning", 42.0}, "mission.show")
+
+	require.NoError(t, w.Close())
+	os.Stderr = origStderr
+	var captured bytes.Buffer
+	_, err = captured.ReadFrom(r)
+	require.NoError(t, err)
+
+	assert.Contains(t, ctx.String(), "\n  - a real warning")
+	assert.NotContains(t, ctx.String(), "42")
+
+	stderr := captured.String()
+	assert.Contains(t, stderr, "mission.show")
+	assert.Contains(t, stderr, "dropping")
+	assert.Contains(t, stderr, "defect in the tool's warnings emission")
 }
 
 func TestFormatOutput_Mission_Create_MissingMissionID(t *testing.T) {

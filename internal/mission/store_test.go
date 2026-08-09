@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -1017,6 +1019,161 @@ func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
 			assert.Equal(t, status, loaded.Status)
 		})
 	}
+}
+
+// TestStore_Close_WaitsForInFlightDelegationWrite pins the facet-1
+// hardening in docs/design-delegation-lifecycle.md: Close takes
+// AcquireMissionLockExclusive around closeDelegationSkeletons, so a
+// concurrent holder of the shared AcquireMissionLock — standing in
+// for dispatchTierB, which holds the shared lock across its
+// WriteDelegationSkeleton call — blocks the sweep until it releases.
+// This proves the ordering half of the fix: a record written by a
+// shared holder that was already in flight when Close started is
+// still on disk by the time the sweep enumerates delegations/, so it
+// is never left at verdict=open by a sweep that ran too early.
+func TestStore_Close_WaitsForInFlightDelegationWrite(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	missionID := "m-2026-08-09-801"
+	c := newContract(missionID)
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+
+	delegationID := "d-2026-08-09-801"
+	writerHoldsLock := make(chan struct{})
+	writerRelease := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		release, err := AcquireMissionLock(repoRoot, missionID)
+		if err != nil {
+			writerDone <- err
+			return
+		}
+		defer release()
+		close(writerHoldsLock)
+		<-writerRelease // hold the shared lock until the test says go
+		_, err = WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+			Tier:      TierB,
+			AgentType: "bwk",
+		})
+		writerDone <- err
+	}()
+
+	<-writerHoldsLock // the shared holder is in place before Close starts
+
+	closeDone := make(chan error, 1)
+	go func() {
+		_, err := s.Close(missionID, StatusClosed)
+		closeDone <- err
+	}()
+
+	// Close must block on AcquireMissionLockExclusive while the shared
+	// holder is up. Give it time to reach and wait on the lock, then
+	// confirm it has NOT returned yet.
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before the in-flight shared holder released — exclusive lock not enforced")
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	close(writerRelease)
+	require.NoError(t, <-writerDone)
+
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not complete within 5s after the shared holder released")
+	}
+
+	recordPath := filepath.Join(DelegationDir(repoRoot, missionID, delegationID), "record.yaml")
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, DelegationVerdictOpen, d.Verdict,
+		"Close's sweep must observe the write that finished before it could take the exclusive lock")
+}
+
+// TestMissingRepoTreeDir pins the fix that closed a silent-failure
+// mode: only fs.ErrNotExist means the repo-tree per-mission directory
+// legitimately does not exist. Any other stat error (permission
+// denied, I/O error, a symlink loop) must NOT be treated the same way
+// — the directory may well be present, and Close's delegation sweep
+// must still attempt the locked path rather than falling through to
+// an unlocked bare sweep.
+func TestMissingRepoTreeDir(t *testing.T) {
+	wrapped := &fs.PathError{Op: "stat", Path: "/x", Err: fs.ErrNotExist}
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil (dir exists)", nil, false},
+		{"fs.ErrNotExist", fs.ErrNotExist, true},
+		{"wrapped ErrNotExist", wrapped, true},
+		{"permission denied", &fs.PathError{Op: "stat", Path: "/x", Err: syscall.EACCES}, false},
+		{"I/O error", &fs.PathError{Op: "stat", Path: "/x", Err: syscall.EIO}, false},
+		{"symlink loop", &fs.PathError{Op: "stat", Path: "/x", Err: syscall.ELOOP}, false},
+		{"arbitrary non-fs error", errors.New("boom"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, missingRepoTreeDir(c.err))
+		})
+	}
+}
+
+// TestStore_Close_LockFailureFallsBackToUnlockedSweep pins finding #2
+// of the delegation-lifecycle fix round: when the repo-tree per-mission
+// directory exists but AcquireMissionLockExclusive itself fails (a
+// synthetic failure here — the lock file's path is pre-occupied by a
+// directory, so os.OpenFile refuses it), Close must not skip the sweep
+// outright. It must fall back to an unlocked closeDelegationSkeletons
+// call so every open delegation still gets closed, the exact bug this
+// round of fixes exists to close, just via a different mechanism
+// (a lock-acquire failure instead of a missing directory).
+func TestStore_Close_LockFailureFallsBackToUnlockedSweep(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	missionID := "m-2026-08-09-802"
+	c := newContract(missionID)
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+
+	delegationID := "d-2026-08-09-802"
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+	})
+	require.NoError(t, err)
+
+	// Occupy the lock file's path with a directory so
+	// AcquireMissionLockExclusive's os.OpenFile fails deterministically
+	// — a synthetic stand-in for any real lock-acquire failure.
+	missionDir := RepoStatePath(repoRoot, "missions", missionID)
+	require.NoError(t, os.MkdirAll(filepath.Join(missionDir, ".lock"), 0o700))
+
+	stderr := captureStderr(t, func() {
+		_, err = s.Close(missionID, StatusClosed)
+		require.NoError(t, err)
+	})
+
+	recordPath := filepath.Join(DelegationDir(repoRoot, missionID, delegationID), "record.yaml")
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, DelegationVerdictOpen, d.Verdict,
+		"Close must fall back to an unlocked sweep when the exclusive lock cannot be acquired")
+
+	// Round-2 re-review finding #4: the fallback must say so, loudly
+	// enough that a future refactor swapping this Fprintf for a silent
+	// return-error would fail this test rather than pass it unnoticed.
+	assert.Contains(t, stderr, "unlocked sweep",
+		"fallback must announce it is sweeping without the exclusive lock")
+	assert.Contains(t, stderr, "TOCTOU window remains",
+		"fallback must name the residual race, matching the design doc's wording")
 }
 
 // TestStore_CloseFailsOnCorruptContract asserts that Close refuses to
