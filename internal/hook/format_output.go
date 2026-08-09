@@ -1201,6 +1201,12 @@ func formatMissionCreate(w io.Writer, result string) error {
 
 	var ctx strings.Builder
 	writeMissionFields(&ctx, c)
+	// handleCreateMission carries a rebind warning (ethos-5jsf) in the
+	// same top-level `warnings` array formatMissionShow already renders;
+	// without this the notice reached JSON but never a rendered surface.
+	if raw, ok := c["warnings"]; ok {
+		writeMissionWarnings(&ctx, raw)
+	}
 
 	return emit(w, summary, ctx.String())
 }
