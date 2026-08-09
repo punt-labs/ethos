@@ -315,7 +315,7 @@ func CheckSealHook(repoRoot string) Result {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, statErr, remedy)}
 	}
 	if !active {
-		if strings.Contains(body, "DES-058") {
+		if strings.Contains(body, hooks.SealTag) {
 			return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: "enabled here but the seal hook is not chained" + remedy}
@@ -341,7 +341,7 @@ func hasSealMarker(body string) bool {
 	lines := textscan.SplitKeepEnds(data)
 	mask := textscan.HeredocMask(data)
 	for i, raw := range lines {
-		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN ETHOS DES-058 SEAL") {
+		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN "+hooks.SealTag) {
 			return true
 		}
 	}
