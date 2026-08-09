@@ -127,10 +127,30 @@ func staleBindingReason(missionID string) string {
 	if err != nil {
 		return ""
 	}
-	if c.Status != mission.StatusOpen {
-		return fmt.Sprintf("that mission is %s", c.Status)
+	return nonOpenReason(c.Status)
+}
+
+// nonOpenReason reports why a mission cannot take a new delegation —
+// "" when status is open. Shared by case 2's staleBindingReason (the
+// active-mission sidecar) and case 1's dispatchTierB (the MISSION_ID
+// env var, both on first Load and on the pre-write TOCTOU re-check)
+// so every non-open source produces identical wording.
+func nonOpenReason(status string) string {
+	if status == mission.StatusOpen {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("that mission is %s", status)
+}
+
+// warnNonOpenMissionID writes the case-1 counterpart of
+// readActiveMissionForDispatch's stale-sidecar warning: same shape
+// (names the session, the mission, and the remedy), worded for an
+// explicit MISSION_ID rather than a claimed sidecar.
+func warnNonOpenMissionID(sessionID, missionID, reason string) {
+	fmt.Fprintf(os.Stderr,
+		"ethos: pre-tool-use: MISSION_ID: session %q named %s but %s; "+
+			"run `ethos mission claim <id>` (or dispatch the mission you mean) — spawning without a mission\n",
+		sessionID, missionID, reason)
 }
 
 // dispatchTierA emits the round-3 advice line and an env block carrying
@@ -203,9 +223,24 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: resolving mission store: %v", err))
 	}
-	if _, err := store.Load(missionID); err != nil {
+	c, err := store.Load(missionID)
+	if err != nil {
 		return writeAgentBlock(w,
 			fmt.Sprintf("ethos pre-tool-use: resolving MISSION_ID %q: %v", missionID, err))
+	}
+	// Case-1 status re-check (docs/design-delegation-lifecycle.md
+	// facet 2): a MISSION_ID env value is inherited by ordinary OS
+	// process-environment inheritance across every subsequent tool
+	// call a resumed subagent process makes — including calls made
+	// long after the mission it names has closed. Case 2's
+	// staleBindingReason already refuses a stale sidecar; case 1 must
+	// refuse identically rather than trust the mere presence of the
+	// env var. Non-open falls through to Tier A (or inheritance) —
+	// never a blocked spawn, matching every other attribution
+	// fallback in this file.
+	if reason := nonOpenReason(c.Status); reason != "" {
+		warnNonOpenMissionID(sessionID, missionID, reason)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 
 	delegationID, releaseID, err := mission.NewID(mission.NamespaceDelegations, time.Now())
@@ -241,6 +276,25 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 			fmt.Sprintf("ethos pre-tool-use: acquiring delegation lock for %q: %v", delegationID, err))
 	}
 	defer releaseDelegation()
+
+	// TOCTOU re-check (docs/design-delegation-lifecycle.md facet 2):
+	// re-Load the contract while both AcquireMissionLock (shared) and
+	// AcquireDelegationLock (exclusive, just acquired above) are held.
+	// Store.Close takes AcquireMissionLockExclusive around its
+	// delegation sweep, so a concurrent Close either committed before
+	// this shared holder was admitted (caught here) or is blocked
+	// waiting for this shared holder to release (and will sweep the
+	// skeleton this call is about to write). Either way the mission
+	// can never end up closed with an open delegation record this
+	// dispatch wrote after the fact. A reload error is not treated as
+	// stale — that mirrors staleBindingReason's own rule and defers to
+	// whatever the eventual write or a later read surfaces.
+	if recheck, err := store.Load(missionID); err == nil {
+		if reason := nonOpenReason(recheck.Status); reason != "" {
+			warnNonOpenMissionID(sessionID, missionID, reason)
+			return dispatchTierBOrTierA(w, sessionID, toolInput)
+		}
+	}
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
 	agentType, _ := toolInput["subagent_type"].(string)
