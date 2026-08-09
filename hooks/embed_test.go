@@ -23,7 +23,8 @@ func TestEmbedsNonEmptyShellScripts(t *testing.T) {
 				t.Fatal("embedded script is empty")
 			}
 			if !strings.HasPrefix(string(tt.src), "#!") {
-				t.Errorf("script does not start with a shebang: %q", tt.src[:20])
+				n := min(len(tt.src), 20)
+				t.Errorf("script does not start with a shebang: %q", tt.src[:n])
 			}
 		})
 	}
