@@ -17,9 +17,14 @@ Two recommendations, both mechanical, both small:
    delegations that were **written after the sweep already ran**,
    which is a write-time attribution bug, not a close-time lifecycle
    bug. Fix the write path (recommendation 2) and the existing sweep
-   becomes complete by construction: nothing can be written to a
-   closed mission's `delegations/` directory after this fix ships, so
-   there is nothing left for a one-shot sweep to miss.
+   is complete for the invariant that matters: after this fix ships,
+   a write against a closed mission's `delegations/` directory is
+   either refused outright (facet 2's status re-check) or, in the
+   narrow TOCTOU window where a write is already in flight when
+   `Close` starts, caught by `Close`'s own exclusive-lock sweep before
+   `Close` returns. A skeleton can briefly land on disk in that
+   window, but no open-verdict delegation record persists under a
+   closed mission once `Close` has returned.
 
 2. **Attribution.** `internal/hook/pretooluse_dispatch.go`'s
    `dispatchAgent` has two paths into `dispatchTierB`, and only one of
@@ -106,11 +111,14 @@ of failure: refuse the write. That is recommendation 2.
 
 **Keep `closeDelegationSkeletons` exactly as it is.** Do not add a
 refuse-close-until-delegations-resolved gate, and do not add a
-periodic or read-time re-sweep. Fix the write path instead
-(facet 2); once nothing can be written to a closed mission's
-`delegations/` directory after `Close` returns, the existing one-shot
-sweep is provably complete — every delegation that will ever exist
-under that mission existed by the time `Close` walked the directory.
+periodic or read-time re-sweep. Fix the write path instead (facet 2);
+once every write against a closed mission's `delegations/` directory
+either is refused by facet 2's status re-check or, for a write already
+in flight when `Close` starts, is caught by `Close`'s own
+exclusive-lock sweep (see the locking hardening below), the existing
+sweep guarantees no open-verdict delegation record persists under a
+closed mission — even though, in that narrow window, a skeleton can
+briefly land before being swept to a terminal verdict.
 
 Two alternatives considered and rejected:
 
