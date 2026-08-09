@@ -1022,18 +1022,23 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	// delegations/. Without this, a dispatch that read status: open a
 	// moment before this Close committed could still be mid-write when
 	// the sweep walked the directory (docs/design-delegation-lifecycle.md
-	// facet 1). A lock-acquisition failure is logged and the sweep is
-	// skipped, non-fatal like the sweep itself — the mission is already
-	// closed and cannot be rolled back for this.
+	// facet 1). A lock-acquisition failure falls back to an unlocked
+	// sweep (below) rather than skipping it outright — a skipped sweep
+	// is the exact bug this fix exists to close, just via a new
+	// mechanism.
 	//
 	// The lock is taken only when the repo-tree per-mission directory
-	// already exists. AcquireMissionLockExclusive's own MkdirAll would
-	// otherwise create that directory as a side effect of closing a
-	// mission whose data lives entirely in the legacy global tree —
-	// there is nothing to make quiescent (no dispatchTierB call under
-	// this repoRoot could be in flight for this mission, since its
-	// first act is the same MkdirAll) and no repo-tree footprint should
-	// appear where none existed (TestStore_TwoRoot_CloseStaysInItsLayer).
+	// already exists — determined by os.IsNotExist on the Stat error,
+	// never a bare "err != nil" check, which would also treat EACCES,
+	// EIO, or ELOOP as "does not exist" and skip locking for a
+	// directory that may well be present. AcquireMissionLockExclusive's
+	// own MkdirAll would otherwise create that directory as a side
+	// effect of closing a mission whose data lives entirely in the
+	// legacy global tree — there is nothing to make quiescent (no
+	// dispatchTierB call under this repoRoot could be in flight for
+	// this mission, since its first act is the same MkdirAll) and no
+	// repo-tree footprint should appear where none existed
+	// (TestStore_TwoRoot_CloseStaysInItsLayer).
 	if s.repoRoot != "" {
 		delegationVerdict := DelegationVerdictPass
 		if satisfying != nil && satisfying.Verdict == VerdictFail {
@@ -1041,15 +1046,28 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		}
 		closedAt := time.Now().UTC().Format(time.RFC3339)
 		missionDir := RepoStatePath(s.repoRoot, "missions", filepath.Base(missionID))
-		if _, statErr := os.Stat(missionDir); statErr != nil {
+		_, statErr := os.Stat(missionDir)
+		switch {
+		case missingRepoTreeDir(statErr):
 			closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
-		} else if releaseExcl, lockErr := AcquireMissionLockExclusive(s.repoRoot, missionID); lockErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: mission %s: acquiring exclusive lock for delegation sweep: %v\n",
-				missionID, lockErr)
-		} else {
-			closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
-			releaseExcl()
+		default:
+			if statErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: mission %s: stat %s failed, treating directory as present: %v\n",
+					missionID, missionDir, statErr)
+			}
+			if releaseExcl, lockErr := AcquireMissionLockExclusive(s.repoRoot, missionID); lockErr != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: mission %s: acquiring exclusive lock for delegation sweep: %v — "+
+						"falling back to unlocked sweep — a concurrent dispatchTierB may still "+
+						"race in a late delegation write; open delegations WILL be closed, but "+
+						"a narrow TOCTOU window remains\n",
+					missionID, lockErr)
+				closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
+			} else {
+				closeDelegationSkeletons(s.repoRoot, missionID, delegationVerdict, closedAt)
+				releaseExcl()
+			}
 		}
 	}
 
@@ -1060,6 +1078,17 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 		fmt.Fprintf(os.Stderr, "ethos: mission %s: trace write failed: %v\n", missionID, err)
 	}
 	return satisfying, nil
+}
+
+// missingRepoTreeDir reports whether statErr indicates the repo-tree
+// per-mission directory legitimately does not exist — the only case
+// where Close's delegation sweep may skip AcquireMissionLockExclusive
+// and go straight to an unlocked sweep. Any other stat failure
+// (EACCES, EIO, ELOOP, ...) means the directory may well be present,
+// so a nil statErr and a non-ENOENT statErr are treated alike: both
+// fall through to the locked branch in Close.
+func missingRepoTreeDir(statErr error) bool {
+	return statErr != nil && os.IsNotExist(statErr)
 }
 
 // closeDelegationSkeletons walks delegations/ under the per-mission
