@@ -273,6 +273,20 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_LoadErrorFallsThrough(t *testin
 	var out bytes.Buffer
 	var dispatchErr error
 	warning := captureHookStderr(t, func() {
+		// Wait until dispatch has passed its first status check (which
+		// confirmed open) via the dispatchTierBConfirmedOpen test hook,
+		// so we know it's about to acquire the shared lock — not a
+		// wall-clock sleep hoping the goroutine got that far.
+		confirmedOpen := make(chan struct{}, 1)
+		originalHook := dispatchTierBConfirmedOpen
+		dispatchTierBConfirmedOpen = func() {
+			select {
+			case confirmedOpen <- struct{}{}:
+			default:
+			}
+		}
+		t.Cleanup(func() { dispatchTierBConfirmedOpen = originalHook })
+
 		dispatchDone := make(chan struct{})
 		go func() {
 			payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-load-err"}`
@@ -280,9 +294,11 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_LoadErrorFallsThrough(t *testin
 			close(dispatchDone)
 		}()
 
-		// Give the dispatch goroutine time to pass its first Load and
-		// block on AcquireMissionLock (shared).
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-confirmedOpen:
+		case <-time.After(5 * time.Second):
+			t.Fatal("dispatch did not reach dispatchTierBConfirmedOpen within 5s")
+		}
 
 		require.NoError(t, os.Remove(contractPath),
 			"removing the contract must force the TOCTOU re-check Load to fail")
