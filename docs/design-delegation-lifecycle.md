@@ -1,7 +1,8 @@
 # Delegation lifecycle and attribution: closing ethos-14r7
 
-**Status**: Design. Bead `ethos-14r7`. Mission `m-2026-08-09-019`.
-Design only — no implementation in this document or this mission.
+**Status**: Implemented on `task/delegation-lifecycle-attribution`.
+Bead `ethos-14r7`. Mission `m-2026-08-09-019` (design);
+`m-2026-08-09-024` (implementation, review rounds).
 
 ## Summary
 
@@ -24,7 +25,15 @@ Two recommendations, both mechanical, both small:
    `Close` starts, caught by `Close`'s own exclusive-lock sweep before
    `Close` returns. A skeleton can briefly land on disk in that
    window, but no open-verdict delegation record persists under a
-   closed mission once `Close` has returned.
+   closed mission once `Close` has returned — provided the exclusive
+   lock is actually acquired. If `AcquireMissionLockExclusive` itself
+   fails, `Close` falls back to an unlocked sweep rather than skipping
+   it outright (open delegations WILL still be closed), but a
+   concurrent `dispatchTierB` may race in a late delegation write in
+   that fallback branch, and a narrow TOCTOU window remains
+   (store.go:1059–1065). This is a deliberate trade-off — a partial
+   sweep beats a skipped sweep — not a claim that the fallback branch
+   closes the window completely.
 
 2. **Attribution.** `internal/hook/pretooluse_dispatch.go`'s
    `dispatchAgent` has two paths into `dispatchTierB`, and only one of
@@ -118,7 +127,15 @@ in flight when `Close` starts, is caught by `Close`'s own
 exclusive-lock sweep (see the locking hardening below), the existing
 sweep guarantees no open-verdict delegation record persists under a
 closed mission — even though, in that narrow window, a skeleton can
-briefly land before being swept to a terminal verdict.
+briefly land before being swept to a terminal verdict. This full
+guarantee depends on the exclusive lock actually being acquired: if
+`AcquireMissionLockExclusive` fails, `Close` falls back to an unlocked
+sweep rather than skipping it outright — open delegations WILL still
+be closed, but a concurrent `dispatchTierB` may still race in a late
+delegation write, and a narrow TOCTOU window remains
+(store.go:1059–1065). That fallback branch is a deliberate trade-off —
+a partial sweep beats a skipped sweep — with a documented residual
+TOCTOU, not a claim of full coverage.
 
 Two alternatives considered and rejected:
 
