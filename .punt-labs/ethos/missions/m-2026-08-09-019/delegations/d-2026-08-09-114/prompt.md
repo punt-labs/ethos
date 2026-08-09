@@ -1,0 +1,5 @@
+Read your mission contract: `ethos mission show m-2026-08-09-019` in <repo>. Do the design work described there.
+
+Context beyond the contract: this bug (ethos-14r7) was found by Bugbot+Copilot reviewing a real production incident — three actual delegation records from PR #358's freeze sitting at verdict:open with no closed_at after their parent missions closed, and two real misattribution cases (a delegation whose own prompt names one mission but got filed under a different, stale-bound mission; two delegations created after their intended mission had already closed). This isn't hypothetical — ground your design in the actual mechanism that produced those real records, not a generic redesign.
+
+Give me a design doc with one clear recommendation for each facet (lifecycle sweep, attribution correctness), grounded in reading the actual code paths, with the terminal-states-are-final invariant from the Z spec respected. If this does share root cause with ethos-r2f9's identity-binding finding or ethos-5jsf's MCP rebind gap, say so plainly and explain how a fix here would or wouldn't also close those.

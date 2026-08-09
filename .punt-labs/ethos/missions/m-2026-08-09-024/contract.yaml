@@ -1,0 +1,29 @@
+mission_id: m-2026-08-09-024
+status: closed
+type: implement
+created_at: "2026-08-09T14:21:04Z"
+updated_at: "2026-08-09T17:27:57Z"
+closed_at: "2026-08-09T17:27:57Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-09T14:21:04Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - internal/hook/pretooluse_dispatch.go
+    - internal/hook/pretooluse_dispatch_test.go
+    - internal/mission/store.go
+    - internal/mission/store_test.go
+    - internal/mission/delegation.go
+    - internal/mission/delegation_test.go
+    - internal/mcp/mission_tools.go
+    - internal/mcp/mission_tools_test.go
+    - CHANGELOG.md
+success_criteria:
+    - 'Implement docs/design-delegation-lifecycle.md (already on this branch) exactly, TDD -- failing tests first, then code. Two beads close with this: ethos-14r7 (delegation lifecycle + attribution) and ethos-5jsf (MCP handleCreateMission rebind gap). Steps: (1) In internal/hook/pretooluse_dispatch.go, give dispatchTierB the same status re-check case 2 already has via staleBindingReason. Immediately after store.Load(missionID) succeeds around line 206, check c.Status != mission.StatusOpen. On non-open, do NOT block the spawn -- fall through to the same Tier A destination readActiveMissionForDispatch already falls back to on a stale sidecar, and emit the same shape of stderr warning (naming session, stale mission, remedy). (2) Same file: re-validate status a second time immediately before WriteDelegationSkeleton (~line 251) while holding AcquireMissionLock. This closes the TOCTOU window against a concurrent Close sweep. (3) In internal/mission/store.go, wrap Close''s closeDelegationSkeletons call (store.go:1018-1025) with AcquireMissionLock in LOCK_EX mode -- delegation.go''s own doc comment at 419-422 explicitly anticipated this exact caller ("a hypothetical mission close that wants no in-flight skeletons -- can take LOCK_EX on the same file and will wait for every shared holder to release"). Together with step (2), any in-flight dispatchTierB either finishes before the sweep enumerates or gets caught by the re-check and falls through to Tier A. (4) In internal/mcp/mission_tools.go, handleCreateMission (~line 105-151) needs to mirror the CLI''s bindDispatchedMission call from cmd/ethos/mission.go:2023-2068 after h.missionStore.Create(&c) succeeds. This is ethos-5jsf''s exact fix -- the CLI rebinds the session sidecar the moment a fresh mission is minted; MCP does not, leaving d-040''s stale-sidecar pattern reachable through the MCP surface even after this design''s facet-2 fix ships. (5) Tests per the design''s implementation sketch section: table-driven cases in pretooluse_dispatch_test.go for case 1 with MISSION_ID naming a closed/failed/escalated/abandoned mission each falling through to Tier A with the warning; a concurrency test in store_test.go or delegation_test.go covering the exclusive-lock ordering (goroutine racing a slow WriteDelegationSkeleton against Close); an MCP test in mission_tools_test.go asserting handleCreateMission writes the active-mission sidecar. (6) CHANGELOG.md entry under Unreleased/Fixed listing both bead IDs. Every commit must pass make check. Commit incrementally, one commit per logical step: the dispatchTierB guard + tests, the exclusive-lock ordering + concurrency test, the MCP rebind + test, CHANGELOG. Do not accumulate more than 30 minutes of uncommitted changes. Forward-fix only -- do not backfill or rewrite existing on-disk delegation records.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2

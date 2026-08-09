@@ -1,0 +1,22 @@
+mission_id: m-2026-08-09-019
+status: closed
+type: implement
+created_at: "2026-08-09T14:10:26Z"
+updated_at: "2026-08-09T14:20:04Z"
+closed_at: "2026-08-09T14:20:04Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-09T14:10:26Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - docs/design-delegation-lifecycle.md
+    - .tmp/design-delegation-lifecycle-notes.md
+success_criteria:
+    - 'Design a fix for ethos-14r7: mission close leaves delegation records open, and delegation attribution can be wrong. Two distinct facets, found by Bugbot+Copilot on PR #358''s freeze (2026-07-22): (1) LIFECYCLE -- delegation records can sit at verdict: open with no closed_at even after their parent mission closes; nothing closes or annotates delegation records on mission close or SubagentStop. (2) ATTRIBUTION -- delegation records are filed under the session''s ACTIVE-MISSION BINDING at PreToolUse time, not necessarily the mission the work actually belongs to. Concrete evidence from the bead: d-2026-07-22-040''s own prompt says m-003 but it was stored under m-002 (m-002 was still bound when a resume fired); d-043/d-044 have created_at AFTER m-003''s closed_at (post-close review-cycle resumes attributed to an already-closed mission). Read first: internal/mission/store.go (Close, the delegation-record write paths, PreToolUse-on-Agent''s binding logic), docs/spec-mission-lifecycle.tex (the Z spec -- terminal states are absorbing, no operation touches a closed mission again; your design must not violate this), and the SubagentStart/PreToolUse hook code in internal/hook that reads/writes the session''s active-mission binding. Also worth checking: this may share root cause with the session/identity-binding issues found in ethos-r2f9''s investigation this session (SubagentStart''s join key vs whoami''s lookup key) and ethos-5jsf (MCP mission create not rebinding the session like the CLI) -- read those beads and internal/resolve/resolve.go''s resolveFromSession before designing, and say explicitly whether this is the same root cause wearing a different hat or a genuinely separate bug. Deliverable: docs/design-delegation-lifecycle.md with a single clear recommendation (not a menu) for both facets: (a) what happens to a still-open delegation record when its mission closes -- sweep it closed, annotate it, or refuse the mission close until delegations are resolved -- pick one and justify against the terminal-states-are-final invariant; (b) how attribution should work for a resume that fires when a different mission is bound, or after the intended mission has already closed -- the bead suggests either refusing to attribute to a closed mission (file under a session-level continuations area) or annotating as a post-close continuation; investigate and recommend one, and address whether a SendMessage-resume should inherit no mission unless one is actively bound and open. Explicitly state the bead''s own constraint: existing delegation records already written stay as-written (they faithfully reflect what the tooling wrote at the time) -- this is a forward-fix, not a backfill/migration. Design only, no implementation code.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1

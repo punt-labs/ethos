@@ -1,0 +1,7 @@
+Re-review branch `task/delegation-lifecycle-attribution` against `main` in <repo> (`git diff main...task/delegation-lifecycle-attribution`). This is a follow-up review after a fix round addressing all 6 findings from the previous three-reviewer pass.
+
+Fix round claimed: (1) `internal/hook/format_output.go`'s `formatMissionCreate` now renders `warnings` (previously silently dropped); (2) `internal/mission/store.go` extracts `missingRepoTreeDir(statErr)` with strict `os.IsNotExist` check (was catching all stat errors) and on lock-acquire failure falls back to unlocked sweep with warning (was silently skipping the entire sweep); (3) `internal/hook/pretooluse_dispatch.go` TOCTOU re-check Load failure now warns + falls through to Tier A (was silently proceeding to write); (4) design doc's Facet-1 language reworded to match the code's actual weaker-but-audit-adequate guarantee; (5) `internal/mission/delegation.go` release closure now logs flock unlock/close errors (was `_ =`).
+
+`make check` is clean (leader verified independently, full output read).
+
+Do a genuinely fresh full pass — don't just confirm the 6 fixes landed, look for anything new the fix commits might have introduced (particularly the new `TestStore_Close_LockFailureFallsBackToUnlockedSweep` synthetic-lock-failure harness and `missingRepoTreeDir`'s extraction), and reconsider whether any prior finding might not have been fully resolved. If this comes back clean or only sub-threshold notes, the branch is ready to push and open a PR.
