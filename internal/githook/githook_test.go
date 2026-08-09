@@ -2,6 +2,7 @@ package githook
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -805,6 +806,30 @@ func TestInstalledSectionFingerprintMismatch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "fingerprint") {
 		t.Errorf("error = %q, want a fingerprint refusal", err)
+	}
+}
+
+func TestInstalledSectionDuplicateSections(t *testing.T) {
+	// Not reachable through Chain (which always strips existing sections
+	// before appending), but reachable by hand-duplicating a section —
+	// InstalledSection must refuse rather than silently report the first.
+	one := ExpectedSection(tag, src)
+	data := append(append([]byte("#!/bin/sh\n"), one...), one...)
+	body, ok, err := InstalledSection(data, tag, ident)
+	if err == nil {
+		t.Fatal("expected a duplicate-section error")
+	}
+	if !errors.Is(err, ErrSectionDuplicated) {
+		t.Errorf("error = %v, want ErrSectionDuplicated", err)
+	}
+	if ok {
+		t.Error("ok = true on duplicate sections, want false")
+	}
+	if body != nil {
+		t.Errorf("body = %q, want nil", body)
+	}
+	if !strings.Contains(err.Error(), "hand-duplicated") {
+		t.Errorf("error = %q, want a hand-duplicated refusal", err)
 	}
 }
 

@@ -37,6 +37,13 @@ var ErrSectionTruncated = errors.New("section has a BEGIN marker with no matchin
 // InstalledSection refuses to report it as installed.
 var ErrSectionNotEthosOwned = errors.New("section does not carry the ethos fingerprint")
 
+// ErrSectionDuplicated indicates data carries more than one real
+// BEGIN...END section for the same tag — not reachable through normal
+// Chain use, which always strips every existing section before appending
+// a fresh one, but reachable by hand-editing the hook file. InstalledSection
+// refuses to silently pick one of the duplicates over the other.
+var ErrSectionDuplicated = errors.New("multiple sections found for the same tag")
+
 // Result reports the outcome of a Chain or Unchain call.
 type Result struct {
 	// Path is the file operated on — the symlink target when the hook was a
@@ -305,14 +312,11 @@ func stripSection(data []byte, tag, ident string) ([]byte, error) {
 // lines through the matching END, inclusive. ok is false when no BEGIN for
 // tag exists: nothing installed, nothing to compare. A non-nil error means a
 // BEGIN was found but failed a check stripSection already enforces on this
-// data: no matching END (truncated section), or the line after BEGIN does
-// not carry ident (not an ethos-written section).
-//
-// It returns only the first matching range; stripSection, by contrast,
-// deletes every matching range it finds. A file with more than one real
-// section for the same tag — not reachable through normal Chain use, which
-// always strips before appending — would report only its first section here
-// while stripSection would remove them all.
+// data: no matching END (truncated section), the line after BEGIN does not
+// carry ident (not an ethos-written section), or more than one real section
+// exists for tag (ErrSectionDuplicated) — stripSection, by contrast, would
+// silently remove every matching range it finds; InstalledSection refuses
+// rather than silently report only the first.
 func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
 	lines := textscan.SplitKeepEnds(data)
 	ranges, err := sectionRanges(data, tag, ident)
@@ -321,6 +325,10 @@ func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
 	}
 	if len(ranges) == 0 {
 		return nil, false, nil
+	}
+	if len(ranges) > 1 {
+		return nil, false, fmt.Errorf(
+			"%q: %d sections found for the same tag — hand-duplicated; fix it by hand: %w", tag, len(ranges), ErrSectionDuplicated)
 	}
 	r := ranges[0]
 	var body []byte

@@ -790,6 +790,16 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Contains(t, r.Detail, "fingerprint")
 	})
 
+	t.Run("duplicate sections -> FAIL", func(t *testing.T) {
+		dir := currencyRepo(t)
+		one := githook.ExpectedSection(currencyTestSpec.Tag, currencyTestSpec.Canonical)
+		body := append(append([]byte("#!/bin/sh\n"), one...), one...)
+		require.NoError(t, os.WriteFile(hookPath(dir), body, 0o755))
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "hand-duplicated")
+	})
+
 	t.Run("truncated section -> FAIL", func(t *testing.T) {
 		dir := currencyRepo(t)
 		body := "#!/bin/sh\n# --- BEGIN " + currencyTestSpec.Tag + " ---\n# " +
