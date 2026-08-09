@@ -1,0 +1,31 @@
+results:
+    - mission: m-2026-08-09-012
+      round: 1
+      created_at: "2026-08-09T04:31:28Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs/design-hook-drift-detection.md
+          added: 377
+          removed: 0
+      evidence:
+        - name: read docs/enable-disable.md, ethos-hy40/ethos-kcbv/ethos-r2f9/ethos-pobi/ethos-wx8j bead text, internal/doctor/doctor.go, internal/githook/githook.go, hooks/embed.go, internal/enable/enable.go
+          status: pass
+        - name: captured actual installed punt-kit/.git/hooks/commit-msg as ground truth of the incident
+          status: pass
+        - name: verified sectionBytes/stripSection and the four tag/ident constants exist exactly as the design describes (leader cross-check, grep against internal/githook/githook.go and internal/enable/enable.go)
+          status: pass
+        - name: verified no import cycle -- hooks/ imports neither enable nor doctor; internal/enable already imports hooks (leader cross-check)
+          status: pass
+      prose: |
+        Delivered a single-recommendation design (byte-for-byte section
+        comparison against the live go:embed source, no persisted state)
+        with concrete rejected-alternatives reasoning against both a
+        version-stamp and a hash-manifest approach, a clear scope boundary
+        against ethos-hy40 (presence/active) and ethos-kcbv (execution
+        reachability) backed by a proof that the actual punt-kit incident
+        would pass both of those checks and only a content compare catches
+        it, and a testing strategy that turns the real captured incident
+        into a regression fixture. No Go source touched, design doc and
+        working notes only, per the write_set.

@@ -1,0 +1,5 @@
+Read your mission contract: `ethos mission show m-2026-08-09-014` in <repo>, on branch `task/hook-drift-detection`. Also read the design doc it implements in full: `docs/design-hook-drift-detection.md` (already committed on this branch).
+
+This is strict TDD: write the failing tests first (especially the punt-kit regression fixture — the actual pre-#415 buggy commit-msg body is quoted verbatim in the design doc's Problem section, use that exact text as your fixture), confirm they fail for the right reason, then write the implementation that makes them pass. Run `make check` before every commit — it must be green at every commit, not just at the end. Commit incrementally per the mission criteria; do not sit on more than 30 minutes of uncommitted work.
+
+When done, submit your result with `ethos mission result m-2026-08-09-014 --file <path> --verify` (the --verify flag cross-checks your declared files_changed against the real git diff — use it) and report back.

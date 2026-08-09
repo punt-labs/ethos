@@ -1,0 +1,7 @@
+Review the diff of branch `task/hook-drift-detection` against `main` in <repo> (`git diff main...task/hook-drift-detection`) for silent failures, swallowed errors, and inappropriate fallbacks.
+
+Context: this adds `CheckHookCurrency` to `internal/doctor/doctor.go` — a check that reads an installed git hook file, extracts its ethos-managed section via `internal/githook.InstalledSection`, and compares its content hash against what the current binary would install, reporting PASS/FAIL/WARN. Read docs/design-hook-drift-detection.md on this branch first for the intended four-state semantics.
+
+Pay particular attention to: error handling in `CheckHookCurrency` when `os.ReadFile` fails for reasons other than not-exist (is that path distinguishable from "nothing installed," or could a real read error like a permissions problem get silently reported as something misleadingly benign), whether `digestSection`'s SHA-256 truncation to 8 hex chars creates any meaningful collision risk for this use case (report-only fingerprint, not a security boundary — but confirm that's actually true given how the digest is used), and whether `InstalledSection`'s error path in `internal/githook/githook.go` could ever mask a real problem as the wrong one of its two error shapes (fingerprint-mismatch vs. truncated-section) in a way that would produce a misleading `doctor` message.
+
+Report findings via the standard format.

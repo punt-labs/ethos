@@ -1,0 +1,22 @@
+mission_id: m-2026-08-09-012
+status: closed
+type: implement
+created_at: "2026-08-09T04:22:10Z"
+updated_at: "2026-08-09T04:31:28Z"
+closed_at: "2026-08-09T04:31:28Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-09T04:22:10Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - docs/design-hook-drift-detection.md
+    - .tmp/design-hook-drift-detection-notes.md
+success_criteria:
+    - 'Design a mechanism for ethos doctor to detect when an installed hook script (commit-msg.sh, pre-commit.sh, etc.) is stale relative to what the current ethos binary would deploy. Context: ethos-r2f9 -- hooks are deployed as static file copies at ''ethos enable''/install time with no version marker; when ethos ships a hook bug fix (e.g. PR #415/ethos-pobi), already-enabled repos silently keep running the old, buggy script forever. Confirmed concretely: punt-kit''s installed .git/hooks/commit-msg still ran the pre-#415 buggy reverse-name-sort logic nine days after the fix landed. Read first: docs/enable-disable.md (the existing doctor/enable design), the ethos-hy40 bead text (doctor detects a MISSING/clobbered trailer hook -- does NOT cover a present-but-outdated one), and the ethos-kcbv bead text (converts the SEAL hook''s lexical scan to execution-based verification -- ask explicitly whether this new check should fold into that same execution-based mechanism applied to the trailer hook, or needs its own content-hash/version-stamp approach, and give a clear recommendation with tradeoffs, not just options). Deliverable: a design doc at docs/design-hook-drift-detection.md stating the recommended mechanism, why it does or doesn''t fold into kcbv, what doctor''s new check output looks like (WARN vs FAIL, remedy text), and what changes on the deploy side (version-stamping the hook at enable time, or hashing its content) to make drift detectable. Do not write implementation code in this mission -- design only. Commit incrementally per CLAUDE.md''s mission workflow rules; the write-set is enforced at runtime.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
