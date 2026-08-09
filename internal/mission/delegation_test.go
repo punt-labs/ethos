@@ -407,6 +407,99 @@ func TestAcquireMissionLock_EmptyArgs(t *testing.T) {
 	assert.Contains(t, err.Error(), "missionID")
 }
 
+// TestAcquireMissionLockExclusive_AcquireAndRelease pins the happy
+// path for the LOCK_EX variant Store.Close uses around
+// closeDelegationSkeletons: same lock file as AcquireMissionLock,
+// exclusive mode, idempotent release.
+func TestAcquireMissionLockExclusive_AcquireAndRelease(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-08-09-701"
+
+	release, err := AcquireMissionLockExclusive(repoRoot, missionID)
+	require.NoError(t, err)
+	require.NotNil(t, release)
+
+	lockPath := filepath.Join(repoRoot, ".punt-labs", "ethos", "missions", missionID, ".lock")
+	info, statErr := os.Stat(lockPath)
+	require.NoError(t, statErr, "lock file must exist on disk after acquire")
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	release()
+	release() // idempotent
+}
+
+// TestAcquireMissionLockExclusive_WaitsForSharedHolder pins the
+// ordering docs/design-delegation-lifecycle.md's facet-1 hardening
+// depends on: AcquireMissionLockExclusive must wait for every
+// AcquireMissionLock (shared) holder to release before it succeeds —
+// the same guarantee AcquireMissionLock's own doc comment promises
+// ("a hypothetical mission close... can take LOCK_EX on the same file
+// and will wait for every shared holder to release"). Store.Close
+// depends on this: it takes the exclusive lock around
+// closeDelegationSkeletons so a concurrent dispatchTierB (a shared
+// holder) finishes its write before the sweep enumerates
+// delegations/.
+func TestAcquireMissionLockExclusive_WaitsForSharedHolder(t *testing.T) {
+	repoRoot := t.TempDir()
+	missionID := "m-2026-08-09-702"
+
+	releaseShared, err := AcquireMissionLock(repoRoot, missionID)
+	require.NoError(t, err)
+
+	var acquired atomic.Bool
+	var tStart, tAcquired time.Time
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tStart = time.Now()
+		release, err := AcquireMissionLockExclusive(repoRoot, missionID)
+		tAcquired = time.Now()
+		if err != nil {
+			return
+		}
+		acquired.Store(true)
+		release()
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	assert.False(t, acquired.Load(),
+		"exclusive acquire must block while a shared holder is up")
+
+	hold := 60 * time.Millisecond
+	time.Sleep(hold)
+	releaseShared()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("exclusive acquire did not complete within 2s after shared release")
+	}
+	assert.True(t, acquired.Load(),
+		"exclusive acquire must succeed once the shared holder releases")
+	waited := tAcquired.Sub(tStart)
+	assert.GreaterOrEqual(t, waited, 40*time.Millisecond,
+		"exclusive acquire wait must reflect the shared hold (got %v)", waited)
+}
+
+// TestAcquireMissionLockExclusive_EmptyArgs mirrors
+// TestAcquireMissionLock_EmptyArgs — the exclusive variant shares the
+// same argument validation.
+func TestAcquireMissionLockExclusive_EmptyArgs(t *testing.T) {
+	_, err := AcquireMissionLockExclusive("", "m-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "repoRoot")
+
+	_, err = AcquireMissionLockExclusive(t.TempDir(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missionID")
+}
+
 // TestCloseDelegationSkeleton_HappyPath pins the atomic rewrite: a
 // skeleton on disk with verdict=open is closed to verdict=aborted
 // and the closed_at timestamp is stamped. LoadDelegation reads the
