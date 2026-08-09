@@ -439,6 +439,18 @@ func TestAcquireMissionLockExclusive_AcquireAndRelease(t *testing.T) {
 // closeDelegationSkeletons so a concurrent dispatchTierB (a shared
 // holder) finishes its write before the sweep enumerates
 // delegations/.
+//
+// Sequencing is via channels, not a blind time.Sleep, to close a real
+// flakiness gap (round-2 re-review finding #6): a sleep-then-check
+// only proves "not yet acquired" if the exclusive goroutine actually
+// got scheduled and reached the blocking flock call within the sleep
+// window. Under load, a delayed scheduler would let the check
+// spuriously pass without ever exercising the block. `started`
+// confirms the goroutine is running before the test proceeds; the
+// `done`-with-timeout select then waits for the acquire to either
+// succeed (a bug — done fires early) or stay blocked for the full
+// window (the expected outcome), which is true regardless of how long
+// the goroutine took to actually reach the syscall.
 func TestAcquireMissionLockExclusive_WaitsForSharedHolder(t *testing.T) {
 	repoRoot := t.TempDir()
 	missionID := "m-2026-08-09-702"
@@ -446,40 +458,47 @@ func TestAcquireMissionLockExclusive_WaitsForSharedHolder(t *testing.T) {
 	releaseShared, err := AcquireMissionLock(repoRoot, missionID)
 	require.NoError(t, err)
 
+	started := make(chan struct{})
+	done := make(chan struct{})
 	var acquired atomic.Bool
+	var acquireErr error
 	var tStart, tAcquired time.Time
-	wg := sync.WaitGroup{}
-	wg.Add(1)
 	go func() {
-		defer wg.Done()
+		close(started)
 		tStart = time.Now()
 		release, err := AcquireMissionLockExclusive(repoRoot, missionID)
 		tAcquired = time.Now()
-		if err != nil {
-			return
+		acquireErr = err
+		if err == nil {
+			acquired.Store(true)
+			release()
 		}
-		acquired.Store(true)
-		release()
+		close(done)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	<-started // the goroutine is running and about to call AcquireMissionLockExclusive
+
+	select {
+	case <-done:
+		t.Fatal("exclusive acquire must block while a shared holder is up")
+	case <-time.After(50 * time.Millisecond):
+	}
 	assert.False(t, acquired.Load(),
 		"exclusive acquire must block while a shared holder is up")
 
+	// A real hold, not a sequencing sleep: this is the scenario
+	// parameter TestAcquireMissionLockExclusive's own wait-time
+	// assertion below measures against.
 	hold := 60 * time.Millisecond
 	time.Sleep(hold)
 	releaseShared()
 
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("exclusive acquire did not complete within 2s after shared release")
 	}
+	require.NoError(t, acquireErr)
 	assert.True(t, acquired.Load(),
 		"exclusive acquire must succeed once the shared holder releases")
 	waited := tAcquired.Sub(tStart)

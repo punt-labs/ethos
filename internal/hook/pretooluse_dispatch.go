@@ -217,6 +217,17 @@ func dispatchTierA(w io.Writer, sessionID string) error {
 // repoRoot resolution uses resolve.FindRepoRoot — when there is no
 // enclosing repo (test fixture, ad-hoc invocation), the helper falls
 // back to the working directory and the .ethos tree lands there.
+//
+// dispatchTierBConfirmedOpen is a test-only synchronization hook,
+// invoked immediately after the status check above confirms the
+// mission is open, right before the call that blocks acquiring the
+// shared mission lock. Its zero value is a no-op with negligible
+// production cost; tests that need to race a concurrent Close against
+// this exact moment override it to signal a channel, replacing a
+// blind time.Sleep guess with a real synchronization point (round-2
+// re-review finding #6 on the delegation-lifecycle TOCTOU test).
+var dispatchTierBConfirmedOpen = func() {}
+
 func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[string]any) error {
 	store, err := tierBMissionStore()
 	if err != nil {
@@ -258,6 +269,7 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	defer func() { releaseID(success) }()
 
 	repoRoot := tierBStoreRoot()
+	dispatchTierBConfirmedOpen()
 	releaseMission, err := mission.AcquireMissionLock(repoRoot, missionID)
 	if err != nil {
 		return writeAgentBlock(w,

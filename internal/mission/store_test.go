@@ -1156,14 +1156,24 @@ func TestStore_Close_LockFailureFallsBackToUnlockedSweep(t *testing.T) {
 	missionDir := RepoStatePath(repoRoot, "missions", missionID)
 	require.NoError(t, os.MkdirAll(filepath.Join(missionDir, ".lock"), 0o700))
 
-	_, err = s.Close(missionID, StatusClosed)
-	require.NoError(t, err)
+	stderr := captureStderr(t, func() {
+		_, err = s.Close(missionID, StatusClosed)
+		require.NoError(t, err)
+	})
 
 	recordPath := filepath.Join(DelegationDir(repoRoot, missionID, delegationID), "record.yaml")
 	d, err := LoadDelegation(recordPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, DelegationVerdictOpen, d.Verdict,
 		"Close must fall back to an unlocked sweep when the exclusive lock cannot be acquired")
+
+	// Round-2 re-review finding #4: the fallback must say so, loudly
+	// enough that a future refactor swapping this Fprintf for a silent
+	// return-error would fail this test rather than pass it unnoticed.
+	assert.Contains(t, stderr, "unlocked sweep",
+		"fallback must announce it is sweeping without the exclusive lock")
+	assert.Contains(t, stderr, "TOCTOU window remains",
+		"fallback must name the residual race, matching the design doc's wording")
 }
 
 // TestStore_CloseFailsOnCorruptContract asserts that Close refuses to

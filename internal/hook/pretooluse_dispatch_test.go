@@ -119,6 +119,22 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck(t *testing.T) {
 // .lock file), so it commits even while this test holds the
 // exclusive mission lock; only Close's delegation-sweep half blocks
 // behind it.
+//
+// Sequencing is via dispatchTierBConfirmedOpen (a test-only hook) and
+// a poll for the contract's on-disk status, not two blind
+// time.Sleep(50ms) calls (round-2 re-review finding #6). A fixed
+// sleep only proves the intended TOCTOU path fired by luck: if
+// dispatch's first Load is slow to schedule under load, it could run
+// AFTER Close's transition already committed, hit the early
+// non-open-status check instead of the TOCTOU re-check, and still
+// produce the same externally observable "allow + closed warning +
+// no delegation written" result — the test would keep passing while
+// silently testing a different code path than the one it claims to
+// guard. The hook removes that ambiguity: it fires only once
+// dispatchTierB has actually observed status open and is about to
+// block acquiring the shared lock, so Close is guaranteed to start
+// (and its poll-confirmed commit is guaranteed to land) strictly
+// after that observation.
 func TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -149,6 +165,11 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU(t *testing.T) {
 	releaseExcl, err := mission.AcquireMissionLockExclusive(repo, missionID)
 	require.NoError(t, err)
 
+	confirmedOpen := make(chan struct{})
+	origHook := dispatchTierBConfirmedOpen
+	dispatchTierBConfirmedOpen = func() { close(confirmedOpen) }
+	t.Cleanup(func() { dispatchTierBConfirmedOpen = origHook })
+
 	var out bytes.Buffer
 	var dispatchErr error
 	warning := captureHookStderr(t, func() {
@@ -159,9 +180,11 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU(t *testing.T) {
 			close(dispatchDone)
 		}()
 
-		// Give the dispatch goroutine time to pass its first Load and
-		// block on AcquireMissionLock (shared).
-		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-confirmedOpen:
+		case <-time.After(5 * time.Second):
+			t.Fatal("dispatch did not confirm mission open within 5s")
+		}
 
 		closeDone := make(chan error, 1)
 		go func() {
@@ -169,9 +192,14 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU(t *testing.T) {
 			closeDone <- closeErr
 		}()
 
-		// Give Close's contract transition time to commit before the
-		// exclusive hold is released.
-		time.Sleep(50 * time.Millisecond)
+		// Poll the on-disk contract for the actual committed status
+		// instead of guessing how long Close's transition takes —
+		// deterministic regardless of machine load.
+		require.Eventually(t, func() bool {
+			c, loadErr := store.Load(missionID)
+			return loadErr == nil && c.Status == mission.StatusClosed
+		}, 5*time.Second, 2*time.Millisecond,
+			"Close's contract transition did not commit before the exclusive hold was released")
 		releaseExcl()
 
 		select {
