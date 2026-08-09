@@ -206,3 +206,87 @@ func TestDispatchAgent_EnvMissionIDStatusRecheck_TOCTOU(t *testing.T) {
 		assert.True(t, os.IsNotExist(err), "unexpected error reading delegations dir: %v", err)
 	}
 }
+
+// TestDispatchAgent_EnvMissionIDStatusRecheck_LoadErrorFallsThrough
+// pins finding #4 of the delegation-lifecycle fix round: a re-check
+// Load failure (not a status transition, an actual read error) must
+// be treated exactly like the non-open case above — a stderr warning
+// and a fall-through to Tier A/B fallback — rather than proceeding to
+// WriteDelegationSkeleton. Before the fix, `if recheck, err :=
+// store.Load(missionID); err == nil { ... }` silently authorized the
+// write whenever the recheck errored, asymmetric with the first Load
+// (which blocks the spawn outright on error).
+//
+// Uses the same blocking technique as the TOCTOU test above: hold
+// AcquireMissionLockExclusive to force dispatch to block on
+// AcquireMissionLock (shared) after its first Load succeeds, then
+// delete the on-disk contract out from under it so the second Load
+// fails with a real read error rather than a status change.
+func TestDispatchAgent_EnvMissionIDStatusRecheck_LoadErrorFallsThrough(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	repo := stageRepoRoot(t)
+
+	missionID := "m-2026-08-09-721"
+	stageContract(t, home, missionID)
+	contractPath := filepath.Join(home, ".punt-labs", "ethos", "missions", missionID+".yaml")
+
+	t.Setenv("ETHOS_VERIFIER_ALLOWLIST", "")
+	t.Setenv("MISSION_ID", missionID)
+	t.Setenv("PARENT_DELEGATION_ID", "")
+	t.Setenv("ETHOS_QUIET_ADVICE", "1")
+	t.Setenv("PARENT_SESSION_ID", "")
+
+	// Holding this also creates the repo-tree per-mission directory —
+	// harmless here, dispatch never checks for it on this path.
+	releaseExcl, err := mission.AcquireMissionLockExclusive(repo, missionID)
+	require.NoError(t, err)
+
+	var out bytes.Buffer
+	var dispatchErr error
+	warning := captureHookStderr(t, func() {
+		dispatchDone := make(chan struct{})
+		go func() {
+			payload := `{"tool_name":"Agent","tool_input":{},"session_id":"sess-load-err"}`
+			dispatchErr = HandlePreToolUse(strings.NewReader(payload), &out)
+			close(dispatchDone)
+		}()
+
+		// Give the dispatch goroutine time to pass its first Load and
+		// block on AcquireMissionLock (shared).
+		time.Sleep(50 * time.Millisecond)
+
+		require.NoError(t, os.Remove(contractPath),
+			"removing the contract must force the TOCTOU re-check Load to fail")
+
+		releaseExcl()
+
+		select {
+		case <-dispatchDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("dispatch did not complete within 5s")
+		}
+	})
+	require.NoError(t, dispatchErr)
+
+	var r PreToolUseResult
+	require.NoError(t, json.Unmarshal(out.Bytes(), &r))
+	assert.Equal(t, "allow", r.HookSpecificOutput.PermissionDecision,
+		"a re-check Load failure must not block the spawn")
+	assert.Empty(t, r.HookSpecificOutput.AdditionalEnv["MISSION_ID"],
+		"a re-check Load failure must fall through to Tier A rather than trust the write")
+	assert.NotEmpty(t, r.HookSpecificOutput.AdditionalEnv["DELEGATION_ID"],
+		"fall-through to Tier A must still allocate a DELEGATION_ID")
+	assert.Contains(t, warning, "sess-load-err", "the warning must name the session")
+	assert.Contains(t, warning, missionID, "the warning must name the mission")
+	assert.Contains(t, warning, "TOCTOU", "the warning must identify the re-check that failed")
+
+	delegationsDir := filepath.Join(repo, ".punt-labs", "ethos", "missions", missionID, "delegations")
+	entries, err := os.ReadDir(delegationsDir)
+	if err == nil {
+		assert.Empty(t, entries,
+			"the fallback must fire before WriteDelegationSkeleton — no record should land under the unverified mission")
+	} else {
+		assert.True(t, os.IsNotExist(err), "unexpected error reading delegations dir: %v", err)
+	}
+}

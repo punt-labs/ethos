@@ -286,14 +286,25 @@ func dispatchTierB(w io.Writer, sessionID, missionID string, toolInput map[strin
 	// waiting for this shared holder to release (and will sweep the
 	// skeleton this call is about to write). Either way the mission
 	// can never end up closed with an open delegation record this
-	// dispatch wrote after the fact. A reload error is not treated as
-	// stale — that mirrors staleBindingReason's own rule and defers to
-	// whatever the eventual write or a later read surfaces.
-	if recheck, err := store.Load(missionID); err == nil {
-		if reason := nonOpenReason(recheck.Status); reason != "" {
-			warnNonOpenMissionID(sessionID, missionID, reason)
-			return dispatchTierBOrTierA(w, sessionID, toolInput)
-		}
+	// dispatch wrote after the fact.
+	//
+	// A reload error falls through to Tier A/B fallback rather than to
+	// WriteDelegationSkeleton — asymmetric treatment of the recheck vs.
+	// the first Load above (which blocks the spawn outright on error)
+	// would let an error the first check would have refused silently
+	// authorize the write here. Neither Load failing is evidence the
+	// mission is open; only a successful Load reporting status: open is.
+	recheck, err := store.Load(missionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr,
+			"ethos: pre-tool-use: MISSION_ID: session %q, mission %s: TOCTOU re-check Load failed: %v; "+
+				"falling through to Tier A/B fallback rather than writing a delegation on unverified status\n",
+			sessionID, missionID, err)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
+	}
+	if reason := nonOpenReason(recheck.Status); reason != "" {
+		warnNonOpenMissionID(sessionID, missionID, reason)
+		return dispatchTierBOrTierA(w, sessionID, toolInput)
 	}
 
 	parentDelegation := os.Getenv("PARENT_DELEGATION_ID")
