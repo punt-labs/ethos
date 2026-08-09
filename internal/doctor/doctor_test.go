@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"bytes"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/punt-labs/ethos/hooks"
+	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/punt-labs/ethos/internal/session"
@@ -708,6 +711,198 @@ func TestCheckSealHook(t *testing.T) {
 	})
 }
 
+// currencyTestSpec is a HookSpec fixture independent of the real hooks.*
+// constants, so these tests exercise CheckHookCurrency's own logic without
+// depending on the shape of the real seal/trailer scripts.
+var currencyTestSpec = HookSpec{
+	Name:      "Test hook",
+	File:      "pre-commit",
+	Tag:       "ETHOS TEST HOOK",
+	Ident:     "test hook ident fingerprint",
+	Canonical: []byte("#!/bin/sh\n# test hook ident fingerprint\necho hello\n"),
+}
+
+// currencyRepo creates a bare .git/hooks dir for CheckHookCurrency tests.
+func currencyRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "hooks"), 0o755))
+	return dir
+}
+
+func TestCheckHookCurrency(t *testing.T) {
+	hookPath := func(dir string) string {
+		return filepath.Join(dir, ".git", "hooks", currencyTestSpec.File)
+	}
+
+	t.Run("not in a repo", func(t *testing.T) {
+		r := CheckHookCurrency("", currencyTestSpec)
+		assert.True(t, r.Passed())
+		assert.Equal(t, "not in a repo", r.Detail)
+	})
+
+	t.Run("no hook file present -> PASS nothing installed", func(t *testing.T) {
+		dir := currencyRepo(t)
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Equal(t, "Test hook currency", r.Name)
+		assert.Contains(t, r.Detail, "no Test hook section installed")
+	})
+
+	t.Run("hook file present, no matching tag -> PASS", func(t *testing.T) {
+		dir := currencyRepo(t)
+		require.NoError(t, os.WriteFile(hookPath(dir), []byte("#!/bin/sh\nrun_lint || exit 1\n"), 0o755))
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "no Test hook section installed")
+	})
+
+	t.Run("matching tag, current -> PASS", func(t *testing.T) {
+		dir := currencyRepo(t)
+		_, err := githook.Chain(hookPath(dir), currencyTestSpec.Canonical, currencyTestSpec.Tag, currencyTestSpec.Ident)
+		require.NoError(t, err)
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "matches this ethos build")
+		assert.Contains(t, r.Detail, "sha256:")
+	})
+
+	t.Run("matching tag, stale -> WARN with both hash prefixes", func(t *testing.T) {
+		dir := currencyRepo(t)
+		oldSrc := []byte("#!/bin/sh\n# test hook ident fingerprint\necho an older body\n")
+		_, err := githook.Chain(hookPath(dir), oldSrc, currencyTestSpec.Tag, currencyTestSpec.Ident)
+		require.NoError(t, err)
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "WARN", r.Status)
+		assert.Contains(t, r.Detail, "differs from what this ethos build would install")
+		assert.Contains(t, r.Detail, "installed sha256:")
+		assert.Contains(t, r.Detail, "current sha256:")
+		assert.Contains(t, r.Detail, "ethos enable")
+	})
+
+	t.Run("tampered fingerprint -> FAIL", func(t *testing.T) {
+		dir := currencyRepo(t)
+		body := "#!/bin/sh\n# --- BEGIN " + currencyTestSpec.Tag + " ---\n" +
+			"not ours\n# --- END " + currencyTestSpec.Tag + " ---\n"
+		require.NoError(t, os.WriteFile(hookPath(dir), []byte(body), 0o755))
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "fingerprint")
+	})
+
+	t.Run("truncated section -> FAIL", func(t *testing.T) {
+		dir := currencyRepo(t)
+		body := "#!/bin/sh\n# --- BEGIN " + currencyTestSpec.Tag + " ---\n# " +
+			currencyTestSpec.Ident + "\necho hi\n"
+		require.NoError(t, os.WriteFile(hookPath(dir), []byte(body), 0o755))
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "FAIL", r.Status)
+		assert.Contains(t, r.Detail, "hand-truncated")
+	})
+}
+
+// TestCheckHookCurrencyCRLFHostNotStale is the CRLF regression: Chain
+// rewrites a section's line endings to match a foreign CRLF host, so a
+// naive byte compare would misread that EOL rewrite as drift. The
+// terminator-normalized comparison must still report Current.
+func TestCheckHookCurrencyCRLFHostNotStale(t *testing.T) {
+	dir := currencyRepo(t)
+	hookPath := filepath.Join(dir, ".git", "hooks", currencyTestSpec.File)
+	require.NoError(t, os.WriteFile(hookPath, []byte("#!/bin/sh\r\nrun_something || exit 1\r\n"), 0o755))
+	_, err := githook.Chain(hookPath, currencyTestSpec.Canonical, currencyTestSpec.Tag, currencyTestSpec.Ident)
+	require.NoError(t, err)
+
+	r := CheckHookCurrency(dir, currencyTestSpec)
+	assert.Equal(t, "PASS", r.Status, "detail: %s", r.Detail)
+	assert.Contains(t, r.Detail, "matches this ethos build")
+}
+
+// TestCheckHookCurrencyOneByteDriftIsStale is the drift-positive case: a
+// single hand-edited byte inside an otherwise-valid section, simulating an
+// older release's content, must report Stale with both hash prefixes in
+// Detail.
+func TestCheckHookCurrencyOneByteDriftIsStale(t *testing.T) {
+	dir := currencyRepo(t)
+	hookPath := filepath.Join(dir, ".git", "hooks", currencyTestSpec.File)
+	_, err := githook.Chain(hookPath, currencyTestSpec.Canonical, currencyTestSpec.Tag, currencyTestSpec.Ident)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(hookPath)
+	require.NoError(t, err)
+	edited := bytes.Replace(data, []byte("echo hello"), []byte("echo hellO"), 1)
+	require.NotEqual(t, data, edited, "fixture setup: replacement did not apply")
+	require.NoError(t, os.WriteFile(hookPath, edited, 0o755))
+
+	r := CheckHookCurrency(dir, currencyTestSpec)
+	assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+	assert.Contains(t, r.Detail, "installed sha256:")
+	assert.Contains(t, r.Detail, "current sha256:")
+}
+
+// pre415TrailerLoop is the pre-#415 commit-msg session-resolution loop,
+// quoted verbatim from docs/design-hook-drift-detection.md's Problem
+// section: the reverse-sort fallback PR #415 (5b80bff, merged 2026-07-31)
+// replaced with a call to `ethos hook commit-trailers`. ethos-pobi found this
+// exact text still running in punt-kit nine days after the fix merged — the
+// incident CheckHookCurrency exists to catch.
+const pre415TrailerLoop = `  for d in $(find "$HOME/.punt-labs/ethos/sessions" -maxdepth 1 -type d 2>/dev/null | sort -r); do
+    if [ -f "$d/delegation-binding" ]; then
+      binding_file="$d/delegation-binding"
+      break
+    fi
+  done
+`
+
+// TestCheckHookCurrencyPuntKitRegression pins the ethos-pobi incident as a
+// regression test: a hook chained with the pre-#415 body must report Stale
+// against today's hooks.CommitMsg, or the drift-detection mechanism this
+// design adds has itself regressed.
+func TestCheckHookCurrencyPuntKitRegression(t *testing.T) {
+	dir := currencyRepo(t)
+	hookPath := filepath.Join(dir, ".git", "hooks", "commit-msg")
+	pre415 := []byte("#!/bin/sh\n# " + hooks.TrailerIdent + "\n" + pre415TrailerLoop)
+	_, err := githook.Chain(hookPath, pre415, hooks.TrailerTag, hooks.TrailerIdent)
+	require.NoError(t, err)
+
+	r := CheckHookCurrency(dir, trailerHookSpec)
+	assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+	assert.Contains(t, r.Detail, "differs from what this ethos build would install")
+}
+
+// TestRunAllHookCurrencyIndependentOfEnabledMarker: a dormant repo (no
+// enabled marker) with a leftover chained-but-current hook must still report
+// PASS on both currency checks — RunAll never gates CheckHookCurrency on the
+// enabled marker the way CheckSealHook does.
+func TestRunAllHookCurrencyIndependentOfEnabledMarker(t *testing.T) {
+	s, ss, root := newFixture(t)
+	writeIdentity(t, root, "mal", "name: Mal\nhandle: mal\nkind: human\n")
+	t.Setenv("USER", "mal")
+	t.Setenv("HOME", t.TempDir())
+
+	repo := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git", "hooks"), 0o755))
+	_, err := githook.Chain(filepath.Join(repo, ".git", "hooks", "pre-commit"), hooks.PreCommit, hooks.SealTag, hooks.SealIdent)
+	require.NoError(t, err)
+	_, err = githook.Chain(filepath.Join(repo, ".git", "hooks", "commit-msg"), hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent)
+	require.NoError(t, err)
+	// No enabled marker written — the repo stays dormant.
+
+	results := RunAll(s, ss, repo, repo, nil)
+	var sealCurrency, trailerCurrency *Result
+	for i := range results {
+		switch results[i].Name {
+		case "Seal hook currency":
+			sealCurrency = &results[i]
+		case "Trailer hook currency":
+			trailerCurrency = &results[i]
+		}
+	}
+	require.NotNil(t, sealCurrency, "results: %+v", results)
+	require.NotNil(t, trailerCurrency, "results: %+v", results)
+	assert.Equal(t, "PASS", sealCurrency.Status, "detail: %s", sealCurrency.Detail)
+	assert.Equal(t, "PASS", trailerCurrency.Status, "detail: %s", trailerCurrency.Detail)
+}
+
 func TestRunAllAndHelpers(t *testing.T) {
 	// A fixture that passes all four checks initially, including
 	// human-identity via USER=mal matching the mal identity.
@@ -727,7 +922,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", "", nil)
-	require.Len(t, results, 9)
+	require.Len(t, results, 11)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -740,20 +935,22 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Duplicate fields",
 		"Orphaned agent files",
 		"Audit seal hook",
+		"Seal hook currency",
+		"Trailer hook currency",
 		"Repo-only completeness",
 		"Local extension files",
 		"Extension key names",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 9, PassedCount(results))
+	assert.Equal(t, 11, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
 	require.NoError(t, os.RemoveAll(filepath.Join(root, "identities")))
 	results = RunAll(s, ss, "", "", nil)
 	assert.False(t, AllPassed(results))
-	assert.Less(t, PassedCount(results), 9)
+	assert.Less(t, PassedCount(results), 11)
 
 	// At least one result should name the identity directory failure.
 	var found bool

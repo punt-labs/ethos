@@ -728,7 +728,7 @@ func TestHandleDoctor_ReturnsCheckResults(t *testing.T) {
 
 	text := resultText(t, result)
 	// Summary line should contain check count.
-	assert.Contains(t, text, "9 checks")
+	assert.Contains(t, text, "11 checks")
 	// Table should contain check names.
 	assert.Contains(t, text, "Identity directory")
 	assert.Contains(t, text, "Human identity")
