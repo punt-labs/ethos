@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -476,12 +477,15 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
 
 	installed, ok, err := githook.InstalledSection(data, spec.Tag, spec.Ident)
 	if err != nil {
-		if strings.Contains(err.Error(), "no matching END") {
+		if errors.Is(err, githook.ErrSectionTruncated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 				"%s section has a BEGIN with no matching END — hand-truncated; fix it by hand", spec.Name)}
+		} else if errors.Is(err, githook.ErrSectionNotEthosOwned) {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`", spec.Name)}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-			"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`", spec.Name)}
+			"%s section could not be read: %v", spec.Name, err)}
 	}
 	if !ok {
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}

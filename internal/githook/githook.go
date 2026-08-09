@@ -16,6 +16,7 @@ package githook
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,6 +24,18 @@ import (
 
 	"github.com/punt-labs/ethos/internal/textscan"
 )
+
+// ErrSectionTruncated indicates a BEGIN marker was found with no matching
+// END — a hand-truncated section. stripSection, InstalledSection, Chain,
+// and Unchain all refuse to touch such data rather than guess where the
+// section ends.
+var ErrSectionTruncated = errors.New("section has a BEGIN marker with no matching END")
+
+// ErrSectionNotEthosOwned indicates a BEGIN marker was found but the line
+// immediately after it does not carry the ident fingerprint. The region is
+// not an ethos-written section, so stripSection refuses to remove it and
+// InstalledSection refuses to report it as installed.
+var ErrSectionNotEthosOwned = errors.New("section does not carry the ethos fingerprint")
 
 // Result reports the outcome of a Chain or Unchain call.
 type Result struct {
@@ -331,7 +344,7 @@ func sectionRanges(data []byte, tag, ident string) ([][2]int, error) {
 		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(lines[i]), begin) {
 			if i+1 >= len(lines) || !strings.Contains(textscan.StripTerminator(lines[i+1]), ident) {
 				return nil, fmt.Errorf(
-					"%q section does not carry the ethos fingerprint %q — refusing to remove a region that is not an ethos-written section; fix it by hand", tag, ident)
+					"%q section does not carry the ethos fingerprint %q — refusing to remove a region that is not an ethos-written section; fix it by hand: %w", tag, ident, ErrSectionNotEthosOwned)
 			}
 			j := i + 1
 			paired := false
@@ -344,7 +357,7 @@ func sectionRanges(data []byte, tag, ident string) ([][2]int, error) {
 			}
 			if !paired {
 				return nil, fmt.Errorf(
-					"%q section has a BEGIN with no matching END — refusing to edit a truncated hook; fix it by hand", tag)
+					"%q section has a BEGIN with no matching END — refusing to edit a truncated hook; fix it by hand: %w", tag, ErrSectionTruncated)
 			}
 			ranges = append(ranges, [2]int{i, j + 1})
 			i = j + 1
