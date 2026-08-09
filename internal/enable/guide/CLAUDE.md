@@ -20,7 +20,13 @@ SessionStart; restart Claude Code to regenerate them after a team change.
   — write a mission contract. Dispatch writes the contract; a separate
   agent spawn does the work.
 - `ethos mission show|log|results <id>` — inspect a mission.
-- `ethos mission close <id>` — close a passing mission.
+- `ethos mission close <id>` — close a passing mission (requires a
+  submitted result for the current round).
+- `ethos mission abandon <id> --reason <text>` — retire a mission that
+  was created but never had a worker spawned against it (zero
+  delegations, zero results). Refuses if any delegation or result
+  exists — use `close` for those. Not a bypass of `close`'s result
+  gate; see `docs/mission-abandon.md`.
 - `ethos mission pipeline list|show|instantiate <name>` — drive multi-stage
   work from a template.
 
