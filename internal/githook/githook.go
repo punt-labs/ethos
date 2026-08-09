@@ -307,6 +307,12 @@ func stripSection(data []byte, tag, ident string) ([]byte, error) {
 // BEGIN was found but failed a check stripSection already enforces on this
 // data: no matching END (truncated section), or the line after BEGIN does
 // not carry ident (not an ethos-written section).
+//
+// It returns only the first matching range; stripSection, by contrast,
+// deletes every matching range it finds. A file with more than one real
+// section for the same tag — not reachable through normal Chain use, which
+// always strips before appending — would report only its first section here
+// while stripSection would remove them all.
 func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
 	lines := textscan.SplitKeepEnds(data)
 	ranges, err := sectionRanges(data, tag, ident)

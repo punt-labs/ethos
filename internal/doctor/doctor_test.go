@@ -809,6 +809,21 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
 		assert.Contains(t, r.Detail, "unterminated here-document")
 	})
+
+	t.Run("unreadable hook file -> FAIL with remedy", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root bypasses file permissions")
+		}
+		dir := currencyRepo(t)
+		path := hookPath(dir)
+		require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\necho hi\n"), 0o644))
+		require.NoError(t, os.Chmod(path, 0o000))
+		t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "cannot read")
+		assert.Contains(t, r.Detail, "check file permissions")
+	})
 }
 
 // TestCheckHookCurrencyCRLFHostNotStale is the CRLF regression: Chain
