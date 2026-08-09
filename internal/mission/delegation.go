@@ -485,8 +485,17 @@ func acquireMissionLock(repoRoot, missionID string, mode int, label string) (fun
 			return
 		}
 		released = true
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
+		// A long-lived MCP-server process holds this lock across a
+		// request; a leaked flock or fd here hangs every subsequent
+		// AcquireMissionLock/AcquireMissionLockExclusive on this
+		// mission until the process restarts. Log rather than swallow
+		// so an operator can correlate a hang with its cause.
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: releasing %s mission lock %s: %v\n", label, lockPath, err)
+		}
+		if err := f.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "ethos: closing %s mission lock %s: %v\n", label, lockPath, err)
+		}
 	}
 	return release, nil
 }
