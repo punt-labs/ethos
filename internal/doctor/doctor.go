@@ -510,6 +510,10 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
 			"%s section could not be read: %v — re-run `ethos doctor`; if this persists, file a bug", spec.Name, err)}
 	}
 	if !ok {
+		if githook.IsLegacyStandalone(data, spec.Ident) {
+			return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+				"%s is active but still in the legacy pre-marker standalone format — run `ethos enable` to refresh it into the current format", spec.Name)}
+		}
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
 	}
 

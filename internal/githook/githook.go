@@ -424,6 +424,15 @@ func isOurStandalone(data []byte, ident string) bool {
 	return strings.Contains(textscan.StripTerminator(lines[1]), ident)
 }
 
+// IsLegacyStandalone reports whether data is an ethos hook still in the
+// pre-marker standalone format Chain converts on sight (isOurStandalone's
+// same test, exported so a caller other than Chain — doctor's currency
+// check — can recognize the format without a second implementation of the
+// same detection).
+func IsLegacyStandalone(data []byte, ident string) bool {
+	return isOurStandalone(data, ident)
+}
+
 // isBareShebang reports whether data is only a shebang line and blank lines —
 // nothing of the host's own remains.
 func isBareShebang(data []byte) bool {

@@ -820,6 +820,21 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Contains(t, r.Detail, "unterminated here-document")
 	})
 
+	// A pre-marker standalone hook (predates PR #357/83e75ec: ident on line 2,
+	// no BEGIN markers anywhere) is active and ethos-owned — CheckSealHook
+	// already recognizes it as "standalone seal hook active". InstalledSection
+	// reports ok=false for it (no BEGIN to find), but that must not collapse
+	// to a silent PASS "nothing installed": the hook IS installed, just in the
+	// old format, and doctor must WARN rather than hide it.
+	t.Run("legacy pre-marker standalone -> WARN, not PASS", func(t *testing.T) {
+		dir := currencyRepo(t)
+		require.NoError(t, os.WriteFile(hookPath(dir), currencyTestSpec.Canonical, 0o755))
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "WARN", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "legacy")
+		assert.Contains(t, r.Detail, "ethos enable")
+	})
+
 	t.Run("unreadable hook file -> FAIL with permission remedy", func(t *testing.T) {
 		if os.Geteuid() == 0 {
 			t.Skip("root bypasses file permissions")
