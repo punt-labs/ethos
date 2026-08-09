@@ -195,9 +195,14 @@ seal coexists with the host hook. The chained script gates on the enabled
 marker: it does nothing at commit time unless `.punt-labs/ethos/enabled`
 exists, so a disabled repo's hook is inert (and still preserves a host
 hook's failing fall-through). Re-running `enable` is idempotent. `ethos
-doctor` resolves the same path and reports on the seal hook only when the
-repo is enabled — a never-enabled or disabled repo passes; a repo with the
-hook chained but no marker WARNs. See [enable / disable](#enable--disable).
+doctor` resolves the same path for its seal-hook presence check, which is
+keyed on the enabled marker — a never-enabled or disabled repo passes; a
+repo with the hook chained but no marker WARNs. Doctor's separate hook
+*currency* checks (seal and trailer) run unconditionally, independent of
+the enabled marker, including on a dormant repo — they compare the
+installed section's content against what this ethos build would install
+today, since `ethos enable` is the remedy for stale content either way.
+See [enable / disable](#enable--disable).
 
 Or visually: `ethos ui` opens a localhost dashboard where you browse
 the repo, click a line, and see the agent who wrote it, the prompt
@@ -413,15 +418,18 @@ lines stay in the gitignored local zone and seal on a later re-enable.
 
 The three states a repo can be in:
 
-| State | `enabled` marker | Import line | Hooks | `doctor` seal check |
-|-------|------------------|-------------|-------|---------------------|
-| Enabled | present | present | chained + active | FAIL if seal missing/inactive |
-| Dormant / Absent | absent | absent | absent | PASS (not enabled here) |
-| Gated-but-unenabled | absent | absent | chained (inert) | WARN |
+| State | `enabled` marker | Import line | Hooks | `doctor` seal check | `doctor` currency check |
+|-------|------------------|-------------|-------|---------------------|--------------------------|
+| Enabled | present | present | chained + active | FAIL if seal missing/inactive | FAIL/WARN if installed section is truncated, foreign, or stale |
+| Dormant / Absent | absent | absent | absent | PASS (not enabled here) | PASS (no section installed) |
+| Gated-but-unenabled | absent | absent | chained (inert) | WARN | FAIL/WARN if the chained section is truncated, foreign, or stale |
 
 The chained hook scripts gate on the marker: they do no commit-time work
 unless `.punt-labs/ethos/enabled` exists, so a dormant repo's hook is inert
-while still preserving a host hook's failing fall-through.
+while still preserving a host hook's failing fall-through. The currency
+check runs independently of the marker in every state — it inspects
+whatever section is actually on disk, not whether the marker says it
+should be running.
 
 ## How This Is Different
 

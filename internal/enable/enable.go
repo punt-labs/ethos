@@ -39,14 +39,6 @@ const CanonicalImport = "@.punt-labs/ethos/CLAUDE.md"
 
 const markerRel = ".punt-labs/ethos/enabled"
 
-// Hook tags and idents, shared by chain and unchain.
-const (
-	sealTag      = "ETHOS DES-058 SEAL"
-	sealIdent    = "hooks/pre-commit.sh — Seal pending live audit lines"
-	trailerTag   = "ETHOS DES-054 TRAILER"
-	trailerIdent = "hooks/commit-msg.sh — Append Mission:/Delegation:"
-)
-
 // StepResult is one line of the per-step report.
 type StepResult struct {
 	Step   string `json:"step"`
@@ -241,8 +233,8 @@ func chainHooks(repoRoot string, rep *Report) error {
 		tag   string
 		ident string
 	}{
-		{"pre-commit", hooks.PreCommit, sealTag, sealIdent},
-		{"commit-msg", hooks.CommitMsg, trailerTag, trailerIdent},
+		{"pre-commit", hooks.PreCommit, hooks.SealTag, hooks.SealIdent},
+		{"commit-msg", hooks.CommitMsg, hooks.TrailerTag, hooks.TrailerIdent},
 	}
 	for _, s := range specs {
 		res, err := githook.Chain(filepath.Join(dir, s.name), s.src, s.tag, s.ident)
@@ -264,8 +256,8 @@ func unchainHooks(repoRoot string, rep *Report) error {
 		tag   string
 		ident string
 	}{
-		{"pre-commit", sealTag, sealIdent},
-		{"commit-msg", trailerTag, trailerIdent},
+		{"pre-commit", hooks.SealTag, hooks.SealIdent},
+		{"commit-msg", hooks.TrailerTag, hooks.TrailerIdent},
 	}
 	for _, s := range specs {
 		res, err := githook.Unchain(filepath.Join(dir, s.name), s.tag, s.ident)

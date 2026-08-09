@@ -18,3 +18,17 @@ var PreCommit []byte
 //
 //go:embed commit-msg.sh
 var CommitMsg []byte
+
+// Hook tags and idents: the marker tag internal/githook.Chain fences each
+// script's section with, and the fingerprint it carries on the line after
+// BEGIN. internal/enable uses these to chain and unchain the hooks;
+// internal/doctor uses the same four to find and identify a hook's on-disk
+// section for the presence, active, and currency checks. One copy here
+// avoids the two-copies-drift pattern this codebase already burned itself on
+// once (ethos-2ol1, docs/enable-disable.md "Why three packages, not one").
+const (
+	SealTag      = "ETHOS DES-058 SEAL"
+	SealIdent    = "hooks/pre-commit.sh — Seal pending live audit lines"
+	TrailerTag   = "ETHOS DES-054 TRAILER"
+	TrailerIdent = "hooks/commit-msg.sh — Append Mission:/Delegation:"
+)

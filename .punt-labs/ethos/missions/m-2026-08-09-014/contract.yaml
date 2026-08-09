@@ -1,0 +1,29 @@
+mission_id: m-2026-08-09-014
+status: closed
+type: implement
+created_at: "2026-08-09T04:33:19Z"
+updated_at: "2026-08-09T06:43:01Z"
+closed_at: "2026-08-09T06:43:01Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-09T04:33:19Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - internal/githook/githook.go
+    - internal/githook/githook_test.go
+    - hooks/embed.go
+    - hooks/embed_test.go
+    - internal/enable/enable.go
+    - internal/enable/enable_test.go
+    - internal/doctor/doctor.go
+    - internal/doctor/doctor_test.go
+    - CHANGELOG.md
+success_criteria:
+    - 'Implement docs/design-hook-drift-detection.md exactly, TDD: write failing tests first, then the code that makes them pass. (1) Export ExpectedSection(tag string, src []byte) []byte and InstalledSection(data []byte, tag, ident string) (body []byte, ok bool, err error) from internal/githook, factored out of the existing unexported sectionBytes/stripSection per the design -- stripSection becomes a one-line wrapper over the shared scanner. (2) Relocate sealTag/sealIdent/trailerTag/trailerIdent from internal/enable into the hooks package as exported SealTag/SealIdent/TrailerTag/TrailerIdent; update internal/enable to reference the relocated constants (verified no import cycle: hooks imports neither enable nor doctor, and enable already imports hooks). (3) Add CheckHookCurrency(repoRoot string, spec HookSpec) doctor.Result to internal/doctor implementing the exact four-state table in the design (PASS nothing-installed, FAIL not-ours/fingerprint-mismatch, FAIL truncated/no-matching-END, PASS current, WARN stale) with terminator-normalized SHA-256 comparison per the design''s normalization section (split with textscan.SplitKeepEnds, strip with textscan.StripTerminator, rejoin with \n, hash both sides, compare digests -- truncated hex prefixes in Detail, not full bodies). Wire two unconditional CheckHookCurrency calls into RunAll for the seal and trailer hooks. (4) Test coverage per the design''s own ''Testing strategy'' section verbatim -- table-driven fixtures for InstalledSection/ExpectedSection (standalone hook, chained hook, truncated BEGIN-no-END, fingerprint mismatch, no BEGIN), a CRLF regression test (chain onto a CRLF host, verify the LF-embedded source still reports Current, not Stale), a drift-positive test (hand-edit one byte, verify Stale with both hash prefixes in Detail), and critically the punt-kit regression fixture: embed the actual pre-#415 commit-msg body captured in docs/design-hook-drift-detection.md (the ''find | sort -r'' fallback shown in the Problem section) as a table case against current hooks.CommitMsg -- must report Stale. This is the concrete incident turned into a regression test that fails if the mechanism ever regresses. Also test CheckHookCurrency''s four states directly and RunAll wiring (both currency Results appear, independent of the enabled marker). (5) CHANGELOG.md entry under Unreleased/Added. Every commit must pass make check. Commit incrementally -- one commit per logical step (the githook export, the constant relocation, the doctor check + RunAll wiring, tests), each passing make check. Do not accumulate more than 30 minutes of uncommitted changes.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2

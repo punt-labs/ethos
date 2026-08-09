@@ -2,6 +2,7 @@ package githook
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -593,7 +594,7 @@ func TestChainMultiLineArithmeticAboveSectionNoDuplicate(t *testing.T) {
 	// produces a DUPLICATE. With span state carried across lines there is no
 	// phantom: exactly one section.
 	dest := filepath.Join(t.TempDir(), "pre-commit")
-	host := "#!/bin/sh\nx=$((1 +\n2 << 3))\n" + string(sectionBytes(tag, src))
+	host := "#!/bin/sh\nx=$((1 +\n2 << 3))\n" + string(ExpectedSection(tag, src))
 	if err := os.WriteFile(dest, []byte(host), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +633,7 @@ func TestChainRefusesTruncatedDuplicateAfterCompleteSection(t *testing.T) {
 	// deletion). Per-BEGIN pairing must refuse, byte-unchanged (B1).
 	dest := filepath.Join(t.TempDir(), "pre-commit")
 	host := "#!/bin/sh\n" +
-		string(sectionBytes(tag, src)) +
+		string(ExpectedSection(tag, src)) +
 		"# --- BEGIN " + tag + " ---\n" +
 		"# " + ident + "\n" +
 		"precious host content below the truncated BEGIN\n"
@@ -743,6 +744,106 @@ func TestManualHooksDirWorktree(t *testing.T) {
 	want := filepath.Join(commonGit, "hooks")
 	if evalPath(got) != evalPath(want) {
 		t.Errorf("worktree hooks dir = %q, want %q", got, want)
+	}
+}
+
+func TestExpectedSectionAndInstalledSectionAgree(t *testing.T) {
+	want := ExpectedSection(tag, src)
+	tests := []struct {
+		name string
+		host []byte
+	}{
+		{"standalone hook", markerForm(tag, src)},
+		{"chained hook", append(append([]byte("#!/bin/sh\nrun_something || exit 1\n"), want...), "echo trailing host line\n"...)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, err := InstalledSection(tt.host, tag, ident)
+			if err != nil {
+				t.Fatalf("InstalledSection: %v", err)
+			}
+			if !ok {
+				t.Fatal("ok = false, want true")
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("body = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestInstalledSectionTruncatedNoEnd(t *testing.T) {
+	data := []byte("#!/bin/sh\nrun_host || exit 1\n# --- BEGIN " + tag + " ---\n# " + ident + "\nethos audit seal || exit 2\n")
+	body, ok, err := InstalledSection(data, tag, ident)
+	if err == nil {
+		t.Fatal("expected a truncated-section error")
+	}
+	if ok {
+		t.Error("ok = true on a truncated section, want false")
+	}
+	if body != nil {
+		t.Errorf("body = %q, want nil", body)
+	}
+	if !strings.Contains(err.Error(), "no matching END") {
+		t.Errorf("error = %q, want a truncated-section refusal", err)
+	}
+}
+
+func TestInstalledSectionFingerprintMismatch(t *testing.T) {
+	data := []byte("#!/bin/sh\n" +
+		"# --- BEGIN " + tag + " ---\n" +
+		"someone hand-wrote this and it is not ours\n" +
+		"# --- END " + tag + " ---\n")
+	body, ok, err := InstalledSection(data, tag, ident)
+	if err == nil {
+		t.Fatal("expected a fingerprint error")
+	}
+	if ok {
+		t.Error("ok = true on a fingerprint mismatch, want false")
+	}
+	if body != nil {
+		t.Errorf("body = %q, want nil", body)
+	}
+	if !strings.Contains(err.Error(), "fingerprint") {
+		t.Errorf("error = %q, want a fingerprint refusal", err)
+	}
+}
+
+func TestInstalledSectionDuplicateSections(t *testing.T) {
+	// Not reachable through Chain (which always strips existing sections
+	// before appending), but reachable by hand-duplicating a section —
+	// InstalledSection must refuse rather than silently report the first.
+	one := ExpectedSection(tag, src)
+	data := append(append([]byte("#!/bin/sh\n"), one...), one...)
+	body, ok, err := InstalledSection(data, tag, ident)
+	if err == nil {
+		t.Fatal("expected a duplicate-section error")
+	}
+	if !errors.Is(err, ErrSectionDuplicated) {
+		t.Errorf("error = %v, want ErrSectionDuplicated", err)
+	}
+	if ok {
+		t.Error("ok = true on duplicate sections, want false")
+	}
+	if body != nil {
+		t.Errorf("body = %q, want nil", body)
+	}
+	if !strings.Contains(err.Error(), "hand-duplicated") {
+		t.Errorf("error = %q, want a hand-duplicated refusal", err)
+	}
+}
+
+func TestInstalledSectionNoBegin(t *testing.T) {
+	data := []byte("#!/bin/sh\nrun_something || exit 1\n")
+	body, ok, err := InstalledSection(data, tag, ident)
+	if err != nil {
+		t.Fatalf("InstalledSection: %v", err)
+	}
+	if ok {
+		t.Error("ok = true with no BEGIN present, want false")
+	}
+	if body != nil {
+		t.Errorf("body = %q, want nil", body)
 	}
 }
 

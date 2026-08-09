@@ -3,6 +3,10 @@
 package doctor
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/punt-labs/ethos/hooks"
 	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -69,6 +74,12 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 
 	results = append(results, CheckOrphanedAgentFiles(repoRoot, storeRoot, teams))
 	results = append(results, CheckSealHook(repoRoot))
+
+	// DES-hook-drift-detection: content-currency checks, independent of the
+	// enabled marker and of CheckSealHook's presence/active states — see
+	// docs/design-hook-drift-detection.md.
+	results = append(results, CheckHookCurrency(repoRoot, sealHookSpec))
+	results = append(results, CheckHookCurrency(repoRoot, trailerHookSpec))
 
 	// DES-057. The completeness gate reads the shared store (storeRoot),
 	// matching every other resolution consumer; the git-boundary check
@@ -304,7 +315,7 @@ func CheckSealHook(repoRoot string) Result {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot stat %s: %v%s", hook, statErr, remedy)}
 	}
 	if !active {
-		if strings.Contains(body, "DES-058") {
+		if strings.Contains(body, hooks.SealTag) {
 			return Result{Name: name, Status: "FAIL", Detail: "seal section present but no active 'audit seal' call (stale)" + remedy}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: "enabled here but the seal hook is not chained" + remedy}
@@ -330,7 +341,7 @@ func hasSealMarker(body string) bool {
 	lines := textscan.SplitKeepEnds(data)
 	mask := textscan.HeredocMask(data)
 	for i, raw := range lines {
-		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN ETHOS DES-058 SEAL") {
+		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(raw), "# --- BEGIN "+hooks.SealTag) {
 			return true
 		}
 	}
@@ -391,6 +402,130 @@ func stripInlineComment(line string) string {
 		}
 	}
 	return line
+}
+
+// HookSpec names one ethos-managed git hook for CheckHookCurrency.
+type HookSpec struct {
+	Name      string // report label, e.g. "Seal hook"
+	File      string // hook filename inside the hooks dir: "pre-commit"
+	Tag       string // hooks.SealTag / hooks.TrailerTag
+	Ident     string // hooks.SealIdent / hooks.TrailerIdent
+	Canonical []byte // hooks.PreCommit / hooks.CommitMsg
+}
+
+var sealHookSpec = HookSpec{
+	Name:      "Seal hook",
+	File:      "pre-commit",
+	Tag:       hooks.SealTag,
+	Ident:     hooks.SealIdent,
+	Canonical: hooks.PreCommit,
+}
+
+var trailerHookSpec = HookSpec{
+	Name:      "Trailer hook",
+	File:      "commit-msg",
+	Tag:       hooks.TrailerTag,
+	Ident:     hooks.TrailerIdent,
+	Canonical: hooks.CommitMsg,
+}
+
+// hashPrefixLen truncates a sha256 hex digest for Detail so a currency
+// result stays a short, comparable fingerprint rather than the hook's full
+// body — display only. Comparisons always use the full digest from
+// digestSection; truncating before comparing would collapse SHA-256's
+// collision resistance to a 32-bit birthday bound.
+const hashPrefixLen = 8
+
+// digestSection normalizes section's line terminators to LF (Chain rewrites
+// them to match a foreign CRLF host, so a byte compare across EOL styles
+// would false-positive on content that is otherwise unchanged) and returns
+// the full SHA-256 digest of the result. Callers wanting a short fingerprint
+// for display, not comparison, pass the result to shortHex.
+func digestSection(section []byte) [sha256.Size]byte {
+	var norm bytes.Buffer
+	for _, line := range textscan.SplitKeepEnds(section) {
+		norm.WriteString(textscan.StripTerminator(line))
+		norm.WriteByte('\n')
+	}
+	return sha256.Sum256(norm.Bytes())
+}
+
+// shortHex renders sum as a hashPrefixLen-character hex fingerprint for
+// Detail text. Never use this for equality checks — compare the [sha256.Size]byte
+// values digestSection returns instead.
+func shortHex(sum [sha256.Size]byte) string {
+	return hex.EncodeToString(sum[:])[:hashPrefixLen]
+}
+
+// CheckHookCurrency compares spec's installed section against what this
+// ethos build would install today (docs/design-hook-drift-detection.md). It
+// never reads the enabled marker: a section that doesn't exist is not this
+// check's concern (PASS, nothing installed); a section that exists is
+// checked for currency regardless of whether ethos is enabled in this repo
+// right now, because `ethos enable` is the remedy for both problems.
+func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
+	name := spec.Name + " currency"
+
+	if repoRoot == "" {
+		return Result{Name: name, Status: "PASS", Detail: "not in a repo"}
+	}
+
+	dir, _ := githook.HooksDir(repoRoot)
+	hookPath := filepath.Join(dir, spec.File)
+	data, err := os.ReadFile(hookPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
+		}
+		remedy := " — inspect the file manually"
+		if os.IsPermission(err) {
+			remedy = " — check file permissions"
+		}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v%s", hookPath, err, remedy)}
+	}
+
+	// A host ending inside an unterminated heredoc masks its trailing lines
+	// opaque — a real section below the open heredoc is invisible to the
+	// scanner and would otherwise read PASS "nothing installed". Chain and
+	// Unchain already refuse to touch such a file; this check must refuse
+	// for the same reason before trusting InstalledSection's answer.
+	if textscan.HeredocOpenAtEOF(data) {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+			"%s ends inside an unterminated here-document — close it and re-run; `ethos enable` cannot chain into it either", hookPath)}
+	}
+
+	installed, ok, err := githook.InstalledSection(data, spec.Tag, spec.Ident)
+	if err != nil {
+		if errors.Is(err, githook.ErrSectionTruncated) {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+				"%s section has a BEGIN with no matching END — hand-truncated; fix it by hand", spec.Name)}
+		} else if errors.Is(err, githook.ErrSectionNotEthosOwned) {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`", spec.Name)}
+		} else if errors.Is(err, githook.ErrSectionDuplicated) {
+			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+				"multiple %q sections found — hand-duplicated; run `ethos enable` to collapse them into one", spec.Tag)}
+		}
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+			"%s section could not be read: %v — re-run `ethos doctor`; if this persists, file a bug", spec.Name, err)}
+	}
+	if !ok {
+		if githook.IsLegacyStandalone(data, spec.Ident) {
+			return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+				"%s is active but still in the legacy pre-marker standalone format — run `ethos enable` to refresh it into the current format", spec.Name)}
+		}
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf("no %s section installed", spec.Name)}
+	}
+
+	installedDigest := digestSection(installed)
+	expectedDigest := digestSection(githook.ExpectedSection(spec.Tag, spec.Canonical))
+	if installedDigest == expectedDigest {
+		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf(
+			"%s section matches this ethos build (sha256:%s)", spec.Name, shortHex(installedDigest))}
+	}
+	return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
+		"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — run `ethos enable` to refresh",
+		spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 }
 
 // CheckIdentityDir verifies the identity directory exists.
