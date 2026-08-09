@@ -431,25 +431,30 @@ var trailerHookSpec = HookSpec{
 
 // hashPrefixLen truncates a sha256 hex digest for Detail so a currency
 // result stays a short, comparable fingerprint rather than the hook's full
-// body — the report is O(1) regardless of script size.
+// body — display only. Comparisons always use the full digest from
+// digestSection; truncating before comparing would collapse SHA-256's
+// collision resistance to a 32-bit birthday bound.
 const hashPrefixLen = 8
 
 // digestSection normalizes section's line terminators to LF (Chain rewrites
 // them to match a foreign CRLF host, so a byte compare across EOL styles
 // would false-positive on content that is otherwise unchanged) and returns
-// the SHA-256 hex digest of the result.
-func digestSection(section []byte) string {
+// the full SHA-256 digest of the result. Callers wanting a short fingerprint
+// for display, not comparison, pass the result to shortHex.
+func digestSection(section []byte) [sha256.Size]byte {
 	var norm bytes.Buffer
 	for _, line := range textscan.SplitKeepEnds(section) {
 		norm.WriteString(textscan.StripTerminator(line))
 		norm.WriteByte('\n')
 	}
-	sum := sha256.Sum256(norm.Bytes())
-	digest := hex.EncodeToString(sum[:])
-	if len(digest) > hashPrefixLen {
-		return digest[:hashPrefixLen]
-	}
-	return digest
+	return sha256.Sum256(norm.Bytes())
+}
+
+// shortHex renders sum as a hashPrefixLen-character hex fingerprint for
+// Detail text. Never use this for equality checks — compare the [sha256.Size]byte
+// values digestSection returns instead.
+func shortHex(sum [sha256.Size]byte) string {
+	return hex.EncodeToString(sum[:])[:hashPrefixLen]
 }
 
 // CheckHookCurrency compares spec's installed section against what this
@@ -495,11 +500,11 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
 	expectedDigest := digestSection(githook.ExpectedSection(spec.Tag, spec.Canonical))
 	if installedDigest == expectedDigest {
 		return Result{Name: name, Status: "PASS", Detail: fmt.Sprintf(
-			"%s section matches this ethos build (sha256:%s)", spec.Name, installedDigest)}
+			"%s section matches this ethos build (sha256:%s)", spec.Name, shortHex(installedDigest))}
 	}
 	return Result{Name: name, Status: "WARN", Detail: fmt.Sprintf(
 		"%s section content differs from what this ethos build would install (installed sha256:%s, current sha256:%s) — run `ethos enable` to refresh",
-		spec.Name, installedDigest, expectedDigest)}
+		spec.Name, shortHex(installedDigest), shortHex(expectedDigest))}
 }
 
 // CheckIdentityDir verifies the identity directory exists.
