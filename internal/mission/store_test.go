@@ -1019,6 +1019,80 @@ func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
 	}
 }
 
+// TestStore_Close_WaitsForInFlightDelegationWrite pins the facet-1
+// hardening in docs/design-delegation-lifecycle.md: Close takes
+// AcquireMissionLockExclusive around closeDelegationSkeletons, so a
+// concurrent holder of the shared AcquireMissionLock — standing in
+// for dispatchTierB, which holds the shared lock across its
+// WriteDelegationSkeleton call — blocks the sweep until it releases.
+// This proves the ordering half of the fix: a record written by a
+// shared holder that was already in flight when Close started is
+// still on disk by the time the sweep enumerates delegations/, so it
+// is never left at verdict=open by a sweep that ran too early.
+func TestStore_Close_WaitsForInFlightDelegationWrite(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	missionID := "m-2026-08-09-801"
+	c := newContract(missionID)
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictPass)
+
+	delegationID := "d-2026-08-09-801"
+	writerHoldsLock := make(chan struct{})
+	writerRelease := make(chan struct{})
+	writerDone := make(chan error, 1)
+	go func() {
+		release, err := AcquireMissionLock(repoRoot, missionID)
+		if err != nil {
+			writerDone <- err
+			return
+		}
+		defer release()
+		close(writerHoldsLock)
+		<-writerRelease // hold the shared lock until the test says go
+		_, err = WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+			Tier:      TierB,
+			AgentType: "bwk",
+		})
+		writerDone <- err
+	}()
+
+	<-writerHoldsLock // the shared holder is in place before Close starts
+
+	closeDone := make(chan error, 1)
+	go func() {
+		_, err := s.Close(missionID, StatusClosed)
+		closeDone <- err
+	}()
+
+	// Close must block on AcquireMissionLockExclusive while the shared
+	// holder is up. Give it time to reach and wait on the lock, then
+	// confirm it has NOT returned yet.
+	select {
+	case <-closeDone:
+		t.Fatal("Close returned before the in-flight shared holder released — exclusive lock not enforced")
+	case <-time.After(80 * time.Millisecond):
+	}
+
+	close(writerRelease)
+	require.NoError(t, <-writerDone)
+
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not complete within 5s after the shared holder released")
+	}
+
+	recordPath := filepath.Join(DelegationDir(repoRoot, missionID, delegationID), "record.yaml")
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.NotEqual(t, DelegationVerdictOpen, d.Verdict,
+		"Close's sweep must observe the write that finished before it could take the exclusive lock")
+}
+
 // TestStore_CloseFailsOnCorruptContract asserts that Close refuses to
 // mutate a contract that fails validation on load. A hand-edited or
 // corrupt on-disk YAML must be rejected before Close touches it,
