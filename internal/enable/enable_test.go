@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/punt-labs/ethos/hooks"
 )
 
 // TestMain isolates HOME so the claudemd per-user lock dir
@@ -93,11 +95,11 @@ func TestEnableDepositsFourArtifacts(t *testing.T) {
 		t.Error("host prose not preserved")
 	}
 	pre := readFile(t, filepath.Join(dir, ".git", "hooks", "pre-commit"))
-	if !strings.Contains(pre, "# --- BEGIN "+sealTag) {
+	if !strings.Contains(pre, "# --- BEGIN "+hooks.SealTag) {
 		t.Error("seal section not chained")
 	}
 	cm := readFile(t, filepath.Join(dir, ".git", "hooks", "commit-msg"))
-	if !strings.Contains(cm, "# --- BEGIN "+trailerTag) {
+	if !strings.Contains(cm, "# --- BEGIN "+hooks.TrailerTag) {
 		t.Error("trailer section not chained")
 	}
 	if rep.Hint == "" {
@@ -157,8 +159,8 @@ func TestEnableIdempotent(t *testing.T) {
 		t.Errorf("import line count = %d, want 1", strings.Count(claude, CanonicalImport))
 	}
 	pre := readFile(t, filepath.Join(dir, ".git", "hooks", "pre-commit"))
-	if strings.Count(pre, "# --- BEGIN "+sealTag) != 1 {
-		t.Errorf("seal BEGIN count = %d, want 1", strings.Count(pre, "# --- BEGIN "+sealTag))
+	if strings.Count(pre, "# --- BEGIN "+hooks.SealTag) != 1 {
+		t.Errorf("seal BEGIN count = %d, want 1", strings.Count(pre, "# --- BEGIN "+hooks.SealTag))
 	}
 }
 
@@ -201,10 +203,10 @@ func TestEnableConvergesInterimRepo(t *testing.T) {
 		"# --- BEGIN BEADS INTEGRATION ---\n" +
 		"bd hooks run pre-commit || exit 1\n" +
 		"# --- END BEADS INTEGRATION ---\n" +
-		"# --- BEGIN " + sealTag + " ---\n" +
-		"# " + sealIdent + "\n" +
+		"# --- BEGIN " + hooks.SealTag + " ---\n" +
+		"# " + hooks.SealIdent + "\n" +
 		"ethos audit seal || exit 2\n" +
-		"# --- END " + sealTag + " ---\n"
+		"# --- END " + hooks.SealTag + " ---\n"
 	if err := os.WriteFile(filepath.Join(hooksDir, "pre-commit"), []byte(host), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -218,8 +220,8 @@ func TestEnableConvergesInterimRepo(t *testing.T) {
 	if !strings.Contains(pre, "BEGIN BEADS INTEGRATION") {
 		t.Error("beads host content lost on convergence")
 	}
-	if strings.Count(pre, "# --- BEGIN "+sealTag) != 1 {
-		t.Errorf("seal BEGIN count = %d, want 1", strings.Count(pre, "# --- BEGIN "+sealTag))
+	if strings.Count(pre, "# --- BEGIN "+hooks.SealTag) != 1 {
+		t.Errorf("seal BEGIN count = %d, want 1", strings.Count(pre, "# --- BEGIN "+hooks.SealTag))
 	}
 }
 
