@@ -147,7 +147,90 @@ func (h *Handler) handleCreateMission(req mcplib.CallToolRequest) (*mcplib.CallT
 	if err := h.missionStore.Create(&c); err != nil {
 		return mcplib.NewToolResultError(fmt.Sprintf("failed to create mission: %v", err)), nil
 	}
+	// Parity with the CLI's create/dispatch: minting a fresh mission is
+	// the leader naming one explicitly, so the session's active-mission
+	// sidecar must follow immediately (ethos-5jsf) -- otherwise the very
+	// next Agent() spawn in this session still writes its delegation
+	// under whatever mission the sidecar named a moment ago, d-040's
+	// exact pattern, reachable through the MCP surface even though
+	// dispatchTierB's own status re-check (facet 2) already closes the
+	// post-close half of the same root cause.
+	if warnings := h.bindDispatchedMission(c.MissionID); len(warnings) > 0 {
+		return jsonResult(createMissionResponse{Contract: &c, Warnings: warnings})
+	}
 	return jsonResult(&c)
+}
+
+// createMissionResponse is the wire shape for handleCreateMission's
+// rebind warnings: the created contract plus an optional warnings
+// list, present only when bindDispatchedMission's rebind left
+// something for the caller to see. Mirrors ShowPayload/LogPayload's
+// warnings convention (internal/mission/mission.go) as a local type
+// rather than a shared one -- mission.go is outside this fix's
+// write-set.
+type createMissionResponse struct {
+	*mission.Contract
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// bindDispatchedMission mirrors the CLI's bindDispatchedMission
+// (cmd/ethos/mission.go:2023) for the MCP create surface -- ethos-5jsf.
+// Creating a mission is the leader naming one explicitly, so it is the
+// moment the session's active-mission sidecar must follow: without
+// this, the next Agent() spawn in this session still writes under
+// whatever mission the sidecar named a moment ago (observed: d-078
+// under m-017, d-040 under m-002).
+//
+// The binding is written with dispatch origin, not claim -- creating a
+// mission on someone's behalf must not turn on commit trailers for
+// this session; only an explicit `ethos mission claim` does that.
+//
+// Every step is advisory, like the CLI's: no session store wired, or
+// no session in context, is the ordinary case for many MCP callers,
+// and a mission that was created stays created regardless of whether
+// the rebind below succeeds. Failures are returned as strings for the
+// caller to fold into the result's warnings array -- MCP has no
+// stderr channel to print the CLI's line to.
+func (h *Handler) bindDispatchedMission(missionID string) []string {
+	if h.sessionStore == nil {
+		return nil
+	}
+	sessionID, _ := resolve.SessionID(h.sessionStore)
+	if sessionID == "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return []string{fmt.Sprintf("binding mission: user home dir: %v", err)}
+	}
+	globalRoot := filepath.Join(home, ".punt-labs", "ethos")
+
+	previous, prevErr := mission.ReadActiveMissionBinding(globalRoot, sessionID)
+	var warnings []string
+	if prevErr != nil {
+		// Report and continue: the rebind below is what makes the next
+		// spawn correct, and an unreadable sidecar is exactly the state
+		// that must be overwritten.
+		warnings = append(warnings, fmt.Sprintf("binding mission: reading active mission: %v", prevErr))
+	}
+	if err := mission.WriteActiveMissionOrigin(
+		globalRoot, sessionID, missionID, mission.BindOriginDispatch,
+	); err != nil {
+		return append(warnings, fmt.Sprintf("binding mission: binding session %s to %s: %v", sessionID, missionID, err))
+	}
+	// create always mints a fresh mission ID, so a rebind onto the SAME
+	// mission cannot arise; only the changed-mission case is reachable.
+	if previous.MissionID == "" || previous.MissionID == missionID {
+		return warnings
+	}
+	warnings = append(warnings, fmt.Sprintf(
+		"session %s was bound to %s; rebound to %s -- delegations now file under %s, "+
+			"and commit trailers are off until you run `ethos mission claim <id>`",
+		sessionID, previous.MissionID, missionID, missionID))
+	if err := mission.ClearDelegationBinding(globalRoot, sessionID); err != nil {
+		warnings = append(warnings, fmt.Sprintf("binding mission: clearing delegation binding: %v", err))
+	}
+	return warnings
 }
 
 // handleShowMission resolves the requested mission by exact ID or
