@@ -799,6 +799,16 @@ func TestCheckHookCurrency(t *testing.T) {
 		assert.Equal(t, "FAIL", r.Status)
 		assert.Contains(t, r.Detail, "hand-truncated")
 	})
+
+	t.Run("unterminated heredoc masks a real section -> FAIL", func(t *testing.T) {
+		dir := currencyRepo(t)
+		body := "#!/bin/sh\ncat <<EOF\n# --- BEGIN " + currencyTestSpec.Tag + " ---\n# " +
+			currencyTestSpec.Ident + "\necho hi\n# --- END " + currencyTestSpec.Tag + " ---\n"
+		require.NoError(t, os.WriteFile(hookPath(dir), []byte(body), 0o755))
+		r := CheckHookCurrency(dir, currencyTestSpec)
+		assert.Equal(t, "FAIL", r.Status, "detail: %s", r.Detail)
+		assert.Contains(t, r.Detail, "unterminated here-document")
+	})
 }
 
 // TestCheckHookCurrencyCRLFHostNotStale is the CRLF regression: Chain

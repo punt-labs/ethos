@@ -480,6 +480,16 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf("cannot read %s: %v", hookPath, err)}
 	}
 
+	// A host ending inside an unterminated heredoc masks its trailing lines
+	// opaque — a real section below the open heredoc is invisible to the
+	// scanner and would otherwise read PASS "nothing installed". Chain and
+	// Unchain already refuse to touch such a file; this check must refuse
+	// for the same reason before trusting InstalledSection's answer.
+	if textscan.HeredocOpenAtEOF(data) {
+		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
+			"%s ends inside an unterminated here-document — close it and re-run; `ethos enable` cannot chain into it either", hookPath)}
+	}
+
 	installed, ok, err := githook.InstalledSection(data, spec.Tag, spec.Ident)
 	if err != nil {
 		if errors.Is(err, githook.ErrSectionTruncated) {
