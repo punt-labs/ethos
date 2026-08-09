@@ -68,5 +68,6 @@ Local review sequence, after `make check` passes:
 - Never run `make install` from inside Claude Code — the running binary
   cannot overwrite itself. Ask a human to run it from a shell.
 - Agent types are discovered at SessionStart; restart after adding one.
-- `ethos doctor` checks the seal hook only when ethos is enabled here — a
-  dormant or never-enabled repo passes.
+- `ethos doctor` checks seal-hook presence only when ethos is enabled
+  here, but its hook currency checks run unconditionally, on dormant
+  repos too.

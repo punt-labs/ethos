@@ -328,7 +328,7 @@ func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
 	}
 	if len(ranges) > 1 {
 		return nil, false, fmt.Errorf(
-			"%q: %d sections found for the same tag — hand-duplicated; fix it by hand: %w", tag, len(ranges), ErrSectionDuplicated)
+			"%q: %d sections found for the same tag — hand-duplicated; run `ethos enable` to collapse them into one: %w", tag, len(ranges), ErrSectionDuplicated)
 	}
 	r := ranges[0]
 	var body []byte
@@ -341,7 +341,7 @@ func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
 // sectionRanges walks data for every real (non-heredoc) BEGIN-tag marker,
 // returning each one's [begin, end) line-index range through its matching
 // END, inclusive. It is the single scanner stripSection (delete the ranges)
-// and InstalledSection (keep the first one) both build on — "single
+// and InstalledSection (refuse when more than one) both build on — "single
 // authoritative copy" applied to the code that finds a section, not just the
 // code that writes one.
 //

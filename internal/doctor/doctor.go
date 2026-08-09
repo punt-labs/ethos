@@ -504,7 +504,7 @@ func CheckHookCurrency(repoRoot string, spec HookSpec) Result {
 				"%s section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`", spec.Name)}
 		} else if errors.Is(err, githook.ErrSectionDuplicated) {
 			return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
-				"multiple %q sections found — hand-duplicated; fix it by hand", spec.Tag)}
+				"multiple %q sections found — hand-duplicated; run `ethos enable` to collapse them into one", spec.Tag)}
 		}
 		return Result{Name: name, Status: "FAIL", Detail: fmt.Sprintf(
 			"%s section could not be read: %v — re-run `ethos doctor`; if this persists, file a bug", spec.Name, err)}
