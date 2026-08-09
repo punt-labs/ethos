@@ -251,10 +251,10 @@ established (`doctor.go:245`):
 | State | Condition | Status | Detail |
 |---|---|---|---|
 | Nothing installed | no BEGIN for `spec.Tag` anywhere in the hook file (or no hook file) | PASS | `"no <name> section installed"` |
-| Not ours | BEGIN found, ident fingerprint on the next line fails | FAIL | `"<name> section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`"` |
+| Not ours | BEGIN found, ident fingerprint on the next line fails | FAIL | ``"<name> section present but does not carry ethos's fingerprint — not a recognized ethos section; remove it and run `ethos enable`"`` |
 | Truncated | BEGIN found, no matching END | FAIL | `"<name> section has a BEGIN with no matching END — hand-truncated; fix it by hand"` (same wording `githook.Chain`/`Unchain` already use for this case) |
 | Current | fingerprint OK, normalized hash matches `ExpectedSection(spec.Tag, spec.Canonical)` | PASS | `"<name> section matches this ethos build (sha256:a1b2c3d4…)"` |
-| Stale | fingerprint OK, normalized hash differs | WARN | `"<name> section content differs from what this ethos build would install (installed sha256:a1b2c3d4…, current sha256:e5f6a7b8…) — run `ethos enable` to refresh"` |
+| Stale | fingerprint OK, normalized hash differs | WARN | ``"<name> section content differs from what this ethos build would install (installed sha256:a1b2c3d4…, current sha256:e5f6a7b8…) — run `ethos enable` to refresh"`` |
 
 **Stale is `WARN`, not `FAIL`.** `Result.Passed()` already treats `WARN`
 as advisory (`doctor.go:30`) — the same tier as "gated-but-unenabled."
@@ -298,14 +298,14 @@ separate: each `Result` answers one question.
 
 Today (`cmd/ethos/main.go:248`, `"  %-24s %s  %s\n"`):
 
-```
+```text
   Audit seal hook          PASS   chained seal section active
 ```
 
 With this design landed (pre-commit currency line; a trailer-hook line
 follows once the constant move and second `CheckHookCurrency` call ship):
 
-```
+```text
   Audit seal hook          PASS   chained seal section active
   Seal hook currency       WARN   Seal hook section content differs from what this ethos build would install (installed sha256:a1b2c3d4, current sha256:e5f6a7b8) — run `ethos enable` to refresh
   Trailer hook currency    WARN   Trailer hook section content differs from what this ethos build would install (installed sha256:9f8e7d6c, current sha256:e5f6a7b8) — run `ethos enable` to refresh

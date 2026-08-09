@@ -120,7 +120,7 @@ func Chain(destPath string, src []byte, tag, ident string) (Result, error) {
 	// Match the host's EOL for the appended section so a CRLF host does not
 	// gain LF-only lines (reviewer N1).
 	eol := textscan.DetectEOL(stripped)
-	section := sectionBytes(tag, src)
+	section := ExpectedSection(tag, src)
 	if !bytes.Equal(eol, []byte("\n")) {
 		section = bytes.ReplaceAll(section, []byte("\n"), eol)
 	}
@@ -228,12 +228,16 @@ func resolveHookSymlink(destPath string) (string, []string, error) {
 func markerForm(tag string, src []byte) []byte {
 	var b bytes.Buffer
 	b.WriteString("#!/bin/sh\n")
-	b.Write(sectionBytes(tag, src))
+	b.Write(ExpectedSection(tag, src))
 	return b.Bytes()
 }
 
-// sectionBytes returns src (minus its shebang) fenced by the tag markers.
-func sectionBytes(tag string, src []byte) []byte {
+// ExpectedSection returns the exact bytes Chain would write for tag's
+// section from src today: the marker lines plus src with its shebang
+// stripped. Exported so a caller other than Chain (doctor's currency check)
+// can compute the canonical section without a second implementation of the
+// same transform.
+func ExpectedSection(tag string, src []byte) []byte {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "# --- BEGIN %s ---\n", tag)
 	b.Write(stripShebang(src))
@@ -265,20 +269,70 @@ func stripShebang(src []byte) []byte {
 // refusal instead of silent deletion.
 func stripSection(data []byte, tag, ident string) ([]byte, error) {
 	lines := textscan.SplitKeepEnds(data)
+	ranges, err := sectionRanges(data, tag, ident)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, 0, len(data))
+	skip := make([]bool, len(lines))
+	for _, r := range ranges {
+		for i := r[0]; i < r[1]; i++ {
+			skip[i] = true
+		}
+	}
+	for i, line := range lines {
+		if !skip[i] {
+			out = append(out, line...)
+		}
+	}
+	return out, nil
+}
+
+// InstalledSection returns the on-disk section for tag in data — the marker
+// lines through the matching END, inclusive. ok is false when no BEGIN for
+// tag exists: nothing installed, nothing to compare. A non-nil error means a
+// BEGIN was found but failed a check stripSection already enforces on this
+// data: no matching END (truncated section), or the line after BEGIN does
+// not carry ident (not an ethos-written section).
+func InstalledSection(data []byte, tag, ident string) ([]byte, bool, error) {
+	lines := textscan.SplitKeepEnds(data)
+	ranges, err := sectionRanges(data, tag, ident)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(ranges) == 0 {
+		return nil, false, nil
+	}
+	r := ranges[0]
+	var body []byte
+	for i := r[0]; i < r[1]; i++ {
+		body = append(body, lines[i]...)
+	}
+	return body, true, nil
+}
+
+// sectionRanges walks data for every real (non-heredoc) BEGIN-tag marker,
+// returning each one's [begin, end) line-index range through its matching
+// END, inclusive. It is the single scanner stripSection (delete the ranges)
+// and InstalledSection (keep the first one) both build on — "single
+// authoritative copy" applied to the code that finds a section, not just the
+// code that writes one.
+//
+// Checking per-BEGIN (not file-global) is what catches a complete section
+// followed by a truncated duplicate BEGIN: an unpaired BEGIN refuses rather
+// than dropping from it to EOF (silent host-content deletion).
+func sectionRanges(data []byte, tag, ident string) ([][2]int, error) {
+	lines := textscan.SplitKeepEnds(data)
 	mask := textscan.HeredocMask(data)
 	begin := "# --- BEGIN " + tag
 	end := "# --- END " + tag
-	out := make([]byte, 0, len(data))
+	var ranges [][2]int
 	for i := 0; i < len(lines); {
 		if !mask[i] && strings.HasPrefix(textscan.StripTerminator(lines[i]), begin) {
 			if i+1 >= len(lines) || !strings.Contains(textscan.StripTerminator(lines[i+1]), ident) {
 				return nil, fmt.Errorf(
 					"%q section does not carry the ethos fingerprint %q — refusing to remove a region that is not an ethos-written section; fix it by hand", tag, ident)
 			}
-			// Pair this BEGIN with the next END after it. Checking per-BEGIN
-			// (not file-global) is what catches a complete section followed by
-			// a truncated duplicate BEGIN: an unpaired BEGIN refuses rather
-			// than dropping from it to EOF (silent host-content deletion).
 			j := i + 1
 			paired := false
 			for j < len(lines) {
@@ -292,13 +346,13 @@ func stripSection(data []byte, tag, ident string) ([]byte, error) {
 				return nil, fmt.Errorf(
 					"%q section has a BEGIN with no matching END — refusing to edit a truncated hook; fix it by hand", tag)
 			}
+			ranges = append(ranges, [2]int{i, j + 1})
 			i = j + 1
 			continue
 		}
-		out = append(out, lines[i]...)
 		i++
 	}
-	return out, nil
+	return ranges, nil
 }
 
 // hasBegin reports whether data carries a real (non-heredoc) BEGIN marker for tag.
