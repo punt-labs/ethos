@@ -811,7 +811,7 @@ func formatMissionLog(w io.Writer, result string) error {
 		var ctx strings.Builder
 		ctx.WriteString("(none)")
 		if warnings, _ := payload["warnings"].([]any); len(warnings) > 0 {
-			writeMissionWarnings(&ctx, warnings)
+			writeMissionWarnings(&ctx, warnings, "mission.log")
 		}
 		return emit(w, summary, ctx.String())
 	}
@@ -840,7 +840,7 @@ func formatMissionLog(w io.Writer, result string) error {
 		}
 	}
 	if warnings, _ := payload["warnings"].([]any); len(warnings) > 0 {
-		writeMissionWarnings(&ctx, warnings)
+		writeMissionWarnings(&ctx, warnings, "mission.log")
 	}
 	return emit(w, summary, ctx.String())
 }
@@ -1124,7 +1124,7 @@ func formatMissionShow(w io.Writer, result string) error {
 	// added this — without it, a corrupted results file was
 	// indistinguishable from "no results yet" for MCP callers.
 	if raw, ok := c["warnings"]; ok {
-		writeMissionWarnings(&ctx, raw)
+		writeMissionWarnings(&ctx, raw, "mission.show")
 	}
 
 	return emit(w, summary, ctx.String())
@@ -1170,7 +1170,13 @@ func writeMissionResults(ctx *strings.Builder, raw any) {
 // non-empty) as a Warnings section. The show payload emits this
 // only when an advisory sibling load failed; the operator must see
 // the failure even in JSON-parsed MCP mode.
-func writeMissionWarnings(ctx *strings.Builder, raw any) {
+//
+// caller identifies the emitting tool method (e.g. "mission.show")
+// so a dropped non-string entry can be traced back to the formatter
+// that produced it; the six call sites share this one helper, and
+// without a caller label a stderr line naming only the type and
+// value gives the operator no way to tell them apart.
+func writeMissionWarnings(ctx *strings.Builder, raw any, caller string) {
 	entries, ok := raw.([]any)
 	if !ok || len(entries) == 0 {
 		return
@@ -1179,7 +1185,7 @@ func writeMissionWarnings(ctx *strings.Builder, raw any) {
 	for _, e := range entries {
 		s, ok := e.(string)
 		if !ok {
-			fmt.Fprintf(os.Stderr, "ethos: warnings entry is %T, not a string, dropping: %v\n", e, e)
+			fmt.Fprintf(os.Stderr, "ethos: %s: warnings entry is %T, not a string, dropping — this is a defect in the tool's warnings emission: %v\n", caller, e, e)
 			continue
 		}
 		ctx.WriteString("\n  - " + s)
@@ -1209,7 +1215,7 @@ func formatMissionCreate(w io.Writer, result string) error {
 	// same top-level `warnings` array formatMissionShow already renders;
 	// without this the notice reached JSON but never a rendered surface.
 	if raw, ok := c["warnings"]; ok {
-		writeMissionWarnings(&ctx, raw)
+		writeMissionWarnings(&ctx, raw, "mission.create")
 	}
 
 	return emit(w, summary, ctx.String())
@@ -1424,7 +1430,7 @@ func formatMissionClose(w io.Writer, result string) error {
 		return emitSimple(w, summary)
 	}
 	var ctx strings.Builder
-	writeMissionWarnings(&ctx, warnings)
+	writeMissionWarnings(&ctx, warnings, "mission.close")
 	// writeMissionWarnings separates its section from whatever precedes
 	// it; on a close nothing does, so drop the leading blank lines.
 	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
@@ -1452,7 +1458,7 @@ func formatMissionAbandon(w io.Writer, result string) error {
 		return emitSimple(w, summary)
 	}
 	var ctx strings.Builder
-	writeMissionWarnings(&ctx, warnings)
+	writeMissionWarnings(&ctx, warnings, "mission.abandon")
 	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
 }
 
