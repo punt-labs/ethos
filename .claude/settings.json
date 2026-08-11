@@ -1,6 +1,7 @@
 {
   "permissions": {
     "allow": [
+      "Bash(bash:*)",
       "Bash(git:*)",
       "Bash(gh:*)",
       "Bash(bd:*)",
