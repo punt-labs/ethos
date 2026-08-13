@@ -250,13 +250,17 @@ func TestGenerateAgentFiles(t *testing.T) {
 
 				// Body checks.
 				assert.Contains(t, content, "You are Brian K (bwk),")
-				// This assertion holds only while setupTestRepo has no
-				// collaborations at all — enforced by the "shared-fixture
-				// guard" case below, not just this comment. A reports_to
-				// edge from go-specialist to a role with responsibilities
-				// would also break this case's Responsibilities/Talents
-				// adjacency assertion a few lines down; prefer adding any
-				// new collaboration to the dedicated
+				// This assertion holds because setupTestRepo has no
+				// collaborations at all — the "shared-fixture guard" case
+				// below preserves that precondition. That precondition is
+				// stronger than strictly required for this assertion (a
+				// reports_to edge to a non-claude occupant, a non-
+				// reports_to edge, or any edge from another role would
+				// all leave it passing too), but it also protects this
+				// case's Responsibilities/Talents adjacency assertion a
+				// few lines down, which IS sensitive to a reports_to edge
+				// from go-specialist to a role with responsibilities.
+				// Prefer adding any new collaboration to the dedicated
 				// TestGenerateAgentFiles_ReportsTo test instead of here.
 				assert.NotContains(t, content, "You report to Claude Agento (claude).")
 
