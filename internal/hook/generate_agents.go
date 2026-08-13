@@ -398,13 +398,15 @@ func deriveReportsToTargets(roleName string, members []team.Member, collabs []te
 		}
 		if handle == "" {
 			fmt.Fprintf(os.Stderr,
-				"ethos: generate-agents: reports-to: target role %q has no occupying team member — skipping\n", c.To)
+				"ethos: generate-agents: reports-to: edge from %q to %q: target role has no occupying team member — skipping\n",
+				c.From, c.To)
 			continue
 		}
 		occ, err := identities.Load(handle, identity.Reference(true))
 		if err != nil {
 			fmt.Fprintf(os.Stderr,
-				"ethos: generate-agents: reports-to: target role %q: loading identity %q: %v\n", c.To, handle, err)
+				"ethos: generate-agents: reports-to: edge from %q to %q: loading identity %q: %v\n",
+				c.From, c.To, handle, err)
 			continue
 		}
 		out = append(out, reportsToTarget{Name: occ.Name, Handle: occ.Handle})
