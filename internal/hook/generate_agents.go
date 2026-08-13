@@ -156,8 +156,9 @@ func GenerateAgentFilesTo(configRoot, destRoot string, identities identity.Ident
 		expected++
 
 		antiResps := deriveAntiResponsibilities(m.Role, t.Collaborations, roles)
+		reportsTo := deriveReportsToTargets(m.Role, t.Members, t.Collaborations, identities)
 		filePatterns := projectFilePatterns(destRoot)
-		content := buildAgentFile(id, r, antiResps, filePatterns)
+		content := buildAgentFile(id, r, antiResps, reportsTo, filePatterns)
 
 		destPath := filepath.Join(destDir, id.Handle+".md")
 
@@ -346,6 +347,88 @@ func deriveAntiResponsibilities(roleName string, collabs []team.Collaboration, r
 	return out
 }
 
+// reportsToTarget is one resolved occupant of a role that roleName's
+// outgoing reports_to edge points to.
+type reportsToTarget struct {
+	Name   string
+	Handle string
+}
+
+// deriveReportsToTargets walks the team's collaboration edges starting
+// from roleName and returns, in walk order, the occupying identity of
+// each outgoing reports_to edge's target role. Same walk as
+// deriveAntiResponsibilities (c.From == roleName, c.Type ==
+// "reports_to", same warn-and-skip on any other edge type) — only the
+// resolution step differs: this resolves the target role's occupying
+// IDENTITY through members, not the target role's Responsibilities
+// through roles.
+//
+// A target role with no occupying member — prevented on every Load by
+// team.ValidateStructural, but not provable from this function's own
+// inputs — or an occupant whose identity fails to load, is warned to
+// stderr and skipped, mirroring deriveAntiResponsibilities's
+// target.Load handling above. The caller must not assert a reporting
+// line it cannot back up. Returns nil if roleName has no outgoing
+// reports_to edges or every target fails to resolve.
+//
+// If two distinct outgoing edges resolve to the same occupying
+// identity (one identity filling two roles roleName reports to), that
+// identity appears twice in the returned slice — not deduplicated, to
+// preserve visibility of the underlying graph shape. If visually wrong
+// in practice, add de-dup-by-handle before joinWithOxford in a
+// follow-up.
+func deriveReportsToTargets(roleName string, members []team.Member, collabs []team.Collaboration, identities identity.IdentityStore) []reportsToTarget {
+	var out []reportsToTarget
+	for _, c := range collabs {
+		if c.From != roleName {
+			continue
+		}
+		if c.Type != "reports_to" {
+			fmt.Fprintf(os.Stderr,
+				"ethos: generate-agents: reports-to: unsupported edge from %q to %q with type %q (expected \"reports_to\") — skipping\n",
+				c.From, c.To, c.Type)
+			continue
+		}
+		var handle string
+		for _, m := range members {
+			if m.Role == c.To {
+				handle = m.Identity
+				break
+			}
+		}
+		if handle == "" {
+			fmt.Fprintf(os.Stderr,
+				"ethos: generate-agents: reports-to: target role %q has no occupying team member — skipping\n", c.To)
+			continue
+		}
+		occ, err := identities.Load(handle, identity.Reference(true))
+		if err != nil {
+			fmt.Fprintf(os.Stderr,
+				"ethos: generate-agents: reports-to: target role %q: loading identity %q: %v\n", c.To, handle, err)
+			continue
+		}
+		out = append(out, reportsToTarget{Name: occ.Name, Handle: occ.Handle})
+	}
+	return out
+}
+
+// renderReportsToLine renders the resolved reports-to targets as one
+// sentence, in the same shape resolveParentLine (subagent_start.go)
+// uses for a single target: "You report to Name (handle)." Multiple
+// targets join with joinWithOxford. Zero targets returns "" — the
+// caller omits the line rather than assert a claim it cannot back up
+// (audit finding 1).
+func renderReportsToLine(targets []reportsToTarget) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	names := make([]string, len(targets))
+	for i, t := range targets {
+		names[i] = fmt.Sprintf("%s (%s)", t.Name, t.Handle)
+	}
+	return fmt.Sprintf("You report to %s.", joinWithOxford(names))
+}
+
 // joinWithOxford joins names in English. Two items: "a and b". Three or
 // more: Oxford-comma "a, b, and c". One item returns as-is. Zero items
 // returns the empty string.
@@ -402,8 +485,10 @@ const toolScopeNote = "Only the tools listed in the `tools:` field above are ava
 // personality, writing-style, and role data. antiResps is the flat list
 // of responsibilities belonging to roles this agent reports to; when
 // non-empty, it is rendered as a "## What You Don't Do" section between
-// Responsibilities and Talents.
-func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiResponsibility, filePatterns string) string {
+// Responsibilities and Talents. reportsTo is the resolved occupants of
+// those same roles; when non-empty, it renders the "You report to ..."
+// opening-line sentence.
+func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiResponsibility, reportsTo []reportsToTarget, filePatterns string) string {
 	var b strings.Builder
 
 	// Extract description: first non-heading content line from personality.
@@ -521,7 +606,10 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	} else {
 		fmt.Fprintf(&b, "\nYou are %s (%s), %s.\n", id.Name, id.Handle, firstLine)
 	}
-	fmt.Fprintf(&b, "You report to Claude Agento (COO/VP Engineering).\n")
+	if line := renderReportsToLine(reportsTo); line != "" {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
 
 	// Tool scope. Sits directly under the opening lines, next to the
 	// frontmatter it refers to, and above the personality so the agent

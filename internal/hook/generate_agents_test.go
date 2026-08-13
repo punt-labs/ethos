@@ -250,7 +250,13 @@ func TestGenerateAgentFiles(t *testing.T) {
 
 				// Body checks.
 				assert.Contains(t, content, "You are Brian K (bwk),")
-				assert.Contains(t, content, "You report to Claude Agento (COO/VP Engineering).")
+				// This assertion holds only while setupTestRepo has no
+				// collaborations. If you add one to the shared fixture,
+				// this test case's Responsibilities/Talents adjacency
+				// assertion below will also break — prefer adding the
+				// collab to the dedicated TestGenerateAgentFiles_ReportsTo
+				// test instead.
+				assert.NotContains(t, content, "You report to Claude Agento (claude).")
 
 				// Section-shape anchors — every `## Heading` gets a blank
 				// line after it, and `Talents:` is separated from the
@@ -834,7 +840,27 @@ func TestGenerateAgentFiles(t *testing.T) {
 // and nothing else. The note is asserted verbatim and by position: after the
 // frontmatter, before the personality body.
 func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
-	root, ids, teams, roles := setupTestRepo(t)
+	root, _, _, _ := setupTestRepo(t)
+
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+		"name":         "engineering",
+		"repositories": []string{"punt-labs/ethos"},
+		"members": []map[string]string{
+			{"identity": "claude", "role": "coo"},
+			{"identity": "bwk", "role": "go-specialist"},
+			{"identity": "test-human", "role": "ceo"},
+		},
+		"collaborations": []map[string]string{
+			{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+		},
+	})
+	// Rebuild stores after the fixture rewrite (existing pattern, see
+	// setup-modification blocks throughout this file).
+	ids := identity.NewLayeredStore(identity.NewStore(ethosDir), identity.NewStore(ethosDir))
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+	roles := role.NewLayeredStore(ethosDir, ethosDir)
+
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 
 	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
@@ -844,9 +870,12 @@ func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
 	assert.Contains(t, content, toolScopeNote, "generated agent must carry the tool-scope note")
 
 	// Position: below the opening identity lines and above the first
-	// personality heading, with one blank line on each side.
+	// personality heading, with one blank line on each side. The
+	// reporting line here is fixture-echoed output (the fixture wired
+	// go-specialist -> coo and claude's Name/Handle), not a re-pinned
+	// bug value.
 	assert.Contains(t, content,
-		"You report to Claude Agento (COO/VP Engineering).\n\n"+toolScopeNote+"\n## Core Principles\n",
+		"You report to Claude Agento (claude).\n\n"+toolScopeNote+"\n## Core Principles\n",
 		"note must sit between the opening lines and the personality body")
 
 	// The note is in the body, not the frontmatter — it must follow the
