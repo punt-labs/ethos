@@ -250,7 +250,19 @@ func TestGenerateAgentFiles(t *testing.T) {
 
 				// Body checks.
 				assert.Contains(t, content, "You are Brian K (bwk),")
-				assert.Contains(t, content, "You report to Claude Agento (COO/VP Engineering).")
+				// This assertion holds because setupTestRepo has no
+				// collaborations at all — the "shared-fixture guard" case
+				// below preserves that precondition. That precondition is
+				// stronger than strictly required for this assertion (a
+				// reports_to edge to a non-claude occupant, a non-
+				// reports_to edge, or any edge from another role would
+				// all leave it passing too), but it also protects this
+				// case's Responsibilities/Talents adjacency assertion a
+				// few lines down, which IS sensitive to a reports_to edge
+				// from go-specialist to a role with responsibilities.
+				// Prefer adding any new collaboration to the dedicated
+				// TestGenerateAgentFiles_ReportsTo test instead of here.
+				assert.NotContains(t, content, "You report to Claude Agento (claude).")
 
 				// Section-shape anchors — every `## Heading` gets a blank
 				// line after it, and `Talents:` is separated from the
@@ -258,6 +270,22 @@ func TestGenerateAgentFiles(t *testing.T) {
 				assert.Contains(t, content, "## Writing Style\n\n")
 				assert.Contains(t, content, "## Responsibilities\n\n- Go package implementation with tests\n")
 				assert.Contains(t, content, "- adherence to punt-kit/standards/go.md\n\nTalents: engineering\n")
+			},
+		},
+		{
+			// Enforces the precondition "basic generation" (above) relies
+			// on: the shared setupTestRepo fixture has zero
+			// collaborations. If this fails, "basic generation"'s
+			// absence-assertion strategy for the reports-to line, and its
+			// Responsibilities/Talents adjacency assertion, both need
+			// revisiting — a fixture collab makes those assertions
+			// stochastic depending on which role/type was added.
+			name: "shared-fixture guard: zero collaborations",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+				teamData, readErr := os.ReadFile(filepath.Join(root, ".punt-labs", "ethos", "teams", "engineering.yaml"))
+				require.NoError(t, readErr)
+				assert.NotContains(t, string(teamData), "collaborations:")
 			},
 		},
 		{
@@ -834,7 +862,27 @@ func TestGenerateAgentFiles(t *testing.T) {
 // and nothing else. The note is asserted verbatim and by position: after the
 // frontmatter, before the personality body.
 func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
-	root, ids, teams, roles := setupTestRepo(t)
+	root, _, _, _ := setupTestRepo(t)
+
+	ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+	writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+		"name":         "engineering",
+		"repositories": []string{"punt-labs/ethos"},
+		"members": []map[string]string{
+			{"identity": "claude", "role": "coo"},
+			{"identity": "bwk", "role": "go-specialist"},
+			{"identity": "test-human", "role": "ceo"},
+		},
+		"collaborations": []map[string]string{
+			{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+		},
+	})
+	// Rebuild stores after the fixture rewrite (existing pattern, see
+	// setup-modification blocks throughout this file).
+	ids := identity.NewLayeredStore(identity.NewStore(ethosDir), identity.NewStore(ethosDir))
+	teams := team.NewLayeredStore(ethosDir, ethosDir)
+	roles := role.NewLayeredStore(ethosDir, ethosDir)
+
 	require.NoError(t, GenerateAgentFiles(root, ids, teams, roles))
 
 	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
@@ -844,9 +892,12 @@ func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
 	assert.Contains(t, content, toolScopeNote, "generated agent must carry the tool-scope note")
 
 	// Position: below the opening identity lines and above the first
-	// personality heading, with one blank line on each side.
+	// personality heading, with one blank line on each side. The
+	// reporting line here is fixture-echoed output (the fixture wired
+	// go-specialist -> coo and claude's Name/Handle), not a re-pinned
+	// bug value.
 	assert.Contains(t, content,
-		"You report to Claude Agento (COO/VP Engineering).\n\n"+toolScopeNote+"\n## Core Principles\n",
+		"You report to Claude Agento (claude).\n\n"+toolScopeNote+"\n## Core Principles\n",
 		"note must sit between the opening lines and the personality body")
 
 	// The note is in the body, not the frontmatter — it must follow the
@@ -856,6 +907,248 @@ func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
 	require.True(t, frontmatterEnd >= 0 && noteIdx >= 0,
 		"frontmatter terminator and note must both be present")
 	assert.Less(t, frontmatterEnd, noteIdx, "note must appear after the frontmatter")
+}
+
+// TestGenerateAgentFiles_ReportsTo covers the "You report to ..."
+// opening-line sentence derived from roleName's outgoing reports_to
+// edges (github issue #457, ethos-5r7v). Structured like
+// TestGenerateAgentFiles_AntiResponsibilities: same setup/assert
+// closure shape, same per-case fixture rewrite + store-rebuild
+// pattern, same reliance on bwk.md as the file under test.
+// Self-contained on purpose — a reader auditing reports-to behavior
+// should not have to cross-reference "basic generation" or
+// ToolScopeNote to find the zero-edge case, even though those two
+// also happen to exercise it.
+func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(t *testing.T, root string)
+		assert func(t *testing.T, content string, stderr string)
+	}{
+		{
+			// No collaborations in the fixture => no outgoing reports_to
+			// edges => no line. Default setupTestRepo has no
+			// collaborations already, so the default state is
+			// sufficient. Also pins the exact byte shape at the
+			// boundary: no double blank line, no placeholder, when the
+			// line is omitted.
+			name:  "zero targets — line omitted",
+			setup: func(t *testing.T, root string) {},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.NotContains(t, content, "You report to Claude Agento (claude).")
+				assert.Contains(t, content,
+					"You are Brian K (bwk), Go specialist sub-agent.\n\n"+toolScopeNote,
+					"opening line must go straight to the blank-line+tool-scope-note block when no reports-to line is emitted")
+			},
+		},
+		{
+			// Two outgoing edges, both resolving to real occupants —
+			// joined with joinWithOxford in walk order.
+			name: "multiple targets — joined with Oxford join",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "architect.yaml"), map[string]interface{}{
+					"name":             "architect",
+					"responsibilities": []string{"system design reviews"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "identities", "arc.yaml"), map[string]interface{}{
+					"name": "Ada Architect", "handle": "arc", "kind": "agent",
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "arc", "role": "architect"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+						{"from": "go-specialist", "to": "architect", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.Contains(t, content, "You report to Claude Agento (claude) and Ada Architect (arc).\n")
+			},
+		},
+		{
+			// A member fills a real role (so ValidateStructural is
+			// satisfied), but no identities/ghost-agent.yaml exists on
+			// disk, so identities.Load("ghost-agent") fails downstream
+			// inside deriveReportsToTargets. Mirrors the "ghost"
+			// technique TestDeriveAntiResponsibilities_MissingTarget
+			// uses to defeat ValidateStructural, applied to the
+			// identity rather than the role.
+			name: "missing identity — warned and dropped, other target survives",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "advisor.yaml"), map[string]interface{}{
+					"name":             "advisor",
+					"responsibilities": []string{"informal guidance"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						// ghost-agent fills "advisor" so ValidateStructural
+						// passes. identities/ghost-agent.yaml is
+						// deliberately never written, so
+						// identities.Load("ghost-agent") still fails
+						// downstream — the invariant under test.
+						{"identity": "ghost-agent", "role": "advisor"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+						{"from": "go-specialist", "to": "advisor", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				// Exact rendered line, not just substrings — a
+				// regression that dropped c.From from this message
+				// (the discriminating piece of information for
+				// debugging which edge lost its target) must fail
+				// this assertion, not silently pass a looser check.
+				assert.Contains(t, stderr,
+					`ethos: generate-agents: reports-to: edge from "go-specialist" to "advisor": loading identity "ghost-agent":`)
+				assert.Contains(t, content, "You report to Claude Agento (claude).\n")
+				assert.NotContains(t, content, "ghost-agent")
+			},
+		},
+		{
+			// Two outgoing edges resolve to the SAME identity (claude
+			// fills both coo and the new acting-cto role) — ONE identity
+			// in TWO different target roles. This pins
+			// deriveReportsToTargets's documented behavior: it is not
+			// deduplicated, so the identity appears twice in the
+			// rendered line. A future refactor that added a
+			// seen[handle] guard would silently violate the docstring's
+			// claim without this test to catch it. Compare with
+			// "multi-occupant target role" below, which covers the
+			// opposite shape: TWO identities in the SAME target role.
+			// Both are valid team shapes (team.ValidateStructural only
+			// dedupes (identity, role) pairs) and both must render
+			// correctly.
+			name: "co-occupancy — same identity in two target roles renders twice",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "acting-cto.yaml"), map[string]interface{}{
+					"name":             "acting-cto",
+					"responsibilities": []string{"technical direction"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "claude", "role": "acting-cto"},
+						{"identity": "bwk", "role": "go-specialist"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+						{"from": "go-specialist", "to": "acting-cto", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.Contains(t, content, "You report to Claude Agento (claude) and Claude Agento (claude).")
+			},
+		},
+		{
+			// One outgoing edge, but its target role (coo) has TWO
+			// occupants — claude and a second agent identity arc.
+			// team.ValidateStructural allows this: it only dedupes
+			// (identity, role) pairs, not roles. Before the Copilot-
+			// reported fix, deriveReportsToTargets's inner loop broke
+			// after the first matching member, silently dropping arc.
+			// Both must render, in members order.
+			name: "multi-occupant target role — both identities render",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "identities", "arc.yaml"), map[string]interface{}{
+					"name": "Ada Architect", "handle": "arc", "kind": "agent",
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "arc", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.Contains(t, content, "You report to Claude Agento (claude) and Ada Architect (arc).")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, _, _, _ := setupTestRepo(t)
+			tt.setup(t, root)
+
+			// Rebuild stores after setup modifications.
+			ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+			ids := identity.NewLayeredStore(
+				identity.NewStore(ethosDir),
+				identity.NewStore(ethosDir),
+			)
+			teams := team.NewLayeredStore(ethosDir, ethosDir)
+			roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+			var content, stderr string
+			stderr = captureStderr(t, func() {
+				err := GenerateAgentFiles(root, ids, teams, roles)
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+				content = string(data)
+			})
+
+			tt.assert(t, content, stderr)
+		})
+	}
+}
+
+// TestDeriveReportsToTargets_NoOccupyingMember exercises the "no
+// occupying team member" branch directly, bypassing
+// team.ValidateStructural. team.Store.Load rejects any collaboration
+// whose To role is not filled by a member before this function ever
+// sees the data, so the branch is defensive-unreachable through the
+// normal load path — see deriveReportsToTargets's own reasoning for
+// keeping it anyway. Calling the function directly with a hand-built
+// []team.Member and []team.Collaboration is the only way to reach it.
+func TestDeriveReportsToTargets_NoOccupyingMember(t *testing.T) {
+	_, ids, _, _ := setupTestRepo(t)
+
+	members := []team.Member{
+		{Identity: "claude", Role: "coo"},
+		{Identity: "bwk", Role: "go-specialist"},
+		// No member fills "advisor" — the shape under test.
+	}
+	collabs := []team.Collaboration{
+		{From: "go-specialist", To: "advisor", Type: "reports_to"},
+		{From: "go-specialist", To: "coo", Type: "reports_to"},
+	}
+
+	var out []reportsToTarget
+	stderr := captureStderr(t, func() {
+		out = deriveReportsToTargets("go-specialist", members, collabs, ids)
+	})
+
+	assert.Contains(t, stderr,
+		`ethos: generate-agents: reports-to: edge from "go-specialist" to "advisor": target role has no occupying team member — skipping`)
+	require.Equal(t, []reportsToTarget{{Name: "Claude Agento", Handle: "claude"}}, out)
 }
 
 // TestGenerateAgentFiles_AntiResponsibilities covers the "## What You
