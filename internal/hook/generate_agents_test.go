@@ -1020,12 +1020,18 @@ func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
 		},
 		{
 			// Two outgoing edges resolve to the SAME identity (claude
-			// fills both coo and the new acting-cto role). This pins
+			// fills both coo and the new acting-cto role) — ONE identity
+			// in TWO different target roles. This pins
 			// deriveReportsToTargets's documented behavior: it is not
 			// deduplicated, so the identity appears twice in the
 			// rendered line. A future refactor that added a
 			// seen[handle] guard would silently violate the docstring's
-			// claim without this test to catch it.
+			// claim without this test to catch it. Compare with
+			// "multi-occupant target role" below, which covers the
+			// opposite shape: TWO identities in the SAME target role.
+			// Both are valid team shapes (team.ValidateStructural only
+			// dedupes (identity, role) pairs) and both must render
+			// correctly.
 			name: "co-occupancy — same identity in two target roles renders twice",
 			setup: func(t *testing.T, root string) {
 				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
@@ -1049,6 +1055,37 @@ func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
 			},
 			assert: func(t *testing.T, content string, stderr string) {
 				assert.Contains(t, content, "You report to Claude Agento (claude) and Claude Agento (claude).")
+			},
+		},
+		{
+			// One outgoing edge, but its target role (coo) has TWO
+			// occupants — claude and a second agent identity arc.
+			// team.ValidateStructural allows this: it only dedupes
+			// (identity, role) pairs, not roles. Before the Copilot-
+			// reported fix, deriveReportsToTargets's inner loop broke
+			// after the first matching member, silently dropping arc.
+			// Both must render, in members order.
+			name: "multi-occupant target role — both identities render",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "identities", "arc.yaml"), map[string]interface{}{
+					"name": "Ada Architect", "handle": "arc", "kind": "agent",
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "arc", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.Contains(t, content, "You report to Claude Agento (claude) and Ada Architect (arc).")
 			},
 		},
 	}
