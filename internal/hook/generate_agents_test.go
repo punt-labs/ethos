@@ -251,11 +251,13 @@ func TestGenerateAgentFiles(t *testing.T) {
 				// Body checks.
 				assert.Contains(t, content, "You are Brian K (bwk),")
 				// This assertion holds only while setupTestRepo has no
-				// collaborations. If you add one to the shared fixture,
-				// this test case's Responsibilities/Talents adjacency
-				// assertion below will also break — prefer adding the
-				// collab to the dedicated TestGenerateAgentFiles_ReportsTo
-				// test instead.
+				// collaborations at all — enforced by the "shared-fixture
+				// guard" case below, not just this comment. A reports_to
+				// edge from go-specialist to a role with responsibilities
+				// would also break this case's Responsibilities/Talents
+				// adjacency assertion a few lines down; prefer adding any
+				// new collaboration to the dedicated
+				// TestGenerateAgentFiles_ReportsTo test instead of here.
 				assert.NotContains(t, content, "You report to Claude Agento (claude).")
 
 				// Section-shape anchors — every `## Heading` gets a blank
@@ -264,6 +266,22 @@ func TestGenerateAgentFiles(t *testing.T) {
 				assert.Contains(t, content, "## Writing Style\n\n")
 				assert.Contains(t, content, "## Responsibilities\n\n- Go package implementation with tests\n")
 				assert.Contains(t, content, "- adherence to punt-kit/standards/go.md\n\nTalents: engineering\n")
+			},
+		},
+		{
+			// Enforces the precondition "basic generation" (above) relies
+			// on: the shared setupTestRepo fixture has zero
+			// collaborations. If this fails, "basic generation"'s
+			// absence-assertion strategy for the reports-to line, and its
+			// Responsibilities/Talents adjacency assertion, both need
+			// revisiting — a fixture collab makes those assertions
+			// stochastic depending on which role/type was added.
+			name: "shared-fixture guard: zero collaborations",
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+				teamData, readErr := os.ReadFile(filepath.Join(root, ".punt-labs", "ethos", "teams", "engineering.yaml"))
+				require.NoError(t, readErr)
+				assert.NotContains(t, string(teamData), "collaborations:")
 			},
 		},
 		{
@@ -985,10 +1003,48 @@ func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
 				})
 			},
 			assert: func(t *testing.T, content string, stderr string) {
-				assert.Contains(t, stderr, "reports-to")
-				assert.Contains(t, stderr, "ghost-agent")
+				// Exact rendered line, not just substrings — a
+				// regression that dropped c.From from this message
+				// (the discriminating piece of information for
+				// debugging which edge lost its target) must fail
+				// this assertion, not silently pass a looser check.
+				assert.Contains(t, stderr,
+					`ethos: generate-agents: reports-to: edge from "go-specialist" to "advisor": loading identity "ghost-agent":`)
 				assert.Contains(t, content, "You report to Claude Agento (claude).\n")
 				assert.NotContains(t, content, "ghost-agent")
+			},
+		},
+		{
+			// Two outgoing edges resolve to the SAME identity (claude
+			// fills both coo and the new acting-cto role). This pins
+			// deriveReportsToTargets's documented behavior: it is not
+			// deduplicated, so the identity appears twice in the
+			// rendered line. A future refactor that added a
+			// seen[handle] guard would silently violate the docstring's
+			// claim without this test to catch it.
+			name: "co-occupancy — same identity in two target roles renders twice",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "acting-cto.yaml"), map[string]interface{}{
+					"name":             "acting-cto",
+					"responsibilities": []string{"technical direction"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "claude", "role": "acting-cto"},
+						{"identity": "bwk", "role": "go-specialist"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+						{"from": "go-specialist", "to": "acting-cto", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.Contains(t, content, "You report to Claude Agento (claude) and Claude Agento (claude).")
 			},
 		},
 	}
@@ -1021,6 +1077,37 @@ func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
 			tt.assert(t, content, stderr)
 		})
 	}
+}
+
+// TestDeriveReportsToTargets_NoOccupyingMember exercises the "no
+// occupying team member" branch directly, bypassing
+// team.ValidateStructural. team.Store.Load rejects any collaboration
+// whose To role is not filled by a member before this function ever
+// sees the data, so the branch is defensive-unreachable through the
+// normal load path — see deriveReportsToTargets's own reasoning for
+// keeping it anyway. Calling the function directly with a hand-built
+// []team.Member and []team.Collaboration is the only way to reach it.
+func TestDeriveReportsToTargets_NoOccupyingMember(t *testing.T) {
+	_, ids, _, _ := setupTestRepo(t)
+
+	members := []team.Member{
+		{Identity: "claude", Role: "coo"},
+		{Identity: "bwk", Role: "go-specialist"},
+		// No member fills "advisor" — the shape under test.
+	}
+	collabs := []team.Collaboration{
+		{From: "go-specialist", To: "advisor", Type: "reports_to"},
+		{From: "go-specialist", To: "coo", Type: "reports_to"},
+	}
+
+	var out []reportsToTarget
+	stderr := captureStderr(t, func() {
+		out = deriveReportsToTargets("go-specialist", members, collabs, ids)
+	})
+
+	assert.Contains(t, stderr,
+		`ethos: generate-agents: reports-to: edge from "go-specialist" to "advisor": target role has no occupying team member — skipping`)
+	require.Equal(t, []reportsToTarget{{Name: "Claude Agento", Handle: "claude"}}, out)
 }
 
 // TestGenerateAgentFiles_AntiResponsibilities covers the "## What You
