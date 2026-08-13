@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hardcoded "You report to Claude Agento (COO/VP Engineering)" line in every generated agent file (#457, ethos-5r7v).** `internal/hook/generate_agents.go`'s `buildAgentFile` wrote an unconditional literal into every `.claude/agents/<handle>.md` regardless of the team's actual `reports_to` graph — every team using ethos got the same wrong reporting-line baked into every subagent's system prompt. Two tests (`generate_agents_test.go:253,849`) pinned the literal as expected output, which is why `make check` stayed green while the bug shipped. Fix introduces `deriveReportsToTargets` reusing `deriveAntiResponsibilities`'s existing `c.From == roleName && c.Type == "reports_to"` walk (`generate_agents.go:308`), and `renderReportsToLine` mirroring `subagent_start.go:864`'s `resolveParentLine` shape. Zero outgoing edges drop the line (matches the same file's other empty-section behavior at `:566`); multiple edges join via `joinWithOxford`; a target role with no occupying member or a failed identity load warns to stderr with both endpoints (`edge from %q to %q: ...`) and skips, mirroring `deriveAntiResponsibilities`'s own `roles.Load` handling at `:327-331`. Every stale generated agent file self-heals on the next `SessionStart` — no migration step (`generate_agents.go:164-168` writes only on content diff). See `docs/design-issue-457-reports-to.md` and `docs/audit-hardcoded-team-strings.md`.
+
 ## [4.13.0] - 2026-08-09
 
 ### Added
