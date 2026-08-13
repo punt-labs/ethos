@@ -887,6 +887,142 @@ func TestGenerateAgentFiles_ToolScopeNote(t *testing.T) {
 	assert.Less(t, frontmatterEnd, noteIdx, "note must appear after the frontmatter")
 }
 
+// TestGenerateAgentFiles_ReportsTo covers the "You report to ..."
+// opening-line sentence derived from roleName's outgoing reports_to
+// edges (github issue #457, ethos-5r7v). Structured like
+// TestGenerateAgentFiles_AntiResponsibilities: same setup/assert
+// closure shape, same per-case fixture rewrite + store-rebuild
+// pattern, same reliance on bwk.md as the file under test.
+// Self-contained on purpose — a reader auditing reports-to behavior
+// should not have to cross-reference "basic generation" or
+// ToolScopeNote to find the zero-edge case, even though those two
+// also happen to exercise it.
+func TestGenerateAgentFiles_ReportsTo(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(t *testing.T, root string)
+		assert func(t *testing.T, content string, stderr string)
+	}{
+		{
+			// No collaborations in the fixture => no outgoing reports_to
+			// edges => no line. Default setupTestRepo has no
+			// collaborations already, so the default state is
+			// sufficient. Also pins the exact byte shape at the
+			// boundary: no double blank line, no placeholder, when the
+			// line is omitted.
+			name:  "zero targets — line omitted",
+			setup: func(t *testing.T, root string) {},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.NotContains(t, content, "You report to Claude Agento (claude).")
+				assert.Contains(t, content,
+					"You are Brian K (bwk), Go specialist sub-agent.\n\n"+toolScopeNote,
+					"opening line must go straight to the blank-line+tool-scope-note block when no reports-to line is emitted")
+			},
+		},
+		{
+			// Two outgoing edges, both resolving to real occupants —
+			// joined with joinWithOxford in walk order.
+			name: "multiple targets — joined with Oxford join",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "architect.yaml"), map[string]interface{}{
+					"name":             "architect",
+					"responsibilities": []string{"system design reviews"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "identities", "arc.yaml"), map[string]interface{}{
+					"name": "Ada Architect", "handle": "arc", "kind": "agent",
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						{"identity": "arc", "role": "architect"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+						{"from": "go-specialist", "to": "architect", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.Contains(t, content, "You report to Claude Agento (claude) and Ada Architect (arc).\n")
+			},
+		},
+		{
+			// A member fills a real role (so ValidateStructural is
+			// satisfied), but no identities/ghost-agent.yaml exists on
+			// disk, so identities.Load("ghost-agent") fails downstream
+			// inside deriveReportsToTargets. Mirrors the "ghost"
+			// technique TestDeriveAntiResponsibilities_MissingTarget
+			// uses to defeat ValidateStructural, applied to the
+			// identity rather than the role.
+			name: "missing identity — warned and dropped, other target survives",
+			setup: func(t *testing.T, root string) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeYAML(t, filepath.Join(ethosDir, "roles", "advisor.yaml"), map[string]interface{}{
+					"name":             "advisor",
+					"responsibilities": []string{"informal guidance"},
+				})
+				writeYAML(t, filepath.Join(ethosDir, "teams", "engineering.yaml"), map[string]interface{}{
+					"name":         "engineering",
+					"repositories": []string{"punt-labs/ethos"},
+					"members": []map[string]string{
+						{"identity": "claude", "role": "coo"},
+						{"identity": "bwk", "role": "go-specialist"},
+						// ghost-agent fills "advisor" so ValidateStructural
+						// passes. identities/ghost-agent.yaml is
+						// deliberately never written, so
+						// identities.Load("ghost-agent") still fails
+						// downstream — the invariant under test.
+						{"identity": "ghost-agent", "role": "advisor"},
+					},
+					"collaborations": []map[string]string{
+						{"from": "go-specialist", "to": "coo", "type": "reports_to"},
+						{"from": "go-specialist", "to": "advisor", "type": "reports_to"},
+					},
+				})
+			},
+			assert: func(t *testing.T, content string, stderr string) {
+				assert.Contains(t, stderr, "reports-to")
+				assert.Contains(t, stderr, "ghost-agent")
+				assert.Contains(t, content, "You report to Claude Agento (claude).\n")
+				assert.NotContains(t, content, "ghost-agent")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root, _, _, _ := setupTestRepo(t)
+			tt.setup(t, root)
+
+			// Rebuild stores after setup modifications.
+			ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+			ids := identity.NewLayeredStore(
+				identity.NewStore(ethosDir),
+				identity.NewStore(ethosDir),
+			)
+			teams := team.NewLayeredStore(ethosDir, ethosDir)
+			roles := role.NewLayeredStore(ethosDir, ethosDir)
+
+			var content, stderr string
+			stderr = captureStderr(t, func() {
+				err := GenerateAgentFiles(root, ids, teams, roles)
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+				content = string(data)
+			})
+
+			tt.assert(t, content, stderr)
+		})
+	}
+}
+
 // TestGenerateAgentFiles_AntiResponsibilities covers the "## What You
 // Don't Do" section derived from reports_to edges (ethos-9ai.1).
 func TestGenerateAgentFiles_AntiResponsibilities(t *testing.T) {
