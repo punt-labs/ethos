@@ -377,6 +377,12 @@ type reportsToTarget struct {
 // preserve visibility of the underlying graph shape. If visually wrong
 // in practice, add de-dup-by-handle before joinWithOxford in a
 // follow-up.
+//
+// A single target role may itself have multiple occupants —
+// team.ValidateStructural only dedupes (identity, role) pairs, not
+// roles, so two different identities filling the same role is a valid
+// team shape. All occupants of a matched role are appended, in the
+// order they appear in members.
 func deriveReportsToTargets(roleName string, members []team.Member, collabs []team.Collaboration, identities identity.IdentityStore) []reportsToTarget {
 	var out []reportsToTarget
 	for _, c := range collabs {
@@ -389,27 +395,31 @@ func deriveReportsToTargets(roleName string, members []team.Member, collabs []te
 				c.From, c.To, c.Type)
 			continue
 		}
-		var handle string
+		// Collect every member occupying c.To — multiple identities
+		// may share a role (team.ValidateStructural only dedupes
+		// (identity, role) pairs).
+		var handles []string
 		for _, m := range members {
 			if m.Role == c.To {
-				handle = m.Identity
-				break
+				handles = append(handles, m.Identity)
 			}
 		}
-		if handle == "" {
+		if len(handles) == 0 {
 			fmt.Fprintf(os.Stderr,
 				"ethos: generate-agents: reports-to: edge from %q to %q: target role has no occupying team member — skipping\n",
 				c.From, c.To)
 			continue
 		}
-		occ, err := identities.Load(handle, identity.Reference(true))
-		if err != nil {
-			fmt.Fprintf(os.Stderr,
-				"ethos: generate-agents: reports-to: edge from %q to %q: loading identity %q: %v\n",
-				c.From, c.To, handle, err)
-			continue
+		for _, handle := range handles {
+			occ, err := identities.Load(handle, identity.Reference(true))
+			if err != nil {
+				fmt.Fprintf(os.Stderr,
+					"ethos: generate-agents: reports-to: edge from %q to %q: loading identity %q: %v\n",
+					c.From, c.To, handle, err)
+				continue
+			}
+			out = append(out, reportsToTarget{Name: occ.Name, Handle: occ.Handle})
 		}
-		out = append(out, reportsToTarget{Name: occ.Name, Handle: occ.Handle})
 	}
 	return out
 }
