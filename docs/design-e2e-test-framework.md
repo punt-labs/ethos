@@ -436,7 +436,7 @@ design mission did not touch `tests/token-harness/hello/`,
 |---|---|
 | `run.sh`'s proxy start/wait/teardown | `LiteLLMProxy` fixture (§3). Bash orchestration deleted — keeping both means every proxy-lifecycle fix has to land twice. |
 | `run.sh`'s `claude --print ... "reply with the single word pong"` invocation | `tests/e2e/scenarios/empty-repo.yaml`'s `claude_invocation` block, with `type: token`. Same prompt, same `--max-turns 1`. |
-| `run.sh`'s structural / 700KB ratchet / 9-pattern PII checks | `TokenCapture.assert_body_shape` / `.assert_size_within` / `.assert_no_secrets` (§4), driven by `empty-repo.yaml`'s `max_bytes: 700000`. Values carried forward unchanged — a relocation of the code that enforces the ratchet, not a re-derivation. |
+| `run.sh`'s structural / 700KB ratchet / 9-pattern PII checks | `TokenCapture.assert_body_shape` / `.assert_size_within` / `.assert_no_secrets` (§4), driven by `empty-repo.yaml`'s `max_bytes: 716800` (700 * 1024). Values carried forward unchanged — a relocation of the code that enforces the ratchet, not a re-derivation. |
 | `litellm.yaml` (static, one `mock-anthropic` model) | Generated dynamically by `LiteLLMProxy.start` from the full scenario registry (§3), not hand-maintained. |
 | `custom_callbacks.py`'s `TokenCaptureLogger` | Moves to `tests/e2e/src/e2e/custom_callbacks.py` near-verbatim — already correctly designed (env-configured capture dir, minimal `CustomLogger` subclass); only the import path changes. |
 | `README.md` | Content merges into this design doc and the new `tests/e2e/README.md`; the "known issue: pin litellm==1.81.9" note carries forward unchanged — the FastAPI incompatibility it documents is still live. |
