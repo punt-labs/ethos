@@ -16,15 +16,18 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral test-tokens-hello
+.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral test-e2e test-e2e-smoke baseline-tokens calibrate-tokens
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
-lint: ## Lint (golangci-lint + shellcheck)
+lint: ## Lint (golangci-lint + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
 	shellcheck hooks/*.sh install.sh
+	cd tests/e2e && uv run ruff check .
+	cd tests/e2e && uv run ruff format --check .
+	cd tests/e2e && uv run mypy src/ tests/
 
 docs: ## Lint markdown
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
@@ -38,8 +41,17 @@ validate-content: ## Validate all ethos content files
 test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
 	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
 
-test-tokens-hello: ## Run L6 hello-world token-capture harness (requires `pip install 'litellm[proxy]==1.81.9'` and claude CLI)
-	tests/token-harness/hello/run.sh
+test-e2e-smoke: ## Run the fast E2E (L6) smoke scenario (every push; requires litellm + claude CLI)
+	cd tests/e2e && uv run pytest -m "e2e and smoke"
+
+test-e2e: ## Run the full E2E (L6) scenario sweep (per-release; requires litellm + claude CLI)
+	cd tests/e2e && uv run pytest -m e2e
+
+baseline-tokens: ## Recapture E2E token baselines (operator-invoked)
+	@echo "not yet implemented in initial land"
+
+calibrate-tokens: ## Calibrate the offline tokenizer against Anthropic's API (operator-invoked)
+	@echo "not yet implemented in initial land"
 
 check: lint docs test validate-content ## Run all quality gates
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **L6 End-to-End test tier** (`tests/e2e/`): a real `claude --print` subprocess driven against a local mock-upstream LiteLLM proxy, so Claude Code's actual outgoing wire payload can be observed without spending Anthropic tokens or requiring an API key. Scenario discovery is a file drop — `pytest_generate_tests` in `tests/e2e/conftest.py` globs `tests/e2e/scenarios/*.yaml` at collection time, so a new scenario needs zero `conftest.py`/Makefile/workflow edit. Token/payload profiling (`type: token`) is the first scenario type, carrying three assertions per capture: structural shape, a payload-size ratchet, and a nine-pattern credential/PII scan. `make test-e2e-smoke` (every push) runs the fast smoke scenario; `make test-e2e` (per-release) runs the full sweep. `cmd/e2e-attribute/` is a Go skeleton that slices a captured system prompt by the `internal/hook/persona.go` markers and reports byte-level attribution (system prompt, tool schemas, messages) — token counts and baseline diffing are explicitly deferred pending the tokenizer decision (`docs/design-e2e-test-framework.md` §6). `make lint` now also runs `ruff check`, `ruff format --check`, and `mypy --strict` against `tests/e2e/` on every commit. See `docs/design-e2e-test-framework.md`.
+
+### Removed
+
+- **`tests/token-harness/hello/`**, the ad-hoc L6 proof-of-integration harness. Every one of its assertions (structural shape, the 700KB payload ratchet, the nine-pattern secret scan) carries forward unchanged into the new `tests/e2e/scenarios/empty-repo.yaml` smoke scenario — no signal regression. `make test-tokens-hello` and the `token-harness-hello` CI job are replaced by `make test-e2e-smoke` and the `e2e-smoke` CI job.
+
 ## [4.13.1] - 2026-08-12
 
 ### Fixed
