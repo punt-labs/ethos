@@ -25,10 +25,26 @@ _E2E_ROOT = Path(__file__).resolve().parents[2]
 
 _CLAUDE_TIMEOUT_S = 60.0
 
-# Minimal PATH covering the common install locations for `claude` across
-# workstations and CI. Deliberately not the caller's own PATH — the cage
-# is the point.
+# Minimal PATH for the caged subprocess. It isolates HOME and the
+# ANTHROPIC_* vars from whatever hooks/MCP/config the calling session
+# carries — that isolation is the point. It is not used to find the
+# `claude` binary: install locations vary too much across workstations
+# and CI runners (npm global prefix, hostedtoolcache, homebrew, etc.) to
+# enumerate. Resolve `claude` on the caller's own PATH instead, once, at
+# import time — see _CLAUDE_BIN below.
 _CAGE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{home}/.local/bin"
+
+
+def _resolve_claude_bin() -> str:
+    path = shutil.which("claude")
+    if path is None:
+        raise RuntimeError(
+            "runner: `claude` CLI not found on PATH — install @anthropic-ai/claude-code"
+        )
+    return path
+
+
+_CLAUDE_BIN = _resolve_claude_bin()
 
 
 def run_scenario(scenario: Scenario, proxy: LiteLLMProxy) -> TokenCapture:
@@ -65,7 +81,7 @@ def _invoke_claude(scenario: TokenScenario, proxy: LiteLLMProxy, cwd: Path) -> N
     invocation = scenario.claude_invocation
     subprocess.run(
         [
-            "claude",
+            _CLAUDE_BIN,
             "--print",
             "--output-format",
             "json",
