@@ -2,7 +2,7 @@
 
 One proxy runs per pytest session (see conftest.py's ``litellm_proxy``
 fixture) — every scenario in the run shares it, keyed by scenario id
-in the generated litellm.yaml (design §3, §6).
+in the generated litellm.yaml.
 """
 
 from __future__ import annotations
@@ -75,6 +75,11 @@ class LiteLLMProxy:
         # Sibling to workdir (e.g. .tmp/e2e -> .tmp/e2e-captures) so CI can
         # upload both with one .tmp/e2e-* glob (see .github/workflows/test.yml).
         captures_dir = workdir.parent / f"{workdir.name}-captures"
+        # Cleared on every start — a capture left over from a prior local run
+        # would otherwise let e2e.runner._latest_capture pick up stale data
+        # and pass a scenario that never actually reached the proxy.
+        if captures_dir.exists():
+            shutil.rmtree(captures_dir)
         captures_dir.mkdir(parents=True, exist_ok=True)
         config_path.write_text(yaml.safe_dump(cls._config(registry)))
         shutil.copy(
@@ -142,6 +147,8 @@ class LiteLLMProxy:
 
     def _log_tail(self) -> str:
         lines = self._log_path.read_text(errors="replace").splitlines()
+        if not lines:
+            return "(log file is empty — check dependency install)"
         return "\n".join(lines[-_LOG_TAIL_LINES:])
 
     @property
