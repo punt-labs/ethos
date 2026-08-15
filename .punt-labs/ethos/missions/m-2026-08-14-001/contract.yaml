@@ -1,0 +1,22 @@
+mission_id: m-2026-08-14-001
+status: closed
+type: implement
+created_at: "2026-08-14T01:18:40Z"
+updated_at: "2026-08-14T01:27:04Z"
+closed_at: "2026-08-14T01:27:04Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-14T01:18:40Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs: {}
+write_set:
+    - docs/audit-ethos-livi-repo-primary-resolution.md
+    - .tmp/audit-ethos-livi-notes.md
+success_criteria:
+    - 'Audit for ethos-livi (bead in bd). Read-only investigation to scope the potential repo-primary resolution flip in ethos. Deliverable: docs/audit-ethos-livi-repo-primary-resolution.md.\n\nBackground: ethos currently resolves identities from ~/.punt-labs/ethos/ global registry. Vox and potentially other consumers vendor .punt-labs/ethos/ inline (mode=''tree'') rather than as submodule. tty17 (vox) established these facts on 2026-08-13: (a) vendored copies are NOT authoritative today — ethos reads global; (b) vendored trim doesn''t reduce context injection; (c) vendored set not proven complete (claudia example exists in global only). The bead''s revised direction: don''t build a sync mechanism until we settle repo-primary resolution.\n\nAudit questions to answer, cite file:line:\n\n1. **DESIGN.md ADR search**: Is there an existing DES-N ADR for repo-primary vs global resolution? Or a design doc anywhere in docs/ that addresses this tradeoff? If yes, quote the relevant section and note whether it accepts or rejects repo-primary. If no, note the absence.\n\n2. **Current resolution code map**: Walk the identity-resolution paths. Start at internal/resolve/ (Resolve, ResolveAgent, LoadRepoConfig, StoreRepoRoot, EnvRepoRoot). Trace into internal/identity/ (Store, LayeredStore, Load, Reference). Which paths currently read from ~/.punt-labs/ethos/ vs from a repo-local path? Where is ''global vs repo-local'' already a decision point? Cite file:line for every layered-store call site.\n\n3. **Layered store contract**: The internal/identity/LayeredStore already appears to layer stores (per attribute-resolution comments about ''repo-local → active bundle → global'' — see .punt-labs/ethos/CLAUDE.md''s ''Storage Layout'' table and any generate_agents.go / persona.go layered calls). Is this the mechanism that would need to flip? Or is it already correct and something at a higher layer is the issue?\n\n4. **Consumers that would break on flip**: If ethos flips to repo-primary, what breaks? Specifically:\n   (a) Consumers with incomplete vendored sets (vox missing ''claudia''). What''s the fallback semantics — miss with error, silent fallback to global, or something else?\n   (b) Consumers that DON''T vendor at all (only global). Should still work post-flip.\n   (c) Session-start persona resolution: SessionStart hook uses ResolveAgent (repo config); does the identity load path from there go through repo-first or global-first?\n\n5. **Scope estimate**: Realistic hours for design + implementation (mission-based, one worker + one evaluator), assuming (a) an ADR needs writing (b) internal/resolve and internal/identity need modification (c) tests for both flip-direction cases (d) migration/compat guidance for existing vendored consumers.\n\n6. **Prerequisites and dependencies**: Is there anything else that must happen first? E.g., completeness enforcement (a validator that a vendored set is complete before the flip is safe for that repo), or a config flag for opt-in.\n\nAlso: while you''re auditing, cover this small adjacent finding — ethos itself tracks .claude/.settings.json.punt-import.lock (0-byte residue, root .gitignore lacks .claude/.*.lock pattern). Include a one-paragraph ''small residual'' section noting the fix: add gitignore pattern + git rm --cached + verify. Don''t fix it in this mission (read-only audit). It''ll be part of the eventual ethos-livi PR per @claude:alpha''s fold-into-cleanup instruction.\n\nRead-only. Commit the audit doc. Report clearly at the top: whether an ADR exists, ballpark hours for the flip, and whether you found any blocking prerequisite the operator would need to decide before design starts.'
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
