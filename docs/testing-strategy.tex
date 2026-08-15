@@ -550,34 +550,18 @@ completes.  Requirements:
     that the attribution parser reads.
 \end{itemize}
 
-Two concrete options, both compatible with the requirements:
-
-\begin{itemize}
-  \item \textbf{LiteLLM proxy in mock/record mode.}
-    \href{https://github.com/BerriAI/litellm}{LiteLLM} is an
-    MIT-licensed Python library that exposes an Anthropic-compatible
-    Messages endpoint and can be run as a subprocess proxy
-    (\cmd{litellm --config litellm.yaml}).  Its callback surface
-    supports request/response logging to disk.  For test use, set
-    the response to a static canned turn (via a mock provider
-    config) and enable request-body dumping to
-    \fpath{.tmp/token-captures/<scenario>.jsonl}.  Ships as a
-    single \cmd{pip install} --- CI adds one line to install and
-    one line to start.
-  \item \textbf{In-tree Go proxy (\fpath{cmd/token-capture-proxy/}).}
-    A tiny HTTP server built on \pkg{net/http} plus
-    \pkg{net/http/httptest} that speaks just enough of the
-    Anthropic Messages wire protocol to accept the request, dump
-    the body, and return a canned assistant turn.  Roughly
-    200 lines of Go, no external dependency, matches the ethos
-    codebase's language.  Preferred if we want zero-Python-in-CI.
-\end{itemize}
-
-Recommend the in-tree Go proxy for the first cut: no new dependency
-in CI, no Python interpreter version to pin, and it colocates the
-capture-format spec with the attribution parser that reads it.
-LiteLLM stays a valid fallback if a broader multi-provider capture
-surface is ever needed.
+\textbf{Harness: LiteLLM proxy in mock/record mode.}
+\href{https://github.com/BerriAI/litellm}{LiteLLM} (MIT-licensed
+Python library) exposes an Anthropic-compatible Messages endpoint
+and runs as a subprocess proxy (\cmd{litellm --config litellm.yaml}).
+Its callback surface supports request/response logging to disk.  For
+test use, configure a mock provider that returns a canned static
+turn and enable request-body dumping to
+\fpath{.tmp/token-captures/<scenario>.jsonl}.  Ships as a single
+\cmd{pip install litellm[proxy]} --- CI adds one line to install
+and one line to start.  Already the standard tool for this class
+of proxy-and-capture pattern; the ethos suite adopts it verbatim
+rather than reinventing.
 
 \emph{Aside on Bifrost}: Bifrost is a separately-deployed workstation
 proxy some developers use for interactive local inspection
@@ -707,16 +691,15 @@ change.
 \subsection*{Infrastructure deliverables}
 
 \begin{enumerate}
-  \item Test-harness proxy: in-tree Go binary at
-    \fpath{cmd/token-capture-proxy/}.  Speaks the Anthropic Messages
-    wire protocol on \texttt{localhost:PORT}, accepts the request,
-    dumps the full body to
-    \fpath{.tmp/token-captures/<scenario>.jsonl}, returns a canned
-    minimal assistant turn so Claude Code terminates cleanly.
-    Roughly 200 lines, no external dependency.
+  \item Harness config: \fpath{tests/token-harness/litellm.yaml}
+    declaring the mock-Anthropic route (canned assistant turn) and
+    the request-body capture callback that writes to
+    \fpath{.tmp/token-captures/<scenario>.jsonl}.  Started as a
+    subprocess by the test runner via
+    \cmd{litellm --config litellm.yaml --port <ephemeral>}.
   \item Attribution parser: Go binary in \fpath{cmd/token-attribute/}
-    that reads a capture file and emits the report structure above.
-    Uses persona-block markers already defined by
+    that reads a LiteLLM capture file and emits the report structure
+    above.  Uses persona-block markers already defined by
     \pkg{internal/hook/persona.go}.
   \item Local tokenizer wiring: pick and pin the offline tokenizer
     (Anthropic first-party if it exists, else \pkg{tiktoken} with
@@ -727,18 +710,20 @@ change.
     \fpath{tests/token-scenarios/}, each declaring the repo/team
     configuration to reproduce plus the Claude Code invocation
     (\cmd{claude --bare -p "<task>" -{}-max-turns 1} pointed at the
-    proxy).
+    LiteLLM proxy).
   \item Baseline captures: \fpath{tests/token-baselines/<scenario>.json}
     committed, regenerated via a \cmd{make baseline-tokens} target
     (operator-invoked on a controlled workstation, not automatic).
-  \item Reporting: \cmd{make test-tokens} boots the capture proxy,
-    runs every scenario, tokenizes captures, writes reports to
+  \item Reporting: \cmd{make test-tokens} boots LiteLLM, runs every
+    scenario, tokenizes captures, writes reports to
     \fpath{.tmp/token-reports/}, compares to baseline, prints delta
-    summary + attribution tree.  Exits 0 always; deltas are surfaced
-    via PR comment, not the exit code.
-  \item CI wiring: per-release GitHub Actions job runs
+    summary alongside the attribution tree.  Exits 0 always; deltas
+    are surfaced via PR comment, not the exit code.
+  \item CI wiring: per-release GitHub Actions job installs LiteLLM
+    (\cmd{pip install 'litellm[proxy]'}) and runs
     \cmd{make test-tokens} against the committed baselines.  No
-    Anthropic API key needed --- the proxy stays entirely local.
+    Anthropic API key needed --- LiteLLM's mock provider returns
+    a canned turn.
   \item Calibration recipe: separate \cmd{make calibrate-tokens}
     target (not CI) that re-runs a chosen scenario against the
     Anthropic \texttt{messages/count\_tokens} endpoint, compares to
@@ -750,6 +735,10 @@ change.
 \subsection*{Prerequisites and dependencies}
 
 \begin{itemize}
+  \item LiteLLM installed in the CI Python toolchain
+    (\cmd{pip install 'litellm[proxy]'}).  Already the standard
+    tool for Anthropic-compatible mock/capture proxies; no
+    reinvention.
   \item An offline Claude-compatible tokenizer, either Anthropic
     first-party or a calibrated approximation.  Verify which is
     current when the framework is built.
@@ -764,10 +753,12 @@ change.
 
 \subsection*{Effort estimate}
 
-Approximately 5--7 days for initial framework + baseline capture
-across 4--6 scenarios.  Breakdown: capture proxy 1 day, attribution
-parser 2--3 days, tokenizer wiring + calibration recipe 1 day,
-scenarios + baselines 1 day, CI wiring + docs 1 day.  Then ongoing
+Approximately 4--5 days for initial framework + baseline capture
+across 4--6 scenarios.  Breakdown: LiteLLM config + mock provider
+0.5 day, attribution parser 2--3 days, tokenizer wiring +
+calibration recipe 1 day, scenarios + baselines 0.5 day, CI wiring
++ docs 0.5 day.  Reusing LiteLLM shaves the earlier estimate by
+1--2 days over building a bespoke capture proxy.  Then ongoing
 scenario authoring as the ethos surface changes (new hook, new
 bundle, new MCP server).
 

@@ -168,7 +168,7 @@ Add to the ethos release checklist (before tagging):
 **Bead**: `ethos-l90t` (filed 2026-08-14)
 **Effort**: 5-7 days for framework + baseline capture (4-6 scenarios)
 **Frequency**: per release + on-demand (not per-commit)
-**Depends on**: A local test-harness proxy (in-tree Go binary, or LiteLLM if we ever need multi-provider). NOT Bifrost — CI must run without any external proxy dependency.
+**Depends on**: LiteLLM (`pip install 'litellm[proxy]'`) as the local test-harness proxy — MIT-licensed, already the standard tool for this pattern. NOT Bifrost — CI must run without any workstation-only proxy dependency.
 
 ### Why now
 
@@ -193,21 +193,20 @@ cost. L6 is the missing observability tier.
 
 ### Infrastructure deliverables
 
-1. **Test-harness proxy (in-tree)**: `cmd/token-capture-proxy/` —
-   tiny Go HTTP server that speaks just enough of the Anthropic
-   Messages wire protocol to accept the request, dump the full body
-   to `.tmp/token-captures/<scenario>.jsonl`, and return a canned
-   minimal assistant turn so Claude Code terminates cleanly. ~200
-   lines, no external dependency, runs identically local and in CI.
-   (LiteLLM proxy is a valid alternative if we ever need
-   multi-provider capture surface — reserved as fallback, not the
-   default.)
-2. **Attribution parser**: `cmd/token-attribute/` — reads a capture
-   file and slices the assembled system prompt by ethos-injected
-   markers (`## Personality`, `## Writing Style`, `## Team Context`,
-   generated-agent-manifest signature, per-MCP-server tool
-   schemas). Uses persona-block markers already defined by
-   `internal/hook/persona.go`.
+1. **Harness config**: `tests/token-harness/litellm.yaml` declares
+   a mock-Anthropic route (returns a canned assistant turn) and a
+   request-body capture callback that writes to
+   `.tmp/token-captures/<scenario>.jsonl`. Test runner starts the
+   proxy as a subprocess via
+   `litellm --config tests/token-harness/litellm.yaml --port <ephemeral>`.
+   No bespoke proxy code — LiteLLM is already the standard tool
+   for this pattern.
+2. **Attribution parser**: `cmd/token-attribute/` — reads a LiteLLM
+   capture file and slices the assembled system prompt by
+   ethos-injected markers (`## Personality`, `## Writing Style`,
+   `## Team Context`, generated-agent-manifest signature,
+   per-MCP-server tool schemas). Uses persona-block markers already
+   defined by `internal/hook/persona.go`.
 3. **Tokenizer path (offline-only for CI)**: pin a local Claude-
    compatible tokenizer — Anthropic first-party if it ships one for
    the current model family, else `tiktoken` with an "approximate,
@@ -228,14 +227,15 @@ cost. L6 is the missing observability tier.
 5. **Baseline captures**: `tests/token-baselines/<scenario>.json`
    committed. Recaptured via `make baseline-tokens`
    (operator-invoked on a controlled workstation, not automatic).
-6. **Reporting**: `make test-tokens` boots the capture proxy, runs
-   every scenario, tokenizes captures, writes reports to
+6. **Reporting**: `make test-tokens` boots LiteLLM, runs every
+   scenario, tokenizes captures, writes reports to
    `.tmp/token-reports/`, compares to baseline, and prints a delta
    summary alongside the attribution tree. Exits 0 always; deltas
    are surfaced via PR comment, not the exit code.
-7. **CI wiring**: per-release GitHub Actions job runs
-   `make test-tokens` against committed baselines. NO Anthropic API
-   key needed — proxy stays entirely local. Flags per policy:
+7. **CI wiring**: per-release GitHub Actions job installs LiteLLM
+   (`pip install 'litellm[proxy]'`) and runs `make test-tokens`
+   against committed baselines. NO Anthropic API key needed —
+   LiteLLM's mock provider returns a canned turn. Flags per policy:
    - Delta > 5% on any scenario → PR comment, human review before
      merge.
    - Delta > 15% → CI turns yellow, blocks auto-merge memory but
@@ -338,4 +338,4 @@ L5 sprint integration tests remain the sole unimplemented phase. The pipeline in
 | CI coverage | `-coverprofile` in `make test`, CI summary | SHIPPED | v3.1.0 |
 | 4 — L4 Behavioral | Harness, Layer A/B/C scenarios, daily CI workflow | SHIPPED | v3.1.0 |
 | 5 — L5 Sprint Integration | Sprint fixture repo, harness, post-run checks | PLANNED | — |
-| 6 — L6 Payload / Token Profiling | Local capture proxy, attribution parser, offline tokenizer, baseline scenarios, `make test-tokens` | PLANNED | — |
+| 6 — L6 Payload / Token Profiling | LiteLLM capture proxy, attribution parser, offline tokenizer, baseline scenarios, `make test-tokens` | PLANNED | — |
