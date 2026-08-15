@@ -10,6 +10,18 @@ import (
 	"github.com/punt-labs/ethos/internal/team"
 )
 
+// Markers BuildPersonaBlock and BuildTeamContext write into the system
+// prompt to delimit each section. cmd/e2e-attribute reads these back to
+// attribute a captured system prompt's bytes to their source section.
+// MarkerTeamPrefix is a prefix, not a fixed string — the team name follows
+// it.
+const (
+	MarkerPersonality  = "## Personality"
+	MarkerWritingStyle = "## Writing Style"
+	MarkerTalents      = "## Talents"
+	MarkerTeamPrefix   = "## Team:"
+)
+
 // BuildPersonaBlock assembles a full persona block from a resolved identity.
 // Returns empty string if id is nil or has no personality/writing style content.
 func BuildPersonaBlock(id *identity.Identity) string {
@@ -42,7 +54,7 @@ func BuildPersonaBlock(id *identity.Identity) string {
 			if strings.HasPrefix(strings.TrimSpace(trimmed), "##") {
 				b.WriteString("\n\n")
 			} else {
-				b.WriteString("\n\n## Personality\n\n")
+				b.WriteString("\n\n" + MarkerPersonality + "\n\n")
 			}
 			b.WriteString(trimmed)
 		}
@@ -51,7 +63,7 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	if id.WritingStyleContent != "" {
 		trimmed := strings.TrimRight(stripLeadingHeading(id.WritingStyleContent), "\n")
 		if trimmed != "" {
-			b.WriteString("\n\n## Writing Style\n\n")
+			b.WriteString("\n\n" + MarkerWritingStyle + "\n\n")
 			b.WriteString(trimmed)
 		}
 	}
@@ -59,7 +71,7 @@ func BuildPersonaBlock(id *identity.Identity) string {
 	// Talents are listed as slugs, not full content, to stay within context
 	// budget. Full talent content is available on demand via the MCP tool.
 	if len(id.Talents) > 0 {
-		b.WriteString("\n\n## Talents\n\n")
+		b.WriteString("\n\n" + MarkerTalents + "\n\n")
 		b.WriteString(strings.Join(id.Talents, ", "))
 	}
 
@@ -188,7 +200,7 @@ func BuildTeamContext(t *team.Team, roles *role.LayeredStore, identities identit
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Team: %s\n", t.Name)
+	fmt.Fprintf(&b, "%s %s\n", MarkerTeamPrefix, t.Name)
 
 	for _, m := range t.Members {
 		isSelf := selfHandle != "" && m.Identity == selfHandle

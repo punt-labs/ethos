@@ -3,10 +3,9 @@
 // persona-block markers internal/hook/persona.go defines), tool-schema bytes
 // per tool, and message-history bytes.
 //
-// Tokenizing and diffing against a committed baseline are out of scope for
-// this initial land — the tokenizer choice (design §6) isn't settled yet.
-// The report's token fields are always "TODO: awaiting tokenizer decision
-// (calibrate-tokens target)".
+// Tokenizing and diffing against a committed baseline are out of scope
+// until the tokenizer choice is settled. The report's token fields are
+// always "TODO: awaiting tokenizer decision (calibrate-tokens target)".
 package main
 
 import (

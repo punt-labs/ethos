@@ -5,19 +5,23 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/punt-labs/ethos/internal/hook"
 )
 
-// Markers persona.go writes into the system prompt (internal/hook/persona.go).
-// "## Team:" is a prefix, not a fixed string — the team name follows it.
+// Markers persona.go writes into the system prompt. Sourced from
+// internal/hook so the two copies cannot drift — renaming a heading there
+// renames it here automatically. "## Team:" is a prefix, not a fixed
+// string — the team name follows it.
 const (
-	markerPersonality  = "## Personality"
-	markerWritingStyle = "## Writing Style"
-	markerTalents      = "## Talents"
-	markerTeamPrefix   = "## Team:"
+	markerPersonality  = hook.MarkerPersonality
+	markerWritingStyle = hook.MarkerWritingStyle
+	markerTalents      = hook.MarkerTalents
+	markerTeamPrefix   = hook.MarkerTeamPrefix
 )
 
 // tokensTODO is the placeholder every report's token fields carry until the
-// tokenizer decision (design §6) lands.
+// tokenizer decision lands.
 const tokensTODO = "TODO: awaiting tokenizer decision (calibrate-tokens target)"
 
 // envelope is what e2e's custom_callbacks.py writes to a capture file.
@@ -126,7 +130,7 @@ func systemText(raw json.RawMessage) (string, error) {
 }
 
 // toolSizes returns each tool's name and marshaled-JSON byte size, plus
-// their combined size (matching hello's `len(json.dumps(tools))` metric).
+// their combined size (each tool's raw JSON length, summed).
 func toolSizes(tools []json.RawMessage) ([]ToolSize, int, error) {
 	sizes := make([]ToolSize, 0, len(tools))
 	total := 0
