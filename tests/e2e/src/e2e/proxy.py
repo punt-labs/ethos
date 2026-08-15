@@ -72,9 +72,7 @@ class LiteLLMProxy:
         workdir.mkdir(parents=True, exist_ok=True)
         config_path = workdir / "litellm.yaml"
         log_path = workdir / "litellm.log"
-        # Sibling to workdir (e.g. .tmp/e2e -> .tmp/e2e-captures) so CI can
-        # upload both with one .tmp/e2e-* glob (see .github/workflows/test.yml).
-        captures_dir = workdir.parent / f"{workdir.name}-captures"
+        captures_dir = cls.captures_dir_for(workdir)
         # Cleared on every start — a capture left over from a prior local run
         # would otherwise let e2e.runner._latest_capture pick up stale data
         # and pass a scenario that never actually reached the proxy.
@@ -108,6 +106,18 @@ class LiteLLMProxy:
         self = cls(process, port, log_path, captures_dir)
         self._wait_until_listening()
         return self
+
+    @staticmethod
+    def captures_dir_for(workdir: Path) -> Path:
+        """The capture directory ``e2e.custom_callbacks`` writes into for ``workdir``.
+
+        Sibling to workdir (e.g. .tmp/e2e -> .tmp/e2e-captures) so CI can
+        upload both with one .tmp/e2e-* glob (see .github/workflows/test.yml).
+        Exposed as the single derivation both ``start`` and
+        ``conftest.pytest_sessionfinish`` use, so the two can't disagree
+        about where captures land.
+        """
+        return workdir.parent / f"{workdir.name}-captures"
 
     @staticmethod
     def _config(registry: ScenarioRegistry) -> dict[str, object]:

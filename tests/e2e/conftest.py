@@ -11,14 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from e2e.capture import DEFAULT_SECRET_PATTERNS
 from e2e.proxy import LiteLLMProxy
+from e2e.redact import redact_tree
 from e2e.scenario import ScenarioRegistry
 
 _SCENARIOS_DIR = Path(__file__).parent / "scenarios"
 # tests/e2e/conftest.py -> repo root, for a fixed .tmp/e2e workdir (never a
 # system tmpdir) so CI can upload it by a stable glob.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_WORKDIR = _REPO_ROOT / ".tmp" / "e2e"
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -54,27 +55,18 @@ def scenario_registry() -> ScenarioRegistry:
 @pytest.fixture(scope="session")
 def litellm_proxy(scenario_registry: ScenarioRegistry) -> Iterator[LiteLLMProxy]:
     """One proxy for the whole session; every scenario shares it."""
-    workdir = _REPO_ROOT / ".tmp" / "e2e"
-    proxy = LiteLLMProxy.start(scenario_registry, workdir)
+    proxy = LiteLLMProxy.start(scenario_registry, _WORKDIR)
     yield proxy
     proxy.stop()
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Redact secret-shaped substrings from every capture file on disk.
+    """Redact secret-shaped bytes from every capture and proxy-log file.
 
-    CI uploads ``.tmp/e2e-captures/`` as a debugging artifact on
-    failure. If a scenario leaked a real credential into a payload —
-    the exact condition ``assert_no_secrets`` exists to catch — that
-    credential must not also leak into the uploaded artifact.
+    Belt-and-braces with .github/workflows/test.yml's own ``e2e.redact``
+    step: this hook covers a normal (even failing) pytest exit; the
+    workflow step covers a hard-killed pytest (timeout, OOM, SIGKILL)
+    that never reaches this hook at all.
     """
-    captures_dir = _REPO_ROOT / ".tmp" / "e2e-captures"
-    if not captures_dir.is_dir():
-        return
-    for capture_file in captures_dir.glob("*.jsonl"):
-        raw = capture_file.read_text(errors="replace")
-        redacted = raw
-        for pattern in DEFAULT_SECRET_PATTERNS:
-            redacted = pattern.regex.sub("[REDACTED]", redacted)
-        if redacted != raw:
-            capture_file.write_text(redacted)
+    redact_tree(_WORKDIR)
+    redact_tree(LiteLLMProxy.captures_dir_for(_WORKDIR))

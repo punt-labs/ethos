@@ -76,6 +76,14 @@ jobs:
       - name: Run L4 E2E smoke scenario
         run: make test-e2e-smoke
 
+      # Belt-and-braces with conftest.py's own pytest_sessionfinish redaction
+      # hook: a hard-killed pytest (timeout, OOM, SIGKILL) never reaches that
+      # hook, so this step redacts as a separate process after pytest exits,
+      # regardless of how it exited.
+      - name: Redact secrets before upload
+        if: failure()
+        run: uv run --project tests/e2e python -m e2e.redact .tmp/e2e .tmp/e2e-captures
+
       - name: Upload E2E artifacts on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -112,6 +120,14 @@ jobs:
 
       - name: Run L4 E2E full sweep
         run: make test-e2e
+
+      # Belt-and-braces with conftest.py's own pytest_sessionfinish redaction
+      # hook: a hard-killed pytest (timeout, OOM, SIGKILL) never reaches that
+      # hook, so this step redacts as a separate process after pytest exits,
+      # regardless of how it exited.
+      - name: Redact secrets before upload
+        if: always()
+        run: uv run --project tests/e2e python -m e2e.redact .tmp/e2e .tmp/e2e-captures
 
       - name: Upload E2E artifacts
         if: always()
