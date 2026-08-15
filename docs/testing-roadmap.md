@@ -163,7 +163,16 @@ Add to the ethos release checklist (before tagging):
 
 ---
 
-## Phase 6 — Payload / Token Profiling (L6) — PLANNED
+## Phase 6 — End-to-End Test Framework (L6) — PLANNED
+
+Framework design: `docs/design-e2e-test-framework.md`.
+
+L6 is an E2E tier — real `claude --print` subprocess against a
+locally-run mock upstream (LiteLLM proxy). Token/payload profiling
+is the first assertion suite this tier carries and the reason it
+gets built now; hallucination checks, feature-verification runs,
+and future E2E scenarios plug in through the same
+`pytest_generate_tests` collector.
 
 **Bead**: `ethos-l90t` (filed 2026-08-14)
 **Effort**: 5-7 days for framework + baseline capture (4-6 scenarios)
@@ -350,4 +359,4 @@ L5 sprint integration tests remain the sole unimplemented phase. The pipeline in
 | CI coverage | `-coverprofile` in `make test`, CI summary | SHIPPED | v3.1.0 |
 | 4 — L4 Behavioral | Harness, Layer A/B/C scenarios, daily CI workflow | SHIPPED | v3.1.0 |
 | 5 — L5 Sprint Integration | Sprint fixture repo, harness, post-run checks | PLANNED | — |
-| 6 — L6 Payload / Token Profiling | LiteLLM capture proxy, attribution parser, offline tokenizer, baseline scenarios, `make test-tokens` | PLANNED | — |
+| 6 — L6 End-to-End | pytest framework, LiteLLM mock proxy, ScenarioCapture, token profiling as first scenario type, `make test-e2e` / `make test-e2e-smoke` | PLANNED | — |

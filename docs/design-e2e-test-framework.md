@@ -1,24 +1,43 @@
-# L6 Token Harness: Framework Design
+# E2E Test Framework
 
-Read-only design mission (m-2026-08-15-011). Companion to
-`docs/testing-strategy.tex` §"Level 6 — Payload/Token Profiling" and
+Design for the End-to-End test tier of the ethos pyramid — a real
+`claude --print` subprocess driven against a local mock-upstream
+proxy, so we can observe what the client actually sends over the
+wire without paying Anthropic tokens or requiring an API key. Token
+and payload profiling is the first assertion suite this tier
+carries; hallucination checks, feature-verification, and other
+E2E scenarios plug in the same way. Companion to
+`docs/testing-strategy.tex` §"Level 6 — End-to-End" and
 `docs/testing-roadmap.md` §"Phase 6". No code in this PR.
+
+Supersedes the earlier `docs/design-l6-token-harness.md` (same
+file, renamed) — the substance carries forward, only the framing
+changes: this is the E2E tier of the pyramid, not a token-only
+harness. Token profiling is a scenario `type` inside it.
 
 ## Report
 
-- Lines: 468 (`wc -l docs/design-l6-token-harness.md`).
-- Key decisions: pytest (PL-TT-1) · yaml scenarios discovered via
-  `pytest_generate_tests`, zero conftest edits per scenario · one
-  session-scoped `litellm_proxy` fixture, scenario identity carried in
-  the LiteLLM `model` field (not the filesystem) · assertions are
-  methods on a `ScenarioCapture` class, not free functions · tokenize/
-  attribute/diff stays in Go (`cmd/token-attribute/`), reusing
-  `internal/hook/persona.go` markers — Python's job stops at capture ·
-  `tests/token-harness/hello/` is retired: its logic becomes the
-  `empty-repo` scenario and its assertions move onto `ScenarioCapture`
-  · `make test-tokens` stays out of `make check`; a new
-  `lint-python` target (ruff + mypy, no proxy) joins `make check`
-  every commit.
+- Lines: ~470.
+- Framing correction from the earlier draft: this is the E2E tier
+  (real subprocess, real wire traffic through a mock upstream), NOT
+  a token-specific harness. Token/payload profiling is one scenario
+  `type` inside the E2E framework. `make test-e2e`, not
+  `make test-e2e`. Directory `tests/e2e/`, not
+  `tests/e2e/`. Bead scope is E2E framework; token
+  scenarios are a suite within it.
+- Key decisions unchanged in substance: pytest (PL-TT-1) · yaml
+  scenarios discovered via `pytest_generate_tests`, zero conftest
+  edits per scenario · one session-scoped `litellm_proxy` fixture,
+  scenario identity carried in the LiteLLM `model` field (not the
+  filesystem) · assertions are methods on a `ScenarioCapture` class
+  (or type-specific subclass), not free functions · tokenize/
+  attribute/diff stays in Go (`cmd/e2e-attribute/`), reusing
+  `internal/hook/persona.go` markers — Python's job stops at
+  capture · `tests/e2e/hello/` is retired: its logic
+  becomes the `type: token` `empty-repo` scenario, its assertions
+  move onto `TokenCapture(ScenarioCapture)` · `make test-e2e`
+  stays out of `make check`; a new `lint-python` target (ruff +
+  mypy, no proxy) joins `make check` every commit.
 - Blocking prerequisite: whether Anthropic ships a first-party Python
   tokenizer for the current Claude family is unverified as of this
   design. `docs/testing-strategy.tex` already flags this ("Check
@@ -41,8 +60,8 @@ surface at Punt Labs, and there is no reason to deviate. Concretely,
 pytest buys three things the bash+heredoc approach could not:
 
 - `pytest_generate_tests` gives scenario discovery for free (§2).
-- Markers (`@pytest.mark.e2e`, a project-local `@pytest.mark.token`)
-  give tier separation and selective runs (`pytest -m token`) without
+- Markers (`@pytest.mark.e2e`, a project-local `@pytest.mark.e2e`)
+  give tier separation and selective runs (`pytest -m e2e`) without
   a new flag on every script.
 - Standard reporting — JUnit XML, `--co -q` collection listing,
   familiar failure output — for free, instead of hand-rolled
@@ -58,7 +77,7 @@ pytest-timeout) if L6 ever needs it.
 ## 2. Scenario collection mechanism
 
 **Recommendation: `pytest_generate_tests` parametrizing over
-`tests/token-scenarios/*.yaml`.**
+`tests/e2e/scenarios/*.yaml`.**
 
 The hard requirement is: a new scenario is a file drop, no Makefile
 edit, no harness edit, no conftest edit. Three options were on the
@@ -66,9 +85,9 @@ table.
 
 | Option | Verdict |
 |---|---|
-| `@pytest.mark.token` + one `test_*.py` file per scenario | Rejected as the *default* path — every new scenario requires writing a Python function, which is friction for a scenario author who just wants to declare "point at this repo fixture, expect these thresholds." Kept as the sanctioned escape hatch (below). |
+| `@pytest.mark.e2e` + one `test_*.py` file per scenario | Rejected as the *default* path — every new scenario requires writing a Python function, which is friction for a scenario author who just wants to declare "point at this repo fixture, expect these thresholds." Kept as the sanctioned escape hatch (below). |
 | `pytest_collect_file` treating each `.yaml` as a collected item | Rejected. Implementing a custom `Collector`/`Item` pair is the heaviest of the three options for identical end behavior, and it is easy to get pytest's collection protocol subtly wrong (item IDs, `repr_failure`, `reportinfo`). No feature here needs that level of control. |
-| `pytest_generate_tests` parametrizing a single test function | **Chosen.** One `conftest.py` hook globs `tests/token-scenarios/*.yaml` at collection time and calls `metafunc.parametrize("scenario", scenarios, ids=[s.id for s in scenarios])`. Dropping a new `.yaml` file changes nothing else — the next `pytest --co -q` picks it up. Test IDs read as `test_token_scenario[ethos-team-submodule]`, which is what a CI reviewer wants to see. |
+| `pytest_generate_tests` parametrizing a single test function | **Chosen.** One `conftest.py` hook globs `tests/e2e/scenarios/*.yaml` at collection time and calls `metafunc.parametrize("scenario", scenarios, ids=[s.id for s in scenarios])`. Dropping a new `.yaml` file changes nothing else — the next `pytest --co -q` picks it up. Test IDs read as `test_token_scenario[ethos-team-submodule]`, which is what a CI reviewer wants to see. |
 
 The conftest hook is written once, when the framework ships. Adding
 scenario #7 never touches it — that is the point of a *hook*, as
@@ -76,8 +95,8 @@ distinct from a per-scenario registration list.
 
 **Escape hatch.** A scenario whose assertions genuinely cannot be
 expressed by the declarative schema (§5) is written as an ordinary
-`tests/token-harness/tests/test_<name>.py` marked
-`@pytest.mark.token`. pytest autodiscovers `test_*.py` under
+`tests/e2e/tests/test_<name>.py` marked
+`@pytest.mark.e2e`. pytest autodiscovers `test_*.py` under
 `testpaths` with zero config changes, so this preserves the same
 "file drop, no other edits" property as the yaml path. This is the
 release valve, not the default.
@@ -126,16 +145,16 @@ registry discovered.
 
 ## 4. Assertion primitives
 
-**Recommendation: methods on a `ScenarioCapture` class in
-`token_harness/capture.py`, not free functions in `conftest.py` or a
-`helpers.py`.**
+**Recommendation: methods on `ScenarioCapture` and type-specific
+subclasses under `e2e/capture.py`. Not free functions in `conftest.py`
+or a `helpers.py`.**
 
-The mission brief names `assert_body_shape`, `assert_payload_size_within`,
-`assert_no_secret_patterns` as free functions. Written that way they
-would violate PY-OO-7 (PY-OO-5's mirror for modules that already have
-a natural owning class): each of the three takes the captured payload
-and reads multiple fields out of it — the textbook trigger for "this
-should be a method." `ScenarioCapture` is that class:
+Structural assertions that every E2E capture supports (regardless of
+scenario type) live on the base `ScenarioCapture`. Type-specific
+assertions live on subclasses — `TokenCapture(ScenarioCapture)` for
+`type: token` scenarios; future types (hallucination, feature-verify)
+get their own subclasses without touching existing ones (PY-IC-*
+composition guidance).
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -144,24 +163,29 @@ class ScenarioCapture:
     raw_bytes: bytes
     body: Mapping[str, object]  # parsed Anthropic Messages request; wire boundary (PY-TS-14)
 
-    def assert_body_shape(self) -> tuple[str, ...]: ...
+    def assert_body_shape(self) -> tuple[str, ...]: ...  # every E2E capture asserts structure
+
+
+@dataclass(frozen=True, slots=True)
+class TokenCapture(ScenarioCapture):
     def assert_size_within(self, max_bytes: int) -> tuple[str, ...]: ...
-    def assert_no_secrets(self, patterns: Sequence[SecretPattern] = DEFAULT_SECRET_PATTERNS) -> tuple[str, ...]: ...
+    def assert_no_secrets(
+        self, patterns: Sequence[SecretPattern] = DEFAULT_SECRET_PATTERNS
+    ) -> tuple[str, ...]: ...
 ```
 
 Each method returns a tuple of violation strings — empty means pass —
 rather than raising or bare-asserting internally. This mirrors what
-`run.sh`'s embedded Python already does (accumulate every failure,
-report all of them, not just the first) and keeps `assert` itself
-out of library code per PY-EH-3, which restricts `assert` to internal
-consistency checks in non-public methods. The *test* function is
-where `assert` belongs:
+today's ad-hoc `run.sh` does (accumulate every failure, report all of
+them, not just the first) and keeps `assert` itself out of library
+code per PY-EH-3, which restricts `assert` to internal consistency
+checks in non-public methods. The *test* function is where `assert`
+belongs:
 
 ```python
 @pytest.mark.e2e
-@pytest.mark.token
-def test_token_scenario(scenario: Scenario, litellm_proxy: LiteLLMProxy) -> None:
-    capture = run_scenario(scenario, litellm_proxy)
+def test_token_scenario(scenario: TokenScenario, litellm_proxy: LiteLLMProxy) -> None:
+    capture = run_scenario(scenario, litellm_proxy)  # returns a TokenCapture for type: token
     failures = (
         capture.assert_body_shape()
         + capture.assert_size_within(scenario.max_bytes)
@@ -174,58 +198,66 @@ def test_token_scenario(scenario: Scenario, litellm_proxy: LiteLLMProxy) -> None
 justified under PY-TS-14: it is JSON parsed off the wire, from
 LiteLLM's capture file, and the type system cannot know its shape
 until `assert_body_shape` narrows it. `DEFAULT_SECRET_PATTERNS` is the
-nine-pattern list already proven in `run.sh` (Anthropic/OpenAI keys,
-AWS, Google, three GitHub token shapes, PEM blocks, Slack) — carried
-forward verbatim, not reinvented. A scenario can override the pattern
-list via its yaml (§5) for a fixture that legitimately contains a
-credential-shaped string it needs to ignore, though none of the six
-baseline scenarios need that.
+nine-pattern list already proven in the ad-hoc harness (Anthropic/
+OpenAI keys, AWS, Google, three GitHub token shapes, PEM blocks,
+Slack) — carried forward verbatim, not reinvented. A scenario can
+override the pattern list via its yaml (§5) for a fixture that
+legitimately contains a credential-shaped string it needs to ignore,
+though none of the six baseline token scenarios need that.
 
 ## 5. Scenario file schema
 
-**Recommendation: yaml-declarative, one file per scenario under
-`tests/token-scenarios/`.**
+**Recommendation: yaml-declarative with a `type` discriminator, one
+file per scenario under `tests/e2e/scenarios/`.**
 
 ```yaml
 id: ethos-team-submodule
+type: token   # token | (future: hallucination, feature-verify, ...)
 description: >
   Full team submodule vendored into a consuming repo. Isolates the
   aggregation cost called out in testing-strategy.tex's "known cost
   drivers" — every identity in the org ships whether or not the
   session needs it.
-repo_fixture: fixtures/team-submodule   # dir under tests/token-harness/, or omitted for empty-repo
+repo_fixture: fixtures/team-submodule   # dir under tests/e2e/, or omitted for empty-repo
 claude_invocation:
   prompt: "reply with the single word pong"
   max_turns: 1
-expect:
-  max_bytes: 900000
+expect:                        # keys under expect are type-scoped
+  max_bytes: 900000            # token: payload-size ratchet
+  no_secret_patterns: true     # token: PII/credential scan (default true)
 smoke: false
 ```
+
+The `type` field is the discriminator. Every scenario declares one.
+The framework's `pytest_generate_tests` hook parametrizes one test
+function per type — `test_token_scenario`, `test_hallucination_scenario`,
+etc. — each iterating its own scenarios. A new scenario TYPE (say,
+`hallucination`) is a new `test_<type>_scenario` function + a new
+`<Type>Capture` subclass of `ScenarioCapture`. Existing types are
+untouched. A new SCENARIO of an existing type is just a file drop.
+
+Only `type: token` is defined for the first cut. Its `expect` keys are
+`max_bytes` (§4's size ratchet) and `no_secret_patterns` (§4's
+credential/PII scan; defaults `true`, override to `false` on a
+fixture that legitimately contains a credential-shaped string).
+`assert_body_shape` runs for every token scenario unconditionally —
+it's not a policy dial. Future types define their own `expect` keys.
 
 Yaml wins over py-imperative for the default path for the same reason
 §2 picked declarative discovery: the person adding scenario #7 is
 usually answering "what repo/team shape am I profiling and what's the
-size ceiling," not writing test logic. That is data, and
-`testing-roadmap.md`'s own Phase 6 write-up already describes
-scenarios this way ("YAML per scenario in `tests/token-scenarios/`,
-each declaring the repo/team configuration to reproduce") — this
-design does not introduce that choice, it makes it concrete.
-
-The `expect` block maps directly onto `ScenarioCapture`'s three
-methods; nothing in the schema needs a fourth field until a fourth
-assertion primitive exists. `smoke: true` (§7) marks the scenario(s)
-that run on every push; everything else runs per-release. Anything
-that needs logic beyond `expect`'s fixed vocabulary — a scenario
-comparing two captures against each other, say — uses the py escape
-hatch from §2 instead of growing the yaml schema into a second
-programming language.
+size ceiling," not writing test logic. That is data. Anything that
+needs logic beyond `expect`'s fixed vocabulary — a scenario comparing
+two captures against each other, say — uses the py escape hatch from
+§2 instead of growing the yaml schema into a second programming
+language.
 
 ## 6. Baseline capture and delta
 
 Carried forward from `testing-strategy.tex` and `testing-roadmap.md`,
 which already settled this; restated for continuity, not re-litigated:
 
-- **Location.** `tests/token-baselines/<scenario-id>.json`, committed.
+- **Location.** `tests/e2e/baselines/<scenario-id>.json`, committed.
 - **Recapture.** `make baseline-tokens`, operator-invoked on a
   controlled workstation — never automatic from CI.
 - **Tokenizer.** Local/offline for CI. Recommend `tiktoken` with an
@@ -236,7 +268,7 @@ which already settled this; restated for continuity, not re-litigated:
   this design (flagged in the Report header as the one blocking
   prerequisite). `messages/count_tokens` stays reserved for
   `make calibrate-tokens`, operator-invoked, never CI.
-- **Strictness.** Advisory, not a hard gate — `make test-tokens`
+- **Strictness.** Advisory, not a hard gate — `make test-e2e`
   exits 0 regardless of delta. >5% on any scenario → PR comment,
   human review before merge. >15% → CI turns yellow, blocks the
   auto-merge memory, not the merge button. A new token source not in
@@ -256,26 +288,26 @@ timestamp-ordering heuristics.
 
 ## 7. Make integration
 
-**Recommendation: `make test-tokens` stays outside `make check`.
+**Recommendation: `make test-e2e` stays outside `make check`.
 Full sweep is per-release/on-demand; one smoke scenario runs on every
 push, matching what already happens today.**
 
 ```makefile
-test-tokens: ## Run the full L6 scenario sweep (per-release; requires litellm + claude CLI)
-    uv run --project tests/token-harness pytest -m token
-    go run ./cmd/token-attribute -captures .tmp/token-captures -baselines tests/token-baselines -out .tmp/token-reports
+test-e2e: ## Run the full E2E scenario sweep (per-release; requires litellm + claude CLI)
+    uv run --project tests/e2e pytest -m e2e
+    go run ./cmd/token-attribute -captures .tmp/e2e-captures -baselines tests/token-baselines -out .tmp/e2e-reports
 
-test-tokens-smoke: ## Run the fast L6 subset (every push; no baseline diff)
-    uv run --project tests/token-harness pytest -m "token and smoke"
+test-e2e-smoke: ## Run the fast L6 subset (every push; no baseline diff)
+    uv run --project tests/e2e pytest -m "e2e and smoke"
 ```
 
 (Recipe lines above are shown space-indented for Markdown lint; a
 real Makefile requires a literal tab.)
 
-`test-tokens-hello` disappears (§10); `test-tokens-smoke` is its
+`test-tokens-hello` disappears (§10); `test-e2e-smoke` is its
 replacement, running the `empty-repo` scenario's structural/size/PII
 assertions on every push — the same signal the hello job gives today,
-now inside the real framework instead of a parallel one. `test-tokens`
+now inside the real framework instead of a parallel one. `test-e2e`
 (the full sweep, baselines, attribution, delta report) is per-release,
 exactly as `testing-roadmap.md` specifies, and stays out of `make
 check` for the same reason `test-tokens-hello` already is: it shells
@@ -290,25 +322,25 @@ source itself — see §9.
 
 **Recommendation: two jobs, both scenario-count-agnostic.**
 
-- `token-harness-smoke` — every push and PR. Installs Python
+- `e2e-smoke` — every push and PR. Installs Python
   3.13 (per PL-TC-6; the `litellm==1.81.9` pin governs the litellm
   version, not the interpreter — verify at implementation time
   whether 3.13 also satisfies litellm's own `python_requires`),
   `litellm[proxy]==1.81.9`, `@anthropic-ai/claude-code`, runs `make
-  test-tokens-smoke`. Uploads `.tmp/token-harness/` and
-  `.tmp/token-captures/` on failure, same as today's
+  test-e2e-smoke`. Uploads `.tmp/e2e/` and
+  `.tmp/e2e-captures/` on failure, same as today's
   `token-harness-hello` job.
-- `token-harness-release` — triggered on release tag (or scheduled
+- `e2e-release` — triggered on release tag (or scheduled
   weekly, whichever the release cadence ends up being; this is a
   workflow-file decision for the implementation mission, out of
-  scope here). Same install steps, runs `make test-tokens`, uploads
-  `.tmp/token-reports/` and `.tmp/token-captures/` always (not just
+  scope here). Same install steps, runs `make test-e2e`, uploads
+  `.tmp/e2e-reports/` and `.tmp/e2e-captures/` always (not just
   on failure — the delta report is the point of the job, not a
   failure artifact).
 
-Neither job's YAML lists scenario names. A new `tests/token-scenarios/
+Neither job's YAML lists scenario names. A new `tests/e2e/scenarios/
 *.yaml` file changes what `pytest_generate_tests` collects; the CI
-job's command line (`make test-tokens[-smoke]`) does not change. This
+job's command line (`make test-e2e[-smoke]`) does not change. This
 is the same "no harness edit" property §2 established, extended
 through to CI.
 
@@ -321,7 +353,7 @@ convenient.
 **Recommendation: Python's job stops at capture. Tokenize, attribute,
 diff, and report stay in Go.**
 
-`testing-strategy.tex` already specified `cmd/token-attribute/` as a
+`testing-strategy.tex` already specified `cmd/e2e-attribute/` as a
 Go binary reading a LiteLLM capture file and emitting the attribution
 report. This design keeps that boundary and gives it a concrete
 justification beyond "it was already written down":
@@ -346,15 +378,15 @@ justification beyond "it was already written down":
 
 **Concretely:**
 
-- `tests/token-harness/pyproject.toml` — a `uv` project scoped to
+- `tests/e2e/pyproject.toml` — a `uv` project scoped to
   this subtree, per PL-PL-1's src layout:
-  `tests/token-harness/src/token_harness/{proxy,capture,scenario,
-  custom_callbacks}.py`, tests under `tests/token-harness/tests/
+  `tests/e2e/src/e2e/src/e2e/{proxy,capture,scenario,
+  custom_callbacks}.py`, tests under `tests/e2e/tests/
   test_scenarios.py` + `conftest.py`. This is not a package that ships
   anywhere — no `[project.scripts]`, no PyPI target, PL-DI-* does not
   apply. It exists to be `uv run` from inside the ethos repo, nothing
   more.
-- `tests/token-harness/uv.lock` — committed, pins `litellm[proxy]
+- `tests/e2e/uv.lock` — committed, pins `litellm[proxy]
   ==1.81.9`, `pytest`, dev-only `ruff`/`mypy`. This replaces the
   `pip install 'litellm[proxy]==1.81.9'` step documented in
   `hello/README.md` today, which is a direct PL-TC-1 violation (never
@@ -369,9 +401,9 @@ justification beyond "it was already written down":
       @test -x $(GOLANGCI_LINT) || { echo "..."; exit 1; }
       $(GOLANGCI_LINT) run ./...
       shellcheck hooks/*.sh install.sh
-      uv run --project tests/token-harness ruff check .
-      uv run --project tests/token-harness ruff format --check .
-      uv run --project tests/token-harness mypy src/ tests/
+      uv run --project tests/e2e ruff check .
+      uv run --project tests/e2e ruff format --check .
+      uv run --project tests/e2e mypy src/ tests/
   ```
 
   This is what answers the mission's "how does `make check` aggregate
@@ -385,32 +417,33 @@ justification beyond "it was already written down":
   claude," which was never true even for the Go behavioral tests
   (`test-behavioral` is its own target, deliberately outside `check`,
   same pattern this reuses).
-- `cmd/token-attribute/` — plain Go, `go build`/`go test` covered by
+- `cmd/e2e-attribute/` — plain Go, `go build`/`go test` covered by
   the existing `make test`/`make lint` targets with zero new
   Makefile plumbing, because it's just another Go package.
 
 ## 10. What replaces `tests/token-harness/hello/`
 
-**Recommendation: retire it. Its logic is absorbed, not deleted and
-not kept as a second path.**
+**Recommendation: retire it. Its logic is absorbed into the new
+`tests/e2e/` framework, not deleted and not kept as a second path.**
 
 Concrete mapping, for the implementation mission to execute (this
-mission does not touch `hello/`, `Makefile`, or `.github/workflows/`):
+design mission did not touch `tests/token-harness/hello/`,
+`Makefile`, or `.github/workflows/`):
 
-| `hello/` today | Becomes |
+| `tests/token-harness/hello/` today | Becomes |
 |---|---|
 | `run.sh`'s proxy start/wait/teardown | `LiteLLMProxy` fixture (§3). Bash orchestration deleted — keeping both means every proxy-lifecycle fix has to land twice. |
-| `run.sh`'s `claude --print ... "reply with the single word pong"` invocation | `tests/token-scenarios/empty-repo.yaml`'s `claude_invocation` block. Same prompt, same `--max-turns 1`. |
-| `run.sh`'s structural / 700KB ratchet / 9-pattern PII checks | `ScenarioCapture.assert_body_shape` / `.assert_size_within` / `.assert_no_secrets` (§4), called with `empty-repo.yaml`'s `max_bytes: 700000`. Values carried forward unchanged — this is not a re-derivation of the ratchet, just a relocation of the code that enforces it. |
+| `run.sh`'s `claude --print ... "reply with the single word pong"` invocation | `tests/e2e/scenarios/empty-repo.yaml`'s `claude_invocation` block, with `type: token`. Same prompt, same `--max-turns 1`. |
+| `run.sh`'s structural / 700KB ratchet / 9-pattern PII checks | `TokenCapture.assert_body_shape` / `.assert_size_within` / `.assert_no_secrets` (§4), driven by `empty-repo.yaml`'s `max_bytes: 700000`. Values carried forward unchanged — a relocation of the code that enforces the ratchet, not a re-derivation. |
 | `litellm.yaml` (static, one `mock-anthropic` model) | Generated dynamically by `LiteLLMProxy.start` from the full scenario registry (§3), not hand-maintained. |
-| `custom_callbacks.py`'s `TokenCaptureLogger` | Moves to `token_harness/custom_callbacks.py` near-verbatim — it is already correctly designed (env-configured capture dir, minimal `CustomLogger` subclass) and needs no rewrite, only a new import path. |
-| `README.md` | Content merges into this design doc and the new `tests/token-harness/README.md`; the "known issue: pin litellm==1.81.9" note carries forward unchanged — the FastAPI incompatibility it documents is still live. |
-| `make test-tokens-hello`, the `token-harness-hello` CI job | Replaced by `make test-tokens-smoke` / `token-harness-smoke` (§7, §8), running the same `empty-repo` scenario so the every-push signal does not regress during the cutover. |
+| `custom_callbacks.py`'s `TokenCaptureLogger` | Moves to `tests/e2e/src/e2e/custom_callbacks.py` near-verbatim — already correctly designed (env-configured capture dir, minimal `CustomLogger` subclass); only the import path changes. |
+| `README.md` | Content merges into this design doc and the new `tests/e2e/README.md`; the "known issue: pin litellm==1.81.9" note carries forward unchanged — the FastAPI incompatibility it documents is still live. |
+| `make test-tokens-hello`, the `token-harness-hello` CI job | Replaced by `make test-e2e-smoke` / `e2e-smoke` (§7, §8), running the same `empty-repo` scenario so the every-push signal does not regress during the cutover. |
 
-Nothing from `hello/` is kept running in parallel once the cutover
-lands — a smoke-test-shaped scenario and a real framework both
-capturing "empty repo, bare Claude Code" would be the exact
-duplication L6 exists to catch elsewhere in ethos.
+Nothing from the old `hello/` directory is kept running in parallel
+once the cutover lands — a smoke-test-shaped scenario and the real
+framework both capturing "empty repo, bare Claude Code" would be
+the exact duplication this tier exists to catch elsewhere in ethos.
 
 ## 11. Rejected alternatives
 
@@ -418,7 +451,8 @@ duplication L6 exists to catch elsewhere in ethos.
 L6.** This is the design the operator already rejected, restated for
 the record: `run.sh` treats an entire pyramid level as one scenario.
 Adding scenario #2 means editing the embedded Python inside `run.sh`
-and adding a second Makefile target (`test-tokens-hello-2`, or
+and adding a second Makefile target (`test-tokens-hello-2`, or  <!-- historical reference to the rejected shape -->
+
 branching the existing one on an argument) — there is no collection
 mechanism, no marker, no discovery. At six scenarios this becomes six
 near-identical bash scripts or one script with six embedded blocks,

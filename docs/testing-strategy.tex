@@ -125,7 +125,7 @@ L2 & CLI Behavioral      & No  & Subprocess harness       & Every commit   & 2 d
 L3 & MCP Integration     & No  & \tool{ethos serve}       & Every commit   & 2 days \\
 L4 & Agent Behavioral    & Yes & Non-interactive Claude   & Daily          & 4+N days \\
 L5 & Sprint Integration  & Yes & Fixture repo + harness   & Per release    & 5 days \\
-L6 & Payload / Token Profiling & Proxy & Local capture proxy + offline tokenizer & Per release + on-demand & 5--7 days \\
+L6 & End-to-End (mock upstream) & Proxy & LiteLLM mock + pytest & Per release (full) + per push (smoke) & 5--7 days \\
 \bottomrule
 \caption{Test pyramid summary.  ``4+N days'' for L4 means 4 days of
   framework plus 1 day per role for scenario authoring.  L6 uses a
@@ -467,7 +467,28 @@ Per release.  Three Claude processes running sequentially for
 approximately 15 minutes total.  Not suitable for per-commit CI.
 
 % ===================================================================
-\section{Level 6 --- Payload / Token Profiling}
+\section{Level 6 --- End-to-End (mock upstream)}
+
+\subsection*{What this tier is}
+
+A real \cmd{claude --print} subprocess drives against a locally-run
+mock upstream (LiteLLM proxy) so we can observe what Claude Code
+actually puts on the wire without paying Anthropic tokens or
+requiring an API key.  This is the E2E slot in the pyramid --- L4
+and L5 also run \cmd{claude}, but they consume real Anthropic
+tokens and grade the model's output; L6 mocks the upstream and
+observes the client's input construction.
+
+Token / payload profiling is the first scenario \emph{type} this
+tier carries and the reason it was built.  The framework is not
+token-specific: hallucination checks, feature-verification runs,
+and any other assertion that needs a real Claude Code subprocess
+against a controlled upstream plug in through the same
+\pkg{pytest\_generate\_tests} scenario collector.  See
+\fpath{docs/design-e2e-test-framework.md} for the framework
+design; the rest of this section is why the tier exists at all.
+
+\subsection*{Token profiling --- the reason for the tier}
 % ===================================================================
 
 \subsection*{The problem}
