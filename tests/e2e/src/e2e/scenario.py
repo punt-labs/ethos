@@ -29,6 +29,13 @@ class ClaudeInvocation:
     max_turns: int
 
 
+# Keys every scenario type accepts, regardless of ``type``. A type-specific
+# subclass extends this with its own keys (see TokenScenario._KNOWN_KEYS).
+_COMMON_KEYS = frozenset(
+    {"id", "type", "description", "repo_fixture", "claude_invocation", "smoke"}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class Scenario:
     """A scenario declared by a yaml file under tests/e2e/scenarios/."""
@@ -45,9 +52,12 @@ class Scenario:
         """Parse a scenario yaml file, dispatching on its ``type`` key."""
         raw = yaml.safe_load(path.read_text())
         kind = raw.get("type")
-        if kind == "token":
+        if kind != "token":
+            raise ValueError(f"{path}: unknown scenario type {kind!r}")
+        try:
             return TokenScenario._from_raw(raw)
-        raise ValueError(f"{path}: unknown scenario type {kind!r}")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"{path}: {exc}") from exc
 
     def litellm_model_entry(self) -> dict[str, object]:
         """A litellm.yaml ``model_list`` entry keyed by this scenario's id.
@@ -77,18 +87,35 @@ class Scenario:
         )
 
 
+# Keys the "expect" block accepts. A typo here (e.g. "no_secret_pattern")
+# would otherwise silently fall back to the default instead of erroring —
+# for a security-relevant check like the secret scan, silent is the wrong
+# failure mode.
+_EXPECT_KEYS = frozenset({"max_bytes", "no_secret_patterns"})
+
+
 @dataclass(frozen=True, slots=True)
 class TokenScenario(Scenario):
     """A ``type: token`` scenario: payload-size ratchet + secret scan."""
+
+    _KNOWN_KEYS = _COMMON_KEYS | {"expect"}
 
     max_bytes: int
     no_secret_patterns: bool
 
     @classmethod
     def _from_raw(cls, raw: dict[str, object]) -> Self:
+        unknown = raw.keys() - cls._KNOWN_KEYS
+        if unknown:
+            raise ValueError(f"unknown scenario key(s): {sorted(unknown)}")
+
         expect = raw.get("expect", {})
         if not isinstance(expect, dict):
             raise ValueError(f"expect must be a mapping, got {type(expect)!r}")
+        unknown_expect = expect.keys() - _EXPECT_KEYS
+        if unknown_expect:
+            raise ValueError(f"unknown 'expect' key(s): {sorted(unknown_expect)}")
+
         return cls(
             id=str(raw["id"]),
             type=str(raw["type"]),

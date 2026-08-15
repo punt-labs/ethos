@@ -24,9 +24,8 @@ class SecretPattern:
     label: str
 
 
-# Carried forward verbatim from tests/token-harness/hello/run.sh — nine
-# credential shapes proven in CI. False positives are cheaper than false
-# negatives, so patterns stay conservative.
+# Nine credential shapes proven in CI. False positives are cheaper than
+# false negatives, so patterns stay conservative.
 DEFAULT_SECRET_PATTERNS: tuple[SecretPattern, ...] = (
     SecretPattern(re.compile(r"sk-live-[A-Za-z0-9]{16,}"), "Anthropic/OpenAI live key"),
     SecretPattern(re.compile(r"sk-ant-api03-[A-Za-z0-9_\-]{20,}"), "Anthropic API key"),

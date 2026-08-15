@@ -8,21 +8,20 @@ proxy request and receives the full request dict, including
 sent. This hook writes that body verbatim to a per-capture jsonl file
 in ``TOKEN_CAPTURE_DIR`` so ``e2e.runner`` and ``cmd/e2e-attribute``
 can read it back.
-
-Carried forward from tests/token-harness/hello/custom_callbacks.py — the
-capture mechanism was already correctly designed; only the import path
-changed (design §10).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
 from typing import Any  # litellm's CustomLogger base ships no stubs (PY-TS-9)
 
 from litellm.integrations.custom_logger import CustomLogger
+
+logger = logging.getLogger(__name__)
 
 
 class TokenCaptureLogger(CustomLogger):
@@ -43,15 +42,27 @@ class TokenCaptureLogger(CustomLogger):
         # e2e.scenario.Scenario.litellm_model_entry), so the model name
         # here IS the scenario id — filenames carry it so e2e.runner can
         # find a scenario's capture without parsing every file in the dir.
-        model = data.get("model") or "unknown"
+        model = data.get("model")
+        if not model:
+            logger.error(
+                "e2e-capture: request has no model, refusing to write "
+                "(request keys: %s)",
+                sorted(data.keys()),
+            )
+            return response
+
         capture = {
             "timestamp_ns": time.time_ns(),
             "model": model,
             "proxy_server_request": data.get("proxy_server_request", {}),
         }
         capture_file = self._capture_dir / f"{model}-{time.time_ns()}.jsonl"
-        capture_file.write_text(json.dumps(capture, indent=2, default=str) + "\n")
-        print(f"[e2e-capture] wrote {capture_file}", flush=True)
+        try:
+            capture_file.write_text(json.dumps(capture, default=str) + "\n")
+        except OSError:
+            logger.exception("e2e-capture: failed writing %s", capture_file)
+            raise
+        logger.info("e2e-capture: wrote %s", capture_file)
         return response
 
 
