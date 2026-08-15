@@ -194,13 +194,21 @@ cost. L6 is the missing observability tier.
 ### Infrastructure deliverables
 
 1. **Harness config**: `tests/token-harness/litellm.yaml` declares
-   a mock-Anthropic route (returns a canned assistant turn) and a
-   request-body capture callback that writes to
+   (a) an Anthropic-compatible model entry that returns a canned
+   assistant turn — via `mock_response` if supported at
+   proxy-config level, otherwise via a small
+   `CustomLogger.async_pre_call_hook` that short-circuits before
+   any upstream call; and (b) a
+   `CustomLogger.async_post_call_success_hook` that dumps
+   `proxy_server_request` (the full JSON body Claude Code sent) to
    `.tmp/token-captures/<scenario>.jsonl`. Test runner starts the
    proxy as a subprocess via
    `litellm --config tests/token-harness/litellm.yaml --port <ephemeral>`.
-   No bespoke proxy code — LiteLLM is already the standard tool
-   for this pattern.
+   Claude Code points at the proxy via `ANTHROPIC_BASE_URL` +
+   `ANTHROPIC_AUTH_TOKEN` — LiteLLM's own Claude Code quickstart
+   documents this exact wiring, and both the unified `/v1/messages`
+   and pass-through `/anthropic/*` routes are natively served.
+   No bespoke proxy code.
 2. **Attribution parser**: `cmd/token-attribute/` — reads a LiteLLM
    capture file and slices the assembled system prompt by
    ethos-injected markers (`## Personality`, `## Writing Style`,

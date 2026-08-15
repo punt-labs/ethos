@@ -552,16 +552,43 @@ completes.  Requirements:
 
 \textbf{Harness: LiteLLM proxy in mock/record mode.}
 \href{https://github.com/BerriAI/litellm}{LiteLLM} (MIT-licensed
-Python library) exposes an Anthropic-compatible Messages endpoint
-and runs as a subprocess proxy (\cmd{litellm --config litellm.yaml}).
-Its callback surface supports request/response logging to disk.  For
-test use, configure a mock provider that returns a canned static
-turn and enable request-body dumping to
-\fpath{.tmp/token-captures/<scenario>.jsonl}.  Ships as a single
-\cmd{pip install litellm[proxy]} --- CI adds one line to install
-and one line to start.  Already the standard tool for this class
-of proxy-and-capture pattern; the ethos suite adopts it verbatim
-rather than reinventing.
+Python library) is already the standard tool for this class of
+proxy-and-capture pattern; the ethos suite adopts it verbatim
+rather than reinventing.  Concrete integration primitives, verified
+against LiteLLM's own docs (2026-08-14):
+
+\begin{itemize}
+  \item \textbf{Anthropic-compatible surface}: LiteLLM proxy serves
+    Anthropic Messages requests at both a unified route
+    (\fpath{/v1/messages} at the proxy root) and a pass-through
+    route (\fpath{/anthropic/\{endpoint:path\}}).  Claude Code is
+    named as a first-class client in LiteLLM's own quickstart:
+    point at the proxy with
+    \texttt{ANTHROPIC\_BASE\_URL=http://0.0.0.0:4000} and
+    \texttt{ANTHROPIC\_AUTH\_TOKEN=<litellm-master-key>}.
+
+  \item \textbf{Request capture}: register a \pkg{CustomLogger}
+    subclass on the proxy via
+    \texttt{litellm\_settings.callbacks: <dotted.module.path>} in
+    the proxy config.  The \pkg{CustomLogger}'s
+    \texttt{async\_post\_call\_success\_hook(data, ...)} receives
+    the full request dict including \field{proxy\_server\_request}
+    --- the exact JSON body Claude Code sent.  A five-line callback
+    writes that to \fpath{.tmp/token-captures/<scenario>.jsonl}.
+
+  \item \textbf{Canned response}: LiteLLM's SDK exposes a
+    \texttt{mock\_response} field on \cmd{completion()}.  Whether it
+    surfaces as \texttt{model\_list.litellm\_params.mock\_response}
+    in the proxy config is not documented on the public docs page
+    (SDK-only shown) --- verify at implementation time.  If it does,
+    a one-line proxy config declares a mock model.  If it does not,
+    a \pkg{CustomLogger} \texttt{async\_pre\_call\_hook} can
+    short-circuit the request and return the canned response before
+    it hits any upstream.  Both paths are on-shelf.
+\end{itemize}
+
+Ships as a single \cmd{pip install 'litellm[proxy]'}.  CI adds one
+line to install and one line to start.
 
 \emph{Aside on Bifrost}: Bifrost is a separately-deployed workstation
 proxy some developers use for interactive local inspection
@@ -692,11 +719,20 @@ change.
 
 \begin{enumerate}
   \item Harness config: \fpath{tests/token-harness/litellm.yaml}
-    declaring the mock-Anthropic route (canned assistant turn) and
-    the request-body capture callback that writes to
+    declares (a) an Anthropic-compatible model entry that returns a
+    canned turn --- via \texttt{mock\_response} if supported at
+    proxy-config level, otherwise via a small
+    \pkg{CustomLogger.async\_pre\_call\_hook} that short-circuits;
+    and (b) a \pkg{CustomLogger.async\_post\_call\_success\_hook}
+    that dumps \field{proxy\_server\_request} (the full JSON body
+    Claude Code sent) to
     \fpath{.tmp/token-captures/<scenario>.jsonl}.  Started as a
     subprocess by the test runner via
-    \cmd{litellm --config litellm.yaml --port <ephemeral>}.
+    \cmd{litellm --config tests/token-harness/litellm.yaml --port <ephemeral>}.
+    Claude Code points at the proxy via
+    \texttt{ANTHROPIC\_BASE\_URL=http://127.0.0.1:<port>} and
+    \texttt{ANTHROPIC\_AUTH\_TOKEN=<test-key>} --- LiteLLM's own
+    Claude Code quickstart documents this exact wiring.
   \item Attribution parser: Go binary in \fpath{cmd/token-attribute/}
     that reads a LiteLLM capture file and emits the report structure
     above.  Uses persona-block markers already defined by
