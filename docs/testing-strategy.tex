@@ -129,7 +129,7 @@ question objectively.
 L1 & Content Validation    & No    & \tool{make validate-content} & Every commit & 1 day \\
 L2 & CLI Behavior          & No    & Subprocess harness       & Every commit   & 2 days \\
 L3 & MCP Server Behavior   & No    & \tool{ethos serve}       & Every commit   & 2 days \\
-L4 & Wire Observability    & Proxy & LiteLLM mock + pytest    & Per release (full) + per push (smoke) & 5--7 days \\
+L4 & Wire Observability    & No (mock proxy) & LiteLLM mock + pytest    & Per release (full) + per push (smoke) & 5--7 days \\
 L5 & End-to-End Agent      & Yes   & Non-interactive Claude   & Daily          & 4+N days \\
 \bottomrule
 \caption{Test pyramid summary, ordered by dependency escalation:
