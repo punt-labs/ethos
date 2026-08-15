@@ -41,10 +41,10 @@ validate-content: ## Validate all ethos content files
 test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
 	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
 
-test-e2e-smoke: ## Run the fast E2E (L6) smoke scenario (every push; requires litellm + claude CLI)
+test-e2e-smoke: ## Run the fast E2E (L4) smoke scenario (every push; requires litellm + claude CLI)
 	cd tests/e2e && uv run pytest -m "e2e and smoke"
 
-test-e2e: ## Run the full E2E (L6) scenario sweep (per-release; requires litellm + claude CLI)
+test-e2e: ## Run the full E2E (L4) scenario sweep (per-release; requires litellm + claude CLI)
 	cd tests/e2e && uv run pytest -m e2e
 
 baseline-tokens: ## Recapture E2E token baselines (operator-invoked)

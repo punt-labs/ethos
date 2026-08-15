@@ -90,7 +90,7 @@ research/
 # runtime artifacts, never source. See ethos-qs0v.
 **/.create.lock
 
-# tests/e2e (L6 E2E tier): Python bytecode/tool caches and the venv. Keep
+# tests/e2e (L4 E2E tier): Python bytecode/tool caches and the venv. Keep
 # tests/e2e/uv.lock tracked — it's the reproducibility contract.
 tests/e2e/__pycache__/
 tests/e2e/**/__pycache__/
