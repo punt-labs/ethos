@@ -33,7 +33,14 @@ class TokenCaptureLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self._capture_dir = Path(os.getenv("TOKEN_CAPTURE_DIR", "captures"))
-        self._capture_dir.mkdir(parents=True, exist_ok=True)
+        # mkdir is deferred to the first write below, not done here. This
+        # class is instantiated at import time (module-level `token_capture
+        # = TokenCaptureLogger()`); LiteLLM's callback loader logs-and-
+        # continues on an __init__ exception, so an unwritable
+        # TOKEN_CAPTURE_DIR would silently register no callback at all —
+        # e2e.runner would then report a generic "no capture file" with no
+        # clue why. Deferring the mkdir into the try/except below turns
+        # that into a loud, specific failure on first use instead.
 
     async def async_post_call_success_hook(
         self, data: Any, user_api_key_dict: Any, response: Any
@@ -58,6 +65,7 @@ class TokenCaptureLogger(CustomLogger):
         }
         capture_file = self._capture_dir / f"{model}-{time.time_ns()}.jsonl"
         try:
+            self._capture_dir.mkdir(parents=True, exist_ok=True)
             capture_file.write_text(json.dumps(capture, default=str) + "\n")
         except OSError:
             logger.exception("e2e-capture: failed writing %s", capture_file)
