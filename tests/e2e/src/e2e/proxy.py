@@ -8,6 +8,7 @@ in the generated litellm.yaml (design §3, §6).
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import socket
 import subprocess
@@ -20,8 +21,18 @@ import yaml
 from e2e.scenario import ScenarioRegistry
 
 _MASTER_KEY = "sk-litellm-test-e2e"
-_CALLBACK_PATH = "e2e.custom_callbacks.token_capture"
-_STARTUP_TIMEOUT_S = 15.0
+# LiteLLM's callback loader (litellm.proxy.types_utils.utils.get_instance_fn)
+# resolves a dotted callback path as a *file* relative to --config's
+# directory whenever a config file is given — it never falls back to a
+# normal package import. So the callback module has to be copied next to
+# the generated litellm.yaml; "e2e.custom_callbacks" (a real installed
+# package) is not reachable this way.
+_CALLBACK_MODULE_NAME = "custom_callbacks"
+_CALLBACK_PATH = f"{_CALLBACK_MODULE_NAME}.token_capture"
+# litellm's proxy import graph (fastapi, pydantic, litellm-enterprise) is
+# heavy enough that a cold start can take 20s+; a short timeout here reads
+# as a false "proxy never came up" when it's actually still importing.
+_STARTUP_TIMEOUT_S = 45.0
 _POLL_INTERVAL_S = 0.5
 _STOP_TIMEOUT_S = 5.0
 _LOG_TAIL_LINES = 30
@@ -66,6 +77,10 @@ class LiteLLMProxy:
         captures_dir = workdir.parent / f"{workdir.name}-captures"
         captures_dir.mkdir(parents=True, exist_ok=True)
         config_path.write_text(yaml.safe_dump(cls._config(registry)))
+        shutil.copy(
+            Path(__file__).with_name(f"{_CALLBACK_MODULE_NAME}.py"),
+            workdir / f"{_CALLBACK_MODULE_NAME}.py",
+        )
 
         port = cls._ephemeral_port()
         env = os.environ | {"TOKEN_CAPTURE_DIR": str(captures_dir)}
@@ -110,6 +125,11 @@ class LiteLLMProxy:
     def _wait_until_listening(self) -> None:
         deadline = time.monotonic() + _STARTUP_TIMEOUT_S
         while time.monotonic() < deadline:
+            if self._process.poll() is not None:
+                raise RuntimeError(
+                    f"litellm proxy exited early (code {self._process.returncode}); "
+                    f"log tail:\n{self._log_tail()}"
+                )
             try:
                 with socket.create_connection(("127.0.0.1", self._port), timeout=0.5):
                     return
