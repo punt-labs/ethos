@@ -86,14 +86,20 @@ techniques:
     turn.  ``Does the payload we send to the Anthropic API stay
     within budget?'' and ``Which ethos component contributed how many
     tokens to the last session?'' are testable questions.  They are
-    not answered by any of the three surfaces above --- L1 through L5
-    treat network and context as free.
+    not answered by any of the three surfaces above --- every level
+    except Wire Observability (L4) treats network and context as
+    free.
 \end{itemize}
 
-The test pyramid has six levels, ordered by infrastructure cost and
-LLM dependency.  Levels 1--3 are fast, deterministic, and run on
-every commit.  Levels 4--6 require external calls (LLM or a captured
-API proxy) and run on a scheduled or per-release cadence.
+The test pyramid has five levels, ordered by infrastructure cost and
+LLM dependency: L1--L3 need neither network nor an LLM and run on
+every commit; L4 (Wire Observability) needs a captured API proxy but
+no live LLM and no API key, so it runs on every push (smoke) and
+per release (full); L5 (End-to-End Agent) needs a real Anthropic call
+and runs daily.  Levels are ordered by how much a test costs to run,
+not by when the tier was built --- L4 needing less (a mocked proxy)
+than L5 (a live model) is why Wire Observability sits below
+End-to-End Agent despite being the newer tier.
 
 \subsection*{Auditability as a Testing Asset}
 
@@ -106,7 +112,7 @@ contract YAML declares the allowed write set.  Generated agent files
 in \fpath{.claude/agents/} are deterministic outputs of the identity
 store.
 
-The behavioral tests at Levels 4 and 5 do not ask the agent ``did you
+The behavioral tests at Level 5 do not ask the agent ``did you
 follow your constraints?''  They read the audit log and answer the
 question objectively.
 
@@ -120,17 +126,19 @@ question objectively.
   \textbf{Frequency} & \textbf{Effort} \\
 \midrule
 \endhead
-L1 & Content Validation  & No  & \tool{make validate-content} & Every commit   & 1 day \\
-L2 & CLI Behavioral      & No  & Subprocess harness       & Every commit   & 2 days \\
-L3 & MCP Integration     & No  & \tool{ethos serve}       & Every commit   & 2 days \\
-L4 & Agent Behavioral    & Yes & Non-interactive Claude   & Daily          & 4+N days \\
-L5 & Sprint Integration  & Yes & Fixture repo + harness   & Per release    & 5 days \\
-L6 & End-to-End (mock upstream) & Proxy & LiteLLM mock + pytest & Per release (full) + per push (smoke) & 5--7 days \\
+L1 & Content Validation    & No    & \tool{make validate-content} & Every commit & 1 day \\
+L2 & CLI Behavior          & No    & Subprocess harness       & Every commit   & 2 days \\
+L3 & MCP Server Behavior   & No    & \tool{ethos serve}       & Every commit   & 2 days \\
+L4 & Wire Observability    & Proxy & LiteLLM mock + pytest    & Per release (full) + per push (smoke) & 5--7 days \\
+L5 & End-to-End Agent      & Yes   & Non-interactive Claude   & Daily          & 4+N days \\
 \bottomrule
-\caption{Test pyramid summary.  ``4+N days'' for L4 means 4 days of
-  framework plus 1 day per role for scenario authoring.  L6 uses a
-  local capture proxy (in-tree, no external dependency) rather than
-  live LLM calls; a scenario run costs zero Anthropic tokens.}
+\caption{Test pyramid summary, ordered by dependency escalation:
+  no network/LLM (L1--L3), a mocked upstream with no API key or
+  Anthropic spend (L4), a real Anthropic call (L5).  ``4+N days''
+  for L5 means 4 days of framework plus 1 day per role for scenario
+  authoring.  L4 uses a local capture proxy (in-tree, no external
+  dependency) rather than live LLM calls; a scenario run costs zero
+  Anthropic tokens.}
 \end{longtable}
 
 % ===================================================================
@@ -199,7 +207,7 @@ the packages.
 Any validation error or warning is a failure.  Zero tolerance.
 
 % ===================================================================
-\section{Level 2 --- CLI Behavioral}
+\section{Level 2 --- CLI Behavior}
 % ===================================================================
 
 \subsection*{What it covers}
@@ -246,7 +254,7 @@ behavior.  A subprocess test for \cmd{ethos --help} (exit~0) and
 \cmd{ethos bogus-command} (exit~1) does not exist.
 
 % ===================================================================
-\section{Level 3 --- MCP Integration}
+\section{Level 3 --- MCP Server Behavior}
 % ===================================================================
 
 \subsection*{What it covers}
@@ -300,7 +308,374 @@ response, then kills the server.  Approximately 150 lines.  The
 that makes this straightforward.
 
 % ===================================================================
-\section{Level 4 --- Agent Behavioral}
+\section{Level 4 --- Wire Observability}
+% ===================================================================
+
+\subsection*{What this tier is}
+
+A real \cmd{claude --print} subprocess drives against a locally-run
+mock upstream (LiteLLM proxy) so we can observe what Claude Code
+actually puts on the wire without paying Anthropic tokens or
+requiring an API key.  This is the wire-observability slot in the
+pyramid --- L5 (End-to-End Agent) also runs \cmd{claude}, but it
+consumes real Anthropic tokens and grades the model's output; L4
+mocks the upstream and observes the client's input construction
+instead.
+
+Token / payload profiling is the first scenario \emph{type} this
+tier carries and the reason it was built.  The framework is not
+token-specific: hallucination checks, feature-verification runs,
+and any other assertion that needs a real Claude Code subprocess
+against a controlled upstream plug in through the same
+\pkg{pytest\_generate\_tests} scenario collector.  See
+\fpath{docs/design-e2e-test-framework.md} for the framework
+design; the rest of this section is why the tier exists at all.
+
+\subsection*{Token profiling --- the reason for the tier}
+% ===================================================================
+
+\subsection*{The problem}
+
+Ethos treats the model's context window as free.  Every session that
+runs against an ethos-enabled repo pays for content ethos injected:
+
+\begin{itemize}
+  \item A persona block appended to the system prompt by SessionStart
+    and PreCompact hooks (personality, writing style, talents, team
+    context, working context).
+  \item Every \fpath{.claude/agents/*.md} file regenerated on
+    SessionStart and shipped as part of subagent invocations.  A
+    consuming repo tracking a full team submodule ships every
+    identity's agent file whether or not the session ever spawns
+    that agent.
+  \item \field{additionalContext} from every fired hook.  These bytes
+    ride on every subsequent turn until compaction.
+  \item MCP tool descriptions from every connected server.  Ethos does
+    not own these directly, but the seed content and enablement
+    defaults do decide which servers are wired into which repos.
+\end{itemize}
+
+Two known cost drivers, both surfaced by observing the actual
+request payloads sent to the Anthropic Messages API through a proxy
+(Bifrost, deployed on this workstation):
+
+\begin{enumerate}
+  \item \textbf{Team-submodule aggregation.}  A consumer that vendors
+    the whole \texttt{team} submodule receives every identity in the
+    org's engineering closure, whether or not the consumer's own
+    session ever needs them.  DES-057's \texttt{ethos vendor} tool
+    exists to produce a provably-complete but minimal repo-local
+    snapshot; without it, consumers overpay on the full closure.
+
+  \item \textbf{Duplication.}  The same identity content appears in
+    multiple places on a single session --- persona block from
+    SessionStart, generated agent \texttt{.md} content, sometimes
+    team-context section from PreCompact.  A byte counted three times
+    across three attachment points is a byte the model pays for three
+    times.
+\end{enumerate}
+
+Neither driver is caught by L1--L3 or L5.  Content validation (L1)
+does not measure size.  CLI/MCP tests (L2--L3) exercise the binary,
+not the payload it causes to be sent.  End-to-end agent tests (L5)
+verify constraint adherence, not cost.  L4 is the missing lens: cost
+per session, attributed to source, tracked over time.
+
+\subsection*{What it covers}
+
+\begin{itemize}
+  \item Total input tokens per representative Claude Code session
+    against known repo/team configurations (empty repo, single-agent
+    repo, full team submodule, DES-057 vendored copy, rich MCP setup).
+  \item Attribution of token counts to ethos-injected sources: which
+    persona block section, which generated agent file, which hook's
+    \field{additionalContext}, which MCP server's tool schema.
+  \item Regression detection: token count deltas per source across
+    ethos releases.
+\end{itemize}
+
+\subsection*{Test harness (CI-portable, no external dependency)}
+
+The harness is a local proxy the test process spins up on
+\texttt{localhost}, points Claude Code at via
+\texttt{ANTHROPIC\_BASE\_URL}, and tears down when the scenario
+completes.  Requirements:
+
+\begin{itemize}
+  \item Runs identically on a developer workstation and in CI --- no
+    dependency on any specific machine, VPN, or network host.
+  \item Captures the full request body Claude Code sends (system
+    prompt, messages, tools) as JSON, deterministic per scenario.
+  \item Returns a canned minimal response so the scenario terminates
+    without hitting a live model --- CI cost per run is zero, offline
+    runs work.
+  \item Records to a per-scenario file under \fpath{.tmp/token-captures/}
+    that the attribution parser reads.
+\end{itemize}
+
+\textbf{Harness: LiteLLM proxy in mock/record mode.}
+\href{https://github.com/BerriAI/litellm}{LiteLLM} (MIT-licensed
+Python library) is already the standard tool for this class of
+proxy-and-capture pattern; the ethos suite adopts it verbatim
+rather than reinventing.  Concrete integration primitives, verified
+against LiteLLM's own docs (2026-08-14):
+
+\begin{itemize}
+  \item \textbf{Anthropic-compatible surface}: LiteLLM proxy serves
+    Anthropic Messages requests at both a unified route
+    (\fpath{/v1/messages} at the proxy root) and a pass-through
+    route (\fpath{/anthropic/\{endpoint:path\}}).  Claude Code is
+    named as a first-class client in LiteLLM's own quickstart:
+    point at the proxy with
+    \texttt{ANTHROPIC\_BASE\_URL=http://0.0.0.0:4000} and
+    \texttt{ANTHROPIC\_AUTH\_TOKEN=<litellm-master-key>}.
+
+  \item \textbf{Request capture}: register a \pkg{CustomLogger}
+    subclass on the proxy via
+    \texttt{litellm\_settings.callbacks: <dotted.module.path>} in
+    the proxy config.  The \pkg{CustomLogger}'s
+    \texttt{async\_post\_call\_success\_hook(data, ...)} receives
+    the full request dict including \field{proxy\_server\_request}
+    --- the exact JSON body Claude Code sent.  A five-line callback
+    writes that to \fpath{.tmp/token-captures/<scenario>.jsonl}.
+
+  \item \textbf{Canned response}: verified working at proxy level
+    on \texttt{litellm==1.81.9} --- one line in the proxy config
+    declares a mock model:
+    \texttt{model\_list.litellm\_params.mock\_response: "..."}.
+    Claude Code accepts the returned envelope and its own
+    \field{modelUsage} block populates from LiteLLM's mock.  No
+    upstream call, zero Anthropic tokens consumed per scenario.
+    The E2E framework in \fpath{tests/e2e/} runs the full pipe
+    end-to-end (\cmd{make test-e2e-smoke}).
+\end{itemize}
+
+Ships as a single \cmd{pip install 'litellm[proxy]==1.81.9'}.  The
+version pin matters: LiteLLM's latest releases as of 2026-08-15
+fail to boot with
+\texttt{ImportError: cannot import name 'get\_flat\_dependant' from
+'fastapi.dependencies.utils'} on Python 3.12+ (FastAPI removed the
+symbol; LiteLLM's own proxy still imports it).  \texttt{1.81.9}
+boots cleanly.  Revisit the pin when a newer LiteLLM restores the
+import or caps its FastAPI ceiling.
+
+\emph{Aside on Bifrost}: Bifrost is a separately-deployed workstation
+proxy some developers use for interactive local inspection
+(\texttt{CLAUDE\_PROVIDER=bifrost} stanza in the workspace
+\fpath{.envrc.local}).  It is a useful eyeball tool but is NOT the
+test harness --- Bifrost lives on a specific machine, so CI can't
+reach it and other developers don't necessarily run it.  The L4
+harness must stand on its own.
+
+\subsection*{Tokenizer (offline-only for CI)}
+
+The tokenizer must run in CI without external network.  Anthropic's
+\texttt{messages/count\_tokens} endpoint is authoritative but
+requires an API call and a live key --- unsuitable as the primary
+tokenizer for a per-release CI job.
+
+Options that satisfy the offline requirement:
+
+\begin{itemize}
+  \item \textbf{\pkg{@anthropic-ai/tokenizer}} (npm) or the
+    equivalent Python package, if Anthropic ships one for the current
+    Claude family.  Check first --- the SDK docs are the ground
+    truth.
+  \item \textbf{\pkg{tiktoken}} (Python, MIT) with an explicit
+    ``approximate --- calibrated against Anthropic's tokenizer, not
+    identical'' disclaimer stamped into every report.  This is what
+    the LiteLLM cost-estimator uses when Anthropic doesn't ship a
+    first-party option.
+  \item \textbf{Anthropic \texttt{messages/count\_tokens} endpoint,
+    only for a periodic calibration run}.  Not for CI.  Used
+    manually --- once per release, once every N releases, or when
+    the local-tokenizer approximate baseline drifts noticeably ---
+    to cross-check that the offline tokenizer is still close enough
+    to authoritative.  Cost bounded and human-gated.
+\end{itemize}
+
+Recommend the local approximate tokenizer as the CI default and the
+Anthropic endpoint as an occasional operator-run calibration check.
+Every report stamps ``approximate'' unless the calibration run
+tightens the confidence.
+
+\subsection*{Attribution}
+
+Given a captured payload from the harness proxy, split it into sources ethos
+either owns or influences.  The system-prompt assembly is
+addressable because ethos-injected sections carry known headings
+(\texttt{\#\# Personality}, \texttt{\#\# Writing Style},
+\texttt{\#\# Team Context}) --- a small parser can slice the
+assembled prompt and tokenize each slice separately.  Message-content
+tool results are addressable by \field{tool\_use\_id}.  Tool schemas
+are addressable by MCP server name.
+
+Report structure:
+
+\begin{lstlisting}[language={}]
+scenario: session-start-with-team-submodule
+total_input_tokens: 8642
+attribution:
+  system_prompt:
+    claude_code_baseline: 3210
+    ethos_persona_block:
+      personality: 412
+      writing_style: 187
+      team_context: 924  # driven by team-submodule aggregation
+      talents: 63
+    generated_agents_manifest: 1204  # 28 files, mostly redundant with persona
+    mcp_tool_descriptions:
+      biff: 340
+      quarry: 512
+      ethos_self: 218
+      ...
+  first_turn_message:
+    session_start_additional_context: 402  # from ethos SessionStart hook
+    user_prompt: 12
+  ...
+delta_vs_baseline: +342 tokens (+4.1%) -- git bisect flag
+\end{lstlisting}
+
+\subsection*{Fixture scenarios}
+
+At minimum, one per representative repo/team configuration:
+
+\begin{longtable}{ll}
+\toprule
+\textbf{Scenario} & \textbf{What it isolates} \\
+\midrule
+\endhead
+\texttt{empty-repo}          & Baseline Claude Code with no ethos content \\
+\texttt{ethos-single-agent}  & Single-agent repo, minimal identity closure \\
+\texttt{ethos-team-submodule} & Full team submodule (aggregation cost) \\
+\texttt{ethos-vendored-minimal} & DES-057 \texttt{ethos vendor --all} snapshot \\
+\texttt{ethos-rich-mcp}      & Multiple MCP servers wired (tool-schema cost) \\
+\texttt{ethos-post-compact}  & PreCompact hook fired (context restoration cost) \\
+\bottomrule
+\caption{Baseline profiling scenarios.  Each isolates one
+  ethos-side lever so a regression attributes cleanly.}
+\end{longtable}
+
+\subsection*{Pass/fail criterion}
+
+Not a hard fail.  L4 produces a report, compares to the baseline
+recorded in \fpath{tests/token-baselines/<scenario>.json}, and flags:
+
+\begin{itemize}
+  \item Delta $> 5\%$ on any single scenario --- PR comment, human
+    review before merge.
+  \item Delta $> 15\%$ on any single scenario --- CI check turns
+    yellow, blocks the auto-merge memory but not the merge button.
+  \item New source of tokens (a section not in the last baseline) ---
+    PR comment, no gate.
+\end{itemize}
+
+Cost regressions are treated the way security regressions are
+treated: surfaced, reviewed, sometimes accepted.  A behavioral gain
+worth 400 extra tokens is a fair trade; a mystery 400 extra tokens
+is not.
+
+\subsection*{Run frequency}
+
+Per release, and on-demand during ethos changes that touch the
+persona-block builder, generated-agents synthesizer, or hook
+\field{additionalContext} format.  Not per-commit --- spinning up
+the capture proxy and tokenizing every scenario is more
+infrastructure than a git commit warrants for a subword-level
+change.
+
+\subsection*{Infrastructure deliverables}
+
+\begin{enumerate}
+  \item Harness config: \fpath{tests/token-harness/litellm.yaml}
+    declares (a) an Anthropic-compatible model entry that returns a
+    canned turn --- via \texttt{mock\_response} if supported at
+    proxy-config level, otherwise via a small
+    \pkg{CustomLogger.async\_pre\_call\_hook} that short-circuits;
+    and (b) a \pkg{CustomLogger.async\_post\_call\_success\_hook}
+    that dumps \field{proxy\_server\_request} (the full JSON body
+    Claude Code sent) to
+    \fpath{.tmp/token-captures/<scenario>.jsonl}.  Started as a
+    subprocess by the test runner via
+    \cmd{litellm --config tests/token-harness/litellm.yaml --port <ephemeral>}.
+    Claude Code points at the proxy via
+    \texttt{ANTHROPIC\_BASE\_URL=http://127.0.0.1:<port>} and
+    \texttt{ANTHROPIC\_AUTH\_TOKEN=<test-key>} --- LiteLLM's own
+    Claude Code quickstart documents this exact wiring.
+  \item Attribution parser: Go binary in \fpath{cmd/token-attribute/}
+    that reads a LiteLLM capture file and emits the report structure
+    above.  Uses persona-block markers already defined by
+    \pkg{internal/hook/persona.go}.
+  \item Local tokenizer wiring: pick and pin the offline tokenizer
+    (Anthropic first-party if it exists, else \pkg{tiktoken} with
+    calibration disclaimer).  Wrap in a small Go interface so a
+    calibration run against the Anthropic endpoint can validate the
+    approximate.
+  \item Fixture scenarios: YAML file per scenario in
+    \fpath{tests/token-scenarios/}, each declaring the repo/team
+    configuration to reproduce plus the Claude Code invocation
+    (\cmd{claude --bare -p "<task>" -{}-max-turns 1} pointed at the
+    LiteLLM proxy).
+  \item Baseline captures: \fpath{tests/token-baselines/<scenario>.json}
+    committed, regenerated via a \cmd{make baseline-tokens} target
+    (operator-invoked on a controlled workstation, not automatic).
+  \item Reporting: \cmd{make test-tokens} boots LiteLLM, runs every
+    scenario, tokenizes captures, writes reports to
+    \fpath{.tmp/token-reports/}, compares to baseline, prints delta
+    summary alongside the attribution tree.  Exits 0 always; deltas
+    are surfaced via PR comment, not the exit code.
+  \item CI wiring: per-release GitHub Actions job installs LiteLLM
+    (\cmd{pip install 'litellm[proxy]'}) and runs
+    \cmd{make test-tokens} against the committed baselines.  No
+    Anthropic API key needed --- LiteLLM's mock provider returns
+    a canned turn.
+  \item Calibration recipe: separate \cmd{make calibrate-tokens}
+    target (not CI) that re-runs a chosen scenario against the
+    Anthropic \texttt{messages/count\_tokens} endpoint, compares to
+    the offline tokenizer's number, and updates the calibration
+    disclaimer if the delta is significant.  Operator-invoked, human
+    reviewed.
+\end{enumerate}
+
+\emph{Naming note}: this enumeration is the original planning
+prose and predates the concrete implementation.  The framework that
+actually shipped lives under \fpath{tests/e2e/} (Python, pytest) and
+\fpath{cmd/e2e-attribute/} (Go), driven by \cmd{make test-e2e} /
+\cmd{make test-e2e-smoke} --- see
+\fpath{docs/design-e2e-test-framework.md} and
+\fpath{tests/e2e/README.md} for the paths and commands as built.
+
+\subsection*{Prerequisites and dependencies}
+
+\begin{itemize}
+  \item LiteLLM installed in the CI Python toolchain
+    (\cmd{pip install 'litellm[proxy]'}).  Already the standard
+    tool for Anthropic-compatible mock/capture proxies; no
+    reinvention.
+  \item An offline Claude-compatible tokenizer, either Anthropic
+    first-party or a calibrated approximation.  Verify which is
+    current when the framework is built.
+  \item Decision on where the fixture scenarios live --- a separate
+    \texttt{ethos-token-fixture} repo or in-tree under
+    \fpath{tests/token-scenarios/}.  In-tree is simpler for the
+    first cut; extract later if fixtures grow.
+  \item No dependency on Bifrost or any external proxy.  Bifrost is
+    a workstation eyeball tool, not a CI harness.
+\end{itemize}
+
+\subsection*{Effort estimate}
+
+Approximately 4--5 days for initial framework + baseline capture
+across 4--6 scenarios.  Breakdown: LiteLLM config + mock provider
+0.5 day, attribution parser 2--3 days, tokenizer wiring +
+calibration recipe 1 day, scenarios + baselines 0.5 day, CI wiring
++ docs 0.5 day.  Reusing LiteLLM shaves the earlier estimate by
+1--2 days over building a bespoke capture proxy.  Then ongoing
+scenario authoring as the ethos surface changes (new hook, new
+bundle, new MCP server).
+
+% ===================================================================
+\section{Level 5 --- End-to-End Agent}
 % ===================================================================
 
 \subsection*{The problem}
@@ -403,429 +778,6 @@ is enforced via \cmd{--max-budget-usd}.  Total daily cost for 10
 scenarios: approximately \$1.00.
 
 % ===================================================================
-\section{Level 5 --- Sprint Team Integration}
-% ===================================================================
-
-\subsection*{What it tests}
-
-A full sprint cycle (architect briefs $\rightarrow$ implementer
-commits $\rightarrow$ reviewer reports) completes a canned task with
-known defects.  This verifies that role constraints are respected
-across a real multi-agent workflow, not just in isolated prompts.
-
-\subsection*{Pass criteria}
-
-\begin{enumerate}
-  \item Both seeded bugs are fixed in the committed diff.
-  \item Reviewer findings reference line numbers in the actual diff.
-  \item Reviewer audit log shows zero \texttt{Write}/\texttt{Edit}
-    calls against production files.
-  \item \fpath{DESIGN.md} contains an ADR with \texttt{SETTLED}
-    status.
-  \item \cmd{make check} passes in the fixture repo at completion.
-\end{enumerate}
-
-\subsection*{Test fixture: \texttt{ethos-sprint-fixture}}
-
-A minimal Go repo containing:
-
-\begin{itemize}
-  \item \fpath{pkg/counter/counter.go} with two seeded bugs:
-    off-by-one in \pkg{Increment}, nil pointer in \pkg{Reset}.
-  \item \fpath{pkg/counter/counter\_test.go} that covers neither bug.
-  \item \fpath{DESIGN.md} with an ADR in \texttt{PROPOSED} status.
-  \item A mission contract YAML naming
-    \texttt{leader=claude}, \texttt{worker=bwk},
-    \texttt{reviewer=djb},
-    \texttt{write\_set=[pkg/counter/*.go, DESIGN.md]}.
-\end{itemize}
-
-\subsection*{Automated post-run checks}
-
-\begin{lstlisting}[language=bash]
-# Both bugs fixed
-git diff HEAD~2..HEAD -- pkg/counter/ | grep -c "^+" | test $(cat) -gt 0
-
-# Only implementer committed Go files
-git log --author="bwk" --name-only | grep -c "\.go$" | test $(cat) -gt 0
-git log --author="djb" --name-only | grep "\.go$" && exit 1
-
-# Reviewer constraint: no Edit/Write calls
-jq '.tool_name' ~/.punt-labs/ethos/sessions/djb-*.audit.jsonl \
-  | grep -E "Edit|Write" && exit 1
-
-# Tests pass
-go test ./pkg/counter/...
-
-# ADR settled
-grep -c "SETTLED" DESIGN.md | test $(cat) -eq 1
-\end{lstlisting}
-
-\subsection*{Run frequency}
-
-Per release.  Three Claude processes running sequentially for
-approximately 15 minutes total.  Not suitable for per-commit CI.
-
-% ===================================================================
-\section{Level 6 --- End-to-End (mock upstream)}
-
-\subsection*{What this tier is}
-
-A real \cmd{claude --print} subprocess drives against a locally-run
-mock upstream (LiteLLM proxy) so we can observe what Claude Code
-actually puts on the wire without paying Anthropic tokens or
-requiring an API key.  This is the E2E slot in the pyramid --- L4
-and L5 also run \cmd{claude}, but they consume real Anthropic
-tokens and grade the model's output; L6 mocks the upstream and
-observes the client's input construction.
-
-Token / payload profiling is the first scenario \emph{type} this
-tier carries and the reason it was built.  The framework is not
-token-specific: hallucination checks, feature-verification runs,
-and any other assertion that needs a real Claude Code subprocess
-against a controlled upstream plug in through the same
-\pkg{pytest\_generate\_tests} scenario collector.  See
-\fpath{docs/design-e2e-test-framework.md} for the framework
-design; the rest of this section is why the tier exists at all.
-
-\subsection*{Token profiling --- the reason for the tier}
-% ===================================================================
-
-\subsection*{The problem}
-
-Ethos treats the model's context window as free.  Every session that
-runs against an ethos-enabled repo pays for content ethos injected:
-
-\begin{itemize}
-  \item A persona block appended to the system prompt by SessionStart
-    and PreCompact hooks (personality, writing style, talents, team
-    context, working context).
-  \item Every \fpath{.claude/agents/*.md} file regenerated on
-    SessionStart and shipped as part of subagent invocations.  A
-    consuming repo tracking a full team submodule ships every
-    identity's agent file whether or not the session ever spawns
-    that agent.
-  \item \field{additionalContext} from every fired hook.  These bytes
-    ride on every subsequent turn until compaction.
-  \item MCP tool descriptions from every connected server.  Ethos does
-    not own these directly, but the seed content and enablement
-    defaults do decide which servers are wired into which repos.
-\end{itemize}
-
-Two known cost drivers, both surfaced by observing the actual
-request payloads sent to the Anthropic Messages API through a proxy
-(Bifrost, deployed on this workstation):
-
-\begin{enumerate}
-  \item \textbf{Team-submodule aggregation.}  A consumer that vendors
-    the whole \texttt{team} submodule receives every identity in the
-    org's engineering closure, whether or not the consumer's own
-    session ever needs them.  DES-057's \texttt{ethos vendor} tool
-    exists to produce a provably-complete but minimal repo-local
-    snapshot; without it, consumers overpay on the full closure.
-
-  \item \textbf{Duplication.}  The same identity content appears in
-    multiple places on a single session --- persona block from
-    SessionStart, generated agent \texttt{.md} content, sometimes
-    team-context section from PreCompact.  A byte counted three times
-    across three attachment points is a byte the model pays for three
-    times.
-\end{enumerate}
-
-Neither driver is caught by L1--L5.  Content validation (L1) does
-not measure size.  CLI/MCP tests (L2--L3) exercise the binary, not
-the payload it causes to be sent.  Behavioral tests (L4) verify
-constraint adherence, not cost.  Sprint integration (L5) verifies
-multi-agent flow, not cost.  L6 is the missing lens: cost per
-session, attributed to source, tracked over time.
-
-\subsection*{What it covers}
-
-\begin{itemize}
-  \item Total input tokens per representative Claude Code session
-    against known repo/team configurations (empty repo, single-agent
-    repo, full team submodule, DES-057 vendored copy, rich MCP setup).
-  \item Attribution of token counts to ethos-injected sources: which
-    persona block section, which generated agent file, which hook's
-    \field{additionalContext}, which MCP server's tool schema.
-  \item Regression detection: token count deltas per source across
-    ethos releases.
-\end{itemize}
-
-\subsection*{Test harness (CI-portable, no external dependency)}
-
-The harness is a local proxy the test process spins up on
-\texttt{localhost}, points Claude Code at via
-\texttt{ANTHROPIC\_BASE\_URL}, and tears down when the scenario
-completes.  Requirements:
-
-\begin{itemize}
-  \item Runs identically on a developer workstation and in CI --- no
-    dependency on any specific machine, VPN, or network host.
-  \item Captures the full request body Claude Code sends (system
-    prompt, messages, tools) as JSON, deterministic per scenario.
-  \item Returns a canned minimal response so the scenario terminates
-    without hitting a live model --- CI cost per run is zero, offline
-    runs work.
-  \item Records to a per-scenario file under \fpath{.tmp/token-captures/}
-    that the attribution parser reads.
-\end{itemize}
-
-\textbf{Harness: LiteLLM proxy in mock/record mode.}
-\href{https://github.com/BerriAI/litellm}{LiteLLM} (MIT-licensed
-Python library) is already the standard tool for this class of
-proxy-and-capture pattern; the ethos suite adopts it verbatim
-rather than reinventing.  Concrete integration primitives, verified
-against LiteLLM's own docs (2026-08-14):
-
-\begin{itemize}
-  \item \textbf{Anthropic-compatible surface}: LiteLLM proxy serves
-    Anthropic Messages requests at both a unified route
-    (\fpath{/v1/messages} at the proxy root) and a pass-through
-    route (\fpath{/anthropic/\{endpoint:path\}}).  Claude Code is
-    named as a first-class client in LiteLLM's own quickstart:
-    point at the proxy with
-    \texttt{ANTHROPIC\_BASE\_URL=http://0.0.0.0:4000} and
-    \texttt{ANTHROPIC\_AUTH\_TOKEN=<litellm-master-key>}.
-
-  \item \textbf{Request capture}: register a \pkg{CustomLogger}
-    subclass on the proxy via
-    \texttt{litellm\_settings.callbacks: <dotted.module.path>} in
-    the proxy config.  The \pkg{CustomLogger}'s
-    \texttt{async\_post\_call\_success\_hook(data, ...)} receives
-    the full request dict including \field{proxy\_server\_request}
-    --- the exact JSON body Claude Code sent.  A five-line callback
-    writes that to \fpath{.tmp/token-captures/<scenario>.jsonl}.
-
-  \item \textbf{Canned response}: verified working at proxy level
-    on \texttt{litellm==1.81.9} --- one line in the proxy config
-    declares a mock model:
-    \texttt{model\_list.litellm\_params.mock\_response: "..."}.
-    Claude Code accepts the returned envelope and its own
-    \field{modelUsage} block populates from LiteLLM's mock.  No
-    upstream call, zero Anthropic tokens consumed per scenario.
-    Hello-world in \fpath{tests/token-harness/hello/} runs the full
-    pipe end-to-end (\cmd{make test-tokens-hello}).
-\end{itemize}
-
-Ships as a single \cmd{pip install 'litellm[proxy]==1.81.9'}.  The
-version pin matters: LiteLLM's latest releases as of 2026-08-15
-fail to boot with
-\texttt{ImportError: cannot import name 'get\_flat\_dependant' from
-'fastapi.dependencies.utils'} on Python 3.12+ (FastAPI removed the
-symbol; LiteLLM's own proxy still imports it).  \texttt{1.81.9}
-boots cleanly.  Revisit the pin when a newer LiteLLM restores the
-import or caps its FastAPI ceiling.
-
-\emph{Aside on Bifrost}: Bifrost is a separately-deployed workstation
-proxy some developers use for interactive local inspection
-(\texttt{CLAUDE\_PROVIDER=bifrost} stanza in the workspace
-\fpath{.envrc.local}).  It is a useful eyeball tool but is NOT the
-test harness --- Bifrost lives on a specific machine, so CI can't
-reach it and other developers don't necessarily run it.  The L6
-harness must stand on its own.
-
-\subsection*{Tokenizer (offline-only for CI)}
-
-The tokenizer must run in CI without external network.  Anthropic's
-\texttt{messages/count\_tokens} endpoint is authoritative but
-requires an API call and a live key --- unsuitable as the primary
-tokenizer for a per-release CI job.
-
-Options that satisfy the offline requirement:
-
-\begin{itemize}
-  \item \textbf{\pkg{@anthropic-ai/tokenizer}} (npm) or the
-    equivalent Python package, if Anthropic ships one for the current
-    Claude family.  Check first --- the SDK docs are the ground
-    truth.
-  \item \textbf{\pkg{tiktoken}} (Python, MIT) with an explicit
-    ``approximate --- calibrated against Anthropic's tokenizer, not
-    identical'' disclaimer stamped into every report.  This is what
-    the LiteLLM cost-estimator uses when Anthropic doesn't ship a
-    first-party option.
-  \item \textbf{Anthropic \texttt{messages/count\_tokens} endpoint,
-    only for a periodic calibration run}.  Not for CI.  Used
-    manually --- once per release, once every N releases, or when
-    the local-tokenizer approximate baseline drifts noticeably ---
-    to cross-check that the offline tokenizer is still close enough
-    to authoritative.  Cost bounded and human-gated.
-\end{itemize}
-
-Recommend the local approximate tokenizer as the CI default and the
-Anthropic endpoint as an occasional operator-run calibration check.
-Every report stamps ``approximate'' unless the calibration run
-tightens the confidence.
-
-\subsection*{Attribution}
-
-Given a captured payload from the harness proxy, split it into sources ethos
-either owns or influences.  The system-prompt assembly is
-addressable because ethos-injected sections carry known headings
-(\texttt{\#\# Personality}, \texttt{\#\# Writing Style},
-\texttt{\#\# Team Context}) --- a small parser can slice the
-assembled prompt and tokenize each slice separately.  Message-content
-tool results are addressable by \field{tool\_use\_id}.  Tool schemas
-are addressable by MCP server name.
-
-Report structure:
-
-\begin{lstlisting}[language={}]
-scenario: session-start-with-team-submodule
-total_input_tokens: 8642
-attribution:
-  system_prompt:
-    claude_code_baseline: 3210
-    ethos_persona_block:
-      personality: 412
-      writing_style: 187
-      team_context: 924  # driven by team-submodule aggregation
-      talents: 63
-    generated_agents_manifest: 1204  # 28 files, mostly redundant with persona
-    mcp_tool_descriptions:
-      biff: 340
-      quarry: 512
-      ethos_self: 218
-      ...
-  first_turn_message:
-    session_start_additional_context: 402  # from ethos SessionStart hook
-    user_prompt: 12
-  ...
-delta_vs_baseline: +342 tokens (+4.1%) -- git bisect flag
-\end{lstlisting}
-
-\subsection*{Fixture scenarios}
-
-At minimum, one per representative repo/team configuration:
-
-\begin{longtable}{ll}
-\toprule
-\textbf{Scenario} & \textbf{What it isolates} \\
-\midrule
-\endhead
-\texttt{empty-repo}          & Baseline Claude Code with no ethos content \\
-\texttt{ethos-single-agent}  & Single-agent repo, minimal identity closure \\
-\texttt{ethos-team-submodule} & Full team submodule (aggregation cost) \\
-\texttt{ethos-vendored-minimal} & DES-057 \texttt{ethos vendor --all} snapshot \\
-\texttt{ethos-rich-mcp}      & Multiple MCP servers wired (tool-schema cost) \\
-\texttt{ethos-post-compact}  & PreCompact hook fired (context restoration cost) \\
-\bottomrule
-\caption{Baseline profiling scenarios.  Each isolates one
-  ethos-side lever so a regression attributes cleanly.}
-\end{longtable}
-
-\subsection*{Pass/fail criterion}
-
-Not a hard fail.  L6 produces a report, compares to the baseline
-recorded in \fpath{tests/token-baselines/<scenario>.json}, and flags:
-
-\begin{itemize}
-  \item Delta $> 5\%$ on any single scenario --- PR comment, human
-    review before merge.
-  \item Delta $> 15\%$ on any single scenario --- CI check turns
-    yellow, blocks the auto-merge memory but not the merge button.
-  \item New source of tokens (a section not in the last baseline) ---
-    PR comment, no gate.
-\end{itemize}
-
-Cost regressions are treated the way security regressions are
-treated: surfaced, reviewed, sometimes accepted.  A behavioral gain
-worth 400 extra tokens is a fair trade; a mystery 400 extra tokens
-is not.
-
-\subsection*{Run frequency}
-
-Per release, and on-demand during ethos changes that touch the
-persona-block builder, generated-agents synthesizer, or hook
-\field{additionalContext} format.  Not per-commit --- spinning up
-the capture proxy and tokenizing every scenario is more
-infrastructure than a git commit warrants for a subword-level
-change.
-
-\subsection*{Infrastructure deliverables}
-
-\begin{enumerate}
-  \item Harness config: \fpath{tests/token-harness/litellm.yaml}
-    declares (a) an Anthropic-compatible model entry that returns a
-    canned turn --- via \texttt{mock\_response} if supported at
-    proxy-config level, otherwise via a small
-    \pkg{CustomLogger.async\_pre\_call\_hook} that short-circuits;
-    and (b) a \pkg{CustomLogger.async\_post\_call\_success\_hook}
-    that dumps \field{proxy\_server\_request} (the full JSON body
-    Claude Code sent) to
-    \fpath{.tmp/token-captures/<scenario>.jsonl}.  Started as a
-    subprocess by the test runner via
-    \cmd{litellm --config tests/token-harness/litellm.yaml --port <ephemeral>}.
-    Claude Code points at the proxy via
-    \texttt{ANTHROPIC\_BASE\_URL=http://127.0.0.1:<port>} and
-    \texttt{ANTHROPIC\_AUTH\_TOKEN=<test-key>} --- LiteLLM's own
-    Claude Code quickstart documents this exact wiring.
-  \item Attribution parser: Go binary in \fpath{cmd/token-attribute/}
-    that reads a LiteLLM capture file and emits the report structure
-    above.  Uses persona-block markers already defined by
-    \pkg{internal/hook/persona.go}.
-  \item Local tokenizer wiring: pick and pin the offline tokenizer
-    (Anthropic first-party if it exists, else \pkg{tiktoken} with
-    calibration disclaimer).  Wrap in a small Go interface so a
-    calibration run against the Anthropic endpoint can validate the
-    approximate.
-  \item Fixture scenarios: YAML file per scenario in
-    \fpath{tests/token-scenarios/}, each declaring the repo/team
-    configuration to reproduce plus the Claude Code invocation
-    (\cmd{claude --bare -p "<task>" -{}-max-turns 1} pointed at the
-    LiteLLM proxy).
-  \item Baseline captures: \fpath{tests/token-baselines/<scenario>.json}
-    committed, regenerated via a \cmd{make baseline-tokens} target
-    (operator-invoked on a controlled workstation, not automatic).
-  \item Reporting: \cmd{make test-tokens} boots LiteLLM, runs every
-    scenario, tokenizes captures, writes reports to
-    \fpath{.tmp/token-reports/}, compares to baseline, prints delta
-    summary alongside the attribution tree.  Exits 0 always; deltas
-    are surfaced via PR comment, not the exit code.
-  \item CI wiring: per-release GitHub Actions job installs LiteLLM
-    (\cmd{pip install 'litellm[proxy]'}) and runs
-    \cmd{make test-tokens} against the committed baselines.  No
-    Anthropic API key needed --- LiteLLM's mock provider returns
-    a canned turn.
-  \item Calibration recipe: separate \cmd{make calibrate-tokens}
-    target (not CI) that re-runs a chosen scenario against the
-    Anthropic \texttt{messages/count\_tokens} endpoint, compares to
-    the offline tokenizer's number, and updates the calibration
-    disclaimer if the delta is significant.  Operator-invoked, human
-    reviewed.
-\end{enumerate}
-
-\subsection*{Prerequisites and dependencies}
-
-\begin{itemize}
-  \item LiteLLM installed in the CI Python toolchain
-    (\cmd{pip install 'litellm[proxy]'}).  Already the standard
-    tool for Anthropic-compatible mock/capture proxies; no
-    reinvention.
-  \item An offline Claude-compatible tokenizer, either Anthropic
-    first-party or a calibrated approximation.  Verify which is
-    current when the framework is built.
-  \item Decision on where the fixture scenarios live --- a separate
-    \texttt{ethos-token-fixture} repo (parallel to the L5 sprint
-    fixture) or in-tree under \fpath{tests/token-scenarios/}.
-    In-tree is simpler for the first cut; extract later if fixtures
-    grow.
-  \item No dependency on Bifrost or any external proxy.  Bifrost is
-    a workstation eyeball tool, not a CI harness.
-\end{itemize}
-
-\subsection*{Effort estimate}
-
-Approximately 4--5 days for initial framework + baseline capture
-across 4--6 scenarios.  Breakdown: LiteLLM config + mock provider
-0.5 day, attribution parser 2--3 days, tokenizer wiring +
-calibration recipe 1 day, scenarios + baselines 0.5 day, CI wiring
-+ docs 0.5 day.  Reusing LiteLLM shaves the earlier estimate by
-1--2 days over building a bespoke capture proxy.  Then ongoing
-scenario authoring as the ethos surface changes (new hook, new
-bundle, new MCP server).
-
-% ===================================================================
 \section{Tooling Landscape}
 % ===================================================================
 
@@ -865,7 +817,7 @@ test cases.  Assertion types: \texttt{contains}, \texttt{regex},
 \texttt{javascript}, \texttt{cost}, \texttt{latency}.  The
 \texttt{llm-rubric} type sends output plus a plain-English grading
 criterion to a configurable judge model.  First-choice tool for
-Level~4 behavioral tests.
+Level~5 behavioral tests.
 
 \textbf{autoevals} (\url{https://github.com/braintrustdata/autoevals})
 --- Open-source evaluators: \pkg{Factuality}, \pkg{Hallucination},
@@ -946,18 +898,20 @@ Gaps identified at v3.0.0 (all resolved by v3.1.0):
 
 \subsection{Current State (v3.7.0)}
 
-As of v3.7.0, the test pyramid through L4 is fully implemented:
+As of v3.7.0, content validation, CLI behavior, MCP server behavior,
+and end-to-end agent behavioral tests (today's L1, L2, L3, and L5)
+are fully implemented:
 
 \begin{itemize}
   \item \textbf{2,187 tests} across 14 packages, 89.8\% mission
     package coverage.
   \item \textbf{23.9 KLOC production Go, 37.7 KLOC test Go} (1.58:1
     test-to-production ratio).
-  \item L1 content validation, L2 CLI subprocess, L3 MCP integration,
-    and L4 behavioral tests all shipped in v3.1.0.
+  \item Content validation, CLI subprocess, MCP integration, and
+    agent behavioral tests all shipped in v3.1.0.
   \item 8 behavioral scenarios: 4 deterministic (Layer~A), 2
     LLM-judged (Layer~B), 2 adversarial (Layer~C).
-  \item L4 behavioral tests run daily via
+  \item End-to-end agent (L5) behavioral tests run daily via
     \fpath{.github/workflows/behavioral.yml}.
   \item Three-layer behavioral architecture documented in DES-043
     (\texttt{DESIGN.md}).
@@ -965,7 +919,12 @@ As of v3.7.0, the test pyramid through L4 is fully implemented:
     in CI output).
 \end{itemize}
 
-L5 sprint integration tests remain planned.  v3.2.0 added archetypes
+Sprint Team Integration --- originally slotted at L5 --- was retired
+without ever shipping: no test-sprint target, no fixture repo, no
+implementation ever landed.  L5 now designates the End-to-End Agent
+tier (\S Level~5), which is what shipped under that name in v3.1.0.
+Wire Observability (L4, \S Level~4) is the newest tier, landing after
+v3.7.0.  v3.2.0 added archetypes
 (7 types), pipelines (3 sprint templates), archetype validation, and
 10 lint heuristics.  v3.3.0 expanded to 8 pipeline templates with a
 nature-based H10 decision tree.  v3.4.0 added pipeline instantiate,
@@ -980,9 +939,9 @@ stores (repo, active bundle, global), bundle resolver, five CLI
 commands (\texttt{available}, \texttt{activate}, \texttt{active},
 \texttt{deactivate}, \texttt{add-bundle}), embedded gstack bundle,
 and \texttt{ethos team migrate} (removed post-ship, see DESIGN.md's
-DES-051 reversal note).  No new test levels since v3.1.0,
-but test count grew from 1,055 to 2,187 through feature-level test
-coverage.
+DES-051 reversal note).  No new test levels between v3.1.0 and
+v3.7.0, but test count grew from 1,055 to 2,187 through feature-level
+test coverage.
 
 \subsection{Coverage Gate Policy}
 
@@ -994,7 +953,7 @@ coverage.
     original failure.
   \item A change that touches persona-block assembly, generated-agent
     synthesis, or hook \field{additionalContext} format must include
-    an L6 baseline recapture and record any per-source delta > 5\%
+    an L4 baseline recapture and record any per-source delta > 5\%
     in the PR description.  Silent context growth is a regression
     class this policy exists to catch.
   \item \cmd{make check} passing is necessary but not sufficient.
@@ -1021,28 +980,28 @@ coverage.
     infrastructure.  Catches a class of bugs (MCP serialization,
     session auto-discovery) that neither L1 nor L2 reaches.
 
-  \item \textbf{L4.}  Framework design before scenario authoring.
-    Choose promptfoo as the runner; design the fixture repo; write
+  \item \textbf{L4 (Wire Observability).}  Depends on the in-tree
+    capture proxy being built (no external deployment) and on an
+    attribution parser that reads ethos-injected sections from an
+    assembled system prompt.  Does not require L5 to exist; it can
+    be built first if payload bloat is the more urgent surface ---
+    which is what happened: L4 shipped ahead of some L5 scenario
+    authoring.
+
+  \item \textbf{L5 (End-to-End Agent).}  Framework design before
+    scenario authoring.  Choose promptfoo as the runner; write
     scenarios for the highest-risk roles (sprint-architect,
-    sprint-reviewer, sdet) first.
-
-  \item \textbf{L5 last among LLM-in-the-loop tiers.}  Depends on
-    L4's framework and fixture repo.  Wire into the release
-    checklist, not CI.
-
-  \item \textbf{L6 parallel to L5, not after.}  Depends on the
-    in-tree capture proxy being built (no external deployment) and
-    on a token-attribution parser that reads ethos-injected sections
-    from an assembled system prompt.  L6 does not require L4 or L5
-    to exist; it can be built first if payload bloat is the more
-    urgent surface.
+    sprint-reviewer, sdet) first.  Independent of L4 --- either can
+    be sequenced first.
 \end{enumerate}
 
 The total infrastructure investment before any LLM tests run is
-approximately 5 days (L1 + L2 + L3).  The LLM test suite (L4 + L5)
-adds approximately 10 more days plus ongoing scenario authoring as
-new roles are added.  L6 adds another 5--7 days for the profiling
-framework + baseline capture, run through a proxy so it costs no
-Anthropic tokens beyond the one-off baseline recapture per release.
+approximately 5 days (L1 + L2 + L3).  L5 (End-to-End Agent) adds
+approximately 4+N more days (framework plus per-role scenario
+authoring; see \S Level~5).  L4 (Wire Observability) adds another
+5--7 days for the profiling framework + baseline capture, run
+through a mock proxy so it costs no Anthropic tokens beyond the
+one-off baseline recapture per release.  L4 and L5 are independent
+efforts.
 
 \end{document}

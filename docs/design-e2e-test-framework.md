@@ -7,8 +7,10 @@ wire without paying Anthropic tokens or requiring an API key. Token
 and payload profiling is the first assertion suite this tier
 carries; hallucination checks, feature-verification, and other
 E2E scenarios plug in the same way. Companion to
-`docs/testing-strategy.tex` §"Level 6 — End-to-End" and
-`docs/testing-roadmap.md` §"Phase 6". No code in this PR.
+`docs/testing-strategy.tex` §"Level 4 — Wire Observability" and
+`docs/testing-roadmap.md` §"Phase 6" (phase number is rollout order,
+independent of the L4 pyramid slot — see that doc's header note). No
+code in this PR.
 
 Supersedes the earlier `docs/design-l6-token-harness.md` (same
 file, renamed) — the substance carries forward, only the framing
@@ -72,7 +74,7 @@ No alternative was seriously in the running. `unittest` fails
 PL-TC-4 outright. A bespoke YAML-driven runner (writing our own
 collector loop, our own subprocess management) reinvents exactly what
 pytest already does and forfeits the plugin ecosystem (pytest-xdist,
-pytest-timeout) if L6 ever needs it.
+pytest-timeout) if L4 ever needs it.
 
 ## 2. Scenario collection mechanism
 
@@ -297,7 +299,7 @@ test-e2e: ## Run the full E2E scenario sweep (per-release; requires litellm + cl
     uv run --project tests/e2e pytest -m e2e
     go run ./cmd/token-attribute -captures .tmp/e2e-captures -baselines tests/token-baselines -out .tmp/e2e-reports
 
-test-e2e-smoke: ## Run the fast L6 subset (every push; no baseline diff)
+test-e2e-smoke: ## Run the fast L4 subset (every push; no baseline diff)
     uv run --project tests/e2e pytest -m "e2e and smoke"
 ```
 
@@ -312,7 +314,7 @@ now inside the real framework instead of a parallel one. `test-e2e`
 exactly as `testing-roadmap.md` specifies, and stays out of `make
 check` for the same reason `test-tokens-hello` already is: it shells
 out to `litellm` and `claude`, external processes `make check` does
-not otherwise depend on, and the roadmap explicitly scopes L6 to
+not otherwise depend on, and the roadmap explicitly scopes L4 to
 "per release + on-demand," never per-commit.
 
 What *does* join `make check` every commit is linting the Python
@@ -448,7 +450,7 @@ the exact duplication this tier exists to catch elsewhere in ethos.
 ## 11. Rejected alternatives
 
 **Bash + heredoc (the current `hello/` shape), generalized to all of
-L6.** This is the design the operator already rejected, restated for
+L4.** This is the design the operator already rejected, restated for
 the record: `run.sh` treats an entire pyramid level as one scenario.
 Adding scenario #2 means editing the embedded Python inside `run.sh`
 and adding a second Makefile target (`test-tokens-hello-2`, or  <!-- historical reference to the rejected shape -->
@@ -474,23 +476,24 @@ than a compromise: only the capture step needs Python, and that step
 is a hard requirement, not a preference.
 
 This is a different situation from DES-043's rejected alternative
-"Python test harness" for L4 behavioral tests. DES-043's reasoning —
-"the Anthropic API call is a single `net/http` POST, no SDK needed" —
-is true for L4 (call the API, grade the response) and false for L6
-(intercept the *exact* wire body Claude Code independently constructs
-and sends, without Claude Code knowing it's being intercepted). L4's
-Go-only choice and L6's Python-for-capture choice are both instances
-of the same underlying rule — use the language that can do the job
-with the least reinvention — applied to two different jobs.
+"Python test harness" for L5 (End-to-End Agent) behavioral tests.
+DES-043's reasoning — "the Anthropic API call is a single
+`net/http` POST, no SDK needed" — is true for L5 (call the API,
+grade the response) and false for L4 (intercept the *exact* wire
+body Claude Code independently constructs and sends, without Claude
+Code knowing it's being intercepted). L5's Go-only choice and L4's
+Python-for-capture choice are both instances of the same underlying
+rule — use the language that can do the job with the least
+reinvention — applied to two different jobs.
 
 **LiteLLM's own test hooks / evaluation frameworks (promptfoo,
 LiteLLM's internal test suite).** Not sufficient because they test
 the wrong thing: LiteLLM's own request-handling correctness, or an
-LLM's response quality. L6 needs LiteLLM purely as a passive,
+LLM's response quality. L4 needs LiteLLM purely as a passive,
 transparent proxy sitting between Claude Code and a mocked upstream —
 the thing under test is Claude Code's *outgoing* payload, which
 neither promptfoo nor LiteLLM's own test suite is built to capture.
-`testing-strategy.tex` reaches the same conclusion for L4 (promptfoo
+`testing-strategy.tex` reaches the same conclusion for L5 (promptfoo
 "doesn't support `claude --bare` with MCP config and per-agent system
 prompts") for an adjacent reason: these tools assume they are
 grading a model's *output*, not observing a client's *input

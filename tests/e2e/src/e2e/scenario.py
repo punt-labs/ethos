@@ -18,7 +18,7 @@ import yaml
 # Registered on the generated litellm.yaml's mock model so the proxy
 # returns a stable, non-empty assistant turn without hitting a real
 # upstream. Every scenario's model entry uses this canned response.
-_MOCK_RESPONSE = "ack from the ethos L6 mock upstream"
+_MOCK_RESPONSE = "ack from the ethos L4 mock upstream"
 
 
 @dataclass(frozen=True, slots=True)

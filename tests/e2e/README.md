@@ -1,4 +1,4 @@
-# E2E test tier (L6)
+# E2E test tier (L4)
 
 A real `claude --print` subprocess driven against a local mock-upstream
 LiteLLM proxy, so we can observe exactly what Claude Code puts on the

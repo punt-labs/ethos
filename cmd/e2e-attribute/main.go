@@ -1,4 +1,4 @@
-// Command e2e-attribute reads one L6 capture file and reports its byte-level
+// Command e2e-attribute reads one L4 capture file and reports its byte-level
 // size and attribution: total bytes, system-prompt bytes (sliced by the
 // persona-block markers internal/hook/persona.go defines), tool-schema bytes
 // per tool, and message-history bytes.
@@ -18,7 +18,7 @@ import (
 
 func main() {
 	var capturePath, outPath string
-	flag.StringVar(&capturePath, "capture", "", "path to a single L6 capture file (required)")
+	flag.StringVar(&capturePath, "capture", "", "path to a single L4 capture file (required)")
 	flag.StringVar(&outPath, "out", "", "path to write the JSON report (default: stdout)")
 	flag.Parse()
 

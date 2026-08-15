@@ -1,4 +1,4 @@
-"""L6 capture logger: dumps every proxied request body to disk.
+"""L4 capture logger: dumps every proxied request body to disk.
 
 Registered on the generated litellm.yaml via
 ``litellm_settings.callbacks: e2e.custom_callbacks.token_capture``.

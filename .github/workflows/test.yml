@@ -47,7 +47,7 @@ jobs:
         run: go tool cover -func=coverage.out | tail -1
 
   e2e-smoke:
-    # L6 E2E smoke: real `claude --print` against a mocked LiteLLM upstream.
+    # L4 (Wire Observability) smoke: real `claude --print` against a mocked LiteLLM upstream.
     # Runs the fast (single) smoke scenario on every push/PR. Zero Anthropic
     # tokens consumed; no ANTHROPIC_API_KEY needed. Deliberately lists no
     # scenario names — dropping a new tests/e2e/scenarios/*.yaml file never
@@ -73,7 +73,7 @@ jobs:
       - name: Sync tests/e2e
         run: uv sync --project tests/e2e
 
-      - name: Run L6 E2E smoke scenario
+      - name: Run L4 E2E smoke scenario
         run: make test-e2e-smoke
 
       - name: Upload E2E artifacts on failure
@@ -85,7 +85,7 @@ jobs:
           retention-days: 7
 
   e2e-release:
-    # L6 E2E full sweep: every scenario, plus the (currently skeleton) Go
+    # L4 (Wire Observability) full sweep: every scenario, plus the (currently skeleton) Go
     # attribution report. Per-release, not per-commit — see
     # docs/design-e2e-test-framework.md §8.
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
@@ -110,7 +110,7 @@ jobs:
       - name: Sync tests/e2e
         run: uv sync --project tests/e2e
 
-      - name: Run L6 E2E full sweep
+      - name: Run L4 E2E full sweep
         run: make test-e2e
 
       - name: Upload E2E artifacts

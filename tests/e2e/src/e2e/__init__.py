@@ -1,4 +1,4 @@
-"""Ethos L6 end-to-end test tier: real claude subprocess, mocked upstream."""
+"""Ethos L4 end-to-end test tier: real claude subprocess, mocked upstream."""
 
 from __future__ import annotations
 
