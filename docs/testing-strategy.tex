@@ -576,19 +576,25 @@ against LiteLLM's own docs (2026-08-14):
     --- the exact JSON body Claude Code sent.  A five-line callback
     writes that to \fpath{.tmp/token-captures/<scenario>.jsonl}.
 
-  \item \textbf{Canned response}: LiteLLM's SDK exposes a
-    \texttt{mock\_response} field on \cmd{completion()}.  Whether it
-    surfaces as \texttt{model\_list.litellm\_params.mock\_response}
-    in the proxy config is not documented on the public docs page
-    (SDK-only shown) --- verify at implementation time.  If it does,
-    a one-line proxy config declares a mock model.  If it does not,
-    a \pkg{CustomLogger} \texttt{async\_pre\_call\_hook} can
-    short-circuit the request and return the canned response before
-    it hits any upstream.  Both paths are on-shelf.
+  \item \textbf{Canned response}: verified working at proxy level
+    on \texttt{litellm==1.81.9} --- one line in the proxy config
+    declares a mock model:
+    \texttt{model\_list.litellm\_params.mock\_response: "..."}.
+    Claude Code accepts the returned envelope and its own
+    \field{modelUsage} block populates from LiteLLM's mock.  No
+    upstream call, zero Anthropic tokens consumed per scenario.
+    Hello-world in \fpath{tests/token-harness/hello/} runs the full
+    pipe end-to-end (\cmd{make test-tokens-hello}).
 \end{itemize}
 
-Ships as a single \cmd{pip install 'litellm[proxy]'}.  CI adds one
-line to install and one line to start.
+Ships as a single \cmd{pip install 'litellm[proxy]==1.81.9'}.  The
+version pin matters: LiteLLM's latest releases as of 2026-08-15
+fail to boot with
+\texttt{ImportError: cannot import name 'get\_flat\_dependant' from
+'fastapi.dependencies.utils'} on Python 3.12+ (FastAPI removed the
+symbol; LiteLLM's own proxy still imports it).  \texttt{1.81.9}
+boots cleanly.  Revisit the pin when a newer LiteLLM restores the
+import or caps its FastAPI ceiling.
 
 \emph{Aside on Bifrost}: Bifrost is a separately-deployed workstation
 proxy some developers use for interactive local inspection

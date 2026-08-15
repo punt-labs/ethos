@@ -168,7 +168,11 @@ Add to the ethos release checklist (before tagging):
 **Bead**: `ethos-l90t` (filed 2026-08-14)
 **Effort**: 5-7 days for framework + baseline capture (4-6 scenarios)
 **Frequency**: per release + on-demand (not per-commit)
-**Depends on**: LiteLLM (`pip install 'litellm[proxy]'`) as the local test-harness proxy — MIT-licensed, already the standard tool for this pattern. NOT Bifrost — CI must run without any workstation-only proxy dependency.
+**Depends on**: LiteLLM (`pip install 'litellm[proxy]==1.81.9'`) as the local test-harness proxy — MIT-licensed, already the standard tool for this pattern. NOT Bifrost — CI must run without any workstation-only proxy dependency.
+
+**Version pin**: LiteLLM releases newer than `1.81.9` fail to boot on Python 3.12+ with `ImportError: cannot import name 'get_flat_dependant' from 'fastapi.dependencies.utils'` — FastAPI removed the symbol; LiteLLM's proxy still imports it. `1.81.9` boots cleanly. Revisit when a newer LiteLLM restores the import or caps its FastAPI ceiling.
+
+**Hello world proof-of-integration shipped** at `tests/token-harness/hello/`. `make test-tokens-hello` starts the LiteLLM proxy, invokes `claude --print` against it, captures the full request body (~437K, 135 tools, 3-part system prompt, 2 messages), and prints a char-count attribution preview. Documented in `tests/token-harness/hello/README.md`. Not the full L6 framework (no tokenizer, no attribution parser, no baseline diff), but proves every primitive Phase 6 depends on is buildable.
 
 ### Why now
 

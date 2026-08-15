@@ -43,3 +43,42 @@ jobs:
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
+
+  token-harness-hello:
+    # L6 hello world: prove the token-capture harness pipe works end-to-end
+    # (LiteLLM proxy → mock_response → CustomLogger capture → claude --print).
+    # Zero Anthropic tokens consumed; no ANTHROPIC_API_KEY needed.
+    # See tests/token-harness/hello/README.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Install LiteLLM (pinned; see tests/token-harness/hello/README.md)
+        run: pip install 'litellm[proxy]==1.81.9'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run L6 hello-world token-capture harness
+        run: make test-tokens-hello
+
+      - name: Upload capture artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: token-harness-hello-artifacts
+          path: |
+            .tmp/token-harness/hello/
+            .tmp/token-captures/hello/
+          retention-days: 7

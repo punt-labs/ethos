@@ -16,7 +16,7 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral
+.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral test-tokens-hello
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -37,6 +37,9 @@ validate-content: ## Validate all ethos content files
 
 test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
 	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
+
+test-tokens-hello: ## Run L6 hello-world token-capture harness (requires `pip install 'litellm[proxy]==1.81.9'` and claude CLI)
+	tests/token-harness/hello/run.sh
 
 check: lint docs test validate-content ## Run all quality gates
 
