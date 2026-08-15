@@ -49,13 +49,13 @@ func BuildPersonaBlock(id *identity.Identity) string {
 		// opening line — avoids redundant repetition.
 		trimmed := strings.TrimRight(stripLeadingHeading(skipFirstParagraph(id.PersonalityContent)), "\n")
 		if trimmed != "" {
-			// If remaining content already has its own sub-headings,
-			// don't add a redundant ## Personality wrapper.
-			if strings.HasPrefix(strings.TrimSpace(trimmed), "##") {
-				b.WriteString("\n\n")
-			} else {
-				b.WriteString("\n\n" + MarkerPersonality + "\n\n")
-			}
+			// Always emit MarkerPersonality, even when the remaining
+			// content already has its own sub-headings (a stray-looking
+			// "## Personality" immediately before "## Core Traits" is a
+			// cosmetic cost; cmd/e2e-attribute depends on this marker
+			// always being present to attribute personality bytes —
+			// omitting it here silently misroutes them to "preamble").
+			b.WriteString("\n\n" + MarkerPersonality + "\n\n")
 			b.WriteString(trimmed)
 		}
 	}

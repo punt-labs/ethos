@@ -110,6 +110,9 @@ func systemText(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
 		return "", nil
 	}
+	if string(raw) == "null" {
+		return "", fmt.Errorf("system is JSON null, not absent or a string/content-block list")
+	}
 
 	var asString string
 	if err := json.Unmarshal(raw, &asString); err == nil {
@@ -140,6 +143,9 @@ func toolSizes(tools []json.RawMessage) ([]ToolSize, int, error) {
 		}
 		if err := json.Unmarshal(raw, &named); err != nil {
 			return nil, 0, fmt.Errorf("parsing tool entry: %w", err)
+		}
+		if named.Name == "" {
+			return nil, 0, fmt.Errorf("tool entry missing name: %s", raw)
 		}
 		sizes = append(sizes, ToolSize{Name: named.Name, Bytes: len(raw)})
 		total += len(raw)

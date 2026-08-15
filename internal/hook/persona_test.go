@@ -31,7 +31,9 @@ func TestBuildPersonaBlock_Full(t *testing.T) {
 	assert.NotContains(t, got, "Punt Labs..")
 
 	// First paragraph is deduplicated — remaining content starts with
-	// ## Core Traits sub-heading, so no wrapper ## Personality emitted.
+	// ## Core Traits sub-heading, but ## Personality is still emitted
+	// first so cmd/e2e-attribute can always find it.
+	assert.Contains(t, got, "## Personality")
 	assert.Contains(t, got, "## Core Traits")
 	assert.Contains(t, got, "Direct but warm")
 	assert.Contains(t, got, "Data over adjectives")
@@ -100,6 +102,27 @@ func TestBuildPersonaBlock_NoTalents(t *testing.T) {
 	assert.Contains(t, got, "You are Carol (carol)")
 	assert.Contains(t, got, "## Personality")
 	assert.NotContains(t, got, "## Talents")
+}
+
+func TestBuildPersonaBlock_PersonalityMarkerAlwaysPresent(t *testing.T) {
+	// Regression: content whose post-first-paragraph remainder starts with
+	// its own "##" sub-heading must still get the MarkerPersonality
+	// wrapper. cmd/e2e-attribute slices a captured system prompt by this
+	// marker; a personality file shaped like this one used to emit no
+	// marker at all, so its bytes silently attributed to "preamble".
+	id := &identity.Identity{
+		Name:               "Eve",
+		Handle:             "eve",
+		Kind:               "agent",
+		PersonalityContent: "# Rigorous\n\nFormal methods specialist.\n\n## Rigor\n\n- Prove it",
+	}
+
+	got := BuildPersonaBlock(id)
+
+	require.Contains(t, got, MarkerPersonality)
+	idx := strings.Index(got, MarkerPersonality)
+	require.Contains(t, got, "## Rigor")
+	require.Less(t, idx, strings.Index(got, "## Rigor"), "MarkerPersonality must precede the content's own sub-heading")
 }
 
 func TestBuildPersonaBlock_HeadingOnlyWritingStyle(t *testing.T) {

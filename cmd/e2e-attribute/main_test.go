@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -64,6 +66,34 @@ func TestBuildReportRoundTrip(t *testing.T) {
 	}
 	if attrTotal != report.SystemBytes {
 		t.Errorf("sum of Attribution bytes = %d, want SystemBytes %d", attrTotal, report.SystemBytes)
+	}
+}
+
+func TestSystemTextRejectsNull(t *testing.T) {
+	_, err := systemText([]byte("null"))
+	if err == nil {
+		t.Fatal("systemText(null) = nil error, want an error distinguishing null from absent")
+	}
+}
+
+func TestSystemTextAbsentIsEmpty(t *testing.T) {
+	got, err := systemText(nil)
+	if err != nil {
+		t.Fatalf("systemText(nil) = %v, want no error", err)
+	}
+	if got != "" {
+		t.Errorf("systemText(nil) = %q, want empty string", got)
+	}
+}
+
+func TestToolSizesRejectsEmptyName(t *testing.T) {
+	tools := []json.RawMessage{[]byte(`{"name": ""}`)}
+	_, _, err := toolSizes(tools)
+	if err == nil {
+		t.Fatal("toolSizes with empty name = nil error, want an error")
+	}
+	if !strings.Contains(err.Error(), "missing name") {
+		t.Errorf("toolSizes error = %v, want it to mention the missing name", err)
 	}
 }
 
