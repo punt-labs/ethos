@@ -163,6 +163,119 @@ Add to the ethos release checklist (before tagging):
 
 ---
 
+## Phase 6 — Payload / Token Profiling (L6) — PLANNED
+
+**Bead**: `ethos-l90t` (filed 2026-08-14)
+**Effort**: 5-7 days for framework + baseline capture (4-6 scenarios)
+**Frequency**: per release + on-demand (not per-commit)
+**Depends on**: Bifrost deployment (already available on the ref workstation)
+
+### Why now
+
+Ethos treats the model's context window as free. Two cost drivers are
+already known from Bifrost-observed payloads:
+
+1. **Team-submodule aggregation** — consumers vendoring the whole
+   `team` submodule ship the full engineering identity closure on
+   every session, whether or not the session ever needs those
+   agents. DES-057's `ethos vendor` produces a minimal snapshot but
+   nothing measures which consumers are still aggregated.
+
+2. **Duplication** — the same identity content appears in the
+   SessionStart persona block, the generated `.claude/agents/*.md`
+   file, and (post-compact) in the PreCompact team-context section.
+   Bytes counted three times are paid for three times.
+
+L1-L5 don't catch either — content validation doesn't measure size,
+CLI/MCP tests don't exercise the payload path, behavioral tests
+verify correctness not cost, sprint integration verifies flow not
+cost. L6 is the missing observability tier.
+
+### Infrastructure deliverables
+
+1. **Bifrost payload capture**: verify Bifrost logs the full request
+   body (system prompt + messages + tools) before forwarding
+   upstream. If it doesn't, add capture middleware or a proxy shim.
+2. **Attribution parser**: `cmd/token-attribute/` — reads a Bifrost
+   capture and slices the assembled system prompt by ethos-injected
+   markers (`## Personality`, `## Writing Style`, `## Team Context`,
+   generated-agent-manifest signature, per-MCP-server tool
+   schemas). Uses persona-block markers already defined by
+   `internal/hook/persona.go`.
+3. **Tokenizer path**: Anthropic `messages/count_tokens` endpoint for
+   authoritative baseline capture; local tokenizer
+   (`@anthropic-ai/tokenizer` or tiktoken-approximate) for
+   PR-time regression checks marked "approximate".
+4. **Fixture scenarios**: YAML per scenario in
+   `tests/token-scenarios/`, minimum set:
+   - `empty-repo` — Claude Code baseline, no ethos.
+   - `ethos-single-agent` — one identity closure.
+   - `ethos-team-submodule` — full team-submodule aggregation cost.
+   - `ethos-vendored-minimal` — DES-057 `ethos vendor --all` snapshot.
+   - `ethos-rich-mcp` — multi-MCP tool-schema cost.
+   - `ethos-post-compact` — PreCompact hook fired, context
+     restoration cost.
+5. **Baseline captures**: `tests/token-baselines/<scenario>.json`
+   committed. Recaptured on major ethos releases via
+   `make baseline-tokens`.
+6. **Reporting**: `make test-tokens` runs every scenario, writes
+   reports to `.tmp/token-reports/`, compares to baseline, prints
+   delta summary + attribution tree.
+7. **CI wiring**: per-release GitHub Actions job runs
+   `make test-tokens` against committed baselines. Flags per policy:
+   - Delta > 5% on any scenario → PR comment, human review before
+     merge.
+   - Delta > 15% → CI turns yellow, blocks auto-merge memory but
+     not the merge button.
+   - New source of tokens (a section not in the last baseline) → PR
+     comment, no gate.
+
+### Operator policy calls needed before Phase 6 dispatch
+
+1. **In-tree fixtures vs separate repo?** Simpler to start in-tree
+   under `tests/token-scenarios/`; extract to a separate
+   `ethos-token-fixture` repo (parallel to the L5 sprint fixture)
+   only if scenarios grow.
+2. **Regression threshold**: absolute (fail if > Y tokens) or
+   relative (fail if > X% delta)? Recommend relative for now (5%
+   comment, 15% yellow), revisit after first release cycle of data.
+3. **Baseline recapture cadence**: recapture on every ethos release
+   automatically, or only when a change touches persona/agents/hooks?
+   Recommend automatic every release (bounds drift), manual
+   recapture on-demand for suspected regressions.
+4. **What counts as ``the'' ethos payload**: only ethos-injected
+   content, or the entire session payload? Recommend the entire
+   payload with per-source attribution — the goal is total cost
+   observability, ethos is one contributor among several (MCP
+   servers, tool descriptions, message history).
+
+### Testing coverage that Phase 6 adds
+
+- Fleet-wide answer to ``which repo pays the highest cost per
+  session''.
+- Per-release delta on ethos's own contribution to a representative
+  session payload.
+- Attribution of unexpected cost growth to a specific ethos
+  component (persona-block section, generated-agents manifest,
+  additionalContext, MCP tool schema).
+- Regression detection when a refactor accidentally duplicates
+  content across the persona block, the generated agent, and the
+  PreCompact restoration.
+
+### Related design context
+
+- The bloat-drivers-observed section in `docs/testing-strategy.tex`'s
+  L6 section carries the concrete evidence.
+- `bd show ethos-livi` covers the vendored-vs-submodule resolution
+  work, which is complementary — DES-057's vendor produces a
+  minimal snapshot, L6 measures whether that reduction actually
+  reaches the wire.
+- Bifrost setup lives in the workspace `.envrc.local` via
+  `CLAUDE_PROVIDER=bifrost`; the `claude-provider` toggle script
+  in `~/.local/bin/` switches routes.
+
+---
+
 ## CI Coverage Reporting — SHIPPED v3.1.0
 
 **Bead**: `ethos-mhs`
@@ -206,3 +319,4 @@ L5 sprint integration tests remain the sole unimplemented phase. The pipeline in
 | CI coverage | `-coverprofile` in `make test`, CI summary | SHIPPED | v3.1.0 |
 | 4 — L4 Behavioral | Harness, Layer A/B/C scenarios, daily CI workflow | SHIPPED | v3.1.0 |
 | 5 — L5 Sprint Integration | Sprint fixture repo, harness, post-run checks | PLANNED | — |
+| 6 — L6 Payload / Token Profiling | Bifrost capture, attribution parser, baseline scenarios, `make test-tokens` | PLANNED | — |

@@ -76,12 +76,24 @@ techniques:
     ``testability seams only'' constraint?  These questions require
     LLM invocation.  They cannot be answered by static analysis or Go
     unit tests.
+
+  \item \textbf{Payload and token cost.} Ethos injects content into
+    the system prompt (persona block via SessionStart), regenerates
+    files under \fpath{.claude/agents/} that Claude Code sends as part
+    of subagent invocations, and produces
+    \field{additionalContext} bytes from every hook that fires.
+    Every one of those bytes is context the model pays for on every
+    turn.  ``Does the payload we send to the Anthropic API stay
+    within budget?'' and ``Which ethos component contributed how many
+    tokens to the last session?'' are testable questions.  They are
+    not answered by any of the three surfaces above --- L1 through L5
+    treat network and context as free.
 \end{itemize}
 
-The test pyramid has five levels, ordered by infrastructure cost and
+The test pyramid has six levels, ordered by infrastructure cost and
 LLM dependency.  Levels 1--3 are fast, deterministic, and run on
-every commit.  Levels 4--5 require LLM calls and run on a scheduled
-or per-release cadence.
+every commit.  Levels 4--6 require external calls (LLM or a captured
+API proxy) and run on a scheduled or per-release cadence.
 
 \subsection*{Auditability as a Testing Asset}
 
@@ -113,9 +125,13 @@ L2 & CLI Behavioral      & No  & Subprocess harness       & Every commit   & 2 d
 L3 & MCP Integration     & No  & \tool{ethos serve}       & Every commit   & 2 days \\
 L4 & Agent Behavioral    & Yes & Non-interactive Claude   & Daily          & 4+N days \\
 L5 & Sprint Integration  & Yes & Fixture repo + harness   & Per release    & 5 days \\
+L6 & Payload / Token Profiling & Proxy & Bifrost capture + tokenizer & Per release + on-demand & 5--7 days \\
 \bottomrule
 \caption{Test pyramid summary.  ``4+N days'' for L4 means 4 days of
-  framework plus 1 day per role for scenario authoring.}
+  framework plus 1 day per role for scenario authoring.  L6 uses a
+  captured API proxy (Bifrost) rather than direct LLM calls, so it
+  costs one token-counting call per payload instead of a full agentic
+  loop.}
 \end{longtable}
 
 % ===================================================================
@@ -452,6 +468,240 @@ Per release.  Three Claude processes running sequentially for
 approximately 15 minutes total.  Not suitable for per-commit CI.
 
 % ===================================================================
+\section{Level 6 --- Payload / Token Profiling}
+% ===================================================================
+
+\subsection*{The problem}
+
+Ethos treats the model's context window as free.  Every session that
+runs against an ethos-enabled repo pays for content ethos injected:
+
+\begin{itemize}
+  \item A persona block appended to the system prompt by SessionStart
+    and PreCompact hooks (personality, writing style, talents, team
+    context, working context).
+  \item Every \fpath{.claude/agents/*.md} file regenerated on
+    SessionStart and shipped as part of subagent invocations.  A
+    consuming repo tracking a full team submodule ships every
+    identity's agent file whether or not the session ever spawns
+    that agent.
+  \item \field{additionalContext} from every fired hook.  These bytes
+    ride on every subsequent turn until compaction.
+  \item MCP tool descriptions from every connected server.  Ethos does
+    not own these directly, but the seed content and enablement
+    defaults do decide which servers are wired into which repos.
+\end{itemize}
+
+Two known cost drivers, both surfaced by observing the actual
+request payloads sent to the Anthropic Messages API through a proxy
+(Bifrost, deployed on this workstation):
+
+\begin{enumerate}
+  \item \textbf{Team-submodule aggregation.}  A consumer that vendors
+    the whole \texttt{team} submodule receives every identity in the
+    org's engineering closure, whether or not the consumer's own
+    session ever needs them.  DES-057's \texttt{ethos vendor} tool
+    exists to produce a provably-complete but minimal repo-local
+    snapshot; without it, consumers overpay on the full closure.
+
+  \item \textbf{Duplication.}  The same identity content appears in
+    multiple places on a single session --- persona block from
+    SessionStart, generated agent \texttt{.md} content, sometimes
+    team-context section from PreCompact.  A byte counted three times
+    across three attachment points is a byte the model pays for three
+    times.
+\end{enumerate}
+
+Neither driver is caught by L1--L5.  Content validation (L1) does
+not measure size.  CLI/MCP tests (L2--L3) exercise the binary, not
+the payload it causes to be sent.  Behavioral tests (L4) verify
+constraint adherence, not cost.  Sprint integration (L5) verifies
+multi-agent flow, not cost.  L6 is the missing lens: cost per
+session, attributed to source, tracked over time.
+
+\subsection*{What it covers}
+
+\begin{itemize}
+  \item Total input tokens per representative Claude Code session
+    against known repo/team configurations (empty repo, single-agent
+    repo, full team submodule, DES-057 vendored copy, rich MCP setup).
+  \item Attribution of token counts to ethos-injected sources: which
+    persona block section, which generated agent file, which hook's
+    \field{additionalContext}, which MCP server's tool schema.
+  \item Regression detection: token count deltas per source across
+    ethos releases.
+\end{itemize}
+
+\subsection*{How to invoke without hitting Anthropic}
+
+Bifrost is a locally-deployed LLM proxy that exposes an
+Anthropic-compatible Messages endpoint
+(\fpath{/anthropic/v1/messages}) and translates upstream.  Point
+Claude Code at Bifrost with:
+
+\begin{lstlisting}[language=bash]
+export ANTHROPIC_BASE_URL="http://okinos.user.home.lab:8080/anthropic"
+export ANTHROPIC_AUTH_TOKEN="$(security find-generic-password \
+  -a "$USER" -s bifrost-auth-key -w)"
+\end{lstlisting}
+
+(See \fpath{.envrc.local}'s \texttt{CLAUDE\_PROVIDER=bifrost}
+stanza in this repo for the operational shape.)  With
+\cmd{claude-provider bifrost} set, every payload Claude Code would
+have sent to \url{api.anthropic.com} routes through Bifrost.  Bifrost
+logs the full request body (system prompt, messages, tools) before
+forwarding upstream --- or, in test mode, without forwarding at all,
+so no Anthropic tokens are consumed by the profiling run itself.
+
+\subsection*{Tokenizer}
+
+Two options, both viable:
+
+\begin{itemize}
+  \item \textbf{Anthropic \texttt{messages/count\_tokens} endpoint.}
+    Authoritative for Claude model tokenization.  One HTTP call per
+    payload, roughly \$0.001 per call, no compute cost on the model
+    side.  Required for cross-checking any local tokenizer, at
+    minimum on baseline capture.
+  \item \textbf{Local Claude tokenizer.}  If Anthropic ships one
+    (check \pkg{@anthropic-ai/tokenizer} or equivalent in the SDK);
+    otherwise use \pkg{tiktoken}'s closest-match encoding with an
+    explicit ``approximate'' disclaimer on the report.
+\end{itemize}
+
+Recommend Anthropic endpoint for baseline capture (once per release
+per scenario, cost bounded) and local tokenizer for PR-time
+regression checks (fast, no network, marked approximate).
+
+\subsection*{Attribution}
+
+Given a captured payload from Bifrost, split it into sources ethos
+either owns or influences.  The system-prompt assembly is
+addressable because ethos-injected sections carry known headings
+(\texttt{\#\# Personality}, \texttt{\#\# Writing Style},
+\texttt{\#\# Team Context}) --- a small parser can slice the
+assembled prompt and tokenize each slice separately.  Message-content
+tool results are addressable by \field{tool\_use\_id}.  Tool schemas
+are addressable by MCP server name.
+
+Report structure:
+
+\begin{lstlisting}[language={}]
+scenario: session-start-with-team-submodule
+total_input_tokens: 8642
+attribution:
+  system_prompt:
+    claude_code_baseline: 3210
+    ethos_persona_block:
+      personality: 412
+      writing_style: 187
+      team_context: 924  # driven by team-submodule aggregation
+      talents: 63
+    generated_agents_manifest: 1204  # 28 files, mostly redundant with persona
+    mcp_tool_descriptions:
+      biff: 340
+      quarry: 512
+      ethos_self: 218
+      ...
+  first_turn_message:
+    session_start_additional_context: 402  # from ethos SessionStart hook
+    user_prompt: 12
+  ...
+delta_vs_baseline: +342 tokens (+4.1%) -- git bisect flag
+\end{lstlisting}
+
+\subsection*{Fixture scenarios}
+
+At minimum, one per representative repo/team configuration:
+
+\begin{longtable}{ll}
+\toprule
+\textbf{Scenario} & \textbf{What it isolates} \\
+\midrule
+\endhead
+\texttt{empty-repo}          & Baseline Claude Code with no ethos content \\
+\texttt{ethos-single-agent}  & Single-agent repo, minimal identity closure \\
+\texttt{ethos-team-submodule} & Full team submodule (aggregation cost) \\
+\texttt{ethos-vendored-minimal} & DES-057 \texttt{ethos vendor --all} snapshot \\
+\texttt{ethos-rich-mcp}      & Multiple MCP servers wired (tool-schema cost) \\
+\texttt{ethos-post-compact}  & PreCompact hook fired (context restoration cost) \\
+\bottomrule
+\caption{Baseline profiling scenarios.  Each isolates one
+  ethos-side lever so a regression attributes cleanly.}
+\end{longtable}
+
+\subsection*{Pass/fail criterion}
+
+Not a hard fail.  L6 produces a report, compares to the baseline
+recorded in \fpath{tests/token-baselines/<scenario>.json}, and flags:
+
+\begin{itemize}
+  \item Delta $> 5\%$ on any single scenario --- PR comment, human
+    review before merge.
+  \item Delta $> 15\%$ on any single scenario --- CI check turns
+    yellow, blocks the auto-merge memory but not the merge button.
+  \item New source of tokens (a section not in the last baseline) ---
+    PR comment, no gate.
+\end{itemize}
+
+Cost regressions are treated the way security regressions are
+treated: surfaced, reviewed, sometimes accepted.  A behavioral gain
+worth 400 extra tokens is a fair trade; a mystery 400 extra tokens
+is not.
+
+\subsection*{Run frequency}
+
+Per release, and on-demand during ethos changes that touch the
+persona-block builder, generated-agents synthesizer, or hook
+\field{additionalContext} format.  Not per-commit --- Bifrost
+capture + tokenizer call is more infrastructure than a git commit
+warrants for a subword-level change.
+
+\subsection*{Infrastructure deliverables}
+
+\begin{enumerate}
+  \item Bifrost payload capture: verify Bifrost logs the full request
+    body before forwarding.  If not, add a capture middleware or a
+    proxy shim between Claude Code and Bifrost.
+  \item Attribution parser: Go binary in \fpath{cmd/token-attribute/}
+    that reads a Bifrost capture and emits the report structure above.
+    Uses persona-block markers already defined by
+    \pkg{internal/hook/persona.go}.
+  \item Fixture scenarios: YAML file per scenario in
+    \fpath{tests/token-scenarios/}, each declaring the repo/team
+    configuration to reproduce plus the Claude Code invocation
+    (\cmd{claude --bare -p "<task>"}).
+  \item Baseline captures: \fpath{tests/token-baselines/<scenario>.json}
+    committed, regenerated on major ethos releases via a
+    \cmd{make baseline-tokens} target.
+  \item Reporting: \cmd{make test-tokens} runs every scenario, writes
+    reports to \fpath{.tmp/token-reports/}, compares to baseline,
+    prints delta summary + attribution tree.
+  \item CI wiring: per-release GitHub Actions job that runs
+    \cmd{make test-tokens} against the current baselines.
+\end{enumerate}
+
+\subsection*{Prerequisites and dependencies}
+
+\begin{itemize}
+  \item Bifrost deployment (deployed on this workstation; see the
+    workspace \fpath{.envrc.local} for the reference stanza).
+  \item Anthropic \texttt{messages/count\_tokens} API access for
+    authoritative baselines.
+  \item Decision on where the fixture scenarios live --- a separate
+    \texttt{ethos-token-fixture} repo (parallel to the L5 sprint
+    fixture) or in-tree under \fpath{tests/token-scenarios/}.
+    In-tree is simpler for the first cut; extract later if fixtures
+    grow.
+\end{itemize}
+
+\subsection*{Effort estimate}
+
+Approximately 5--7 days for initial framework + baseline capture
+across 4--6 scenarios.  Then ongoing scenario authoring as the
+ethos surface changes (new hook, new bundle, new MCP server).
+
+% ===================================================================
 \section{Tooling Landscape}
 % ===================================================================
 
@@ -618,6 +868,11 @@ coverage.
   \item A new public function requires at least one test.
   \item A bug fix requires a regression test that reproduces the
     original failure.
+  \item A change that touches persona-block assembly, generated-agent
+    synthesis, or hook \field{additionalContext} format must include
+    an L6 baseline recapture and record any per-source delta > 5\%
+    in the PR description.  Silent context growth is a regression
+    class this policy exists to catch.
   \item \cmd{make check} passing is necessary but not sufficient.
     After \cmd{make check} passes, ask: ``Would I catch a regression
     in this change with the current tests?''
@@ -647,13 +902,23 @@ coverage.
     scenarios for the highest-risk roles (sprint-architect,
     sprint-reviewer, sdet) first.
 
-  \item \textbf{L5 last.}  Depends on L4's framework and fixture
-    repo.  Wire into the release checklist, not CI.
+  \item \textbf{L5 last among LLM-in-the-loop tiers.}  Depends on
+    L4's framework and fixture repo.  Wire into the release
+    checklist, not CI.
+
+  \item \textbf{L6 parallel to L5, not after.}  Depends on Bifrost
+    being deployed (already true for this workstation) and on a
+    token-attribution parser that reads ethos-injected sections
+    from an assembled system prompt.  L6 does not require L4 or L5
+    to exist; it can be built first if payload bloat is the more
+    urgent surface.
 \end{enumerate}
 
 The total infrastructure investment before any LLM tests run is
 approximately 5 days (L1 + L2 + L3).  The LLM test suite (L4 + L5)
 adds approximately 10 more days plus ongoing scenario authoring as
-new roles are added.
+new roles are added.  L6 adds another 5--7 days for the profiling
+framework + baseline capture, run through a proxy so it costs no
+Anthropic tokens beyond the one-off baseline recapture per release.
 
 \end{document}
