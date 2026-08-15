@@ -168,7 +168,7 @@ Add to the ethos release checklist (before tagging):
 **Bead**: `ethos-l90t` (filed 2026-08-14)
 **Effort**: 5-7 days for framework + baseline capture (4-6 scenarios)
 **Frequency**: per release + on-demand (not per-commit)
-**Depends on**: Bifrost deployment (already available on the ref workstation)
+**Depends on**: A local test-harness proxy (in-tree Go binary, or LiteLLM if we ever need multi-provider). NOT Bifrost — CI must run without any external proxy dependency.
 
 ### Why now
 
@@ -193,19 +193,29 @@ cost. L6 is the missing observability tier.
 
 ### Infrastructure deliverables
 
-1. **Bifrost payload capture**: verify Bifrost logs the full request
-   body (system prompt + messages + tools) before forwarding
-   upstream. If it doesn't, add capture middleware or a proxy shim.
-2. **Attribution parser**: `cmd/token-attribute/` — reads a Bifrost
-   capture and slices the assembled system prompt by ethos-injected
+1. **Test-harness proxy (in-tree)**: `cmd/token-capture-proxy/` —
+   tiny Go HTTP server that speaks just enough of the Anthropic
+   Messages wire protocol to accept the request, dump the full body
+   to `.tmp/token-captures/<scenario>.jsonl`, and return a canned
+   minimal assistant turn so Claude Code terminates cleanly. ~200
+   lines, no external dependency, runs identically local and in CI.
+   (LiteLLM proxy is a valid alternative if we ever need
+   multi-provider capture surface — reserved as fallback, not the
+   default.)
+2. **Attribution parser**: `cmd/token-attribute/` — reads a capture
+   file and slices the assembled system prompt by ethos-injected
    markers (`## Personality`, `## Writing Style`, `## Team Context`,
    generated-agent-manifest signature, per-MCP-server tool
    schemas). Uses persona-block markers already defined by
    `internal/hook/persona.go`.
-3. **Tokenizer path**: Anthropic `messages/count_tokens` endpoint for
-   authoritative baseline capture; local tokenizer
-   (`@anthropic-ai/tokenizer` or tiktoken-approximate) for
-   PR-time regression checks marked "approximate".
+3. **Tokenizer path (offline-only for CI)**: pin a local Claude-
+   compatible tokenizer — Anthropic first-party if it ships one for
+   the current model family, else `tiktoken` with an "approximate,
+   calibrated against Anthropic's tokenizer" disclaimer stamped
+   into every report. Anthropic's `messages/count_tokens` endpoint
+   is NOT used for CI (requires live API key + network); it stays
+   as an operator-invoked calibration tool via `make
+   calibrate-tokens`.
 4. **Fixture scenarios**: YAML per scenario in
    `tests/token-scenarios/`, minimum set:
    - `empty-repo` — Claude Code baseline, no ethos.
@@ -216,19 +226,27 @@ cost. L6 is the missing observability tier.
    - `ethos-post-compact` — PreCompact hook fired, context
      restoration cost.
 5. **Baseline captures**: `tests/token-baselines/<scenario>.json`
-   committed. Recaptured on major ethos releases via
-   `make baseline-tokens`.
-6. **Reporting**: `make test-tokens` runs every scenario, writes
-   reports to `.tmp/token-reports/`, compares to baseline, prints
-   delta summary + attribution tree.
+   committed. Recaptured via `make baseline-tokens`
+   (operator-invoked on a controlled workstation, not automatic).
+6. **Reporting**: `make test-tokens` boots the capture proxy, runs
+   every scenario, tokenizes captures, writes reports to
+   `.tmp/token-reports/`, compares to baseline, and prints a delta
+   summary alongside the attribution tree. Exits 0 always; deltas
+   are surfaced via PR comment, not the exit code.
 7. **CI wiring**: per-release GitHub Actions job runs
-   `make test-tokens` against committed baselines. Flags per policy:
+   `make test-tokens` against committed baselines. NO Anthropic API
+   key needed — proxy stays entirely local. Flags per policy:
    - Delta > 5% on any scenario → PR comment, human review before
      merge.
    - Delta > 15% → CI turns yellow, blocks auto-merge memory but
      not the merge button.
    - New source of tokens (a section not in the last baseline) → PR
      comment, no gate.
+8. **Calibration recipe**: `make calibrate-tokens` — separate target
+   (not CI) that re-runs a chosen scenario against Anthropic's
+   `messages/count_tokens`, compares to the offline tokenizer's
+   number, updates the calibration disclaimer if delta is
+   significant. Operator-invoked, human reviewed.
 
 ### Operator policy calls needed before Phase 6 dispatch
 
@@ -270,9 +288,10 @@ cost. L6 is the missing observability tier.
   work, which is complementary — DES-057's vendor produces a
   minimal snapshot, L6 measures whether that reduction actually
   reaches the wire.
-- Bifrost setup lives in the workspace `.envrc.local` via
-  `CLAUDE_PROVIDER=bifrost`; the `claude-provider` toggle script
-  in `~/.local/bin/` switches routes.
+- Bifrost (workspace `.envrc.local` via `CLAUDE_PROVIDER=bifrost`,
+  toggle script in `~/.local/bin/`) is a workstation-only eyeball
+  tool for interactive local inspection. It is NOT the L6 harness
+  — L6 must run in CI without external dependencies.
 
 ---
 
@@ -319,4 +338,4 @@ L5 sprint integration tests remain the sole unimplemented phase. The pipeline in
 | CI coverage | `-coverprofile` in `make test`, CI summary | SHIPPED | v3.1.0 |
 | 4 — L4 Behavioral | Harness, Layer A/B/C scenarios, daily CI workflow | SHIPPED | v3.1.0 |
 | 5 — L5 Sprint Integration | Sprint fixture repo, harness, post-run checks | PLANNED | — |
-| 6 — L6 Payload / Token Profiling | Bifrost capture, attribution parser, baseline scenarios, `make test-tokens` | PLANNED | — |
+| 6 — L6 Payload / Token Profiling | Local capture proxy, attribution parser, offline tokenizer, baseline scenarios, `make test-tokens` | PLANNED | — |

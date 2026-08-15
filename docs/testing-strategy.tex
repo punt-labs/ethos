@@ -125,13 +125,12 @@ L2 & CLI Behavioral      & No  & Subprocess harness       & Every commit   & 2 d
 L3 & MCP Integration     & No  & \tool{ethos serve}       & Every commit   & 2 days \\
 L4 & Agent Behavioral    & Yes & Non-interactive Claude   & Daily          & 4+N days \\
 L5 & Sprint Integration  & Yes & Fixture repo + harness   & Per release    & 5 days \\
-L6 & Payload / Token Profiling & Proxy & Bifrost capture + tokenizer & Per release + on-demand & 5--7 days \\
+L6 & Payload / Token Profiling & Proxy & Local capture proxy + offline tokenizer & Per release + on-demand & 5--7 days \\
 \bottomrule
 \caption{Test pyramid summary.  ``4+N days'' for L4 means 4 days of
   framework plus 1 day per role for scenario authoring.  L6 uses a
-  captured API proxy (Bifrost) rather than direct LLM calls, so it
-  costs one token-counting call per payload instead of a full agentic
-  loop.}
+  local capture proxy (in-tree, no external dependency) rather than
+  live LLM calls; a scenario run costs zero Anthropic tokens.}
 \end{longtable}
 
 % ===================================================================
@@ -532,50 +531,97 @@ session, attributed to source, tracked over time.
     ethos releases.
 \end{itemize}
 
-\subsection*{How to invoke without hitting Anthropic}
+\subsection*{Test harness (CI-portable, no external dependency)}
 
-Bifrost is a locally-deployed LLM proxy that exposes an
-Anthropic-compatible Messages endpoint
-(\fpath{/anthropic/v1/messages}) and translates upstream.  Point
-Claude Code at Bifrost with:
-
-\begin{lstlisting}[language=bash]
-export ANTHROPIC_BASE_URL="http://okinos.user.home.lab:8080/anthropic"
-export ANTHROPIC_AUTH_TOKEN="$(security find-generic-password \
-  -a "$USER" -s bifrost-auth-key -w)"
-\end{lstlisting}
-
-(See \fpath{.envrc.local}'s \texttt{CLAUDE\_PROVIDER=bifrost}
-stanza in this repo for the operational shape.)  With
-\cmd{claude-provider bifrost} set, every payload Claude Code would
-have sent to \url{api.anthropic.com} routes through Bifrost.  Bifrost
-logs the full request body (system prompt, messages, tools) before
-forwarding upstream --- or, in test mode, without forwarding at all,
-so no Anthropic tokens are consumed by the profiling run itself.
-
-\subsection*{Tokenizer}
-
-Two options, both viable:
+The harness is a local proxy the test process spins up on
+\texttt{localhost}, points Claude Code at via
+\texttt{ANTHROPIC\_BASE\_URL}, and tears down when the scenario
+completes.  Requirements:
 
 \begin{itemize}
-  \item \textbf{Anthropic \texttt{messages/count\_tokens} endpoint.}
-    Authoritative for Claude model tokenization.  One HTTP call per
-    payload, roughly \$0.001 per call, no compute cost on the model
-    side.  Required for cross-checking any local tokenizer, at
-    minimum on baseline capture.
-  \item \textbf{Local Claude tokenizer.}  If Anthropic ships one
-    (check \pkg{@anthropic-ai/tokenizer} or equivalent in the SDK);
-    otherwise use \pkg{tiktoken}'s closest-match encoding with an
-    explicit ``approximate'' disclaimer on the report.
+  \item Runs identically on a developer workstation and in CI --- no
+    dependency on any specific machine, VPN, or network host.
+  \item Captures the full request body Claude Code sends (system
+    prompt, messages, tools) as JSON, deterministic per scenario.
+  \item Returns a canned minimal response so the scenario terminates
+    without hitting a live model --- CI cost per run is zero, offline
+    runs work.
+  \item Records to a per-scenario file under \fpath{.tmp/token-captures/}
+    that the attribution parser reads.
 \end{itemize}
 
-Recommend Anthropic endpoint for baseline capture (once per release
-per scenario, cost bounded) and local tokenizer for PR-time
-regression checks (fast, no network, marked approximate).
+Two concrete options, both compatible with the requirements:
+
+\begin{itemize}
+  \item \textbf{LiteLLM proxy in mock/record mode.}
+    \href{https://github.com/BerriAI/litellm}{LiteLLM} is an
+    MIT-licensed Python library that exposes an Anthropic-compatible
+    Messages endpoint and can be run as a subprocess proxy
+    (\cmd{litellm --config litellm.yaml}).  Its callback surface
+    supports request/response logging to disk.  For test use, set
+    the response to a static canned turn (via a mock provider
+    config) and enable request-body dumping to
+    \fpath{.tmp/token-captures/<scenario>.jsonl}.  Ships as a
+    single \cmd{pip install} --- CI adds one line to install and
+    one line to start.
+  \item \textbf{In-tree Go proxy (\fpath{cmd/token-capture-proxy/}).}
+    A tiny HTTP server built on \pkg{net/http} plus
+    \pkg{net/http/httptest} that speaks just enough of the
+    Anthropic Messages wire protocol to accept the request, dump
+    the body, and return a canned assistant turn.  Roughly
+    200 lines of Go, no external dependency, matches the ethos
+    codebase's language.  Preferred if we want zero-Python-in-CI.
+\end{itemize}
+
+Recommend the in-tree Go proxy for the first cut: no new dependency
+in CI, no Python interpreter version to pin, and it colocates the
+capture-format spec with the attribution parser that reads it.
+LiteLLM stays a valid fallback if a broader multi-provider capture
+surface is ever needed.
+
+\emph{Aside on Bifrost}: Bifrost is a separately-deployed workstation
+proxy some developers use for interactive local inspection
+(\texttt{CLAUDE\_PROVIDER=bifrost} stanza in the workspace
+\fpath{.envrc.local}).  It is a useful eyeball tool but is NOT the
+test harness --- Bifrost lives on a specific machine, so CI can't
+reach it and other developers don't necessarily run it.  The L6
+harness must stand on its own.
+
+\subsection*{Tokenizer (offline-only for CI)}
+
+The tokenizer must run in CI without external network.  Anthropic's
+\texttt{messages/count\_tokens} endpoint is authoritative but
+requires an API call and a live key --- unsuitable as the primary
+tokenizer for a per-release CI job.
+
+Options that satisfy the offline requirement:
+
+\begin{itemize}
+  \item \textbf{\pkg{@anthropic-ai/tokenizer}} (npm) or the
+    equivalent Python package, if Anthropic ships one for the current
+    Claude family.  Check first --- the SDK docs are the ground
+    truth.
+  \item \textbf{\pkg{tiktoken}} (Python, MIT) with an explicit
+    ``approximate --- calibrated against Anthropic's tokenizer, not
+    identical'' disclaimer stamped into every report.  This is what
+    the LiteLLM cost-estimator uses when Anthropic doesn't ship a
+    first-party option.
+  \item \textbf{Anthropic \texttt{messages/count\_tokens} endpoint,
+    only for a periodic calibration run}.  Not for CI.  Used
+    manually --- once per release, once every N releases, or when
+    the local-tokenizer approximate baseline drifts noticeably ---
+    to cross-check that the offline tokenizer is still close enough
+    to authoritative.  Cost bounded and human-gated.
+\end{itemize}
+
+Recommend the local approximate tokenizer as the CI default and the
+Anthropic endpoint as an occasional operator-run calibration check.
+Every report stamps ``approximate'' unless the calibration run
+tightens the confidence.
 
 \subsection*{Attribution}
 
-Given a captured payload from Bifrost, split it into sources ethos
+Given a captured payload from the harness proxy, split it into sources ethos
 either owns or influences.  The system-prompt assembly is
 addressable because ethos-injected sections carry known headings
 (\texttt{\#\# Personality}, \texttt{\#\# Writing Style},
@@ -653,53 +699,77 @@ is not.
 
 Per release, and on-demand during ethos changes that touch the
 persona-block builder, generated-agents synthesizer, or hook
-\field{additionalContext} format.  Not per-commit --- Bifrost
-capture + tokenizer call is more infrastructure than a git commit
-warrants for a subword-level change.
+\field{additionalContext} format.  Not per-commit --- spinning up
+the capture proxy and tokenizing every scenario is more
+infrastructure than a git commit warrants for a subword-level
+change.
 
 \subsection*{Infrastructure deliverables}
 
 \begin{enumerate}
-  \item Bifrost payload capture: verify Bifrost logs the full request
-    body before forwarding.  If not, add a capture middleware or a
-    proxy shim between Claude Code and Bifrost.
+  \item Test-harness proxy: in-tree Go binary at
+    \fpath{cmd/token-capture-proxy/}.  Speaks the Anthropic Messages
+    wire protocol on \texttt{localhost:PORT}, accepts the request,
+    dumps the full body to
+    \fpath{.tmp/token-captures/<scenario>.jsonl}, returns a canned
+    minimal assistant turn so Claude Code terminates cleanly.
+    Roughly 200 lines, no external dependency.
   \item Attribution parser: Go binary in \fpath{cmd/token-attribute/}
-    that reads a Bifrost capture and emits the report structure above.
+    that reads a capture file and emits the report structure above.
     Uses persona-block markers already defined by
     \pkg{internal/hook/persona.go}.
+  \item Local tokenizer wiring: pick and pin the offline tokenizer
+    (Anthropic first-party if it exists, else \pkg{tiktoken} with
+    calibration disclaimer).  Wrap in a small Go interface so a
+    calibration run against the Anthropic endpoint can validate the
+    approximate.
   \item Fixture scenarios: YAML file per scenario in
     \fpath{tests/token-scenarios/}, each declaring the repo/team
     configuration to reproduce plus the Claude Code invocation
-    (\cmd{claude --bare -p "<task>"}).
+    (\cmd{claude --bare -p "<task>" -{}-max-turns 1} pointed at the
+    proxy).
   \item Baseline captures: \fpath{tests/token-baselines/<scenario>.json}
-    committed, regenerated on major ethos releases via a
-    \cmd{make baseline-tokens} target.
-  \item Reporting: \cmd{make test-tokens} runs every scenario, writes
-    reports to \fpath{.tmp/token-reports/}, compares to baseline,
-    prints delta summary + attribution tree.
-  \item CI wiring: per-release GitHub Actions job that runs
-    \cmd{make test-tokens} against the current baselines.
+    committed, regenerated via a \cmd{make baseline-tokens} target
+    (operator-invoked on a controlled workstation, not automatic).
+  \item Reporting: \cmd{make test-tokens} boots the capture proxy,
+    runs every scenario, tokenizes captures, writes reports to
+    \fpath{.tmp/token-reports/}, compares to baseline, prints delta
+    summary + attribution tree.  Exits 0 always; deltas are surfaced
+    via PR comment, not the exit code.
+  \item CI wiring: per-release GitHub Actions job runs
+    \cmd{make test-tokens} against the committed baselines.  No
+    Anthropic API key needed --- the proxy stays entirely local.
+  \item Calibration recipe: separate \cmd{make calibrate-tokens}
+    target (not CI) that re-runs a chosen scenario against the
+    Anthropic \texttt{messages/count\_tokens} endpoint, compares to
+    the offline tokenizer's number, and updates the calibration
+    disclaimer if the delta is significant.  Operator-invoked, human
+    reviewed.
 \end{enumerate}
 
 \subsection*{Prerequisites and dependencies}
 
 \begin{itemize}
-  \item Bifrost deployment (deployed on this workstation; see the
-    workspace \fpath{.envrc.local} for the reference stanza).
-  \item Anthropic \texttt{messages/count\_tokens} API access for
-    authoritative baselines.
+  \item An offline Claude-compatible tokenizer, either Anthropic
+    first-party or a calibrated approximation.  Verify which is
+    current when the framework is built.
   \item Decision on where the fixture scenarios live --- a separate
     \texttt{ethos-token-fixture} repo (parallel to the L5 sprint
     fixture) or in-tree under \fpath{tests/token-scenarios/}.
     In-tree is simpler for the first cut; extract later if fixtures
     grow.
+  \item No dependency on Bifrost or any external proxy.  Bifrost is
+    a workstation eyeball tool, not a CI harness.
 \end{itemize}
 
 \subsection*{Effort estimate}
 
 Approximately 5--7 days for initial framework + baseline capture
-across 4--6 scenarios.  Then ongoing scenario authoring as the
-ethos surface changes (new hook, new bundle, new MCP server).
+across 4--6 scenarios.  Breakdown: capture proxy 1 day, attribution
+parser 2--3 days, tokenizer wiring + calibration recipe 1 day,
+scenarios + baselines 1 day, CI wiring + docs 1 day.  Then ongoing
+scenario authoring as the ethos surface changes (new hook, new
+bundle, new MCP server).
 
 % ===================================================================
 \section{Tooling Landscape}
@@ -906,9 +976,9 @@ coverage.
     L4's framework and fixture repo.  Wire into the release
     checklist, not CI.
 
-  \item \textbf{L6 parallel to L5, not after.}  Depends on Bifrost
-    being deployed (already true for this workstation) and on a
-    token-attribution parser that reads ethos-injected sections
+  \item \textbf{L6 parallel to L5, not after.}  Depends on the
+    in-tree capture proxy being built (no external deployment) and
+    on a token-attribution parser that reads ethos-injected sections
     from an assembled system prompt.  L6 does not require L4 or L5
     to exist; it can be built first if payload bloat is the more
     urgent surface.
