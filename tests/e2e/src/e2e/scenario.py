@@ -102,8 +102,20 @@ class Scenario:
         )
 
     @staticmethod
-    def _hermetic_from_raw(raw: dict[str, object]) -> bool:
-        return bool(raw.get("hermetic", True))
+    def _require_bool(mapping: dict[str, object], key: str, default: bool) -> bool:
+        """Return ``mapping[key]`` if present, else ``default`` — reject non-bool.
+
+        ``bool(mapping.get(key, default))`` would silently coerce a
+        mistyped yaml value like ``"false"`` (a non-empty, truthy string)
+        into ``True``. A boolean-shaped scenario key should be a literal
+        yaml boolean or absent, never anything else.
+        """
+        if key not in mapping:
+            return default
+        value = mapping[key]
+        if not isinstance(value, bool):
+            raise ValueError(f"{key!r} must be a boolean, got {type(value)!r}")
+        return value
 
 
 # Keys the "expect" block accepts. A typo here (e.g. "no_secret_pattern")
@@ -143,10 +155,12 @@ class TokenScenario(Scenario):
                 str(raw["repo_fixture"]) if raw.get("repo_fixture") else None
             ),
             claude_invocation=Scenario._invocation_from_raw(raw),
-            smoke=bool(raw.get("smoke", False)),
-            hermetic=Scenario._hermetic_from_raw(raw),
+            smoke=Scenario._require_bool(raw, "smoke", False),
+            hermetic=Scenario._require_bool(raw, "hermetic", True),
             max_bytes=int(expect["max_bytes"]),
-            no_secret_patterns=bool(expect.get("no_secret_patterns", True)),
+            no_secret_patterns=Scenario._require_bool(
+                expect, "no_secret_patterns", True
+            ),
         )
 
 

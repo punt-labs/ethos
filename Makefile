@@ -28,6 +28,7 @@ lint: ## Lint (golangci-lint + shellcheck + ruff + mypy)
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
+	cd tests/e2e && uv run pytest tests/ -m "not e2e"
 
 docs: ## Lint markdown
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"

@@ -26,8 +26,9 @@ from e2e.scenario import Scenario, TokenScenario
 # are relative to this directory (e.g. "fixtures/team-submodule").
 _E2E_ROOT = Path(__file__).resolve().parents[2]
 # tests/e2e -> repo root — where `make test-e2e[-smoke]` builds a fresh
-# `ethos` binary before running pytest (see Makefile).
-_REPO_ROOT = _E2E_ROOT.parent
+# `ethos` binary before running pytest (see Makefile). One more `.parent`
+# than _E2E_ROOT itself: _E2E_ROOT is already <repo>/tests/e2e.
+_REPO_ROOT = _E2E_ROOT.parent.parent
 _E2E_BIN_DIR = _REPO_ROOT / ".tmp" / "e2e-bin"
 
 _CLAUDE_TIMEOUT_S = 60.0
