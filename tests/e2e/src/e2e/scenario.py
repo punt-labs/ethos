@@ -147,16 +147,25 @@ class TokenScenario(Scenario):
         if unknown_expect:
             raise ValueError(f"unknown 'expect' key(s): {sorted(unknown_expect)}")
 
+        repo_fixture = str(raw["repo_fixture"]) if raw.get("repo_fixture") else None
+        hermetic = Scenario._require_bool(raw, "hermetic", True)
+        if not hermetic and repo_fixture is None:
+            # hermetic: false means "run a real session and observe what
+            # its config injects" — with no repo_fixture, that session
+            # has nothing to inject and the capture just measures the
+            # bare Claude Code baseline again, silently. That's the
+            # empty-repo scenario already; state it as hermetic: true
+            # instead of reaching the same result by omission.
+            raise ValueError("hermetic: false requires repo_fixture")
+
         return cls(
             id=str(raw["id"]),
             type=str(raw["type"]),
             description=str(raw.get("description", "")),
-            repo_fixture=(
-                str(raw["repo_fixture"]) if raw.get("repo_fixture") else None
-            ),
+            repo_fixture=repo_fixture,
             claude_invocation=Scenario._invocation_from_raw(raw),
             smoke=Scenario._require_bool(raw, "smoke", False),
-            hermetic=Scenario._require_bool(raw, "hermetic", True),
+            hermetic=hermetic,
             max_bytes=int(expect["max_bytes"]),
             no_secret_patterns=Scenario._require_bool(
                 expect, "no_secret_patterns", True
