@@ -70,6 +70,29 @@ def _claude_bin() -> str:
     return path
 
 
+def _require_e2e_bin() -> None:
+    """Raise unless the checkout-built `ethos` binary is in place.
+
+    Called only for hermetic: false scenarios, whose whole point is
+    exercising the ethos binary under test. `_E2E_BIN_DIR` comes first
+    on the caged PATH, but PATH lookup silently skips a missing entry —
+    without this check, a run that skipped `make e2e-bin` (invoking
+    `pytest` directly rather than `make test-e2e[-smoke]`) would fall
+    through to whatever `ethos` happens to be globally installed and
+    reintroduce the stale-binary problem this PATH ordering exists to
+    prevent, with no signal that it happened.
+    """
+    e2e_bin = _E2E_BIN_DIR / "ethos"
+    if not e2e_bin.is_file():
+        raise RuntimeError(
+            f"runner: {e2e_bin} not found — a hermetic: false scenario's "
+            "SessionStart hook must run the ethos binary built from this "
+            "checkout, not whatever's globally installed. Run `make "
+            "e2e-bin` (or `make test-e2e`/`test-e2e-smoke`, which build "
+            "it first) before invoking pytest directly."
+        )
+
+
 def run_scenario(scenario: Scenario, proxy: LiteLLMProxy) -> TokenCapture:
     """Invoke ``scenario`` against ``proxy`` and return its capture.
 
@@ -106,6 +129,7 @@ def _invoke_claude(
     if scenario.hermetic:
         argv.append("--bare")
     else:
+        _require_e2e_bin()
         # cwd is a throwaway copy of repo_fixture with no .git of its own.
         # Without this override, a repo-root walk (ethos's StoreRepoRoot,
         # or anything else that climbs looking for a .git marker) would
