@@ -113,6 +113,42 @@ func TestDepositSetupCollisionOnUnlistedExistingPath(t *testing.T) {
 	}
 }
 
+func TestDepositRecoversFromInterruptAfterManifestBeforeContent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".punt-labs", "ethos"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a deposit that was interrupted right after the manifest was
+	// rewritten to the new (tier-C) set, but before the guide and setup
+	// content were written: the manifest already names setupRel, but the
+	// file itself does not exist yet.
+	newSet := []string{guideRel, setupRel, manifestRel}
+	if err := os.WriteFile(filepath.Join(dir, manifestRel), manifestBytes(newSet), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	warns, err := deposit(dir, []byte("guide content\n"), []byte("setup content\n"))
+	if err != nil {
+		t.Fatalf("deposit: %v, want the retry to recover without a collision", err)
+	}
+	if len(warns) != 0 {
+		t.Errorf("unexpected warnings on retry: %v", warns)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, guideRel)); string(got) != "guide content\n" {
+		t.Errorf("guide = %q, want %q", got, "guide content\n")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, setupRel)); string(got) != "setup content\n" {
+		t.Errorf("setup = %q, want %q", got, "setup content\n")
+	}
+	paths, err := readManifest(filepath.Join(dir, manifestRel))
+	if err != nil {
+		t.Fatalf("readManifest: %v", err)
+	}
+	if len(paths) != 3 || paths[0] != guideRel || paths[1] != setupRel || paths[2] != manifestRel {
+		t.Errorf("manifest = %v, want %v", paths, newSet)
+	}
+}
+
 func TestReadManifestAbsent(t *testing.T) {
 	paths, err := readManifest(filepath.Join(t.TempDir(), "nope"))
 	if err != nil {

@@ -74,13 +74,20 @@ func deposit(repoRoot string, guide, setup []byte) ([]string, error) {
 		}
 	}
 
+	// The manifest is written first, ahead of the content it describes. Once
+	// it lands, a retry's prevSet already equals newSet, so every
+	// newSet path is grandfathered rather than checked for collision — an
+	// interrupt between here and the last content write is safe to resume.
+	// Writing content first would leave a retry unable to tell "our own
+	// interrupted deposit" from "someone else's file at that path," and
+	// hard-collide on the former.
+	if err := writeVendored(filepath.Join(repoRoot, manifestRel), want[manifestRel]); err != nil {
+		return nil, err
+	}
 	if err := writeVendored(filepath.Join(repoRoot, guideRel), guide); err != nil {
 		return nil, err
 	}
 	if err := writeVendored(filepath.Join(repoRoot, setupRel), setup); err != nil {
-		return nil, err
-	}
-	if err := writeVendored(filepath.Join(repoRoot, manifestRel), manifestBytes(newSet)); err != nil {
 		return nil, err
 	}
 	return warnings, nil
