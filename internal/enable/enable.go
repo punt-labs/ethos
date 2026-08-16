@@ -32,6 +32,14 @@ import (
 //go:embed guide/CLAUDE.md
 var Guide []byte
 
+// Setup is the vendored one-time setup playbook deposited at
+// .punt-labs/ethos/ETHOS-SETUP.md (DES-071 tier C). It is not @-imported by
+// the guide; an agent opens it on demand. Kept in sync with
+// docs/ETHOS-SETUP.md via `make sync-embed` and its validate-content check.
+//
+//go:embed setup/ETHOS-SETUP.md
+var Setup []byte
+
 // CanonicalImport is the exact import line enable writes to and disable
 // removes from the repo CLAUDE.md. It must be byte-identical across every
 // ethos install.
@@ -83,12 +91,12 @@ func EnableTo(repoRoot, storeRoot string) (*Report, error) {
 			".punt-labs/ethos is a git submodule (gitlink); the vendored guide cannot be written into a foreign git repo — convert it to an inline directory first (ethos-e29s)")
 	}
 
-	depositWarns, err := deposit(repoRoot, Guide)
+	depositWarns, err := deposit(repoRoot, Guide, Setup)
 	if err != nil {
 		return rep, err
 	}
 	rep.Warnings = append(rep.Warnings, depositWarns...)
-	rep.step("vendored", "done", "deposited "+guideRel+" and "+manifestRel)
+	rep.step("vendored", "done", "deposited "+guideRel+", "+setupRel+", and "+manifestRel)
 
 	// Protect before marking enabled, so "enabled implies protected" holds: a
 	// rare .gitignore write error must not leave an enabled-but-unprotected

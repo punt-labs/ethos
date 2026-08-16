@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/enable"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/role"
@@ -45,6 +47,24 @@ func checkReadmeTable(path string, e schema.Entity) result {
 	want := strings.TrimRight(e.MarkdownTable(), "\n")
 	if got != want {
 		return fail(label, fmt.Sprintf("%s drifted from schema.%s.MarkdownTable(); update the README table to match the registry in internal/schema", path, e.Name))
+	}
+	return pass(label)
+}
+
+// checkSetupSync compares docs/ETHOS-SETUP.md — the DES-071 tier-C source of
+// truth — against the embedded copy that ships in the binary
+// (internal/enable/setup/ETHOS-SETUP.md, exposed as enable.Setup). The ADR
+// requires the two stay byte-identical; `make sync-embed` closes any drift
+// this check finds.
+func checkSetupSync(repoRoot string) result {
+	label := "enable: ETHOS-SETUP.md embed sync"
+	path := filepath.Join(repoRoot, "docs", "ETHOS-SETUP.md")
+	onDisk, err := os.ReadFile(path)
+	if err != nil {
+		return fail(label, fmt.Sprintf("reading %s: %v", path, err))
+	}
+	if !bytes.Equal(onDisk, enable.Setup) {
+		return fail(label, "docs/ETHOS-SETUP.md and internal/enable/setup/ETHOS-SETUP.md have drifted — run `make sync-embed`")
 	}
 	return pass(label)
 }
@@ -151,6 +171,7 @@ func main() {
 	// Check 5: agent file path resolution.
 	// ethosRoot is always <repo>/.punt-labs/ethos — derive repo root structurally.
 	repoRoot := filepath.Dir(filepath.Dir(ethosRoot))
+	results = append(results, checkSetupSync(repoRoot))
 	agentFails := 0
 	for _, idRef := range listResult.Identities {
 		if idRef.Agent == "" {

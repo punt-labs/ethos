@@ -81,6 +81,9 @@ func TestEnableDepositsFourArtifacts(t *testing.T) {
 	if !exists(filepath.Join(dir, guideRel)) {
 		t.Error("guide not deposited")
 	}
+	if !exists(filepath.Join(dir, setupRel)) {
+		t.Error("setup playbook not deposited")
+	}
 	if !exists(filepath.Join(dir, manifestRel)) {
 		t.Error("manifest not deposited")
 	}
@@ -107,6 +110,21 @@ func TestEnableDepositsFourArtifacts(t *testing.T) {
 	}
 }
 
+// TestEnableProducesGuideAndSetupContent pins DES-071 tier C: Enable deposits
+// both embedded files verbatim, not just their presence.
+func TestEnableProducesGuideAndSetupContent(t *testing.T) {
+	dir := gitRepo(t)
+	if _, err := Enable(dir); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if got := readFile(t, filepath.Join(dir, guideRel)); got != string(Guide) {
+		t.Error("deposited guide content does not match the embedded Guide")
+	}
+	if got := readFile(t, filepath.Join(dir, setupRel)); got != string(Setup) {
+		t.Error("deposited setup content does not match the embedded Setup")
+	}
+}
+
 func TestEnableDisableRoundTrip(t *testing.T) {
 	dir := gitRepo(t)
 	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# repo\n"), 0o644); err != nil {
@@ -126,6 +144,9 @@ func TestEnableDisableRoundTrip(t *testing.T) {
 	}
 	if !exists(filepath.Join(dir, guideRel)) {
 		t.Error("guide should stay dormant after disable")
+	}
+	if !exists(filepath.Join(dir, setupRel)) {
+		t.Error("setup playbook should stay dormant after disable")
 	}
 	// Fresh install produced standalone marker forms; unchain removes them.
 	if exists(filepath.Join(dir, ".git", "hooks", "pre-commit")) {
