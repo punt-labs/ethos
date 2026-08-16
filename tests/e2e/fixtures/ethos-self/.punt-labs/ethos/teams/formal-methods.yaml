@@ -9,27 +9,18 @@ members:
   # Formal methods
   - identity: jms
     role: z-specialist
-  - identity: jra
-    role: b-specialist
   # Python
   - identity: rmh
     role: python-specialist
-  - identity: gvr
-    role: python-language-design
   # CLI
   - identity: mdm
     role: cli-specialist
   # UX / info design
-  - identity: edt
-    role: ux-designer
   - identity: dna
     role: ux-cognitive
   # Infrastructure
   - identity: adb
     role: infra-engineer
-  # Product
-  - identity: adt
-    role: pm-grounding
 collaborations:
   - from: coo
     to: ceo
@@ -37,19 +28,10 @@ collaborations:
   - from: z-specialist
     to: coo
     type: reports_to
-  - from: b-specialist
-    to: coo
-    type: reports_to
   - from: python-specialist
     to: coo
     type: reports_to
-  - from: python-language-design
-    to: coo
-    type: reports_to
   - from: cli-specialist
-    to: coo
-    type: reports_to
-  - from: ux-designer
     to: coo
     type: reports_to
   - from: ux-cognitive
@@ -58,16 +40,3 @@ collaborations:
   - from: infra-engineer
     to: coo
     type: reports_to
-  - from: pm-grounding
-    to: coo
-    type: reports_to
-  # Domain pairings
-  - from: b-specialist
-    to: z-specialist
-    type: collaborates_with
-  - from: python-language-design
-    to: python-specialist
-    type: collaborates_with
-  - from: ux-cognitive
-    to: ux-designer
-    type: collaborates_with
