@@ -1,0 +1,24 @@
+id: ethos-self
+type: token
+description: >
+  Ethos's own repo, copied whole: this checkout's real
+  .punt-labs/ethos/ (identities, personalities, writing styles,
+  talents, roles, teams, agent stubs), .claude/ (settings.json,
+  every generated agents/*.md), and CLAUDE.md. hermetic: false, so
+  this is not a synthetic minimal fixture like ethos-loaded — it is
+  the actual wire footprint a developer's `claude` session on this
+  repo carries today, including the full engineering team roster.
+  This is the baseline the engineering.yaml content cut is measured
+  against via cmd/e2e-attribute's "## Team" bucket.
+repo_fixture: fixtures/ethos-self
+hermetic: false
+claude_invocation:
+  prompt: "reply with the single word pong"
+  max_turns: 1
+expect:
+  # Observed baseline: ~388,800 bytes. Ceiling set ~20% above that
+  # first capture — see PR description for the full attribution
+  # breakdown this ceiling was calibrated from.
+  max_bytes: 470000
+  no_secret_patterns: true
+smoke: false
