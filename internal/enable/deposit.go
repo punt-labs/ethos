@@ -8,30 +8,31 @@ import (
 	"strings"
 )
 
-// The vendored zone is exactly these two repo-relative paths. enable writes
+// The vendored zone is exactly these three repo-relative paths. enable writes
 // them wholesale and never any other path under .punt-labs/ethos/, so the
 // overwrite is bounded to the vendored zone by construction (§7).
 const (
 	guideRel    = ".punt-labs/ethos/CLAUDE.md"
+	setupRel    = ".punt-labs/ethos/ETHOS-SETUP.md"
 	manifestRel = ".punt-labs/ethos/.vendored-manifest"
 )
 
 // deposit writes the vendored zone under §7 manifest semantics: it writes
-// exactly the new-manifest set (the guide and the manifest itself), removes
-// any path the previous manifest listed but the new one does not, and
-// collision-errors on any new-manifest path that already exists but is not in
-// the previous manifest. On the first manifest-aware run (no previous
-// manifest) the new set is grandfathered as the previous set, so an
-// already-deposited guide does not error — but a manifest path in a
+// exactly the new-manifest set (the guide, the setup playbook, and the
+// manifest itself), removes any path the previous manifest listed but the new
+// one does not, and collision-errors on any new-manifest path that already
+// exists but is not in the previous manifest. On the first manifest-aware run
+// (no previous manifest) the new set is grandfathered as the previous set, so
+// an already-deposited guide does not error — but a manifest path in a
 // non-vendored zone errors unconditionally.
 //
 // It returns any warnings — on first contact (bootstrap), overwriting an
 // existing vendored file whose content differs from what we deposit is
 // grandfathered by punt-labs-dir §7, but the overwrite is surfaced by naming
 // the path so the (git-tracked, recoverable) clobber is not silent (S2).
-func deposit(repoRoot string, guide []byte) ([]string, error) {
-	newSet := []string{guideRel, manifestRel}
-	want := map[string][]byte{guideRel: guide, manifestRel: manifestBytes(newSet)}
+func deposit(repoRoot string, guide, setup []byte) ([]string, error) {
+	newSet := []string{guideRel, setupRel, manifestRel}
+	want := map[string][]byte{guideRel: guide, setupRel: setup, manifestRel: manifestBytes(newSet)}
 
 	prev, err := readManifest(filepath.Join(repoRoot, manifestRel))
 	if err != nil {
@@ -73,20 +74,30 @@ func deposit(repoRoot string, guide []byte) ([]string, error) {
 		}
 	}
 
+	// The manifest is written first, ahead of the content it describes. Once
+	// it lands, a retry's prevSet already equals newSet, so every
+	// newSet path is grandfathered rather than checked for collision — an
+	// interrupt between here and the last content write is safe to resume.
+	// Writing content first would leave a retry unable to tell "our own
+	// interrupted deposit" from "someone else's file at that path," and
+	// hard-collide on the former.
+	if err := writeVendored(filepath.Join(repoRoot, manifestRel), want[manifestRel]); err != nil {
+		return nil, err
+	}
 	if err := writeVendored(filepath.Join(repoRoot, guideRel), guide); err != nil {
 		return nil, err
 	}
-	if err := writeVendored(filepath.Join(repoRoot, manifestRel), manifestBytes(newSet)); err != nil {
+	if err := writeVendored(filepath.Join(repoRoot, setupRel), setup); err != nil {
 		return nil, err
 	}
 	return warnings, nil
 }
 
-// isVendored reports whether rel is one of the two paths the vendored zone
+// isVendored reports whether rel is one of the three paths the vendored zone
 // owns. Any other path under .punt-labs/ethos/ is Config, Local, or
 // seal-managed data enable must never write.
 func isVendored(rel string) bool {
-	return rel == guideRel || rel == manifestRel
+	return rel == guideRel || rel == setupRel || rel == manifestRel
 }
 
 // manifestBytes renders the manifest: one repo-relative path per line.

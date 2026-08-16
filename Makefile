@@ -16,7 +16,7 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
+.PHONY: help lint docs test check validate-content sync-embed format build install dev clean dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -38,6 +38,9 @@ test: ## Run tests with race detection and write coverage to coverage.out
 
 validate-content: ## Validate all ethos content files
 	go run ./cmd/validate-content
+
+sync-embed: ## Copy docs/ETHOS-SETUP.md to its DES-071 tier-C embed source
+	cp docs/ETHOS-SETUP.md internal/enable/setup/ETHOS-SETUP.md
 
 test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
 	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
