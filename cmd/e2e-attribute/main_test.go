@@ -67,6 +67,25 @@ func TestBuildReportRoundTrip(t *testing.T) {
 	if attrTotal != report.SystemBytes {
 		t.Errorf("sum of Attribution bytes = %d, want SystemBytes %d", attrTotal, report.SystemBytes)
 	}
+
+	if report.MessagesTextBytes == 0 {
+		t.Error("MessagesTextBytes = 0, want > 0 (fixture has a hook-injected message)")
+	}
+	wantMsgLabels := []string{"other", markerPersonality, markerWritingStyle, markerTalents, "## Team"}
+	if len(report.MessagesAttribution) != len(wantMsgLabels) {
+		t.Fatalf("MessagesAttribution = %v, want %d sections labeled %v",
+			report.MessagesAttribution, len(wantMsgLabels), wantMsgLabels)
+	}
+	msgAttrTotal := 0
+	for i, want := range wantMsgLabels {
+		if report.MessagesAttribution[i].Label != want {
+			t.Errorf("MessagesAttribution[%d].Label = %q, want %q", i, report.MessagesAttribution[i].Label, want)
+		}
+		msgAttrTotal += report.MessagesAttribution[i].Bytes
+	}
+	if msgAttrTotal != report.MessagesTextBytes {
+		t.Errorf("sum of MessagesAttribution bytes = %d, want MessagesTextBytes %d", msgAttrTotal, report.MessagesTextBytes)
+	}
 }
 
 func TestSystemTextRejectsNull(t *testing.T) {
@@ -94,6 +113,44 @@ func TestToolSizesRejectsEmptyName(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing name") {
 		t.Errorf("toolSizes error = %v, want it to mention the missing name", err)
+	}
+}
+
+func TestMessagesTextConcatenatesContentBlocks(t *testing.T) {
+	raw := []byte(`[
+		{"role": "user", "content": "hello"},
+		{"role": "system", "content": [{"type": "text", "text": "world"}]}
+	]`)
+	got, err := messagesText(raw)
+	if err != nil {
+		t.Fatalf("messagesText: %v", err)
+	}
+	if want := "helloworld"; got != want {
+		t.Errorf("messagesText = %q, want %q", got, want)
+	}
+}
+
+func TestMessagesTextAbsentIsEmpty(t *testing.T) {
+	got, err := messagesText(nil)
+	if err != nil {
+		t.Fatalf("messagesText(nil) = %v, want no error", err)
+	}
+	if got != "" {
+		t.Errorf("messagesText(nil) = %q, want empty string", got)
+	}
+}
+
+func TestAttributeMessages(t *testing.T) {
+	text := "plain reply" + markerPersonality + "\nbody"
+	got := attributeMessages(text)
+	want := []string{"other", markerPersonality}
+	if len(got) != len(want) {
+		t.Fatalf("attributeMessages(%q) = %v, want labels %v", text, got, want)
+	}
+	for i, label := range want {
+		if got[i].Label != label {
+			t.Errorf("section %d label = %q, want %q", i, got[i].Label, label)
+		}
 	}
 }
 

@@ -13,7 +13,8 @@
         {"name": "Write", "description": "Write a file.", "input_schema": {"type": "object"}}
       ],
       "messages": [
-        {"role": "user", "content": "reply with the single word pong"}
+        {"role": "user", "content": "reply with the single word pong"},
+        {"role": "system", "content": [{"type": "text", "text": "SessionStart hook additional context: You are Fix Turing (efx).\n\n## Personality\n\nDeterministic, minimal.\n\n## Writing Style\n\nPlain sentences.\n\n## Talents\n\ne2e-fixture\n\n## Team: e2e-fixture\n\nSingle member."}]}
       ]
     }
   }

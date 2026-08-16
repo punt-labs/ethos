@@ -25,6 +25,11 @@ from e2e.scenario import Scenario, TokenScenario
 # tests/e2e/src/e2e/runner.py -> tests/e2e — scenario.repo_fixture paths
 # are relative to this directory (e.g. "fixtures/team-submodule").
 _E2E_ROOT = Path(__file__).resolve().parents[2]
+# tests/e2e -> repo root — where `make test-e2e[-smoke]` builds a fresh
+# `ethos` binary before running pytest (see Makefile). One more `.parent`
+# than _E2E_ROOT itself: _E2E_ROOT is already <repo>/tests/e2e.
+_REPO_ROOT = _E2E_ROOT.parent.parent
+_E2E_BIN_DIR = _REPO_ROOT / ".tmp" / "e2e-bin"
 
 _CLAUDE_TIMEOUT_S = 60.0
 _LOG_TAIL_LINES = 30
@@ -36,7 +41,16 @@ _LOG_TAIL_LINES = 30
 # and CI runners (npm global prefix, hostedtoolcache, homebrew, etc.) to
 # enumerate. Resolve `claude` on the caller's own PATH instead — see
 # _claude_bin below.
-_CAGE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{home}/.local/bin"
+#
+# _E2E_BIN_DIR comes first so a non-hermetic scenario's SessionStart hook
+# runs the `ethos` binary built from the checkout under test, never
+# whichever version happens to be globally installed on the developer's
+# or runner's machine — a stale install there would silently exercise
+# old behavior and misreport what this PR's code actually sends over the
+# wire.
+_CAGE_PATH = (
+    "{e2e_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{home}/.local/bin"
+)
 
 
 @cache
@@ -54,6 +68,29 @@ def _claude_bin() -> str:
             "runner: `claude` CLI not found on PATH — install @anthropic-ai/claude-code"
         )
     return path
+
+
+def _require_e2e_bin() -> None:
+    """Raise unless the checkout-built `ethos` binary is in place.
+
+    Called only for hermetic: false scenarios, whose whole point is
+    exercising the ethos binary under test. `_E2E_BIN_DIR` comes first
+    on the caged PATH, but PATH lookup silently skips a missing entry —
+    without this check, a run that skipped `make e2e-bin` (invoking
+    `pytest` directly rather than `make test-e2e[-smoke]`) would fall
+    through to whatever `ethos` happens to be globally installed and
+    reintroduce the stale-binary problem this PATH ordering exists to
+    prevent, with no signal that it happened.
+    """
+    e2e_bin = _E2E_BIN_DIR / "ethos"
+    if not e2e_bin.is_file():
+        raise RuntimeError(
+            f"runner: {e2e_bin} not found — a hermetic: false scenario's "
+            "SessionStart hook must run the ethos binary built from this "
+            "checkout, not whatever's globally installed. Run `make "
+            "e2e-bin` (or `make test-e2e`/`test-e2e-smoke`, which build "
+            "it first) before invoking pytest directly."
+        )
 
 
 def run_scenario(scenario: Scenario, proxy: LiteLLMProxy) -> TokenCapture:
@@ -83,23 +120,34 @@ def _invoke_claude(
     home = os.environ.get("HOME", "")
     env = {
         "HOME": home,
-        "PATH": _CAGE_PATH.format(home=home),
+        "PATH": _CAGE_PATH.format(e2e_bin=_E2E_BIN_DIR, home=home),
         "ANTHROPIC_BASE_URL": proxy.base_url,
         "ANTHROPIC_AUTH_TOKEN": proxy.auth_token,
         "ANTHROPIC_MODEL": scenario.id,
     }
+    argv = [_claude_bin(), "--print"]
+    if scenario.hermetic:
+        argv.append("--bare")
+    else:
+        _require_e2e_bin()
+        # cwd is a throwaway copy of repo_fixture with no .git of its own.
+        # Without this override, a repo-root walk (ethos's StoreRepoRoot,
+        # or anything else that climbs looking for a .git marker) would
+        # keep going past the fixture and land on whichever real repo
+        # happens to contain the test run's tmpdir — silently resolving
+        # against the wrong tree instead of the fixture under test.
+        env["ETHOS_REPO_ROOT"] = str(cwd)
+
     invocation = scenario.claude_invocation
+    argv += [
+        "--output-format",
+        "json",
+        "--max-turns",
+        str(invocation.max_turns),
+        invocation.prompt,
+    ]
     return subprocess.run(
-        [
-            _claude_bin(),
-            "--print",
-            "--bare",
-            "--output-format",
-            "json",
-            "--max-turns",
-            str(invocation.max_turns),
-            invocation.prompt,
-        ],
+        argv,
         cwd=cwd,
         env=env,
         timeout=_CLAUDE_TIMEOUT_S,

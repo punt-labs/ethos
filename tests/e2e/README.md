@@ -38,9 +38,30 @@ make test-e2e-smoke
 make test-e2e
 ```
 
-Both assume `claude` is on `PATH`. Outputs land under `.tmp/e2e/` (proxy
-config/log) and `.tmp/e2e-captures/` (captured request bodies), both
-gitignored.
+Both assume `claude` is on `PATH`. Both also build `.tmp/e2e-bin/ethos`
+from this checkout first (the `e2e-bin` Make target) and put it ahead
+of everything else on the caged subprocess's `PATH` — a non-hermetic
+scenario's `SessionStart` hook then runs the code under test, not
+whatever `ethos` version happens to be installed globally. Outputs
+land under `.tmp/e2e/` (proxy config/log) and `.tmp/e2e-captures/`
+(captured request bodies), both gitignored.
+
+## Hermetic vs. non-hermetic
+
+Every scenario declares `hermetic: bool` (default `true`). Hermetic
+scenarios invoke `claude --print --bare`, which strips hooks, MCP
+servers, and CLAUDE.md — this is the Claude Code baseline `empty-repo`
+exists to pin. `hermetic: false` drops `--bare`: the scenario runs a
+real session against `repo_fixture`, so that repo's own `SessionStart`
+hooks and config fire exactly as they would for a user. `ethos-loaded`
+is the first such scenario — a minimal fixture (one identity,
+personality, writing style, talent, single-member team) that proves
+`cmd/e2e-attribute` can see ethos's own persona-block markers on the
+wire, not just the SDK baseline. A non-hermetic scenario's cwd is a
+throwaway copy of `repo_fixture` with no `.git` of its own, so the
+runner sets `ETHOS_REPO_ROOT` to that cwd — without it, a repo-root
+walk keeps climbing past the fixture and lands on whichever real repo
+happens to contain the test run's tmpdir.
 
 ## Adding a scenario
 

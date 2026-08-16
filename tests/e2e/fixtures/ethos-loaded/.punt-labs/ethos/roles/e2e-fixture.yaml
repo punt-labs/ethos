@@ -1,0 +1,3 @@
+name: e2e-fixture
+responsibilities:
+    - prove the L4 harness observes ethos-injected bytes on the wire

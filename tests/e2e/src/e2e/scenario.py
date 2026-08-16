@@ -32,7 +32,15 @@ class ClaudeInvocation:
 # Keys every scenario type accepts, regardless of ``type``. A type-specific
 # subclass extends this with its own keys (see TokenScenario._KNOWN_KEYS).
 _COMMON_KEYS = frozenset(
-    {"id", "type", "description", "repo_fixture", "claude_invocation", "smoke"}
+    {
+        "id",
+        "type",
+        "description",
+        "repo_fixture",
+        "claude_invocation",
+        "smoke",
+        "hermetic",
+    }
 )
 
 
@@ -46,6 +54,13 @@ class Scenario:
     repo_fixture: str | None
     claude_invocation: ClaudeInvocation
     smoke: bool
+    # True (the default) invokes `claude --print --bare`, stripping hooks,
+    # MCP servers, and CLAUDE.md — the Claude Code baseline. False invokes
+    # a real session against repo_fixture, so a repo's own SessionStart
+    # hooks and config fire exactly as they would for a user. empty-repo
+    # stays hermetic; a scenario that means to observe ethos (or any other
+    # hook-driven consumer) sets this false.
+    hermetic: bool
 
     @classmethod
     def load(cls, path: Path) -> Scenario:
@@ -86,6 +101,22 @@ class Scenario:
             prompt=str(block["prompt"]), max_turns=int(block["max_turns"])
         )
 
+    @staticmethod
+    def _require_bool(mapping: dict[str, object], key: str, default: bool) -> bool:
+        """Return ``mapping[key]`` if present, else ``default`` — reject non-bool.
+
+        ``bool(mapping.get(key, default))`` would silently coerce a
+        mistyped yaml value like ``"false"`` (a non-empty, truthy string)
+        into ``True``. A boolean-shaped scenario key should be a literal
+        yaml boolean or absent, never anything else.
+        """
+        if key not in mapping:
+            return default
+        value = mapping[key]
+        if not isinstance(value, bool):
+            raise ValueError(f"{key!r} must be a boolean, got {type(value)!r}")
+        return value
+
 
 # Keys the "expect" block accepts. A typo here (e.g. "no_secret_pattern")
 # would otherwise silently fall back to the default instead of erroring —
@@ -116,17 +147,29 @@ class TokenScenario(Scenario):
         if unknown_expect:
             raise ValueError(f"unknown 'expect' key(s): {sorted(unknown_expect)}")
 
+        repo_fixture = str(raw["repo_fixture"]) if raw.get("repo_fixture") else None
+        hermetic = Scenario._require_bool(raw, "hermetic", True)
+        if not hermetic and repo_fixture is None:
+            # hermetic: false means "run a real session and observe what
+            # its config injects" — with no repo_fixture, that session
+            # has nothing to inject and the capture just measures the
+            # bare Claude Code baseline again, silently. That's the
+            # empty-repo scenario already; state it as hermetic: true
+            # instead of reaching the same result by omission.
+            raise ValueError("hermetic: false requires repo_fixture")
+
         return cls(
             id=str(raw["id"]),
             type=str(raw["type"]),
             description=str(raw.get("description", "")),
-            repo_fixture=(
-                str(raw["repo_fixture"]) if raw.get("repo_fixture") else None
-            ),
+            repo_fixture=repo_fixture,
             claude_invocation=Scenario._invocation_from_raw(raw),
-            smoke=bool(raw.get("smoke", False)),
+            smoke=Scenario._require_bool(raw, "smoke", False),
+            hermetic=hermetic,
             max_bytes=int(expect["max_bytes"]),
-            no_secret_patterns=bool(expect.get("no_secret_patterns", True)),
+            no_secret_patterns=Scenario._require_bool(
+                expect, "no_secret_patterns", True
+            ),
         )
 
 

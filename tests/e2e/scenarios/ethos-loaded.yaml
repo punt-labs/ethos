@@ -1,0 +1,19 @@
+id: ethos-loaded
+type: token
+description: >
+  A minimal repo fixture — one ethos identity, personality, writing
+  style, talent, and single-member team. hermetic: false, so this
+  scenario runs WITHOUT --bare: Claude Code's real SessionStart hook,
+  CLAUDE.md, and .claude/agents/ fire exactly as they would for a real
+  user. This is the L4 tier's first scenario that observes ethos's own
+  wire footprint rather than only the Claude Code baseline empty-repo
+  already covers.
+repo_fixture: fixtures/ethos-loaded
+hermetic: false
+claude_invocation:
+  prompt: "reply with the single word pong"
+  max_turns: 1
+expect:
+  max_bytes: 500000
+  no_secret_patterns: true
+smoke: false
