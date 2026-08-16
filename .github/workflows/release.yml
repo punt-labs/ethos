@@ -17,6 +17,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # make lint also runs ruff/mypy under tests/e2e via `uv run`; keep
+      # this python-version pin in sync with tests/e2e/pyproject.toml's
+      # requires-python.
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: '3.13'
+
+      - name: Sync tests/e2e
+        run: uv sync --project tests/e2e
+
       # make lint runs golangci-lint (bundles staticcheck); `make tools`
       # installs it from the Makefile's pinned GOLANGCI_LINT_VERSION to the
       # GOBIN path make lint resolves — single source for the version.

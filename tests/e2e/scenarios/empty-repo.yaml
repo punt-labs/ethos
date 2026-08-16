@@ -1,0 +1,15 @@
+id: empty-repo
+type: token
+description: >
+  Bare claude --print invocation with no repo fixture — no CLAUDE.md, no
+  hooks, no MCP servers, no ethos content. This is the L4 (E2E) tier's
+  smoke scenario: it retires tests/token-harness/hello/, carrying every
+  one of that harness's assertions forward unchanged (structural shape,
+  the 700KB payload ratchet, and the nine-pattern secret scan).
+claude_invocation:
+  prompt: "reply with the single word pong"
+  max_turns: 1
+expect:
+  max_bytes: 716800
+  no_secret_patterns: true
+smoke: true

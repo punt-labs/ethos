@@ -1,0 +1,32 @@
+results:
+    - mission: m-2026-08-14-001
+      round: 1
+      created_at: "2026-08-14T01:27:04Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.96
+      files_changed:
+        - path: docs/audit-ethos-livi-repo-primary-resolution.md
+          added: 378
+          removed: 0
+      evidence:
+        - name: audit doc committed as ba1d01f on work/ethos-livi-audit
+          status: pass
+        - name: audit correctly identified DES-018 and DES-057 as the already-shipped mechanism (DESIGN.md:1227, :5442) — vox is DES-057's named acceptance test case
+          status: pass
+        - name: empirical verification against live ethos 4.13.1 binary from inside vox repo (ethos identity show claudia, ethos doctor, ethos vendor --all dry-run) — not just doc reading
+          status: pass
+        - name: numeric blast-radius confirmed via dry-run — 31 identities vs current ~16 hand-vendored in vox
+          status: pass
+        - name: leader read the audit's top-line answers and verified DES-018 and DES-057 exist in DESIGN.md at cited lines
+          status: pass
+      prose: |
+        Audit correctly reframed the bead. The repo-primary resolution flip
+        ethos-livi asked for was already shipped as DES-018 (repo-local
+        first-checked) plus DES-057 (opt-in strict mode + ethos vendor
+        tooling). Vox is DES-057's named acceptance test case. Zero new
+        ethos engineering; ~2-3 hours of vox-side adoption + 2 operator
+        policy calls (repo-only-now vs stay-layered; accept the 31-identity
+        blast radius vs current 16). Small residual: ethos itself tracks
+        two 0-byte punt-import.lock artifacts; noted for the eventual
+        cleanup PR. Ready to escalate to operator with corrected picture.

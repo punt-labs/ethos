@@ -3,8 +3,10 @@ name: Test
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -43,3 +45,94 @@ jobs:
 
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
+
+  e2e-smoke:
+    # L4 (Wire Observability) smoke: real `claude --print` against a mocked LiteLLM upstream.
+    # Runs the fast (single) smoke scenario on every push/PR. Zero Anthropic
+    # tokens consumed; no ANTHROPIC_API_KEY needed. Deliberately lists no
+    # scenario names — dropping a new tests/e2e/scenarios/*.yaml file never
+    # requires a workflow edit. See tests/e2e/README.md.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Sync tests/e2e
+        run: uv sync --project tests/e2e
+
+      - name: Run L4 E2E smoke scenario
+        run: make test-e2e-smoke
+
+      # Belt-and-braces with conftest.py's own pytest_sessionfinish redaction
+      # hook: a hard-killed pytest (timeout, OOM, SIGKILL) never reaches that
+      # hook, so this step redacts as a separate process after pytest exits,
+      # regardless of how it exited.
+      - name: Redact secrets before upload
+        if: failure()
+        run: uv run --project tests/e2e python -m e2e.redact .tmp/e2e .tmp/e2e-captures
+
+      - name: Upload E2E artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-smoke-artifacts
+          path: .tmp/e2e-*
+          retention-days: 7
+
+  e2e-release:
+    # L4 (Wire Observability) full sweep: every scenario, plus the (currently skeleton) Go
+    # attribution report. Per-release, not per-commit — see
+    # docs/design-e2e-test-framework.md §8.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          python-version: '3.13'
+
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Sync tests/e2e
+        run: uv sync --project tests/e2e
+
+      - name: Run L4 E2E full sweep
+        run: make test-e2e
+
+      # Belt-and-braces with conftest.py's own pytest_sessionfinish redaction
+      # hook: a hard-killed pytest (timeout, OOM, SIGKILL) never reaches that
+      # hook, so this step redacts as a separate process after pytest exits,
+      # regardless of how it exited.
+      - name: Redact secrets before upload
+        if: always()
+        run: uv run --project tests/e2e python -m e2e.redact .tmp/e2e .tmp/e2e-captures
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: e2e-release-artifacts
+          path: .tmp/e2e-*
+          retention-days: 7
