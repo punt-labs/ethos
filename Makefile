@@ -16,7 +16,7 @@ GOBIN := $(shell go env GOPATH)/bin
 endif
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral test-e2e test-e2e-smoke baseline-tokens calibrate-tokens
+.PHONY: help lint docs test check validate-content format build install dev clean dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -41,10 +41,14 @@ validate-content: ## Validate all ethos content files
 test-behavioral: build ## Run L4 behavioral tests (requires ANTHROPIC_API_KEY and claude CLI)
 	go test -tags behavioral -timeout 10m -v ./tests/behavioral/
 
-test-e2e-smoke: ## Run the fast E2E (L4) smoke scenario (every push; requires litellm + claude CLI)
+e2e-bin: ## Build the ethos binary a non-hermetic E2E scenario's hooks run
+	@mkdir -p .tmp/e2e-bin
+	CGO_ENABLED=0 go build -o .tmp/e2e-bin/ethos ./cmd/ethos/
+
+test-e2e-smoke: e2e-bin ## Run the fast E2E (L4) smoke scenario (every push; requires litellm + claude CLI)
 	cd tests/e2e && uv run pytest -m "e2e and smoke"
 
-test-e2e: ## Run the full E2E (L4) scenario sweep (per-release; requires litellm + claude CLI)
+test-e2e: e2e-bin ## Run the full E2E (L4) scenario sweep (per-release; requires litellm + claude CLI)
 	cd tests/e2e && uv run pytest -m e2e
 
 baseline-tokens: ## Recapture E2E token baselines (operator-invoked)

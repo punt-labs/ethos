@@ -1,0 +1,7 @@
+name: Fix Turing
+handle: efx
+kind: agent
+writing_style: e2e-fixture
+personality: e2e-fixture
+talents:
+    - e2e-fixture

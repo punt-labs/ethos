@@ -32,7 +32,15 @@ class ClaudeInvocation:
 # Keys every scenario type accepts, regardless of ``type``. A type-specific
 # subclass extends this with its own keys (see TokenScenario._KNOWN_KEYS).
 _COMMON_KEYS = frozenset(
-    {"id", "type", "description", "repo_fixture", "claude_invocation", "smoke"}
+    {
+        "id",
+        "type",
+        "description",
+        "repo_fixture",
+        "claude_invocation",
+        "smoke",
+        "hermetic",
+    }
 )
 
 
@@ -46,6 +54,13 @@ class Scenario:
     repo_fixture: str | None
     claude_invocation: ClaudeInvocation
     smoke: bool
+    # True (the default) invokes `claude --print --bare`, stripping hooks,
+    # MCP servers, and CLAUDE.md — the Claude Code baseline. False invokes
+    # a real session against repo_fixture, so a repo's own SessionStart
+    # hooks and config fire exactly as they would for a user. empty-repo
+    # stays hermetic; a scenario that means to observe ethos (or any other
+    # hook-driven consumer) sets this false.
+    hermetic: bool
 
     @classmethod
     def load(cls, path: Path) -> Scenario:
@@ -86,6 +101,10 @@ class Scenario:
             prompt=str(block["prompt"]), max_turns=int(block["max_turns"])
         )
 
+    @staticmethod
+    def _hermetic_from_raw(raw: dict[str, object]) -> bool:
+        return bool(raw.get("hermetic", True))
+
 
 # Keys the "expect" block accepts. A typo here (e.g. "no_secret_pattern")
 # would otherwise silently fall back to the default instead of erroring —
@@ -125,6 +144,7 @@ class TokenScenario(Scenario):
             ),
             claude_invocation=Scenario._invocation_from_raw(raw),
             smoke=bool(raw.get("smoke", False)),
+            hermetic=Scenario._hermetic_from_raw(raw),
             max_bytes=int(expect["max_bytes"]),
             no_secret_patterns=bool(expect.get("no_secret_patterns", True)),
         )

@@ -41,6 +41,17 @@ type messagesBody struct {
 	Messages json.RawMessage   `json:"messages"`
 }
 
+// message is one entry of body.Messages — role plus content, the shape
+// this tool needs to pull hook-injected text back out. Anthropic's
+// Messages API carries no field for host-injected context; Claude Code
+// instead appends it as an extra message (observed role "system", but
+// this tool does not depend on that — every message's content is
+// scanned).
+type message struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
 // Section is one attributed slice of the system prompt.
 type Section struct {
 	Label string `json:"label"`
@@ -56,15 +67,24 @@ type ToolSize struct {
 // Report is the JSON e2e-attribute prints: byte-level size and attribution
 // for one capture. Token counts are not yet computed — see tokensTODO.
 type Report struct {
-	CaptureFile   string     `json:"capture_file"`
-	ScenarioID    string     `json:"scenario_id"`
-	TotalBytes    int        `json:"total_bytes"`
-	SystemBytes   int        `json:"system_bytes"`
-	ToolsBytes    int        `json:"tools_bytes"`
-	MessagesBytes int        `json:"messages_bytes"`
-	Attribution   []Section  `json:"system_attribution"`
-	Tools         []ToolSize `json:"tools"`
-	TotalTokens   string     `json:"total_tokens"`
+	CaptureFile   string    `json:"capture_file"`
+	ScenarioID    string    `json:"scenario_id"`
+	TotalBytes    int       `json:"total_bytes"`
+	SystemBytes   int       `json:"system_bytes"`
+	ToolsBytes    int       `json:"tools_bytes"`
+	MessagesBytes int       `json:"messages_bytes"`
+	Attribution   []Section `json:"system_attribution"`
+	// MessagesTextBytes and MessagesAttribution cover the plain text
+	// Claude Code folds into body.Messages — this is where a hermetic:
+	// false scenario's SessionStart hook output (ethos's persona block
+	// included) actually lands. The Anthropic Messages API has no
+	// top-level field for host-injected context, so the CLI appends it
+	// as extra messages instead of extending "system"; a marker never
+	// appearing in Attribution above does not mean it never fired.
+	MessagesTextBytes   int        `json:"messages_text_bytes"`
+	MessagesAttribution []Section  `json:"messages_attribution"`
+	Tools               []ToolSize `json:"tools"`
+	TotalTokens         string     `json:"total_tokens"`
 }
 
 // BuildReport parses a capture file's raw bytes and computes its report.
@@ -85,21 +105,28 @@ func BuildReport(capturePath string, raw []byte) (Report, error) {
 		return Report{}, fmt.Errorf("parsing system prompt: %w", err)
 	}
 
+	msgsText, err := messagesText(body.Messages)
+	if err != nil {
+		return Report{}, fmt.Errorf("parsing messages: %w", err)
+	}
+
 	tools, toolsBytes, err := toolSizes(body.Tools)
 	if err != nil {
 		return Report{}, fmt.Errorf("parsing tools: %w", err)
 	}
 
 	return Report{
-		CaptureFile:   capturePath,
-		ScenarioID:    env.Model,
-		TotalBytes:    len(raw),
-		SystemBytes:   len(systemText),
-		ToolsBytes:    toolsBytes,
-		MessagesBytes: len(body.Messages),
-		Attribution:   attributeSystem(systemText),
-		Tools:         tools,
-		TotalTokens:   tokensTODO,
+		CaptureFile:         capturePath,
+		ScenarioID:          env.Model,
+		TotalBytes:          len(raw),
+		SystemBytes:         len(systemText),
+		ToolsBytes:          toolsBytes,
+		MessagesBytes:       len(body.Messages),
+		Attribution:         attributeSystem(systemText),
+		MessagesTextBytes:   len(msgsText),
+		MessagesAttribution: attributeMessages(msgsText),
+		Tools:               tools,
+		TotalTokens:         tokensTODO,
 	}, nil
 }
 
@@ -132,6 +159,32 @@ func systemText(raw json.RawMessage) (string, error) {
 	return b.String(), nil
 }
 
+// messagesText concatenates the plain text of every message's content
+// blocks, in array order. Claude Code has no top-level field for
+// host-injected context, so hook additionalContext (ethos's SessionStart
+// persona block included) arrives here as an ordinary message rather than
+// as part of "system".
+func messagesText(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 {
+		return "", nil
+	}
+
+	var msgs []message
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		return "", fmt.Errorf("messages is not a list of role/content objects: %w", err)
+	}
+
+	var b strings.Builder
+	for _, m := range msgs {
+		text, err := systemText(m.Content)
+		if err != nil {
+			return "", fmt.Errorf("message (role %q): %w", m.Role, err)
+		}
+		b.WriteString(text)
+	}
+	return b.String(), nil
+}
+
 // toolSizes returns each tool's name and marshaled-JSON byte size, plus
 // their combined size (each tool's raw JSON length, summed).
 func toolSizes(tools []json.RawMessage) ([]ToolSize, int, error) {
@@ -158,6 +211,21 @@ func toolSizes(tools []json.RawMessage) ([]ToolSize, int, error) {
 // the first marker (the SDK/base system prompt ethos didn't add) are
 // labeled "preamble".
 func attributeSystem(text string) []Section {
+	return attributeMarkers(text, "preamble")
+}
+
+// attributeMessages slices messagesText the same way attributeSystem
+// slices the system prompt. Bytes before the first marker are labeled
+// "other" rather than "preamble" — this text is ordinary conversation
+// and other hooks' additionalContext, not an SDK preamble.
+func attributeMessages(text string) []Section {
+	return attributeMarkers(text, "other")
+}
+
+// attributeMarkers slices text by the persona-block markers
+// internal/hook/persona.go writes, in the order they appear. Bytes before
+// the first marker are labeled otherLabel.
+func attributeMarkers(text string, otherLabel string) []Section {
 	type hit struct {
 		offset int
 		label  string
@@ -185,7 +253,7 @@ func attributeSystem(text string) []Section {
 		firstOffset = hits[0].offset
 	}
 	if firstOffset > 0 {
-		sections = append(sections, Section{Label: "preamble", Bytes: firstOffset})
+		sections = append(sections, Section{Label: otherLabel, Bytes: firstOffset})
 	}
 	for i, h := range hits {
 		end := len(text)

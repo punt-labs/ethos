@@ -1,0 +1,4 @@
+name: e2e-fixture
+members:
+    - identity: efx
+      role: e2e-fixture

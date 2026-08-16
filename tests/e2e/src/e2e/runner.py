@@ -25,6 +25,10 @@ from e2e.scenario import Scenario, TokenScenario
 # tests/e2e/src/e2e/runner.py -> tests/e2e — scenario.repo_fixture paths
 # are relative to this directory (e.g. "fixtures/team-submodule").
 _E2E_ROOT = Path(__file__).resolve().parents[2]
+# tests/e2e -> repo root — where `make test-e2e[-smoke]` builds a fresh
+# `ethos` binary before running pytest (see Makefile).
+_REPO_ROOT = _E2E_ROOT.parent
+_E2E_BIN_DIR = _REPO_ROOT / ".tmp" / "e2e-bin"
 
 _CLAUDE_TIMEOUT_S = 60.0
 _LOG_TAIL_LINES = 30
@@ -36,7 +40,16 @@ _LOG_TAIL_LINES = 30
 # and CI runners (npm global prefix, hostedtoolcache, homebrew, etc.) to
 # enumerate. Resolve `claude` on the caller's own PATH instead — see
 # _claude_bin below.
-_CAGE_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{home}/.local/bin"
+#
+# _E2E_BIN_DIR comes first so a non-hermetic scenario's SessionStart hook
+# runs the `ethos` binary built from the checkout under test, never
+# whichever version happens to be globally installed on the developer's
+# or runner's machine — a stale install there would silently exercise
+# old behavior and misreport what this PR's code actually sends over the
+# wire.
+_CAGE_PATH = (
+    "{e2e_bin}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:{home}/.local/bin"
+)
 
 
 @cache
@@ -83,23 +96,33 @@ def _invoke_claude(
     home = os.environ.get("HOME", "")
     env = {
         "HOME": home,
-        "PATH": _CAGE_PATH.format(home=home),
+        "PATH": _CAGE_PATH.format(e2e_bin=_E2E_BIN_DIR, home=home),
         "ANTHROPIC_BASE_URL": proxy.base_url,
         "ANTHROPIC_AUTH_TOKEN": proxy.auth_token,
         "ANTHROPIC_MODEL": scenario.id,
     }
+    argv = [_claude_bin(), "--print"]
+    if scenario.hermetic:
+        argv.append("--bare")
+    else:
+        # cwd is a throwaway copy of repo_fixture with no .git of its own.
+        # Without this override, a repo-root walk (ethos's StoreRepoRoot,
+        # or anything else that climbs looking for a .git marker) would
+        # keep going past the fixture and land on whichever real repo
+        # happens to contain the test run's tmpdir — silently resolving
+        # against the wrong tree instead of the fixture under test.
+        env["ETHOS_REPO_ROOT"] = str(cwd)
+
     invocation = scenario.claude_invocation
+    argv += [
+        "--output-format",
+        "json",
+        "--max-turns",
+        str(invocation.max_turns),
+        invocation.prompt,
+    ]
     return subprocess.run(
-        [
-            _claude_bin(),
-            "--print",
-            "--bare",
-            "--output-format",
-            "json",
-            "--max-turns",
-            str(invocation.max_turns),
-            invocation.prompt,
-        ],
+        argv,
         cwd=cwd,
         env=env,
         timeout=_CLAUDE_TIMEOUT_S,
