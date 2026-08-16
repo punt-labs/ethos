@@ -7384,10 +7384,7 @@ audience.
 
 - Tier A + tier B split: shipped in the branch `content/dev-doc-split` on
   top of `content/rightsize-engineering-team` (PR #467).
-- Tier C deposition: NOT yet shipped. Requires code changes to
-  `internal/enable/` (add second `//go:embed`, extend `deposit()` to
-  handle both files, update `.vendored-manifest` schema). Delegated to
-  `bwk` as a follow-up.
+- Tier C deposition: shipped in PR #468 (commit bea993f).
 
 **Rejected alternatives.**
 
