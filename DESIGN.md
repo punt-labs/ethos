@@ -7291,3 +7291,136 @@ for any other repo.
   ("we now use our own seeded agents"), not a competitive claim.
   `pr-review-toolkit` stays listed in the Plugins section for one PR cycle
   per the transition plan before it's dropped.
+
+## DES-071: Distribution scope — what ships in the plugin vs what stays dev-side (SETTLED)
+
+**Context.** During the L4 payload-optimization pass (post-DES-070), the
+ethos repo's own per-session payload measured 388 KB, of which ~54 KB was
+the ambient `# Ethos` block — the top-level `CLAUDE.md` plus three
+`@`-imported plugin CLAUDE.mds (`.punt-labs/{ethos,z-spec,vox}/CLAUDE.md`).
+On inspection every byte was developer content, not needed for using ethos
+in a consumer repo. Meanwhile the same ambient session had zero setup
+guidance visible to an agent landing in a repo where ethos was not yet
+enabled — a documentation gap in the opposite direction.
+
+Root cause: the repo had never explicitly separated three distinct
+audiences and their delivery mechanisms:
+
+1. **Developer of ethos** — needs architecture, build & run, delegation
+   table, standards checklist. Present in every ethos-repo session.
+2. **Agent using ethos in a consumer repo** (day to day) — needs the daily
+   command surface: `ethos whoami`, `ethos iam`, `ethos mission`, `ethos
+   audit`, `ethos session`. Present in every consumer session.
+3. **Agent using ethos in a consumer repo** (one-time setup) — needs
+   `ethos seed`, `ethos enable`, `ethos setup`, bundle choices,
+   troubleshooting. Present once during install; unnecessary thereafter.
+
+Without an explicit rule for each, developer content and end-user content
+mixed together in a single always-injected block, and setup content lived
+nowhere reachable by the audience that needed it.
+
+**Decision.** Codify three tiers of documentation delivery, each with a
+specific mechanism, and place each new doc in the tier that matches its
+audience.
+
+| Tier | Audience | Delivery mechanism | Auto-inject? |
+|---|---|---|---|
+| A. Developer of ethos | ethos-repo sessions only | `@`-import from ethos repo's top-level `CLAUDE.md` — lives in `docs/development.md` | Yes, per-session in the ethos repo |
+| B. Daily-use in consumer repos | Every consumer session after `ethos enable` | Embedded in the ethos binary (`//go:embed internal/enable/guide/CLAUDE.md`), deposited by `ethos enable` to `.punt-labs/ethos/CLAUDE.md`, `@`-imported by the enable step into the consumer's top-level `CLAUDE.md` | Yes, per-session in each consumer repo |
+| C. One-time setup in consumer repos | Only when an agent lands in a repo where ethos is not yet enabled | Embedded in the ethos binary alongside the guide, deposited by `ethos enable` alongside `.punt-labs/ethos/CLAUDE.md` as `.punt-labs/ethos/ETHOS-SETUP.md` (or equivalent), referenced by URL from the daily-use guide so a pre-enable agent can fetch it via WebFetch | No — referenced, opened on demand |
+
+**Concrete placement rules:**
+
+- **`CLAUDE.md` at the ethos repo root** — tier-A only. `@`-imports
+  `docs/development.md`. Does NOT `@`-import `.punt-labs/{ethos,z-spec,vox}/CLAUDE.md`
+  (those are tier-B end-user docs, not needed for developing ethos).
+- **`docs/development.md`** — tier-A. Build & run, architecture, package
+  map, storage layout, identity schema, design invariants, specialist
+  delegation table, quality gates, standards checklist, operational
+  constraints. Everything a developer of ethos needs at every-session
+  start.
+- **`internal/enable/guide/CLAUDE.md`** (embed source) — tier-B. Daily-use
+  command surface. Kept tight; anything not needed every session moves to
+  tier C.
+- **`internal/enable/setup/ETHOS-SETUP.md`** (embed source, planned) —
+  tier-C. Setup playbook: `ethos seed`, `ethos enable`, `ethos setup`,
+  bundle choices (foundation vs gstack), troubleshooting. Deposited
+  alongside the guide but NOT `@`-imported. Referenced from the guide
+  by relative path (`./ETHOS-SETUP.md`) once deposited, and by absolute
+  GitHub URL for pre-enable discovery.
+- **`docs/ETHOS-SETUP.md`** (ethos repo) — the authoritative source, and
+  the target of the GitHub URL that pre-enable agents fetch. Kept in sync
+  with the embedded copy at `internal/enable/setup/`.
+
+**Naming convention.** Under `docs/`:
+
+- Lowercase for developer-internal docs (`development.md`, `workflow.md`,
+  `architecture.md`, all existing files).
+- UPPERCASE-KEBAB for consumer-visible `ETHOS-*` docs
+  (`ETHOS-SETUP.md`, `ETHOS-ROADMAP.md`) — matches the existing pattern
+  and signals "this is a document a consumer or new agent may open by
+  name."
+
+**Consequences.**
+
+- Ethos-repo per-session payload drops the tier-B and tier-C content
+  (~15 KB of plugin end-user docs) that were being auto-injected via
+  the three `@`-imports. Measured reduction: −69 KB on the ethos-self
+  scenario (388 KB → 319 KB after this ADR's structural changes).
+- Consumer per-session payload stays at daily-use minimum (tier B only);
+  setup content is fetched on demand.
+- Every new documentation file has one right home; ambiguity ("does this
+  go in `.punt-labs/ethos/CLAUDE.md` or `docs/`?") is resolved by
+  audience-tier lookup.
+- Renaming a doc between tiers requires moving its source file AND
+  re-running `ethos enable` in consumers if the change affects tier B.
+- The GitHub URL reference in the daily-use guide (tier B) points at the
+  ethos repo's `docs/ETHOS-SETUP.md`, which is reachable via WebFetch
+  from a consumer session with net access. Air-gapped consumers rely on
+  the deposited copy at `.punt-labs/ethos/ETHOS-SETUP.md` (once tier-C
+  deposition is implemented).
+
+**Implementation status.**
+
+- Tier A + tier B split: shipped in the branch `content/dev-doc-split` on
+  top of `content/rightsize-engineering-team` (PR #467).
+- Tier C deposition: NOT yet shipped. Requires code changes to
+  `internal/enable/` (add second `//go:embed`, extend `deposit()` to
+  handle both files, update `.vendored-manifest` schema). Delegated to
+  `bwk` as a follow-up.
+
+**Rejected alternatives.**
+
+- **Ship setup as part of the tier-B daily guide.** Rejected: bloats
+  every-session payload with content only needed once, undoing the
+  optimization that motivated the split.
+- **Put setup only at a GitHub URL, no local deposition.** Rejected:
+  breaks air-gapped consumers and forces WebFetch for a task that could
+  be a local file read. GitHub URL reference stays as the pre-enable
+  discovery path, but the file also ships locally post-enable.
+- **Add setup to `ethos setup --help` output only.** Rejected: partial
+  overlap (`--help` covers the command flags but not the surrounding
+  playbook — troubleshooting, bundle-choice guidance, verify-with-doctor
+  sequence). Considered as a small pointer supplement to the setup file,
+  not a replacement.
+- **Merge `docs/development.md` back into the top-level `CLAUDE.md`.**
+  Rejected: mixes tier-A auto-inject with the tier-B/C reference-only
+  content that also lives in the root `CLAUDE.md`, undoing the audience
+  separation.
+- **Drop `docs/development.md` `@`-import from the root `CLAUDE.md`
+  entirely (fully on-demand).** Rejected: this repo is where ethos is
+  developed; the audience by default IS the developer, and every session
+  benefits from architecture/delegation guidance being present.
+
+### Open questions — ruled
+
+- Case convention for `docs/ETHOS-*.md` vs `docs/development.md` (mixed
+  case in the same directory): **Ruled: allow the mix** — UPPERCASE for
+  files consumers might open by name (`ETHOS-SETUP.md`, `ETHOS-ROADMAP.md`)
+  and lowercase for developer-internal reference (`development.md`,
+  `workflow.md`). Consistency by audience, not by directory.
+- Whether tier-C deposition ships in the same PR as tier-A/B split, or as
+  a follow-up code change. **Ruled: follow-up.** Splitting keeps this PR
+  content-only (no `internal/enable/` code changes), which is faster to
+  land and easier to revert. The GitHub URL reference in the guide is a
+  bridge until tier-C deposition ships.

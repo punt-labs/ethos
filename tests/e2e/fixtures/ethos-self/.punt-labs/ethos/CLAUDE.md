@@ -4,6 +4,12 @@ How an agent drives ethos — not how to develop ethos itself. Ethos binds a
 name, voice, email, GitHub handle, writing style, personality, and talents
 into one identity that other tools read.
 
+New in this repo, or `ethos doctor` reports missing state? See
+<https://github.com/punt-labs/ethos/blob/main/docs/ETHOS-SETUP.md> for
+`ethos seed`, `ethos enable`, `ethos setup`, bundle choices, and
+troubleshooting. Fetch on demand — setup is a one-time task and is
+deliberately not `@`-imported here.
+
 ## Who am I
 
 - `ethos whoami` — resolve your identity from the session, git config, or OS
