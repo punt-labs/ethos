@@ -79,19 +79,55 @@ install: build ## Build and install to ~/.local/bin
 # the same directory the git-subdir marketplace source checks out. Pointing
 # it at the repo root would resolve ${CLAUDE_PLUGIN_ROOT}/hooks/*.sh to a
 # path that no longer exists.
+#
+# Both recipes are ONE shell each. There is no .ONESHELL here, so a guard on
+# its own line ends only that line's shell and make runs the next line
+# regardless — the previous `@if ...; exit 0; fi` guards printed their message
+# and then fell straight through to the work they were meant to skip. A second
+# `make dev` moved the symlink *into* the existing .bak directory (leaving a
+# stray .bak/$(PLUGIN_VERSION) link behind; the real backup survived) and
+# `make undev` outside dev mode ran `rm` against the real cache directory,
+# failing the target instead of no-opping.
+#
+# dev handles three states, because after the move a stale link is actively
+# broken rather than merely redundant: a link left over from before DES-072
+# points at the repo root, where there is no hooks/, so every
+# ${CLAUDE_PLUGIN_ROOT}/hooks/*.sh silently fails. Only a genuine directory
+# is ever backed up; retargeting a link leaves the existing .bak alone.
 dev: install ## Install and symlink plugin cache for development
-	@if [ -z "$(PLUGIN_VERSION)" ]; then echo "error: no plugin cache found at $(PLUGIN_CACHE)"; exit 1; fi
-	@if [ -L "$(PLUGIN_CACHE)/$(PLUGIN_VERSION)" ]; then echo "plugin cache already symlinked"; exit 0; fi
-	mv $(PLUGIN_CACHE)/$(PLUGIN_VERSION) $(PLUGIN_CACHE)/$(PLUGIN_VERSION).bak
-	ln -s $(CURDIR)/plugin $(PLUGIN_CACHE)/$(PLUGIN_VERSION)
-	@echo "symlinked $(PLUGIN_CACHE)/$(PLUGIN_VERSION) → $(CURDIR)/plugin"
-	@echo "original cached at $(PLUGIN_CACHE)/$(PLUGIN_VERSION).bak"
+	@set -e; \
+	if [ -z "$(PLUGIN_VERSION)" ]; then \
+	  echo "error: no plugin cache found at $(PLUGIN_CACHE)" >&2; exit 1; \
+	fi; \
+	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; want="$(CURDIR)/plugin"; \
+	if [ -L "$$link" ]; then \
+	  have=$$(readlink "$$link"); \
+	  if [ "$$have" = "$$want" ]; then \
+	    echo "plugin cache already symlinked → $$want"; exit 0; \
+	  fi; \
+	  echo "retargeting stale symlink ($$have → $$want)"; \
+	  rm "$$link"; \
+	else \
+	  mv "$$link" "$$link.bak"; \
+	  echo "original cached at $$link.bak"; \
+	fi; \
+	ln -s "$$want" "$$link"; \
+	echo "symlinked $$link → $$want"
 
 undev: ## Restore plugin cache from backup
-	@if [ ! -L "$(PLUGIN_CACHE)/$(PLUGIN_VERSION)" ]; then echo "not in dev mode"; exit 0; fi
-	rm $(PLUGIN_CACHE)/$(PLUGIN_VERSION)
-	mv $(PLUGIN_CACHE)/$(PLUGIN_VERSION).bak $(PLUGIN_CACHE)/$(PLUGIN_VERSION)
-	@echo "restored $(PLUGIN_CACHE)/$(PLUGIN_VERSION)"
+	@set -e; \
+	if [ -z "$(PLUGIN_VERSION)" ]; then \
+	  echo "error: no plugin cache found at $(PLUGIN_CACHE)" >&2; exit 1; \
+	fi; \
+	link="$(PLUGIN_CACHE)/$(PLUGIN_VERSION)"; \
+	if [ ! -L "$$link" ]; then echo "not in dev mode"; exit 0; fi; \
+	if [ ! -d "$$link.bak" ]; then \
+	  echo "error: no backup at $$link.bak; leaving the symlink in place — reinstall with 'claude plugin install ethos@punt-labs' to repopulate the cache" >&2; \
+	  exit 1; \
+	fi; \
+	rm "$$link"; \
+	mv "$$link.bak" "$$link"; \
+	echo "restored $$link"
 
 clean: ## Remove build artifacts
 	rm -f ethos coverage.out
