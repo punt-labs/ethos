@@ -583,8 +583,8 @@ func TestSealHookPassthroughWithoutEthos(t *testing.T) {
 		t.Skip("git not available")
 	}
 
-	body, err := os.ReadFile(filepath.Join("..", "..", "hooks", "pre-commit.sh"))
-	require.NoError(t, err, "read hooks/pre-commit.sh")
+	body, err := os.ReadFile(filepath.Join("..", "..", "plugin", "hooks", "pre-commit.sh"))
+	require.NoError(t, err, "read plugin/hooks/pre-commit.sh")
 
 	// Build the marker form exactly as install.sh's write_marker_form does:
 	// a shebang, then the script body (minus its own shebang) fenced by the

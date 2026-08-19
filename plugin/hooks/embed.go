@@ -2,7 +2,10 @@
 // single authoritative copy — the shellcheck-linted scripts in this
 // directory — is the one both the shell test suite and the Go chainer use.
 // The embed lives here beside the scripts because an embed directive cannot
-// reach files above its own package directory (no "..").
+// reach files above its own package directory (no ".."). That constraint is
+// why this package moved under plugin/ with the scripts in DES-072 rather
+// than staying at the repo root: the scripts have to ship inside the
+// git-subdir plugin surface, and the embed has to sit at or above them.
 package hooks
 
 import _ "embed"
@@ -26,6 +29,14 @@ var CommitMsg []byte
 // section for the presence, active, and currency checks. One copy here
 // avoids the two-copies-drift pattern this codebase already burned itself on
 // once (ethos-2ol1, docs/enable-disable.md "Why three packages, not one").
+//
+// The two Ident strings are FROZEN on-disk tokens, not repo paths. They are
+// written verbatim into every .git/hooks/{pre-commit,commit-msg} section
+// ethos has ever installed, and internal/doctor matches an installed section
+// by exact ident. Re-pointing them at the DES-072 plugin/hooks/ location
+// would make every already-installed hook report as not-ours and fail its
+// currency check, so they keep the pre-move spelling on purpose. Only the
+// embed directives above track the directory.
 const (
 	SealTag      = "ETHOS DES-058 SEAL"
 	SealIdent    = "hooks/pre-commit.sh — Seal pending live audit lines"

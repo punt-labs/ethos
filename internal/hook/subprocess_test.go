@@ -425,7 +425,7 @@ func TestShellScript_SessionStart(t *testing.T) {
 	se := setupSubprocessEnv(t)
 	sid := "test-shell-script-001"
 
-	hookScript := filepath.Join(moduleRoot(t), "hooks", "session-start.sh")
+	hookScript := filepath.Join(moduleRoot(t), "plugin", "hooks", "session-start.sh")
 	_, err := os.Stat(hookScript)
 	require.NoError(t, err, "session-start.sh not found at %s", hookScript)
 

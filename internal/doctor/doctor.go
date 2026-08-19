@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/punt-labs/ethos/hooks"
 	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -23,6 +22,7 @@ import (
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
 	"github.com/punt-labs/ethos/internal/textscan"
+	"github.com/punt-labs/ethos/plugin/hooks"
 )
 
 // Result holds the outcome of a single health check.

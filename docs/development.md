@@ -127,9 +127,45 @@ The Makefile is the source of truth (`make help`).
 make check                             # All gates: lint + docs + test
 ```
 
-Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `shellcheck hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`.
+Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`.
 
 ## Architecture
+
+### Repository Layout
+
+Everything the Claude Code plugin ships lives under `plugin/`, and nothing
+else does:
+
+| Path | Contents |
+|------|----------|
+| `plugin/.claude-plugin/plugin.json` | Plugin manifest. `mcpServers` points at the `ethos` binary on `PATH`, so no compiled code ships. |
+| `plugin/commands/` | Slash commands (`name.md` + `name-dev.md` pairs). |
+| `plugin/hooks/` | The hook scripts, `hooks.json`, and the `hooks` Go package that embeds the two git-hook scripts. |
+
+The marketplace installs this directory with Claude Code's `git-subdir`
+source (`"source": "git-subdir"`, `"path": "plugin"`), which does a blobless
+partial clone plus `git sparse-checkout set --cone plugin` — so an install
+never fetches `cmd/`, `internal/`, `tests/`, `docs/`, `scripts/`, `.github/`,
+or this repo's own `.punt-labs/` and `.claude/` working state. Cone mode does
+always materialize the files in the *repo root*, so the large root documents
+(`DESIGN.md`, `CHANGELOG.md`, `prfaq.pdf`) still travel with an install; only
+whole directories are excluded.
+
+Two rules follow from that, and both are load-bearing:
+
+- **The plugin surface must not reach outside itself at runtime.** A hook
+  script may use `$HOME`, the `ethos` binary, and paths under the *consumer's*
+  repo root; it may not reference a file elsewhere in this repo, because that
+  file will not exist on an installed plugin. `${CLAUDE_PLUGIN_ROOT}` is
+  `plugin/`.
+- **`make dev` symlinks `$(CURDIR)/plugin`**, not the repo root, so a
+  development install sees the same `CLAUDE_PLUGIN_ROOT` layout a real install
+  does.
+
+The `hooks` Go package (`plugin/hooks`) is inside the plugin surface because
+`go:embed` cannot reach above its own package directory and it embeds
+`pre-commit.sh`/`commit-msg.sh`. Its three `.go` files ship with the plugin
+and are inert there; Claude Code ignores files it does not recognize.
 
 ### Package Map
 

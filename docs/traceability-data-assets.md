@@ -352,7 +352,7 @@ Each line carries `ts`, `event`, `actor`, and a `details` map specific to the ev
 - Commit SHA → `git blame` (per-line attribution)
 - Commit SHA → GitHub commit page
 
-**How they land:** The `hooks/commit-msg.sh` git hook reads the delegation-binding sidecar (`~/.punt-labs/ethos/sessions/<session-id>/delegation-binding`) and appends trailers when a Tier B delegation is active. Commits made before the sidecar fix (v3.12.0) don't have trailers; the UI blame view falls back to parsing the bead/ticket ID from the commit subject and looking it up in `missions.jsonl`.
+**How they land:** The `plugin/hooks/commit-msg.sh` git hook reads the delegation-binding sidecar (`~/.punt-labs/ethos/sessions/<session-id>/delegation-binding`) and appends trailers when a Tier B delegation is active. Commits made before the sidecar fix (v3.12.0) don't have trailers; the UI blame view falls back to parsing the bead/ticket ID from the commit subject and looking it up in `missions.jsonl`.
 
 ### 9. Conversation Transcript (Quarry Capture)
 

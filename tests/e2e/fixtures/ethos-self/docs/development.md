@@ -127,7 +127,7 @@ The Makefile is the source of truth (`make help`).
 make check                             # All gates: lint + docs + test
 ```
 
-Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `shellcheck hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`.
+Expands to `make lint docs test validate-content`: `go vet`, `staticcheck`, `shellcheck plugin/hooks/*.sh install.sh`, `markdownlint`, `go test -race -count=1 ./...`, `go run ./cmd/validate-content`.
 
 ## Architecture
 

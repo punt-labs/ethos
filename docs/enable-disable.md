@@ -65,7 +65,7 @@ data; the vendored zone is a two-file manifest and the collision rule
 | Package | Responsibility | Ports / reuses |
 |---------|---------------|----------------|
 | `internal/claudemd/` | The §2.4 import-line writer: exclusive lock, atomic temp+rename, byte-preserving host-EOL append, terminator-insensitive idempotent match, fenced/indented code-block exclusion, symlink-resolving, mode-preserving. Pure, host-file-agnostic. | Ports the *correctness* of vox `GlobalClaudeImports` (`punt-labs/vox`, `src/punt_vox/claude_md.py`) into Go (§2.4). Adds the exclusive lock vox lacks. |
-| `internal/githook/` | Git-hook chaining: marker sections, line-2 wholly-ours ID, non-shell skip-and-warn, unterminated-marker abort, symlink-target resolve, mktemp-fail-loud, host-status preservation, hooksPath/worktree resolution. `Chain(dest, src, tag, ident)` and `Unchain(dest, tag)`. | Ports `install.sh`'s `install_hook` / `emit_section` / `write_marker_form` / `is_shell_hook` / `resolve_hooks_dir` into Go; **shares** the resolver with `doctor.gitHooksDir` (§8 below). Stays a **pure chainer** — it receives the script bytes as `src` and never embeds them. The scripts are embedded by a separate `hooks` package (`hooks/embed.go`: `hooks.PreCommit`, `hooks.CommitMsg`), which sits beside the shellcheck-linted `.sh` files so one authoritative copy serves both the shell test suite and the Go chainer (an embed directive cannot reach files above its own package directory). This is a cleaner factoring than the round-2 design text, which put the embed in `githook` (rop NIT-1). |
+| `internal/githook/` | Git-hook chaining: marker sections, line-2 wholly-ours ID, non-shell skip-and-warn, unterminated-marker abort, symlink-target resolve, mktemp-fail-loud, host-status preservation, hooksPath/worktree resolution. `Chain(dest, src, tag, ident)` and `Unchain(dest, tag)`. | Ports `install.sh`'s `install_hook` / `emit_section` / `write_marker_form` / `is_shell_hook` / `resolve_hooks_dir` into Go; **shares** the resolver with `doctor.gitHooksDir` (§8 below). Stays a **pure chainer** — it receives the script bytes as `src` and never embeds them. The scripts are embedded by a separate `hooks` package (`plugin/hooks/embed.go`: `hooks.PreCommit`, `hooks.CommitMsg`), which sits beside the shellcheck-linted `.sh` files so one authoritative copy serves both the shell test suite and the Go chainer (an embed directive cannot reach files above its own package directory). This is a cleaner factoring than the round-2 design text, which put the embed in `githook` (rop NIT-1). |
 | `internal/enable/` | Orchestration: deposit the vendored zone from the manifest, write/delete the `enabled` marker, drive `claudemd` for the import line, drive `githook` for the two chained hooks, merge/remove the `.claude/settings.json` entries. Embeds the vendored user guide via `go:embed`. | New. Depends on the two packages above. |
 
 CLI surface: `cmd/ethos/enable.go` and `cmd/ethos/disable.go`, both in the
@@ -291,7 +291,7 @@ drifting toward a half-parser that is wrong in new ways.
 #### The §2.7 marker gate in the embedded hook scripts
 
 Per §2.7, "hook shell gates test the marker, not the directory." Both
-embedded scripts — `hooks/pre-commit.sh` and `hooks/commit-msg.sh` — gain
+embedded scripts — `plugin/hooks/pre-commit.sh` and `plugin/hooks/commit-msg.sh` — gain
 the normative gate as their first executable step, immediately after the
 `$?` capture that preserves the host's fall-through status:
 
