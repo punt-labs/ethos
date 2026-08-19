@@ -108,6 +108,7 @@ dev: install ## Install and symlink plugin cache for development
 	  echo "retargeting stale symlink ($$have → $$want)"; \
 	  rm "$$link"; \
 	else \
+	  [ -e "$$link.bak" ] && { echo "error: $$link.bak already exists; refusing to overwrite" >&2; exit 1; }; \
 	  mv "$$link" "$$link.bak"; \
 	  echo "original cached at $$link.bak"; \
 	fi; \

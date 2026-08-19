@@ -31,11 +31,19 @@ fi
 echo "Restoring dev state from parent of ${RELEASE_PREP_COMMIT:0:12}"
 git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- "$PLUGIN_JSON"
 
-# Restore dev commands if the parent commit had a plugin/commands/ directory
+# Restore dev commands if the parent commit had a plugin/commands/ directory.
+# The checkout AND the add share this one presence check: a release prepared
+# from a tree with no dev commands has nothing to restore and nothing to
+# stage, which is the only legitimate reason the add could fail. Staging it
+# here rather than unconditionally below means any other git failure — a
+# locked index, a permissions error, a corrupt object — propagates under
+# `set -e` instead of being swallowed by a blanket `2>/dev/null || true`.
+# The ref is already known good: the checkout above would have failed loudly
+# if `${RELEASE_PREP_COMMIT}^` did not resolve.
 if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- plugin/commands/ | grep -q .; then
   git -C "$REPO_ROOT" checkout "${RELEASE_PREP_COMMIT}^" -- plugin/commands/
+  git -C "$REPO_ROOT" add plugin/commands/
 fi
 
 git -C "$REPO_ROOT" add "$PLUGIN_JSON"
-git -C "$REPO_ROOT" add plugin/commands/ 2>/dev/null || true
 git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state [skip ci]"
