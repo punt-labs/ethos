@@ -10,12 +10,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/hooks"
 	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/punt-labs/ethos/internal/session"
 	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/plugin/hooks"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

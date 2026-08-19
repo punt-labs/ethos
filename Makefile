@@ -24,7 +24,7 @@ help: ## Show available targets
 lint: ## Lint (golangci-lint + shellcheck + ruff + mypy)
 	@test -x $(GOLANGCI_LINT) || { echo "golangci-lint not found at $(GOLANGCI_LINT) — run 'make tools' to install $(GOLANGCI_LINT_VERSION)"; exit 1; }
 	$(GOLANGCI_LINT) run ./...
-	shellcheck hooks/*.sh install.sh
+	shellcheck plugin/hooks/*.sh install.sh
 	cd tests/e2e && uv run ruff check .
 	cd tests/e2e && uv run ruff format --check .
 	cd tests/e2e && uv run mypy src/ tests/
@@ -74,12 +74,17 @@ install: build ## Build and install to ~/.local/bin
 	rm -f $(HOME)/.local/bin/ethos
 	cp ethos $(HOME)/.local/bin/ethos
 
+# The symlink target is $(CURDIR)/plugin, not $(CURDIR): since DES-072 the
+# shippable plugin surface lives in plugin/, and CLAUDE_PLUGIN_ROOT must be
+# the same directory the git-subdir marketplace source checks out. Pointing
+# it at the repo root would resolve ${CLAUDE_PLUGIN_ROOT}/hooks/*.sh to a
+# path that no longer exists.
 dev: install ## Install and symlink plugin cache for development
 	@if [ -z "$(PLUGIN_VERSION)" ]; then echo "error: no plugin cache found at $(PLUGIN_CACHE)"; exit 1; fi
 	@if [ -L "$(PLUGIN_CACHE)/$(PLUGIN_VERSION)" ]; then echo "plugin cache already symlinked"; exit 0; fi
 	mv $(PLUGIN_CACHE)/$(PLUGIN_VERSION) $(PLUGIN_CACHE)/$(PLUGIN_VERSION).bak
-	ln -s $(CURDIR) $(PLUGIN_CACHE)/$(PLUGIN_VERSION)
-	@echo "symlinked $(PLUGIN_CACHE)/$(PLUGIN_VERSION) → $(CURDIR)"
+	ln -s $(CURDIR)/plugin $(PLUGIN_CACHE)/$(PLUGIN_VERSION)
+	@echo "symlinked $(PLUGIN_CACHE)/$(PLUGIN_VERSION) → $(CURDIR)/plugin"
 	@echo "original cached at $(PLUGIN_CACHE)/$(PLUGIN_VERSION).bak"
 
 undev: ## Restore plugin cache from backup

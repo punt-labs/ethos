@@ -17,12 +17,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/hooks"
 	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/claudemd"
 	"github.com/punt-labs/ethos/internal/githook"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/textscan"
+	"github.com/punt-labs/ethos/plugin/hooks"
 )
 
 // Guide is the vendored agent-facing user guide deposited at

@@ -388,7 +388,7 @@ mission migrate: dry-run complete
 
 ## Commit-Msg Trailer Hook
 
-`hooks/commit-msg.sh` appends `Mission: <id>` and `Delegation: <id>`
+`plugin/hooks/commit-msg.sh` appends `Mission: <id>` and `Delegation: <id>`
 git trailers to every commit message when `MISSION_ID` and
 `DELEGATION_ID` are set in the environment. Idempotent — re-running
 on a message already carrying the trailer is a no-op.
@@ -396,14 +396,14 @@ on a message already carrying the trailer is a no-op.
 ### Installation
 
 `install.sh` installs the hook automatically when run inside a git
-work tree. It copies `hooks/commit-msg.sh` to `.git/hooks/commit-msg`
+work tree. It copies `plugin/hooks/commit-msg.sh` to `.git/hooks/commit-msg`
 and refuses to clobber an unrelated existing hook (no-op + warning if
 `.git/hooks/commit-msg` does not contain `DES-054`).
 
 Manual install:
 
 ```bash
-cp hooks/commit-msg.sh .git/hooks/commit-msg
+cp plugin/hooks/commit-msg.sh .git/hooks/commit-msg
 chmod +x .git/hooks/commit-msg
 ```
 

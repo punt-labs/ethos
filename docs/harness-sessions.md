@@ -17,7 +17,7 @@ only join one. `runIam` calls `session.Store.Join`, which calls `Load`
 and errors if the roster file is absent (`internal/session/store.go:88-91`,
 `75-79`). The only thing that creates a roster in normal use is the
 SessionStart **hook** (`internal/hook/session_start.go:68, 134-163`),
-driven by `hooks/session-start.sh:14`, which fires only inside Claude
+driven by `plugin/hooks/session-start.sh:14`, which fires only inside Claude
 Code and takes its session ID from a Claude-supplied stdin JSON payload.
 No hook, no roster, no `iam`.
 

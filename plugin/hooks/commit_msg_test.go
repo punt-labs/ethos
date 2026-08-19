@@ -51,7 +51,7 @@ func ethosBinDir(t *testing.T) string {
 		// on a failed build too; a build that fails on every run would
 		// otherwise leave one temp dir behind per run.
 		ethosDir = dir
-		cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "ethos"), "../cmd/ethos")
+		cmd := exec.Command("go", "build", "-o", filepath.Join(dir, "ethos"), "../../cmd/ethos")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			ethosErr = fmt.Errorf("%w\n%s", err, out)
 		}

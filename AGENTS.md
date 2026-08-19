@@ -908,7 +908,7 @@ itself a valid audit-log fragment — pipes cleanly into `jq`.
 
 ### Commit-Msg Trailer Hook
 
-`hooks/commit-msg.sh` appends `Mission: <id>` and `Delegation: <id>`
+`plugin/hooks/commit-msg.sh` appends `Mission: <id>` and `Delegation: <id>`
 git trailers when `MISSION_ID` and `DELEGATION_ID` are set in the
 environment. Idempotent. `install.sh` installs it as the repo's
 `.git/hooks/commit-msg` automatically (no clobber if an unrelated
@@ -1117,7 +1117,7 @@ When `agent:` is unset, the primary agent has no persona.
 
 ## Hooks
 
-Ethos registers 6 hooks in `hooks/hooks.json`:
+Ethos registers 6 hooks in `plugin/hooks/hooks.json`:
 
 | Hook | Script | Purpose |
 |------|--------|---------|

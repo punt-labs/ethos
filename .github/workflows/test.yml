@@ -33,7 +33,7 @@ jobs:
           version: v2.12.2
 
       - name: ShellCheck
-        run: shellcheck hooks/*.sh install.sh
+        run: shellcheck plugin/hooks/*.sh install.sh
 
       - name: Test
         run: go test -race -count=1 -coverprofile=coverage.out ./...
