@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.14.0] - 2026-08-19
+
 ### Fixed
 
 - **`make dev` and `make undev` guards never actually guarded, and `make dev` now retargets a stale symlink.** There is no `.ONESHELL` in the Makefile, so each recipe line is its own shell and the `@if ...; exit 0; fi` guards ended only their own line — make then ran the very commands they were meant to skip. Demonstrated: a second `make dev` printed "plugin cache already symlinked" and then moved the symlink *into* the existing `.bak` directory, leaving a stray `<version>.bak/<version>` link (the real backup survived); `make undev` outside dev mode printed "not in dev mode" and then ran `rm` against the real cache directory, failing the target with "Is a directory". Both are now single-shell recipes. `dev` additionally distinguishes three states rather than two, because after the `plugin/` move a leftover symlink is actively broken rather than merely redundant: a link created before the move points at the repo root, where there is no `hooks/`, so every `${CLAUDE_PLUGIN_ROOT}/hooks/*.sh` silently fails until someone thinks to run `make undev` first. A link already pointing at `$(CURDIR)/plugin` is a no-op, a link pointing anywhere else is retargeted in place (leaving the existing `.bak` alone), and only a genuine directory is ever backed up. `undev` now refuses with a remedy instead of half-restoring when `.bak` is missing.
