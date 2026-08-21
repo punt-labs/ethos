@@ -1,0 +1,31 @@
+mission_id: m-2026-08-21-009
+status: closed
+type: implement
+created_at: "2026-08-21T21:58:33Z"
+updated_at: "2026-08-21T22:03:55Z"
+closed_at: "2026-08-21T22:03:55Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-21T21:58:33Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-iiiw
+write_set:
+    - .punt-labs/ethos/identities/kpz.yaml
+    - .punt-labs/ethos/identities/ylc.yaml
+    - .punt-labs/ethos/identities/kwb.yaml
+    - .punt-labs/ethos/roles/ml-specialist.yaml
+    - .punt-labs/ethos/roles/ml-foundations.yaml
+    - .punt-labs/ethos/roles/smalltalk-specialist.yaml
+success_criteria:
+    - git rm .punt-labs/ethos/identities/kpz.yaml .punt-labs/ethos/identities/ylc.yaml .punt-labs/ethos/identities/kwb.yaml .punt-labs/ethos/roles/ml-specialist.yaml .punt-labs/ethos/roles/ml-foundations.yaml .punt-labs/ethos/roles/smalltalk-specialist.yaml
+    - Grep the whole tracked tree (docs/, .punt-labs/ethos/, internal/, cmd/) for kpz, ylc, and kwb before deleting to confirm no other tracked file still references them, EXCEPT DESIGN.md and docs/ethos-biff-integration.md which are deliberately preserved historical/illustrative references per ethos-kxyc's ruling — do not touch those two files
+    - make check passes, including validate-content's referential-integrity check (go run ./cmd/validate-content) — this is the mechanical proof nothing still points at the deleted identities/roles
+    - Commit as a single commit if the check above finds nothing else to touch; otherwise one commit per logical step, each passing make check
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Operator ruling 2026-08-21: full purge, not team-only removal. kpz/ylc/kwb are already removed from engineering.yaml (this branch, earlier commits) and their generated + source agent stub files are already deleted (m-2026-08-21-008). This mission finishes the purge: delete the identity YAMLs and role YAMLs entirely. Zero evidence of ML/Smalltalk work anywhere in this repo.'
