@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **`ethos vendor --team` silently dropped explicit positional handles instead of combining with them.** `internal/vendor/vendor.go`'s `seeds()` was a `switch` where `--team` and positional handles were mutually exclusive branches: setting `--team` made any named handle vanish from the seed set with no error, contradicting the command's own usage line `ethos vendor [handle...] [flags]`. `seeds()` now unions the team's members with any explicit handles, deduplicated via the existing `appendUnique`; `--all` still takes priority over both when set.
+- **`ethos vendor --team` silently dropped explicit positional handles instead of combining with them.** `internal/vendor/vendor.go`'s `seeds()` was a `switch` where `--team` and positional handles were mutually exclusive branches: setting `--team` made any named handle vanish from the seed set with no error, contradicting the command's own usage line `ethos vendor [handle...] [flags]`. `seeds()` now unions the team's members with any explicit handles, deduplicated via the existing `appendUnique`. `--all` was also silently overriding both — it is now rejected outright when combined with `--team` or positional handles, via `MarkFlagsMutuallyExclusive` and an explicit args check.
 
 ## [4.14.0] - 2026-08-19
 
