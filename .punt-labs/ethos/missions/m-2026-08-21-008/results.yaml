@@ -1,0 +1,83 @@
+results:
+    - mission: m-2026-08-21-008
+      round: 1
+      created_at: "2026-08-21T21:55:46Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: .punt-labs/ethos/agents/kpz.md
+          added: 0
+          removed: 51
+        - path: .punt-labs/ethos/agents/ylc.md
+          added: 0
+          removed: 41
+        - path: .punt-labs/ethos/agents/kwb.md
+          added: 0
+          removed: 50
+        - path: .punt-labs/ethos/agents/rej.md
+          added: 0
+          removed: 1
+        - path: internal/mission/store.go
+          added: 7
+          removed: 2
+        - path: internal/mission/store_test.go
+          added: 34
+          removed: 0
+        - path: .punt-labs/ethos/missions/m-2026-07-26-013/delegations/d-2026-07-26-071/record.yaml
+          added: 1
+          removed: 1
+        - path: .punt-labs/ethos/missions/m-2026-07-26-013/delegations/d-2026-07-26-075/record.yaml
+          added: 1
+          removed: 1
+        - path: .punt-labs/ethos/missions/m-2026-08-21-006/results.yaml
+          added: 1
+          removed: 1
+        - path: CHANGELOG.md
+          added: 1
+          removed: 0
+      evidence:
+        - name: go build -o .tmp/ethos ./cmd/ethos && .tmp/ethos hook session-start (kpz/ylc/kwb absent from .claude/agents/ after removal)
+          status: pass
+        - name: grep -rln -i -E 'kpz|ylc|\bkwb\b' .punt-labs/ethos/agents/*.md (no remaining dangling references after rej.md fix)
+          status: pass
+        - name: go test ./internal/mission/... -run TestStore_Close_EscalateVerdictAbortsOpenDelegations -v
+          status: pass
+        - name: go test ./internal/mission/...
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Removed the three still-tracked stub agent files (kpz.md, ylc.md,
+        kwb.md) that InstallAgentDefinitions would otherwise silently
+        re-copy into .claude/agents/ on the next SessionStart, since their
+        handles are no longer in GeneratedAgentHandles. Verified empirically
+        with a real ethos hook session-start run: the three files do not
+        reappear. Removed rej.md's dangling "Pair with kwb" line and
+        confirmed via grep that no other tracked agent file references
+        kpz/ylc/kwb.
+
+        Fixed Store.Close's delegation-verdict mapping (ethos-15mp):
+        VerdictEscalate now maps to DelegationVerdictAborted instead of
+        falling through to DelegationVerdictPass; VerdictFail and
+        VerdictPass behavior is unchanged. Added
+        TestStore_Close_EscalateVerdictAbortsOpenDelegations, which submits
+        an escalate-verdict result against a mission with an open delegation
+        skeleton, closes it, and asserts the delegation record ends up
+        verdict: aborted.
+
+        Hand-corrected the two already-committed delegation records at
+        m-2026-07-26-013 (d-2026-07-26-071, d-2026-07-26-075) from
+        verdict: pass to verdict: aborted, matching the fixed mapping — the
+        mission is already closed, so this corrects committed data rather
+        than re-running Close.
+
+        Corrected m-2026-08-21-006/results.yaml's author from bwk to claude,
+        since the leader submitted that result on the worker's behalf (per
+        the file's own prose); the contract's worker: field already
+        correctly records bwk.
+
+        Added a CHANGELOG entry under Unreleased > Fixed describing the
+        delegation-verdict mapping bug.
+
+        Six commits, each preceded by a passing make check.

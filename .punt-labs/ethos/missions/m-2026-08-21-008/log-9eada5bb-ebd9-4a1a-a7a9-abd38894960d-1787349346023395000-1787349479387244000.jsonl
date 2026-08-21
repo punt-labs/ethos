@@ -1,0 +1,2 @@
+{"ts":"2026-08-21T21:55:46.023395Z","event":"result","actor":"bwk","details":{"confidence":0.95,"evidence_entries":5,"files_changed":10,"round":1,"verdict":"pass"}}
+{"ts":"2026-08-21T21:57:59.387244Z","event":"close","actor":"claude","details":{"round":1,"status":"closed","verdict":"pass"}}
