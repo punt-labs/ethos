@@ -1021,6 +1021,40 @@ func TestStore_CloseAcceptsFailedAndEscalated(t *testing.T) {
 	}
 }
 
+// TestStore_Close_EscalateVerdictAbortsOpenDelegations pins the fix
+// for ethos-15mp: Close's delegation-verdict mapping treated any
+// non-fail result verdict as a pass, so an escalate-verdict result
+// silently flipped open delegation skeletons to verdict=pass. An
+// escalated mission must close its delegations as aborted — neither
+// passed nor failed.
+func TestStore_Close_EscalateVerdictAbortsOpenDelegations(t *testing.T) {
+	repoRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	s := NewStoreWithRoots(repoRoot, globalRoot)
+
+	missionID := "m-2026-08-21-901"
+	c := newContract(missionID)
+	c.MissionID = missionID
+	require.NoError(t, s.Create(c))
+	submitRoundResult(t, s, c, VerdictEscalate)
+
+	delegationID := "d-2026-08-21-901"
+	_, err := WriteDelegationSkeleton(repoRoot, missionID, delegationID, DelegationSkeleton{
+		Tier:      TierB,
+		AgentType: "bwk",
+	})
+	require.NoError(t, err)
+
+	_, err = s.Close(missionID, StatusEscalated)
+	require.NoError(t, err)
+
+	recordPath := filepath.Join(DelegationDir(repoRoot, missionID, delegationID), "record.yaml")
+	d, err := LoadDelegation(recordPath)
+	require.NoError(t, err)
+	assert.Equal(t, DelegationVerdictAborted, d.Verdict,
+		"an escalate-verdict Close must abort open delegations, not silently pass them")
+}
+
 // TestStore_Close_WaitsForInFlightDelegationWrite pins the facet-1
 // hardening in docs/design-delegation-lifecycle.md: Close takes
 // AcquireMissionLockExclusive around closeDelegationSkeletons, so a

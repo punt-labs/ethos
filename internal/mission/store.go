@@ -1041,8 +1041,13 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	// (TestStore_TwoRoot_CloseStaysInItsLayer).
 	if s.repoRoot != "" {
 		delegationVerdict := DelegationVerdictPass
-		if satisfying != nil && satisfying.Verdict == VerdictFail {
-			delegationVerdict = DelegationVerdictFail
+		if satisfying != nil {
+			switch satisfying.Verdict {
+			case VerdictFail:
+				delegationVerdict = DelegationVerdictFail
+			case VerdictEscalate:
+				delegationVerdict = DelegationVerdictAborted
+			}
 		}
 		closedAt := time.Now().UTC().Format(time.RFC3339)
 		missionDir := RepoStatePath(s.repoRoot, "missions", filepath.Base(missionID))
