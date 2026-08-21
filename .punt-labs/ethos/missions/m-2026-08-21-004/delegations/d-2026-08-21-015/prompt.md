@@ -1,0 +1,1 @@
+Review the diff on branch fix/vendor-seeds-and-engineering-team vs main in <repo> (`git diff main...fix/vendor-seeds-and-engineering-team`) for silent failures, swallowed errors, or inappropriate fallback logic. Focus especially on internal/vendor/vendor.go's seeds() function.

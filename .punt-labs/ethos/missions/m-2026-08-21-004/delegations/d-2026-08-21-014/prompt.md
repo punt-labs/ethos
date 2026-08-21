@@ -1,0 +1,1 @@
+Review the diff on branch fix/vendor-seeds-and-engineering-team vs main in <repo> (`git diff main...fix/vendor-seeds-and-engineering-team`). This touches internal/vendor/vendor.go (seeds() logic fix), internal/vendor/vendor_test.go, .punt-labs/ethos/teams/engineering.yaml, and CHANGELOG.md. Report findings per your standard review checklist.

@@ -1,0 +1,8 @@
+id: d-2026-08-21-016
+tier: B
+mission: m-2026-08-21-004
+parent_session: 9eada5bb-ebd9-4a1a-a7a9-abd38894960d
+agent_type: invariant-completeness-reviewer
+created_at: "2026-08-21T18:09:03Z"
+closed_at: "2026-08-21T18:11:11Z"
+verdict: pass
