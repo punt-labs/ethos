@@ -1,0 +1,34 @@
+results:
+    - mission: m-2026-08-21-006
+      round: 1
+      created_at: "2026-08-21T21:27:09Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: .punt-labs/ethos/teams/engineering.yaml
+          added: 0
+          removed: 17
+        - path: docs/workflow.md
+          added: 0
+          removed: 2
+        - path: .claude/agents/kpz.md
+          added: 0
+          removed: 182
+        - path: .claude/agents/ylc.md
+          added: 0
+          removed: 150
+        - path: .claude/agents/kwb.md
+          added: 0
+          removed: 541
+      evidence:
+        - name: git diff main...chore/cut-ml-smalltalk-team -- .punt-labs/ethos/teams/engineering.yaml docs/workflow.md
+          status: pass
+        - name: DESIGN.md and docs/ethos-biff-integration.md confirmed untouched (no diff)
+          status: pass
+        - name: ethos vendor --team engineering --dry-run (seeds exactly the 20-identity target)
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Cut kpz, ylc, kwb per operator ruling — verified zero evidence of ONNX/inference or Smalltalk work anywhere in this repo. engineering.yaml lost their members and reports_to collaborations entries; docs/workflow.md lost kpz's team-table row and org-chart line. DESIGN.md (historical record) and docs/ethos-biff-integration.md (illustrative example payload) deliberately untouched. Regenerated .claude/agents/*.md via ethos hook session-start and git rm'd the three now-stale files. ethos vendor --team engineering --dry-run confirms the seed list is exactly the 20 target identities. Three commits, each preceded by a clean make check. Leader is submitting this result on the worker's behalf, citing independently re-verified diffs and a fresh make check run on the branch tip, since the worker completed the work but did not submit the structured result artifact itself.
