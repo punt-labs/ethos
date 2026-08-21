@@ -15,7 +15,6 @@ registry.
 | bwk | Brian K | Go specialist | Implement Go code and tests per spec |
 | mdm | Doug M | CLI specialist | CLI design, help text, composability, output formatting |
 | rmh | Raymond H | Python specialist | Implement Python code and tests per spec |
-| kpz | Andrej K | ML specialist | ML inference, hardware abstraction, ONNX, benchmarks |
 | djb | Dan B | Security engineer | Threat modeling, credential audit, input validation |
 | adt | Alan T | PM (grounding) | Product roadmap for Z Spec, PR/FAQ, Use Cases, Refactory |
 | ghr | Grace H | PM (building blocks) | Product roadmap for Quarry, Biff, Vox, Lux, Tally |
@@ -31,7 +30,6 @@ jfreeman (CEO)
   │    ├─ bwk (Go specialist)
   │    ├─ mdm (CLI specialist)
   │    ├─ rmh (Python specialist)
-  │    ├─ kpz (ML specialist)
   │    ├─ djb (Security engineer)
   │    └─ adb (Infra engineer)
   ├─ adt (PM grounding)
