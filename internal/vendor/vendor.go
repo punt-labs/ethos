@@ -179,11 +179,11 @@ func (v *Vendorer) Run() (*Plan, error) {
 	return p, nil
 }
 
-// seeds resolves the starting handles from --all, --team, or the
-// positional arguments, in that precedence.
+// seeds resolves the starting handles. --all takes priority over
+// everything else. Otherwise --team and explicit positional handles
+// combine: the result is their union, deduplicated.
 func (v *Vendorer) seeds() ([]string, error) {
-	switch {
-	case v.opts.All:
+	if v.opts.All {
 		result, err := v.src.Identities.List()
 		if err != nil {
 			return nil, fmt.Errorf("listing identities: %w", err)
@@ -201,22 +201,23 @@ func (v *Vendorer) seeds() ([]string, error) {
 		}
 		sort.Strings(out)
 		return out, nil
-	case v.opts.Team != "":
+	}
+
+	var out []string
+	if v.opts.Team != "" {
 		t, err := v.src.Teams.Load(v.opts.Team)
 		if err != nil {
 			return nil, fmt.Errorf("loading team %q: %w", v.opts.Team, err)
 		}
-		var out []string
 		for _, m := range t.Members {
 			out = appendUnique(out, m.Identity)
 		}
-		sort.Strings(out)
-		return out, nil
-	default:
-		out := append([]string(nil), v.opts.Handles...)
-		sort.Strings(out)
-		return out, nil
 	}
+	for _, h := range v.opts.Handles {
+		out = appendUnique(out, h)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // extFiles lists an identity's extension BASE files in its source layer.

@@ -261,6 +261,30 @@ func TestSeedFromTeam(t *testing.T) {
 	assert.Equal(t, []string{"bwk", "claudia"}, p.Identities)
 }
 
+// --team and explicit handles are not mutually exclusive: the command's
+// own usage line is `ethos vendor [handle...] [flags]`, so a positional
+// handle alongside --team must add to the team, not be dropped.
+func TestSeedFromTeamPlusExplicitHandlesIsAUnion(t *testing.T) {
+	f := newFixture(t)
+	f.seedOrg(t)
+
+	p, err := f.run(t, Options{Team: "engineering", Handles: []string{"unrelated"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bwk", "claudia", "unrelated"}, p.Seeds)
+	assert.Equal(t, []string{"bwk", "claudia", "unrelated"}, p.Identities)
+}
+
+// The union deduplicates: naming a handle that the team already contains
+// must not produce a repeated seed.
+func TestSeedFromTeamPlusExplicitHandlesDeduplicates(t *testing.T) {
+	f := newFixture(t)
+	f.seedOrg(t)
+
+	p, err := f.run(t, Options{Team: "engineering", Handles: []string{"bwk"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"bwk", "claudia"}, p.Seeds)
+}
+
 func TestSeedFromAll(t *testing.T) {
 	f := newFixture(t)
 	f.seedOrg(t)
