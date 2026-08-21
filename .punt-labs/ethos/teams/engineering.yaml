@@ -70,11 +70,6 @@ members:
   # Formal methods — Event-B (evaluator on Z spec design)
   - identity: jra
     role: b-specialist
-  # ML inference and foundations
-  - identity: kpz
-    role: ml-specialist
-  - identity: ylc
-    role: ml-foundations
   # Product pipeline (design → prfaq → schema stages)
   - identity: adt
     role: pm-grounding
@@ -88,9 +83,6 @@ members:
   # Python language design
   - identity: gvr
     role: python-language-design
-  # Smalltalk implementation
-  - identity: kwb
-    role: smalltalk-specialist
 collaborations:
   - from: coo
     to: ceo
@@ -134,12 +126,6 @@ collaborations:
   - from: b-specialist
     to: coo
     type: reports_to
-  - from: ml-specialist
-    to: coo
-    type: reports_to
-  - from: ml-foundations
-    to: coo
-    type: reports_to
   - from: pm-grounding
     to: coo
     type: reports_to
@@ -153,8 +139,5 @@ collaborations:
     to: coo
     type: reports_to
   - from: python-language-design
-    to: coo
-    type: reports_to
-  - from: smalltalk-specialist
     to: coo
     type: reports_to

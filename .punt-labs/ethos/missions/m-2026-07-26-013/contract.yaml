@@ -1,8 +1,9 @@
 mission_id: m-2026-07-26-013
-status: open
+status: escalated
 type: implement
 created_at: "2026-07-26T15:09:01Z"
-updated_at: "2026-07-26T15:09:01Z"
+updated_at: "2026-08-21T21:17:15Z"
+closed_at: "2026-08-21T21:17:15Z"
 leader: claude
 worker: mdm
 evaluator:

@@ -1,0 +1,67 @@
+results:
+    - mission: m-2026-08-21-013
+      round: 1
+      created_at: "2026-08-21T22:33:40Z"
+      author: bwk
+      verdict: pass
+      confidence: 1
+      files_changed:
+        - path: tests/e2e/fixtures/ethos-self/.claude/agents/ahj.md
+          added: 0
+          removed: 42
+        - path: tests/e2e/fixtures/ethos-self/.claude/agents/bne.md
+          added: 0
+          removed: 42
+        - path: tests/e2e/fixtures/ethos-self/.claude/agents/csl.md
+          added: 0
+          removed: 43
+        - path: tests/e2e/fixtures/ethos-self/.claude/agents/rej.md
+          added: 0
+          removed: 42
+        - path: tests/e2e/fixtures/ethos-self/.claude/agents/srn.md
+          added: 0
+          removed: 42
+        - path: tests/e2e/fixtures/ethos-self/.claude/agents/tdt.md
+          added: 0
+          removed: 42
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/personalities/beck.md
+          added: 0
+          removed: 462
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/personalities/karpathy.md
+          added: 0
+          removed: 68
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/personalities/lecun.md
+          added: 0
+          removed: 37
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/talents/convnets.md
+          added: 0
+          removed: 9
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/talents/deep-learning.md
+          added: 0
+          removed: 9
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/talents/machine-learning.md
+          added: 0
+          removed: 9
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/talents/self-supervised-learning.md
+          added: 0
+          removed: 9
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/writing-styles/beck-prose.md
+          added: 0
+          removed: 16
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/writing-styles/karpathy-prose.md
+          added: 0
+          removed: 48
+        - path: tests/e2e/fixtures/ethos-self/.punt-labs/ethos/writing-styles/lecun-prose.md
+          added: 0
+          removed: 47
+      evidence:
+        - name: git rm 10 orphaned attribute files (personalities/writing-styles/talents for karpathy, lecun, beck)
+          status: pass
+        - name: git rm 6 untracked-in-real-tree .claude/agents stubs (ahj, bne, csl, rej, srn, tdt)
+          status: pass
+        - name: cd tests/e2e && uv run pytest tests/test_scenarios.py::test_token_scenario -k ethos-self -m e2e -v
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Removed the 10 now-orphaned attribute files and the 6 untracked .claude/agents stubs from tests/e2e/fixtures/ethos-self so the fixture mirrors only what commit 8d8a725 actually left tracked in the real tree. The ethos-self token scenario still passes well under its 470000-byte ceiling. One commit, make check clean.

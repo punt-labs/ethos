@@ -46,7 +46,6 @@ Match the worker to the task:
 - Python code → `rmh`
 - CLI design → `mdm`
 - Security review → `djb`
-- ML / inference → `kpz`
 - Infrastructure / CI → `adb`
 
 The worker and evaluator must be distinct handles and must not
@@ -346,8 +345,8 @@ better than no design.
 
 Design missions default to `mdm` for docs and CLI-facing designs,
 or the domain specialist when the design is deep in their area
-(e.g. `djb` for a security protocol, `kpz` for an inference
-pipeline). The evaluator should be someone who will consume the
+(e.g. `djb` for a security protocol, `bwk` for a Go runtime
+change). The evaluator should be someone who will consume the
 design — the implementer, not another writer.
 
 ## What this skill does NOT do

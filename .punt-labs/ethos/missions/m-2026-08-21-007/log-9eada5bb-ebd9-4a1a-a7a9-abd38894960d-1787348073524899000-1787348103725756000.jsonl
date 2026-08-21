@@ -1,0 +1,2 @@
+{"ts":"2026-08-21T21:34:33.524899Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"ethos-15mp","worker":"bwk"}}
+{"ts":"2026-08-21T21:35:03.725756Z","event":"abandon","actor":"claude","details":{"reason":"Redispatching with an added write-set item (rej.md dangling reference) found by a second reviewer after this contract was written"}}

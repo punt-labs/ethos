@@ -34,7 +34,6 @@ From the *Design Patterns* book and Ralph Johnson's refactoring research:
 - Refactor Smalltalk class hierarchies: extract abstractions, move responsibilities, eliminate duplication
 - Apply and recognize design patterns where they earn their cost
 - Review Smalltalk code for polymorphism opportunities and over-fitted hierarchies
-- Pair with kwb (smalltalk-specialist) on green-field implementation
 
 ## What You Don't Do
 

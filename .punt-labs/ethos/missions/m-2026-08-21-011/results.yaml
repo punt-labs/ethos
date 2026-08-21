@@ -1,0 +1,75 @@
+results:
+    - mission: m-2026-08-21-011
+      round: 1
+      created_at: "2026-08-21T22:24:44Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.97
+      files_changed:
+        - path: .punt-labs/ethos/personalities/beck.md
+          added: 0
+          removed: 462
+        - path: .punt-labs/ethos/personalities/karpathy.md
+          added: 0
+          removed: 68
+        - path: .punt-labs/ethos/personalities/lecun.md
+          added: 0
+          removed: 37
+        - path: .punt-labs/ethos/writing-styles/karpathy-prose.md
+          added: 0
+          removed: 48
+        - path: .punt-labs/ethos/writing-styles/lecun-prose.md
+          added: 0
+          removed: 47
+        - path: .punt-labs/ethos/writing-styles/beck-prose.md
+          added: 0
+          removed: 16
+        - path: .punt-labs/ethos/talents/machine-learning.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/deep-learning.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/convnets.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/self-supervised-learning.md
+          added: 0
+          removed: 9
+        - path: internal/seed/sidecar/skills/mission/SKILL.md
+          added: 2
+          removed: 3
+      evidence:
+        - name: grep for the 10 slugs across .punt-labs/ethos/identities/ (repo-local) — zero matches before removal
+          status: pass
+        - name: make check
+          status: pass
+        - name: go run ./cmd/validate-content (30 identities, 3 teams, 201 attributes, referential integrity clean)
+          status: pass
+      prose: |
+        git rm'd all 10 orphaned attribute files after confirming, by grep,
+        that no repo-local identity YAML in .punt-labs/ethos/identities/
+        references karpathy, lecun, beck, machine-learning, deep-learning,
+        convnets, or self-supervised-learning. Left talents/smalltalk.md,
+        design-patterns.md, and refactoring.md untouched — identities/rej.yaml
+        still references all three, as the contract required.
+
+        Fixed SKILL.md lines 49 and 349: both routed ML/inference work to
+        kpz, a handle deleted by the earlier full purge. Dropped the routing
+        row and the parenthetical example rather than reassigning to bwk,
+        since bwk already appears as the Go-code route on the same list —
+        reusing it for ML/inference would read as a second, contradictory
+        claim about scope. dropping the row is the honest statement: this
+        skill no longer has a dedicated ML/inference specialist.
+
+        make check failed once, not from anything in the write set: a stale
+        *global* identity file, ~/.punt-labs/ethos/identities/ylc.yaml —
+        untracked, outside this repo, left over from earlier purge-mission
+        testing — still referenced lecun/lecun-prose and all four deleted
+        talents. It predates this round and sits outside git entirely, so it
+        isn't part of this commit. Moved it to .tmp/ylc.yaml.orphaned-global-identity
+        (not deleted, per destructive-ops discipline) rather than leaving
+        broken global state on the machine; validate-content passes cleanly
+        after.
+
+        One commit, as instructed: 8d8a725.

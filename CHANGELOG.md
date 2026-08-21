@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Store.Close` mapped an escalate-verdict result to `DelegationVerdictPass`.** `internal/mission/store.go`'s delegation-verdict mapping checked only `VerdictFail`; every other result verdict, including `VerdictEscalate`, fell through to `DelegationVerdictPass`, so closing an escalated mission silently flipped its open delegation records to `verdict: pass`. `VerdictEscalate` now maps to `DelegationVerdictAborted`. (ethos-15mp)
 - **`ethos vendor --team` silently dropped explicit positional handles instead of combining with them.** `internal/vendor/vendor.go`'s `seeds()` was a `switch` where `--team` and positional handles were mutually exclusive branches: setting `--team` made any named handle vanish from the seed set with no error, contradicting the command's own usage line `ethos vendor [handle...] [flags]`. `seeds()` now unions the team's members with any explicit handles, deduplicated via the existing `appendUnique`. `--all` was also silently overriding both — it is now rejected outright when combined with `--team` or positional handles, via `MarkFlagsMutuallyExclusive` and an explicit args check.
 
 ## [4.14.0] - 2026-08-19

@@ -1,0 +1,36 @@
+mission_id: m-2026-08-21-011
+status: closed
+type: implement
+created_at: "2026-08-21T22:20:09Z"
+updated_at: "2026-08-21T22:26:51Z"
+closed_at: "2026-08-21T22:26:51Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-21T22:20:09Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-zb1t
+write_set:
+    - .punt-labs/ethos/personalities/karpathy.md
+    - .punt-labs/ethos/personalities/lecun.md
+    - .punt-labs/ethos/personalities/beck.md
+    - .punt-labs/ethos/writing-styles/karpathy-prose.md
+    - .punt-labs/ethos/writing-styles/lecun-prose.md
+    - .punt-labs/ethos/writing-styles/beck-prose.md
+    - .punt-labs/ethos/talents/machine-learning.md
+    - .punt-labs/ethos/talents/deep-learning.md
+    - .punt-labs/ethos/talents/convnets.md
+    - .punt-labs/ethos/talents/self-supervised-learning.md
+    - internal/seed/sidecar/skills/mission/SKILL.md
+success_criteria:
+    - git rm .punt-labs/ethos/personalities/{karpathy,lecun,beck}.md .punt-labs/ethos/writing-styles/{karpathy-prose,lecun-prose,beck-prose}.md .punt-labs/ethos/talents/{machine-learning,deep-learning,convnets,self-supervised-learning}.md — verify first with grep that zero remaining identity YAMLs reference any of these 10 slugs. Do NOT touch talents/smalltalk.md, design-patterns.md, or refactoring.md — identities/rej.yaml still references all three.
+    - Fix internal/seed/sidecar/skills/mission/SKILL.md:49 and :349 — both route ML/inference dispatch guidance to handle 'kpz', which no longer resolves in this repo. Swap to a live handle (bwk) or drop the ML routing row entirely, your call on which reads better in context.
+    - make check passes
+    - Commit as one commit if straightforward
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: Final review-cycle fix round on branch chore/cut-ml-smalltalk-team, part of the ethos-iiiw full-purge ruling. validate-content's referential-integrity check validates identity -> attribute forward references, not orphaned attributes with zero consumers, so it never caught these.

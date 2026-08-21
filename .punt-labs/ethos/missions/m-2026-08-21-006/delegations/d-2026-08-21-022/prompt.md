@@ -1,0 +1,1 @@
+Read your mission contract with `ethos mission show m-2026-08-21-006` and execute it. You're on branch chore/cut-ml-smalltalk-team in <repo>. Follow the criteria exactly, commit incrementally per the contract's commit-discipline criterion, and run `make check` before each commit.

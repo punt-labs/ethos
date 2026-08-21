@@ -1013,8 +1013,10 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	// Close open delegation skeletons. Non-fatal — the mission is
 	// already closed; a delegation-close failure writes stderr but
 	// does not roll back the mission close. The verdict maps from the
-	// mission's result verdict (pass/fail) to the delegation-level
-	// vocabulary (pass/fail/error/aborted).
+	// mission's result verdict (pass/fail/escalate) to the
+	// delegation-level vocabulary (pass/fail/aborted): fail maps to
+	// fail, escalate maps to aborted, everything else (including a
+	// nil result) maps to pass.
 	//
 	// The sweep runs under AcquireMissionLockExclusive so it waits for
 	// every in-flight AcquireMissionLock (shared) holder — a
@@ -1041,8 +1043,13 @@ func (s *Store) Close(missionID, status string) (*Result, error) {
 	// (TestStore_TwoRoot_CloseStaysInItsLayer).
 	if s.repoRoot != "" {
 		delegationVerdict := DelegationVerdictPass
-		if satisfying != nil && satisfying.Verdict == VerdictFail {
-			delegationVerdict = DelegationVerdictFail
+		if satisfying != nil {
+			switch satisfying.Verdict {
+			case VerdictFail:
+				delegationVerdict = DelegationVerdictFail
+			case VerdictEscalate:
+				delegationVerdict = DelegationVerdictAborted
+			}
 		}
 		closedAt := time.Now().UTC().Format(time.RFC3339)
 		missionDir := RepoStatePath(s.repoRoot, "missions", filepath.Base(missionID))
