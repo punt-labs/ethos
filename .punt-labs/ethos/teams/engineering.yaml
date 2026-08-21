@@ -79,7 +79,7 @@ members:
   - identity: adt
     role: pm-grounding
   - identity: ghr
-    role: product-discovery
+    role: pm-building-blocks
   - identity: edt
     role: ux-designer
   # Finance / operations
@@ -88,9 +88,9 @@ members:
   # Python language design
   - identity: gvr
     role: python-language-design
-  # Smalltalk patterns and refactoring
+  # Smalltalk implementation
   - identity: kwb
-    role: smalltalk-patterns
+    role: smalltalk-specialist
 collaborations:
   - from: coo
     to: ceo
@@ -143,7 +143,7 @@ collaborations:
   - from: pm-grounding
     to: coo
     type: reports_to
-  - from: product-discovery
+  - from: pm-building-blocks
     to: coo
     type: reports_to
   - from: ux-designer
@@ -155,6 +155,6 @@ collaborations:
   - from: python-language-design
     to: coo
     type: reports_to
-  - from: smalltalk-patterns
+  - from: smalltalk-specialist
     to: coo
     type: reports_to
