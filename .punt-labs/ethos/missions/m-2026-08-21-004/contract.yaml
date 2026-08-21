@@ -1,0 +1,33 @@
+mission_id: m-2026-08-21-004
+status: closed
+type: implement
+created_at: "2026-08-21T17:54:26Z"
+updated_at: "2026-08-21T18:11:11Z"
+closed_at: "2026-08-21T18:11:11Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-21T17:54:26Z"
+    hash: 1022bfc167d35ef8ed64154bcad5a3cb758dbedc090410a30670d384f498744f
+inputs:
+    ticket: ethos-03py
+write_set:
+    - internal/vendor/vendor.go
+    - internal/vendor/vendor_test.go
+    - internal/vendor/closure_test.go
+    - .punt-labs/ethos/teams/engineering.yaml
+    - CHANGELOG.md
+success_criteria:
+    - Fix seeds() in internal/vendor/vendor.go so --team and explicit Handles combine (union, deduplicated) instead of being mutually exclusive; --all still takes priority over both when set
+    - Add a unit test in internal/vendor covering --team plus explicit extra handles producing the union
+    - 'Update .punt-labs/ethos/teams/engineering.yaml members: to add rsc, rop, bcs, kth, jra, kpz, adt, ghr, edt, ach, ylc, gvr, kwb — model each entry sensibly (they are pipeline evaluators/specialists per docs/development.md and docs/workflow.md, not necessarily reports_to relationships; do not fabricate collaborations edges that aren''t real) and add a one-line YAML comment grouping if it aids readability, matching the existing file''s style'
+    - 'Verify with ''ethos vendor --team engineering --dry-run'' (no explicit handles needed anymore) that the seed list is exactly the 23 identities: ach, adb, adt, bcs, bwk, claude, djb, dna, edt, ghr, gvr, jfreeman, jms, jra, kpz, kth, kwb, mcg, mdm, rmh, rop, rsc, ylc'
+    - make check passes; make check-oo passes if present
+    - Add a CHANGELOG.md entry under Unreleased > Fixed describing the seeds() bug fix
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 2
+context: 'Two related fixes surfaced while scoping an ethos-repo-only vendoring project. (1) internal/vendor/vendor.go:184-219 seeds() is a switch statement: v.opts.Team != "" and v.opts.Handles are mutually exclusive — when --team is set, explicit positional handles are silently dropped, no error. This contradicts the command''s own usage line ''ethos vendor [handle...] [flags]''. (2) .punt-labs/ethos/teams/engineering.yaml''s members: list (10 identities) is stale relative to what this repo''s own docs/development.md mission-pipeline table and docs/workflow.md org-roster table actually reference: rsc, rop, bcs, kth, jra, kpz, adt, ghr, edt, ach, ylc, gvr, kwb (13 more). Verified by grep across docs/*.md, DESIGN.md, and .punt-labs/ethos/missions/*/contract.yaml, then confirmed with a manual vendor dry-run seeding all 23 handles explicitly (bypassing the --team bug) which produced a self-consistent 23-identity closure with 26 ext files. The real target for this repo''s eventual vendor+repo-only migration is 23 identities, not engineering.yaml''s 10 and not the full 31-identity global roster.'

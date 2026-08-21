@@ -613,6 +613,14 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	// Opening line.
 	firstLine := firstContentSentence(id.PersonalityContent)
 	firstLine = strings.TrimSuffix(firstLine, ".")
+	// The template already opens with "You are %s (%s), ...". A personality
+	// whose first sentence itself starts with "You are" (e.g. "You are
+	// inspired by...") would duplicate that phrase, so strip it before
+	// interpolating.
+	const youAre = "you are "
+	if len(firstLine) >= len(youAre) && strings.EqualFold(firstLine[:len(youAre)], youAre) {
+		firstLine = firstLine[len(youAre):]
+	}
 	if firstLine == "" {
 		fmt.Fprintf(&b, "\nYou are %s (%s).\n", id.Name, id.Handle)
 	} else {

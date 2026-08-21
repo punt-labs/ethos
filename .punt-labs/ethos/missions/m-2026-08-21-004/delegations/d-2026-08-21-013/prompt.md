@@ -1,0 +1,1 @@
+Read your mission contract with `ethos mission show m-2026-08-21-004` and execute it. You're on branch fix/vendor-seeds-and-engineering-team in <repo>. Follow the criteria exactly, commit incrementally per the contract's commit-discipline criterion, and run `make check` before each commit.

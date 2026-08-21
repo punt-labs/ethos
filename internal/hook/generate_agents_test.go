@@ -431,6 +431,52 @@ func TestGenerateAgentFiles(t *testing.T) {
 			},
 		},
 		{
+			// Cursor Bugbot finding on PR #474: a personality whose first
+			// sentence itself starts with "You are" (e.g. "You are inspired
+			// by...") duplicated the phrase in the opening line, producing
+			// "You are Brian K (bwk), You are inspired by...". The generator
+			// must strip that leading "You are " before interpolating.
+			name: "personality first sentence starting with You are is not duplicated",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeFile(t, filepath.Join(ethosDir, "personalities", "kernighan.md"),
+					"# Kernighan\n\nYou are inspired by Kent Beck — creator of TDD.\n\n## Core Principles\n\nSimplicity, clarity, generality.\n")
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				assert.Contains(t, content, "You are Brian K (bwk), inspired by Kent Beck — creator of TDD.\n")
+				assert.NotContains(t, content, "You are Brian K (bwk), You are")
+			},
+		},
+		{
+			// Same as above but with lowercase "you are" to confirm the
+			// case-insensitive match.
+			name: "personality first sentence starting with lowercase you are is not duplicated",
+			setup: func(t *testing.T, root string, ids identity.IdentityStore, teams *team.LayeredStore, roles *role.LayeredStore) {
+				ethosDir := filepath.Join(root, ".punt-labs", "ethos")
+				writeFile(t, filepath.Join(ethosDir, "personalities", "kernighan.md"),
+					"# Kernighan\n\nyou are inspired by Kent Beck — creator of TDD.\n\n## Core Principles\n\nSimplicity, clarity, generality.\n")
+			},
+			check: func(t *testing.T, root string, err error) {
+				require.NoError(t, err)
+
+				agentPath := filepath.Join(root, ".claude", "agents", "bwk.md")
+				data, readErr := os.ReadFile(agentPath)
+				require.NoError(t, readErr)
+
+				content := string(data)
+				assert.Contains(t, content, "You are Brian K (bwk), inspired by Kent Beck — creator of TDD.\n")
+				assert.NotContains(t, content, "You are Brian K (bwk), you are")
+				assert.NotContains(t, content, "You are Brian K (bwk), You are")
+			},
+		},
+		{
 			name: "skills frontmatter includes baseline-ops",
 			check: func(t *testing.T, root string, err error) {
 				require.NoError(t, err)
