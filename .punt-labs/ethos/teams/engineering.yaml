@@ -54,6 +54,43 @@ members:
   # Product management
   - identity: mcg
     role: product-strategy
+  # Go toolchain / supply chain (evaluator on Go internals per
+  # docs/development.md's worker/evaluator table)
+  - identity: rsc
+    role: go-toolchain
+  # CLI minimalism (evaluator on CLI / command surface)
+  - identity: rop
+    role: cli-minimalist
+  # Security architecture (evaluator on threat modeling)
+  - identity: bcs
+    role: security-architect
+  # Infrastructure / cloud-native (evaluator on infra / CI / release)
+  - identity: kth
+    role: cloud-native-engineer
+  # Formal methods — Event-B (evaluator on Z spec design)
+  - identity: jra
+    role: b-specialist
+  # ML inference and foundations
+  - identity: kpz
+    role: ml-specialist
+  - identity: ylc
+    role: ml-foundations
+  # Product pipeline (design → prfaq → schema stages)
+  - identity: adt
+    role: pm-grounding
+  - identity: ghr
+    role: product-discovery
+  - identity: edt
+    role: ux-designer
+  # Finance / operations
+  - identity: ach
+    role: finance-ops
+  # Python language design
+  - identity: gvr
+    role: python-language-design
+  # Smalltalk patterns and refactoring
+  - identity: kwb
+    role: smalltalk-patterns
 collaborations:
   - from: coo
     to: ceo
@@ -80,5 +117,44 @@ collaborations:
     to: coo
     type: reports_to
   - from: product-strategy
+    to: coo
+    type: reports_to
+  - from: go-toolchain
+    to: coo
+    type: reports_to
+  - from: cli-minimalist
+    to: coo
+    type: reports_to
+  - from: security-architect
+    to: coo
+    type: reports_to
+  - from: cloud-native-engineer
+    to: coo
+    type: reports_to
+  - from: b-specialist
+    to: coo
+    type: reports_to
+  - from: ml-specialist
+    to: coo
+    type: reports_to
+  - from: ml-foundations
+    to: coo
+    type: reports_to
+  - from: pm-grounding
+    to: coo
+    type: reports_to
+  - from: product-discovery
+    to: coo
+    type: reports_to
+  - from: ux-designer
+    to: coo
+    type: reports_to
+  - from: finance-ops
+    to: coo
+    type: reports_to
+  - from: python-language-design
+    to: coo
+    type: reports_to
+  - from: smalltalk-patterns
     to: coo
     type: reports_to
