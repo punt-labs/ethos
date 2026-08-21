@@ -63,6 +63,8 @@ func init() {
 	_ = vendorCmd.Flags().MarkHidden("no-teams")
 	_ = vendorCmd.Flags().MarkHidden("from")
 
+	vendorCmd.MarkFlagsMutuallyExclusive("all", "team")
+
 	rootCmd.AddCommand(vendorCmd)
 }
 
@@ -76,6 +78,9 @@ func runVendor(cmd *cobra.Command, args []string) error {
 	}
 	if vendorApply && vendorDryRun {
 		return usageError{"--apply and --dry-run are mutually exclusive"}
+	}
+	if vendorAll && len(args) > 0 {
+		return usageError{"--all is not supported with explicit handles: --all already selects every readable identity"}
 	}
 
 	// The FULL chain, not identityStore(): vendor copies from global into

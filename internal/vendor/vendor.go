@@ -179,9 +179,10 @@ func (v *Vendorer) Run() (*Plan, error) {
 	return p, nil
 }
 
-// seeds resolves the starting handles. --all takes priority over
-// everything else. Otherwise --team and explicit positional handles
-// combine: the result is their union, deduplicated.
+// seeds resolves the starting handles. --all is mutually exclusive with
+// --team and explicit positional handles, so it is the sole path when
+// used. Otherwise --team and explicit positional handles combine: the
+// result is their union, deduplicated.
 func (v *Vendorer) seeds() ([]string, error) {
 	if v.opts.All {
 		result, err := v.src.Identities.List()
