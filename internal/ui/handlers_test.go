@@ -201,6 +201,88 @@ func TestHandleMission_RendersCorrectionsError(t *testing.T) {
 	assert.Contains(t, body, "boom")
 }
 
+// TestServer_loadResults_SurfacesError asserts loadResults returns the
+// underlying error instead of swallowing it — a nil slice from a
+// failed read must be distinguishable from a mission that genuinely
+// has zero results.
+func TestServer_loadResults_SurfacesError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).WithCheckoutRoot(storeRoot)
+
+	srv := &Server{storeRoot: storeRoot, repoRoot: storeRoot, globalRoot: globalRoot}
+	results, err := srv.loadResults(store, "")
+	require.Error(t, err)
+	assert.Nil(t, results)
+	assert.Contains(t, err.Error(), "missionID is required")
+}
+
+// TestServer_loadEvents_SurfacesError asserts loadEvents returns the
+// underlying error instead of swallowing it — a nil slice from a
+// failed read must be distinguishable from a mission that genuinely
+// has zero events.
+func TestServer_loadEvents_SurfacesError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).WithCheckoutRoot(storeRoot)
+
+	srv := &Server{storeRoot: storeRoot, repoRoot: storeRoot, globalRoot: globalRoot}
+	events, err := srv.loadEvents(store, "not a valid mission id")
+	require.Error(t, err)
+	assert.Nil(t, events)
+	assert.Contains(t, err.Error(), "not a valid mission id")
+}
+
+// TestHandleMission_RendersResultsError asserts the mission detail
+// template surfaces a ResultsError as a visible warning rather than
+// rendering the page as though there were no results at all.
+func TestHandleMission_RendersResultsError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:        "m-2026-08-22-092",
+		Contract:     uiTestContract("m-2026-08-22-092"),
+		ResultsError: "loading results for mission \"m-2026-08-22-092\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "could not load results")
+	assert.Contains(t, body, "boom")
+}
+
+// TestHandleMission_RendersEventsError asserts the mission detail
+// template surfaces an EventsError as a visible warning rather than
+// rendering the page as though there were no events at all.
+func TestHandleMission_RendersEventsError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:       "m-2026-08-22-093",
+		Contract:    uiTestContract("m-2026-08-22-093"),
+		EventsError: "loading events for mission \"m-2026-08-22-093\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "could not load events")
+	assert.Contains(t, body, "boom")
+}
+
 // uiTestContract returns a minimal valid open contract for id.
 func uiTestContract(id string) *mission.Contract {
 	return &mission.Contract{

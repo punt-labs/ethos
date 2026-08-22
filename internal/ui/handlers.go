@@ -118,9 +118,11 @@ type missionData struct {
 	Contract         *mission.Contract
 	Delegations      []*mission.Delegation
 	Results          []mission.Result
+	ResultsError     string
 	Corrections      []mission.Correction
 	CorrectionsError string
 	Events           []mission.Event
+	EventsError      string
 	AuditEntries     []hook.AuditView
 	AuditCount       int
 }
@@ -152,9 +154,9 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	delegations := s.loadDelegations(id)
-	results := s.loadResults(store, id)
+	results, resultsErr := s.loadResults(store, id)
 	corrections, correctionsErr := s.loadCorrections(store, id)
-	events := s.loadEvents(store, id)
+	events, eventsErr := s.loadEvents(store, id)
 
 	// Aggregate audit entries across all delegations under this mission.
 	var allAudit []hook.AuditView
@@ -174,8 +176,14 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		AuditEntries: allAudit,
 		AuditCount:   len(allAudit),
 	}
+	if resultsErr != nil {
+		data.ResultsError = resultsErr.Error()
+	}
 	if correctionsErr != nil {
 		data.CorrectionsError = correctionsErr.Error()
+	}
+	if eventsErr != nil {
+		data.EventsError = eventsErr.Error()
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "mission.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -204,12 +212,16 @@ func (s *Server) loadDelegations(missionID string) []*mission.Delegation {
 	return delegations
 }
 
-func (s *Server) loadResults(store *mission.Store, id string) []mission.Result {
+// loadResults reads the mission's result log. The error return is
+// surfaced to the caller rather than swallowed: a failure here means
+// the dashboard cannot prove the mission has no results, which is
+// exactly the kind of integrity signal this page exists to show.
+func (s *Server) loadResults(store *mission.Store, id string) ([]mission.Result, error) {
 	results, err := store.LoadResults(id)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("loading results for mission %q: %w", id, err)
 	}
-	return results
+	return results, nil
 }
 
 // loadCorrections reads the DES-072 correction log for id, sourced
@@ -227,12 +239,16 @@ func (s *Server) loadCorrections(store *mission.Store, id string) ([]mission.Cor
 	return corrections, nil
 }
 
-func (s *Server) loadEvents(store *mission.Store, id string) []mission.Event {
+// loadEvents reads the DES-058 event union for id. The error return is
+// surfaced to the caller rather than swallowed: a failure here means
+// the dashboard cannot prove the mission has no events, which is
+// exactly the kind of integrity signal this page exists to show.
+func (s *Server) loadEvents(store *mission.Store, id string) ([]mission.Event, error) {
 	events, _, err := store.LoadEvents(id)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("loading events for mission %q: %w", id, err)
 	}
-	return events
+	return events, nil
 }
 
 type delegationData struct {
