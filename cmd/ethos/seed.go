@@ -54,6 +54,15 @@ func runSeed(cmd *cobra.Command, args []string) error {
 		if b, bErr := bundle.ResolveActive(repoRoot, destRoot); bErr == nil && b != nil {
 			activeBundle = b.Name
 			activeBundleDir = b.Path
+		} else {
+			// Fresh install: active_bundle is set in .punt-labs/ethos.yaml
+			// but the bundle isn't on disk yet (nothing for
+			// bundle.ResolveActive to find in either repo or global
+			// scope) — this seed run is what's supposed to put it there.
+			// Fall back to the config's bundle NAME with no resolved dir,
+			// so SeedVersionWithBundleDir's embedded-fallback path
+			// deploys the embedded skills for it instead of no-op'ing.
+			activeBundle, _ = resolve.ResolveActiveBundle(repoRoot)
 		}
 	}
 
