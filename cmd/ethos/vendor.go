@@ -249,11 +249,11 @@ func writeVendorPlan(w io.Writer, p *vendor.Plan) {
 
 	if len(p.Pruned) > 0 {
 		head := "Would remove"
-		if p.Applied && vendorPrune {
+		if p.Applied && p.Prune {
 			head = "Removed"
 		}
 		fmt.Fprintf(w, "\n%s %d file(s) no longer in the closure", head, len(p.Pruned))
-		if !vendorPrune {
+		if !p.Prune {
 			fmt.Fprintf(w, " (with --prune)")
 		}
 		fmt.Fprintln(w, ":")

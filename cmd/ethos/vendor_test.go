@@ -116,3 +116,33 @@ func TestCLI_VendorApplyWithoutPruneReportsWouldRemove(t *testing.T) {
 		"the hint must appear on --apply alone, not only on a plain dry run")
 	assert.FileExists(t, stale, "no --prune means the stale file must survive --apply")
 }
+
+// TestVendorApplyJSONWithoutPruneReportsPruneFalse pins that a --json plan
+// carries the actual --prune setting rather than letting a reader infer
+// removal from "applied" alone. Applied is true whenever --apply ran; it
+// says nothing about whether files were pruned.
+func TestVendorApplyJSONWithoutPruneReportsPruneFalse(t *testing.T) {
+	dir := enableGitRepo(t)
+	t.Chdir(dir)
+
+	home := os.Getenv("HOME")
+	idDir := filepath.Join(home, ".punt-labs", "ethos", "identities")
+	if err := os.MkdirAll(idDir, 0o755); err != nil {
+		t.Fatalf("mkdir identities: %v", err)
+	}
+	id := "name: Brian K\nhandle: bwk\nkind: agent\n"
+	if err := os.WriteFile(filepath.Join(idDir, "bwk.yaml"), []byte(id), 0o644); err != nil {
+		t.Fatalf("write identity: %v", err)
+	}
+
+	jsonOutput = true
+	defer func() { jsonOutput = false }()
+
+	out, _, err := runVendorCmd(t, "bwk", "--apply", "--json")
+	if err != nil {
+		t.Fatalf("vendor --apply --json: %v", err)
+	}
+	if !strings.Contains(out, `"prune": false`) {
+		t.Errorf("output = %s, want \"prune\": false", out)
+	}
+}

@@ -75,6 +75,7 @@ type Plan struct {
 	Ext          map[string][]ExtFile `json:"-"`
 	ExtFiles     int                  `json:"ext_files"`
 	Pruned       []string             `json:"pruned,omitempty"`
+	Prune        bool                 `json:"prune"`
 	Warnings     []Finding            `json:"warnings,omitempty"`
 	Applied      bool                 `json:"applied"`
 	FilesWritten int                  `json:"files_written"`
@@ -135,6 +136,7 @@ func (v *Vendorer) Run() (*Plan, error) {
 		return nil, err
 	}
 	p.Dest = v.opts.Dest
+	p.Prune = v.opts.Prune
 	p.ExtFiles = p.ExtCount()
 
 	// The guard runs before anything is written, on the plan, so a
