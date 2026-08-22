@@ -1,0 +1,5 @@
+Work mission m-2026-08-22-048 in repo <repo>. Your worktree will start from some commit — verify with `git merge-base HEAD feat/mission-correction-events` whether your base matches feat/mission-correction-events's current tip; if stale, rebase onto the local `feat/mission-correction-events` branch (local branch, no fetch needed) before starting.
+
+Read the mission contract: `ethos mission show m-2026-08-22-048`. It fixes two silent-failure bugs in internal/ui/handlers.go (loadResults, loadEvents) by matching the pattern already used for loadCorrections in the same file (which returns (data, error) and surfaces the error in missionData/mission.html as an inline warning). Full details in the contract's success_criteria.
+
+When done, submit your result: `ethos mission result m-2026-08-22-048 --round 1 --verdict pass --confidence <0-1> --prose "..." --evidence "make check=pass"`. Report your worktree path, branch name, and commit hash so the leader can merge it back onto feat/mission-correction-events.
