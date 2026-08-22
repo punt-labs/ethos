@@ -245,13 +245,25 @@ func (s *seeder) seedBundles(fsys embed.FS, destBundlesRoot string) {
 	}
 }
 
-// topLevelSkillSlugs names every sidecar top-level skill directory
-// (the ones deployed by the seedFile calls above). seedBundleSkills
-// checks a bundle-scoped slug against this set to detect a collision.
-var topLevelSkillSlugs = map[string]bool{
-	"baseline-ops":        true,
-	"mission":             true,
-	"create-from-project": true,
+// topLevelSkillSlugs returns every sidecar top-level skill directory name,
+// enumerated from the embedded Skills FS rather than hardcoded — a new
+// skill added under sidecar/skills/ is picked up with no change here.
+// seedBundleSkills checks a bundle-scoped slug against this set to detect
+// a collision. A read error yields an empty set: seedBundleSkills then
+// treats every bundle slug as non-colliding, which is the same behavior
+// (deploy via the normal no-clobber path) as before this set existed.
+func topLevelSkillSlugs() map[string]bool {
+	entries, err := fs.ReadDir(Skills, "sidecar/skills")
+	if err != nil {
+		return nil
+	}
+	slugs := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			slugs[e.Name()] = true
+		}
+	}
+	return slugs
 }
 
 // seedBundleSkills deploys bundleName's skills/<slug>/SKILL.md tree (if
@@ -281,6 +293,7 @@ func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName string) {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", root, err))
 		return
 	}
+	topLevel := topLevelSkillSlugs()
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -293,7 +306,7 @@ func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName string) {
 			continue
 		}
 		dest := filepath.Join(s.skillsRoot, slug, "SKILL.md")
-		if topLevelSkillSlugs[slug] {
+		if topLevel[slug] {
 			fmt.Fprintf(os.Stderr,
 				"ethos: seed: bundle %q skill %q collides with a sidecar skill; bundle wins\n",
 				bundleName, slug)

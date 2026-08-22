@@ -482,6 +482,19 @@ func TestSeedBundleNoClobber(t *testing.T) {
 	assert.True(t, found, "edited bundle manifest should be in the edited list on second seed")
 }
 
+// TestTopLevelSkillSlugs_DerivedFromEmbeddedFS pins the Copilot MEDIUM
+// finding on PR #481: the sidecar top-level skill set must be enumerated
+// from the embedded Skills FS, not hardcoded, so a new skill added under
+// sidecar/skills/ is picked up with no code change here.
+func TestTopLevelSkillSlugs_DerivedFromEmbeddedFS(t *testing.T) {
+	got := topLevelSkillSlugs()
+	assert.Equal(t, map[string]bool{
+		"baseline-ops":        true,
+		"mission":             true,
+		"create-from-project": true,
+	}, got)
+}
+
 // TestSeedDeploysBundleSkills pins DES-073's bundle-scoped skill deploy:
 // with the gstack bundle active, its skills/<slug>/SKILL.md files land
 // under skillsRoot alongside the sidecar top-level skills. With no
