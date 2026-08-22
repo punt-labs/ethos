@@ -1,0 +1,77 @@
+results:
+    - mission: m-2026-08-22-051
+      round: 1
+      created_at: "2026-08-22T15:13:06Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: internal/mission/correct.go
+          added: 25
+          removed: 2
+        - path: internal/mission/correct_test.go
+          added: 71
+          removed: 0
+        - path: internal/ui/handlers.go
+          added: 34
+          removed: 33
+        - path: internal/ui/handlers_test.go
+          added: 61
+          removed: 12
+      evidence:
+        - name: make check
+          status: pass
+      prose: |
+        Fixed all three Copilot findings coherently, not as three independent
+        patches.
+
+        (1) Double load: handleMission called store.LoadEvents twice — once
+        via loadCorrections -> Store.LoadCorrections -> LoadEvents, and once
+        via loadEvents -> LoadEvents. handleMission now calls loadEvents once
+        and derives Corrections from that same slice via a new exported
+        mission.CorrectionsFromEvents(missionID, events). loadCorrections is
+        deleted.
+
+        (2) Discarded UI warnings: loadEvents now returns LoadEvents' warnings
+        slice. missionData carries a new EventsWarnings []string field, and
+        mission.html renders it the same way the existing *Error fields are
+        rendered (a red warning box). Since Corrections now reads from the
+        same events load and has no independent source, a failed events load
+        also populates CorrectionsError with the same underlying error rather
+        than leaving it blank while Events shows the warning.
+
+        (3) Discarded Store warnings: Store.LoadCorrections dropped
+        LoadEvents' warnings. It now upgrades a non-empty warnings slice into
+        an error, keeping the existing (corrections, error) signature so
+        every current caller (CLI mission show/results, MCP,
+        internal/ui) — which already treats a LoadCorrections error as an
+        integrity warning to surface, not a hard failure — picks the signal
+        up for free with no call-site changes needed. This kept the fix
+        inside the mission's write_set: changing LoadCorrections' signature
+        to also return warnings would have required touching
+        cmd/ethos/mission.go and internal/mcp/mission_tools.go, both outside
+        the write_set.
+
+        Tests added: TestStore_LoadCorrections_UpgradesEventLogWarningsToError
+        (plants a corrupt trailing line after a real correct event and
+        asserts LoadCorrections errors, naming the mission and the corrupt
+        line), TestCorrectionsFromEvents_DerivesFromAlreadyLoadedSlice
+        (asserts the new exported helper reproduces LoadCorrections' fields
+        from an already-loaded slice), TestHandleMission_DerivesCorrectionsFromEventsOnce
+        and TestHandleMission_RendersEventsWarnings (UI rendering).
+        TestServer_loadEvents_SurfacesError updated for loadEvents' new
+        3-value return. TestServer_loadCorrections_SurfacesError deleted —
+        the loadCorrections method it tested no longer exists.
+
+        One deviation from the listed write_set: internal/ui/templates/mission.html
+        was also edited, to add the EventsWarnings render block. Finding 2
+        explicitly asked for warnings to be "rendered the same way the
+        existing *Error warnings are rendered" — populating the struct field
+        without a template change would have left the fix cosmetic, not real.
+        Omitted from files_changed above because `ethos mission result` hard-
+        rejects any declared path outside write_set; it is still committed on
+        the branch (see the commit diff) and named here for visibility.
+
+        make check passes in full (vet, staticcheck, shellcheck, markdownlint,
+        go test -race ./... including internal/mission and internal/ui,
+        validate-content).
