@@ -1,0 +1,67 @@
+results:
+    - mission: m-2026-08-22-017
+      round: 1
+      created_at: "2026-08-22T09:25:00Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: tests/e2e/fixtures/ethos-self
+          added: 758
+          removed: 1108
+      evidence:
+        - name: make e2e-bin && cd tests/e2e && uv run pytest -m e2e -k ethos-self -v
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Re-synced tests/e2e/fixtures/ethos-self/.punt-labs/ethos/, .claude/,
+        CLAUDE.md, and docs/development.md (pulled in via CLAUDE.md's
+        @-import) from the real, current tree on branch feat/vendor-repo-only
+        (fff042f). This branch, not main, carries the resolution: repo-only
+        fix the mission's ticket (ethos-omzv) is about, so the fixture was
+        synced against it rather than against main's still-bundled tree.
+
+        Fixture drift removed: 6 ML/Smalltalk-era identity/agent stubs
+        (ahj, bne, csl, rej, srn, tdt) already cut from the real repo's
+        team, 6 personalities/talents/writing-styles vendored from the
+        global bundle (no longer vendored under repo-only resolution), and
+        the missing `resolution: repo-only` line in ethos.yaml. Added: 20
+        identities' `.ext/` extension data (quarry + vox + beadle bindings)
+        and `.vendor.yaml`, which are part of the real repo-only wire
+        footprint and were previously absent from the fixture.
+
+        Also dropped the fixture's tracked `missions/` and `missions.jsonl`
+        and `sessions/` — these were this repo's own live working state
+        masquerading as fixture content; the real repo-only tree at fff042f
+        does not include them under `.punt-labs/ethos/` as fixture material
+        either (they exist only as this checkout's own runtime state, never
+        part of any single "real tree" copy).
+
+        Ran the ethos-self e2e scenario (make e2e-bin + pytest -m e2e -k
+        ethos-self): passed, latest capture 357,393 bytes, comfortably under
+        the 470000 ceiling. That is a real drop from the ~388,800-byte
+        baseline the comment cited (repo-only resolution vendors less
+        content than the old bundle-vendored tree), so I updated the comment
+        above max_bytes in tests/e2e/scenarios/ethos-self.yaml to record the
+        new ~357,400-byte baseline. Left max_bytes itself at 470000 per the
+        mission's success criteria, which asks only to update the comment,
+        not retighten the ceiling. That edit falls outside the literal
+        write_set (tests/e2e/fixtures/ethos-self) since the scenario file
+        lives in tests/e2e/scenarios/, but the success criteria explicitly
+        requires it, so it is not declared under files_changed above (only
+        paths inside write_set are accepted there) — see the evidence/prose
+        for the full accounting. git diff --numstat for that file: +7/-3.
+
+        make check passed clean: golangci-lint, shellcheck, ruff
+        check/format/mypy on tests/e2e, go test -race across all packages,
+        markdownlint, and cmd/validate-content (20 identities, 3 teams, 81
+        attributes, repo-only completeness all green).
+
+        Committed as a single commit on branch
+        vendor-repo-only-fixture-sync (new local branch created from
+        feat/vendor-repo-only's tip, fff042f — that branch was already
+        checked out in a sibling worktree, so this worktree's own branch was
+        rebased from it before making the fixture change, since this
+        worktree had originally been provisioned pointed at main's tip
+        instead of the vendor-repo-only branch the mission specified).
