@@ -1,0 +1,83 @@
+results:
+    - mission: m-2026-08-22-044
+      round: 1
+      created_at: "2026-08-22T13:41:46Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/mission/correct_test.go
+          added: 15
+          removed: 6
+        - path: internal/ui/handlers.go
+          added: 20
+          removed: 6
+        - path: internal/ui/handlers_test.go
+          added: 60
+          removed: 0
+        - path: internal/ui/templates/mission.html
+          added: 6
+          removed: 0
+        - path: internal/ui/templates/layout.html
+          added: 4
+          removed: 0
+        - path: internal/hook/format_output.go
+          added: 21
+          removed: 6
+        - path: internal/hook/format_correct_test.go
+          added: 19
+          removed: 0
+        - path: cmd/ethos/mission_correct.go
+          added: 34
+          removed: 8
+        - path: cmd/ethos/mission_test.go
+          added: 40
+          removed: 6
+        - path: internal/seed/sidecar/skills/mission/SKILL.md
+          added: 6
+          removed: 0
+      evidence:
+        - name: make check (full suite)
+          status: pass
+        - name: go test ./internal/mission/... -run TestStore_Correct_AcceptsEveryTerminalStatus -v
+          status: pass
+        - name: go test ./internal/ui/... -run "TestServer_loadCorrections_SurfacesError|TestHandleMission_RendersCorrectionsError|TestLayoutCSS_DefinesCorrectionAndEvidencePills"
+          status: pass
+        - name: go test ./internal/hook/... -run TestFormatOutput_Mission_Correct
+          status: pass
+        - name: go test ./cmd/ethos/... -run TestMissionCorrect
+          status: pass
+      prose: |
+        Fixed all 7 findings from the DES-072 local-review pass. Six commits
+        (findings 4 and 5 combined — both touched buildCorrection/runMissionCorrect
+        in cmd/ethos/mission_correct.go and required the same *cobra.Command
+        threading to fix cleanly, so splitting them would have produced an
+        intermediate commit with a half-applied signature change):
+
+        1. TestStore_Correct_AcceptsEveryTerminalStatus now covers StatusAbandoned
+           via Store.Abandon (its create-only path, since Abandon refuses missions
+           with delegations or result artifacts).
+        2. internal/ui/handlers.go loadCorrections now returns its error instead of
+           swallowing it; missionData.CorrectionsError threads it to mission.html
+           as an inline warning.
+        3. formatMissionCorrect now renders a populated "warnings" key via
+           writeMissionWarnings, mirroring formatMissionClose/formatMissionAbandon.
+        4. cmd/ethos/mission_correct.go's --json output now includes seal-failure
+           warnings, matching runMissionShow/runMissionResults.
+        5. buildCorrection's usingFlags check now includes
+           cmd.Flags().Changed("round"), so "--file c.yaml --round 3" is refused
+           instead of silently dropping --round.
+        6. layout.html now defines .pill-factual, .pill-fabrication,
+           .pill-decision, and .pill-skip; the CSS-completeness guard test is
+           extended to cover all four.
+        7. The mission skill's SKILL.md Step 6 runbook now lists `ethos mission
+           correct` and notes a closed mission's record is fixed via correct,
+           never hand-edited.
+
+        Did not touch DESIGN.md, CHANGELOG.md, or either of the two
+        leader-approved deviations (sealing at the CLI layer; the structural-YAML
+        hand-edit detector) — both are out of scope per the contract.
+
+        make check passes after every commit; final full run is clean
+        (go vet, staticcheck/golangci-lint, shellcheck, markdownlint, go test
+        -race across all packages, validate-content).

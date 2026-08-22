@@ -1,0 +1,43 @@
+mission_id: m-2026-08-22-033
+status: closed
+type: implement
+created_at: "2026-08-22T10:43:36Z"
+updated_at: "2026-08-22T13:02:44Z"
+closed_at: "2026-08-22T13:02:44Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T10:43:36Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-268t
+write_set:
+    - internal/mission/correct.go
+    - internal/mission/correct_test.go
+    - internal/mission/result.go
+    - internal/mission/log.go
+    - cmd/ethos/mission.go
+    - cmd/ethos/mission_correct.go
+    - cmd/ethos/mission_test.go
+    - internal/hook/format_output.go
+    - internal/hook/format_correct_test.go
+    - internal/mcp/mission_tools.go
+    - internal/ui
+    - internal/doctor
+    - CHANGELOG.md
+success_criteria:
+    - 'internal/mission/correct.go: CorrectionKind enum (factual/fabrication/decision), Correction struct exactly as specified in DES-072 (Mission, Round, Kind, Author, Claim, Corrected, Supersedes, Evidence), Store.Correct(missionID string, c Correction) error. Validate: Kind is one of the three; Claim required unless Kind==decision; Author must resolve to a real identity; Round 0 (whole-mission) or <= contract.CurrentRound; refuse when status==stOpen; refuse when resolveLayer(missionID) != layerRepo with the exact error DES-072 specifies. Append a ''correct'' event via appendEventLocked under the mission''s flock (same locking pattern as AppendResult), then seal the mission''s own live log so the correction is durable without an unrelated commit.'
+    - 'CLI: ethos mission correct <id> --kind factual|fabrication|decision --corrected "..." [--claim ...] [--round N] [--supersedes ...] [--evidence name=status repeatable] [--file <path> as an alternative to flags, same YAML shape as mission reflect/result --file]'
+    - 'Rendering on all four surfaces: ethos mission show and ethos mission log render correct events inline ordered by timestamp; ethos mission results gains a Corrections: section; the MCP mission tool gets a formatter for the correct verb in internal/hook/format_output.go per DES-020; internal/ui''s mission detail view renders corrections the same way it renders results/reflections'
+    - 'internal/doctor: new check flagging any tracked contract.yaml/results.yaml/reflections.yaml under .punt-labs/ethos/missions/ containing a top-level comment line (regex ^\s*#) — these files are exclusively yaml.Marshal output, which never emits comments, so any comment is definitionally a hand-edit. Wire it into the existing doctor check list.'
+    - 'Tests exactly as listed in DES-072''s Verification section: TestStore_Correct_RefusesOnOpenMission, TestStore_Correct_AppendsEventWithoutMutatingContract (byte-identical contract.yaml before/after), TestStore_Correct_RefusesGlobalLayerMission, TestStore_Correct_SealsOnSuccess (readable from a fresh Store without an intervening manual seal call), TestStore_Correct_RequiresClaimUnlessDecision, TestStore_Correct_RejectsRoundBeyondCurrent, TestStore_Correct_RendersInShowAndLog, and a doctor test for the comment-line detector'
+    - The Z-spec Correct schema is explicitly OUT of scope for this mission (DES-072 defers it to jms/jra as follow-up formal-methods work) — do not touch docs/spec-mission-lifecycle.tex
+    - make check passes, including make check-oo if present
+    - CHANGELOG.md entry under Unreleased > Added
+    - Commit incrementally — one commit per logical step (file group, single concern, or single PR-equivalent slice). Each commit must pass make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Implement DES-072 (DESIGN.md, search ''## DES-072: Correction events'') exactly as settled — read the whole section first, it has the full struct shape, guard semantics, CLI flag shape, rendering surfaces, and rejected alternatives with reasoning. Reuse cmd/ethos/audit.go:281 runAuditSeal''s underlying seal logic (or the internal/audit package it calls) for the self-sealing requirement — do not reimplement sealing. internal/mission/store.go:2711 AppendResult is the closest existing precedent for the shape of a new Store method that validates, then calls appendEventLocked under the mission''s flock — follow that pattern for Store.Correct. internal/mission/paths.go:169-193 resolveLayer is what Correct must check to refuse global-layer missions.'

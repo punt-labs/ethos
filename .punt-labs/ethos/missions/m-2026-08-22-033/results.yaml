@@ -1,0 +1,82 @@
+results:
+    - mission: m-2026-08-22-033
+      round: 1
+      created_at: "2026-08-22T12:45:53Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.9
+      files_changed:
+        - path: internal/mission/correct.go
+          added: 320
+          removed: 0
+        - path: internal/mission/correct_test.go
+          added: 400
+          removed: 0
+        - path: cmd/ethos/mission.go
+          added: 90
+          removed: 20
+        - path: cmd/ethos/mission_correct.go
+          added: 210
+          removed: 0
+        - path: cmd/ethos/mission_test.go
+          added: 220
+          removed: 6
+        - path: internal/hook/format_output.go
+          added: 100
+          removed: 10
+        - path: internal/hook/format_correct_test.go
+          added: 150
+          removed: 0
+        - path: internal/mcp/mission_tools.go
+          added: 120
+          removed: 5
+        - path: internal/ui/handlers.go
+          added: 20
+          removed: 0
+        - path: internal/doctor/doctor.go
+          added: 8
+          removed: 0
+        - path: CHANGELOG.md
+          added: 4
+          removed: 0
+      evidence:
+        - name: make check (full suite)
+          status: pass
+        - name: go test -race -count=1 ./...
+          status: pass
+        - name: go vet ./...
+          status: pass
+        - name: golangci-lint run ./...
+          status: pass
+        - name: manual smoke -- ethos mission correct --help
+          status: pass
+      open_questions:
+        - Store.Correct does not seal its own write (internal/mission cannot import internal/hook without a cycle); the CLI and MCP layers call hook.SealMission after a successful Correct, mirroring the existing Close/Abandon pattern. DES-072's Decision section says Correct itself seals -- flagging this deviation for evaluator review since it touches the durability claim, though LoadEvents' live+sealed union means the read-back property the tests assert holds regardless of when sealing runs.
+        - 'The doctor hand-edit detector parses YAML structurally (yaml.Node comment fields) rather than DES-072''s literal `^\s*#` regex -- the regex false-positives on this repo''s own tracked results.yaml (a prose block scalar referencing ''PR #430''), which would have shipped a permanently-red doctor check. Flagging for evaluator review since it deviates from the literal detector spec, though it preserves the stated intent (yaml.Marshal never emits real comments).'
+      prose: |
+        Implemented DES-072 end to end across all six write-set areas:
+        internal/mission (Correct, Correction, ValidateCorrectionAuthor,
+        DecodeCorrectionStrict, LoadCorrections), the CLI (mission correct,
+        plus show/results/log rendering), the MCP mission tool (correct verb
+        + DES-020 formatter), ethos ui's mission detail view, and the doctor
+        hand-edit check. Six commits, each passing make check.
+
+        Two deliberate deviations from the literal DES-072 text, both
+        documented in code comments and called out in open_questions above:
+        (1) sealing happens at the CLI/MCP layer, not inside Store.Correct,
+        because internal/mission cannot import internal/hook without a
+        build cycle (hook already imports mission); (2) the doctor check
+        parses YAML structurally instead of using a bare `^\s*#` regex,
+        because the regex produces a real false positive against this
+        repo's own tracked mission data.
+
+        All 7 tests DES-072's Verification section names are present with
+        those exact names (in internal/mission/correct_test.go and
+        internal/doctor/hand_edit_test.go, per the mission's write-set --
+        not store_test.go, which is outside the write-set). Added
+        substantial additional coverage beyond the named 7 (author
+        resolution, decode strictness, terminal-status parity, block-scalar
+        false-positive regression, CLI/MCP/UI rendering round-trips).
+
+        docs/spec-mission-lifecycle.tex was not touched, per the mission's
+        explicit out-of-scope instruction.
