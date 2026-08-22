@@ -176,6 +176,50 @@ func TestGeneratedAgentHandles(t *testing.T) {
 	assert.False(t, owned["test-human"], "a human member is not generated")
 }
 
+// TestGenerateAgentFile_MergesIdentityAndBundleSkills pins DES-073's
+// generator step: baseline-ops always leads, followed by the identity's
+// own Skills, followed by the active bundle's default_skills — deduped,
+// in that order.
+func TestGenerateAgentFile_MergesIdentityAndBundleSkills(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+
+	// bwk declares an identity-level skill.
+	writeYAML(t, filepath.Join(root, ".punt-labs", "ethos", "identities", "bwk.yaml"), map[string]interface{}{
+		"name":          "Brian K",
+		"handle":        "bwk",
+		"kind":          "agent",
+		"personality":   "kernighan",
+		"writing_style": "kernighan-prose",
+		"talents":       []string{"engineering"},
+		"skills":        []string{"gstack-design"},
+	})
+
+	// Activate a repo-local bundle carrying default_skills, one of which
+	// (gstack-design) duplicates bwk's own declaration — the merge must
+	// not repeat it.
+	writeYAML(t, filepath.Join(root, ".punt-labs", "ethos-bundles", "gstack", "bundle.yaml"), map[string]interface{}{
+		"name":           "gstack",
+		"default_skills": []string{"gstack-design", "gstack-ship"},
+	})
+	writeYAML(t, filepath.Join(root, ".punt-labs", "ethos.yaml"), map[string]string{
+		"agent":         "claude",
+		"team":          "engineering",
+		"active_bundle": "gstack",
+	})
+
+	err := GenerateAgentFilesTo(root, root, ids, teams, roles)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
+	require.NoError(t, err)
+
+	content := string(data)
+	assert.Contains(t, content, "skills:\n"+
+		"  - baseline-ops\n"+
+		"  - gstack-design\n"+
+		"  - gstack-ship\n")
+}
+
 func writeYAML(t *testing.T, path string, data interface{}) {
 	t.Helper()
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
