@@ -94,6 +94,53 @@ func TestLayoutCSS_DefinesAbandonedPill(t *testing.T) {
 		"layout.html must define a .pill-abandoned CSS rule, matching every other terminal status")
 }
 
+// TestHandleMission_RendersCorrections asserts the DES-072 rendering
+// requirement on the UI surface: a correction filed against a closed
+// mission appears in the mission detail page's Corrections section.
+func TestHandleMission_RendersCorrections(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).
+		WithCheckoutRoot(storeRoot).
+		WithSessionID("s1")
+	id := "m-2026-08-22-090"
+	require.NoError(t, store.Create(uiTestContract(id)))
+	require.NoError(t, store.AppendResult(id, &mission.Result{
+		Mission:    id,
+		Round:      1,
+		Author:     "bwk",
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence:   []mission.EvidenceCheck{{Name: "make check", Status: mission.EvidenceStatusPass}},
+	}))
+	_, err := store.Close(id, mission.StatusClosed)
+	require.NoError(t, err)
+	require.NoError(t, store.Correct(id, mission.Correction{
+		Mission:   id,
+		Kind:      mission.CorrectionFabrication,
+		Author:    "claude",
+		Claim:     "make check (full suite): fail — pre-existing, unrelated",
+		Corrected: "make check failed because of a stale worktree base",
+	}))
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+	srv.repoRoot = storeRoot
+
+	req := httptest.NewRequest(http.MethodGet, "/missions/"+id, nil)
+	rec := httptest.NewRecorder()
+	srv.handleMission(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Corrections", "detail: %s", body)
+	assert.Contains(t, body, "fabrication")
+	assert.Contains(t, body, "make check failed because of a stale worktree base")
+	assert.Contains(t, body, "by claude")
+}
+
 // uiTestContract returns a minimal valid open contract for id.
 func uiTestContract(id string) *mission.Contract {
 	return &mission.Contract{

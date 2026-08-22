@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ethos mission correct` — additive-only correction events for closed missions (DES-072).** A correction is a new `correct` event on the mission's existing append-only event log, never a new file and never a rewrite of `contract.yaml`/`results.yaml`/`reflections.yaml`. `Store.Correct`'s guard is the inverse of every other write path — it refuses an OPEN mission and accepts every terminal status — and it never touches the `Mission` schema's fields, so it cannot falsify the `TerminalIsFinal` invariant. `ethos mission correct <id> --kind factual|fabrication|decision --corrected "..." [--claim ...] [--round N] [--supersedes ...] [--evidence name=status]` (or `--file`, matching `mission result`/`mission reflect`'s convention); the correction's author must resolve to a real, fully-configured identity. `mission show` and `mission log` render correction events inline; `mission results` gains a `Corrections:` section on both text and `--json` output (the results `--json` wire shape changes from a bare array to `{results, corrections}` — the one intentional break this design requires). The MCP `mission` tool gains a `correct` method and a DES-020 formatter; `ethos ui`'s mission detail view renders corrections the same way it renders results. `ethos doctor` gains a check flagging any tracked `contract.yaml`/`results.yaml`/`reflections.yaml` carrying a genuine YAML comment — these files are exclusively `yaml.Marshal` output, which never emits comments, so any comment present is definitionally a hand-edit (the exact failure mode `ethos-ecpv` hit before this mechanism existed). (ethos-268t)
+
 ### Fixed
 
 - **`Store.Close` mapped an escalate-verdict result to `DelegationVerdictPass`.** `internal/mission/store.go`'s delegation-verdict mapping checked only `VerdictFail`; every other result verdict, including `VerdictEscalate`, fell through to `DelegationVerdictPass`, so closing an escalated mission silently flipped its open delegation records to `verdict: pass`. `VerdictEscalate` now maps to `DelegationVerdictAborted`. (ethos-15mp)

@@ -118,6 +118,7 @@ type missionData struct {
 	Contract     *mission.Contract
 	Delegations  []*mission.Delegation
 	Results      []mission.Result
+	Corrections  []mission.Correction
 	Events       []mission.Event
 	AuditEntries []hook.AuditView
 	AuditCount   int
@@ -151,6 +152,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 
 	delegations := s.loadDelegations(id)
 	results := s.loadResults(store, id)
+	corrections := s.loadCorrections(store, id)
 	events := s.loadEvents(store, id)
 
 	// Aggregate audit entries across all delegations under this mission.
@@ -166,6 +168,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		Contract:     c,
 		Delegations:  delegations,
 		Results:      results,
+		Corrections:  corrections,
 		Events:       events,
 		AuditEntries: allAudit,
 		AuditCount:   len(allAudit),
@@ -203,6 +206,17 @@ func (s *Server) loadResults(store *mission.Store, id string) []mission.Result {
 		return nil
 	}
 	return results
+}
+
+// loadCorrections reads the DES-072 correction log for id, sourced
+// from the mission's event log rather than a sibling file — a
+// correction never touches results.yaml or contract.yaml.
+func (s *Server) loadCorrections(store *mission.Store, id string) []mission.Correction {
+	corrections, err := store.LoadCorrections(id)
+	if err != nil {
+		return nil
+	}
+	return corrections
 }
 
 func (s *Server) loadEvents(store *mission.Store, id string) []mission.Event {
