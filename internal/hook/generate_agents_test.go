@@ -185,6 +185,44 @@ func TestMergeSkills_TrimsAndSkipsEmpty(t *testing.T) {
 	assert.Equal(t, []string{"baseline-ops", "gstack-plan"}, got)
 }
 
+// TestGenerateAgentFile_SkillSlugYAMLSafe pins the Copilot HIGH finding on
+// PR #481: a skill slug carrying YAML-significant characters (a colon, a
+// hash, a quote) must not corrupt the generated frontmatter or inject
+// extra YAML structure. buildAgentFile quotes every skill entry with the
+// same yamlQuote helper used for description/model, so the emitted
+// frontmatter must still parse as valid YAML with the slug preserved
+// verbatim.
+func TestGenerateAgentFile_SkillSlugYAMLSafe(t *testing.T) {
+	root, ids, teams, roles := setupTestRepo(t)
+
+	const maliciousSlug = `evil: injected # "quoted"`
+	writeYAML(t, filepath.Join(root, ".punt-labs", "ethos", "identities", "bwk.yaml"), map[string]interface{}{
+		"name":          "Brian K",
+		"handle":        "bwk",
+		"kind":          "agent",
+		"personality":   "kernighan",
+		"writing_style": "kernighan-prose",
+		"talents":       []string{"engineering"},
+		"skills":        []string{maliciousSlug},
+	})
+
+	require.NoError(t, GenerateAgentFilesTo(root, root, ids, teams, roles))
+
+	data, err := os.ReadFile(filepath.Join(root, ".claude", "agents", "bwk.md"))
+	require.NoError(t, err)
+
+	content := string(data)
+	parts := strings.SplitN(content, "---", 3)
+	require.Len(t, parts, 3, "expected frontmatter delimiters")
+
+	var fm struct {
+		Skills []string `yaml:"skills"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte(parts[1]), &fm), "frontmatter must remain valid YAML")
+	assert.Equal(t, []string{"baseline-ops", maliciousSlug}, fm.Skills,
+		"the malicious slug must round-trip verbatim, not be split into extra YAML structure")
+}
+
 // TestGenerateAgentFile_MergesIdentityAndBundleSkills pins DES-073's
 // generator step: baseline-ops always leads, followed by the identity's
 // own Skills, followed by the active bundle's default_skills — deduped,
@@ -224,9 +262,9 @@ func TestGenerateAgentFile_MergesIdentityAndBundleSkills(t *testing.T) {
 
 	content := string(data)
 	assert.Contains(t, content, "skills:\n"+
-		"  - baseline-ops\n"+
-		"  - gstack-design\n"+
-		"  - gstack-ship\n")
+		"  - \"baseline-ops\"\n"+
+		"  - \"gstack-design\"\n"+
+		"  - \"gstack-ship\"\n")
 }
 
 func writeYAML(t *testing.T, path string, data interface{}) {
@@ -292,7 +330,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				// block and the closing frontmatter delimiter.
 				assert.Contains(t, content,
 					"skills:\n"+
-						"  - baseline-ops\n"+
+						"  - \"baseline-ops\"\n"+
 						"hooks:\n"+
 						"  PostToolUse:\n"+
 						"    - matcher: \"Write|Edit\"\n"+
@@ -542,12 +580,12 @@ func TestGenerateAgentFiles(t *testing.T) {
 				parts := strings.SplitN(content, "---", 3)
 				require.Len(t, parts, 3, "expected frontmatter delimiters")
 				frontmatter := parts[1]
-				assert.Contains(t, frontmatter, "skills:\n  - baseline-ops\n")
+				assert.Contains(t, frontmatter, "skills:\n  - \"baseline-ops\"\n")
 				// bwk has Write in its tools list, so the hooks block
 				// follows skills in the same frontmatter section.
 				assert.Contains(t, frontmatter,
 					"skills:\n"+
-						"  - baseline-ops\n"+
+						"  - \"baseline-ops\"\n"+
 						"hooks:\n"+
 						"  PostToolUse:\n"+
 						"    - matcher: \"Write|Edit\"\n"+
@@ -576,7 +614,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 
 				content := string(data)
 				want := "skills:\n" +
-					"  - baseline-ops\n" +
+					"  - \"baseline-ops\"\n" +
 					"hooks:\n" +
 					"  PostToolUse:\n" +
 					"    - matcher: \"Write|Edit\"\n" +
@@ -647,7 +685,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				// the closing delimiter, so it runs against `content`.
 				assert.Contains(t, content,
 					"skills:\n"+
-						"  - baseline-ops\n"+
+						"  - \"baseline-ops\"\n"+
 						"---\n")
 			},
 		},
@@ -730,7 +768,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 				// both.
 				assert.Contains(t, content,
 					"skills:\n"+
-						"  - baseline-ops\n"+
+						"  - \"baseline-ops\"\n"+
 						"hooks:\n"+
 						"  PostToolUse:\n",
 					"write-enabled role must still emit hooks block when output_format is set")
@@ -886,7 +924,7 @@ func TestGenerateAgentFiles(t *testing.T) {
 
 				content := string(data)
 				want := "skills:\n" +
-					"  - baseline-ops\n" +
+					"  - \"baseline-ops\"\n" +
 					"hooks:\n" +
 					"  PostToolUse:\n" +
 					"    - matcher: \"Write|Edit\"\n" +

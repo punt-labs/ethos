@@ -560,7 +560,7 @@ func buildAgentFile(id *identity.Identity, r *role.Role, antiResps []antiRespons
 	}
 	b.WriteString("skills:\n")
 	for _, s := range skills {
-		fmt.Fprintf(&b, "  - %s\n", s)
+		fmt.Fprintf(&b, "  - %s\n", yamlQuote(s))
 	}
 	if hasWriteTool(r.Tools) {
 		b.WriteString("hooks:\n")
