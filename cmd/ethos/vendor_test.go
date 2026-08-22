@@ -1,9 +1,16 @@
+//go:build linux || darwin
+
 package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func runVendorCmd(t *testing.T, args ...string) (string, string, error) {
@@ -76,4 +83,36 @@ func TestVendorAllAloneStillWorks(t *testing.T) {
 	if err != nil && strings.Contains(err.Error(), "not supported") {
 		t.Errorf("--all alone was rejected by the new exclusivity checks: %v", err)
 	}
+}
+
+// TestCLI_VendorApplyWithoutPruneReportsWouldRemove pins the bug: --apply
+// alone (no --prune) must never claim it deleted files. internal/vendor's
+// prune() only runs when Prune is set, so a status line keyed on p.Applied
+// alone described a deletion that never happened — a user could run
+// --apply, read "Removed 53 file(s)", and believe stale files were gone
+// when every one of them was still on disk.
+func TestCLI_VendorApplyWithoutPruneReportsWouldRemove(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+
+	// First apply vendors test-agent into the repo layer.
+	_, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "initial vendor --apply: stderr=%s", stderr)
+
+	// A stale file the closure no longer contains.
+	stale := filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "stale.yaml")
+	require.NoError(t, os.WriteFile(stale,
+		[]byte("name: Stale\nhandle: stale\nkind: human\n"), 0o644))
+
+	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "vendor --apply without --prune: stderr=%s", stderr)
+
+	assert.Contains(t, stdout, "Would remove 1 file(s)",
+		"an --apply run with no --prune must not claim it removed anything")
+	assert.NotContains(t, stdout, "Removed 1 file(s)")
+	assert.Contains(t, stdout, "(with --prune)",
+		"the hint must appear on --apply alone, not only on a plain dry run")
+	assert.FileExists(t, stale, "no --prune means the stale file must survive --apply")
 }
