@@ -1,0 +1,41 @@
+results:
+    - mission: m-2026-08-22-048
+      round: 1
+      created_at: "2026-08-22T14:32:29Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/ui/handlers.go
+          added: 24
+          removed: 8
+        - path: internal/ui/handlers_test.go
+          added: 82
+          removed: 0
+        - path: internal/ui/templates/mission.html
+          added: 12
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+      prose: |
+        Fixed loadResults and loadEvents in internal/ui/handlers.go to
+        return (data, error) instead of swallowing errors, matching the
+        loadCorrections pattern. Added ResultsError/EventsError fields to
+        missionData, wired through handleMission, rendered as inline
+        warnings in mission.html using the same style as CorrectionsError.
+        loadDelegations left unchanged per contract -- an empty or missing
+        delegations directory is normal, not a corruption signal.
+
+        Added four tests: loadResults/loadEvents error-surfacing unit tests
+        (loadResults triggers on empty missionID since resultsPath has no
+        ID-format validation; loadEvents triggers on a malformed ID since
+        LoadEvents validates against missionIDPattern) and two
+        mission.html rendering tests for ResultsError/EventsError,
+        mirroring the existing CorrectionsError tests.
+
+        Rebased worktree onto feat/mission-correction-events tip (d752424)
+        before starting -- base was stale (merge-base equaled starting
+        HEAD, not the branch tip). make check passes in full: golangci-lint,
+        shellcheck, e2e python suite, markdownlint, go test -race across
+        all packages, validate-content.

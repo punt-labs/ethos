@@ -114,13 +114,19 @@ func (s *Server) readMissionsJSONL() []missionRow {
 }
 
 type missionData struct {
-	Title        string
-	Contract     *mission.Contract
-	Delegations  []*mission.Delegation
-	Results      []mission.Result
-	Events       []mission.Event
-	AuditEntries []hook.AuditView
-	AuditCount   int
+	Title               string
+	Contract            *mission.Contract
+	Delegations         []*mission.Delegation
+	Results             []mission.Result
+	ResultsError        string
+	Corrections         []mission.Correction
+	CorrectionsError    string
+	CorrectionsWarnings []string
+	Events              []mission.Event
+	EventsError         string
+	EventsWarnings      []string
+	AuditEntries        []hook.AuditView
+	AuditCount          int
 }
 
 // missionStore builds the mission store the UI reads from. The record
@@ -150,8 +156,17 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	}
 
 	delegations := s.loadDelegations(id)
-	results := s.loadResults(store, id)
-	events := s.loadEvents(store, id)
+	results, resultsErr := s.loadResults(store, id)
+	events, warnings, eventsErr := s.loadEvents(store, id)
+
+	// Corrections are a "correct" event under the same log the Events
+	// section renders (DES-072) — deriving them from the events slice
+	// already in hand avoids a second LoadEvents call (and a second
+	// disk read + JSON decode) for the same mission log.
+	var corrections []mission.Correction
+	if eventsErr == nil {
+		corrections = mission.CorrectionsFromEvents(id, events)
+	}
 
 	// Aggregate audit entries across all delegations under this mission.
 	var allAudit []hook.AuditView
@@ -162,13 +177,33 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(allAudit, func(i, j int) bool { return allAudit[i].Ts < allAudit[j].Ts })
 
 	data := missionData{
-		Title:        id,
-		Contract:     c,
-		Delegations:  delegations,
-		Results:      results,
-		Events:       events,
-		AuditEntries: allAudit,
-		AuditCount:   len(allAudit),
+		Title:          id,
+		Contract:       c,
+		Delegations:    delegations,
+		Results:        results,
+		Corrections:    corrections,
+		Events:         events,
+		EventsWarnings: warnings,
+		AuditEntries:   allAudit,
+		AuditCount:     len(allAudit),
+	}
+	if resultsErr != nil {
+		data.ResultsError = resultsErr.Error()
+	}
+	switch {
+	case eventsErr != nil:
+		data.EventsError = eventsErr.Error()
+		// The Corrections section reads from the same event log; a
+		// failure there is the same integrity signal, not a separate
+		// one, so it is surfaced through CorrectionsError too rather
+		// than left blank while Events shows the warning.
+		data.CorrectionsError = eventsErr.Error()
+	case len(warnings) > 0:
+		// eventsErr is nil but the union has per-line decode warnings
+		// (a corrupt line skipped, not a hard failure) — Corrections
+		// was still derived from the events that DID decode, so a
+		// dropped correct event must not render as a clean section.
+		data.CorrectionsWarnings = warnings
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "mission.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -197,20 +232,32 @@ func (s *Server) loadDelegations(missionID string) []*mission.Delegation {
 	return delegations
 }
 
-func (s *Server) loadResults(store *mission.Store, id string) []mission.Result {
+// loadResults reads the mission's result log. The error return is
+// surfaced to the caller rather than swallowed: a failure here means
+// the dashboard cannot prove the mission has no results, which is
+// exactly the kind of integrity signal this page exists to show.
+func (s *Server) loadResults(store *mission.Store, id string) ([]mission.Result, error) {
 	results, err := store.LoadResults(id)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("loading results for mission %q: %w", id, err)
 	}
-	return results
+	return results, nil
 }
 
-func (s *Server) loadEvents(store *mission.Store, id string) []mission.Event {
-	events, _, err := store.LoadEvents(id)
+// loadEvents reads the DES-058 event union for id. The error return is
+// surfaced to the caller rather than swallowed: a failure here means
+// the dashboard cannot prove the mission has no events, which is
+// exactly the kind of integrity signal this page exists to show. The
+// warnings return is likewise surfaced rather than discarded: some
+// JSONL lines can fail to decode without the whole load failing, and a
+// mission log that is partially unreadable is not the same as one that
+// is fully healthy — see EventsWarnings on missionData.
+func (s *Server) loadEvents(store *mission.Store, id string) ([]mission.Event, []string, error) {
+	events, warnings, err := store.LoadEvents(id)
 	if err != nil {
-		return nil
+		return nil, nil, fmt.Errorf("loading events for mission %q: %w", id, err)
 	}
-	return events
+	return events, warnings, nil
 }
 
 type delegationData struct {

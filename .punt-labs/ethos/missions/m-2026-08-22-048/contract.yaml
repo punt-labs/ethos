@@ -1,0 +1,29 @@
+mission_id: m-2026-08-22-048
+status: closed
+type: implement
+created_at: "2026-08-22T14:07:06Z"
+updated_at: "2026-08-22T14:32:51Z"
+closed_at: "2026-08-22T14:32:51Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T14:07:06Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-268t
+write_set:
+    - internal/ui/handlers.go
+    - internal/ui/handlers_test.go
+    - internal/ui/templates/mission.html
+success_criteria:
+    - 'internal/ui/handlers.go loadResults (~line 207-213) and loadEvents (~line 230-236) both swallow their store errors and return nil, the same defect class loadCorrections was just fixed for (see loadCorrections ~line 215-228 for the established pattern: wrap the error, return it, surface it via missionData.CorrectionsError and an inline warning in mission.html). This is the mission-detail dashboard whose entire purpose is showing integrity signals -- a load failure must not render identically to zero results / zero events. Apply the same fix to loadResults and loadEvents: return (results, error) and (events, error) respectively, add ResultsError/EventsError string fields to missionData (or a single generic LoadErrors slice if that reads cleaner given three near-identical fields), wire them through handleMission the same way CorrectionsError already is, and render each as the same inline warning style mission.html already uses for corrections.'
+    - Do not change loadDelegations -- an empty or missing delegations directory is the normal state for a mission with no delegations yet, not a corruption signal, so os.ReadDir returning ErrNotExist there is not the same defect class.
+    - Add or extend tests in internal/ui/handlers_test.go covering a results-load-error and an events-load-error case, mirroring whatever test already covers the corrections-load-error case.
+    - make check passes.
+    - Single commit, must pass make check before committing.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Found by silent-failure-hunter during round-2 full-diff re-verification of feat/mission-correction-events: it flagged loadEvents as swallowing its error and noted it is unchanged on main (pre-existing, not introduced by this branch) but structurally identical to the corrections-load bug this same PR already fixed. Per the standing no-pre-existing-excuse policy, fixing it now rather than deferring.'

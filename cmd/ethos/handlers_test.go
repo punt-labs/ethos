@@ -148,7 +148,9 @@ func TestRunDoctor_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var results []map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &results))
-	require.Len(t, results, 11)
+	// DES-072 added the "Mission file hand-edits" check, bumping the
+	// count from 11 to 12.
+	require.Len(t, results, 12)
 	names := make([]string, len(results))
 	for i, r := range results {
 		names[i] = r["name"]
@@ -156,6 +158,7 @@ func TestRunDoctor_JSON(t *testing.T) {
 	assert.Contains(t, names, "Identity directory")
 	assert.Contains(t, names, "Human identity")
 	assert.Contains(t, names, "Repo-only completeness")
+	assert.Contains(t, names, "Mission file hand-edits")
 }
 
 // --- whoami ---

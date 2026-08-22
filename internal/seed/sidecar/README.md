@@ -62,7 +62,7 @@ Created on session start, deleted on session end.
 ## Consuming This Data
 
 Any tool can read these files directly without importing ethos. The file
-layout is the sidecar contract. For programmatic access: `ethos show`,
+layout is the sidecar contract. For programmatic access: `ethos identity show`,
 `ethos whoami`, or the MCP server (`ethos serve`).
 
 See [DESIGN.md](https://github.com/punt-labs/ethos/blob/main/DESIGN.md)

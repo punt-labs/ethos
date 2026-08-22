@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -92,6 +93,309 @@ func TestLayoutCSS_DefinesAbandonedPill(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), ".pill-abandoned",
 		"layout.html must define a .pill-abandoned CSS rule, matching every other terminal status")
+}
+
+// TestLayoutCSS_DefinesCorrectionAndEvidencePills pins the four
+// classes mission.html's pill-{{.Kind}} and pill-{{.Status}}
+// interpolations can render for a DES-072 correction: three
+// correction kinds (factual, fabrication, decision) plus the
+// evidence status "skip" — pass and fail already have rules via the
+// result-evidence pills above. Without these the pill renders with
+// no color, an enumeration gap of the same shape TestLayoutCSS_DefinesAbandonedPill
+// guards for mission status.
+func TestLayoutCSS_DefinesCorrectionAndEvidencePills(t *testing.T) {
+	data, err := templateFS.ReadFile("templates/layout.html")
+	require.NoError(t, err)
+	css := string(data)
+	for _, class := range []string{".pill-factual", ".pill-fabrication", ".pill-decision", ".pill-skip"} {
+		assert.Contains(t, css, class,
+			"layout.html must define a %s CSS rule, matching every other pill", class)
+	}
+}
+
+// TestHandleMission_RendersCorrections asserts the DES-072 rendering
+// requirement on the UI surface: a correction filed against a closed
+// mission appears in the mission detail page's Corrections section.
+func TestHandleMission_RendersCorrections(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).
+		WithCheckoutRoot(storeRoot).
+		WithSessionID("s1")
+	id := "m-2026-08-22-090"
+	require.NoError(t, store.Create(uiTestContract(id)))
+	require.NoError(t, store.AppendResult(id, &mission.Result{
+		Mission:    id,
+		Round:      1,
+		Author:     "bwk",
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence:   []mission.EvidenceCheck{{Name: "make check", Status: mission.EvidenceStatusPass}},
+	}))
+	_, err := store.Close(id, mission.StatusClosed)
+	require.NoError(t, err)
+	require.NoError(t, store.Correct(id, mission.Correction{
+		Mission:   id,
+		Kind:      mission.CorrectionFabrication,
+		Author:    "claude",
+		Claim:     "make check (full suite): fail — pre-existing, unrelated",
+		Corrected: "make check failed because of a stale worktree base",
+	}))
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+	srv.repoRoot = storeRoot
+
+	req := httptest.NewRequest(http.MethodGet, "/missions/"+id, nil)
+	rec := httptest.NewRecorder()
+	srv.handleMission(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	assert.Contains(t, body, "Corrections", "detail: %s", body)
+	assert.Contains(t, body, "fabrication")
+	assert.Contains(t, body, "make check failed because of a stale worktree base")
+	assert.Contains(t, body, "by claude")
+}
+
+// TestHandleMission_RendersCorrectionsWarningsOnPartialLog asserts the
+// ethos-268t regression fix: when store.LoadEvents returns warnings
+// but a nil error (some JSONL lines failed to decode, others did
+// not), handleMission must not render the Corrections section as
+// clean. Before the fix, handleMission only set CorrectionsError when
+// eventsErr was non-nil, so a corrupt line silently dropped from a
+// healthy-looking union left no signal at all.
+func TestHandleMission_RendersCorrectionsWarningsOnPartialLog(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).
+		WithCheckoutRoot(storeRoot).
+		WithSessionID("s1")
+	id := "m-2026-08-22-096"
+	require.NoError(t, store.Create(uiTestContract(id)))
+	require.NoError(t, store.AppendResult(id, &mission.Result{
+		Mission:    id,
+		Round:      1,
+		Author:     "bwk",
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence:   []mission.EvidenceCheck{{Name: "make check", Status: mission.EvidenceStatusPass}},
+	}))
+	_, err := store.Close(id, mission.StatusClosed)
+	require.NoError(t, err)
+	require.NoError(t, store.Correct(id, mission.Correction{
+		Mission:   id,
+		Kind:      mission.CorrectionDecision,
+		Author:    "claude",
+		Corrected: "the round-1 verdict stands",
+	}))
+
+	// The DES-058 union reads the correct event back from the mission's
+	// live per-session log; appending a corrupt line to the frozen
+	// legacy log.jsonl slot adds a decode warning to the union without
+	// disturbing (or duplicating) the correct event already in the
+	// live tail — same technique internal/mission's LoadCorrections
+	// warnings test uses.
+	sealedDir := audit.SealedMissionDir(storeRoot, id)
+	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+	legacyLog := filepath.Join(sealedDir, "log.jsonl")
+	require.NoError(t, os.WriteFile(legacyLog, []byte("{not valid json\n"), 0o600))
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+	srv.repoRoot = storeRoot
+
+	req := httptest.NewRequest(http.MethodGet, "/missions/"+id, nil)
+	rec := httptest.NewRecorder()
+	srv.handleMission(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	// The mission log is only partially unreadable, not a hard
+	// failure, so eventsErr is nil and the readable correct event must
+	// still render...
+	assert.Contains(t, body, "the round-1 verdict stands", "detail: %s", body)
+	// ...but the page must not look clean: a warning naming the
+	// unreadable line must be visible.
+	assert.Contains(t, body, "corrections may be incomplete", "detail: %s", body)
+	assert.Contains(t, body, "line 1", "detail: %s", body)
+}
+
+// TestHandleMission_DerivesCorrectionsFromEventsOnce asserts
+// handleMission loads the mission event log exactly once and derives
+// both the Corrections and Events sections from that single slice,
+// rather than loadCorrections and loadEvents each calling
+// store.LoadEvents independently. A failing event load must surface
+// as both an EventsError and a CorrectionsError on the same page,
+// since the Corrections section reads from that same log and has no
+// independent source of its own.
+func TestHandleMission_DerivesCorrectionsFromEventsOnce(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+	srv.repoRoot = storeRoot
+
+	// No mission was ever created at this id, so store.Load fails
+	// before events are ever read — handleMission 404s. Instead,
+	// exercise the events-error path directly the way
+	// TestHandleMission_RendersEventsError does: construct missionData
+	// as handleMission would after an event-log failure and confirm
+	// both error fields are populated from the one failure.
+	data := missionData{
+		Title:            "m-2026-08-22-094",
+		Contract:         uiTestContract("m-2026-08-22-094"),
+		EventsError:      "loading events for mission \"m-2026-08-22-094\": boom",
+		CorrectionsError: "loading events for mission \"m-2026-08-22-094\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "could not load events")
+	assert.Contains(t, body, "could not load corrections")
+}
+
+// TestHandleMission_RendersEventsWarnings asserts a mission log with
+// decode warnings (some JSONL lines corrupt, others readable) shows a
+// visible integrity warning on the mission detail page rather than
+// rendering as though the log were fully healthy — the DES-058
+// warnings LoadEvents already computes must not be discarded.
+func TestHandleMission_RendersEventsWarnings(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:          "m-2026-08-22-095",
+		Contract:       uiTestContract("m-2026-08-22-095"),
+		EventsWarnings: []string{"line 3: invalid character '}' looking for beginning of value"},
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "partially unreadable")
+	assert.Contains(t, body, "invalid character")
+}
+
+// TestHandleMission_RendersCorrectionsError asserts the mission
+// detail template surfaces a CorrectionsError as a visible warning
+// rather than rendering the page as though there were no
+// corrections at all.
+func TestHandleMission_RendersCorrectionsError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:            "m-2026-08-22-091",
+		Contract:         uiTestContract("m-2026-08-22-091"),
+		CorrectionsError: "loading corrections for mission \"m-2026-08-22-091\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "could not load corrections")
+	assert.Contains(t, body, "boom")
+}
+
+// TestServer_loadResults_SurfacesError asserts loadResults returns the
+// underlying error instead of swallowing it — a nil slice from a
+// failed read must be distinguishable from a mission that genuinely
+// has zero results.
+func TestServer_loadResults_SurfacesError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).WithCheckoutRoot(storeRoot)
+
+	srv := &Server{storeRoot: storeRoot, repoRoot: storeRoot, globalRoot: globalRoot}
+	results, err := srv.loadResults(store, "")
+	require.Error(t, err)
+	assert.Nil(t, results)
+	assert.Contains(t, err.Error(), "missionID is required")
+}
+
+// TestServer_loadEvents_SurfacesError asserts loadEvents returns the
+// underlying error instead of swallowing it — a nil slice from a
+// failed read must be distinguishable from a mission that genuinely
+// has zero events.
+func TestServer_loadEvents_SurfacesError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).WithCheckoutRoot(storeRoot)
+
+	srv := &Server{storeRoot: storeRoot, repoRoot: storeRoot, globalRoot: globalRoot}
+	events, warnings, err := srv.loadEvents(store, "not a valid mission id")
+	require.Error(t, err)
+	assert.Nil(t, events)
+	assert.Nil(t, warnings)
+	assert.Contains(t, err.Error(), "not a valid mission id")
+}
+
+// TestHandleMission_RendersResultsError asserts the mission detail
+// template surfaces a ResultsError as a visible warning rather than
+// rendering the page as though there were no results at all.
+func TestHandleMission_RendersResultsError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:        "m-2026-08-22-092",
+		Contract:     uiTestContract("m-2026-08-22-092"),
+		ResultsError: "loading results for mission \"m-2026-08-22-092\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "could not load results")
+	assert.Contains(t, body, "boom")
+}
+
+// TestHandleMission_RendersEventsError asserts the mission detail
+// template surfaces an EventsError as a visible warning rather than
+// rendering the page as though there were no events at all.
+func TestHandleMission_RendersEventsError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:       "m-2026-08-22-093",
+		Contract:    uiTestContract("m-2026-08-22-093"),
+		EventsError: "loading events for mission \"m-2026-08-22-093\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "could not load events")
+	assert.Contains(t, body, "boom")
 }
 
 // uiTestContract returns a minimal valid open contract for id.

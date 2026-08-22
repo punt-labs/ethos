@@ -1,0 +1,5 @@
+Work mission m-2026-08-22-047 in repo <repo>. Your worktree will start from some commit — first verify with `git merge-base HEAD feat/mission-correction-events` whether your base matches feat/mission-correction-events's current tip; if it's stale, rebase onto the local `feat/mission-correction-events` branch (it's a local branch in this same repo, no fetch needed) before starting.
+
+Read the mission contract: `ethos mission show m-2026-08-22-047`. It's a single small, well-specified fix: internal/doctor/hand_edit.go's handEditFileNames closed set is missing "record.yaml" (mission delegation records), so a hand-edited delegation record.yaml silently passes the hand-edit detector today, contradicting the check's own doc comment. Add it, fix the doc comment, add a regression test, make check must pass, single commit.
+
+When done, submit your result: `ethos mission result m-2026-08-22-047 --round 1 --verdict pass --confidence <0-1> --prose "..." --evidence "make check=pass"`. Report your worktree path, branch name, and commit hash so the leader can merge it back onto feat/mission-correction-events.

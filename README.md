@@ -17,46 +17,6 @@ no telemetry, no cloud.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 
-## The Problem
-
-Agents write code you're responsible for, and you can't see what
-they did or why.
-
-A developer delegates a task to an AI agent. The agent reads files,
-edits code, runs tests, commits. Six months later someone asks: who
-authorized this change? What were the instructions? Did the agent
-stay within the files it was supposed to touch? Why this approach?
-
-Today the answer is: check the chat history, if you still have it.
-There is no durable record connecting a line of code to the contract
-that authorized it, the prompt that drove it, and the tool calls
-that produced it.
-
-## What Ethos Does
-
-Ethos records and bounds agent delegation along three axes:
-
-**Control.** Typed mission contracts with file-level write-sets
-enforced at runtime, frozen evaluators (hash-pinned so nobody swaps
-the reviewer mid-mission), bounded review rounds, preconditions
-that gate tool calls on prior reads, and delegation depth limits.
-The agent can only do what the contract authorizes.
-
-**Auditability.** Every delegation produces artifacts on disk —
-contract, delegation record, the exact dispatch prompt, a
-per-tool-call audit trail tagged with the delegation ID, and
-`Mission:`/`Delegation:` git trailers on commits. `git blame` any
-line → commit → trailer → contract → prompt → audit trail. Months
-later, you can reconstruct exactly what happened and why.
-
-**Performance.** Named specialist agents with encapsulated domain
-expertise — not generic assistants, but a Go specialist grounded in
-Kernighan's principles, a security reviewer with Bernstein's
-methodology. Personalities, writing styles, and talents shape the
-model's output the way a real colleague's expertise would. Roles
-restrict tool access. Teams define delegation topology. The
-configuration is reusable, measurable, and improvable.
-
 ## Quick Start
 
 ```bash
@@ -269,6 +229,12 @@ Essentials below. Every command accepts `--json`. Full reference in
 | `ethos find missions` | Query closed missions by date, worker, status |
 | `ethos ui` | Open traceability dashboard in browser |
 
+## Setup
+
+Configuration beyond the Quick Start: running outside Claude Code, making a
+repo self-standing, working across git worktrees, and turning ethos on or
+off per repo.
+
 ### Outside Claude Code (Codex, plain terminal)
 
 Ethos is harness-neutral. Inside Claude Code a session is created for you by
@@ -352,7 +318,7 @@ resolving from a home directory a CI runner or a fresh clone does not
 have. `ethos doctor` is the gate:
 
 ```text
-Repo-only completeness   PASS  29 identities resolve with no global fallback
+Repo-only completeness   PASS  20 identities resolve with no global fallback
 ```
 
 Extensions come along, because a vendored agent without its memory wiring
@@ -431,6 +397,46 @@ check runs independently of the marker in every state — it inspects
 whatever section is actually on disk, not whether the marker says it
 should be running.
 
+## The Problem
+
+Agents write code you're responsible for, and you can't see what
+they did or why.
+
+A developer delegates a task to an AI agent. The agent reads files,
+edits code, runs tests, commits. Six months later someone asks: who
+authorized this change? What were the instructions? Did the agent
+stay within the files it was supposed to touch? Why this approach?
+
+Today the answer is: check the chat history, if you still have it.
+There is no durable record connecting a line of code to the contract
+that authorized it, the prompt that drove it, and the tool calls
+that produced it.
+
+## What Ethos Does
+
+Ethos records and bounds agent delegation along three axes:
+
+**Control.** Typed mission contracts with file-level write-sets
+enforced at runtime, frozen evaluators (hash-pinned so nobody swaps
+the reviewer mid-mission), bounded review rounds, preconditions
+that gate tool calls on prior reads, and delegation depth limits.
+The agent can only do what the contract authorizes.
+
+**Auditability.** Every delegation produces artifacts on disk —
+contract, delegation record, the exact dispatch prompt, a
+per-tool-call audit trail tagged with the delegation ID, and
+`Mission:`/`Delegation:` git trailers on commits. `git blame` any
+line → commit → trailer → contract → prompt → audit trail. Months
+later, you can reconstruct exactly what happened and why.
+
+**Performance.** Named specialist agents with encapsulated domain
+expertise — not generic assistants, but a Go specialist grounded in
+Kernighan's principles, a security reviewer with Bernstein's
+methodology. Personalities, writing styles, and talents shape the
+model's output the way a real colleague's expertise would. Roles
+restrict tool access. Teams define delegation topology. The
+configuration is reusable, measurable, and improvable.
+
 ## How This Is Different
 
 | Tool | What it does | Where ethos differs |
@@ -462,7 +468,7 @@ markdown cannot represent it).
 
 ## Development
 
-Run all quality gates (vet, staticcheck, markdownlint, shellcheck, tests):
+Run all quality gates (vet, staticcheck, shellcheck, markdownlint, validate-content, tests):
 
 ```bash
 make check

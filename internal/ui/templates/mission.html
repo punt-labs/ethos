@@ -75,6 +75,12 @@
 </div>
 {{end}}
 
+{{if .ResultsError}}
+<div class="border border-red-900 bg-red-950/30 text-red-400 text-xs p-3 mb-6">
+  <span class="uppercase tracking-wider text-red-500">Warning:</span> could not load results — {{.ResultsError}}
+</div>
+{{end}}
+
 {{if .Results}}
 <div class="border border-neutral-800 p-5 mb-6">
   <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Results</h2>
@@ -92,6 +98,59 @@
     {{end}}
   </div>
   {{end}}
+</div>
+{{end}}
+
+{{if .CorrectionsError}}
+<div class="border border-red-900 bg-red-950/30 text-red-400 text-xs p-3 mb-6">
+  <span class="uppercase tracking-wider text-red-500">Warning:</span> could not load corrections — {{.CorrectionsError}}
+</div>
+{{end}}
+
+{{if .CorrectionsWarnings}}
+<div class="border border-red-900 bg-red-950/30 text-red-400 text-xs p-3 mb-6">
+  <span class="uppercase tracking-wider text-red-500">Warning:</span> mission log is partially unreadable — corrections may be incomplete
+  <ul class="list-disc list-inside mt-1">
+    {{range .CorrectionsWarnings}}<li>{{.}}</li>{{end}}
+  </ul>
+</div>
+{{end}}
+
+{{if .Corrections}}
+<div class="border border-neutral-800 p-5 mb-6">
+  <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Corrections</h2>
+  {{range .Corrections}}
+  <div class="border border-neutral-800 p-4 mb-3">
+    <div class="flex items-center gap-3 mb-2">
+      {{if .Round}}<span class="text-white text-sm font-bold">Round {{.Round}}</span>{{else}}<span class="text-white text-sm font-bold">Whole mission</span>{{end}}
+      <span class="pill pill-{{.Kind}}">{{.Kind}}</span>
+      <span class="text-xs text-neutral-500">by {{.Author}}</span>
+    </div>
+    {{if .Claim}}<div class="text-xs text-neutral-400 mt-1"><span class="text-neutral-600">claim:</span> {{.Claim}}</div>{{end}}
+    <div class="text-xs text-neutral-400 mt-1"><span class="text-neutral-600">corrected:</span> {{.Corrected}}</div>
+    {{if .Supersedes}}<div class="text-xs text-neutral-400 mt-1"><span class="text-neutral-600">supersedes:</span> {{.Supersedes}}</div>{{end}}
+    {{if .Evidence}}
+    <div class="text-xs text-neutral-400 space-y-1 mt-2">
+      {{range .Evidence}}<div>{{.Name}} <span class="pill pill-{{.Status}}">{{.Status}}</span></div>{{end}}
+    </div>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{if .EventsError}}
+<div class="border border-red-900 bg-red-950/30 text-red-400 text-xs p-3 mb-6">
+  <span class="uppercase tracking-wider text-red-500">Warning:</span> could not load events — {{.EventsError}}
+</div>
+{{end}}
+
+{{if .EventsWarnings}}
+<div class="border border-red-900 bg-red-950/30 text-red-400 text-xs p-3 mb-6">
+  <span class="uppercase tracking-wider text-red-500">Warning:</span> mission log is partially unreadable
+  <ul class="list-disc list-inside mt-1">
+    {{range .EventsWarnings}}<li>{{.}}</li>{{end}}
+  </ul>
 </div>
 {{end}}
 

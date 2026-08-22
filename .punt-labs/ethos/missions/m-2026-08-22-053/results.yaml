@@ -1,0 +1,27 @@
+results:
+    - mission: m-2026-08-22-053
+      round: 1
+      created_at: "2026-08-22T17:00:29Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/hook/format_output.go
+          added: 12
+          removed: 3
+        - path: internal/hook/format_correct_test.go
+          added: 18
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+      prose: |
+        Added Warnings []string to formatMissionResults' payload struct and
+        rendered it via writeMissionWarnings (converting to []any at the call
+        site to match the helper's existing signature), the same pattern used
+        by formatMissionCorrect/Show/Log/Close/Abandon. Both the empty-results
+        and populated-results render paths now call writeMissionWarnings
+        before returning. Added TestFormatOutput_Mission_Results_WithWarnings
+        to format_correct_test.go, asserting a warnings-populated results
+        payload renders the Warnings section. make check passes (lint, tests,
+        validate-content) with zero new findings.

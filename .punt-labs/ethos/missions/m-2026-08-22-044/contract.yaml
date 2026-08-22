@@ -1,0 +1,41 @@
+mission_id: m-2026-08-22-044
+status: closed
+type: implement
+created_at: "2026-08-22T13:02:58Z"
+updated_at: "2026-08-22T13:44:14Z"
+closed_at: "2026-08-22T13:44:14Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T13:02:58Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-268t
+write_set:
+    - internal/mission/correct_test.go
+    - internal/ui/handlers.go
+    - internal/ui/handlers_test.go
+    - internal/ui/templates/mission.html
+    - internal/ui/templates/layout.html
+    - internal/hook/format_output.go
+    - internal/hook/format_correct_test.go
+    - cmd/ethos/mission_correct.go
+    - cmd/ethos/mission_test.go
+    - internal/seed/sidecar/skills/mission/SKILL.md
+success_criteria:
+    - 'internal/mission/correct_test.go: TestStore_Correct_AcceptsEveryTerminalStatus hardcodes []string{StatusClosed, StatusFailed, StatusEscalated} and never tests StatusAbandoned, so it does not prove "every terminal status" despite its name/docstring. Add a 4th case constructing a mission via Store.Abandon and asserting Correct still succeeds on it.'
+    - internal/ui/handlers.go loadCorrections (~line 214-219) discards the error from store.LoadCorrections and returns nil, indistinguishable from a clean record on the dashboard whose job is surfacing exactly this kind of integrity signal. Surface the error and render it in mission.html as an inline warning.
+    - internal/hook/format_output.go formatMissionCorrect (~line 1081) reads only mission_id and kind, ignoring a populated "warnings" key that internal/mcp/mission_tools.go handleCorrectMission correctly attaches on seal failure. Mirror formatMissionClose/formatMissionAbandon warnings rendering (writeMissionWarnings). Add a test in format_correct_test.go.
+    - 'cmd/ethos/mission_correct.go (~line 144-158): hook.SealMission failure only goes to stderr; --json payload never includes it, unlike runMissionShow/runMissionResults in the same file. Mirror that warnings pattern.'
+    - cmd/ethos/mission_correct.go buildCorrection usingFlags (~line 169-171) omits missionCorrectRound even though the mutual-exclusivity error names --round. "--file c.yaml --round 3" silently drops --round. Use Flags().Changed("round") (0 is a valid round). Extend TestMissionCorrect_FileAndFlagsMutuallyExclusive to cover --round.
+    - internal/ui/templates/mission.html renders pill-{{.Kind}} for factual/fabrication/decision but layout.html defines none of the three pill-* CSS rules, so the pill renders with no color. Add pill-factual, pill-fabrication, pill-decision, and the also-missing pill-skip rules to layout.html. Extend the CSS-completeness guard test (see TestLayoutCSS_DefinesAbandonedPill) to cover all four.
+    - internal/seed/sidecar/skills/mission/SKILL.md runbook (~line 165-179) never mentions "ethos mission correct" and its post-result-choices list ends at close/fail/escalate. Add correct to the command list and one line noting a closed mission is corrected via ethos mission correct, never hand-edited.
+    - Do not re-litigate DES-072s two deliberate, leader-approved deviations (sealing at the CLI layer; the structural-YAML hand-edit detector) -- both independently reviewed and confirmed correct.
+    - make check passes, including make check-oo if present.
+    - Commit incrementally -- one commit per finding (7 commits), each passing make check. Do not accumulate more than 30 minutes of uncommitted changes.
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: Fix 7 findings from the local-review pass (code-reviewer, silent-failure-hunter, invariant-completeness-reviewer) run against the completed DES-072 implementation on branch feat/mission-correction-events (now merged). All 7 confirmed real by direct code reading -- fix the code, not the test that would catch it.

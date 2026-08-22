@@ -1,0 +1,29 @@
+results:
+    - mission: m-2026-08-22-047
+      round: 1
+      created_at: "2026-08-22T13:56:55Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: internal/doctor/hand_edit.go
+          added: 9
+          removed: 7
+        - path: internal/doctor/hand_edit_test.go
+          added: 20
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+      prose: |
+        Added "record.yaml": true to handEditFileNames (internal/doctor/hand_edit.go),
+        fixed the doc comment's false claim that delegation records are out of
+        scope, and added TestCheckNoHandEditedMissionFiles_FlagsDelegationRecord,
+        which writes a genuine YAML comment into a
+        missions/<id>/delegations/<name>/record.yaml and asserts
+        CheckNoHandEditedMissionFiles flags it, naming the file and pointing at
+        `ethos mission correct`. make check passes in full: go vet, staticcheck,
+        shellcheck, markdownlint, go test -race -count=1 ./... (internal/doctor
+        91.2% coverage), and validate-content. Single commit c883e4b on branch
+        worktree-agent-a0fcb89d976f6fde2, rebased onto the current tip of
+        feat/mission-correction-events before starting.

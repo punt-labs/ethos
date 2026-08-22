@@ -1,0 +1,26 @@
+mission_id: m-2026-08-22-042
+status: closed
+type: implement
+created_at: "2026-08-22T12:30:05Z"
+updated_at: "2026-08-22T12:39:04Z"
+closed_at: "2026-08-22T12:39:04Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T12:30:05Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-5qjg
+write_set:
+    - internal/seed/sidecar/README.md
+    - internal/seed/sidecar/skills/README.md
+success_criteria:
+    - 'internal/seed/sidecar/README.md: change ''ethos show'' to ''ethos identity show'' in the ''Consuming This Data'' section'
+    - 'internal/seed/sidecar/skills/README.md: add entries for create-from-project and mission skills (currently undocumented despite existing in the directory) -- read each skill''s SKILL.md for a one-line description matching the existing baseline-ops entry''s format'
+    - markdownlint clean; one commit
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: Found during an all-docs accuracy review. Two small factual fixes in sidecar README content shipped via ethos seed.

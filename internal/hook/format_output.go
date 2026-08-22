@@ -760,7 +760,8 @@ func formatRoleShow(w io.Writer, result string) error {
 //	reflections   → an array of Reflection objects (one per round)
 //	advance       → {mission_id, current_round}
 //	result        → {mission_id, round, verdict, confidence, created_at}
-//	results       → an array of Result objects (one per round)
+//	results       → {results: [...], corrections: [...]} (DES-072)
+//	correct       → {mission_id, kind, round, author}
 func formatMission(w io.Writer, method, result string) error {
 	switch method {
 	case "create":
@@ -785,6 +786,8 @@ func formatMission(w io.Writer, method, result string) error {
 		return formatMissionResults(w, result)
 	case "log":
 		return formatMissionLog(w, result)
+	case "correct":
+		return formatMissionCorrect(w, result)
 	default:
 		return emitSimple(w, truncate(result, 200))
 	}
@@ -900,6 +903,11 @@ func summarizeEventDetailsRaw(evType string, details map[string]any) string {
 		if from > 0 && to > 0 {
 			return fmt.Sprintf("round %d -> %d", int(from), int(to))
 		}
+	case "correct":
+		return joinEventParts(
+			eventKV("kind", eventStr(details, "kind")),
+			eventKVRound("round", eventRound(details, "round")),
+		)
 	}
 	return ""
 }
@@ -961,23 +969,39 @@ func formatMissionResult(w io.Writer, result string) error {
 	return emitSimple(w, fmt.Sprintf("Result %s round %d (%s)", missionID, int(round), verdict))
 }
 
-// formatMissionResults renders the results method's array as one
-// bullet per round. The summary line counts the entries; an empty
-// array becomes "(none)" so the operator distinguishes "no results
-// yet" from a tool error.
+// formatMissionResults renders the results method's payload — DES-072
+// wraps the round-by-round array in {results, corrections} — as one
+// bullet per round plus a trailing Corrections section, and then a
+// Warnings section when handleMissionResults' LoadCorrections call
+// surfaced an advisory sidecar-corruption signal. The summary line
+// counts the results entries; an empty array becomes "(none)" so the
+// operator distinguishes "no results yet" from a tool error.
 func formatMissionResults(w io.Writer, result string) error {
-	var entries []map[string]any
-	if err := json.Unmarshal([]byte(result), &entries); err != nil {
+	var payload struct {
+		Results     []map[string]any `json:"results"`
+		Corrections []any            `json:"corrections"`
+		Warnings    []string         `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		return emitSimple(w, truncate(result, 200))
 	}
+	entries := payload.Results
 	n := len(entries)
 	noun := "results"
 	if n == 1 {
 		noun = "result"
 	}
 	summary := fmt.Sprintf("%d %s", n, noun)
+	warnings := make([]any, len(payload.Warnings))
+	for i, s := range payload.Warnings {
+		warnings[i] = s
+	}
 	if n == 0 {
-		return emit(w, summary, "(none)")
+		var ctx strings.Builder
+		ctx.WriteString("(none)")
+		writeMissionCorrections(&ctx, payload.Corrections)
+		writeMissionWarnings(&ctx, warnings, "mission.results")
+		return emit(w, summary, ctx.String())
 	}
 	var ctx strings.Builder
 	for i, e := range entries {
@@ -1010,7 +1034,83 @@ func formatMissionResults(w io.Writer, result string) error {
 			}
 		}
 	}
+	writeMissionCorrections(&ctx, payload.Corrections)
+	writeMissionWarnings(&ctx, warnings, "mission.results")
 	return emit(w, summary, ctx.String())
+}
+
+// writeMissionCorrections renders a `corrections` array (DES-072) as
+// a Corrections section — a correction is never hidden and never
+// replaces the original text it corrects. formatMissionShow passes
+// `raw` from a map lookup, so a caller supplying no corrections key
+// at all skips the section entirely (`ok` is false at the call
+// site); formatMissionResults always calls this with its typed
+// (possibly nil, but never absent) Corrections field, so its results
+// payload always renders the section, empty or not. An empty (or
+// nil, boxed non-nil) array renders "(none)".
+func writeMissionCorrections(ctx *strings.Builder, raw any) {
+	entries, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	ctx.WriteString("\n\nCorrections:")
+	if len(entries) == 0 {
+		ctx.WriteString("\n  (none)")
+		return
+	}
+	for _, e := range entries {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		round, _ := em["round"].(float64)
+		kind, _ := em["kind"].(string)
+		author, _ := em["author"].(string)
+		roundLabel := "whole mission"
+		if round > 0 {
+			roundLabel = fmt.Sprintf("round %d", int(round))
+		}
+		fmt.Fprintf(ctx, "\n  - %s (%s) by %s", roundLabel, kind, author)
+		if claim, _ := em["claim"].(string); claim != "" {
+			fmt.Fprintf(ctx, "\n      claim:      %s", claim)
+		}
+		if corrected, _ := em["corrected"].(string); corrected != "" {
+			fmt.Fprintf(ctx, "\n      corrected:  %s", corrected)
+		}
+		if supersedes, _ := em["supersedes"].(string); supersedes != "" {
+			fmt.Fprintf(ctx, "\n      supersedes: %s", supersedes)
+		}
+	}
+}
+
+// formatMissionCorrect renders the correct method's confirmation:
+// "Corrected <mission_id> (<kind>)", plus a Warnings section when the
+// payload carries one.
+//
+// handleCorrectMission attaches a "warnings" entry when the
+// post-correction seal fails (parity with formatMissionClose's
+// sidecar-cleanup warning): the correction is already recorded, so
+// the summary line is unchanged, but the operator must learn the
+// mission log may not be durable on disk yet. Without this the
+// warning would reach no rendered surface at all.
+func formatMissionCorrect(w io.Writer, result string) error {
+	var c map[string]any
+	if err := json.Unmarshal([]byte(result), &c); err != nil {
+		return emitSimple(w, truncate(result, 200))
+	}
+	missionID, _ := c["mission_id"].(string)
+	kind, _ := c["kind"].(string)
+	if missionID == "" || kind == "" {
+		return emitSimple(w, truncate(result, 200))
+	}
+	summary := fmt.Sprintf("Corrected %s (%s)", missionID, kind)
+	warnings, _ := c["warnings"].([]any)
+	if len(warnings) == 0 {
+		return emitSimple(w, summary)
+	}
+	var ctx strings.Builder
+	writeMissionWarnings(&ctx, warnings, "mission.correct")
+	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
 }
 
 // formatMissionReflect renders the reflect method's confirmation:
@@ -1127,6 +1227,12 @@ func formatMissionShow(w io.Writer, result string) error {
 	// so the operator sees the section exists and is empty.
 	if raw, ok := c["results"]; ok {
 		writeMissionResults(&ctx, raw)
+	}
+	// DES-072: the show payload carries a top-level `corrections`
+	// array alongside `results`. Same missing-means-no-section
+	// convention as results above.
+	if raw, ok := c["corrections"]; ok {
+		writeMissionCorrections(&ctx, raw)
 	}
 	// Surface any warnings from a corrupt sibling file. Round 3
 	// added this — without it, a corrupted results file was

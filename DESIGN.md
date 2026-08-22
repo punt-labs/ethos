@@ -7421,3 +7421,266 @@ audience.
   content-only (no `internal/enable/` code changes), which is faster to
   land and easier to revert. The GitHub URL reference in the guide is a
   bridge until tier-C deposition ships.
+
+## DES-072: Correction events — an additive-only annotation mechanism for closed missions (SETTLED)
+
+**Context.** Two open beads (`ethos-11fy`, filed 2026-08-07; `ethos-lpub`,
+filed 2026-08-09) independently hit the same gap from different angles.
+`ethos-11fy`: a closed mission's only result was fabricated (worker never
+ran, `confidence: 1.0` on nothing), and no sanctioned way exists to correct
+or annotate the record — every write path in `internal/mission/store.go`
+(`Update`, `Close`, `Abandon`, `AppendReflection`, `AppendResult`,
+`ForceReleaseWriteSet`) either requires `status = stOpen` or transitions a
+mission into a terminal state; none apply to an already-closed mission.
+`ethos-lpub`: the same gap for a plain factual correction (not a lie at
+close time — a fact discovered afterward) and for `StatusEscalated`
+missions, which have zero special-casing beyond being grouped with
+`closed`/`failed` as terminal (confirmed in code: no reopen or
+continuation path exists anywhere in `internal/mission`).
+
+A concrete, real-world instance surfaced during the ethos-dsby repo-only
+migration (2026-08-22, `ethos-ecpv`): closing mission `m-2026-08-22-018`
+recorded an evidence entry ("make check (full suite): fail") whose
+accompanying diagnosis was wrong — a stale worktree base, not the
+"pre-existing, unrelated" defect the worker claimed. Lacking a sanctioned
+mechanism, the leader (`claude`) hand-edited `results.yaml`, appending a
+YAML comment outside the parsed schema. A later `code-reviewer` audit
+found the comment invisible to every mission-reading surface (`ethos
+mission show`/`results`, MCP, `ethos ui`) and non-durable: any future
+`AppendResult` on that mission re-marshals the whole file via
+`yaml.Marshal` and silently drops it. Exactly the failure mode `ethos-11fy`
+predicted, reproduced by the very agent that predicted it.
+
+**Formal grounding (`docs/spec-mission-lifecycle.tex`).** The
+`TerminalIsFinal` theorem is proven both by inspection and ProB animation:
+`Delegate`, `SubmitResult`, `Reflect`, `AdvanceRound`, `Close`, and
+`Abandon` all guard on `status = stOpen`; once `status' ≠ stOpen`, no
+operation in that set is enabled again — `status` is absorbing at every
+value in `CloseableStatus ∪ {stAbandoned}`. Any new operation touching a
+closed mission MUST leave `status`, `resultRounds`, and `delegationCount`
+unchanged in its frame conjuncts, or it falsifies a proven theorem, not
+just an implementation convention. `prfaq.tex`'s audit-trail FAQ
+(`faq:audit-trails`) independently establishes the shape the fix must
+take: sealed audit chunks are already "immutable, timestamp-named" and
+merge without conflict specifically because each session writes to a new
+file, never rewrites an existing one. `results.yaml`/`contract.yaml` are
+the outliers — mutable files rewritten via whole-value `yaml.Marshal` on
+every write — which is *why* the hand-edit was fragile: it added content
+to a file whose own write path doesn't know that content exists.
+
+**Decision.** A correction is a new **event on the existing mission event
+log**, not a new file format and not a new field on `results.yaml`. The
+event log is already exactly the artifact `prfaq.tex` describes:
+append-only, one JSON line per event, flock-serialized
+(`appendEventLocked`), chunked per-session into immutable,
+timestamp-named files that never need to be merged against each other —
+DES-058's two-tree layout already routes every event append into a
+machine-local per-(mission, session) log with a strictly-monotonic
+sequence, sealed at pre-commit. `Event.Details` is documented as
+intentionally open (`log.go:33`: "so future event types do not require a
+schema migration") — a new `correct` event type needs zero schema
+migration on the log itself.
+
+- **New `Store.Correct(missionID string, c Correction) error`.** Guard is
+  the *inverse* of every other write path: refuses when `status = stOpen`
+  (a correction is for a mission that already reached a verdict; an open
+  mission's story isn't finished yet — use `Update`/`Reflect` instead).
+  Never touches `contract.yaml`, `results.yaml`, `reflections.yaml`, or
+  any `resultRounds`/`delegationCount`/`status` field — the operation's
+  entire effect is one `appendEventLocked` call with
+  `Event: "correct"`. This is provably compatible with `TerminalIsFinal`:
+  the theorem's frame conjuncts are about the `Mission` schema's fields,
+  none of which `Correct` writes.
+- **Seals its own write.** Every existing event type rides to git inside
+  a commit that also changes code — a correction usually doesn't (the
+  `ethos-ecpv` case was pure post-hoc audit, no code change). Left alone,
+  `appendEventLocked` routes into the machine-local live zone
+  (`log.go:87-89`) and nothing promotes it to git until an unrelated
+  `ethos audit seal` fires at some future pre-commit — the same
+  non-durability this design exists to fix, one layer down. `Correct`
+  therefore calls the mission's own seal path on success before
+  returning, so a correction is durable the moment the command exits, not
+  contingent on the next commit touching that mission.
+- **Layer-consistent or refused, never silently mismatched.**
+  `appendEventLocked` writes to the live zone whenever
+  `twoTreeStorage && repoRoot != ""`, with no check of which layer the
+  mission itself lives in; `LoadEvents` only reads the live union when
+  `resolveLayer` returns `layerRepo` — a global-layer mission is
+  "operated on in place, never silently migrated" (`paths.go:169-193`).
+  No existing operation exercises this gap because nothing today targets
+  an old mission from a new session; `Correct` is the first one that
+  does, by definition. `Correct` refuses with a clear error
+  (`"cannot correct a global-layer mission from a repo-layer session"`)
+  when `resolveLayer(missionID) != layerRepo`, rather than writing
+  somewhere `LoadEvents` won't read back.
+- **`Kind` is a required, closed enum — not folded into free-text
+  `Claim`.** The three motivating cases are different in kind, not just
+  in wording: `ethos-11fy` is an integrity finding (a worker fabricated a
+  result), `ethos-lpub`'s factual case is a correction to something true
+  when written and false now, and the escalation follow-up is a decision
+  record with no wrong claim to quote at all. Collapsing all three into
+  one `Claim`/`Correction` pair either forces a fabricated "claim" for
+  the decision case or leaves "was any mission's result found fabricated"
+  — the question the audit trail exists to answer — unanswerable by
+  anything but grepping free text.
+
+  ```go
+  type CorrectionKind string
+  const (
+      CorrectionFactual    CorrectionKind = "factual"    // true when written, false now
+      CorrectionFabrication CorrectionKind = "fabrication" // the original claim was never true
+      CorrectionDecision   CorrectionKind = "decision"    // a decision record, no prior claim to correct
+  )
+
+  type Correction struct {
+      Mission    string         // must match; validated like Result.Mission
+      Round      int            // the round being corrected; 0 = whole-mission; must be <= contract.CurrentRound
+      Kind       CorrectionKind // required
+      Author     string         // identity handle; must resolve — unlike Result.Author, WHO says the record is wrong is load-bearing
+      Claim      string         // required for factual/fabrication; empty for decision
+      Corrected  string         // what's actually true, or what was decided
+      Supersedes string         // optional: references a prior correction this one supersedes
+      Evidence   []Evidence     // optional, same shape as Result.Evidence
+  }
+  ```
+
+  `Claim` is required for `factual`/`fabrication` and must quote or
+  closely paraphrase the thing being corrected — this mirrors
+  `ethos-11fy`'s explicit requirement: "the fabrication has to stay
+  visible in the audit trail alongside its correction, or the fix
+  defeats the point of an append-only audit log." `Round: 0` is the
+  whole-mission sentinel; any other value greater than the mission's
+  `CurrentRound` is rejected — a correction cannot cite a round that
+  never ran. `Correction` the field was renamed `Corrected` to stop
+  `type Correction struct { Correction string }` from reading badly at
+  every call site.
+- **CLI**: `ethos mission correct <id> --kind factual|fabrication|decision
+  --corrected "..."` (`--claim` required unless `--kind decision`, plus
+  `--round`, `--supersedes`, `--evidence name=status` repeatable,
+  matching `mission result`'s flag shape). `--file` accepts the same YAML
+  shape for longer corrections, matching `mission reflect`/`mission
+  result`'s existing `--file` convention.
+- **Rendering — all four surfaces the incident named, not three.**
+  `ethos mission show` and `ethos mission log` render correction events
+  inline, ordered by timestamp alongside the events they follow — never
+  hidden, never replacing the original text. `ethos mission results`
+  (which reads the parsed `results.yaml`, not the log) gains a
+  `Corrections:` section sourced from the log. The MCP `mission` tool
+  gets its own formatter for the `correct` verb per DES-020 (every MCP
+  tool needs a `format_output.go` formatter before shipping) — the
+  original hand-edit was invisible specifically to the surfaces an agent
+  reads, and MCP is the one this list would otherwise still miss.
+  `internal/ui` (`ethos ui`)'s mission detail view renders corrections
+  the same way it renders results and reflections today.
+- **Detecting the wrong path, not just providing the right one.**
+  Shipping `Correct` makes a sanctioned mechanism available; it does not
+  by itself stop the next hand-edit, which is what actually produced the
+  `ethos-ecpv` incident. `ethos doctor` gains a check that flags any
+  tracked `contract.yaml`, `results.yaml`, or `reflections.yaml`
+  containing a top-level comment line (`^\s*#`) — these are exclusively
+  machine-written by `yaml.Marshal`, which never emits comments, so any
+  comment present is definitionally a hand-edit. Cheap, exact, and would
+  have caught `ethos-ecpv` on the commit that introduced it.
+- **No `EscalationFollowUp`, no reopen.** `ethos-lpub`'s "escalation gap"
+  (once `status = stEscalated`, whatever the leader decides next has no
+  home) is the same shape, closed the same way: the leader's decision
+  after an escalation is itself a `Correction{Kind: CorrectionDecision}`
+  event (`Corrected` = what was actually decided, `Claim` empty), not a new
+  mission-lifecycle transition. `StatusEscalated` needs no special-casing
+  beyond what it already has.
+
+**Reasoning.**
+
+- **Reuses proven machinery instead of inventing new machinery.** The
+  event log's flock, atomicity (pre-write-size capture + truncate-on-
+  failure), chunk sealing, and git-merge-conflict-freedom are already
+  built, tested, and exercised by every other event type. A `Correction`
+  file format would need to reinvent all of that or leave it unprotected.
+- **Structurally impossible to violate `TerminalIsFinal`.** `Correct`
+  doesn't read-modify-write `Mission`'s fields at all — there's no
+  `Mission` value in scope for it to mutate. This is stronger than "the
+  guard checks the invariant" (which `Close`/`Abandon` do); it's "the
+  operation has no path to the fields the invariant is about."
+- **Solves the durability half of `ethos-ecpv` once sealed on write.** A
+  `correct` event lives in a new, immutable log chunk — nothing rewrites
+  it, the same reason `close`/`result` events never get silently dropped
+  by a later write to a *different* mission's files. Unlike those other
+  events, a correction isn't guaranteed to ride along with a commit that
+  seals it, which is why `Correct` seals its own write explicitly (see
+  Decision) rather than relying on the next unrelated commit's
+  pre-commit hook.
+- **Solves the visibility half.** Because it's a first-class event type
+  (not a comment, not free text in an existing field), `mission show`
+  and `mission log` render it the same way they already render `close`,
+  `result`, and `write_set_released` events — no new rendering framework,
+  just a new case in the existing dispatch.
+
+**Rejected alternatives.**
+
+- **A `corrections []Correction` field on `resultsFile`** (the option
+  named in `ethos-lpub`'s own note as "add a `corrections` field so the
+  data round-trips and renders"). Rejected: `results.yaml` is rewritten
+  in full via `yaml.Marshal(&wrapper)` on every `AppendResult` — adding a
+  field there doesn't fix the underlying fragility, it just moves the
+  YAML-comment problem into a schema field that's still vulnerable to
+  being dropped by a future migration or hand-edit of the same
+  mutable file. The event log has no such rewrite path; every write is a
+  pure append.
+- **Reopening the mission via a new `stCorrected` status, or via
+  `Update`.** Rejected outright by `TerminalIsFinal` — introducing any
+  path back into a non-absorbing state for a terminal mission falsifies a
+  proven theorem, not just a design preference. `ethos-lpub`'s own
+  framing ("terminal states are absorbing... that invariant should NOT be
+  broken") already rules this out; restated here because it's the most
+  tempting wrong answer.
+- **A correction as a same-shaped `Result` with a synthetic round
+  number.** Rejected: `Result` and `Correction` mean different things — a
+  `Result` is a worker's claim about work just done, gated by
+  `checkResultGateLocked`'s round-currency check; a `Correction` is a
+  claim about a claim already on record. Conflating them would make
+  `mission results` unable to distinguish "the worker said this" from
+  "someone later said the worker was wrong," which is the entire point
+  `ethos-11fy` is trying to preserve.
+- **Editing `results.yaml`/`contract.yaml` in place with a documented
+  convention (e.g., a `# CORRECTED:` comment prefix).** This is what
+  `ethos-ecpv` actually did, found broken by the very next code-reviewer
+  pass: invisible to every tool, and not durable against a future
+  rewrite of the same file. Kept as a documented anti-pattern, not a
+  fallback, and now mechanically detected — see the doctor check above.
+- **A correction as its own mission**, linked by a `corrects: m-…` field.
+  The natural answer in a repo whose own `CLAUDE.md` says to use ethos to
+  build ethos, and worth stating on the record because it's the first
+  question a future reader will ask. For `ethos-11fy` specifically, a
+  bare `Correct` event is an unreviewed accusation — one appended line,
+  one `Author`, no evaluator, in a system whose entire premise is that a
+  claim about work gets a reviewer; "a worker fabricated a result" is a
+  heavier claim than the result it corrects. Rejected anyway: far too
+  heavy for `ethos-lpub`'s "we later learned X" case, and it reintroduces
+  the reopen temptation this design otherwise avoids — a mission-about-a-
+  mission invites exactly the "does the corrected mission now need a
+  status change" question `TerminalIsFinal` forecloses. `Author`
+  resolving to a validated session identity (above) recovers most of the
+  accountability a full mission would have added, at a fraction of the
+  weight.
+
+**Verification.** `internal/mission/store_test.go` gains
+`TestStore_Correct_RefusesOnOpenMission`,
+`TestStore_Correct_AppendsEventWithoutMutatingContract` (asserts
+`contract.yaml`'s bytes are byte-identical before/after `Correct`, closing
+the exact class of gap `ethos-ecpv` hit),
+`TestStore_Correct_RefusesGlobalLayerMission`,
+`TestStore_Correct_SealsOnSuccess` (asserts the correction is readable
+from a fresh `Store` opened after the call returns, without an
+intervening `ethos audit seal`), `TestStore_Correct_RequiresClaimUnlessDecision`,
+`TestStore_Correct_RejectsRoundBeyondCurrent`, and
+`TestStore_Correct_RendersInShowAndLog`. `internal/doctor` gains
+`TestCheckNoHandEditedMissionFiles` covering the comment-line detector.
+`docs/spec-mission-lifecycle.tex` gains a `Correct` schema (frame
+conjunct: `ΞMission`, i.e. explicitly a no-op on the state ProB reasons
+about) as a sibling of `Idle` (§Idle already models "nothing more
+happens" on a terminal mission; `Correct` is "something appends to a
+side channel, `Mission` itself still does nothing") — filed as follow-up
+formal-methods work (`jms`/`jra`, per this repo's Z-spec row), not
+blocking the Go implementation, since the Go-level guard
+(`status ≠ stOpen`) already enforces the same precondition the formal
+schema will state.
