@@ -117,12 +117,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// ethosRoot is always <repo>/.punt-labs/ethos — derive repo root
+	// structurally, and read the repo's DES-057 resolution policy from it
+	// before building any store. Every store below is built from this one
+	// repoAuthoritative bit, so validate-content honors the same policy
+	// cmd/ethos/identity.go's repoAuthoritativeMode reads, instead of
+	// always consulting global regardless of what the repo declared.
+	repoRoot := filepath.Dir(filepath.Dir(ethosRoot))
+	resolutionMode, err := resolve.ResolveResolution(repoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "validate-content: %v\n", err)
+		os.Exit(1)
+	}
+	repoAuthoritative := resolutionMode == resolve.ResolutionRepoOnly
+
 	var results []result
 
 	// Build identity stores.
 	repoIDStore := identity.NewStore(ethosRoot)
 	globalIDStore := identity.NewStore(globalRoot)
-	layeredID := identity.NewLayeredStore(repoIDStore, globalIDStore)
+	layeredID := identity.NewLayeredStoreWithBundle(repoIDStore, nil, globalIDStore, repoAuthoritative)
 
 	// List identities once. LayeredStore.List deduplicates by handle.
 	listResult, err := layeredID.List()
@@ -169,8 +183,6 @@ func main() {
 	}
 
 	// Check 5: agent file path resolution.
-	// ethosRoot is always <repo>/.punt-labs/ethos — derive repo root structurally.
-	repoRoot := filepath.Dir(filepath.Dir(ethosRoot))
 	results = append(results, checkSetupSync(repoRoot))
 	agentFails := 0
 	for _, idRef := range listResult.Identities {
@@ -198,7 +210,7 @@ func main() {
 	attrFails := 0
 	for _, kind := range attrKinds {
 		stores := []*attribute.Store{attribute.NewStore(ethosRoot, kind)}
-		if hasGlobal {
+		if hasGlobal && !repoAuthoritative {
 			stores = append(stores, attribute.NewStore(globalRoot, kind))
 		}
 		for _, s := range stores {
@@ -230,10 +242,10 @@ func main() {
 	}
 
 	// Check 3: team validation.
-	teamStore := team.NewLayeredStore(ethosRoot, globalRoot)
+	teamStore := team.NewLayeredStoreWithBundle(ethosRoot, "", globalRoot, repoAuthoritative)
 	roleRepo := role.NewStore(ethosRoot)
 	var roleGlobal *role.Store
-	if hasGlobal {
+	if hasGlobal && !repoAuthoritative {
 		roleGlobal = role.NewStore(globalRoot)
 	}
 	roleExists := func(n string) bool {
