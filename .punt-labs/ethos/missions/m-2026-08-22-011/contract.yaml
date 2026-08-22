@@ -1,0 +1,33 @@
+mission_id: m-2026-08-22-011
+status: closed
+type: implement
+created_at: "2026-08-22T08:16:47Z"
+updated_at: "2026-08-22T08:55:19Z"
+closed_at: "2026-08-22T08:55:19Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T08:16:47Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-ccjz
+write_set:
+    - cmd/validate-content/main.go
+    - cmd/validate-content/main_test.go
+    - .github/workflows/test.yml
+    - Makefile
+    - CHANGELOG.md
+success_criteria:
+    - cmd/ethos/bundle.go's resolveBundleRoot()/activeBundle() are cmd/ethos-package-private and validate-content is a separate main package — it cannot call them directly. Prefer extracting the shared bundle-resolution + fatal-guard logic into an internal package (e.g. internal/resolve or internal/bundle) that BOTH cmd/ethos and cmd/validate-content import and call, rather than re-implementing it a second time in cmd/validate-content — duplicating this logic a second time is exactly the kind of drift that caused ethos-9kdk in the first place. Your call on the exact extraction shape, but the two binaries must end up calling the same code, not parallel copies.
+    - validate-content must resolve the bundle layer the same way cmd/ethos does, and must exit(1) with the same two fatal guards (no repo layer at all under repo-only; active bundle sourced from a global//Users/jfreeman bundle) rather than silently proceeding with a config the real CLI would refuse to start under
+    - 'Wire ext-completeness verification into a CI gate that actually runs on every push/PR: either add ''ethos doctor'' (or the specific repo-only-completeness + ext-manifest checks it performs) to .github/workflows/test.yml and/or the Makefile''s check target. Verify it actually passes cleanly in this repo''s current state before committing (build the binary, run it, confirm exit 0) — don''t wire in a check that''s currently red or flaky. If ''ethos doctor'' as a whole isn''t CI-appropriate (e.g. checks that assume a human''s git hooks are installed), scope it down or extract just the completeness-relevant checks — your call, but the ext-manifest-completeness gap must be closed by something that runs in CI.'
+    - 'Add a regression test proving the fix: seed a repo-local active bundle supplying a talent an identity needs, confirm validate-content resolves it correctly under repo-only (previously would have failed since bundle was invisible)'
+    - make check passes; verify test.yml changes are syntactically valid (yamllint or equivalent if available, otherwise careful manual review)
+    - Add a CHANGELOG.md entry under Unreleased > Fixed
+    - Commit incrementally, each commit passing make check
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: Two related gaps found by code-reviewer on branch feat/vendor-repo-only, part of finishing the ethos-dsby repo-only migration cleanly. (1) validate-content's comment claims parity with cmd/ethos/identity.go's repoAuthoritativeMode but doesn't resolve the bundle layer (nil bundle store, empty bundleRoot everywhere) or carry its two fatal guards (no repo layer under repo-only; active bundle sourced from /Users/jfreeman). (2) nothing in CI actually verifies .vendor.yaml's ext-completeness claim (LayeredStore.WithRequiredExt/missingExt is never invoked by validate-content, and 'ethos doctor' — the one command that does check it — isn't wired into make check or .github/workflows/test.yml).

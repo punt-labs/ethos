@@ -1,0 +1,63 @@
+results:
+    - mission: m-2026-08-22-011
+      round: 1
+      created_at: "2026-08-22T08:43:23Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.92
+      files_changed:
+        - path: cmd/validate-content/main.go
+          added: 108
+          removed: 45
+        - path: cmd/validate-content/main_test.go
+          added: 143
+          removed: 0
+        - path: CHANGELOG.md
+          added: 1
+          removed: 0
+      evidence:
+        - name: make check (lint, docs, validate-content)
+          status: pass
+        - name: go test ./cmd/validate-content/... ./internal/bundle/... ./internal/resolve/... ./internal/identity/... ./internal/team/... ./internal/role/... ./internal/doctor/...
+          status: pass
+        - name: go run ./cmd/validate-content (this repo's own current state, incl. main checkout's live resolution:repo-only config)
+          status: pass
+        - name: go test ./cmd/ethos/... (baseline comparison via git stash)
+          status: fail
+      open_questions:
+        - 'go test ./cmd/ethos/... fails on 3 pre-existing tests (TestExportSoulSpec, TestExportClaudeMD, TestExportMissingPersonality) that reproduce identically with none of this mission''s changes applied (confirmed via git stash). Root cause: the shared main checkout at /Users/jfreeman/Coding/punt-labs/ethos/.punt-labs/ethos.yaml carries an uncommitted `resolution: repo-only` line this worktree''s own committed copy does not have; export_test.go''s subprocess CLI tests run with cwd inside this repo tree and rely on a global-only (HOME-scoped) identity fixture with no isolating ETHOS_REPO_ROOT, so they pick up the shared checkout''s live repo-only config and fail to find the fixture identity via global fallback. Not caused by, or fixable within, this mission''s write_set — the main checkout is another session/agent''s active state and this worktree-isolated agent is refused from touching it.'
+        - 'This diff also touches cmd/ethos/bundle.go, cmd/ethos/identity.go, and internal/bundle/resolve.go, none of which are in the contract''s write_set (cmd/validate-content/main.go, main_test.go, .github/workflows/test.yml, Makefile, CHANGELOG.md). The success criteria itself required this: it states cmd/ethos/bundle.go''s functions are "cmd/ethos-package-private" and instructs extracting the shared logic into an internal package both binaries import, which is not possible without editing cmd/ethos. Recommend widening the write_set on future missions of this shape.'
+        - The contract's write_set (cmd/validate-content/main.go, cmd/validate-content/main_test.go, .github/workflows/test.yml, Makefile, CHANGELOG.md) omitted the internal package and cmd/ethos files the success criteria explicitly required touching — the criteria text itself says cmd/ethos/bundle.go's functions are "cmd/ethos-package-private" and instructs extracting the shared logic into an internal package both binaries import. I extended scope to cmd/ethos/bundle.go, cmd/ethos/identity.go, and internal/bundle/resolve.go to satisfy that instruction (see files_changed_not_in_write_set above); recommend widening the write_set on future missions of this shape so mission result --verify can account for the full diff.
+        - '.github/workflows/test.yml and Makefile were left untouched: the ext-completeness gap is closed by wiring internal/doctor.CheckRepoSetComplete directly into cmd/validate-content''s own check list, which already runs on every push/PR via the existing "Validate content" CI step and `make check`''s validate-content target. No new CI job or Makefile target was needed — verified PASS against this repo''s own current tree before committing, per the criteria''s explicit instruction.'
+      prose: |
+        Fixed the two gaps code-reviewer found on feat/vendor-repo-only:
+
+        1. cmd/validate-content built identity/team/role stores with no
+           bundle layer and neither of repoAuthoritativeMode's two fatal
+           repo-only guards. The bundle-root resolution and guard logic
+           that lived inline in cmd/ethos/bundle.go and identity.go now
+           lives once in internal/bundle (ResolveRoot, VerifyRepoOnly);
+           both cmd/ethos and cmd/validate-content call it. Added a
+           regression test (TestRun_RepoOnlyResolvesBundleTalent) proving
+           an identity whose talent is supplied only by a repo-local active
+           bundle now resolves under repo-only, plus a guard test
+           (TestRun_RepoOnlyRejectsGlobalBundle) and a layered-mode
+           no-regression test.
+
+        2. Ext-completeness verification (internal/doctor.CheckRepoSetComplete,
+           the same predicate `ethos vendor`/`ethos doctor` use) now runs as
+           part of cmd/validate-content's own check list, so it executes on
+           every push/PR through the existing CI step rather than nowhere.
+           Confirmed clean (PASS) against this repo's current tree before
+           committing.
+
+        main() was refactored into a testable run(ethosRoot, globalRoot)
+        (report, error) so the new logic is unit-testable without a
+        subprocess.
+
+        make check is clean except 3 pre-existing cmd/ethos export-test
+        failures unrelated to this change (see evidence above) — confirmed
+        via git stash that they fail identically on main with none of this
+        mission's diff applied, caused by the shared main checkout's live
+        (uncommitted) resolution:repo-only config, which this
+        worktree-isolated agent cannot and should not touch.
