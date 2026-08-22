@@ -1,9 +1,14 @@
 package mission
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // EventCorrect is the event type Store.Correct appends. Named for the
@@ -266,6 +271,33 @@ func (s *Store) LoadCorrections(missionID string) ([]Correction, error) {
 		out = append(out, correctionFromEvent(missionID, e))
 	}
 	return out, nil
+}
+
+// DecodeCorrectionStrict parses a YAML correction with strict rules:
+// every field must be known to the Correction struct, and exactly
+// one YAML document must be present. Symmetric with
+// DecodeResultStrict and DecodeReflectionStrict — the `ethos mission
+// correct --file` and MCP `mission correct` entry points share it so
+// the input trust boundary is enforced identically regardless of how
+// the YAML reached the store.
+//
+// The label argument is a human-readable identifier (file path or
+// request label) used in error messages.
+func DecodeCorrectionStrict(data []byte, label string) (*Correction, error) {
+	var c Correction
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&c); err != nil {
+		return nil, fmt.Errorf("invalid correction %s: %w", label, err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("invalid correction %s: multiple YAML documents are not allowed", label)
+		}
+		return nil, fmt.Errorf("invalid correction %s: trailing content after first document: %w", label, err)
+	}
+	return &c, nil
 }
 
 // correctionFromEvent reconstructs a Correction from a decoded "correct"

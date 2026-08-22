@@ -369,3 +369,27 @@ func TestStore_Correct_AcceptsEveryTerminalStatus(t *testing.T) {
 		require.NoError(t, err, "status %q must accept a correction", status)
 	}
 }
+
+func TestDecodeCorrectionStrict(t *testing.T) {
+	body := `mission: m-2026-08-22-301
+round: 1
+kind: factual
+author: claude
+claim: something was true
+corrected: it no longer is
+evidence:
+  - name: re-ran the check
+    status: pass
+`
+	c, err := DecodeCorrectionStrict([]byte(body), "test.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, "m-2026-08-22-301", c.Mission)
+	assert.Equal(t, CorrectionFactual, c.Kind)
+	require.Len(t, c.Evidence, 1)
+
+	_, err = DecodeCorrectionStrict([]byte(body+"\nbogus_field: 1\n"), "test.yaml")
+	require.Error(t, err)
+
+	_, err = DecodeCorrectionStrict([]byte(body+"---\nmission: m2\n"), "test.yaml")
+	require.Error(t, err)
+}
