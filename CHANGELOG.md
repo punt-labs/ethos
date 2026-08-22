@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.15.0] - 2026-08-22
+
 ### Added
 
 - **Skills are now a first-class ethos primitive: per-identity and per-bundle declarations reach generated agents (DES-073).** `internal/hook/generate_agents.go`'s `skills:` frontmatter was hardcoded to `baseline-ops` for every generated `.claude/agents/<handle>.md`, regardless of identity or bundle. Identity gains an optional `skills: [...]` field (slugs), bundle.yaml gains an optional `default_skills: [...]` applied additively to every identity in the bundle — merged as a union with the identity's own `skills:`, then deduplicated, not an override — and the generator now emits `baseline-ops` (always) + the identity's own skills + the bundle's default skills, deduplicated. `ethos seed` deploys a bundle's `skills/<slug>/SKILL.md` tree to `~/.claude/skills/` alongside the sidecar top-level skills when that bundle is active; a slug collision with a sidecar skill resolves bundle-wins, with a warning logged. Skill descriptions ride the per-session skill index unconditionally; skill bodies ride the wire only when a sub-agent that preloads them is spawned. The `gstack` bundle ships its first skill content: `gstack-plan`, `gstack-design`, `gstack-ship`, `gstack-review`, `gstack-qa`, and `gstack-debug`, distilled from the corresponding `garrytan/gstack` skills (MIT-licensed, origin attributed in each `SKILL.md`) — `gstack-plan` and `gstack-ship` preload on every gstack agent via `default_skills`; the rest preload only where relevant (e.g. `gstack-qa` on the QA agent). (ethos-fwex)
