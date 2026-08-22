@@ -258,11 +258,34 @@ func correctionDetails(c Correction) map[string]any {
 // log with no correct events -> empty slice, consistent with
 // LoadResults and LoadReflections: the absence of any correction is
 // the normal state for most missions.
+//
+// LoadCorrections has no warnings return of its own — unlike
+// LoadEvents, its callers (CLI `mission show`/`results`, MCP,
+// internal/ui) already treat a LoadCorrections error as an
+// integrity warning rather than a hard failure (see cmd/ethos/mission.go).
+// A partially corrupt event log could otherwise skip a correct event
+// with no signal at all, so any warnings LoadEvents reports are
+// upgraded to an error here, reusing that existing warning path
+// instead of adding a second, differently-shaped one.
 func (s *Store) LoadCorrections(missionID string) ([]Correction, error) {
-	events, _, err := s.LoadEvents(missionID)
+	events, warnings, err := s.LoadEvents(missionID)
 	if err != nil {
 		return nil, err
 	}
+	if len(warnings) > 0 {
+		return nil, fmt.Errorf("mission %q event log has %d unreadable line(s): %s",
+			missionID, len(warnings), strings.Join(warnings, "; "))
+	}
+	return CorrectionsFromEvents(missionID, events), nil
+}
+
+// CorrectionsFromEvents extracts every "correct" event out of an
+// already-loaded event slice, in the same on-disk order LoadCorrections
+// returns. Split out so a caller that already paid for one LoadEvents
+// call (internal/ui's handleMission, which also renders the Events
+// section) can derive Corrections from that same slice instead of
+// calling LoadEvents a second time.
+func CorrectionsFromEvents(missionID string, events []Event) []Correction {
 	out := []Correction{}
 	for _, e := range events {
 		if e.Event != EventCorrect {
@@ -270,7 +293,7 @@ func (s *Store) LoadCorrections(missionID string) ([]Correction, error) {
 		}
 		out = append(out, correctionFromEvent(missionID, e))
 	}
-	return out, nil
+	return out
 }
 
 // DecodeCorrectionStrict parses a YAML correction with strict rules:

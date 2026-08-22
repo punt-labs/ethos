@@ -3,6 +3,7 @@
 package mission
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -267,6 +268,76 @@ func TestStore_Correct_RendersInShowAndLog(t *testing.T) {
 	require.Len(t, got.Evidence, 1)
 	assert.Equal(t, "re-ran make check on a fresh worktree", got.Evidence[0].Name)
 	assert.Equal(t, EvidenceStatusPass, got.Evidence[0].Status)
+}
+
+// TestStore_LoadCorrections_UpgradesEventLogWarningsToError asserts
+// that a partially corrupt event log is not indistinguishable from a
+// mission that has zero corrections: LoadEvents surfaces a decode
+// warning rather than failing, and LoadCorrections must upgrade that
+// warning to an error rather than silently returning whatever
+// correct events it could still parse. A correction skipped by a bad
+// line with no error return would be invisible to every caller.
+func TestStore_LoadCorrections_UpgradesEventLogWarningsToError(t *testing.T) {
+	s, c := closedMission(t, "m-2026-08-22-107")
+
+	require.NoError(t, s.Correct(c.MissionID, Correction{
+		Mission:   c.MissionID,
+		Round:     1,
+		Kind:      CorrectionDecision,
+		Author:    "claude",
+		Corrected: "the round-1 verdict stands",
+	}))
+
+	// Confirm the log has a real correct event before corrupting it.
+	events, warnings, err := s.LoadEvents(c.MissionID)
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+	var lines []string
+	for _, e := range events {
+		data, marshalErr := json.Marshal(e)
+		require.NoError(t, marshalErr)
+		lines = append(lines, string(data))
+	}
+	// Append a corrupt line after the good ones so the correct event
+	// itself still decodes, and LoadCorrections has no other reason to
+	// fail.
+	seedLogLines(t, s, c.MissionID, append(lines, "{not valid json")...)
+
+	corrections, err := s.LoadCorrections(c.MissionID)
+	require.Error(t, err, "a partially unreadable event log must fail LoadCorrections, not silently drop the warning")
+	assert.Nil(t, corrections)
+	assert.Contains(t, err.Error(), c.MissionID)
+	assert.Contains(t, err.Error(), fmt.Sprintf("line %d", len(lines)+1))
+}
+
+// TestCorrectionsFromEvents_DerivesFromAlreadyLoadedSlice asserts
+// CorrectionsFromEvents extracts the same correction fields
+// LoadCorrections would, without performing its own LoadEvents call —
+// the split internal/ui's handleMission relies on to load the event
+// log once and derive both the Events and Corrections sections from
+// it.
+func TestCorrectionsFromEvents_DerivesFromAlreadyLoadedSlice(t *testing.T) {
+	s, c := closedMission(t, "m-2026-08-22-108")
+
+	require.NoError(t, s.Correct(c.MissionID, Correction{
+		Mission:   c.MissionID,
+		Round:     1,
+		Kind:      CorrectionFactual,
+		Author:    "claude",
+		Claim:     "the fix landed on main",
+		Corrected: "the fix landed on a feature branch, not main",
+	}))
+
+	events, warnings, err := s.LoadEvents(c.MissionID)
+	require.NoError(t, err)
+	require.Empty(t, warnings)
+
+	corrections := CorrectionsFromEvents(c.MissionID, events)
+	require.Len(t, corrections, 1)
+	assert.Equal(t, c.MissionID, corrections[0].Mission)
+	assert.Equal(t, CorrectionFactual, corrections[0].Kind)
+	assert.Equal(t, "claude", corrections[0].Author)
+	assert.Equal(t, "the fix landed on a feature branch, not main", corrections[0].Corrected)
 }
 
 func TestValidateCorrectionAuthor(t *testing.T) {

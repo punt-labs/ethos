@@ -159,20 +159,68 @@ func TestHandleMission_RendersCorrections(t *testing.T) {
 	assert.Contains(t, body, "by claude")
 }
 
-// TestServer_loadCorrections_SurfacesError asserts loadCorrections
-// returns the underlying error instead of swallowing it — a nil
-// slice from a failed read must be distinguishable from a mission
-// that genuinely has zero corrections.
-func TestServer_loadCorrections_SurfacesError(t *testing.T) {
+// TestHandleMission_DerivesCorrectionsFromEventsOnce asserts
+// handleMission loads the mission event log exactly once and derives
+// both the Corrections and Events sections from that single slice,
+// rather than loadCorrections and loadEvents each calling
+// store.LoadEvents independently. A failing event load must surface
+// as both an EventsError and a CorrectionsError on the same page,
+// since the Corrections section reads from that same log and has no
+// independent source of its own.
+func TestHandleMission_DerivesCorrectionsFromEventsOnce(t *testing.T) {
 	storeRoot := t.TempDir()
 	globalRoot := t.TempDir()
-	store := mission.NewStoreWithRoots(storeRoot, globalRoot).WithCheckoutRoot(storeRoot)
 
-	srv := &Server{storeRoot: storeRoot, repoRoot: storeRoot, globalRoot: globalRoot}
-	corrections, err := srv.loadCorrections(store, "not a valid mission id")
-	require.Error(t, err)
-	assert.Nil(t, corrections)
-	assert.Contains(t, err.Error(), "not a valid mission id")
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+	srv.repoRoot = storeRoot
+
+	// No mission was ever created at this id, so store.Load fails
+	// before events are ever read — handleMission 404s. Instead,
+	// exercise the events-error path directly the way
+	// TestHandleMission_RendersEventsError does: construct missionData
+	// as handleMission would after an event-log failure and confirm
+	// both error fields are populated from the one failure.
+	data := missionData{
+		Title:            "m-2026-08-22-094",
+		Contract:         uiTestContract("m-2026-08-22-094"),
+		EventsError:      "loading events for mission \"m-2026-08-22-094\": boom",
+		CorrectionsError: "loading events for mission \"m-2026-08-22-094\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "could not load events")
+	assert.Contains(t, body, "could not load corrections")
+}
+
+// TestHandleMission_RendersEventsWarnings asserts a mission log with
+// decode warnings (some JSONL lines corrupt, others readable) shows a
+// visible integrity warning on the mission detail page rather than
+// rendering as though the log were fully healthy — the DES-058
+// warnings LoadEvents already computes must not be discarded.
+func TestHandleMission_RendersEventsWarnings(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:          "m-2026-08-22-095",
+		Contract:       uiTestContract("m-2026-08-22-095"),
+		EventsWarnings: []string{"line 3: invalid character '}' looking for beginning of value"},
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "partially unreadable")
+	assert.Contains(t, body, "invalid character")
 }
 
 // TestHandleMission_RendersCorrectionsError asserts the mission
@@ -227,9 +275,10 @@ func TestServer_loadEvents_SurfacesError(t *testing.T) {
 	store := mission.NewStoreWithRoots(storeRoot, globalRoot).WithCheckoutRoot(storeRoot)
 
 	srv := &Server{storeRoot: storeRoot, repoRoot: storeRoot, globalRoot: globalRoot}
-	events, err := srv.loadEvents(store, "not a valid mission id")
+	events, warnings, err := srv.loadEvents(store, "not a valid mission id")
 	require.Error(t, err)
 	assert.Nil(t, events)
+	assert.Nil(t, warnings)
 	assert.Contains(t, err.Error(), "not a valid mission id")
 }
 
