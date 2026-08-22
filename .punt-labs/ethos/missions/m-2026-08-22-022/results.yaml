@@ -24,6 +24,8 @@ results:
           status: pass
         - name: make check
           status: pass
+      open_questions:
+        - 'write_set was internal/hook/format_output.go, cmd/ethos/vendor_test.go, CHANGELOG.md — internal/hook/format_vendor_test.go (+21/-4) is in the real diff (commit eddb0f7) but outside the write_set, so the result CLI refuses a files_changed entry for it; omitted from files_changed above, disclosed in prose instead. Same class of gap as m-2026-08-22-018''s write_set/criteria mismatch note.'
       prose: |
         formatVendor's pruned-files block (internal/hook/format_output.go)
         now keys its head on applied&&prune, matching cmd/ethos/vendor.go's
