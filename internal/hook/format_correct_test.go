@@ -102,6 +102,24 @@ func TestFormatOutput_Mission_Results_PreDES072Shape(t *testing.T) {
 	assert.Equal(t, "[]", r.HookSpecificOutput.UpdatedMCPToolOutput)
 }
 
+// TestFormatOutput_Mission_Results_WithWarnings asserts the results
+// formatter renders a `warnings` array under a Warnings header, the
+// same way formatMissionCorrect does. handleMissionResults attaches
+// this warning when LoadCorrections hits a corrupt sidecar; before
+// this fix the payload struct had no Warnings field, so the signal
+// was silently dropped rather than reaching a rendered surface.
+func TestFormatOutput_Mission_Results_WithWarnings(t *testing.T) {
+	result := `{"results":[],"corrections":[],` +
+		`"warnings":["loading corrections: corrections.jsonl: unexpected EOF"]}`
+	payload := makeToolPayload("mission", "results", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "0 results", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	ctx := r.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "Warnings:\n  - loading corrections: corrections.jsonl: unexpected EOF")
+}
+
 // TestFormatOutput_Mission_Show_WithCorrections asserts `mission
 // show`'s formatter renders a top-level `corrections` array under
 // the contract block, the same way it already renders `results`.

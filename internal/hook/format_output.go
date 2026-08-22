@@ -971,13 +971,16 @@ func formatMissionResult(w io.Writer, result string) error {
 
 // formatMissionResults renders the results method's payload — DES-072
 // wraps the round-by-round array in {results, corrections} — as one
-// bullet per round plus a trailing Corrections section. The summary
-// line counts the results entries; an empty array becomes "(none)"
-// so the operator distinguishes "no results yet" from a tool error.
+// bullet per round plus a trailing Corrections section, and then a
+// Warnings section when handleMissionResults' LoadCorrections call
+// surfaced an advisory sidecar-corruption signal. The summary line
+// counts the results entries; an empty array becomes "(none)" so the
+// operator distinguishes "no results yet" from a tool error.
 func formatMissionResults(w io.Writer, result string) error {
 	var payload struct {
 		Results     []map[string]any `json:"results"`
 		Corrections []any            `json:"corrections"`
+		Warnings    []string         `json:"warnings"`
 	}
 	if err := json.Unmarshal([]byte(result), &payload); err != nil {
 		return emitSimple(w, truncate(result, 200))
@@ -989,10 +992,15 @@ func formatMissionResults(w io.Writer, result string) error {
 		noun = "result"
 	}
 	summary := fmt.Sprintf("%d %s", n, noun)
+	warnings := make([]any, len(payload.Warnings))
+	for i, s := range payload.Warnings {
+		warnings[i] = s
+	}
 	if n == 0 {
 		var ctx strings.Builder
 		ctx.WriteString("(none)")
 		writeMissionCorrections(&ctx, payload.Corrections)
+		writeMissionWarnings(&ctx, warnings, "mission.results")
 		return emit(w, summary, ctx.String())
 	}
 	var ctx strings.Builder
@@ -1027,6 +1035,7 @@ func formatMissionResults(w io.Writer, result string) error {
 		}
 	}
 	writeMissionCorrections(&ctx, payload.Corrections)
+	writeMissionWarnings(&ctx, warnings, "mission.results")
 	return emit(w, summary, ctx.String())
 }
 
