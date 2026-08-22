@@ -264,6 +264,9 @@ func run(ethosRoot, globalRoot string) (report, error) {
 	attrFails := 0
 	for _, kind := range attrKinds {
 		stores := []*attribute.Store{attribute.NewStore(ethosRoot, kind)}
+		if bundleRoot != "" {
+			stores = append(stores, attribute.NewStore(bundleRoot, kind))
+		}
 		if hasGlobal && !repoAuthoritative {
 			stores = append(stores, attribute.NewStore(globalRoot, kind))
 		}

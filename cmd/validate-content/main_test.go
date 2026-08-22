@@ -185,6 +185,38 @@ func TestRun_RepoOnlyResolvesBundleTalent(t *testing.T) {
 	}
 }
 
+// TestRun_ValidatesBundleAttribute is the regression test for checks 6&8:
+// an attribute file that lives only in the active bundle — not in ethosRoot
+// or globalRoot — must still be validated. Before the fix, the attribute
+// stores checks 6&8 built never included attribute.NewStore(bundleRoot,
+// kind), so a bundle-only attribute with an invalid slug or empty content
+// passed silently.
+func TestRun_ValidatesBundleAttribute(t *testing.T) {
+	repoRoot := t.TempDir()
+	ethosRoot := filepath.Join(repoRoot, ".punt-labs", "ethos")
+	bundleRoot := filepath.Join(repoRoot, ".punt-labs", "ethos-bundles", "ops")
+	globalRoot := filepath.Join(t.TempDir(), "global") // deliberately absent
+
+	writeRepoConfig(t, repoRoot, "repo-only", "ops")
+	writeIdentityYAML(t, ethosRoot, "mal", "Mal Reynolds", nil)
+
+	// The talent lives ONLY in the bundle, and has empty content — invalid
+	// under check 8 (non-empty content).
+	require.NoError(t, attribute.NewStore(bundleRoot, attribute.Talents).Save(&attribute.Attribute{
+		Slug:    "piloting",
+		Content: "# Piloting\n",
+	}))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(bundleRoot, "talents", "piloting.md"), []byte(""), 0o600))
+
+	rep, err := run(ethosRoot, globalRoot)
+	require.NoError(t, err)
+
+	attrCheck := findResult(rep.results, "attributes(talents): empty content")
+	require.NotNil(t, attrCheck, "expected a bundle-only attribute empty-content failure to be reported")
+	require.False(t, attrCheck.pass)
+}
+
 // TestRun_RepoOnlyRejectsGlobalBundle is the CI-side check for repoAuthoritativeMode's
 // second fatal guard: `resolution: repo-only` cannot use an active bundle
 // sourced from the user's home, because it does not travel with the
