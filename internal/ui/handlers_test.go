@@ -94,6 +94,24 @@ func TestLayoutCSS_DefinesAbandonedPill(t *testing.T) {
 		"layout.html must define a .pill-abandoned CSS rule, matching every other terminal status")
 }
 
+// TestLayoutCSS_DefinesCorrectionAndEvidencePills pins the four
+// classes mission.html's pill-{{.Kind}} and pill-{{.Status}}
+// interpolations can render for a DES-072 correction: three
+// correction kinds (factual, fabrication, decision) plus the
+// evidence status "skip" — pass and fail already have rules via the
+// result-evidence pills above. Without these the pill renders with
+// no color, an enumeration gap of the same shape TestLayoutCSS_DefinesAbandonedPill
+// guards for mission status.
+func TestLayoutCSS_DefinesCorrectionAndEvidencePills(t *testing.T) {
+	data, err := templateFS.ReadFile("templates/layout.html")
+	require.NoError(t, err)
+	css := string(data)
+	for _, class := range []string{".pill-factual", ".pill-fabrication", ".pill-decision", ".pill-skip"} {
+		assert.Contains(t, css, class,
+			"layout.html must define a %s CSS rule, matching every other pill", class)
+	}
+}
+
 // TestHandleMission_RendersCorrections asserts the DES-072 rendering
 // requirement on the UI surface: a correction filed against a closed
 // mission appears in the mission detail page's Corrections section.
