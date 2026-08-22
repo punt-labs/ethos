@@ -1,0 +1,51 @@
+results:
+    - mission: m-2026-08-22-009
+      round: 1
+      created_at: "2026-08-22T08:03:14Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: CHANGELOG.md
+          added: 2
+          removed: 0
+        - path: cmd/validate-content/main.go
+          added: 18
+          removed: 6
+        - path: cmd/validate-content/main_test.go
+          added: 98
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+        - name: go run ./cmd/validate-content (real repo-only checkout)
+          status: pass
+        - name: go test ./cmd/validate-content/... -run TestValidateContent -v
+          status: pass
+      prose: |
+        cmd/validate-content/main.go now derives repoRoot before building any
+        store and calls resolve.ResolveResolution(repoRoot) once, exiting(1)
+        on error the same way cmd/ethos/identity.go's repoAuthoritativeMode
+        does. The resulting repoAuthoritative bit threads through:
+          - identity.NewLayeredStoreWithBundle(repo, nil, global, repoAuthoritative)
+          - attribute stores: global store appended only when hasGlobal && !repoAuthoritative
+          - team.NewLayeredStoreWithBundle(ethosRoot, "", globalRoot, repoAuthoritative)
+          - roleExists' roleGlobal fallback: set only when hasGlobal && !repoAuthoritative
+
+        Added cmd/validate-content/main_test.go with three subprocess tests
+        against a built binary: layered mode (unset resolution) stays
+        byte-identical to today (passes as before); resolution: repo-only
+        correctly excludes a global identity that would fail referential
+        integrity if consulted (ghost never appears in output); and a control
+        test confirming layered mode still does consult global (the same
+        ghost identity fails the run when resolution is unset), so the
+        repo-only test isn't accidentally passing for an unrelated reason.
+
+        Verified against the real scenario: from this repo's checkout
+        (feat/vendor-repo-only, which has resolution: repo-only set),
+        `go run ./cmd/validate-content` passes end to end and
+        ahj/bne/csl/kwb/rej/srn/tdt no longer appear anywhere in its output.
+
+        Note: this worktree started on a stale branch behind
+        feat/vendor-repo-only (checked out elsewhere); fast-forwarded to it
+        before making changes since merge-base equalled this worktree's HEAD.

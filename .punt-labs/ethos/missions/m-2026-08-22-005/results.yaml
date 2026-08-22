@@ -1,0 +1,167 @@
+results:
+    - mission: m-2026-08-22-005
+      round: 1
+      created_at: "2026-08-22T07:45:49Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: .punt-labs/ethos/agents/ahj.md
+          added: 0
+          removed: 42
+        - path: .punt-labs/ethos/agents/bne.md
+          added: 0
+          removed: 42
+        - path: .punt-labs/ethos/agents/csl.md
+          added: 0
+          removed: 43
+        - path: .punt-labs/ethos/agents/rej.md
+          added: 0
+          removed: 42
+        - path: .punt-labs/ethos/agents/srn.md
+          added: 0
+          removed: 42
+        - path: .punt-labs/ethos/agents/tdt.md
+          added: 0
+          removed: 42
+        - path: .punt-labs/ethos/identities/ahj.yaml
+          added: 0
+          removed: 11
+        - path: .punt-labs/ethos/identities/bne.yaml
+          added: 0
+          removed: 11
+        - path: .punt-labs/ethos/identities/csl.yaml
+          added: 0
+          removed: 11
+        - path: .punt-labs/ethos/identities/rej.yaml
+          added: 0
+          removed: 11
+        - path: .punt-labs/ethos/identities/srn.yaml
+          added: 0
+          removed: 12
+        - path: .punt-labs/ethos/identities/tdt.yaml
+          added: 0
+          removed: 11
+        - path: .punt-labs/ethos/personalities/eich.md
+          added: 0
+          removed: 39
+        - path: .punt-labs/ethos/personalities/hejlsberg.md
+          added: 0
+          removed: 38
+        - path: .punt-labs/ethos/personalities/johnson.md
+          added: 0
+          removed: 30
+        - path: .punt-labs/ethos/personalities/lattner.md
+          added: 0
+          removed: 37
+        - path: .punt-labs/ethos/personalities/naroff.md
+          added: 0
+          removed: 37
+        - path: .punt-labs/ethos/personalities/torres.md
+          added: 0
+          removed: 38
+        - path: .punt-labs/ethos/talents/apple-platforms.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/assumption-testing.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/browsers.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/cocoa.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/compilers.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/customer-interviewing.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/design-patterns.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/foundation.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/frameworks.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/javascript.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/llvm.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/objective-c.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/refactoring.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/smalltalk.md
+          added: 0
+          removed: 164
+        - path: .punt-labs/ethos/talents/swift.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/typescript.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/talents/web-standards.md
+          added: 0
+          removed: 9
+        - path: .punt-labs/ethos/writing-styles/eich-prose.md
+          added: 0
+          removed: 46
+        - path: .punt-labs/ethos/writing-styles/hejlsberg-prose.md
+          added: 0
+          removed: 42
+        - path: .punt-labs/ethos/writing-styles/johnson-prose.md
+          added: 0
+          removed: 40
+        - path: .punt-labs/ethos/writing-styles/lattner-prose.md
+          added: 0
+          removed: 42
+        - path: .punt-labs/ethos/writing-styles/naroff-prose.md
+          added: 0
+          removed: 43
+        - path: .punt-labs/ethos/writing-styles/torres-prose.md
+          added: 0
+          removed: 47
+      evidence:
+        - name: 'grep -rl ''personality: <handle>'' / ''writing_style: <handle>-prose'' / talent slugs across .punt-labs/ethos/identities/*.yaml (zero matches for every deleted attribute)'
+          status: pass
+        - name: grep -rlE surviving talents (type-systems, language-design, product-management, product-discovery, operations, engineering) still referenced
+          status: pass
+        - name: go build -o .tmp/ethos ./cmd/ethos && .tmp/ethos doctor
+          status: pass
+        - name: make check (vet, staticcheck, shellcheck, markdownlint, go test -race ./..., validate-content referential integrity)
+          status: pass
+      open_questions:
+        - 'cmd/ethos/export_test.go (outside this mission''s write_set) was also fixed in the same commit: it spawned the ethos binary without pinning cwd/git-init, so under the newly-set resolution: repo-only (an unrelated prior mission) the subprocess walked up into this repo''s real .git and store instead of the fake identity it seeded, breaking TestExportSoulSpec/TestExportClaudeMD/TestExportMissingPersonality. This was a blocker for the make check success criterion on this mission and was pre-existing on the branch before this mission''s changes (reproduced by git stash before touching the write_set). Fixed by pinning cmd.Dir and git-initializing the temp repo, matching the existing pattern in subprocess_test.go/handlers_test.go. Flagging since it''s a one-line-scope deviation from the declared write_set, done to satisfy the mission''s own make-check gate.'
+      prose: |
+        Purged ahj, bne, csl, rej, srn, tdt per the operator's 2026-08-22 ruling:
+        their identity yamls, .punt-labs/ethos/agents/*.md, and (had they existed
+        on disk in this worktree) .claude/agents/*.md — none were present here,
+        so nothing to rm there.
+
+        Removed the now-orphaned attribute files with zero remaining consumers,
+        verified by grep across every surviving identity: personalities/
+        {hejlsberg,eich,lattner,johnson,naroff,torres}.md, writing-styles/
+        {hejlsberg,eich,lattner,johnson,naroff,torres}-prose.md, and 17 talent
+        files (typescript, compilers, javascript, web-standards, browsers,
+        swift, llvm, smalltalk, design-patterns, refactoring, frameworks,
+        objective-c, cocoa, foundation, apple-platforms, customer-interviewing,
+        assumption-testing). Confirmed the six explicitly-protected talents
+        (type-systems, language-design, product-management, product-discovery,
+        operations, engineering) are still referenced by surviving identities
+        and left untouched.
+
+        `ethos doctor` on the built binary shows Orphaned agent files PASS and
+        Repo-only completeness PASS (26 identities resolve with no global
+        fallback), along with every other check. `make check` passes clean,
+        including validate-content's referential-integrity pass over the
+        remaining 30 identities, 3 teams, and 201 attributes.
+
+        One commit: 53ffc19.

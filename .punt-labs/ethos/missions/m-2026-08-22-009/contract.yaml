@@ -1,0 +1,34 @@
+mission_id: m-2026-08-22-009
+status: closed
+type: implement
+created_at: "2026-08-22T07:52:42Z"
+updated_at: "2026-08-22T08:06:11Z"
+closed_at: "2026-08-22T08:06:11Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T07:52:42Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-9kdk
+write_set:
+    - cmd/validate-content/main.go
+    - cmd/validate-content/main_test.go
+    - CHANGELOG.md
+success_criteria:
+    - 'cmd/validate-content/main.go: compute repoRoot (filepath.Dir(filepath.Dir(ethosRoot)), already done later in the file for check 5 — move it earlier or compute once and reuse) and call resolve.ResolveResolution(repoRoot) before building any store; exit(1) on error the same way repoAuthoritativeMode() does in cmd/ethos/identity.go'
+    - 'Identity store: identity.NewLayeredStoreWithBundle(repoIDStore, nil, globalIDStore, repoAuthoritative) replacing the plain NewLayeredStore call — global Store is still constructed and passed (matches cmd/ethos/identity.go''s own pattern) but only actually consulted when NOT repo-authoritative, per LayeredStore''s existing repoAuthoritative gating'
+    - 'Attribute stores: only append attribute.NewStore(globalRoot, kind) to the per-kind stores slice when hasGlobal && !repoAuthoritative'
+    - 'Team store: team.NewLayeredStoreWithBundle(ethosRoot, "", globalRoot, repoAuthoritative) replacing team.NewLayeredStore'
+    - 'roleExists'' roleGlobal fallback: only set roleGlobal when hasGlobal && !repoAuthoritative (currently unconditional on hasGlobal alone)'
+    - 'Under layered mode (the default, unset resolution field) behavior must stay byte-identical to today — add a regression test asserting this. Add a second test: with resolution: repo-only set and a global identity present that would fail referential integrity if consulted, validate-content passes (global correctly excluded).'
+    - 'Verify against the real scenario: from this repo''s checkout (which now has resolution: repo-only set), run ''go run ./cmd/validate-content'' and confirm it passes — ahj/bne/csl/kwb/rej/srn/tdt must no longer appear in its output at all'
+    - make check passes
+    - Add a CHANGELOG.md entry under Unreleased > Fixed
+    - Commit incrementally, each commit passing make check
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Found live while running the actual repo-only migration (ethos-dsby, branch feat/vendor-repo-only): ''make check'' failed validate-content''s referential-integrity check citing ahj/bne/csl/kwb/rej/srn/tdt — 6 identities already fully purged from this repo (git rm''d) that still exist as unrelated identities in the developer''s own ~/.punt-labs/ethos/identities/ (personal global store). validate-content resolves them anyway because cmd/validate-content/main.go:125 hardcodes identity.NewLayeredStore(repoIDStore, globalIDStore) — the plain, non-repo-authoritative constructor — and never reads this repo''s own resolution: repo-only setting in .punt-labs/ethos.yaml, unlike cmd/ethos/identity.go''s identityStore()/repoAuthoritativeMode(), documented there as ''the ONE place the DES-057 resolution policy is read.'' Same gap for team.NewLayeredStore(ethosRoot, globalRoot) at line 233 and the manual roleGlobal fallback in roleExists. ethos doctor''s own ''Repo-only completeness'' check already correctly passes (drops the global fallback) — validate-content should honor the same declared policy, not a broader one.'
