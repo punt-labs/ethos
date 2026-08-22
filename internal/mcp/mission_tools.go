@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/punt-labs/ethos/internal/hook"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/punt-labs/ethos/internal/resolve"
 
@@ -20,13 +21,13 @@ import (
 // tools are exposed.
 func (h *Handler) missionTool() mcplib.Tool {
 	return mcplib.NewTool("mission",
-		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, abandon, reflect, reflections, advance, result, results, log. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Abandon retires a mission that was created but never had a worker actually spawned — it refuses if any delegation record or result artifact exists, at any round; use close (after a result is submitted) for missions with real work. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp."),
+		mcplib.WithDescription("Manage mission contracts (typed delegation artifacts). Methods: create, show, list, close, abandon, reflect, reflections, advance, result, results, log, correct. Create resolves the evaluator handle and pins a content hash; verifier spawns are refused if the content has drifted. Reflect submits a structured reflection for the current round, advance bumps to the next round, and reflections fetches the round-by-round log. Result submits the typed worker handoff for the current round; close refuses the terminal transition until a valid result exists. Abandon retires a mission that was created but never had a worker actually spawned — it refuses if any delegation record or result artifact exists, at any round; use close (after a result is submitted) for missions with real work. Log returns the append-only event audit trail for post-mortem analysis; filters by event type and RFC3339 timestamp. Correct files an additive-only annotation against a CLOSED mission — a fact discovered afterward, an integrity finding, or a leader's post-escalation decision — as a new event on the log; it never rewrites the contract, results, or reflections and is refused on an open mission."),
 		mcplib.WithString("method", mcplib.Required(),
-			mcplib.Enum("create", "show", "list", "close", "abandon", "reflect", "reflections", "advance", "result", "results", "log"),
+			mcplib.Enum("create", "show", "list", "close", "abandon", "reflect", "reflections", "advance", "result", "results", "log", "correct"),
 			mcplib.Description("Operation to perform."),
 		),
 		mcplib.WithString("mission_id",
-			mcplib.Description("Mission ID or unique prefix. Required for show, close, abandon, reflect, reflections, advance, result, results, and log."),
+			mcplib.Description("Mission ID or unique prefix. Required for show, close, abandon, reflect, reflections, advance, result, results, log, and correct."),
 		),
 		mcplib.WithString("contract",
 			mcplib.Description("Full contract YAML body. Required for create."),
@@ -36,6 +37,9 @@ func (h *Handler) missionTool() mcplib.Tool {
 		),
 		mcplib.WithString("result",
 			mcplib.Description("Full result YAML body. Required for result."),
+		),
+		mcplib.WithString("correction",
+			mcplib.Description("Full correction YAML body (mission, round, kind, author, claim, corrected, supersedes, evidence). Required for correct. kind is one of factual, fabrication, decision; claim is required unless kind is decision. author must resolve to a real identity."),
 		),
 		mcplib.WithString("actor",
 			mcplib.Description("Optional handle to record on the round_advanced event for advance. Defaults to the contract's leader."),
@@ -93,6 +97,8 @@ func (h *Handler) handleMission(_ context.Context, req mcplib.CallToolRequest) (
 		return h.handleResultsMission(req)
 	case "log":
 		return h.handleLogMission(req)
+	case "correct":
+		return h.handleCorrectMission(req)
 	default:
 		return mcplib.NewToolResultError(fmt.Sprintf("unknown method %q", method)), nil
 	}
@@ -281,12 +287,37 @@ func (h *Handler) handleShowMission(req mcplib.CallToolRequest) (*mcplib.CallToo
 	if results == nil {
 		results = []mission.Result{}
 	}
-	payload := mission.ShowPayload{Contract: c, Results: results}
+	payload := missionShowResponse{ShowPayload: mission.ShowPayload{Contract: c, Results: results}}
 	if loadErr != nil {
 		payload.Warnings = append(payload.Warnings,
 			fmt.Sprintf("loading results: %v", loadErr))
 	}
+	// Corrections are advisory in the same way results are: a corrupt
+	// event log becomes a warning, never a failed show — the payload
+	// still carries the mission the caller asked for.
+	corrections, corrErr := h.missionStore.LoadCorrections(id)
+	if corrections == nil {
+		corrections = []mission.Correction{}
+	}
+	if corrErr != nil {
+		payload.Warnings = append(payload.Warnings,
+			fmt.Sprintf("loading corrections: %v", corrErr))
+	}
+	payload.Corrections = corrections
 	return jsonResult(payload)
+}
+
+// missionShowResponse extends mission.ShowPayload with a corrections
+// section (DES-072). Defined here rather than adding a field to
+// mission.ShowPayload itself — mission.go is outside this fix's
+// write-set, and Go's JSON marshaler flattens an embedded struct's
+// fields to the top level regardless of how many levels are embedded,
+// so wrapping ShowPayload (which itself embeds *Contract) still
+// produces one flat JSON object. Mirrors createMissionResponse's
+// local-wrapper convention above.
+type missionShowResponse struct {
+	mission.ShowPayload
+	Corrections []mission.Correction `json:"corrections"`
 }
 
 // handleListMissions returns the missions matching the status filter.
@@ -569,9 +600,13 @@ func (h *Handler) handleResultMission(req mcplib.CallToolRequest) (*mcplib.CallT
 }
 
 // handleResultsMission returns the round-by-round result log for a
-// mission. Always returns an array, never null, so MCP clients can
-// decode into a typed slice without a presence check — the same
-// convention handleReflectionsMission uses for reflections.
+// mission, plus the corrections filed against it (DES-072). Results
+// and corrections always return as arrays, never null, so MCP
+// clients can decode into typed slices without a presence check — the
+// same convention handleReflectionsMission uses for reflections.
+// Corrections are sourced separately from results because a
+// correction never touches the results file — it lives on the event
+// log instead.
 func (h *Handler) handleResultsMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
 	idArg := stringArg(req, "mission_id", "")
 	if idArg == "" {
@@ -588,7 +623,80 @@ func (h *Handler) handleResultsMission(req mcplib.CallToolRequest) (*mcplib.Call
 	if rs == nil {
 		rs = []mission.Result{}
 	}
-	return jsonResult(rs)
+	cs, err := h.missionStore.LoadCorrections(id)
+	if err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to load corrections: %v", err)), nil
+	}
+	if cs == nil {
+		cs = []mission.Correction{}
+	}
+	return jsonResult(missionResultsResponse{Results: rs, Corrections: cs})
+}
+
+// missionResultsResponse is the wire shape for handleResultsMission
+// (DES-072): results plus the corrections filed against them.
+type missionResultsResponse struct {
+	Results     []mission.Result     `json:"results"`
+	Corrections []mission.Correction `json:"corrections"`
+}
+
+// handleCorrectMission files a correction against a closed mission.
+// The correction YAML is decoded strictly, its author is resolved
+// against the live identity store, and the event is appended via
+// Store.Correct — the same three-step pipeline the CLI's
+// runMissionCorrect runs. Author resolution happens here, not inside
+// Store.Correct: the mission package carries no identity-store
+// dependency (Store.ApplyServerFields takes HashSources as an
+// explicit parameter for the same reason), so CLI and MCP both run
+// ValidateCorrectionAuthor before calling the store.
+func (h *Handler) handleCorrectMission(req mcplib.CallToolRequest) (*mcplib.CallToolResult, error) {
+	idArg := stringArg(req, "mission_id", "")
+	if idArg == "" {
+		return mcplib.NewToolResultError("mission_id is required for correct"), nil
+	}
+	body := stringArg(req, "correction", "")
+	if strings.TrimSpace(body) == "" {
+		return mcplib.NewToolResultError("correction YAML body is required for correct"), nil
+	}
+	id, err := h.missionStore.MatchByPrefix(idArg)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	c, err := mission.DecodeCorrectionStrict([]byte(body), "mcp correct request")
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+
+	sources, err := mission.NewLiveHashSources(h.store, h.roles, h.teams)
+	if err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+	if err := mission.ValidateCorrectionAuthor(c.Author, sources.Identities); err != nil {
+		return mcplib.NewToolResultError(err.Error()), nil
+	}
+
+	if err := h.missionStore.Correct(id, *c); err != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to record correction: %v", err)), nil
+	}
+	// Parity with the CLI: seal the checkout's mission-log tail so the
+	// correction is durable on disk even if no commit immediately
+	// follows. Best-effort — the correction is already recorded.
+	var warnings []string
+	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
+		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
+			warnings = append(warnings, fmt.Sprintf("sealing mission log: %v", sErr))
+		}
+	}
+	payload := map[string]any{
+		"mission_id": id,
+		"kind":       string(c.Kind),
+		"round":      c.Round,
+		"author":     c.Author,
+	}
+	if len(warnings) > 0 {
+		payload["warnings"] = warnings
+	}
+	return jsonResult(payload)
 }
 
 // handleLogMission returns the append-only mission event log for

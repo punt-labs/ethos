@@ -1565,8 +1565,11 @@ evidence:
 }
 
 // TestHandleMission_Results_EmptyReturnsArray asserts that the
-// results method returns [] (not null) for a mission with no
-// results yet, symmetric with the reflections path.
+// results method returns empty results/corrections arrays (never
+// null) for a mission with no results or corrections yet, symmetric
+// with the reflections path. DES-072 wraps the bare array in
+// {results, corrections} so a caller sees the corrections filed
+// against a mission's results without a second round trip.
 func TestHandleMission_Results_EmptyReturnsArray(t *testing.T) {
 	h := testHandlerWithMissions(t)
 	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
@@ -1583,7 +1586,10 @@ func TestHandleMission_Results_EmptyReturnsArray(t *testing.T) {
 	}))
 	require.NoError(t, err)
 	require.False(t, result.IsError)
-	assert.Equal(t, "[]", resultText(t, result))
+	var payload missionResultsResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	assert.Empty(t, payload.Results)
+	assert.Empty(t, payload.Corrections)
 }
 
 // TestHandleMission_Results_ReturnsAfterResult asserts that a
@@ -1606,12 +1612,175 @@ func TestHandleMission_Results_ReturnsAfterResult(t *testing.T) {
 		"mission_id": created.MissionID,
 	}))
 	require.NoError(t, err)
-	var rs []mission.Result
-	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &rs))
+	var payload missionResultsResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	rs := payload.Results
 	require.Len(t, rs, 1)
 	assert.Equal(t, 1, rs[0].Round)
 	assert.Equal(t, mission.VerdictPass, rs[0].Verdict)
 	assert.Equal(t, created.MissionID, rs[0].Mission)
+}
+
+// closeMissionForMCP creates a mission, submits a passing result, and
+// closes it, returning the mission ID. Test helper for the `correct`
+// method, which needs a closed mission on file.
+func closeMissionForMCP(t *testing.T, h *Handler) string {
+	t.Helper()
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+	submitResultForMCP(t, h, created.MissionID)
+
+	closeResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "close",
+		"mission_id": created.MissionID,
+	}))
+	require.NoError(t, err)
+	require.False(t, closeResult.IsError, "close must succeed: %s", resultText(t, closeResult))
+	return created.MissionID
+}
+
+// TestHandleMission_Correct_Succeeds asserts the happy path: a
+// well-formed correction against a closed mission is accepted,
+// appears in LoadCorrections, and is echoed back in the response.
+func TestHandleMission_Correct_Succeeds(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := closeMissionForMCP(t, h)
+
+	body := fmt.Sprintf(`mission: %s
+round: 0
+kind: fabrication
+author: djb
+claim: "make check (full suite): fail — pre-existing, unrelated"
+corrected: "make check failed because of a stale worktree base"
+`, id)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "correct",
+		"mission_id": id,
+		"correction": body,
+	}))
+	require.NoError(t, err)
+	require.False(t, result.IsError, "correct must succeed: %s", resultText(t, result))
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, result)), &payload))
+	assert.Equal(t, "fabrication", payload["kind"])
+	assert.Equal(t, "djb", payload["author"])
+
+	corrections, err := h.missionStore.LoadCorrections(id)
+	require.NoError(t, err)
+	require.Len(t, corrections, 1)
+	assert.Equal(t, mission.CorrectionFabrication, corrections[0].Kind)
+}
+
+// TestHandleMission_Correct_RefusesOnOpenMission proves the MCP
+// surface honors Store.Correct's inverted guard.
+func TestHandleMission_Correct_RefusesOnOpenMission(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	createResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":   "create",
+		"contract": validContractYAML,
+	}))
+	require.NoError(t, err)
+	var created mission.Contract
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, createResult)), &created))
+
+	body := fmt.Sprintf(`mission: %s
+kind: factual
+author: djb
+claim: x
+corrected: y
+`, created.MissionID)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "correct",
+		"mission_id": created.MissionID,
+		"correction": body,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "corrections apply only to closed missions")
+}
+
+// TestHandleMission_Correct_UnresolvableAuthorRefused asserts author
+// resolution runs before Store.Correct, matching the CLI.
+func TestHandleMission_Correct_UnresolvableAuthorRefused(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := closeMissionForMCP(t, h)
+
+	body := fmt.Sprintf(`mission: %s
+kind: factual
+author: ghost
+claim: x
+corrected: y
+`, id)
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "correct",
+		"mission_id": id,
+		"correction": body,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "does not resolve to a valid identity")
+}
+
+// TestHandleMission_Correct_RequiresCorrectionBody asserts the
+// missing-body error, symmetric with handleResultMission's.
+func TestHandleMission_Correct_RequiresCorrectionBody(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := closeMissionForMCP(t, h)
+
+	result, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "correct",
+		"mission_id": id,
+	}))
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Contains(t, resultText(t, result), "correction YAML body is required")
+}
+
+// TestHandleMission_Show_IncludesCorrections and
+// TestHandleMission_Results_IncludesCorrections assert the DES-072
+// rendering requirement on the MCP surface: show and results both
+// carry a corrections array once one is filed.
+func TestHandleMission_Show_IncludesCorrections(t *testing.T) {
+	h := testHandlerWithMissions(t)
+	id := closeMissionForMCP(t, h)
+
+	body := fmt.Sprintf(`mission: %s
+kind: decision
+author: djb
+corrected: "leader ruling: re-scope"
+`, id)
+	correctResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "correct",
+		"mission_id": id,
+		"correction": body,
+	}))
+	require.NoError(t, err)
+	require.False(t, correctResult.IsError)
+
+	showResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "show",
+		"mission_id": id,
+	}))
+	require.NoError(t, err)
+	var showPayload missionShowResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, showResult)), &showPayload))
+	require.Len(t, showPayload.Corrections, 1)
+	assert.Equal(t, mission.CorrectionDecision, showPayload.Corrections[0].Kind)
+
+	resultsResult, err := h.handleMission(context.Background(), callTool(map[string]interface{}{
+		"method":     "results",
+		"mission_id": id,
+	}))
+	require.NoError(t, err)
+	var resultsPayload missionResultsResponse
+	require.NoError(t, json.Unmarshal([]byte(resultText(t, resultsResult)), &resultsPayload))
+	require.Len(t, resultsPayload.Corrections, 1)
 }
 
 // TestHandleMission_CloseGate_RefusesViaMCP covers success criterion
