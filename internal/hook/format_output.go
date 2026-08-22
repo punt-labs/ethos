@@ -1075,9 +1075,15 @@ func writeMissionCorrections(ctx *strings.Builder, raw any) {
 }
 
 // formatMissionCorrect renders the correct method's confirmation:
-// "Corrected <mission_id> (<kind>)". Short enough for a single
-// tool-result row but specific enough to confirm what kind of
-// correction landed.
+// "Corrected <mission_id> (<kind>)", plus a Warnings section when the
+// payload carries one.
+//
+// handleCorrectMission attaches a "warnings" entry when the
+// post-correction seal fails (parity with formatMissionClose's
+// sidecar-cleanup warning): the correction is already recorded, so
+// the summary line is unchanged, but the operator must learn the
+// mission log may not be durable on disk yet. Without this the
+// warning would reach no rendered surface at all.
 func formatMissionCorrect(w io.Writer, result string) error {
 	var c map[string]any
 	if err := json.Unmarshal([]byte(result), &c); err != nil {
@@ -1088,7 +1094,14 @@ func formatMissionCorrect(w io.Writer, result string) error {
 	if missionID == "" || kind == "" {
 		return emitSimple(w, truncate(result, 200))
 	}
-	return emitSimple(w, fmt.Sprintf("Corrected %s (%s)", missionID, kind))
+	summary := fmt.Sprintf("Corrected %s (%s)", missionID, kind)
+	warnings, _ := c["warnings"].([]any)
+	if len(warnings) == 0 {
+		return emitSimple(w, summary)
+	}
+	var ctx strings.Builder
+	writeMissionWarnings(&ctx, warnings, "mission.correct")
+	return emit(w, summary, strings.TrimPrefix(ctx.String(), "\n\n"))
 }
 
 // formatMissionReflect renders the reflect method's confirmation:

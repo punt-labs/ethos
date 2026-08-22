@@ -18,6 +18,25 @@ func TestFormatOutput_Mission_Correct(t *testing.T) {
 	assert.Equal(t, "Corrected m-2026-04-07-001 (fabrication)", r.HookSpecificOutput.UpdatedMCPToolOutput)
 }
 
+// TestFormatOutput_Mission_Correct_Warnings asserts the correct
+// formatter renders a `warnings` array under a Warnings header, the
+// same way formatMissionClose and formatMissionAbandon do.
+// handleCorrectMission attaches this warning when the post-correction
+// seal fails; before this the formatter used emitSimple and dropped
+// all context, so the warning reached no rendered surface.
+func TestFormatOutput_Mission_Correct_Warnings(t *testing.T) {
+	result := `{"mission_id":"m-2026-04-07-001","kind":"fabrication","round":1,"author":"claude",` +
+		`"warnings":["sealing mission log: no repo root in scope"]}`
+	payload := makeToolPayload("mission", "correct", result)
+	out := runFormat(t, payload)
+
+	r := parseFormatResult(t, out)
+	assert.Equal(t, "Corrected m-2026-04-07-001 (fabrication)", r.HookSpecificOutput.UpdatedMCPToolOutput)
+	assert.Equal(t,
+		"Warnings:\n  - sealing mission log: no repo root in scope",
+		r.HookSpecificOutput.AdditionalContext)
+}
+
 // TestFormatOutput_Mission_Correct_Malformed asserts the early guard
 // falls back to a truncated raw render rather than a partial card
 // when mission_id or kind is missing.
