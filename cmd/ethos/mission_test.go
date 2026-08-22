@@ -121,6 +121,14 @@ func resetCorrectFlags() {
 	missionCorrectSupersedes = ""
 	missionCorrectEvidence = nil
 	missionCorrectFile = ""
+	// buildCorrection reads Flags().Changed("round") directly, so a
+	// prior test's cmd.Flags().Set("round", ...) call must be undone
+	// here too, or its "changed" bit leaks into every later test that
+	// calls runMissionCorrect without going through cobra's own
+	// per-invocation flag parsing.
+	if f := missionCorrectCmd.Flags().Lookup("round"); f != nil {
+		f.Changed = false
+	}
 }
 
 // seedClaudeIdentity seeds a "claude" identity into root, reusing the
@@ -1764,7 +1772,7 @@ func TestMissionCorrect_ViaFlags(t *testing.T) {
 	missionCorrectKind = "fabrication"
 	missionCorrectClaim = "make check (full suite): fail — pre-existing, unrelated"
 	missionCorrectCorrected = "make check failed because of a stale worktree base"
-	stdout := captureStdoutE(t, func() error { return runMissionCorrect(id) })
+	stdout := captureStdoutE(t, func() error { return runMissionCorrect(missionCorrectCmd, id) })
 	assert.Contains(t, stdout, "corrected:")
 	assert.Contains(t, stdout, id)
 	assert.Contains(t, stdout, "kind=fabrication")
@@ -1794,7 +1802,7 @@ func TestMissionCorrect_RefusesOnOpenMission(t *testing.T) {
 	missionCorrectKind = "factual"
 	missionCorrectClaim = "x"
 	missionCorrectCorrected = "y"
-	err = runMissionCorrect(id)
+	err = runMissionCorrect(missionCorrectCmd, id)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "corrections apply only to closed missions")
 }
@@ -1818,7 +1826,7 @@ corrected: "leader ruling: re-scope and re-dispatch"
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 
 	missionCorrectFile = path
-	stdout := captureStdoutE(t, func() error { return runMissionCorrect(id) })
+	stdout := captureStdoutE(t, func() error { return runMissionCorrect(missionCorrectCmd, id) })
 	assert.Contains(t, stdout, "kind=decision")
 	assert.Contains(t, stdout, "by djb")
 
@@ -1839,9 +1847,27 @@ func TestMissionCorrect_FileAndFlagsMutuallyExclusive(t *testing.T) {
 
 	missionCorrectFile = "unused.yaml"
 	missionCorrectKind = "factual"
-	err := runMissionCorrect(id)
+	err := runMissionCorrect(missionCorrectCmd, id)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestMissionCorrect_FileAndRoundMutuallyExclusive is the --round
+// case the string/slice usingFlags checks alone cannot catch:
+// "--file c.yaml --round 3" must be refused the same way, not have
+// --round silently dropped, because buildCorrection tracks presence
+// via cmd.Flags().Changed("round") rather than a bare non-zero
+// check (0 is a valid, explicitly-settable round).
+func TestMissionCorrect_FileAndRoundMutuallyExclusive(t *testing.T) {
+	missionTestEnv(t)
+	id := closeCLIMission(t)
+
+	missionCorrectFile = "unused.yaml"
+	require.NoError(t, missionCorrectCmd.Flags().Set("round", "3"))
+	err := runMissionCorrect(missionCorrectCmd, id)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+	assert.Contains(t, err.Error(), "--round")
 }
 
 // TestMissionCorrect_UnresolvableAuthorRefused asserts author
@@ -1857,7 +1883,7 @@ func TestMissionCorrect_UnresolvableAuthorRefused(t *testing.T) {
 	missionCorrectKind = "factual"
 	missionCorrectClaim = "x"
 	missionCorrectCorrected = "y"
-	err := runMissionCorrect(id)
+	err := runMissionCorrect(missionCorrectCmd, id)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not resolve to a valid identity")
 }
@@ -1873,7 +1899,7 @@ func TestMissionCorrect_ShowAndResultsRenderCorrections(t *testing.T) {
 
 	missionCorrectKind = "decision"
 	missionCorrectCorrected = "leader ruling: re-scope"
-	captureStdoutE(t, func() error { return runMissionCorrect(id) })
+	captureStdoutE(t, func() error { return runMissionCorrect(missionCorrectCmd, id) })
 	resetCorrectFlags()
 
 	showOut := captureStdoutE(t, func() error { return runMissionShow(id) })
@@ -1908,7 +1934,7 @@ func TestMissionLog_RendersCorrectEvent(t *testing.T) {
 	missionCorrectKind = "factual"
 	missionCorrectClaim = "x"
 	missionCorrectCorrected = "y"
-	captureStdoutE(t, func() error { return runMissionCorrect(id) })
+	captureStdoutE(t, func() error { return runMissionCorrect(missionCorrectCmd, id) })
 
 	logOut := captureStdoutE(t, func() error { return runMissionLog(id, "", "") })
 	assert.Contains(t, logOut, "correct")

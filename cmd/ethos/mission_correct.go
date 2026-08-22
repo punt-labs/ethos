@@ -84,7 +84,7 @@ identity — unlike a result's author, who says the record on file is
 wrong is load-bearing.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runMissionCorrect(args[0])
+		return runMissionCorrect(cmd, args[0])
 	},
 }
 
@@ -113,14 +113,14 @@ func init() {
 // Store.Correct: unlike Result.Author (a bookkeeping field), WHO says
 // the record on file is wrong is load-bearing, so an unresolvable
 // handle is refused here rather than silently accepted by the store.
-func runMissionCorrect(idOrPrefix string) error {
+func runMissionCorrect(cmd *cobra.Command, idOrPrefix string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
 	if err != nil {
 		return fmt.Errorf("mission correct: %w", err)
 	}
 
-	c, err := buildCorrection(id)
+	c, err := buildCorrection(cmd, id)
 	if err != nil {
 		return fmt.Errorf("mission correct: %w", err)
 	}
@@ -141,19 +141,31 @@ func runMissionCorrect(idOrPrefix string) error {
 	// so the correction is durable on disk even if no commit
 	// immediately follows. Store.Correct cannot do this itself — the
 	// mission package cannot import internal/hook without cycling.
+	//
+	// Surface a seal failure on stderr AND in the --json warnings
+	// field, matching runMissionShow/runMissionResults: a scriptable
+	// caller reading only stdout must not be blind to a durability
+	// warning that a human running interactively would see on stderr.
+	var warnings []string
 	if repoRoot := resolve.EnvRepoRoot(); repoRoot != "" {
 		if _, sErr := hook.SealMission(repoRoot, id, time.Now().UTC(), hook.SealOptions{}); sErr != nil {
-			fmt.Fprintf(os.Stderr, "ethos: mission correct: sealing mission log: %v\n", sErr)
+			msg := fmt.Sprintf("sealing mission log: %v", sErr)
+			fmt.Fprintf(os.Stderr, "ethos: mission correct: %s\n", msg)
+			warnings = append(warnings, msg)
 		}
 	}
 
 	if jsonOutput {
-		printJSON(map[string]any{
+		payload := map[string]any{
 			"mission_id": id,
 			"kind":       string(c.Kind),
 			"round":      c.Round,
 			"author":     c.Author,
-		})
+		}
+		if len(warnings) > 0 {
+			payload["warnings"] = warnings
+		}
+		printJSON(payload)
 		return nil
 	}
 	fmt.Printf("corrected: %s kind=%s round=%d by %s\n", id, c.Kind, c.Round, c.Author)
@@ -165,10 +177,16 @@ func runMissionCorrect(idOrPrefix string) error {
 // Mission and Author default to the resolved mission ID and the
 // current leader when left unset, so the common flag-based case
 // (author = whoever is running the command) needs no --author flag.
-func buildCorrection(id string) (*mission.Correction, error) {
+func buildCorrection(cmd *cobra.Command, id string) (*mission.Correction, error) {
+	// cmd.Flags().Changed("round") catches an explicit "--round 0",
+	// which the string/slice checks below cannot: 0 is also --round's
+	// zero value, so a bare presence check on missionCorrectRound
+	// would silently treat "--file c.yaml --round 0" as file-only
+	// instead of refusing the mutually-exclusive combination the
+	// error message already names.
 	usingFlags := missionCorrectKind != "" || missionCorrectClaim != "" ||
 		missionCorrectCorrected != "" || missionCorrectSupersedes != "" ||
-		len(missionCorrectEvidence) > 0
+		len(missionCorrectEvidence) > 0 || cmd.Flags().Changed("round")
 
 	var c *mission.Correction
 	if missionCorrectFile != "" {
