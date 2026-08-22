@@ -1,0 +1,29 @@
+mission_id: m-2026-08-22-022
+status: open
+type: implement
+created_at: "2026-08-22T09:42:36Z"
+updated_at: "2026-08-22T09:42:36Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T09:42:36Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-gy40
+write_set:
+    - internal/hook/format_output.go
+    - internal/hook/format_output_test.go
+    - cmd/ethos/vendor_test.go
+    - CHANGELOG.md
+success_criteria:
+    - 'Fix formatVendor''s pruned-files block (internal/hook/format_output.go, near line 497-499): the summary text must change based on jsonBool(result, "prune") (already used elsewhere in this file at line 466, same pattern), not just on pruned being non-empty. When applied && !prune, the summary must NOT claim removal happened.'
+    - Add a format_output_test.go case for formatVendor covering applied=true, prune=false, pruned=[...] non-empty, asserting the summary does NOT say the files were removed
+    - 'Strengthen TestVendorApplyJSONWithoutPruneReportsPruneFalse in cmd/ethos/vendor_test.go: first vendor a handle, add a stale file under the destination (reuse the setup TestCLI_VendorApplyWithoutPruneReportsWouldRemove already has), re-run --apply --json without --prune, assert BOTH "prune": false AND a non-empty "pruned" array appear together'
+    - make check passes
+    - Commit incrementally, each commit passing make check; CHANGELOG entry under Unreleased > Fixed
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Two related findings on branch feat/vendor-repo-only, closing out the vendor prune-misreport fix completely (ethos-823n''s fix missed a third surface, and its test doesn''t exercise the real adversarial case). (1) internal/hook/format_output.go''s formatVendor -- the function that rewrites raw MCP tool JSON into the compact summary an agent reads in its transcript -- prints ''No longer in the closure (N): file1, file2...'' whenever pruned is non-empty, regardless of applied/prune. An agent driving vendor via MCP with apply=true and no prune=true sees files listed as ''no longer in the closure'' with zero indication they still exist on disk. (2) cmd/ethos/vendor_test.go''s TestVendorApplyJSONWithoutPruneReportsPruneFalse runs against a fresh destination with nothing to prune, so pruned ends up empty/absent -- it never actually tests the adversarial case (non-empty pruned + prune:false together).'
