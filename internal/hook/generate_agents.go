@@ -523,7 +523,8 @@ func mergeSkills(identitySkills, bundleDefaultSkills []string) []string {
 	out := []string{"baseline-ops"}
 	for _, lists := range [][]string{identitySkills, bundleDefaultSkills} {
 		for _, s := range lists {
-			if seen[s] {
+			s = strings.TrimSpace(s)
+			if s == "" || seen[s] {
 				continue
 			}
 			seen[s] = true

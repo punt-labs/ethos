@@ -176,6 +176,15 @@ func TestGeneratedAgentHandles(t *testing.T) {
 	assert.False(t, owned["test-human"], "a human member is not generated")
 }
 
+// TestMergeSkills_TrimsAndSkipsEmpty pins the Copilot finding on PR #481:
+// an empty or whitespace-only slug in either input list must not survive
+// into the merged list — it would otherwise render as a blank `  - `
+// entry in generated agent frontmatter.
+func TestMergeSkills_TrimsAndSkipsEmpty(t *testing.T) {
+	got := mergeSkills([]string{"", " ", "gstack-plan", "  \t"}, nil)
+	assert.Equal(t, []string{"baseline-ops", "gstack-plan"}, got)
+}
+
 // TestGenerateAgentFile_MergesIdentityAndBundleSkills pins DES-073's
 // generator step: baseline-ops always leads, followed by the identity's
 // own Skills, followed by the active bundle's default_skills — deduped,
