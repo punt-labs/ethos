@@ -1671,8 +1671,9 @@ corrected: "make check failed because of a stale worktree base"
 	assert.Equal(t, "fabrication", payload["kind"])
 	assert.Equal(t, "djb", payload["author"])
 
-	corrections, err := h.missionStore.LoadCorrections(id)
+	corrections, warnings, err := h.missionStore.LoadCorrections(id)
 	require.NoError(t, err)
+	assert.Empty(t, warnings)
 	require.Len(t, corrections, 1)
 	assert.Equal(t, mission.CorrectionFabrication, corrections[0].Kind)
 }

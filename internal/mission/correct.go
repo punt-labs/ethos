@@ -254,29 +254,26 @@ func correctionDetails(c Correction) map[string]any {
 }
 
 // LoadCorrections returns every correction recorded for missionID, in
-// the event log's on-disk (chronological) order. Missing mission or a
-// log with no correct events -> empty slice, consistent with
-// LoadResults and LoadReflections: the absence of any correction is
-// the normal state for most missions.
+// the event log's on-disk (chronological) order, plus any decode
+// warnings from the underlying event log. Missing mission or a log
+// with no correct events -> empty slice, consistent with LoadResults
+// and LoadReflections: the absence of any correction is the normal
+// state for most missions.
 //
-// LoadCorrections has no warnings return of its own — unlike
-// LoadEvents, its callers (CLI `mission show`/`results`, MCP,
-// internal/ui) already treat a LoadCorrections error as an
-// integrity warning rather than a hard failure (see cmd/ethos/mission.go).
-// A partially corrupt event log could otherwise skip a correct event
-// with no signal at all, so any warnings LoadEvents reports are
-// upgraded to an error here, reusing that existing warning path
-// instead of adding a second, differently-shaped one.
-func (s *Store) LoadCorrections(missionID string) ([]Correction, error) {
+// The warnings return mirrors LoadEvents' own shape: a partially
+// corrupt event log still yields whatever corrections the readable
+// lines contain, plus one warning string per unreadable line, rather
+// than failing outright. A hard error here would block every caller
+// (CLI `mission show`/`results`, MCP, internal/ui) from reading
+// results.yaml or the contract over a single corrupt log line — the
+// same reasoning LoadEvents itself already applies to every other
+// consumer of the mission log.
+func (s *Store) LoadCorrections(missionID string) ([]Correction, []string, error) {
 	events, warnings, err := s.LoadEvents(missionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if len(warnings) > 0 {
-		return nil, fmt.Errorf("mission %q event log has %d unreadable line(s): %s",
-			missionID, len(warnings), strings.Join(warnings, "; "))
-	}
-	return CorrectionsFromEvents(missionID, events), nil
+	return CorrectionsFromEvents(missionID, events), warnings, nil
 }
 
 // CorrectionsFromEvents extracts every "correct" event out of an

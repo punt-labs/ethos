@@ -1779,8 +1779,9 @@ func TestMissionCorrect_ViaFlags(t *testing.T) {
 	assert.Contains(t, stdout, "by claude")
 
 	ms := missionStore()
-	corrections, err := ms.LoadCorrections(id)
+	corrections, warnings, err := ms.LoadCorrections(id)
 	require.NoError(t, err)
+	assert.Empty(t, warnings)
 	require.Len(t, corrections, 1)
 	assert.Equal(t, mission.CorrectionFabrication, corrections[0].Kind)
 	assert.Equal(t, "claude", corrections[0].Author)
@@ -1831,8 +1832,9 @@ corrected: "leader ruling: re-scope and re-dispatch"
 	assert.Contains(t, stdout, "by djb")
 
 	ms := missionStore()
-	corrections, err := ms.LoadCorrections(id)
+	corrections, warnings, err := ms.LoadCorrections(id)
 	require.NoError(t, err)
+	assert.Empty(t, warnings)
 	require.Len(t, corrections, 1)
 	assert.Equal(t, mission.CorrectionDecision, corrections[0].Kind)
 	assert.Empty(t, corrections[0].Claim)

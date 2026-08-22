@@ -295,13 +295,17 @@ func (h *Handler) handleShowMission(req mcplib.CallToolRequest) (*mcplib.CallToo
 	// Corrections are advisory in the same way results are: a corrupt
 	// event log becomes a warning, never a failed show — the payload
 	// still carries the mission the caller asked for.
-	corrections, corrErr := h.missionStore.LoadCorrections(id)
+	corrections, corrWarnings, corrErr := h.missionStore.LoadCorrections(id)
 	if corrections == nil {
 		corrections = []mission.Correction{}
 	}
 	if corrErr != nil {
 		payload.Warnings = append(payload.Warnings,
 			fmt.Sprintf("loading corrections: %v", corrErr))
+	}
+	for _, w := range corrWarnings {
+		payload.Warnings = append(payload.Warnings,
+			fmt.Sprintf("loading corrections: %s", w))
 	}
 	payload.Corrections = corrections
 	return jsonResult(payload)
@@ -623,21 +627,33 @@ func (h *Handler) handleResultsMission(req mcplib.CallToolRequest) (*mcplib.Call
 	if rs == nil {
 		rs = []mission.Result{}
 	}
-	cs, err := h.missionStore.LoadCorrections(id)
-	if err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to load corrections: %v", err)), nil
-	}
+	// Corrections are advisory here too (DES-072/ethos-268t): a
+	// corrupt event log must not block reading results.yaml through
+	// this path — it surfaces as a warning in the response, the same
+	// treatment handleShowMission already gives corrections.
+	cs, corrWarnings, corrErr := h.missionStore.LoadCorrections(id)
 	if cs == nil {
 		cs = []mission.Correction{}
 	}
-	return jsonResult(missionResultsResponse{Results: rs, Corrections: cs})
+	resp := missionResultsResponse{Results: rs, Corrections: cs}
+	if corrErr != nil {
+		resp.Warnings = append(resp.Warnings, fmt.Sprintf("loading corrections: %v", corrErr))
+	}
+	for _, w := range corrWarnings {
+		resp.Warnings = append(resp.Warnings, fmt.Sprintf("loading corrections: %s", w))
+	}
+	return jsonResult(resp)
 }
 
 // missionResultsResponse is the wire shape for handleResultsMission
 // (DES-072): results plus the corrections filed against them.
+// Warnings is omitempty and carries advisory corruption signals from
+// loading corrections — a corrupt event log must not fail the whole
+// response, mirroring handleShowMission's warnings field.
 type missionResultsResponse struct {
 	Results     []mission.Result     `json:"results"`
 	Corrections []mission.Correction `json:"corrections"`
+	Warnings    []string             `json:"warnings,omitempty"`
 }
 
 // handleCorrectMission files a correction against a closed mission.

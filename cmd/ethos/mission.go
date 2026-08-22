@@ -1208,11 +1208,16 @@ func runMissionShow(idOrPrefix string) error {
 			payload.Warnings = append(payload.Warnings,
 				fmt.Sprintf("loading results: %v", loadErr))
 		}
-		corrections, corrErr := ms.LoadCorrections(id)
+		corrections, corrWarnings, corrErr := ms.LoadCorrections(id)
 		if corrErr != nil {
 			fmt.Fprintf(os.Stderr, "ethos: warning: loading corrections: %v\n", corrErr)
 			payload.Warnings = append(payload.Warnings,
 				fmt.Sprintf("loading corrections: %v", corrErr))
+		}
+		for _, w := range corrWarnings {
+			fmt.Fprintf(os.Stderr, "ethos: warning: loading corrections: %s\n", w)
+			payload.Warnings = append(payload.Warnings,
+				fmt.Sprintf("loading corrections: %s", w))
 		}
 		if corrections == nil {
 			corrections = []mission.Correction{}
@@ -1244,9 +1249,12 @@ func runMissionShow(idOrPrefix string) error {
 	}
 	printResults(results)
 
-	corrections, err := ms.LoadCorrections(id)
+	corrections, corrWarnings, err := ms.LoadCorrections(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading corrections: %v\n", err)
+	}
+	for _, w := range corrWarnings {
+		fmt.Fprintf(os.Stderr, "ethos: warning: loading corrections: %s\n", w)
 	}
 	printCorrections(corrections)
 	return nil
@@ -1299,9 +1307,17 @@ func runMissionResults(idOrPrefix string) error {
 	if err != nil {
 		return fmt.Errorf("mission results: %w", err)
 	}
-	cs, err := ms.LoadCorrections(id)
+	// LoadCorrections' own error is a genuine failure (I/O, an
+	// unresolvable mission ID) and stays fatal, matching LoadResults
+	// above and LoadEvents in runMissionLog. Its warnings — decode
+	// failures on individual event-log lines — are advisory: they
+	// must not block reading results.yaml through this path (ethos-268t).
+	cs, corrWarnings, err := ms.LoadCorrections(id)
 	if err != nil {
 		return fmt.Errorf("mission results: %w", err)
+	}
+	for _, w := range corrWarnings {
+		fmt.Fprintf(os.Stderr, "ethos: warning: loading corrections: %s\n", w)
 	}
 	if jsonOutput {
 		// Always return arrays, never null, so consumers can
@@ -1312,7 +1328,12 @@ func runMissionResults(idOrPrefix string) error {
 		if cs == nil {
 			cs = []mission.Correction{}
 		}
-		printJSON(missionResultsPayload{Results: rs, Corrections: cs})
+		payload := missionResultsPayload{Results: rs, Corrections: cs}
+		for _, w := range corrWarnings {
+			payload.Warnings = append(payload.Warnings,
+				fmt.Sprintf("loading corrections: %s", w))
+		}
+		printJSON(payload)
 		return nil
 	}
 	printResults(rs)

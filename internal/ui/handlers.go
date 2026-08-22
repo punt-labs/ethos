@@ -114,18 +114,19 @@ func (s *Server) readMissionsJSONL() []missionRow {
 }
 
 type missionData struct {
-	Title            string
-	Contract         *mission.Contract
-	Delegations      []*mission.Delegation
-	Results          []mission.Result
-	ResultsError     string
-	Corrections      []mission.Correction
-	CorrectionsError string
-	Events           []mission.Event
-	EventsError      string
-	EventsWarnings   []string
-	AuditEntries     []hook.AuditView
-	AuditCount       int
+	Title               string
+	Contract            *mission.Contract
+	Delegations         []*mission.Delegation
+	Results             []mission.Result
+	ResultsError        string
+	Corrections         []mission.Correction
+	CorrectionsError    string
+	CorrectionsWarnings []string
+	Events              []mission.Event
+	EventsError         string
+	EventsWarnings      []string
+	AuditEntries        []hook.AuditView
+	AuditCount          int
 }
 
 // missionStore builds the mission store the UI reads from. The record
@@ -189,13 +190,20 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 	if resultsErr != nil {
 		data.ResultsError = resultsErr.Error()
 	}
-	if eventsErr != nil {
+	switch {
+	case eventsErr != nil:
 		data.EventsError = eventsErr.Error()
 		// The Corrections section reads from the same event log; a
 		// failure there is the same integrity signal, not a separate
 		// one, so it is surfaced through CorrectionsError too rather
 		// than left blank while Events shows the warning.
 		data.CorrectionsError = eventsErr.Error()
+	case len(warnings) > 0:
+		// eventsErr is nil but the union has per-line decode warnings
+		// (a corrupt line skipped, not a hard failure) — Corrections
+		// was still derived from the events that DID decode, so a
+		// dropped correct event must not render as a clean section.
+		data.CorrectionsWarnings = warnings
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "mission.html", data); err != nil {
 		http.Error(w, err.Error(), 500)

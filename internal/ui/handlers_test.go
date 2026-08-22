@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/internal/audit"
 	"github.com/punt-labs/ethos/internal/mission"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,6 +158,71 @@ func TestHandleMission_RendersCorrections(t *testing.T) {
 	assert.Contains(t, body, "fabrication")
 	assert.Contains(t, body, "make check failed because of a stale worktree base")
 	assert.Contains(t, body, "by claude")
+}
+
+// TestHandleMission_RendersCorrectionsWarningsOnPartialLog asserts the
+// ethos-268t regression fix: when store.LoadEvents returns warnings
+// but a nil error (some JSONL lines failed to decode, others did
+// not), handleMission must not render the Corrections section as
+// clean. Before the fix, handleMission only set CorrectionsError when
+// eventsErr was non-nil, so a corrupt line silently dropped from a
+// healthy-looking union left no signal at all.
+func TestHandleMission_RendersCorrectionsWarningsOnPartialLog(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).
+		WithCheckoutRoot(storeRoot).
+		WithSessionID("s1")
+	id := "m-2026-08-22-096"
+	require.NoError(t, store.Create(uiTestContract(id)))
+	require.NoError(t, store.AppendResult(id, &mission.Result{
+		Mission:    id,
+		Round:      1,
+		Author:     "bwk",
+		Verdict:    mission.VerdictPass,
+		Confidence: 0.9,
+		Evidence:   []mission.EvidenceCheck{{Name: "make check", Status: mission.EvidenceStatusPass}},
+	}))
+	_, err := store.Close(id, mission.StatusClosed)
+	require.NoError(t, err)
+	require.NoError(t, store.Correct(id, mission.Correction{
+		Mission:   id,
+		Kind:      mission.CorrectionDecision,
+		Author:    "claude",
+		Corrected: "the round-1 verdict stands",
+	}))
+
+	// The DES-058 union reads the correct event back from the mission's
+	// live per-session log; appending a corrupt line to the frozen
+	// legacy log.jsonl slot adds a decode warning to the union without
+	// disturbing (or duplicating) the correct event already in the
+	// live tail — same technique internal/mission's LoadCorrections
+	// warnings test uses.
+	sealedDir := audit.SealedMissionDir(storeRoot, id)
+	require.NoError(t, os.MkdirAll(sealedDir, 0o700))
+	legacyLog := filepath.Join(sealedDir, "log.jsonl")
+	require.NoError(t, os.WriteFile(legacyLog, []byte("{not valid json\n"), 0o600))
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+	srv.repoRoot = storeRoot
+
+	req := httptest.NewRequest(http.MethodGet, "/missions/"+id, nil)
+	rec := httptest.NewRecorder()
+	srv.handleMission(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := rec.Body.String()
+	// The mission log is only partially unreadable, not a hard
+	// failure, so eventsErr is nil and the readable correct event must
+	// still render...
+	assert.Contains(t, body, "the round-1 verdict stands", "detail: %s", body)
+	// ...but the page must not look clean: a warning naming the
+	// unreadable line must be visible.
+	assert.Contains(t, body, "corrections may be incomplete", "detail: %s", body)
+	assert.Contains(t, body, "line 1", "detail: %s", body)
 }
 
 // TestHandleMission_DerivesCorrectionsFromEventsOnce asserts

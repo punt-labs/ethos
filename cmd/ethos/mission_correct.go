@@ -27,9 +27,13 @@ type missionShowPayload struct {
 // missionResultsPayload is the JSON shape for `ethos mission results
 // --json` (DES-072): results plus the corrections filed against them,
 // sourced separately since a correction never touches results.yaml.
+// Warnings is omitempty and carries advisory corruption signals from
+// loading corrections (ethos-268t) — a corrupt event log must not
+// fail `mission results`, only flag it.
 type missionResultsPayload struct {
 	Results     []mission.Result     `json:"results"`
 	Corrections []mission.Correction `json:"corrections"`
+	Warnings    []string             `json:"warnings,omitempty"`
 }
 
 var (

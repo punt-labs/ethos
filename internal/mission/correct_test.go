@@ -3,7 +3,6 @@
 package mission
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -255,8 +254,9 @@ func TestStore_Correct_RendersInShowAndLog(t *testing.T) {
 		"make check (full suite): fail — pre-existing, unrelated",
 		ev.Details["claim"])
 
-	corrections, err := s.LoadCorrections(c.MissionID)
+	corrections, warnings, err := s.LoadCorrections(c.MissionID)
 	require.NoError(t, err)
+	assert.Empty(t, warnings)
 	require.Len(t, corrections, 1)
 	got := corrections[0]
 	assert.Equal(t, c.MissionID, got.Mission)
@@ -270,14 +270,16 @@ func TestStore_Correct_RendersInShowAndLog(t *testing.T) {
 	assert.Equal(t, EvidenceStatusPass, got.Evidence[0].Status)
 }
 
-// TestStore_LoadCorrections_UpgradesEventLogWarningsToError asserts
-// that a partially corrupt event log is not indistinguishable from a
-// mission that has zero corrections: LoadEvents surfaces a decode
-// warning rather than failing, and LoadCorrections must upgrade that
-// warning to an error rather than silently returning whatever
-// correct events it could still parse. A correction skipped by a bad
-// line with no error return would be invisible to every caller.
-func TestStore_LoadCorrections_UpgradesEventLogWarningsToError(t *testing.T) {
+// TestStore_LoadCorrections_SurfacesEventLogWarnings asserts that a
+// partially corrupt event log does not block LoadCorrections from
+// returning the corrections its readable lines still contain — it
+// mirrors LoadEvents' own advisory shape instead of upgrading a
+// decode warning to a hard error. Every caller (CLI `mission
+// show`/`results`, MCP, internal/ui) needs the same readable-results,
+// advisory-warning behavior LoadEvents already gives every other
+// consumer of the mission log; a hard error here would block reading
+// results.yaml entirely over a single corrupt log line.
+func TestStore_LoadCorrections_SurfacesEventLogWarnings(t *testing.T) {
 	s, c := closedMission(t, "m-2026-08-22-107")
 
 	require.NoError(t, s.Correct(c.MissionID, Correction{
@@ -292,22 +294,25 @@ func TestStore_LoadCorrections_UpgradesEventLogWarningsToError(t *testing.T) {
 	events, warnings, err := s.LoadEvents(c.MissionID)
 	require.NoError(t, err)
 	require.Empty(t, warnings)
-	var lines []string
+	var found bool
 	for _, e := range events {
-		data, marshalErr := json.Marshal(e)
-		require.NoError(t, marshalErr)
-		lines = append(lines, string(data))
+		found = found || e.Event == EventCorrect
 	}
-	// Append a corrupt line after the good ones so the correct event
-	// itself still decodes, and LoadCorrections has no other reason to
-	// fail.
-	seedLogLines(t, s, c.MissionID, append(lines, "{not valid json")...)
+	require.True(t, found)
 
-	corrections, err := s.LoadCorrections(c.MissionID)
-	require.Error(t, err, "a partially unreadable event log must fail LoadCorrections, not silently drop the warning")
-	assert.Nil(t, corrections)
-	assert.Contains(t, err.Error(), c.MissionID)
-	assert.Contains(t, err.Error(), fmt.Sprintf("line %d", len(lines)+1))
+	// The DES-058 two-tree union reads the correct event back from the
+	// mission's live per-session log, not the frozen legacy log.jsonl —
+	// seedLogLines writes to the legacy slot instead, so a single
+	// corrupt line there adds a warning to the union without
+	// duplicating the correct event already present in the live tail.
+	seedLogLines(t, s, c.MissionID, "{not valid json")
+
+	corrections, warnings, err := s.LoadCorrections(c.MissionID)
+	require.NoError(t, err, "a partially unreadable event log must not fail LoadCorrections")
+	require.Len(t, corrections, 1, "the readable correct event must still be returned")
+	assert.Equal(t, CorrectionDecision, corrections[0].Kind)
+	require.Len(t, warnings, 1)
+	assert.Contains(t, warnings[0], "line 1")
 }
 
 // TestCorrectionsFromEvents_DerivesFromAlreadyLoadedSlice asserts
