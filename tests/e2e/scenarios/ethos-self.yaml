@@ -16,9 +16,13 @@ claude_invocation:
   prompt: "reply with the single word pong"
   max_turns: 1
 expect:
-  # Observed baseline: ~388,800 bytes. Ceiling set ~20% above that
-  # first capture — see PR description for the full attribution
-  # breakdown this ceiling was calibrated from.
+  # Observed baseline: ~357,400 bytes (dropped from the original
+  # ~388,800 baseline after the repo-only vendoring fix trimmed the
+  # bundle-layer identities, personalities, talents, and writing
+  # styles out of this repo's vendored footprint). Ceiling stays at
+  # 470000, still comfortably above the new baseline — see PR
+  # description for the full attribution breakdown this ceiling was
+  # calibrated from.
   max_bytes: 470000
   no_secret_patterns: true
 smoke: false

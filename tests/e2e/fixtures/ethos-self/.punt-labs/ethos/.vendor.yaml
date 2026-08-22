@@ -1,0 +1,197 @@
+# Written by `ethos vendor`. Records the vendored closure so ethos can
+# verify this set is complete under `resolution: repo-only`.
+# Do not edit by hand — re-run `ethos vendor --apply` instead.
+version: 1
+generated_at: 2026-08-22T07:13:18Z
+seeds:
+    - ach
+    - adb
+    - adt
+    - bcs
+    - bwk
+    - claude
+    - djb
+    - dna
+    - edt
+    - ghr
+    - gvr
+    - jfreeman
+    - jms
+    - jra
+    - kth
+    - mcg
+    - mdm
+    - rmh
+    - rop
+    - rsc
+identities:
+    - handle: ach
+      ext:
+        - quarry.yaml
+    - handle: adb
+      ext:
+        - quarry.yaml
+    - handle: adt
+      ext:
+        - quarry.yaml
+    - handle: bcs
+      ext:
+        - quarry.yaml
+    - handle: bwk
+      ext:
+        - quarry.yaml
+    - handle: claude
+      ext:
+        - beadle.yaml
+        - quarry.yaml
+        - vox.yaml
+    - handle: djb
+      ext:
+        - quarry.yaml
+    - handle: dna
+      ext:
+        - quarry.yaml
+    - handle: edt
+      ext:
+        - quarry.yaml
+    - handle: ghr
+      ext:
+        - quarry.yaml
+    - handle: gvr
+      ext:
+        - quarry.yaml
+    - handle: jfreeman
+      ext:
+        - quarry.yaml
+        - vox.yaml
+    - handle: jms
+      ext:
+        - quarry.yaml
+    - handle: jra
+      ext:
+        - quarry.yaml
+    - handle: kth
+      ext:
+        - quarry.yaml
+    - handle: mcg
+      ext:
+        - quarry.yaml
+    - handle: mdm
+      ext:
+        - quarry.yaml
+    - handle: rmh
+      ext:
+        - quarry.yaml
+    - handle: rop
+      ext:
+        - quarry.yaml
+    - handle: rsc
+      ext:
+        - quarry.yaml
+personalities:
+    - abrial
+    - bernstein
+    - cagan
+    - cox
+    - friendly-direct
+    - hamilton
+    - hettinger
+    - hightower
+    - hopper
+    - kernighan
+    - lovelace
+    - mcilroy
+    - norman
+    - pike
+    - principal-engineer
+    - schneier
+    - spivey
+    - tufte
+    - turing
+    - van-rossum
+writing_styles:
+    - abrial-prose
+    - bernstein-prose
+    - cagan-prose
+    - concise-quantified
+    - cox-prose
+    - direct-with-quips
+    - hamilton-prose
+    - hettinger-prose
+    - hightower-prose
+    - hopper-prose
+    - kernighan-prose
+    - lovelace-prose
+    - mcilroy-prose
+    - norman-prose
+    - pike-prose
+    - schneier-prose
+    - spivey-prose
+    - tufte-prose
+    - turing-prose
+    - van-rossum-prose
+talents:
+    - b-method
+    - cli
+    - cloud-native
+    - cognitive-engineering
+    - cryptography
+    - dependency-management
+    - design
+    - devops
+    - empowered-teams
+    - engineering
+    - event-b
+    - finance
+    - formal-methods
+    - go
+    - infrastructure
+    - kubernetes
+    - language-design
+    - management
+    - operations
+    - peps
+    - plan9
+    - policy
+    - product-development
+    - product-discovery
+    - product-management
+    - product-strategy
+    - python
+    - refinement
+    - security
+    - supply-chain-security
+    - threat-modeling
+    - tooling
+    - type-systems
+    - typing
+    - unix
+    - usability
+    - ux
+    - ux-design
+    - z-notation
+roles:
+    - b-specialist
+    - ceo
+    - cli-minimalist
+    - cli-specialist
+    - cloud-native-engineer
+    - coo
+    - finance-ops
+    - go-specialist
+    - go-toolchain
+    - infra-engineer
+    - pm-building-blocks
+    - pm-grounding
+    - product-strategy
+    - python-language-design
+    - python-specialist
+    - security-architect
+    - security-engineer
+    - ux-cognitive
+    - ux-designer
+    - z-specialist
+teams:
+    - engineering
+    - formal-methods
+    - website
