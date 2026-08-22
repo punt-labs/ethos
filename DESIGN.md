@@ -7830,8 +7830,8 @@ requires user vocabulary to invoke).
   four available via runtime `Skill` invocation without inflating every
   sub-agent's spawn cost.
 
-**Implementation status.** Implementation shipped in the PR that follows
-PR #480 (which introduced this ADR). `Identity.Skills`,
+**Implementation status.** Implementation shipped in PR #481 (stacked on
+PR #480, which introduced this ADR). `Identity.Skills`,
 `bundle.Manifest.DefaultSkills`, the generator merge, `ethos seed`'s
 bundle-skill deploy, and the gstack bundle's six skills all landed
 together; see `internal/hook/generate_agents.go`'s `mergeSkills` and
