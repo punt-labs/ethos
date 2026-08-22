@@ -114,6 +114,26 @@ func TestCheckNoHandEditedMissionFiles_EmptyFilesPass(t *testing.T) {
 	assert.Equal(t, "PASS", r.Status)
 }
 
+// TestCheckNoHandEditedMissionFiles_FlagsDelegationRecord asserts a
+// hand-edited delegations/<name>/record.yaml is flagged, not silently
+// skipped. record.yaml is yaml.Marshal output written by
+// internal/mission/delegation.go, the same machine-written-YAML class
+// as contract.yaml/results.yaml/reflections.yaml, so it belongs in the
+// same closed set.
+func TestCheckNoHandEditedMissionFiles_FlagsDelegationRecord(t *testing.T) {
+	root := t.TempDir()
+	dir := missionArtifactDir(t, root, "m-2026-08-22-008")
+	delegationDir := filepath.Join(dir, "delegations", "01")
+	require.NoError(t, os.MkdirAll(delegationDir, 0o700))
+	body := "worker: bwk\nverdict: pass\n# hand-flipped from fail\n"
+	require.NoError(t, os.WriteFile(filepath.Join(delegationDir, "record.yaml"), []byte(body), 0o600))
+
+	r := CheckNoHandEditedMissionFiles(root)
+	assert.Equal(t, "FAIL", r.Status)
+	assert.Contains(t, r.Detail, "m-2026-08-22-008/delegations/01/record.yaml")
+	assert.Contains(t, r.Detail, "ethos mission correct")
+}
+
 // TestCheckNoHandEditedMissionFiles_MultipleFlagged asserts every
 // offending file is named, not just the first one found.
 func TestCheckNoHandEditedMissionFiles_MultipleFlagged(t *testing.T) {

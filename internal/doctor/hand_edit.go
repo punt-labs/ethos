@@ -12,20 +12,22 @@ import (
 )
 
 // handEditFileNames is the closed set of mission artifact files this
-// check scans. Every other file under missions/<id>/ (log.jsonl and
-// its sealed chunks) is machine-appended JSONL, not YAML, and outside
-// this check's scope.
+// check scans, including delegations/<name>/record.yaml. Every other
+// file under missions/<id>/ (log.jsonl and its sealed chunks) is
+// machine-appended JSONL, not YAML, and outside this check's scope.
 var handEditFileNames = map[string]bool{
 	"contract.yaml":    true,
 	"results.yaml":     true,
 	"reflections.yaml": true,
+	"record.yaml":      true,
 }
 
 // CheckNoHandEditedMissionFiles flags any contract.yaml, results.yaml,
-// or reflections.yaml under <storeRoot>/.punt-labs/ethos/missions/
-// carrying a genuine YAML comment. These files are exclusively
-// yaml.Marshal output — the encoder never emits a comment — so any
-// comment present is definitionally a hand-edit, not a machine write.
+// reflections.yaml, or delegation record.yaml under
+// <storeRoot>/.punt-labs/ethos/missions/ carrying a genuine YAML
+// comment. These files are exclusively yaml.Marshal output — the
+// encoder never emits a comment — so any comment present is
+// definitionally a hand-edit, not a machine write.
 // The sanctioned fix for "the record says something wrong" is `ethos
 // mission correct`, which appends to the event log instead of
 // touching these files at all — see DES-072.
