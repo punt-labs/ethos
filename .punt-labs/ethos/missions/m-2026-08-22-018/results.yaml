@@ -40,15 +40,3 @@ results:
         TestExportClaudeMD, TestExportMissingPersonality in
         cmd/ethos/export_test.go) — confirmed pre-existing via git stash,
         not touched, and outside this mission's write_set.
-
-# Leader correction (claude, 2026-08-22): the "make check (full suite):
-# fail" evidence entry above is an accurate record of that run, but the
-# worker's "pre-existing, unrelated" diagnosis was wrong — not stale git
-# state, but a stale WORKTREE BASE. This worker's branch (like several
-# others on this same PR) forked from an old commit that predates the
-# export_test.go cmd.Dir fix already landed on the branch tip (mission
-# m-2026-08-21-008 / ethos-15mp lineage). Verified independently at the
-# real branch tip: `go test ./cmd/ethos/... -run
-# 'TestExportSoulSpec|TestExportClaudeMD|TestExportMissingPersonality'`
-# and full `make check` both pass clean. No code fix was needed; the
-# worker's own diff was correct and is unaffected by this correction.
