@@ -178,6 +178,12 @@ When the worker reports back, read the result artifact and decide:
   `escalate` recommendation.
 - Fail or escalate → `ethos mission close <id> --status failed` or
   `--status escalated`.
+- The record on file for a closed mission is wrong → `ethos mission
+  correct <id> --kind factual|fabrication|decision --claim <...>
+  --corrected <...>`. A closed mission's contract, results, and
+  reflections are never hand-edited — `correct` is the only way to
+  fix or annotate them, and it appends to the event log rather than
+  rewriting anything.
 
 ## Worked example
 
