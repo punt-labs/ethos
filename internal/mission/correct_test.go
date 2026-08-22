@@ -346,20 +346,29 @@ func TestStore_Correct_MissionMismatchRefused(t *testing.T) {
 
 // TestStore_Correct_AcceptsEveryTerminalStatus proves Correct's guard
 // is genuinely the inverse of every other write path: it accepts
-// closed, failed, AND escalated, not just closed.
+// closed, failed, escalated, AND abandoned, not just closed.
 func TestStore_Correct_AcceptsEveryTerminalStatus(t *testing.T) {
-	for i, status := range []string{StatusClosed, StatusFailed, StatusEscalated} {
+	for i, status := range []string{StatusClosed, StatusFailed, StatusEscalated, StatusAbandoned} {
 		id := fmt.Sprintf("m-2026-08-22-2%02d", i)
 		repoRoot := t.TempDir()
 		globalRoot := t.TempDir()
 		s := NewStoreWithRoots(repoRoot, globalRoot)
 		c := newContract(id)
 		require.NoError(t, s.Create(c))
-		submitRoundResult(t, s, c, VerdictPass)
-		_, err := s.Close(id, status)
-		require.NoError(t, err)
 
-		err = s.Correct(id, Correction{
+		if status == StatusAbandoned {
+			// Abandon refuses a mission with delegations or result
+			// artifacts, so it takes the create-only path rather than
+			// submitRoundResult + Close like the other three statuses.
+			_, err := s.Abandon(id, "reason")
+			require.NoError(t, err)
+		} else {
+			submitRoundResult(t, s, c, VerdictPass)
+			_, err := s.Close(id, status)
+			require.NoError(t, err)
+		}
+
+		err := s.Correct(id, Correction{
 			Mission:   id,
 			Kind:      CorrectionFactual,
 			Author:    "claude",
