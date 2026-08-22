@@ -70,4 +70,9 @@ type Manifest struct {
 	Version         int    `yaml:"version,omitempty"`
 	Description     string `yaml:"description,omitempty"`
 	EthosMinVersion string `yaml:"ethos_min_version,omitempty"`
+	// DefaultSkills lists Claude Code skill slugs applied to every
+	// identity in this bundle that does not declare its own Skills
+	// (DES-073). Slugs must resolve to a sidecar-seeded or
+	// bundle-scoped skill; absent preserves current behavior.
+	DefaultSkills []string `yaml:"default_skills,omitempty"`
 }

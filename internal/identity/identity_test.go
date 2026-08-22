@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestValidate_ValidHuman(t *testing.T) {
@@ -135,4 +136,17 @@ func TestValidate_HandleFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestUnmarshal_Skills confirms a YAML identity carrying a skills: list
+// deserializes into Identity.Skills, and that an identity without the field
+// leaves Skills nil — DES-073's identity-level skill declaration.
+func TestUnmarshal_Skills(t *testing.T) {
+	var id Identity
+	require.NoError(t, yaml.Unmarshal([]byte("name: Test\nhandle: test\nkind: agent\nskills: [foo, bar]\n"), &id))
+	assert.Equal(t, []string{"foo", "bar"}, id.Skills)
+
+	var noSkills Identity
+	require.NoError(t, yaml.Unmarshal([]byte("name: Test\nhandle: test\nkind: agent\n"), &noSkills))
+	assert.Nil(t, noSkills.Skills)
 }
