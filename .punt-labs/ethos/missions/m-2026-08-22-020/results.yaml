@@ -1,0 +1,21 @@
+results:
+    - mission: m-2026-08-22-020
+      round: 1
+      created_at: "2026-08-22T09:33:49Z"
+      author: bwk
+      verdict: pass
+      confidence: 1
+      files_changed:
+        - path: tests/e2e/fixtures/ethos-self/docs/development.md
+          added: 1
+          removed: 0
+      evidence:
+        - name: diff docs/development.md tests/e2e/fixtures/ethos-self/docs/development.md
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Fixture had branched before the repo-only resolution paragraph landed
+        in docs/development.md. Copied the real file over the fixture; diff
+        confirms byte-for-byte match. make check passes (lint, docs, tests,
+        validate-content). Committed as 85166a2.
