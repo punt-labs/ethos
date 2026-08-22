@@ -54,11 +54,13 @@ func TestExportSoulSpec(t *testing.T) {
 	}
 
 	tmp := t.TempDir()
+	gitInitDir(t, tmp, tmp)
 	ethosRoot := filepath.Join(tmp, ".punt-labs", "ethos")
 	seedExportIdentity(t, ethosRoot)
 
 	outDir := filepath.Join(tmp, "export")
 	cmd := exec.Command(ethosBinary, "export", "--to", "soulspec", "mal", "--dir", outDir)
+	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "HOME="+tmp)
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "export soulspec failed: %s", out)
@@ -96,10 +98,12 @@ func TestExportClaudeMD(t *testing.T) {
 	}
 
 	tmp := t.TempDir()
+	gitInitDir(t, tmp, tmp)
 	ethosRoot := filepath.Join(tmp, ".punt-labs", "ethos")
 	seedExportIdentity(t, ethosRoot)
 
 	cmd := exec.Command(ethosBinary, "export", "--to", "claude-md", "mal")
+	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "HOME="+tmp)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -125,6 +129,7 @@ func TestExportMissingPersonality(t *testing.T) {
 	}
 
 	tmp := t.TempDir()
+	gitInitDir(t, tmp, tmp)
 	ethosRoot := filepath.Join(tmp, ".punt-labs", "ethos")
 	require.NoError(t, os.MkdirAll(ethosRoot, 0o700))
 
@@ -137,6 +142,7 @@ func TestExportMissingPersonality(t *testing.T) {
 
 	outDir := filepath.Join(tmp, "export")
 	cmd := exec.Command(ethosBinary, "export", "--to", "soulspec", "bare", "--dir", outDir)
+	cmd.Dir = tmp
 	cmd.Env = append(os.Environ(), "HOME="+tmp)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
