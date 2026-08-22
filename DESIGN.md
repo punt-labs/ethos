@@ -7684,3 +7684,152 @@ formal-methods work (`jms`/`jra`, per this repo's Z-spec row), not
 blocking the Go implementation, since the Go-level guard
 (`status ≠ stOpen`) already enforces the same precondition the formal
 schema will state.
+
+## DES-073: Skills as a first-class ethos primitive — per-identity, per-bundle skill declarations (PROPOSED)
+
+**Context.** Ethos partially uses Claude Code's skill mechanism today:
+`internal/seed/sidecar/skills/` ships three skills (`baseline-ops`,
+`create-from-project`, `mission`), `ethos seed` deploys them to
+`~/.claude/skills/`, and `internal/hook/generate_agents.go` emits a
+`skills:` field into every generated `.claude/agents/<handle>.md`
+frontmatter. The mechanism works end-to-end for `baseline-ops` — sub-agents
+spawned via Claude Code's Task tool receive that skill's body preloaded
+into their context on spawn, per Claude Code's own docs.
+
+The gap: the skill list in the generator is **hardcoded** at line ~520 of
+`generate_agents.go`:
+
+```go
+b.WriteString("skills:\n")
+b.WriteString("  - baseline-ops\n")
+```
+
+Every generated agent gets exactly `baseline-ops` and nothing else,
+regardless of which identity, role, team, or bundle it belongs to. The
+`internal/identity` struct has no `Skills` field. Bundle directories
+(`internal/seed/sidecar/bundles/foundation/`,
+`internal/seed/sidecar/bundles/gstack/`) carry no `skills/` subdirectory
+either. Bundles that would naturally want workflow skills (gstack's
+`ship`, `plan`, `design`, `review`, `qa`, `debug` — a direct mapping from
+the `garrytan/gstack` open-source project this bundle draws from) have no
+way to declare and deliver them.
+
+Research validated this is the missing piece: the source `garrytan/gstack`
+project (129K ⭐) is a Claude Code **skills package** first, with 35+
+skill directories each containing a `SKILL.md`. Users invoke `/ship`,
+`/plan-ceo-review`, `/qa` etc. directly. Ethos's gstack bundle borrowed
+the role names, tagline, and workflow spirit but discarded the skill
+mechanism entirely, delivering only identities + pipelines. The result:
+an ethos gstack consumer has no discoverable slash-command or preloaded-
+skill surface — they have to know the ethos mission-dispatch vocabulary
+to reach gstack workflows.
+
+Claude Code docs confirm skills work identically in the sub-agent
+interaction model ethos uses:
+
+> "The `skills` field allows you to inject specific skill content into
+> a subagent's context at startup … subagents can still access other
+> skills via the Skill tool unless restricted."
+> — <https://code.claude.com/docs/en/sub-agents>
+
+Ethos does not require slash-command invocation for skills to be useful.
+Preloaded skills load whether the sub-agent is spawned via `Task(...)` or
+via `ethos mission dispatch`.
+
+**Decision.** Make skills a first-class ethos primitive: declarable at
+the identity level, defaultable at the bundle level, and rendered into
+generated agent frontmatter. Ship bundle-scoped skill content alongside
+the existing bundle-scoped identities/roles/personalities/etc.
+
+Concretely:
+
+1. **Identity schema** gains a `Skills []string` field. Optional, unset
+   preserves current behavior. Slugs reference skills that must resolve
+   (either sidecar-seeded or bundle-scoped).
+2. **Bundle schema** may optionally carry a `default_skills` list applied
+   additively to every identity in the bundle. Merged as a union with
+   each identity's own `Skills`, then deduplicated — not an override.
+   Same slug-resolution rule. (A gstack identity whose own `Skills`
+   already lists `gstack-plan` and whose bundle `default_skills` also
+   lists `gstack-plan` gets one entry, not two, in the generated
+   frontmatter.)
+3. **Bundle directories** may carry a `skills/<slug>/SKILL.md` subtree
+   (same shape as sidecar top-level `skills/`). `ethos seed` deploys
+   bundle-scoped skills to `~/.claude/skills/` alongside the sidecar
+   top-level skills, namespacing to avoid slug collisions.
+4. **`generate_agents.go`** replaces the hardcoded `baseline-ops` write
+   with a computed slug list: `baseline-ops` (always) + identity's
+   `Skills` + bundle's `default_skills`, deduplicated, deterministic
+   order.
+5. **`gstack` bundle** ships six skills at
+   `internal/seed/sidecar/bundles/gstack/skills/`: `gstack-plan`,
+   `gstack-design`, `gstack-ship`, `gstack-review`, `gstack-qa`,
+   `gstack-debug`. Each is a distilled `SKILL.md` derived from the
+   corresponding `garrytan/gstack` skill (respecting MIT license,
+   attributing origin in the skill metadata). `default_skills` on the
+   bundle preloads the ones every gstack sub-agent benefits from
+   (`gstack-plan`, `gstack-ship`); role-specific skills preload only
+   where relevant (`gstack-qa` on the QA agent, etc.).
+6. **`foundation` bundle** ships no skills initially — foundation is the
+   minimal starter and stays minimal. Skill authoring for foundation is
+   a follow-up if usage patterns warrant it.
+
+**Wire-cost consequences.** Skills are cheap per session:
+
+- Skill DESCRIPTIONS ride the per-session skill index (~200 B per skill).
+  A gstack consumer picks up ~1.2 KB of index cost for six skills.
+- Skill BODIES ride the wire ONLY when a sub-agent that preloads them is
+  spawned, and only into that sub-agent's context. Main-loop payload
+  does not grow by skill body bytes.
+
+This is strictly cheaper than delivering the same workflow content via
+generated agent-file body prose (which rides every session unconditionally)
+and comparable to delivering via pipelines (which is zero per-session but
+requires user vocabulary to invoke).
+
+**Non-goals.**
+
+- Ethos does not become a skill marketplace. Bundle-scoped skills stay
+  bounded to the bundle's workflow. General-purpose language/framework/
+  domain skills are what tools like `ECC` and `hermes-agent` provide;
+  ethos users compose those alongside ethos's own if they want them.
+- No change to how skills are executed by Claude Code — the mechanism
+  is Claude-Code-native. Ethos only decides what to declare, ship, and
+  reference.
+
+**Rejected alternatives.**
+
+- **Leave skills hardcoded to `baseline-ops`, deliver bundle workflows
+  via pipelines only.** Rejected: pipelines require the user (or main
+  Claude) to know the mission-dispatch vocabulary. Discoverability gap.
+  Original `garrytan/gstack` succeeds because skills are directly
+  invocable and self-describing; matching that UX matters.
+- **Deliver workflows as agent-file body prose in the generated
+  `.claude/agents/*.md`.** Rejected: bloats per-session wire (agent
+  bodies always ride the wire). Same content as skills but wire-costs
+  every session, not just on invocation.
+- **Deliver workflows only via slash commands installed by
+  `ethos enable`.** Rejected: slash commands assume the user types them.
+  Ethos's interaction model is user-to-Claude-to-sub-agent; commands
+  wouldn't fire from that path. Also, deposition-scope would need to
+  extend beyond the current guide + SETUP files.
+- **Wait for a code-free way to declare skills (e.g., convention over
+  configuration).** Rejected: the ~15-line schema + generator change
+  is the minimum credible path. Convention alone can't express
+  per-identity or per-bundle scoping.
+
+**Open questions — ruled.**
+
+- Slug-collision policy when a bundle-scoped skill shares a slug with
+  a sidecar top-level skill: **bundle scope wins**, `ethos seed` warns
+  and prefers the bundle when the active bundle is set in
+  `.punt-labs/ethos.yaml`.
+- Whether to auto-preload every bundle-scoped skill on every bundle
+  identity: **no — opt-in only**. `default_skills` is explicit; a
+  bundle that ships six skills but only defaults two makes the other
+  four available via runtime `Skill` invocation without inflating every
+  sub-agent's spawn cost.
+
+**Implementation status.** Not yet implemented. Filed as P1 bead, to be
+dispatched as a scoped mission covering schema + generator + gstack
+skill content + tests + fixture update.
