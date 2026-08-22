@@ -26,6 +26,12 @@ type Identity struct {
 	WritingStyle string   `yaml:"writing_style,omitempty" json:"writing_style,omitempty"`
 	Personality  string   `yaml:"personality,omitempty" json:"personality,omitempty"`
 	Talents      []string `yaml:"talents,omitempty" json:"talents,omitempty"`
+	// Skills lists Claude Code skill slugs to preload into this identity's
+	// generated agent frontmatter, on top of the always-present
+	// baseline-ops (DES-073). A slug must resolve to a sidecar-seeded or
+	// bundle-scoped skill; unresolved slugs are the generator's problem,
+	// not validated here.
+	Skills []string `yaml:"skills,omitempty" json:"skills,omitempty"`
 
 	// Resolved content — populated by Store.Load, never persisted.
 	// Empty when loaded with Reference(true).

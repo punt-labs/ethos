@@ -25,6 +25,7 @@ var Identity = Entity{
 		"writing_style": {Type: "string (slug)", Description: "Slug referencing writing-styles/; e.g. concise-quantified."},
 		"personality":   {Type: "string (slug)", Description: "Slug referencing personalities/; e.g. principal-engineer."},
 		"talents":       {Type: "list of string (slug)", Description: "Slugs referencing talents/; e.g. engineering."},
+		"skills":        {Type: "list of string (slug)", Description: "Slugs referencing Claude Code skills preloaded into this identity's generated agent frontmatter, on top of baseline-ops; e.g. gstack-plan."},
 	},
 }
 

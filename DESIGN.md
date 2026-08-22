@@ -7685,7 +7685,7 @@ blocking the Go implementation, since the Go-level guard
 (`status ≠ stOpen`) already enforces the same precondition the formal
 schema will state.
 
-## DES-073: Skills as a first-class ethos primitive — per-identity, per-bundle skill declarations (PROPOSED)
+## DES-073: Skills as a first-class ethos primitive — per-identity, per-bundle skill declarations (IMPLEMENTED)
 
 **Context.** Ethos partially uses Claude Code's skill mechanism today:
 `internal/seed/sidecar/skills/` ships three skills (`baseline-ops`,
@@ -7830,6 +7830,9 @@ requires user vocabulary to invoke).
   four available via runtime `Skill` invocation without inflating every
   sub-agent's spawn cost.
 
-**Implementation status.** Not yet implemented. Filed as P1 bead, to be
-dispatched as a scoped mission covering schema + generator + gstack
-skill content + tests + fixture update.
+**Implementation status.** Implementation shipped in PR #481 (stacked on
+PR #480, which introduced this ADR). `Identity.Skills`,
+`bundle.Manifest.DefaultSkills`, the generator merge, `ethos seed`'s
+bundle-skill deploy, and the gstack bundle's six skills all landed
+together; see `internal/hook/generate_agents.go`'s `mergeSkills` and
+`internal/seed/seed.go`'s `seedBundleSkills` for the mechanics.

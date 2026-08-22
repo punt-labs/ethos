@@ -28,3 +28,4 @@ validate-content. Edit `internal/schema` and rebuild — do not hand-edit.
 | `writing_style` | no | string (slug) | Slug referencing writing-styles/; e.g. concise-quantified. |
 | `personality` | no | string (slug) | Slug referencing personalities/; e.g. principal-engineer. |
 | `talents` | no | list of string (slug) | Slugs referencing talents/; e.g. engineering. |
+| `skills` | no | list of string (slug) | Slugs referencing Claude Code skills preloaded into this identity's generated agent frontmatter, on top of baseline-ops; e.g. gstack-plan. |

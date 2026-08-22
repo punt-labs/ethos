@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/punt-labs/ethos/internal/bundle"
 	"github.com/punt-labs/ethos/internal/resolve"
 	"github.com/punt-labs/ethos/internal/seed"
 	"github.com/spf13/cobra"
@@ -39,12 +40,33 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// agents (DES-070) are Claude Code subagent definitions that belong to
 	// whichever repo `ethos seed` runs in. Outside a repo there is nowhere to
 	// put them, so the category is skipped rather than guessed.
-	var agentsRoot string
+	var agentsRoot, activeBundle, activeBundleDir string
 	if repoRoot := resolve.FindRepoRoot(); repoRoot != "" {
 		agentsRoot = filepath.Join(repoRoot, ".claude", "agents")
+		// activeBundle/activeBundleDir drive DES-073's bundle-scoped skill
+		// deploy. bundle.ResolveActive is the SAME resolution the
+		// generator uses for default_skills — resolving here too means a
+		// repo-local (or global) bundle override gets ITS skills
+		// deployed, not the embedded ones (Bugbot finding on PR #481). A
+		// resolution error (malformed config, unresolvable active_bundle)
+		// is not fatal to seeding — it just means no bundle-scoped skills
+		// land this run.
+		if b, bErr := bundle.ResolveActive(repoRoot, destRoot); bErr == nil && b != nil {
+			activeBundle = b.Name
+			activeBundleDir = b.Path
+		} else {
+			// Fresh install: active_bundle is set in .punt-labs/ethos.yaml
+			// but the bundle isn't on disk yet (nothing for
+			// bundle.ResolveActive to find in either repo or global
+			// scope) — this seed run is what's supposed to put it there.
+			// Fall back to the config's bundle NAME with no resolved dir,
+			// so SeedVersionWithBundleDir's embedded-fallback path
+			// deploys the embedded skills for it instead of no-op'ing.
+			activeBundle, _ = resolve.ResolveActiveBundle(repoRoot)
+		}
 	}
 
-	result, err := seed.SeedVersion(destRoot, skillsRoot, agentsRoot, version, seedForce)
+	result, err := seed.SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, version, seedForce)
 	if err != nil {
 		if result != nil {
 			for _, e := range result.Errors {

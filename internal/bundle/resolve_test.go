@@ -212,6 +212,28 @@ func TestLoadBundle_WithManifest(t *testing.T) {
 	assert.Equal(t, "test", b.Manifest.Description)
 }
 
+// TestLoadBundle_DefaultSkills confirms bundle.yaml's default_skills list
+// deserializes into Manifest.DefaultSkills (DES-073), and that a manifest
+// without the field leaves it nil — preserving current behavior.
+func TestLoadBundle_DefaultSkills(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "my-bundle")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	writeFile(t, filepath.Join(dir, "bundle.yaml"),
+		"name: my-bundle\ndefault_skills: [gstack-plan, gstack-ship]\n")
+
+	b, err := LoadBundle(dir)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"gstack-plan", "gstack-ship"}, b.Manifest.DefaultSkills)
+
+	noSkills := filepath.Join(t.TempDir(), "plain-bundle")
+	require.NoError(t, os.MkdirAll(noSkills, 0o755))
+	writeFile(t, filepath.Join(noSkills, "bundle.yaml"), "name: plain-bundle\n")
+
+	b2, err := LoadBundle(noSkills)
+	require.NoError(t, err)
+	assert.Nil(t, b2.Manifest.DefaultSkills)
+}
+
 func TestLoadBundle_NoManifest(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "plain")
 	require.NoError(t, os.MkdirAll(dir, 0o755))

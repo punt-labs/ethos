@@ -5,3 +5,5 @@ personality: gstack-qa
 writing_style: gstack-tester
 talents:
   - engineering
+skills:
+  - gstack-qa
