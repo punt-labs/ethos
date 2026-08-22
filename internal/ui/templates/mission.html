@@ -95,6 +95,12 @@
 </div>
 {{end}}
 
+{{if .CorrectionsError}}
+<div class="border border-red-900 bg-red-950/30 text-red-400 text-xs p-3 mb-6">
+  <span class="uppercase tracking-wider text-red-500">Warning:</span> could not load corrections — {{.CorrectionsError}}
+</div>
+{{end}}
+
 {{if .Corrections}}
 <div class="border border-neutral-800 p-5 mb-6">
   <h2 class="text-xs text-neutral-500 uppercase tracking-wider mb-4">Corrections</h2>

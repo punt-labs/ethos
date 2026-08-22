@@ -141,6 +141,48 @@ func TestHandleMission_RendersCorrections(t *testing.T) {
 	assert.Contains(t, body, "by claude")
 }
 
+// TestServer_loadCorrections_SurfacesError asserts loadCorrections
+// returns the underlying error instead of swallowing it — a nil
+// slice from a failed read must be distinguishable from a mission
+// that genuinely has zero corrections.
+func TestServer_loadCorrections_SurfacesError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+	store := mission.NewStoreWithRoots(storeRoot, globalRoot).WithCheckoutRoot(storeRoot)
+
+	srv := &Server{storeRoot: storeRoot, repoRoot: storeRoot, globalRoot: globalRoot}
+	corrections, err := srv.loadCorrections(store, "not a valid mission id")
+	require.Error(t, err)
+	assert.Nil(t, corrections)
+	assert.Contains(t, err.Error(), "not a valid mission id")
+}
+
+// TestHandleMission_RendersCorrectionsError asserts the mission
+// detail template surfaces a CorrectionsError as a visible warning
+// rather than rendering the page as though there were no
+// corrections at all.
+func TestHandleMission_RendersCorrectionsError(t *testing.T) {
+	storeRoot := t.TempDir()
+	globalRoot := t.TempDir()
+
+	srv, err := NewServer(storeRoot, storeRoot)
+	require.NoError(t, err)
+	srv.globalRoot = globalRoot
+
+	data := missionData{
+		Title:            "m-2026-08-22-091",
+		Contract:         uiTestContract("m-2026-08-22-091"),
+		CorrectionsError: "loading corrections for mission \"m-2026-08-22-091\": boom",
+	}
+	rec := httptest.NewRecorder()
+	require.NoError(t, srv.tmpl.ExecuteTemplate(rec, "mission.html", data))
+
+	body := rec.Body.String()
+	assert.Contains(t, body, "Warning", "detail: %s", body)
+	assert.Contains(t, body, "could not load corrections")
+	assert.Contains(t, body, "boom")
+}
+
 // uiTestContract returns a minimal valid open contract for id.
 func uiTestContract(id string) *mission.Contract {
 	return &mission.Contract{

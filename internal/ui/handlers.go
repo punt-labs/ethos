@@ -114,14 +114,15 @@ func (s *Server) readMissionsJSONL() []missionRow {
 }
 
 type missionData struct {
-	Title        string
-	Contract     *mission.Contract
-	Delegations  []*mission.Delegation
-	Results      []mission.Result
-	Corrections  []mission.Correction
-	Events       []mission.Event
-	AuditEntries []hook.AuditView
-	AuditCount   int
+	Title            string
+	Contract         *mission.Contract
+	Delegations      []*mission.Delegation
+	Results          []mission.Result
+	Corrections      []mission.Correction
+	CorrectionsError string
+	Events           []mission.Event
+	AuditEntries     []hook.AuditView
+	AuditCount       int
 }
 
 // missionStore builds the mission store the UI reads from. The record
@@ -152,7 +153,7 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 
 	delegations := s.loadDelegations(id)
 	results := s.loadResults(store, id)
-	corrections := s.loadCorrections(store, id)
+	corrections, correctionsErr := s.loadCorrections(store, id)
 	events := s.loadEvents(store, id)
 
 	// Aggregate audit entries across all delegations under this mission.
@@ -172,6 +173,9 @@ func (s *Server) handleMission(w http.ResponseWriter, r *http.Request) {
 		Events:       events,
 		AuditEntries: allAudit,
 		AuditCount:   len(allAudit),
+	}
+	if correctionsErr != nil {
+		data.CorrectionsError = correctionsErr.Error()
 	}
 	if err := s.tmpl.ExecuteTemplate(w, "mission.html", data); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -210,13 +214,17 @@ func (s *Server) loadResults(store *mission.Store, id string) []mission.Result {
 
 // loadCorrections reads the DES-072 correction log for id, sourced
 // from the mission's event log rather than a sibling file — a
-// correction never touches results.yaml or contract.yaml.
-func (s *Server) loadCorrections(store *mission.Store, id string) []mission.Correction {
+// correction never touches results.yaml or contract.yaml. The error
+// return is surfaced to the caller rather than swallowed: a failure
+// here means the dashboard cannot prove the mission has no
+// corrections, which is exactly the kind of integrity signal this
+// page exists to show.
+func (s *Server) loadCorrections(store *mission.Store, id string) ([]mission.Correction, error) {
 	corrections, err := store.LoadCorrections(id)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("loading corrections for mission %q: %w", id, err)
 	}
-	return corrections
+	return corrections, nil
 }
 
 func (s *Server) loadEvents(store *mission.Store, id string) []mission.Event {
