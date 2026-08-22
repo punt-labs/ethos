@@ -482,6 +482,28 @@ func TestSeedBundleNoClobber(t *testing.T) {
 	assert.True(t, found, "edited bundle manifest should be in the edited list on second seed")
 }
 
+// TestSeedDeploysBundleSkills pins DES-073's bundle-scoped skill deploy:
+// with the gstack bundle active, its skills/<slug>/SKILL.md files land
+// under skillsRoot alongside the sidecar top-level skills. With no
+// active bundle named, no bundle-scoped skill is deployed.
+func TestSeedDeploysBundleSkills(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	_, err := SeedVersionWithBundle(dest, skills, "", "gstack", "", false)
+	require.NoError(t, err)
+
+	assert.FileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"))
+	assert.FileExists(t, filepath.Join(skills, "gstack-ship", "SKILL.md"))
+	// Sidecar top-level skills still deploy alongside the bundle ones.
+	assert.FileExists(t, filepath.Join(skills, "baseline-ops", "SKILL.md"))
+
+	noBundleSkills := t.TempDir()
+	_, err = Seed(dest, noBundleSkills, false)
+	require.NoError(t, err)
+	assert.NoFileExists(t, filepath.Join(noBundleSkills, "gstack-plan", "SKILL.md"))
+}
+
 func TestSeedIdempotent(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()

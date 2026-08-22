@@ -39,12 +39,16 @@ func runSeed(cmd *cobra.Command, args []string) error {
 	// agents (DES-070) are Claude Code subagent definitions that belong to
 	// whichever repo `ethos seed` runs in. Outside a repo there is nowhere to
 	// put them, so the category is skipped rather than guessed.
-	var agentsRoot string
+	var agentsRoot, activeBundle string
 	if repoRoot := resolve.FindRepoRoot(); repoRoot != "" {
 		agentsRoot = filepath.Join(repoRoot, ".claude", "agents")
+		// activeBundle drives DES-073's bundle-scoped skill deploy. A
+		// resolution error (malformed config) is not fatal to seeding —
+		// it just means no bundle-scoped skills land this run.
+		activeBundle, _ = resolve.ResolveActiveBundle(repoRoot)
 	}
 
-	result, err := seed.SeedVersion(destRoot, skillsRoot, agentsRoot, version, seedForce)
+	result, err := seed.SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, version, seedForce)
 	if err != nil {
 		if result != nil {
 			for _, e := range result.Errors {

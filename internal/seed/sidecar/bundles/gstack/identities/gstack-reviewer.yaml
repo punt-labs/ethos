@@ -5,3 +5,5 @@ personality: gstack-reviewer
 writing_style: gstack-reviewer
 talents:
   - engineering
+skills:
+  - gstack-review

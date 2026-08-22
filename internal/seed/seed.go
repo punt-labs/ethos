@@ -36,7 +36,15 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 	return SeedVersion(destRoot, skillsRoot, "", "", force)
 }
 
-// SeedVersion deploys embedded sidecar content to the destination root.
+// SeedVersion deploys embedded sidecar content with no active bundle. It is
+// SeedVersionWithBundle with an empty activeBundle, kept so existing callers
+// (and every test built against this signature) need not name a bundle.
+func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (*Result, error) {
+	return SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, "", version, force)
+}
+
+// SeedVersionWithBundle deploys embedded sidecar content to the destination
+// root.
 // destRoot is typically ~/.punt-labs/ethos/.
 // skillsRoot is typically ~/.claude/skills/.
 // agentsRoot is typically <repo>/.claude/agents/ — a per-repo destination,
@@ -44,6 +52,9 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 // Claude Code subagent definitions local to a repo's own checkout. An empty
 // agentsRoot skips this category entirely — a caller with no repo in scope
 // (e.g. a bare global seed) leaves it unseeded rather than guessing a path.
+// activeBundle names the repo's active_bundle (DES-073); when non-empty and
+// the bundle ships a sidecar/bundles/<activeBundle>/skills/ tree, each skill
+// there is deployed to skillsRoot alongside the sidecar top-level skills.
 // version stamps each manifest entry as provenance.
 //
 // New upgrade behavior applies only to files the manifest already tracks: a
@@ -53,7 +64,7 @@ func Seed(destRoot, skillsRoot string, force bool) (*Result, error) {
 // era is entered by the first seed that writes a file (or by a one-time
 // `--force`). If force is true, every differing file is overwritten with the
 // shipped content.
-func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (*Result, error) {
+func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, version string, force bool) (*Result, error) {
 	mf, err := loadManifest(destRoot)
 	if err != nil {
 		// A present-but-unreadable or corrupt manifest must not be treated as a
@@ -63,13 +74,14 @@ func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (
 		return &Result{Errors: []string{err.Error()}}, err
 	}
 	s := &seeder{
-		destRoot:   destRoot,
-		skillsRoot: skillsRoot,
-		agentsRoot: agentsRoot,
-		version:    version,
-		force:      force,
-		mf:         mf,
-		r:          &Result{},
+		destRoot:     destRoot,
+		skillsRoot:   skillsRoot,
+		agentsRoot:   agentsRoot,
+		activeBundle: activeBundle,
+		version:      version,
+		force:        force,
+		mf:           mf,
+		r:            &Result{},
 	}
 
 	// Roles (skip README.md — handled separately)
@@ -105,6 +117,10 @@ func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (
 	s.seedFile(Skills, "sidecar/skills/create-from-project/SKILL.md",
 		filepath.Join(skillsRoot, "create-from-project", "SKILL.md"))
 
+	// Bundle-scoped skills (DES-073): deployed after the sidecar top-level
+	// skills above, so a slug collision resolves bundle-wins per the ADR.
+	s.seedBundleSkills(Bundles, s.activeBundle)
+
 	// READMEs
 	s.seedReadmes(Readmes, destRoot)
 
@@ -126,13 +142,14 @@ func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (
 // seeder carries the roots, version, and manifest through one Seed run so the
 // per-file decision has everything it needs without long parameter lists.
 type seeder struct {
-	destRoot   string
-	skillsRoot string
-	agentsRoot string
-	version    string
-	force      bool
-	mf         *Manifest
-	r          *Result
+	destRoot     string
+	skillsRoot   string
+	agentsRoot   string
+	activeBundle string
+	version      string
+	force        bool
+	mf           *Manifest
+	r            *Result
 }
 
 func (s *seeder) seedFS(fsys embed.FS, root, destDir, ext string) {
@@ -225,6 +242,69 @@ func (s *seeder) seedBundles(fsys embed.FS, destBundlesRoot string) {
 	})
 	if err != nil {
 		s.r.Errors = append(s.r.Errors, fmt.Sprintf("walking bundles: %v", err))
+	}
+}
+
+// topLevelSkillSlugs names every sidecar top-level skill directory
+// (the ones deployed by the seedFile calls above). seedBundleSkills
+// checks a bundle-scoped slug against this set to detect a collision.
+var topLevelSkillSlugs = map[string]bool{
+	"baseline-ops":        true,
+	"mission":             true,
+	"create-from-project": true,
+}
+
+// seedBundleSkills deploys bundleName's skills/<slug>/SKILL.md tree (if
+// any) to skillsRoot, alongside the sidecar top-level skills (DES-073).
+// bundleName empty is a no-op — no active bundle, nothing to deploy. A
+// bundle with no skills/ subtree is also a silent no-op: not every
+// bundle ships skills.
+//
+// Namespacing: a bundle-scoped slug keeps its name as-is. When it
+// collides with a sidecar top-level slug, the bundle wins — this method
+// runs after the sidecar skills are seeded, and s.place's content-hash
+// decision would otherwise treat a genuine bundle-vs-sidecar difference
+// as a "local edit" and preserve the sidecar copy. A logged warning
+// plus a direct write (bypassing the no-clobber/edited-preserve path)
+// makes the ADR's ruling ("bundle scope wins, log a warning") actually
+// take effect instead of silently losing to the preserve-edit rule.
+func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName string) {
+	if bundleName == "" {
+		return
+	}
+	root := "sidecar/bundles/" + bundleName + "/skills"
+	entries, err := fs.ReadDir(fsys, root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return // this bundle ships no skills — not every bundle does
+		}
+		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", root, err))
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		slug := e.Name()
+		src := root + "/" + slug + "/SKILL.md"
+		data, readErr := fs.ReadFile(fsys, src)
+		if readErr != nil {
+			s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", src, readErr))
+			continue
+		}
+		dest := filepath.Join(s.skillsRoot, slug, "SKILL.md")
+		if topLevelSkillSlugs[slug] {
+			fmt.Fprintf(os.Stderr,
+				"ethos: seed: bundle %q skill %q collides with a sidecar skill; bundle wins\n",
+				bundleName, slug)
+			if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+				s.r.Errors = append(s.r.Errors, fmt.Sprintf("mkdir %s: %v", filepath.Dir(dest), err))
+				continue
+			}
+			s.write(scopeSkills, dest, data, hashBytes(data), &s.r.Updated)
+			continue
+		}
+		s.place(scopeSkills, dest, data)
 	}
 }
 
