@@ -1,0 +1,49 @@
+results:
+    - mission: m-2026-08-22-014
+      round: 1
+      created_at: "2026-08-22T09:12:32Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: cmd/validate-content/main.go
+          added: 3
+          removed: 0
+        - path: cmd/validate-content/main_test.go
+          added: 32
+          removed: 0
+        - path: CHANGELOG.md
+          added: 1
+          removed: 0
+      evidence:
+        - name: go build ./...
+          status: pass
+        - name: go test ./cmd/validate-content/... -run TestRun -v
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Checks 6&8 in cmd/validate-content/main.go now append
+        attribute.NewStore(bundleRoot, kind) to the stores slice whenever
+        bundleRoot != "", mirroring the identity/team/role stores' existing
+        bundle-layer inclusion (lines 189-192 for identity is the pattern
+        followed). Added TestRun_ValidatesBundleAttribute, which plants a
+        bundle-only talent file with empty content (invalid under check 8)
+        and confirms run() now reports "attributes(talents): empty content"
+        where it previously passed silently. CHANGELOG entry added under
+        Unreleased > Fixed (ethos-c7v0).
+
+        Note on the commit: a concurrent process in this shared checkout
+        (feat/vendor-repo-only) ran `git commit` between my `git add` and my
+        own `git commit` invocation, which raced and failed with "cannot
+        lock ref HEAD". The retry showed my staged changes had already
+        landed at HEAD as part of that other process's commit
+        (03a36af, "chore: complete mission m-2026-08-22-016's audit
+        record") rather than my own dedicated commit — a checkout-sharing
+        hazard, not a code defect. The diff itself is correct and isolated
+        to the three write-set files (confirmed via `git diff --numstat
+        03a36af~1..03a36af`); `make check` passes at HEAD. Success criterion
+        "one commit" is not literally met because of this race — the leader
+        should decide whether to split it out via a follow-up amend/rebase
+        or accept it as-is, since further git surgery on a shared checkout
+        risks compounding the collision.
