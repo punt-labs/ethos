@@ -45,12 +45,14 @@ func TestCheckNoHandEditedMissionFiles_CleanFilesPass(t *testing.T) {
 	assert.Equal(t, "no hand-edited mission files", r.Detail)
 }
 
-// TestCheckNoHandEditedMissionFiles_FlagsComment is the ethos-ecpv
-// regression gate: a hand-appended "# CORRECTED:" comment on a
-// results.yaml is exactly what happened when no sanctioned correction
-// mechanism existed. The check must flag it and name the file and
-// point at the sanctioned fix.
-func TestCheckNoHandEditedMissionFiles_FlagsComment(t *testing.T) {
+// TestCheckNoHandEditedMissionFiles is the ethos-ecpv regression
+// gate: a hand-appended "# CORRECTED:" comment on a results.yaml is
+// exactly what happened when no sanctioned correction mechanism
+// existed. The check must flag it and name the file and point at the
+// sanctioned fix. Named to match DES-072's Verification section
+// exactly; the sibling _-suffixed tests in this file cover the
+// individual edge cases this one bare name can't hold by itself.
+func TestCheckNoHandEditedMissionFiles(t *testing.T) {
 	root := t.TempDir()
 	dir := missionArtifactDir(t, root, "m-2026-08-22-002")
 	body := "results:\n  - mission: m-2026-08-22-002\n    round: 1\n" +
