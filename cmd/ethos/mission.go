@@ -1198,7 +1198,7 @@ func runMissionShow(idOrPrefix string) error {
 			// not alternatives.
 			results = []mission.Result{}
 		}
-		payload := mission.ShowPayload{Contract: c, Results: results}
+		payload := missionShowPayload{ShowPayload: mission.ShowPayload{Contract: c, Results: results}}
 		if loadErr != nil {
 			// Surface the load failure on stderr for human
 			// operators AND in the JSON warnings field for
@@ -1208,19 +1208,30 @@ func runMissionShow(idOrPrefix string) error {
 			payload.Warnings = append(payload.Warnings,
 				fmt.Sprintf("loading results: %v", loadErr))
 		}
+		corrections, corrErr := ms.LoadCorrections(id)
+		if corrErr != nil {
+			fmt.Fprintf(os.Stderr, "ethos: warning: loading corrections: %v\n", corrErr)
+			payload.Warnings = append(payload.Warnings,
+				fmt.Sprintf("loading corrections: %v", corrErr))
+		}
+		if corrections == nil {
+			corrections = []mission.Correction{}
+		}
+		payload.Corrections = corrections
 		printJSON(payload)
 		return nil
 	}
 	printContract(c)
 
-	// Reflections and results are advisory in show — load them
-	// after the contract render so a corrupt sibling file does not
-	// block the operator from seeing the contract. Both sections
-	// render their header + `(none)` marker unconditionally so an
-	// operator piping `show` through `less` never loses the signal
-	// on stdout; the stderr warning carries the load failure. Round
-	// 4 fixed the Results case (mdm N1); round 6 closed the parallel
-	// miss for Reflections (Bugbot).
+	// Reflections, results, and corrections are advisory in show —
+	// load them after the contract render so a corrupt sibling file
+	// or a corrupt event log does not block the operator from seeing
+	// the contract. Every section renders its header + `(none)`
+	// marker unconditionally so an operator piping `show` through
+	// `less` never loses the signal on stdout; the stderr warning
+	// carries the load failure. Round 4 fixed the Results case (mdm
+	// N1); round 6 closed the parallel miss for Reflections (Bugbot);
+	// DES-072 adds Corrections to the same pattern.
 	reflections, err := ms.LoadReflections(id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading reflections: %v\n", err)
@@ -1232,6 +1243,12 @@ func runMissionShow(idOrPrefix string) error {
 		fmt.Fprintf(os.Stderr, "ethos: warning: loading results: %v\n", err)
 	}
 	printResults(results)
+
+	corrections, err := ms.LoadCorrections(id)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: warning: loading corrections: %v\n", err)
+	}
+	printCorrections(corrections)
 	return nil
 }
 
@@ -1264,11 +1281,14 @@ func runMissionReflections(idOrPrefix string) error {
 
 // runMissionResults handles `ethos mission results <id>`, the
 // read-only counterpart to `mission result`. Returns the
-// round-by-round result log as a JSON array (or a human-readable
+// round-by-round result log as a JSON object (or a human-readable
 // block list). Round 2 of Phase 3.6 added this subcommand — MCP
 // had both `result` and `results`; the CLI only had `result`, so
 // operators could not list results from the command line at all.
-// Mirrors runMissionReflections byte-for-byte.
+// DES-072 adds the Corrections section: `mission results` reads the
+// parsed results.yaml, which a correction never touches, so the
+// corrections it reports come from the event log via
+// LoadCorrections, sourced separately from rs.
 func runMissionResults(idOrPrefix string) error {
 	ms := missionStore()
 	id, err := ms.MatchByPrefix(idOrPrefix)
@@ -1279,16 +1299,24 @@ func runMissionResults(idOrPrefix string) error {
 	if err != nil {
 		return fmt.Errorf("mission results: %w", err)
 	}
+	cs, err := ms.LoadCorrections(id)
+	if err != nil {
+		return fmt.Errorf("mission results: %w", err)
+	}
 	if jsonOutput {
-		// Always return an array, never null, so consumers can
-		// unmarshal into []Result without a nil check.
+		// Always return arrays, never null, so consumers can
+		// unmarshal into []Result/[]Correction without a nil check.
 		if rs == nil {
 			rs = []mission.Result{}
 		}
-		printJSON(rs)
+		if cs == nil {
+			cs = []mission.Correction{}
+		}
+		printJSON(missionResultsPayload{Results: rs, Corrections: cs})
 		return nil
 	}
 	printResults(rs)
+	printCorrections(cs)
 	return nil
 }
 
@@ -2516,6 +2544,11 @@ func summarizeDetails(evType string, details map[string]any) string {
 			return fmt.Sprintf("round %d -> %d", int(from), int(to))
 		}
 		return ""
+	case mission.EventCorrect:
+		return joinParts(
+			kv("kind", detailStr(details, "kind")),
+			kvRound("round", detailRound(details, "round")),
+		)
 	default:
 		return ""
 	}
@@ -2601,6 +2634,41 @@ func printResults(rs []mission.Result) {
 			// which is the dedicated command.
 			line := strings.SplitN(r.Prose, "\n", 2)[0]
 			fmt.Printf("      prose: %s\n", line)
+		}
+	}
+}
+
+// printCorrections renders the correction log (DES-072) under the
+// results block. A correction is never hidden and never replaces the
+// original text it corrects — the section lists every correction on
+// file, in the log's chronological order, alongside what it claims
+// and what it corrects it to.
+//
+// Empty input renders "Corrections: (none)" so an operator sees the
+// section exists even on a mission with a clean record — the same
+// empty-state convention printResults and printReflections use.
+func printCorrections(cs []mission.Correction) {
+	fmt.Println()
+	fmt.Println("Corrections:")
+	if len(cs) == 0 {
+		fmt.Println("  (none)")
+		return
+	}
+	for _, c := range cs {
+		round := "whole mission"
+		if c.Round > 0 {
+			round = fmt.Sprintf("round %d", c.Round)
+		}
+		fmt.Printf("  - %s (%s) by %s\n", round, c.Kind, c.Author)
+		if c.Claim != "" {
+			fmt.Printf("      claim:      %s\n", c.Claim)
+		}
+		fmt.Printf("      corrected:  %s\n", c.Corrected)
+		if c.Supersedes != "" {
+			fmt.Printf("      supersedes: %s\n", c.Supersedes)
+		}
+		if len(c.Evidence) > 0 {
+			fmt.Printf("      evidence:   %d\n", len(c.Evidence))
 		}
 	}
 }

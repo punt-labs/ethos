@@ -95,6 +95,7 @@ func missionTestEnv(t *testing.T) string {
 	missionResultBase = "main"
 	missionExportDir = ".ethos/missions"
 	resetDispatchFlags()
+	resetCorrectFlags()
 	t.Cleanup(func() {
 		jsonOutput = false
 		missionCreateFile = ""
@@ -105,8 +106,40 @@ func missionTestEnv(t *testing.T) string {
 		missionResultBase = "main"
 		missionExportDir = ".ethos/missions"
 		resetDispatchFlags()
+		resetCorrectFlags()
 	})
 	return tmp
+}
+
+// resetCorrectFlags zeroes every `mission correct` package-level flag
+// global, mirroring resetDispatchFlags for the DES-072 command.
+func resetCorrectFlags() {
+	missionCorrectKind = ""
+	missionCorrectClaim = ""
+	missionCorrectCorrected = ""
+	missionCorrectRound = 0
+	missionCorrectSupersedes = ""
+	missionCorrectEvidence = nil
+	missionCorrectFile = ""
+}
+
+// seedClaudeIdentity seeds a "claude" identity into root, reusing the
+// same placeholder personality/writing-style/talent content
+// seedEvaluator already wrote for "djb" — DES-072's ValidateCorrectionAuthor
+// is the first CLI write path that resolves the LEADER handle (default
+// "claude") as a real identity rather than treating it as an opaque
+// string, so tests that exercise `mission correct` via the flag path
+// (author defaults to resolveLeader()) need this seeded.
+func seedClaudeIdentity(t *testing.T, root string) {
+	t.Helper()
+	require.NoError(t, identity.NewStore(root).Save(&identity.Identity{
+		Name:         "Claude Agento",
+		Handle:       "claude",
+		Kind:         "agent",
+		Personality:  "bernstein",
+		WritingStyle: "bernstein-prose",
+		Talents:      []string{"security"},
+	}))
 }
 
 // resetDispatchFlags zeroes every dispatch package-level flag global
@@ -1665,19 +1698,26 @@ func TestMissionResults_ListsSubmittedResults(t *testing.T) {
 	require.Len(t, ids, 1)
 	id := ids[0]
 
-	// Empty case — no results yet, JSON mode must produce "[]"
-	// (never "null") so consumers can unmarshal into []Result
-	// without a nil guard.
+	// Empty case — no results or corrections yet, JSON mode must
+	// produce both arrays as `[]` (never `null`) so consumers can
+	// unmarshal without a nil guard. DES-072 wraps the bare array in
+	// {results, corrections} so `mission results` can report the
+	// corrections filed against a mission's results without a second
+	// round trip.
 	jsonOutput = true
 	t.Cleanup(func() { jsonOutput = false })
 	out := captureStdoutE(t, func() error { return runMissionResults(id) })
-	assert.Equal(t, "[]", strings.TrimSpace(out))
+	var emptyPayload missionResultsPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &emptyPayload))
+	assert.Empty(t, emptyPayload.Results)
+	assert.Empty(t, emptyPayload.Corrections)
 
 	// Submit a result and fetch again.
 	submitCLIResult(t, id, 1)
 	out = captureStdoutE(t, func() error { return runMissionResults(id) })
-	var got []mission.Result
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	var payload missionResultsPayload
+	require.NoError(t, json.Unmarshal([]byte(out), &payload))
+	got := payload.Results
 	require.Len(t, got, 1)
 	assert.Equal(t, 1, got[0].Round)
 	assert.Equal(t, mission.VerdictPass, got[0].Verdict)
@@ -1690,6 +1730,189 @@ func TestMissionResults_ListsSubmittedResults(t *testing.T) {
 	assert.Contains(t, humanOut, "Results:")
 	assert.Contains(t, humanOut, "round 1")
 	assert.Contains(t, humanOut, "pass")
+}
+
+// closeCLIMission creates, results, and closes a mission via the CLI
+// entry points, returning its ID. Test helper for `mission correct`
+// tests, which need a closed mission on file.
+func closeCLIMission(t *testing.T) string {
+	t.Helper()
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	require.Len(t, ids, 1)
+	id := ids[0]
+
+	submitCLIResult(t, id, 1)
+	_, err = ms.Close(id, mission.StatusClosed)
+	require.NoError(t, err)
+	return id
+}
+
+// TestMissionCorrect_ViaFlags asserts the flag-based input path:
+// --kind, --claim, --corrected build a Correction whose Author
+// defaults to resolveLeader() (here "claude", seeded so
+// ValidateCorrectionAuthor resolves it).
+func TestMissionCorrect_ViaFlags(t *testing.T) {
+	tmp := missionTestEnv(t)
+	seedClaudeIdentity(t, filepath.Join(tmp, ".punt-labs", "ethos"))
+	id := closeCLIMission(t)
+
+	missionCorrectKind = "fabrication"
+	missionCorrectClaim = "make check (full suite): fail — pre-existing, unrelated"
+	missionCorrectCorrected = "make check failed because of a stale worktree base"
+	stdout := captureStdoutE(t, func() error { return runMissionCorrect(id) })
+	assert.Contains(t, stdout, "corrected:")
+	assert.Contains(t, stdout, id)
+	assert.Contains(t, stdout, "kind=fabrication")
+	assert.Contains(t, stdout, "by claude")
+
+	ms := missionStore()
+	corrections, err := ms.LoadCorrections(id)
+	require.NoError(t, err)
+	require.Len(t, corrections, 1)
+	assert.Equal(t, mission.CorrectionFabrication, corrections[0].Kind)
+	assert.Equal(t, "claude", corrections[0].Author)
+}
+
+// TestMissionCorrect_RefusesOnOpenMission proves the CLI surfaces
+// Store.Correct's inverted guard: an open mission is refused.
+func TestMissionCorrect_RefusesOnOpenMission(t *testing.T) {
+	tmp := missionTestEnv(t)
+	seedClaudeIdentity(t, filepath.Join(tmp, ".punt-labs", "ethos"))
+
+	missionCreateFile = writeContractFile(t)
+	captureStdoutE(t, func() error { return runMissionCreate() })
+	ms := missionStore()
+	ids, err := ms.List()
+	require.NoError(t, err)
+	id := ids[0]
+
+	missionCorrectKind = "factual"
+	missionCorrectClaim = "x"
+	missionCorrectCorrected = "y"
+	err = runMissionCorrect(id)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "corrections apply only to closed missions")
+}
+
+// TestMissionCorrect_ViaFile exercises the --file input path, mirroring
+// "mission reflect"/"mission result"'s convention. Uses the already-seeded
+// "djb" identity as author so the test needs no extra identity fixture.
+func TestMissionCorrect_ViaFile(t *testing.T) {
+	tmp := missionTestEnv(t)
+	_ = tmp
+	id := closeCLIMission(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "correction.yaml")
+	body := fmt.Sprintf(`mission: %s
+round: 0
+kind: decision
+author: djb
+corrected: "leader ruling: re-scope and re-dispatch"
+`, id)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	missionCorrectFile = path
+	stdout := captureStdoutE(t, func() error { return runMissionCorrect(id) })
+	assert.Contains(t, stdout, "kind=decision")
+	assert.Contains(t, stdout, "by djb")
+
+	ms := missionStore()
+	corrections, err := ms.LoadCorrections(id)
+	require.NoError(t, err)
+	require.Len(t, corrections, 1)
+	assert.Equal(t, mission.CorrectionDecision, corrections[0].Kind)
+	assert.Empty(t, corrections[0].Claim)
+}
+
+// TestMissionCorrect_FileAndFlagsMutuallyExclusive asserts --file
+// refuses to combine with the individual flags rather than silently
+// picking one input source over the other.
+func TestMissionCorrect_FileAndFlagsMutuallyExclusive(t *testing.T) {
+	missionTestEnv(t)
+	id := closeCLIMission(t)
+
+	missionCorrectFile = "unused.yaml"
+	missionCorrectKind = "factual"
+	err := runMissionCorrect(id)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestMissionCorrect_UnresolvableAuthorRefused asserts author
+// resolution runs before Store.Correct: an author naming no real
+// identity is refused with an actionable error, not silently
+// accepted.
+func TestMissionCorrect_UnresolvableAuthorRefused(t *testing.T) {
+	missionTestEnv(t)
+	// Deliberately do NOT seed "claude" — resolveLeader() defaults to
+	// "claude" and it must not resolve here.
+	id := closeCLIMission(t)
+
+	missionCorrectKind = "factual"
+	missionCorrectClaim = "x"
+	missionCorrectCorrected = "y"
+	err := runMissionCorrect(id)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does not resolve to a valid identity")
+}
+
+// TestMissionCorrect_ShowAndResultsRenderCorrections asserts the
+// rendering surfaces DES-072 requires: `mission show` and `mission
+// results` both print a Corrections section, and JSON mode includes
+// the corrections array on both.
+func TestMissionCorrect_ShowAndResultsRenderCorrections(t *testing.T) {
+	tmp := missionTestEnv(t)
+	seedClaudeIdentity(t, filepath.Join(tmp, ".punt-labs", "ethos"))
+	id := closeCLIMission(t)
+
+	missionCorrectKind = "decision"
+	missionCorrectCorrected = "leader ruling: re-scope"
+	captureStdoutE(t, func() error { return runMissionCorrect(id) })
+	resetCorrectFlags()
+
+	showOut := captureStdoutE(t, func() error { return runMissionShow(id) })
+	assert.Contains(t, showOut, "Corrections:")
+	assert.Contains(t, showOut, "leader ruling: re-scope")
+
+	resultsOut := captureStdoutE(t, func() error { return runMissionResults(id) })
+	assert.Contains(t, resultsOut, "Corrections:")
+	assert.Contains(t, resultsOut, "leader ruling: re-scope")
+
+	jsonOutput = true
+	t.Cleanup(func() { jsonOutput = false })
+	showJSON := captureStdoutE(t, func() error { return runMissionShow(id) })
+	var showPayload missionShowPayload
+	require.NoError(t, json.Unmarshal([]byte(showJSON), &showPayload))
+	require.Len(t, showPayload.Corrections, 1)
+	assert.Equal(t, mission.CorrectionDecision, showPayload.Corrections[0].Kind)
+
+	resultsJSON := captureStdoutE(t, func() error { return runMissionResults(id) })
+	var resultsPayload missionResultsPayload
+	require.NoError(t, json.Unmarshal([]byte(resultsJSON), &resultsPayload))
+	require.Len(t, resultsPayload.Corrections, 1)
+}
+
+// TestMissionLog_RendersCorrectEvent asserts `mission log` surfaces
+// the correct event inline, ordered alongside every other event type.
+func TestMissionLog_RendersCorrectEvent(t *testing.T) {
+	tmp := missionTestEnv(t)
+	seedClaudeIdentity(t, filepath.Join(tmp, ".punt-labs", "ethos"))
+	id := closeCLIMission(t)
+
+	missionCorrectKind = "factual"
+	missionCorrectClaim = "x"
+	missionCorrectCorrected = "y"
+	captureStdoutE(t, func() error { return runMissionCorrect(id) })
+
+	logOut := captureStdoutE(t, func() error { return runMissionLog(id, "", "") })
+	assert.Contains(t, logOut, "correct")
+	assert.Contains(t, logOut, "kind=factual")
 }
 
 // TestMissionResults_HelpListsSubcommand asserts the H3 discovery
