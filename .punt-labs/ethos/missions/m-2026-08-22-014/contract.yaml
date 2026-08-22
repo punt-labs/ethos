@@ -1,0 +1,28 @@
+mission_id: m-2026-08-22-014
+status: closed
+type: implement
+created_at: "2026-08-22T09:01:54Z"
+updated_at: "2026-08-22T09:19:44Z"
+closed_at: "2026-08-22T09:19:44Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T09:01:54Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-c7v0
+write_set:
+    - cmd/validate-content/main.go
+    - cmd/validate-content/main_test.go
+    - CHANGELOG.md
+success_criteria:
+    - Append attribute.NewStore(bundleRoot, kind) to the stores slice in checks 6&8's loop whenever bundleRoot != "", mirroring how identity/team/role stores already include it
+    - 'Add a test analogous to TestRun_RepoOnlyResolvesBundleTalent: plant a bundle-only attribute file with an invalid slug (or empty content), confirm validate-content''s run() now fails and reports it'
+    - make check passes
+    - One commit, CHANGELOG entry under Unreleased > Fixed
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: Final review finding on branch feat/vendor-repo-only, closing out ethos-ccjz's bundle-resolution fix completely. cmd/validate-content/main.go's checks 6&8 (attribute slug/content validation, around line 261-269) build stores = [attribute.NewStore(ethosRoot, kind)], conditionally append global, but never append attribute.NewStore(bundleRoot, kind) even though bundleRoot is resolved earlier in run() and IS used for identity/team/role validation. This repo doesn't currently use a bundle so it's inert today, but the gap is real and the doc comment overclaims coverage.

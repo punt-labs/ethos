@@ -1,0 +1,23 @@
+results:
+    - mission: m-2026-08-22-016
+      round: 1
+      created_at: "2026-08-22T09:09:54Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: docs/development.md
+          added: 1
+          removed: 0
+      evidence:
+        - name: npx markdownlint-cli2 docs/development.md
+          status: pass
+        - name: make docs
+          status: pass
+      prose: |
+        Added a bullet to Design Invariants, immediately after Three-layer
+        resolution, stating this repo runs resolution: repo-only, the
+        engineering closure is vendored under .punt-labs/ethos/ with
+        .vendor.yaml as the manifest, the global store is not consulted, and
+        `ethos vendor --team engineering --apply --prune` refreshes the set.
+        markdownlint clean (both scoped and full-repo run). One commit.

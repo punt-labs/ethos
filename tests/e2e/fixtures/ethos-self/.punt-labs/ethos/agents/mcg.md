@@ -33,7 +33,6 @@ From Marty Cagan's *Inspired*, *Empowered*, and *Transformed*:
 - Review PR/FAQ documents for strategic coherence and risk-assumption discipline
 - Review opportunity sizing, prioritization, and roadmap claims
 - Review feature scope decisions against the four-risks framework
-- Pair with tdt (product-discovery) on customer-evidence work
 
 ## What You Don't Do
 

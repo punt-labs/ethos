@@ -1,0 +1,35 @@
+results:
+    - mission: m-2026-08-22-010
+      round: 1
+      created_at: "2026-08-22T08:12:50Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.95
+      files_changed:
+        - path: .punt-labs/ethos/agents/mcg.md
+          added: 0
+          removed: 1
+      evidence:
+        - name: grep -rln -e ahj -e bne -e csl -e rej -e srn -e tdt .punt-labs/ethos/agents/
+          status: pass
+        - name: go build -o .tmp/ethos ./cmd/ethos && .tmp/ethos hook session-start (regenerated .claude/agents/mcg.md, already matched)
+          status: pass
+        - name: make check
+          status: pass
+      prose: |
+        Removed the "Pair with tdt (product-discovery) on customer-evidence
+        work" line from .punt-labs/ethos/agents/mcg.md — tdt was deleted
+        earlier on this branch (ethos-b5t7 purge) and repo-only resolution
+        has no fallback that could resolve it again.
+
+        Regenerated .claude/agents/ via the build + hook session-start
+        command; .claude/agents/mcg.md required no change since it was last
+        regenerated after the source was already correct in this run — git
+        diff confirms no delta on that file.
+
+        Grepped the whole tracked .punt-labs/ethos/agents/ tree for ahj,
+        bne, csl, rej, srn, tdt: only mcg.md matched, now fixed. No other
+        dangling references found.
+
+        make check passes (lint, shellcheck, tests, markdownlint,
+        validate-content). One commit made.

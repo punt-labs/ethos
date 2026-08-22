@@ -1,0 +1,39 @@
+results:
+    - mission: m-2026-08-22-002
+      round: 1
+      created_at: "2026-08-22T07:26:21Z"
+      author: bwk
+      verdict: pass
+      confidence: 0.97
+      files_changed:
+        - path: cmd/ethos/vendor.go
+          added: 2
+          removed: 2
+        - path: cmd/ethos/vendor_test.go
+          added: 39
+          removed: 0
+        - path: CHANGELOG.md
+          added: 1
+          removed: 0
+      evidence:
+        - name: make check
+          status: pass
+        - name: go test ./cmd/ethos/... -run TestCLI_VendorApplyWithoutPruneReportsWouldRemove -v
+          status: pass
+        - name: manual revert-and-rerun (pre-fix vendor.go against the new test)
+          status: fail
+      prose: |
+        Fixed cmd/ethos/vendor.go's writeVendorPlan: the "Removed" head now
+        requires both p.Applied AND vendorPrune; --apply alone (no --prune)
+        now reads "Would remove" and shows the "(with --prune)" hint, which
+        previously only appeared on a plain dry run. Added
+        TestCLI_VendorApplyWithoutPruneReportsWouldRemove, a subprocess CLI
+        test that vendors a fixture identity, seeds a stale file, runs
+        vendor --apply with no --prune, and asserts the output says "Would
+        remove 1 file(s)" (not "Removed"), shows the "(with --prune)" hint,
+        and that the stale file survives on disk. Verified the test fails
+        against the pre-fix logic (temporarily restored HEAD~1's vendor.go,
+        reran the test, got the "Removed"/no-hint failure the bug report
+        describes) and passes against the fix. Added a CHANGELOG entry under
+        Unreleased > Fixed citing ethos-7075. Three commits, one per
+        write-set file, each preceded by a clean make check.

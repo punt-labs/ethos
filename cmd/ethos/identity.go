@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/punt-labs/ethos/internal/bundle"
 	"github.com/punt-labs/ethos/internal/identity"
@@ -108,14 +107,11 @@ func requiredExt(repoRoot, bundleRoot string) map[string][]string {
 
 // repoAuthoritativeMode reports whether this repo runs in repo-only mode,
 // and exits with a diagnostic when repo-only is configured but cannot be
-// honored. Two states are fatal rather than silently degrading to the
-// global fallback — the one thing repo-only exists to remove:
-//
-//   - No repo layer at all (no .punt-labs/ethos/ and no repo-local or
-//     legacy bundle): there is nothing to be authoritative about.
-//   - The active bundle lives in the user's home (SourceGlobal): it does
-//     not travel with the checkout, so a fresh clone would resolve
-//     differently. Only SourceRepo and SourceLegacy bundles qualify.
+// honored. The two fatal invariants — no repo layer at all, and an
+// active bundle sourced from the user's home — are checked by
+// bundle.VerifyRepoOnly, the one place that logic lives so
+// cmd/validate-content carries the same two guards rather than a second
+// copy of them (ethos-ccjz).
 //
 // Exiting here matches resolveBundleRoot and globalStore: a
 // misconfiguration the user asked for is reported at startup, not
@@ -129,14 +125,8 @@ func repoAuthoritativeMode(repoRoot, bundleRoot string) bool {
 	if mode != resolve.ResolutionRepoOnly {
 		return false
 	}
-	if repoRoot == "" && bundleRoot == "" {
-		fmt.Fprintf(os.Stderr, "ethos: resolution: repo-only is configured but this repo has no identity store — create %s or set active_bundle to a repo-local bundle\n",
-			filepath.Join(".punt-labs", "ethos"))
-		os.Exit(1)
-	}
-	if b := activeBundle(); b != nil && b.Source == bundle.SourceGlobal {
-		fmt.Fprintf(os.Stderr, "ethos: resolution: repo-only cannot use the global bundle %q at %s — a global bundle does not travel with the checkout; vendor it under %s instead\n",
-			b.Name, b.Path, filepath.Join(".punt-labs", "ethos-bundles"))
+	if err := bundle.VerifyRepoOnly(repoRoot, bundleRoot, activeBundle()); err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: %v\n", err)
 		os.Exit(1)
 	}
 	return true

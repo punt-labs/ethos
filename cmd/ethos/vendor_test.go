@@ -1,9 +1,16 @@
+//go:build linux || darwin
+
 package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func runVendorCmd(t *testing.T, args ...string) (string, string, error) {
@@ -76,4 +83,93 @@ func TestVendorAllAloneStillWorks(t *testing.T) {
 	if err != nil && strings.Contains(err.Error(), "not supported") {
 		t.Errorf("--all alone was rejected by the new exclusivity checks: %v", err)
 	}
+}
+
+// TestCLI_VendorApplyWithoutPruneReportsWouldRemove pins the bug: --apply
+// alone (no --prune) must never claim it deleted files. internal/vendor's
+// prune() only runs when Prune is set, so a status line keyed on p.Applied
+// alone described a deletion that never happened — a user could run
+// --apply, read "Removed 53 file(s)", and believe stale files were gone
+// when every one of them was still on disk.
+func TestCLI_VendorApplyWithoutPruneReportsWouldRemove(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+
+	// First apply vendors test-agent into the repo layer.
+	_, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "initial vendor --apply: stderr=%s", stderr)
+
+	// A stale file the closure no longer contains.
+	stale := filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "stale.yaml")
+	require.NoError(t, os.WriteFile(stale,
+		[]byte("name: Stale\nhandle: stale\nkind: human\n"), 0o644))
+
+	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "vendor --apply without --prune: stderr=%s", stderr)
+
+	assert.Contains(t, stdout, "Would remove 1 file(s)",
+		"an --apply run with no --prune must not claim it removed anything")
+	assert.NotContains(t, stdout, "Removed 1 file(s)")
+	assert.Contains(t, stdout, "(with --prune)",
+		"the hint must appear on --apply alone, not only on a plain dry run")
+	assert.FileExists(t, stale, "no --prune means the stale file must survive --apply")
+}
+
+// TestVendorApplyJSONWithoutPruneReportsPruneFalse pins that a --json plan
+// carries the actual --prune setting rather than letting a reader infer
+// removal from "applied" alone. Applied is true whenever --apply ran; it
+// says nothing about whether files were pruned. The adversarial case is a
+// stale file left behind by a prior vendor: pruned must come back non-empty
+// AND prune must read false, together, or a script consumer could read an
+// empty pruned list as the reason prune is false rather than the reverse.
+func TestVendorApplyJSONWithoutPruneReportsPruneFalse(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+
+	// First apply vendors test-agent into the repo layer.
+	_, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "initial vendor --apply: stderr=%s", stderr)
+
+	// A stale file the closure no longer contains.
+	stale := filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "stale.yaml")
+	require.NoError(t, os.WriteFile(stale,
+		[]byte("name: Stale\nhandle: stale\nkind: human\n"), 0o644))
+
+	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply", "--json")
+	require.Equal(t, 0, exit, "vendor --apply --json without --prune: stderr=%s", stderr)
+
+	assert.Contains(t, stdout, `"applied": true`,
+		"the JSON plan must confirm --apply actually ran, not just that the flag was passed")
+	assert.Contains(t, stdout, `"prune": false`)
+	assert.Contains(t, stdout, "stale.yaml",
+		"the adversarial case needs a non-empty pruned array alongside prune:false")
+}
+
+// TestVendorApplyPruneJSONReportsPruneTrue is the true-branch companion to
+// TestVendorApplyJSONWithoutPruneReportsPruneFalse: --apply --prune must
+// report prune:true in --json output, and must actually remove the file.
+func TestVendorApplyPruneJSONReportsPruneTrue(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+
+	_, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "initial vendor --apply: stderr=%s", stderr)
+
+	stale := filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "stale.yaml")
+	require.NoError(t, os.WriteFile(stale,
+		[]byte("name: Stale\nhandle: stale\nkind: human\n"), 0o644))
+
+	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply", "--prune", "--json")
+	require.Equal(t, 0, exit, "vendor --apply --prune --json: stderr=%s", stderr)
+
+	assert.Contains(t, stdout, `"applied": true`)
+	assert.Contains(t, stdout, `"prune": true`)
+	assert.Contains(t, stdout, "stale.yaml")
+	assert.NoFileExists(t, stale, "--prune must actually remove the stale file")
 }

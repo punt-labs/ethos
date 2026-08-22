@@ -1,0 +1,28 @@
+mission_id: m-2026-08-22-010
+status: closed
+type: implement
+created_at: "2026-08-22T08:10:24Z"
+updated_at: "2026-08-22T08:15:04Z"
+closed_at: "2026-08-22T08:15:04Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T08:10:24Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-hnsi
+write_set:
+    - .punt-labs/ethos/agents/mcg.md
+    - .claude/agents/mcg.md
+success_criteria:
+    - Remove the 'Pair with tdt (product-discovery) on customer-evidence work' line from .punt-labs/ethos/agents/mcg.md
+    - Regenerate .claude/agents/mcg.md via 'go build -o .tmp/ethos ./cmd/ethos && .tmp/ethos hook session-start' (remove .tmp/ethos after) and commit the regenerated file so the tracked copy matches
+    - grep the whole tracked .punt-labs/ethos/agents/ tree for any other dangling reference to ahj, bne, csl, rej, srn, or tdt while you're in there — fix any you find in the same commit
+    - make check passes
+    - One commit
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Found by silent-failure-hunter on branch feat/vendor-repo-only. .punt-labs/ethos/agents/mcg.md still references tdt, deleted earlier in this branch (ethos-b5t7 purge). Under the branch''s own new resolution: repo-only, there''s no fallback path that could ever resolve tdt again.'

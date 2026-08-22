@@ -1,0 +1,2 @@
+{"ts":"2026-08-22T09:08:33.429842Z","event":"create","actor":"claude","details":{"evaluator":"rsc","ticket":"ethos-f8kv","worker":"bwk"}}
+{"ts":"2026-08-22T09:10:25.131326Z","event":"close","actor":"claude","details":{"round":1,"status":"closed","verdict":"pass"}}

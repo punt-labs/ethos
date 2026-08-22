@@ -1,0 +1,37 @@
+mission_id: m-2026-08-22-005
+status: closed
+type: implement
+created_at: "2026-08-22T07:32:08Z"
+updated_at: "2026-08-22T08:06:11Z"
+closed_at: "2026-08-22T08:06:11Z"
+leader: claude
+worker: bwk
+evaluator:
+    handle: rsc
+    pinned_at: "2026-08-22T07:32:08Z"
+    hash: 010f8751d3600952c16fe6934fefbad31e70f15e3226029caaaa2610dbcec9c0
+inputs:
+    ticket: ethos-b5t7
+write_set:
+    - .punt-labs/ethos/identities/ahj.yaml
+    - .punt-labs/ethos/identities/bne.yaml
+    - .punt-labs/ethos/identities/csl.yaml
+    - .punt-labs/ethos/identities/rej.yaml
+    - .punt-labs/ethos/identities/srn.yaml
+    - .punt-labs/ethos/identities/tdt.yaml
+    - .punt-labs/ethos/agents
+    - .punt-labs/ethos/personalities
+    - .punt-labs/ethos/writing-styles
+    - .punt-labs/ethos/talents
+    - .claude/agents
+success_criteria:
+    - git rm .punt-labs/ethos/identities/{ahj,bne,csl,rej,srn,tdt}.yaml, .punt-labs/ethos/agents/{ahj,bne,csl,rej,srn,tdt}.md (if tracked — check first), and .claude/agents/{ahj,bne,csl,rej,srn,tdt}.md (currently untracked working-tree files — remove them from disk with rm, not git rm, since they were never tracked; verify with git status before and after that this doesn't accidentally stage/remove anything else)
+    - 'git rm these orphaned attribute files (verified zero remaining consumers among surviving identities): personalities/{hejlsberg,eich,lattner,johnson,naroff,torres}.md, writing-styles/{hejlsberg,eich,lattner,johnson,naroff,torres}-prose.md, talents/{typescript,compilers,javascript,web-standards,browsers,swift,llvm,smalltalk,design-patterns,refactoring,frameworks,objective-c,cocoa,foundation,apple-platforms,customer-interviewing,assumption-testing}.md. Do NOT touch talents/type-systems.md, language-design.md, product-management.md, product-discovery.md, operations.md, or engineering.md — all still referenced by surviving identities (verify with grep before deleting anything, same methodology)'
+    - Run 'go build -o .tmp/ethos ./cmd/ethos && .tmp/ethos doctor' (remove .tmp/ethos after) and confirm the 'Orphaned agent files' check now PASSes and every other doctor check stays PASS, including 'Repo-only completeness'
+    - make check passes, including validate-content's referential-integrity check
+    - Commit incrementally, each commit passing make check
+budget:
+    rounds: 2
+    reflection_after_each: true
+current_round: 1
+context: 'Operator ruling 2026-08-22: full purge of ahj/bne/csl/rej/srn/tdt, same evidence-based standard as the earlier kpz/ylc/kwb (ML/Smalltalk) cut. Zero evidence of TypeScript, JavaScript, Swift, or product-discovery work anywhere in this repo — no .ts/.tsx/.js/.swift files, and rej/tdt aren''t even mentioned in this repo''s own docs (unlike kpz/ylc/kwb, which at least appeared in docs/workflow.md or docs/development.md before being cut). This resolves ethos-doctor''s ''Orphaned agent files'' FAIL under the newly-set resolution: repo-only.'

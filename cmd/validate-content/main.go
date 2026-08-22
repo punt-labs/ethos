@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/internal/bundle"
+	"github.com/punt-labs/ethos/internal/doctor"
 	"github.com/punt-labs/ethos/internal/enable"
 	"github.com/punt-labs/ethos/internal/identity"
 	"github.com/punt-labs/ethos/internal/resolve"
@@ -82,6 +84,16 @@ func tableBlock(s string) string {
 	return strings.Join(rows, "\n")
 }
 
+// report is everything main needs to print and decide the exit code.
+// Building it separately from main lets tests drive the checks against a
+// fixture tree without going through flag.Parse or os.Exit.
+type report struct {
+	results     []result
+	nIdentities int
+	nTeams      int
+	totalAttrs  int
+}
+
 func main() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -97,38 +109,94 @@ func main() {
 	flag.StringVar(&globalRoot, "global-root", defaultGlobalRoot, "path to global ethos dir")
 	flag.Parse()
 
-	if ethosRoot == "" {
-		fmt.Fprintf(os.Stderr, "validate-content: ethos root not found\n")
+	rep, err := run(ethosRoot, globalRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "validate-content: %v\n", err)
 		os.Exit(1)
 	}
+
+	nFail := 0
+	for _, r := range rep.results {
+		if r.pass {
+			fmt.Printf("PASS  %s\n", r.label)
+		} else {
+			fmt.Printf("FAIL  %s: %s\n", r.label, r.detail)
+			nFail++
+		}
+	}
+
+	if nFail == 0 {
+		fmt.Printf("all checks passed (%d identities, %d teams, %d attributes)\n", rep.nIdentities, rep.nTeams, rep.totalAttrs)
+		os.Exit(0)
+	}
+	fmt.Printf("%d failure(s)\n", nFail)
+	os.Exit(1)
+}
+
+// run performs every content check against ethosRoot and globalRoot and
+// returns the report, or an error for a hard failure that stops before any
+// check can produce a result: a bad root, an unreadable listing, or a
+// resolution: repo-only repo that cannot be honored.
+//
+// It resolves the repo's active bundle and DES-057 resolution mode the same
+// way cmd/ethos does — through bundle.ResolveRoot and bundle.VerifyRepoOnly,
+// the shared internal/bundle logic cmd/ethos's identityStore() also calls —
+// so a repo-local bundle supplying an identity's talent is visible here too,
+// and a repo-only misconfiguration the real CLI would refuse to start under
+// fails this check loud rather than silently validating a config nothing
+// would actually run under (ethos-ccjz).
+func run(ethosRoot, globalRoot string) (report, error) {
+	if ethosRoot == "" {
+		return report{}, fmt.Errorf("ethos root not found")
+	}
 	if info, err := os.Stat(ethosRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "validate-content: ethos root not found: %s\n", ethosRoot)
-		os.Exit(1)
+		return report{}, fmt.Errorf("ethos root not found: %s", ethosRoot)
 	} else if !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "validate-content: ethos root is not a directory: %s\n", ethosRoot)
-		os.Exit(1)
+		return report{}, fmt.Errorf("ethos root is not a directory: %s", ethosRoot)
 	}
 
 	hasGlobal := false
 	if info, err := os.Stat(globalRoot); err == nil {
 		hasGlobal = info.IsDir()
 	} else if !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "validate-content: checking global root %s: %v\n", globalRoot, err)
-		os.Exit(1)
+		return report{}, fmt.Errorf("checking global root %s: %w", globalRoot, err)
+	}
+
+	// ethosRoot is always <repo>/.punt-labs/ethos — derive repo root
+	// structurally rather than re-walking .git, matching the DES-057
+	// consumers this file mirrors.
+	repoRoot := filepath.Dir(filepath.Dir(ethosRoot))
+
+	bundleRoot, active, err := bundle.ResolveRoot(repoRoot, globalRoot)
+	if err != nil {
+		return report{}, fmt.Errorf("bundle resolution failed: %w", err)
+	}
+	mode, err := resolve.ResolveResolution(repoRoot)
+	if err != nil {
+		return report{}, err
+	}
+	repoAuthoritative := mode == resolve.ResolutionRepoOnly
+	if repoAuthoritative {
+		if err := bundle.VerifyRepoOnly(ethosRoot, bundleRoot, active); err != nil {
+			return report{}, err
+		}
 	}
 
 	var results []result
 
 	// Build identity stores.
 	repoIDStore := identity.NewStore(ethosRoot)
+	var bundleIDStore *identity.Store
+	if bundleRoot != "" {
+		bundleIDStore = identity.NewStore(bundleRoot)
+	}
 	globalIDStore := identity.NewStore(globalRoot)
-	layeredID := identity.NewLayeredStore(repoIDStore, globalIDStore)
+	layeredID := identity.NewLayeredStoreWithBundle(repoIDStore, bundleIDStore, globalIDStore, repoAuthoritative)
 
 	// List identities once. LayeredStore.List deduplicates by handle.
 	listResult, err := layeredID.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "validate-content: listing identities: %v\n", err)
-		os.Exit(1)
+		return report{}, fmt.Errorf("listing identities: %w", err)
 	}
 
 	// Load-level warnings from List() are failures (referential or parse errors).
@@ -169,8 +237,6 @@ func main() {
 	}
 
 	// Check 5: agent file path resolution.
-	// ethosRoot is always <repo>/.punt-labs/ethos — derive repo root structurally.
-	repoRoot := filepath.Dir(filepath.Dir(ethosRoot))
 	results = append(results, checkSetupSync(repoRoot))
 	agentFails := 0
 	for _, idRef := range listResult.Identities {
@@ -198,7 +264,10 @@ func main() {
 	attrFails := 0
 	for _, kind := range attrKinds {
 		stores := []*attribute.Store{attribute.NewStore(ethosRoot, kind)}
-		if hasGlobal {
+		if bundleRoot != "" {
+			stores = append(stores, attribute.NewStore(bundleRoot, kind))
+		}
+		if hasGlobal && !repoAuthoritative {
 			stores = append(stores, attribute.NewStore(globalRoot, kind))
 		}
 		for _, s := range stores {
@@ -230,26 +299,16 @@ func main() {
 	}
 
 	// Check 3: team validation.
-	teamStore := team.NewLayeredStore(ethosRoot, globalRoot)
+	teamStore := team.NewLayeredStoreWithBundle(ethosRoot, bundleRoot, globalRoot, repoAuthoritative)
 	roleRepo := role.NewStore(ethosRoot)
-	var roleGlobal *role.Store
-	if hasGlobal {
-		roleGlobal = role.NewStore(globalRoot)
-	}
-	roleExists := func(n string) bool {
-		if roleRepo.Exists(n) {
-			return true
-		}
-		return roleGlobal != nil && roleGlobal.Exists(n)
-	}
+	roleLayered := role.NewLayeredStoreWithBundle(ethosRoot, bundleRoot, globalRoot, repoAuthoritative)
 	identityExists := func(h string) bool {
 		return layeredID.Exists(h)
 	}
 
 	teamNames, err := teamStore.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "validate-content: listing teams: %v\n", err)
-		os.Exit(1)
+		return report{}, fmt.Errorf("listing teams: %w", err)
 	}
 	nTeams := len(teamNames)
 	teamFails := 0
@@ -260,7 +319,7 @@ func main() {
 			teamFails++
 			continue
 		}
-		if valErr := team.Validate(t, identityExists, roleExists); valErr != nil {
+		if valErr := team.Validate(t, identityExists, roleLayered.Exists); valErr != nil {
 			results = append(results, fail("teams: validate", fmt.Sprintf("%s: %v", name, valErr)))
 			teamFails++
 		}
@@ -269,12 +328,19 @@ func main() {
 		results = append(results, pass(fmt.Sprintf("teams: structural validation (%d teams)", nTeams)))
 	}
 
-	// DES-069 R2: every mcp__ tool a role grants must be classified.
+	// DES-057: the repo-only completeness gate — the same predicate
+	// `ethos vendor` runs on its own output, and `ethos doctor` runs on the
+	// live tree — now runs on every push/PR via this binary rather than
+	// nowhere in CI. PASSes with "not applicable" in layered mode.
+	results = append(results, fromDoctor(doctor.CheckRepoSetComplete(layeredID, repoRoot)))
+
+	// DES-069 R2: every mcp__ tool a role grants must be classified. Scoped
+	// to this repo's own roles, not the bundle or global layers — those
+	// belong to whichever repo owns them, and are validated there.
 	roleTools := make(map[string][]string)
 	roleNames, err := roleRepo.List()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "validate-content: listing roles: %v\n", err)
-		os.Exit(1)
+		return report{}, fmt.Errorf("listing roles: %w", err)
 	}
 	for _, name := range roleNames {
 		r, loadErr := roleRepo.Load(name)
@@ -301,21 +367,21 @@ func main() {
 		results = append(results, checkReadmeTable(rc.path, rc.entity))
 	}
 
-	// Print all results.
-	nFail := 0
-	for _, r := range results {
-		if r.pass {
-			fmt.Printf("PASS  %s\n", r.label)
-		} else {
-			fmt.Printf("FAIL  %s: %s\n", r.label, r.detail)
-			nFail++
-		}
-	}
+	return report{results: results, nIdentities: nIdentities, nTeams: nTeams, totalAttrs: totalAttrs}, nil
+}
 
-	if nFail == 0 {
-		fmt.Printf("all checks passed (%d identities, %d teams, %d attributes)\n", nIdentities, nTeams, totalAttrs)
-		os.Exit(0)
+// fromDoctor adapts a doctor.Result — which has a third WARN state
+// alongside PASS/FAIL — onto validate-content's binary pass/fail result.
+// WARN counts as pass here, matching doctor.Result.Passed(): it is an
+// advisory (e.g. a hand-authored set whose extension completeness cannot
+// be judged), not a build-breaking fault.
+func fromDoctor(r doctor.Result) result {
+	label := "doctor: " + r.Name
+	if r.Passed() {
+		if r.Status == "WARN" {
+			label = fmt.Sprintf("%s (WARN: %s)", label, r.Detail)
+		}
+		return pass(label)
 	}
-	fmt.Printf("%d failure(s)\n", nFail)
-	os.Exit(1)
+	return fail(label, r.Detail)
 }
