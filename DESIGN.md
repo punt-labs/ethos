@@ -7730,7 +7730,7 @@ interaction model ethos uses:
 > "The `skills` field allows you to inject specific skill content into
 > a subagent's context at startup … subagents can still access other
 > skills via the Skill tool unless restricted."
-> — code.claude.com/docs/en/sub-agents
+> — <https://code.claude.com/docs/en/sub-agents>
 
 Ethos does not require slash-command invocation for skills to be useful.
 Preloaded skills load whether the sub-agent is spawned via `Task(...)` or
@@ -7747,8 +7747,12 @@ Concretely:
    preserves current behavior. Slugs reference skills that must resolve
    (either sidecar-seeded or bundle-scoped).
 2. **Bundle schema** may optionally carry a `default_skills` list applied
-   to every identity in the bundle that does not override at identity
-   level. Same slug-resolution rule.
+   additively to every identity in the bundle. Merged as a union with
+   each identity's own `Skills`, then deduplicated — not an override.
+   Same slug-resolution rule. (A gstack identity whose own `Skills`
+   already lists `gstack-plan` and whose bundle `default_skills` also
+   lists `gstack-plan` gets one entry, not two, in the generated
+   frontmatter.)
 3. **Bundle directories** may carry a `skills/<slug>/SKILL.md` subtree
    (same shape as sidecar top-level `skills/`). `ethos seed` deploys
    bundle-scoped skills to `~/.claude/skills/` alongside the sidecar
