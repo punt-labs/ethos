@@ -120,29 +120,56 @@ func TestCLI_VendorApplyWithoutPruneReportsWouldRemove(t *testing.T) {
 // TestVendorApplyJSONWithoutPruneReportsPruneFalse pins that a --json plan
 // carries the actual --prune setting rather than letting a reader infer
 // removal from "applied" alone. Applied is true whenever --apply ran; it
-// says nothing about whether files were pruned.
+// says nothing about whether files were pruned. The adversarial case is a
+// stale file left behind by a prior vendor: pruned must come back non-empty
+// AND prune must read false, together, or a script consumer could read an
+// empty pruned list as the reason prune is false rather than the reverse.
 func TestVendorApplyJSONWithoutPruneReportsPruneFalse(t *testing.T) {
-	dir := enableGitRepo(t)
-	t.Chdir(dir)
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
 
-	home := os.Getenv("HOME")
-	idDir := filepath.Join(home, ".punt-labs", "ethos", "identities")
-	if err := os.MkdirAll(idDir, 0o755); err != nil {
-		t.Fatalf("mkdir identities: %v", err)
-	}
-	id := "name: Brian K\nhandle: bwk\nkind: agent\n"
-	if err := os.WriteFile(filepath.Join(idDir, "bwk.yaml"), []byte(id), 0o644); err != nil {
-		t.Fatalf("write identity: %v", err)
-	}
+	// First apply vendors test-agent into the repo layer.
+	_, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "initial vendor --apply: stderr=%s", stderr)
 
-	jsonOutput = true
-	defer func() { jsonOutput = false }()
+	// A stale file the closure no longer contains.
+	stale := filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "stale.yaml")
+	require.NoError(t, os.WriteFile(stale,
+		[]byte("name: Stale\nhandle: stale\nkind: human\n"), 0o644))
 
-	out, _, err := runVendorCmd(t, "bwk", "--apply", "--json")
-	if err != nil {
-		t.Fatalf("vendor --apply --json: %v", err)
+	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply", "--json")
+	require.Equal(t, 0, exit, "vendor --apply --json without --prune: stderr=%s", stderr)
+
+	assert.Contains(t, stdout, `"applied": true`,
+		"the JSON plan must confirm --apply actually ran, not just that the flag was passed")
+	assert.Contains(t, stdout, `"prune": false`)
+	assert.Contains(t, stdout, "stale.yaml",
+		"the adversarial case needs a non-empty pruned array alongside prune:false")
+}
+
+// TestVendorApplyPruneJSONReportsPruneTrue is the true-branch companion to
+// TestVendorApplyJSONWithoutPruneReportsPruneFalse: --apply --prune must
+// report prune:true in --json output, and must actually remove the file.
+func TestVendorApplyPruneJSONReportsPruneTrue(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
 	}
-	if !strings.Contains(out, `"prune": false`) {
-		t.Errorf("output = %s, want \"prune\": false", out)
-	}
+	se := setupCLISubprocessEnv(t)
+
+	_, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply")
+	require.Equal(t, 0, exit, "initial vendor --apply: stderr=%s", stderr)
+
+	stale := filepath.Join(se.repo, ".punt-labs", "ethos", "identities", "stale.yaml")
+	require.NoError(t, os.WriteFile(stale,
+		[]byte("name: Stale\nhandle: stale\nkind: human\n"), 0o644))
+
+	stdout, stderr, exit := runCLI(t, se, "vendor", "test-agent", "--apply", "--prune", "--json")
+	require.Equal(t, 0, exit, "vendor --apply --prune --json: stderr=%s", stderr)
+
+	assert.Contains(t, stdout, `"applied": true`)
+	assert.Contains(t, stdout, `"prune": true`)
+	assert.Contains(t, stdout, "stale.yaml")
+	assert.NoFileExists(t, stale, "--prune must actually remove the stale file")
 }

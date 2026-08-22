@@ -495,7 +495,15 @@ func formatVendor(w io.Writer, result string) error {
 		fmt.Fprintf(&b, "\n\nExtension keys worth a look: %s", strings.Join(warnings, ", "))
 	}
 	if pruned := jsonStringArray(result, "pruned"); len(pruned) > 0 {
-		fmt.Fprintf(&b, "\n\nNo longer in the closure (%d): %s", len(pruned), strings.Join(pruned, ", "))
+		head := "Would remove"
+		if jsonBool(result, "applied") && jsonBool(result, "prune") {
+			head = "Removed"
+		}
+		suffix := ""
+		if !jsonBool(result, "prune") {
+			suffix = " (with prune=true)"
+		}
+		fmt.Fprintf(&b, "\n\n%s %d file(s) no longer in the closure%s: %s", head, len(pruned), suffix, strings.Join(pruned, ", "))
 	}
 	if verb == "Would vendor" {
 		b.WriteString("\n\nNothing written. Re-run with apply=true.")

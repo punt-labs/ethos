@@ -63,7 +63,26 @@ func TestFormatVendorSurfacesWarningsAndPrunes(t *testing.T) {
 
 	assert.Contains(t, ctx, "voice_key")
 	assert.Contains(t, ctx, "stale.yaml")
-	assert.Contains(t, ctx, "No longer in the closure (1)")
+	assert.Contains(t, ctx, "Would remove 1 file(s) no longer in the closure (with prune=true)")
+}
+
+// applied=true with prune=false must say the files were NOT removed --
+// the summary an agent reads must never claim removal that didn't happen.
+func TestFormatVendorAppliedWithoutPruneDoesNotClaimRemoval(t *testing.T) {
+	result := `{
+	  "seeds": ["bwk"],
+	  "identities": ["bwk"],
+	  "pruned": ["/repo/.punt-labs/ethos/identities/stale.yaml"],
+	  "applied": true,
+	  "prune": false
+	}`
+	ctx := parseFormatResult(t, runFormat(t, makeToolPayload("vendor", "", result))).
+		HookSpecificOutput.AdditionalContext
+
+	assert.Contains(t, ctx, "stale.yaml")
+	assert.Contains(t, ctx, "Would remove 1 file(s) no longer in the closure (with prune=true)")
+	assert.NotContains(t, ctx, "Removed 1 file(s)",
+		"applied=true without prune=true must not claim the files were removed")
 }
 
 // A payload the formatter cannot read must degrade to the raw text, not
