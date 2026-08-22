@@ -199,6 +199,51 @@ func scanBundles(dir string, src Source) ([]Bundle, error) {
 	return out, nil
 }
 
+// ResolveRoot resolves the repo's active bundle and, from it, the root a
+// layered store should read as its bundle layer: "" when no bundle is
+// active, or when the active bundle is the legacy .punt-labs/ethos/
+// directory (which already serves as the repo-local layer, so it must
+// not also be treated as a distinct bundle layer). Returns the Bundle
+// itself alongside root, so a caller needing its Source — the DES-057
+// repo-only check in VerifyRepoOnly — does not resolve it a second time.
+func ResolveRoot(repoRoot, globalRoot string) (root string, active *Bundle, err error) {
+	b, err := ResolveActive(repoRoot, globalRoot)
+	if err != nil {
+		return "", nil, err
+	}
+	if b == nil || b.Source == SourceLegacy {
+		return "", b, nil
+	}
+	return b.Path, b, nil
+}
+
+// VerifyRepoOnly checks the two invariants DES-057's `resolution:
+// repo-only` requires, once ResolveResolution has already reported that
+// mode active. Both are fatal rather than silently degrading to the
+// global fallback — the one thing repo-only exists to remove:
+//
+//   - No repo layer at all: storeRoot (the repo's .punt-labs/ethos/
+//     directory, or equivalent) and bundleRoot both empty means there is
+//     nothing to be authoritative about.
+//   - The active bundle lives in the user's home (SourceGlobal): it does
+//     not travel with the checkout, so a fresh clone would resolve
+//     differently. Only SourceRepo and SourceLegacy bundles qualify.
+//
+// Returns an error naming the first violation found, or nil when both
+// hold. Callers report the error and exit(1) — a misconfiguration the
+// user asked for is reported at startup, not worked around.
+func VerifyRepoOnly(storeRoot, bundleRoot string, active *Bundle) error {
+	if storeRoot == "" && bundleRoot == "" {
+		return fmt.Errorf("resolution: repo-only is configured but this repo has no identity store — create %s or set active_bundle to a repo-local bundle",
+			filepath.Join(".punt-labs", "ethos"))
+	}
+	if active != nil && active.Source == SourceGlobal {
+		return fmt.Errorf("resolution: repo-only cannot use the global bundle %q at %s — a global bundle does not travel with the checkout; vendor it under %s instead",
+			active.Name, active.Path, filepath.Join(".punt-labs", "ethos-bundles"))
+	}
+	return nil
+}
+
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()

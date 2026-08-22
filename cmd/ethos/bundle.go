@@ -11,34 +11,40 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// resolveBundleRoot returns the active bundle's root path for layered
-// store construction, or "" if no bundle is active or if the active
-// "bundle" is the legacy .punt-labs/ethos/ directory (which already
-// serves as the repo-local layer).
+// resolveBundle resolves the repo's active bundle and the root a
+// layered store should read as its bundle layer, through
+// bundle.ResolveRoot — the one place that logic lives, so
+// cmd/validate-content resolves the bundle layer the same way rather
+// than through a second, drifting copy (ethos-ccjz).
 //
 // Configuration errors (malformed ethos.yaml, missing named bundle) are
 // fatal: the user asked for a specific bundle and silent fall-through
 // would hide the misconfiguration. The process exits with a diagnostic
 // on stderr. This matches how other fatal startup errors are handled.
-func resolveBundleRoot() string {
-	b := activeBundle()
-	if b == nil || b.Source == bundle.SourceLegacy {
-		return ""
-	}
-	return b.Path
-}
-
-// activeBundle resolves the repo's active bundle, or nil when none is
-// active. Shares resolveBundleRoot's fail-loud contract on a
-// configuration error. Callers that need the bundle's Source (the
-// DES-057 repo-only startup check) use this rather than the path.
-func activeBundle() *bundle.Bundle {
-	b, err := bundle.ResolveActive(resolve.StoreRepoRoot(), defaultGlobalRoot())
+func resolveBundle() (root string, active *bundle.Bundle) {
+	root, active, err := bundle.ResolveRoot(resolve.StoreRepoRoot(), defaultGlobalRoot())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ethos: bundle resolution failed: %v\n", err)
 		os.Exit(1)
 	}
-	return b
+	return root, active
+}
+
+// resolveBundleRoot returns the active bundle's root path for layered
+// store construction, or "" if no bundle is active or if the active
+// "bundle" is the legacy .punt-labs/ethos/ directory (which already
+// serves as the repo-local layer).
+func resolveBundleRoot() string {
+	root, _ := resolveBundle()
+	return root
+}
+
+// activeBundle resolves the repo's active bundle, or nil when none is
+// active. Callers that need the bundle's Source (the DES-057 repo-only
+// startup check) use this rather than the path.
+func activeBundle() *bundle.Bundle {
+	_, active := resolveBundle()
+	return active
 }
 
 // defaultGlobalRoot returns ~/.punt-labs/ethos, matching identity.DefaultStore.
