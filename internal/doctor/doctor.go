@@ -88,6 +88,12 @@ func RunAll(s identity.IdentityStore, ss *session.Store, repoRoot, storeRoot str
 	results = append(results, CheckRepoSetComplete(s, storeRoot))
 	results = append(results, CheckLocalExtNotTracked(repoRoot))
 	results = append(results, CheckExtCredentialNames(s))
+
+	// DES-072: hand-edited mission files read as machine-written and
+	// are invisible to every mission-reading surface — the exact
+	// failure mode `ethos mission correct` exists to replace. Reads
+	// storeRoot (the shared record), matching CheckRepoSetComplete.
+	results = append(results, CheckNoHandEditedMissionFiles(storeRoot))
 	return results
 }
 

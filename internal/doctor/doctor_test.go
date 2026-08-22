@@ -987,7 +987,7 @@ func TestRunAllAndHelpers(t *testing.T) {
 	// Pass empty repoRoot/storeRoot and nil teams — the orphaned-agent
 	// check degrades to PASS ("not in a repo") in this configuration.
 	results := RunAll(s, ss, "", "", nil)
-	require.Len(t, results, 11)
+	require.Len(t, results, 12)
 
 	names := make([]string, len(results))
 	for i, r := range results {
@@ -1005,10 +1005,11 @@ func TestRunAllAndHelpers(t *testing.T) {
 		"Repo-only completeness",
 		"Local extension files",
 		"Extension key names",
+		"Mission file hand-edits",
 	}, names)
 
 	assert.True(t, AllPassed(results), "results: %+v", results)
-	assert.Equal(t, 11, PassedCount(results))
+	assert.Equal(t, 12, PassedCount(results))
 
 	// Now inject a failure: remove the identities directory. RunAll
 	// should report at least one failure and AllPassed should flip.
