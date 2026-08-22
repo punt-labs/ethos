@@ -517,6 +517,32 @@ func TestSeedDeploysBundleSkills(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(noBundleSkills, "gstack-plan", "SKILL.md"))
 }
 
+// TestSeedDeploysRepoLocalBundleSkills pins the Bugbot MEDIUM finding on
+// PR #481: a repo-local bundle override (the same on-disk source
+// bundle.ResolveActive gives the generator) must have ITS skills
+// deployed, not the embedded sidecar copy. A repo-local bundle here
+// carries a "foo" skill the embedded gstack bundle does not ship.
+func TestSeedDeploysRepoLocalBundleSkills(t *testing.T) {
+	dest := t.TempDir()
+	skills := t.TempDir()
+
+	bundleDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(bundleDir, "skills", "foo"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bundleDir, "skills", "foo", "SKILL.md"),
+		[]byte("# Foo\n\nRepo-local bundle skill, not shipped in the embedded bundle.\n"), 0o644))
+
+	_, err := SeedVersionWithBundleDir(dest, skills, "", "my-bundle", bundleDir, "", false)
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(skills, "foo", "SKILL.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "Repo-local bundle skill")
+
+	// The embedded gstack skills must NOT appear — the resolved bundle
+	// (my-bundle, at bundleDir) is what's deployed, not the embedded one.
+	assert.NoFileExists(t, filepath.Join(skills, "gstack-plan", "SKILL.md"))
+}
+
 func TestSeedIdempotent(t *testing.T) {
 	dest := t.TempDir()
 	skills := t.TempDir()

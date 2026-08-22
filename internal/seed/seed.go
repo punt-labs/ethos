@@ -43,8 +43,17 @@ func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (
 	return SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, "", version, force)
 }
 
-// SeedVersionWithBundle deploys embedded sidecar content to the destination
-// root.
+// SeedVersionWithBundle deploys embedded sidecar content with an active
+// bundle NAME but no resolved on-disk override. It is
+// SeedVersionWithBundleDir with an empty activeBundleDir, so a caller
+// that only knows the bundle's name (not where it resolves to on disk)
+// still gets the embedded skill content for that name.
+func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, version string, force bool) (*Result, error) {
+	return SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, "", version, force)
+}
+
+// SeedVersionWithBundleDir deploys embedded sidecar content to the
+// destination root.
 // destRoot is typically ~/.punt-labs/ethos/.
 // skillsRoot is typically ~/.claude/skills/.
 // agentsRoot is typically <repo>/.claude/agents/ — a per-repo destination,
@@ -53,9 +62,17 @@ func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (
 // agentsRoot skips this category entirely — a caller with no repo in scope
 // (e.g. a bare global seed) leaves it unseeded rather than guessing a path.
 // activeBundle names the repo's active_bundle (DES-073); when non-empty and
-// the bundle ships a sidecar/bundles/<activeBundle>/skills/ tree, each skill
-// there is deployed to skillsRoot alongside the sidecar top-level skills.
-// version stamps each manifest entry as provenance.
+// the bundle ships a skills/ tree, each skill there is deployed to
+// skillsRoot alongside the sidecar top-level skills. activeBundleDir is
+// the resolved on-disk path of that bundle — the SAME path
+// bundle.ResolveActive gives the generator (a repo-local override under
+// .punt-labs/ethos-bundles/<name>/, or a global one under
+// ~/.punt-labs/ethos/bundles/<name>/) — so a caller that has customized
+// the bundle on disk gets ITS skills deployed, not stale embedded ones.
+// Empty falls back to the embedded sidecar copy for activeBundle, which
+// is also what bootstraps a fresh machine's global bundle store before
+// any on-disk copy exists to resolve to. version stamps each manifest
+// entry as provenance.
 //
 // New upgrade behavior applies only to files the manifest already tracks: a
 // tracked file unchanged since seed last wrote it is upgraded when the release
@@ -64,7 +81,7 @@ func SeedVersion(destRoot, skillsRoot, agentsRoot, version string, force bool) (
 // era is entered by the first seed that writes a file (or by a one-time
 // `--force`). If force is true, every differing file is overwritten with the
 // shipped content.
-func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, version string, force bool) (*Result, error) {
+func SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, version string, force bool) (*Result, error) {
 	mf, err := loadManifest(destRoot)
 	if err != nil {
 		// A present-but-unreadable or corrupt manifest must not be treated as a
@@ -74,14 +91,15 @@ func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, versi
 		return &Result{Errors: []string{err.Error()}}, err
 	}
 	s := &seeder{
-		destRoot:     destRoot,
-		skillsRoot:   skillsRoot,
-		agentsRoot:   agentsRoot,
-		activeBundle: activeBundle,
-		version:      version,
-		force:        force,
-		mf:           mf,
-		r:            &Result{},
+		destRoot:        destRoot,
+		skillsRoot:      skillsRoot,
+		agentsRoot:      agentsRoot,
+		activeBundle:    activeBundle,
+		activeBundleDir: activeBundleDir,
+		version:         version,
+		force:           force,
+		mf:              mf,
+		r:               &Result{},
 	}
 
 	// Roles (skip README.md — handled separately)
@@ -119,7 +137,7 @@ func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, versi
 
 	// Bundle-scoped skills (DES-073): deployed after the sidecar top-level
 	// skills above, so a slug collision resolves bundle-wins per the ADR.
-	s.seedBundleSkills(Bundles, s.activeBundle)
+	s.seedBundleSkills(Bundles, s.activeBundle, s.activeBundleDir)
 
 	// READMEs
 	s.seedReadmes(Readmes, destRoot)
@@ -142,14 +160,15 @@ func SeedVersionWithBundle(destRoot, skillsRoot, agentsRoot, activeBundle, versi
 // seeder carries the roots, version, and manifest through one Seed run so the
 // per-file decision has everything it needs without long parameter lists.
 type seeder struct {
-	destRoot     string
-	skillsRoot   string
-	agentsRoot   string
-	activeBundle string
-	version      string
-	force        bool
-	mf           *Manifest
-	r            *Result
+	destRoot        string
+	skillsRoot      string
+	agentsRoot      string
+	activeBundle    string
+	activeBundleDir string
+	version         string
+	force           bool
+	mf              *Manifest
+	r               *Result
 }
 
 func (s *seeder) seedFS(fsys embed.FS, root, destDir, ext string) {
@@ -272,6 +291,15 @@ func topLevelSkillSlugs() map[string]bool {
 // bundle with no skills/ subtree is also a silent no-op: not every
 // bundle ships skills.
 //
+// bundleDir, when non-empty, is the bundle's resolved on-disk path — the
+// SAME path bundle.ResolveActive gives the generator for computing
+// default_skills. Reading from bundleDir rather than always the embedded
+// fsys means a repo-local (or global) bundle a user has customized on
+// disk gets ITS skills deployed, not the stale embedded copy shipped in
+// this ethos binary. bundleDir empty falls back to the embedded fsys —
+// the only source available before a fresh machine's global bundle
+// store exists on disk at all.
+//
 // Namespacing: a bundle-scoped slug keeps its name as-is. When it
 // collides with a sidecar top-level slug, the bundle wins — this method
 // runs after the sidecar skills are seeded, and s.place's content-hash
@@ -280,29 +308,23 @@ func topLevelSkillSlugs() map[string]bool {
 // plus a direct write (bypassing the no-clobber/edited-preserve path)
 // makes the ADR's ruling ("bundle scope wins, log a warning") actually
 // take effect instead of silently losing to the preserve-edit rule.
-func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName string) {
+func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName, bundleDir string) {
 	if bundleName == "" {
 		return
 	}
-	root := "sidecar/bundles/" + bundleName + "/skills"
-	entries, err := fs.ReadDir(fsys, root)
+	slugs, read, err := bundleSkillReader(fsys, bundleName, bundleDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return // this bundle ships no skills — not every bundle does
 		}
-		s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", root, err))
+		s.r.Errors = append(s.r.Errors, err.Error())
 		return
 	}
 	topLevel := topLevelSkillSlugs()
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		slug := e.Name()
-		src := root + "/" + slug + "/SKILL.md"
-		data, readErr := fs.ReadFile(fsys, src)
+	for _, slug := range slugs {
+		data, readErr := read(slug)
 		if readErr != nil {
-			s.r.Errors = append(s.r.Errors, fmt.Sprintf("reading %s: %v", src, readErr))
+			s.r.Errors = append(s.r.Errors, readErr.Error())
 			continue
 		}
 		dest := filepath.Join(s.skillsRoot, slug, "SKILL.md")
@@ -319,6 +341,43 @@ func (s *seeder) seedBundleSkills(fsys embed.FS, bundleName string) {
 		}
 		s.place(scopeSkills, dest, data)
 	}
+}
+
+// bundleSkillReader resolves where a bundle's skills/<slug>/SKILL.md tree
+// lives — bundleDir on disk when given, else the embedded fsys — and
+// returns the slugs found there plus a reader for each slug's SKILL.md.
+// A missing skills/ subtree (either source) returns an os.IsNotExist
+// error, which the caller treats as "this bundle ships no skills."
+func bundleSkillReader(fsys embed.FS, bundleName, bundleDir string) (slugs []string, read func(slug string) ([]byte, error), err error) {
+	if bundleDir != "" {
+		root := filepath.Join(bundleDir, "skills")
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				slugs = append(slugs, e.Name())
+			}
+		}
+		return slugs, func(slug string) ([]byte, error) {
+			return os.ReadFile(filepath.Join(root, slug, "SKILL.md"))
+		}, nil
+	}
+
+	root := "sidecar/bundles/" + bundleName + "/skills"
+	entries, err := fs.ReadDir(fsys, root)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			slugs = append(slugs, e.Name())
+		}
+	}
+	return slugs, func(slug string) ([]byte, error) {
+		return fs.ReadFile(fsys, root+"/"+slug+"/SKILL.md")
+	}, nil
 }
 
 // place deploys data to dest under the given scope, deciding by content hash
