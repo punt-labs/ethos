@@ -1,0 +1,5 @@
+Work mission m-2026-08-22-053 in repo <repo>. Your worktree will start from some commit — verify with `git merge-base HEAD feat/mission-correction-events` whether your base matches feat/mission-correction-events's current tip; if stale, rebase onto the local `feat/mission-correction-events` branch (local branch, no fetch needed) before starting. The tip just moved again (commit 1d6fe8a landed), so re-check even if you looked once already.
+
+Read the mission contract: `ethos mission show m-2026-08-22-053`. Small, focused fix: internal/hook/format_output.go's formatMissionResults doesn't render the "warnings" field that a recent fix added to the MCP mission-results payload. Full details in the contract.
+
+When done, submit your result: `ethos mission result m-2026-08-22-053 --round 1 --verdict pass --confidence <0-1> --prose "..." --evidence "make check=pass"`. Report your worktree path, branch name, and commit hash so the leader can merge back onto feat/mission-correction-events.
