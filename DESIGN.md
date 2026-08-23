@@ -7292,7 +7292,7 @@ for any other repo.
   `pr-review-toolkit` stays listed in the Plugins section for one PR cycle
   per the transition plan before it's dropped.
 
-## DES-071: Distribution scope — what ships in the plugin vs what stays dev-side (SETTLED)
+## DES-071: Distribution scope — what ships in the plugin vs what stays dev-side (AMENDED 2026-08-23)
 
 **Context.** During the L4 payload-optimization pass (post-DES-070), the
 ethos repo's own per-session payload measured 388 KB, of which ~54 KB was
@@ -7421,6 +7421,57 @@ audience.
   content-only (no `internal/enable/` code changes), which is faster to
   land and easier to revert. The GitHub URL reference in the guide is a
   bridge until tier-C deposition ships.
+
+### Amendment 2026-08-23: superseded by tool-enable-disable § 2.11
+
+**What changed.** The org's `punt-kit/standards/tool-enable-disable.md`
+§ 2.11 states a hard biconditional: for every `<repo>/.punt-labs/<tool>/`
+whose `enabled` marker is present, the repo's `CLAUDE.md` MUST contain
+exactly one `@.punt-labs/<tool>/CLAUDE.md` line — **no exception for
+the tool's own dev repo.** The corresponding § 2.3 makes `enable`
+responsible for writing that import, unconditionally.
+
+The Concrete placement rule that read *"[the ethos repo root
+CLAUDE.md] does NOT `@`-import `.punt-labs/{ethos,z-spec,vox}/CLAUDE.md`
+(those are tier-B end-user docs, not needed for developing ethos)"* is
+**revoked.** In the ethos repo — which enables ethos, vox, and z-spec on
+itself for dogfooding — those three imports are required.
+
+**Rejected alternative that returns.** "Ship the tier-B daily guide as
+part of every session" was rejected here on payload grounds. That
+rejection is reversed by the standard. The correct response to a
+tier-B guide that measures too big is to **tighten the guide** (its
+content is the same content consumers load, so the win compounds
+across every consumer), not to skip the import in the dev repo and
+diverge from what consumers see.
+
+**What still holds.**
+
+- **The three-tier separation** (developer / consumer-daily / consumer-setup)
+  is unaffected. Tier A remains the ethos-only developer content in
+  `docs/development.md`. Tier B remains the deposited daily-use guide.
+  Tier C remains the on-demand setup playbook.
+- **Tier C stays not-`@`-imported.** § 2.11 governs the tier-B guide
+  file, not every companion doc in the tool's subtree. `ETHOS-SETUP.md`
+  is a reference doc opened on demand, not the tool's canonical
+  user-guide `CLAUDE.md`.
+- **`docs/development.md` stays `@`-imported** from the ethos repo root.
+  It's dev-process content, out of scope for the enable/disable
+  standard by § 2.1 ("dev-process standards are entirely separate from
+  tool user guides").
+
+**Measured cost of the reversal.** The ~54 KB tier-B/tier-C content
+this ADR originally optimized away (388 KB → 319 KB on the ethos-self
+E2E scenario) returns to the ethos-repo per-session payload — the
+same content consumers already load every session. Tightening the
+guides is the compounding fix; skipping the import in the dev repo is
+not.
+
+**Landed with PR #488** — added the vox import, enabled z-spec here,
+committed the biconditional-consistent CLAUDE.md preamble. Biff also
+has a marker in this repo but ships no guide (§ 2.6 lets a global
+tool register user-scope only); tracked as a biff-repo bug, not an
+ethos-repo compliance gap.
 
 ## DES-072: Correction events — an additive-only annotation mechanism for closed missions (SETTLED)
 
