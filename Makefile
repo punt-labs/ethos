@@ -49,6 +49,10 @@ docs-pdf: ## Rebuild prfaq.pdf + docs/*.pdf from .tex sources, then sweep interm
 		echo "==> latexmk $$f"; \
 		latexmk -pdf -interaction=nonstopmode -halt-on-error -cd "$$f" || exit 1; \
 		latexmk -c -cd "$$f" >/dev/null; \
+		base=$${f%.tex}; \
+		for ext in $(LATEX_INTERMEDIATE_EXTS); do \
+			rm -f "$$base.$$ext"; \
+		done; \
 	done
 
 # Scoped to intermediates that sit next to a KNOWN .tex source in LATEX_TEX.
