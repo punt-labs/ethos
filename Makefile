@@ -35,11 +35,14 @@ docs: ## Lint markdown
 
 # LaTeX PDFs are checked in (prfaq.pdf, docs/*.pdf). Regenerating them
 # is opt-in — `make docs-pdf` — not part of `make check`, so CI doesn't
-# need a TeX toolchain. latexmk auto-detects biber vs bibtex from each
-# .tex file's biblatex backend directive (prfaq.tex uses biber; the
-# docs/*.tex files don't cite bibs at all), then `-c` sweeps the
-# aux/log/bbl/bcf/blg/out/run.xml/toc intermediates the build produces,
-# so `.tex` and `.pdf` are the only artifacts left on disk after a build.
+# need a TeX toolchain. Passing no bib-backend flag lets latexmk pick
+# biber vs bibtex from the auxiliary files the first pdflatex run
+# generates (a .bcf implies biber; a .aux with \bibdata implies bibtex).
+# prfaq.tex is biblatex + backend=biber → latexmk emits a .bcf → biber;
+# docs/*.tex cite nothing → no bib backend runs at all. `-c` after the
+# build sweeps latexmk's intermediates; the explicit basename+extension
+# loop below sweeps the ones `-c` keeps when a .bib is present (.bbl).
+# Net: only .tex and .pdf remain on disk after docs-pdf.
 LATEX_TEX := prfaq.tex $(wildcard docs/*.tex)
 LATEX_INTERMEDIATE_EXTS := aux bbl bcf blg fdb_latexmk fls log out run.xml synctex.gz toc
 
