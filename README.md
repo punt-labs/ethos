@@ -210,8 +210,9 @@ eval "$(ethos session start --persona bwk)"
 
 Then `ethos whoami` reports the persona, `ethos session` shows the
 roster, `ethos session end` tears it down. `session start` is idempotent
-and exports `ETHOS_SESSION` + `ETHOS_AGENT_ID`. Design + resolution
-rules: [Harness-neutral sessions](docs/harness-sessions.md).
+and exports `ETHOS_SESSION` (plus `ETHOS_AGENT_ID` when `--persona` is
+supplied). Design + resolution rules:
+[Harness-neutral sessions](docs/harness-sessions.md).
 
 ### Self-Standing Repos: `vendor` and `resolution: repo-only`
 
