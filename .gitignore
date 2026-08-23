@@ -45,6 +45,7 @@ Lux.ini
 
 # Biff local
 .biff.local
+.biff
 
 # LaTeX build artifacts
 *.aux

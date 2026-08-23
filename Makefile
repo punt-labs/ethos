@@ -9,14 +9,14 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # .github/workflows/test.yml. Config lives in .golangci.yml.
 # Resolve the install dir the way `go install` does: GOBIN if set, else
 # GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
-GOLANGCI_LINT_VERSION := v2.12.2
+GOLANGCI_LINT_VERSION := v2.13.1
 GOBIN := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
 endif
 GOLANGCI_LINT := $(GOBIN)/golangci-lint
 
-.PHONY: help lint docs test check validate-content sync-embed format build install dev clean dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
+.PHONY: help lint docs docs-pdf test check validate-content sync-embed format build install dev clean clean-latex dist tools doctor undev test-behavioral test-e2e test-e2e-smoke e2e-bin baseline-tokens calibrate-tokens
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -32,6 +32,44 @@ lint: ## Lint (golangci-lint + shellcheck + ruff + mypy)
 
 docs: ## Lint markdown
 	npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
+
+# LaTeX PDFs are checked in (prfaq.pdf, docs/*.pdf). Regenerating them
+# is opt-in — `make docs-pdf` — not part of `make check`, so CI doesn't
+# need a TeX toolchain. Passing no bib-backend flag lets latexmk pick
+# biber vs bibtex from the auxiliary files the first pdflatex run
+# generates (a .bcf implies biber; a .aux with \bibdata implies bibtex).
+# prfaq.tex is biblatex + backend=biber → latexmk emits a .bcf → biber;
+# docs/*.tex cite nothing → no bib backend runs at all. `-c` after the
+# build sweeps latexmk's intermediates; the explicit basename+extension
+# loop below sweeps the ones `-c` keeps when a .bib is present (.bbl).
+# Net: only .tex and .pdf remain on disk after docs-pdf.
+LATEX_TEX := prfaq.tex $(wildcard docs/*.tex)
+LATEX_INTERMEDIATE_EXTS := aux bbl bcf blg fdb_latexmk fls log out run.xml synctex.gz toc
+
+docs-pdf: ## Rebuild prfaq.pdf + docs/*.pdf from .tex sources, then sweep intermediates
+	@command -v latexmk >/dev/null || { echo "latexmk not found — install a TeX distribution (MacTeX, TeX Live)"; exit 1; }
+	@for f in $(LATEX_TEX); do \
+		echo "==> latexmk $$f"; \
+		latexmk -pdf -interaction=nonstopmode -halt-on-error -cd "$$f" || exit 1; \
+		latexmk -c -cd "$$f" >/dev/null; \
+		base=$${f%.tex}; \
+		for ext in $(LATEX_INTERMEDIATE_EXTS); do \
+			rm -f "$$base.$$ext"; \
+		done; \
+	done
+
+# Scoped to intermediates that sit next to a KNOWN .tex source in LATEX_TEX.
+# A repo-wide `find -name '*.log' -delete` would also catch coverage.out,
+# .beads/daemon.log, worktree checkouts under sibling repos, etc. — none of
+# which are ours to remove. Keying on LATEX_TEX basenames means we only touch
+# files whose provenance is a .tex we know about.
+clean-latex: ## Remove LaTeX build intermediates (keeps .pdf/.tex/.bib)
+	@for f in $(LATEX_TEX); do \
+		base=$${f%.tex}; \
+		for ext in $(LATEX_INTERMEDIATE_EXTS); do \
+			rm -f "$$base.$$ext"; \
+		done; \
+	done
 
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -coverprofile=coverage.out ./...
@@ -130,7 +168,7 @@ undev: ## Restore plugin cache from backup
 	mv "$$link.bak" "$$link"; \
 	echo "restored $$link"
 
-clean: ## Remove build artifacts
+clean: clean-latex ## Remove build artifacts
 	rm -f ethos coverage.out
 	rm -rf dist/
 

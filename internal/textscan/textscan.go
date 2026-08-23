@@ -285,7 +285,6 @@ func readDelim(s string, j int) (string, int) {
 		start := j
 		if s[j] == '\\' {
 			start = j + 1
-			j++
 		}
 		k := start
 		for k < len(s) && !isDelimEnd(s[k]) {
