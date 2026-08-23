@@ -13,7 +13,7 @@ git-trailer-links every commit back to the prompt that authorized it.
 Missions dispatch against a persistent layer of identities and teams that
 give each agent a role, tool restrictions, and a delegation graph. It ships
 as a single Go binary with a Claude Code plugin, an MCP server, and a
-filesystem layout other tools read directly. Runs locally — no server, no
+filesystem layout other tools read directly. It runs locally — no server, no
 telemetry, no cloud.
 
 **Platforms:** macOS, Linux (amd64, arm64).
