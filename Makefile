@@ -35,26 +35,34 @@ docs: ## Lint markdown
 
 # LaTeX PDFs are checked in (prfaq.pdf, docs/*.pdf). Regenerating them
 # is opt-in — `make docs-pdf` — not part of `make check`, so CI doesn't
-# need a TeX toolchain. latexmk handles biber/rerun-until-stable and
-# `-c` sweeps the aux/log/bbl/bcf/blg/out/run.xml/toc intermediates the
-# build produces, so `.tex` and `.pdf` are the only artifacts left on
-# disk after a build.
+# need a TeX toolchain. latexmk auto-detects biber vs bibtex from each
+# .tex file's biblatex backend directive (prfaq.tex uses biber; the
+# docs/*.tex files don't cite bibs at all), then `-c` sweeps the
+# aux/log/bbl/bcf/blg/out/run.xml/toc intermediates the build produces,
+# so `.tex` and `.pdf` are the only artifacts left on disk after a build.
 LATEX_TEX := prfaq.tex $(wildcard docs/*.tex)
+LATEX_INTERMEDIATE_EXTS := aux bbl bcf blg fdb_latexmk fls log out run.xml synctex.gz toc
 
 docs-pdf: ## Rebuild prfaq.pdf + docs/*.pdf from .tex sources, then sweep intermediates
 	@command -v latexmk >/dev/null || { echo "latexmk not found — install a TeX distribution (MacTeX, TeX Live)"; exit 1; }
 	@for f in $(LATEX_TEX); do \
 		echo "==> latexmk $$f"; \
-		latexmk -pdf -bibtex -interaction=nonstopmode -halt-on-error -cd "$$f" || exit 1; \
+		latexmk -pdf -interaction=nonstopmode -halt-on-error -cd "$$f" || exit 1; \
 		latexmk -c -cd "$$f" >/dev/null; \
 	done
 
+# Scoped to intermediates that sit next to a KNOWN .tex source in LATEX_TEX.
+# A repo-wide `find -name '*.log' -delete` would also catch coverage.out,
+# .beads/daemon.log, worktree checkouts under sibling repos, etc. — none of
+# which are ours to remove. Keying on LATEX_TEX basenames means we only touch
+# files whose provenance is a .tex we know about.
 clean-latex: ## Remove LaTeX build intermediates (keeps .pdf/.tex/.bib)
-	@find . -maxdepth 3 \( -name '*.aux' -o -name '*.bbl' -o -name '*.bcf' -o -name '*.blg' \
-		-o -name '*.fdb_latexmk' -o -name '*.fls' -o -name '*.log' -o -name '*.out' \
-		-o -name '*.run.xml' -o -name '*.synctex.gz' -o -name '*.toc' \) \
-		-not -path './.git/*' -not -path './.tmp/*' -not -path './node_modules/*' \
-		-not -path './.claude/worktrees/*' -delete
+	@for f in $(LATEX_TEX); do \
+		base=$${f%.tex}; \
+		for ext in $(LATEX_INTERMEDIATE_EXTS); do \
+			rm -f "$$base.$$ext"; \
+		done; \
+	done
 
 test: ## Run tests with race detection and write coverage to coverage.out
 	go test -race -count=1 -coverprofile=coverage.out ./...
