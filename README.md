@@ -197,171 +197,63 @@ Essentials below. Every command accepts `--json`. Full reference in
 
 ## Setup
 
-Configuration beyond the Quick Start: running outside Claude Code, making a
-repo self-standing, working across git worktrees, and turning ethos on or
-off per repo.
+Configuration beyond the Quick Start.
 
 ### Outside Claude Code (Codex, plain terminal)
 
-Ethos is harness-neutral. Inside Claude Code a session is created for you by
-hooks. Anywhere else, open one explicitly — one line at shell or harness
-init:
-
-Start a session — this exports `ETHOS_SESSION` and `ETHOS_AGENT_ID`:
+Ethos is harness-neutral. Inside Claude Code, hooks open a session for
+you. Anywhere else, open one explicitly at shell or harness init:
 
 ```bash
 eval "$(ethos session start --persona bwk)"
 ```
 
-Report the declared persona:
-
-```bash
-ethos whoami
-```
-
-Show the roster:
-
-```bash
-ethos session
-```
-
-Tear the session down:
-
-```bash
-ethos session end
-```
-
-`session start` is idempotent (a live `ETHOS_SESSION` is reported, not
-re-minted), and resolution is `--session` > `ETHOS_SESSION` > the Claude
-process walk. Outside a session, `iam` and `mission claim` fail with an
-error naming `ethos session start`.
+Then `ethos whoami` reports the persona, `ethos session` shows the
+roster, `ethos session end` tears it down. `session start` is idempotent
+and exports `ETHOS_SESSION` + `ETHOS_AGENT_ID`. Design + resolution
+rules: [Harness-neutral sessions](docs/harness-sessions.md).
 
 ### Self-Standing Repos: `vendor` and `resolution: repo-only`
 
-By default ethos resolves repo → active bundle → global, and the global
-fallback catches whatever the repo lacks. That is what you want on a
-developer's machine, and it is also why a repo that vendors a partial
-identity set does not know it is partial: the gaps resolve from
-`~/.punt-labs/ethos/` and nothing says so.
-
-`ethos vendor` produces a set that resolves on its own:
-
-Plan — show the closure and its blast radius:
-
-```bash
-ethos vendor bwk
-```
-
-Write it into `.punt-labs/ethos/`:
-
-```bash
-ethos vendor bwk --apply
-```
-
-Vendor a whole team, pruning anything outside the closure:
+Default resolution is repo → active bundle → global, and the global
+fallback catches whatever the repo lacks — which is why a partially-
+vendored repo does not know it is partial. `ethos vendor` computes the
+identity closure (attributes, roles, teams, *and other members of those
+teams* — the edge that pulls in people reachable no other way) and
+writes a set that resolves on its own:
 
 ```bash
 ethos vendor --team engineering --apply --prune
 ```
 
-It follows references to a fixed point — attributes, roles, the teams an
-identity belongs to, and *those* teams' other members. That last edge is
-what pulls in people reachable no other way, and without it a vendored
-team names members the set does not contain. It also means the closure is
-the connected component of the team graph: naming one handle in a dense
-org can vendor most of the roster. Vendor therefore plans by default and
-reports the gap between what you asked for and what it would write.
+Then set `resolution: repo-only` in `.punt-labs/ethos.yaml` to drop
+the global layer — missing references become hard errors naming each
+one, instead of silently resolving from a home directory a CI runner
+or fresh clone does not have. `ethos doctor` is the gate. Secrets in
+`<handle>.ext/<namespace>.local.yaml` (vendor never copies, `.gitignore`
+covers). Full walkthrough: [Team Setup](docs/team-setup.md).
 
-Then make the repo layer authoritative, in `.punt-labs/ethos.yaml`:
+### Git Worktrees
 
-```yaml
-resolution: repo-only    # default is `layered`
-```
-
-The global layer now leaves every read, and a missing reference is a hard
-error naming each one and the file it should occupy — instead of silently
-resolving from a home directory a CI runner or a fresh clone does not
-have. `ethos doctor` is the gate:
-
-```text
-Repo-only completeness   PASS  20 identities resolve with no global fallback
-```
-
-Extensions come along, because a vendored agent without its memory wiring
-looks correct and behaves as if it had amnesia. Anything secret goes in
-`<handle>.ext/<namespace>.local.yaml`, which vendor never copies and
-`.gitignore` covers; `ethos ext set --local` writes it, and reads see base
-and `.local` merged. Vendor refuses (non-zero) to copy a key whose *name*
-reads as a credential — `api_token` blocks, `gpg_key_id` does not, values
-are never inspected — with `--allow-ext-key <ns>/<key>` as a per-key
-override and no blanket force.
-
-`.local` is a git-exclusion mechanism, not a vault: the merged view still
-reaches the model at runtime.
-
-`ethos export` is a different job — a lossy conversion of one identity
-into a foreign format — and is unchanged.
-
-### Git Worktrees and the Store Root
-
-The repo-layer store lives at `<repo>/.punt-labs/ethos/`. Ethos resolves it
-through the git common dir, so an agent working in a linked worktree
-(`<repo>/.claude/worktrees/x`) still addresses the store in the main work
-tree — a mission created from either checkout is visible from the other, and
-a leader dispatching from a worktree binds the same store the CLI wrote to,
-so delegation resolves rather than failing "MISSION_ID not found". Only the
-mission store crosses to the main tree; per-checkout state (the enable
-marker, generated `.claude/agents/`, audit trail, and the files a verifier
-inspects) stays in the worktree. When no git repository is in scope, the
-mission store warns to stderr that it is operating on the global store
-(`~/.punt-labs/ethos/`) rather than silently switching.
-
-Set `ETHOS_REPO_ROOT` to force the store location when auto-resolution is
-wrong. It overrides the git walk for every command and hook:
-
-```bash
-ETHOS_REPO_ROOT=/path/to/repo ethos mission list
-```
+The repo-layer store lives at `<repo>/.punt-labs/ethos/`. Ethos resolves
+it through the git common dir, so an agent in a linked worktree still
+addresses the store in the main work tree — a mission created from either
+checkout is visible from the other. Only the mission store crosses to
+the main tree; per-checkout state (enable marker, generated agents,
+audit trail) stays in the worktree. Override with `ETHOS_REPO_ROOT`.
 
 ### Enable / Disable
 
-`install.sh` is machine scope only — it installs the binary, registers the
-plugin, and seeds global content. Per-repo enablement is `ethos enable`,
-run inside a repo (and delegated to automatically by `install.sh` when it is
-run inside a work tree). `enable`:
-
-1. deposits the vendored agent guide `.punt-labs/ethos/CLAUDE.md` and its
-   `.vendored-manifest`;
-2. writes the enabled marker `.punt-labs/ethos/enabled`;
-3. adds the `@.punt-labs/ethos/CLAUDE.md` import line to the repo `CLAUDE.md`;
-4. chains the `ETHOS DES-058 SEAL` and `ETHOS DES-054 TRAILER` sections into
-   the `pre-commit` and `commit-msg` hooks.
-
-It is idempotent — re-running is the upgrade path — and prints a "run `ethos
-setup`" hint when the repo has no identity config. `enable` and `setup` stay
-separate: neither calls the other.
-
-`ethos disable` reverses it non-destructively: it removes the import line,
-deletes the marker, and unchains both hooks, but leaves the vendored guide
-and all config and audit data on disk, dormant. It refuses when a sibling
-worktree is still enabled (the git hooks are shared across worktrees); pass
-`--force` to unchain anyway. It runs no final seal — any unsealed audit
-lines stay in the gitignored local zone and seal on a later re-enable.
-
-The three states a repo can be in:
-
-| State | `enabled` marker | Import line | Hooks | `doctor` seal check | `doctor` currency check |
-|-------|------------------|-------------|-------|---------------------|--------------------------|
-| Enabled | present | present | chained + active | FAIL if seal missing/inactive | FAIL/WARN if installed section is truncated, foreign, or stale |
-| Dormant / Absent | absent | absent | absent | PASS (not enabled here) | PASS (no section installed) |
-| Gated-but-unenabled | absent | absent | chained (inert) | WARN | FAIL/WARN if the chained section is truncated, foreign, or stale |
-
-The chained hook scripts gate on the marker: they do no commit-time work
-unless `.punt-labs/ethos/enabled` exists, so a dormant repo's hook is inert
-while still preserving a host hook's failing fall-through. The currency
-check runs independently of the marker in every state — it inspects
-whatever section is actually on disk, not whether the marker says it
-should be running.
+`install.sh` is machine scope. Per-repo enablement is `ethos enable`,
+which deposits the vendored agent guide, writes the `enabled` marker,
+adds the `@.punt-labs/ethos/CLAUDE.md` import to the repo `CLAUDE.md`,
+and chains `ETHOS DES-058 SEAL` + `ETHOS DES-054 TRAILER` sections into
+the `pre-commit` and `commit-msg` hooks. `ethos disable` reverses it
+non-destructively — leaves the vendored guide, config, and audit data
+on disk, dormant. Both idempotent. `enable` and `setup` stay separate.
+State table, hook-chaining mechanics, `ethos doctor`'s marker vs
+currency check distinction, and the sibling-worktree `--force` case:
+[Enable / Disable](docs/enable-disable.md).
 
 ## What Ethos Does
 
@@ -405,7 +297,9 @@ markdown cannot represent it).
 | Guide | Audience |
 |-------|----------|
 | [Onboarding](docs/onboarding.md) | Install, setup, first delegation |
-| [Team Setup](docs/team-setup.md) | Configuring roles, teams, bundles |
+| [Team Setup](docs/team-setup.md) | Configuring roles, teams, bundles, vendor + repo-only |
+| [Harness-Neutral Sessions](docs/harness-sessions.md) | Running ethos outside Claude Code (Codex, plain terminal) |
+| [Enable / Disable](docs/enable-disable.md) | Per-repo enable/disable, hook chaining, `ethos doctor` |
 | [Audited Delegation](docs/audited-delegation.md) | Tier A/B dispatch, claim/release, audit trail, git trailers |
 | [Traceability Data Assets](docs/traceability-data-assets.md) | Every artifact ethos produces, organized by scope |
 | [Traceability Use Cases](docs/traceability-use-cases.md) | 10 forensic/compliance scenarios with query paths |
