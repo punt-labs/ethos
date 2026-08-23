@@ -1,12 +1,11 @@
 # ethos
 
-> A responsible agent harness — control, auditability, and
-> performance for AI agent delegation.
+> Identity, mission contracts, and per-tool-call audit for AI agent delegation.
 
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/punt-labs/ethos.svg)](https://pkg.go.dev/github.com/punt-labs/ethos)
-[![Working Backwards](https://img.shields.io/badge/Working_Backwards-hypothesis-lightgrey)](./prfaq.pdf)
+[![Working Backwards](https://img.shields.io/badge/Working_Backwards-validated-blue)](./prfaq.pdf)
 
 Ethos binds a name, personality, writing style, domain expertise, email,
 GitHub handle, and voice into one identity that other tools read, and adds
@@ -21,23 +20,29 @@ no telemetry, no cloud.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh | sh
+~/.local/bin/ethos setup
 ```
 
-Then set up your identity and team:
+The installer places the `ethos` binary in `~/.local/bin`, seeds
+starter content into `~/.punt-labs/ethos/`, and — when `claude` and
+`git` are available — registers the Claude Code plugin. `ethos setup`
+walks a 60-second wizard that creates your CEO identity, a paired COO
+agent (`claude`), and a specialist team. Once your shell rc adds
+`~/.local/bin` to `PATH` (open a new terminal, or `source` the rc),
+the bare `ethos` command works. Full walkthrough:
+[Onboarding](docs/onboarding.md).
 
-```bash
-ethos setup
-```
+<details>
+<summary>Install without the Claude Code plugin</summary>
 
-To install the CLI without the Claude Code plugin — for a non-Claude
-harness, or a Claude install where org policy blocks plugins — pass
-`--no-plugin`:
+For a non-Claude harness, or a Claude install where org policy blocks
+plugins:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh | sh -s -- --no-plugin
 ```
 
-Or, where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
+Where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh | ETHOS_NO_PLUGIN=1 sh
@@ -45,23 +50,12 @@ curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh 
 
 `--no-plugin` skips only the marketplace-register and plugin-install
 steps; the binary, PATH setup, directories, seed content, per-repo
-`ethos enable`, and health check all still run. Re-run the installer
-without the flag to add the plugin later.
+`ethos enable`, and health check all still run. Re-run without the flag
+to add the plugin later.
+</details>
 
-The installer places the `ethos` binary in `~/.local/bin` and,
-when `claude` and `git` are available, registers the Claude Code
-plugin. `ethos setup` asks for your name, handle, email, GitHub
-handle (optional), and working style, then creates your identity as
-**CEO**, a paired **COO** agent (`claude`), repo config, and a
-specialist team (architect, implementer, reviewer, security) that
-reports to the COO, plus agent definition files. Out of the box the
-org is you (CEO) → `claude` (COO) → specialists — see
-[DESIGN.md](DESIGN.md) DES-064. The email prompt defaults to your `git config user.email`;
-your identity carries that email so ethos can resolve you by it. Start
-Claude Code — the agent knows who it is, who you are, and how to
-delegate. See [Onboarding](docs/onboarding.md) for the full walkthrough.
-
-Non-interactive setup reads the same fields from a YAML file:
+<details>
+<summary>Non-interactive setup from a YAML file</summary>
 
 ```yaml
 name: Mal Reynolds
@@ -74,19 +68,7 @@ writing_style: concise-quantified
 Run `ethos setup --file config.yaml`. When `email` is omitted, setup
 uses `git config user.email`; if that is also unset, setup fails with
 a remedy rather than creating an identity nothing can resolve.
-
-`ethos setup` requires starter content to be seeded first. The
-installer runs `ethos seed` for you, so the quick start above just
-works. If you build from source or run `setup` on a machine that was
-never seeded, run `ethos seed` first — `setup` otherwise fails with an
-error naming the missing attribute and telling you to seed.
-
-Run inside a repo, `ethos seed` also deploys three review-checklist
-agents to that repo's `.claude/agents/`: `code-reviewer`,
-`silent-failure-hunter`, and `invariant-completeness-reviewer`. These
-are personaless Claude Code subagents for local review — invoke them
-directly on a diff, never via `ethos mission dispatch`. Outside a repo,
-`ethos seed` deploys only the global content above.
+</details>
 
 ## Features
 
@@ -143,26 +125,10 @@ session runs, so a repo with an active session keeps a clean `git status`.
 A `pre-commit` hook runs `ethos audit seal`, which copies the pending lines
 into immutable, timestamp-named chunk files under the tracked tree so the
 audit record lands in the same commit as the work. Chunks are never
-modified after creation, so branch merges are conflict-free.
-
-`ethos enable` chains the seal hook into the pre-commit hook git actually
-runs — resolved with `git rev-parse --git-path hooks`, so it lands in
-`.git/hooks/` normally, the common hooks dir inside a worktree, or the
-`core.hooksPath` directory (e.g. `.husky/`) when one is configured. When a
-hook is already there — the beads hook, for one — it appends a
-marker-delimited `ETHOS DES-058 SEAL` section rather than skipping, so the
-seal coexists with the host hook. The chained script gates on the enabled
-marker: it does nothing at commit time unless `.punt-labs/ethos/enabled`
-exists, so a disabled repo's hook is inert (and still preserves a host
-hook's failing fall-through). Re-running `enable` is idempotent. `ethos
-doctor` resolves the same path for its seal-hook presence check, which is
-keyed on the enabled marker — a never-enabled or disabled repo passes; a
-repo with the hook chained but no marker WARNs. Doctor's separate hook
-*currency* checks (seal and trailer) run unconditionally, independent of
-the enabled marker, including on a dormant repo — they compare the
-installed section's content against what this ethos build would install
-today, since `ethos enable` is the remedy for stale content either way.
-See [enable / disable](#enable--disable).
+modified after creation, so branch merges are conflict-free. Hook
+mechanics, marker sections, and `ethos doctor`'s currency checks: see
+[Enable / Disable](#enable--disable) and DES-054/DES-058 in
+[DESIGN.md](DESIGN.md).
 
 Or visually: `ethos ui` opens a localhost dashboard where you browse
 the repo, click a line, and see the agent who wrote it, the prompt
@@ -397,24 +363,9 @@ check runs independently of the marker in every state — it inspects
 whatever section is actually on disk, not whether the marker says it
 should be running.
 
-## The Problem
-
-Agents write code you're responsible for, and you can't see what
-they did or why.
-
-A developer delegates a task to an AI agent. The agent reads files,
-edits code, runs tests, commits. Six months later someone asks: who
-authorized this change? What were the instructions? Did the agent
-stay within the files it was supposed to touch? Why this approach?
-
-Today the answer is: check the chat history, if you still have it.
-There is no durable record connecting a line of code to the contract
-that authorized it, the prompt that drove it, and the tool calls
-that produced it.
-
 ## What Ethos Does
 
-Ethos records and bounds agent delegation along three axes:
+Ethos records and bounds agent delegation along three axes.
 
 **Control.** Typed mission contracts with file-level write-sets
 enforced at runtime, frozen evaluators (hash-pinned so nobody swaps
@@ -426,16 +377,15 @@ The agent can only do what the contract authorizes.
 contract, delegation record, the exact dispatch prompt, a
 per-tool-call audit trail tagged with the delegation ID, and
 `Mission:`/`Delegation:` git trailers on commits. `git blame` any
-line → commit → trailer → contract → prompt → audit trail. Months
-later, you can reconstruct exactly what happened and why.
+line → commit → trailer → contract → prompt → audit trail.
 
 **Performance.** Named specialist agents with encapsulated domain
-expertise — not generic assistants, but a Go specialist grounded in
-Kernighan's principles, a security reviewer with Bernstein's
-methodology. Personalities, writing styles, and talents shape the
-model's output the way a real colleague's expertise would. Roles
+expertise — a Go specialist grounded in Kernighan's principles, a
+security reviewer built on Bernstein's methodology. Personalities,
+writing styles, and talents are prompt-scaffolding that
+constrains the model's output within a role's stated domain. Roles
 restrict tool access. Teams define delegation topology. The
-configuration is reusable, measurable, and improvable.
+configuration is reusable, versioned, and revisable.
 
 ## How This Is Different
 
