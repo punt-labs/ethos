@@ -20,14 +20,16 @@ no telemetry, no cloud.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh | sh
-ethos setup
+~/.local/bin/ethos setup
 ```
 
 The installer places the `ethos` binary in `~/.local/bin`, seeds
 starter content into `~/.punt-labs/ethos/`, and — when `claude` and
 `git` are available — registers the Claude Code plugin. `ethos setup`
 walks a 60-second wizard that creates your CEO identity, a paired COO
-agent (`claude`), and a specialist team. Full walkthrough:
+agent (`claude`), and a specialist team. Once your shell rc adds
+`~/.local/bin` to `PATH` (open a new terminal, or `source` the rc),
+the bare `ethos` command works. Full walkthrough:
 [Onboarding](docs/onboarding.md).
 
 <details>
