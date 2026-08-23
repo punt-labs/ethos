@@ -9,7 +9,7 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # .github/workflows/test.yml. Config lives in .golangci.yml.
 # Resolve the install dir the way `go install` does: GOBIN if set, else
 # GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
-GOLANGCI_LINT_VERSION := v2.12.2
+GOLANGCI_LINT_VERSION := v2.13.1
 GOBIN := $(shell go env GOBIN)
 ifeq ($(GOBIN),)
 GOBIN := $(shell go env GOPATH)/bin
