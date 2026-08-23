@@ -7,12 +7,14 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/punt-labs/ethos.svg)](https://pkg.go.dev/github.com/punt-labs/ethos)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-validated-blue)](./prfaq.pdf)
 
-Ethos binds a name, personality, writing style, domain expertise, email,
-GitHub handle, and voice into one identity that other tools read, and adds
-typed mission contracts that record and bind what an agent is asked to do.
-It ships as a single Go binary with a Claude Code plugin, an MCP server, and
-a filesystem layout other tools read directly. It runs locally — no server,
-no telemetry, no cloud.
+Ethos runs typed mission contracts for AI agents — a write-set, a frozen
+evaluator, bounded review rounds, and a per-tool-call audit trail that
+git-trailer-links every commit back to the prompt that authorized it.
+Missions dispatch against a persistent layer of identities and teams that
+give each agent a role, tool restrictions, and a delegation graph. It ships
+as a single Go binary with a Claude Code plugin, an MCP server, and a
+filesystem layout other tools read directly. It runs locally — no server, no
+telemetry, no cloud.
 
 **Platforms:** macOS, Linux (amd64, arm64).
 
