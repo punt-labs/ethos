@@ -7460,12 +7460,14 @@ diverge from what consumers see.
   standard by § 2.1 ("dev-process standards are entirely separate from
   tool user guides").
 
-**Measured cost of the reversal.** The ~54 KB tier-B/tier-C content
-this ADR originally optimized away (388 KB → 319 KB on the ethos-self
-E2E scenario) returns to the ethos-repo per-session payload — the
-same content consumers already load every session. Tightening the
-guides is the compounding fix; skipping the import in the dev repo is
-not.
+**Measured cost of the reversal.** The three tier-B `@`-imports
+(`.punt-labs/{ethos,vox,z-spec}/CLAUDE.md`) return to the ethos-repo
+per-session payload — the bulk of the ~54 KB "`# Ethos` block" this
+ADR originally measured, minus the top-level `CLAUDE.md` itself
+which is unaffected. Tier C stays not-`@`-imported (see above), so
+the payload increase is tier-B only. Same content consumers already
+load every session. Tightening the tier-B guides is the compounding
+fix; skipping the import in the dev repo is not.
 
 **Landed with PR #488** — added the vox import, enabled z-spec here,
 committed the biconditional-consistent CLAUDE.md preamble. Biff also
