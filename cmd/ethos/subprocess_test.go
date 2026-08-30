@@ -140,9 +140,17 @@ func TestCLI_Version(t *testing.T) {
 	stdout, _, exitCode := runCLI(t, nil, "version")
 	assert.Equal(t, 0, exitCode)
 	assert.NotEmpty(t, stdout, "version output should be non-empty")
-	// Output is "ethos <version>" — accept semver or "dev" (test builds
-	// skip ldflags, so the binary reports "dev" rather than a release tag).
-	assert.Regexp(t, `ethos (\d+\.\d+|dev)`, stdout)
+	// Output is "ethos <version>". TestMain builds this binary with a bare
+	// `go build`, which skips the Makefile's -ldflags. On Go 1.24+, a build
+	// run from inside a VCS checkout (this repo) still stamps a real module
+	// version into runtime/debug.BuildInfo derived from `git describe` —
+	// resolveVersion's fallback path (ethos-vqbk) surfaces exactly that,
+	// with a "+dirty" suffix when the checkout has uncommitted changes. A
+	// checkout with no VCS info (e.g. GOFLAGS=-buildvcs=false) instead
+	// stamps "(devel)", which resolveVersion normalizes to "dev". Accept
+	// any of: an optional "v" prefix, a semver-shaped number, an optional
+	// "+dirty" suffix, or the "dev" fallback.
+	assert.Regexp(t, `ethos v?(\d+\.\d+(\.\d+)?(\+dirty)?|dev)`, stdout)
 }
 
 func TestCLI_Whoami(t *testing.T) {

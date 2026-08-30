@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -95,7 +96,10 @@ func TestVersionCommand(t *testing.T) {
 		err := rootCmd.Execute()
 		require.NoError(t, err)
 	})
-	assert.Contains(t, out, version)
+	// Compare against resolveVersion(), not the raw `version` var: `version`
+	// is empty unless the Makefile's ldflags set it (main.go, ethos-vqbk),
+	// and `assert.Contains(out, "")` would pass vacuously and prove nothing.
+	assert.Contains(t, out, resolveVersion())
 }
 
 func TestVersionCommandJSON(t *testing.T) {
@@ -110,7 +114,100 @@ func TestVersionCommandJSON(t *testing.T) {
 	var parsed map[string]string
 	err := json.Unmarshal([]byte(out), &parsed)
 	require.NoError(t, err, "output should be valid JSON")
-	assert.Equal(t, version, parsed["version"])
+	assert.Equal(t, resolveVersion(), parsed["version"])
+}
+
+// fakeBuildInfo swaps readBuildInfo for the duration of the test so
+// resolveVersion's fallback branch can be exercised deterministically —
+// the real debug.ReadBuildInfo() result depends on the Go toolchain
+// version and on whether the checkout has VCS metadata (see ethos-vqbk:
+// on Go 1.24+, a real git checkout stamps a git-describe-derived version
+// instead of the "(devel)" sentinel older toolchains used).
+func fakeBuildInfo(t *testing.T, info *debug.BuildInfo, ok bool) {
+	t.Helper()
+	old := readBuildInfo
+	readBuildInfo = func() (*debug.BuildInfo, bool) { return info, ok }
+	t.Cleanup(func() { readBuildInfo = old })
+}
+
+// TestResolveVersion_LdflagsSet asserts the ldflags-injected version wins
+// outright, even when it looks nothing like a build-info module version —
+// resolveVersion must never second-guess what the Makefile computed.
+func TestResolveVersion_LdflagsSet(t *testing.T) {
+	old := version
+	version = "v9.9.9-custom"
+	t.Cleanup(func() { version = old })
+
+	assert.Equal(t, "v9.9.9-custom", resolveVersion())
+}
+
+// TestResolveVersion_BuildInfoAbsent covers the case where ldflags did not
+// run and runtime/debug has nothing to offer either (ok == false) —
+// resolveVersion must still return something, never empty.
+func TestResolveVersion_BuildInfoAbsent(t *testing.T) {
+	old := version
+	version = ""
+	t.Cleanup(func() { version = old })
+	fakeBuildInfo(t, nil, false)
+
+	assert.Equal(t, "dev", resolveVersion())
+}
+
+// TestResolveVersion_GoInstallStampsRealVersion is the case ethos-vqbk
+// exists to fix: `go install github.com/punt-labs/ethos/v4/cmd/ethos@v4.16.0`
+// compiles source directly, so ldflags never runs, but Go always stamps
+// the requested module version into info.Main.Version. resolveVersion
+// must surface that real version instead of falling through to "dev".
+func TestResolveVersion_GoInstallStampsRealVersion(t *testing.T) {
+	old := version
+	version = ""
+	t.Cleanup(func() { version = old })
+	fakeBuildInfo(t, &debug.BuildInfo{
+		Main: debug.Module{
+			Path:    "github.com/punt-labs/ethos/v4",
+			Version: "v4.16.0",
+		},
+	}, true)
+
+	assert.Equal(t, "v4.16.0", resolveVersion())
+}
+
+// TestResolveVersion_DevelNormalizedToDev pins the documented mapping from
+// the runtime/debug sentinel "(devel)" — a bare `go build` with no VCS
+// metadata to derive a version from — to this command's own "dev"
+// convention.
+func TestResolveVersion_DevelNormalizedToDev(t *testing.T) {
+	old := version
+	version = ""
+	t.Cleanup(func() { version = old })
+	fakeBuildInfo(t, &debug.BuildInfo{
+		Main: debug.Module{
+			Path:    "github.com/punt-labs/ethos/v4",
+			Version: "(devel)",
+		},
+	}, true)
+
+	assert.Equal(t, "dev", resolveVersion())
+}
+
+// TestResolveVersion_BareGoBuildStampsDirtyVersion covers the Go 1.24+
+// case discovered while fixing ethos-vqbk: building from inside a real
+// VCS checkout stamps a git-describe-derived version, with a "+dirty"
+// suffix when the working tree has uncommitted changes, rather than the
+// older "(devel)" sentinel. resolveVersion surfaces that as-is — it is
+// genuinely more informative than "dev".
+func TestResolveVersion_BareGoBuildStampsDirtyVersion(t *testing.T) {
+	old := version
+	version = ""
+	t.Cleanup(func() { version = old })
+	fakeBuildInfo(t, &debug.BuildInfo{
+		Main: debug.Module{
+			Path:    "github.com/punt-labs/ethos/v4",
+			Version: "v4.16.0+dirty",
+		},
+	}, true)
+
+	assert.Equal(t, "v4.16.0+dirty", resolveVersion())
 }
 
 // TestExitCode2_BadFlag runs the compiled binary with an unknown flag

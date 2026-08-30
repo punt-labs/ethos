@@ -83,7 +83,11 @@ func setInProcessEnv(t *testing.T, se *cliSubprocessEnv) {
 func TestRunVersion_Plain(t *testing.T) {
 	stdout, _, err := execHandler(t, "version")
 	require.NoError(t, err)
-	assert.Contains(t, stdout, "ethos "+version)
+	// Compare against resolveVersion(), not the raw `version` var — `version`
+	// is empty unless the Makefile's ldflags set it, and Contains(stdout,
+	// "ethos "+"") would pass vacuously (ethos-vqbk; see also
+	// TestVersionCommand in main_test.go).
+	assert.Contains(t, stdout, "ethos "+resolveVersion())
 }
 
 func TestRunVersion_JSON(t *testing.T) {
@@ -91,7 +95,7 @@ func TestRunVersion_JSON(t *testing.T) {
 	require.NoError(t, err)
 	var parsed map[string]string
 	require.NoError(t, json.Unmarshal([]byte(stdout), &parsed))
-	assert.Equal(t, version, parsed["version"])
+	assert.Equal(t, resolveVersion(), parsed["version"])
 }
 
 // --- doctor ---

@@ -16,7 +16,11 @@ import (
 func runServeImpl() error {
 	s := server.NewMCPServer(
 		"ethos",
-		version,
+		// resolveVersion, not the raw `version` var: `version` is only
+		// non-empty when the Makefile's ldflags set it (main.go,
+		// ethos-vqbk), and this server is exactly as reachable from a
+		// `go install`-built binary as `ethos version` is.
+		resolveVersion(),
 		server.WithToolCapabilities(true),
 	)
 
