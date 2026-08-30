@@ -227,6 +227,35 @@ dist: clean ## Cross-compile for all platforms
 # resolves live on every fetch, with no transparency log — so treat this
 # as exactly the trust root CI already uses via golangci-lint-action, not
 # an "immutable pin."
+#
+# The awk match below compares the filename FIELD exactly ($2), not a
+# substring (grep -F). checksums.txt also lists sibling artifacts — e.g.
+# "$tarball.sbom.json" — whose names have $tarball as a strict prefix; a
+# substring match against the whole line hits both and trips the
+# uniqueness guard below on every platform, aborting `make tools` even
+# when the real entry is fine. Comparing field 2 for equality is immune
+# to that, and to any other filename that merely contains $tarball
+# elsewhere in its name.
+#
+# This explanatory comment lives here, above the target, rather than
+# inline in the recipe body. An earlier version placed it inline as a
+# backslash-continued `#` comment between two other backslash-continued
+# shell statements. That construct is correct under POSIX sh (a `#`
+# comment consumes characters up to but excluding the newline, so the
+# trailing `\` is swallowed as comment text and the newline still ends
+# the statement — verified directly under /bin/sh, /bin/dash, and
+# /bin/bash) but it has now fooled two careful readers into opposite
+# wrong conclusions: once when the `\` continuations were stripped
+# (which really did break the recipe, by splitting it into separate
+# shell invocations and losing variable state) and once when an
+# automated reviewer flagged the restored `\`-continued comment as the
+# thing breaking verification, extraction, and install (it does not —
+# the recipe reaches and executes every statement after it). A
+# correct-but-treacherous construct inside a security-relevant
+# verification step is not worth keeping around for the next person to
+# "fix" into an actual break in either direction, so the prose moves up
+# here as ordinary Make comments and the recipe body keeps only
+# executable statements.
 tools: ## Install development tools
 	@mkdir -p $(GOBIN)
 	@set -e; \
@@ -244,13 +273,6 @@ tools: ## Install development tools
 	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
 	curl -sSfL -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
 	curl -sSfL -o "$$tmpdir/$$checksums" "$$base/$$checksums"; \
-	# Match the filename FIELD exactly (awk $$2), not a substring (grep -F). \
-	# checksums.txt also lists sibling artifacts -- e.g. "$$tarball.sbom.json" \
-	# -- whose names have $$tarball as a strict prefix; a substring match \
-	# against the whole line hits both and trips the uniqueness guard below \
-	# on every platform, aborting `make tools` even when the real entry is \
-	# fine. Comparing field 2 for equality is immune to that, and to any \
-	# other filename that merely contains $$tarball elsewhere in its name. \
 	line=$$(awk -v n="$$tarball" '$$2 == n {print}' "$$tmpdir/$$checksums" || true); \
 	count=$$(printf '%s\n' "$$line" | grep -c . || true); \
 	if [ "$$count" -ne 1 ]; then \
