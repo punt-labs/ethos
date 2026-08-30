@@ -7,6 +7,25 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
 # local and CI run the same analyzer versions; keep in sync with
 # .github/workflows/test.yml. Config lives in .golangci.yml.
+#
+# `make tools` installs the exact prebuilt release binary, not a fresh
+# `go install` build. golangci-lint bundles a gofmt-compatible formatter that
+# embeds whatever Go standard library (go/printer's comment-alignment
+# heuristics have moved between point releases) it was compiled against. A
+# `go install ...@$(GOLANGCI_LINT_VERSION)` compiles against whatever Go
+# toolchain happens to be on the developer's PATH, while
+# golangci-lint-action's default `install-mode: binary` downloads the
+# official release artifact — built once, by the golangci-lint project, on
+# its own pinned Go version. Two builds of the same source at different Go
+# versions can format identical input differently, which is exactly the
+# false-negative-locally / fail-in-CI split this project hit (see the
+# gofmt-agnostic rewrite in internal/mission/migrate_test.go). Fetching the
+# same release asset CI fetches removes the toolchain as a variable: gofmt's
+# formatting logic is pure Go text processing with no OS/arch dependence, so
+# even a darwin/arm64 developer and the linux/amd64 CI runner make identical
+# formatting decisions once both are running a binary built from the same
+# release commit at the same Go version — only the raw bytes of the two
+# binaries differ, never their verdict on a given source file.
 # Resolve the install dir the way `go install` does: GOBIN if set, else
 # GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
 GOLANGCI_LINT_VERSION := v2.13.1
@@ -180,7 +199,15 @@ dist: clean ## Cross-compile for all platforms
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w $(LDFLAGS)" -o dist/ethos-linux-amd64  ./cmd/ethos/
 
 tools: ## Install development tools
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@mkdir -p $(GOBIN)
+	# Fetch the official prebuilt release binary — the same artifact
+	# golangci-lint-action's default install-mode=binary downloads for CI —
+	# instead of compiling one against whatever local Go toolchain is on
+	# PATH. Pinned to the release tag (immutable), not `master`. This is
+	# golangci-lint's own documented CI/local pinned-install command; see
+	# the GOLANGCI_LINT_VERSION comment above for why the artifact, not a
+	# fresh build, is the thing that must match CI.
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
 
 doctor: build ## Run ethos doctor
 	./ethos doctor
