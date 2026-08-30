@@ -257,7 +257,16 @@ dist: clean ## Cross-compile for all platforms
 # here as ordinary Make comments and the recipe body keeps only
 # executable statements.
 tools: ## Install development tools
-	@mkdir -p $(GOBIN)
+	@if [ -z "$(GOBIN)" ]; then \
+	  echo "error: could not determine GOBIN — is Go installed and on PATH? ('go env GOBIN' and 'go env GOPATH' both came back empty)" >&2; \
+	  exit 1; \
+	fi
+	@case "$(GOBIN)" in \
+	  /bin|/sbin|/usr/bin|/usr/sbin|/usr/local/bin) \
+	    echo "error: refusing to install into '$(GOBIN)' — that is a system directory, not a Go bin dir; check 'go env GOPATH' and 'go env GOBIN'" >&2; \
+	    exit 1 ;; \
+	esac
+	@mkdir -p "$(GOBIN)"
 	@set -e; \
 	ver=$(GOLANGCI_LINT_VERSION); \
 	verNum=$${ver#v}; \
