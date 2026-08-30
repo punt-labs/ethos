@@ -277,7 +277,7 @@ tools: ## Install development tools
 	tarball=$${name}.tar.gz; \
 	checksums=golangci-lint-$${verNum}-checksums.txt; \
 	base=https://github.com/golangci/golangci-lint/releases/download/$${ver}; \
-	tmpdir=$$(mktemp -d); \
+	tmpdir=$$(mktemp -d "$${TMPDIR:-/tmp}/ethos-tools.XXXXXXXXXX"); \
 	trap 'rm -rf "$$tmpdir"' EXIT; \
 	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
 	curl -sSfL -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
