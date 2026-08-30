@@ -244,7 +244,14 @@ tools: ## Install development tools
 	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
 	curl -sSfL -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
 	curl -sSfL -o "$$tmpdir/$$checksums" "$$base/$$checksums"; \
-	line=$$(grep -F -- "$$tarball" "$$tmpdir/$$checksums" || true); \
+	# Match the filename FIELD exactly (awk $$2), not a substring (grep -F). \
+	# checksums.txt also lists sibling artifacts -- e.g. "$$tarball.sbom.json" \
+	# -- whose names have $$tarball as a strict prefix; a substring match \
+	# against the whole line hits both and trips the uniqueness guard below \
+	# on every platform, aborting `make tools` even when the real entry is \
+	# fine. Comparing field 2 for equality is immune to that, and to any \
+	# other filename that merely contains $$tarball elsewhere in its name. \
+	line=$$(awk -v n="$$tarball" '$$2 == n {print}' "$$tmpdir/$$checksums" || true); \
 	count=$$(printf '%s\n' "$$line" | grep -c . || true); \
 	if [ "$$count" -ne 1 ]; then \
 	  echo "expected exactly one checksum entry for $$tarball in $$checksums, found $$count" >&2; \
