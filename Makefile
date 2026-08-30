@@ -198,16 +198,68 @@ dist: clean ## Cross-compile for all platforms
 	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w $(LDFLAGS)" -o dist/ethos-linux-arm64  ./cmd/ethos/
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w $(LDFLAGS)" -o dist/ethos-linux-amd64  ./cmd/ethos/
 
+# Fetches golangci-lint's official prebuilt release binary directly — the
+# same artifact golangci-lint-action's default install-mode=binary
+# downloads for CI — instead of compiling one against whatever local Go
+# toolchain happens to be on PATH. See the GOLANGCI_LINT_VERSION comment
+# above for why the artifact, not a fresh build, is the thing that must
+# match CI.
+#
+# This does NOT shell out to golangci-lint's own install.sh. That script
+# downloads and executes shell logic fetched fresh on every `make tools`
+# run, on every developer's persistent workstation — a workstation that,
+# in this org, holds GPG signing keys and pass-resolved credentials.
+# Piping curl into sh puts code nobody in this repo has read in the path
+# of every future `make tools`, invisible to `git blame` and to PR
+# review, and re-fetched (not reviewed once) on every run. CI already
+# runs the same prebuilt artifact via golangci-lint-action, so the trust
+# root below is not new; what matters is that the fetch, verify, and
+# extract logic are ordinary Makefile lines, reviewed once in this diff,
+# not a script this repo never sees.
+#
+# The checksum check is a same-origin integrity check, not a stronger
+# trust root: checksums.txt is published by the same account, in the
+# same release, over the same channel as the tarball it describes. It
+# catches transit corruption and accidental mismatches; it does not
+# defend against a compromise of golangci-lint's own release pipeline,
+# since whoever could swap the tarball could swap the checksums beside
+# it. Git tags are mutable — the $(GOLANGCI_LINT_VERSION) URL below
+# resolves live on every fetch, with no transparency log — so treat this
+# as exactly the trust root CI already uses via golangci-lint-action, not
+# an "immutable pin."
 tools: ## Install development tools
 	@mkdir -p $(GOBIN)
-	# Fetch the official prebuilt release binary — the same artifact
-	# golangci-lint-action's default install-mode=binary downloads for CI —
-	# instead of compiling one against whatever local Go toolchain is on
-	# PATH. Pinned to the release tag (immutable), not `master`. This is
-	# golangci-lint's own documented CI/local pinned-install command; see
-	# the GOLANGCI_LINT_VERSION comment above for why the artifact, not a
-	# fresh build, is the thing that must match CI.
-	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b $(GOBIN) $(GOLANGCI_LINT_VERSION)
+	@set -e; \
+	ver=$(GOLANGCI_LINT_VERSION); \
+	verNum=$${ver#v}; \
+	os=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	arch=$$(uname -m); \
+	case "$$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac; \
+	name=golangci-lint-$${verNum}-$${os}-$${arch}; \
+	tarball=$${name}.tar.gz; \
+	checksums=golangci-lint-$${verNum}-checksums.txt; \
+	base=https://github.com/golangci/golangci-lint/releases/download/$${ver}; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
+	curl -sSfL -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
+	curl -sSfL -o "$$tmpdir/$$checksums" "$$base/$$checksums"; \
+	line=$$(grep -F -- "$$tarball" "$$tmpdir/$$checksums" || true); \
+	count=$$(printf '%s\n' "$$line" | grep -c . || true); \
+	if [ "$$count" -ne 1 ]; then \
+	  echo "expected exactly one checksum entry for $$tarball in $$checksums, found $$count" >&2; \
+	  exit 1; \
+	fi; \
+	if command -v sha256sum >/dev/null 2>&1; then \
+	  ( cd "$$tmpdir" && echo "$$line" | sha256sum -c - ) || { echo "checksum verification failed for $$tarball" >&2; exit 1; }; \
+	elif command -v shasum >/dev/null 2>&1; then \
+	  ( cd "$$tmpdir" && echo "$$line" | shasum -a 256 -c - ) || { echo "checksum verification failed for $$tarball" >&2; exit 1; }; \
+	else \
+	  echo "neither sha256sum nor shasum found; cannot verify $$tarball" >&2; exit 1; \
+	fi; \
+	tar -xzf "$$tmpdir/$$tarball" -C "$$tmpdir"; \
+	install "$$tmpdir/$$name/golangci-lint" "$(GOBIN)/golangci-lint"; \
+	echo "installed $(GOBIN)/golangci-lint $$ver"
 
 doctor: build ## Run ethos doctor
 	./ethos doctor
