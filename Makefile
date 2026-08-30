@@ -7,6 +7,25 @@ PLUGIN_VERSION := $(shell ls -1 $(PLUGIN_CACHE) 2>/dev/null | grep -v '\.bak$$' 
 # golangci-lint is the Go lint gate (Go Report Card successor). Pinned so
 # local and CI run the same analyzer versions; keep in sync with
 # .github/workflows/test.yml. Config lives in .golangci.yml.
+#
+# `make tools` installs the exact prebuilt release binary, not a fresh
+# `go install` build. golangci-lint bundles a gofmt-compatible formatter that
+# embeds whatever Go standard library (go/printer's comment-alignment
+# heuristics have moved between point releases) it was compiled against. A
+# `go install ...@$(GOLANGCI_LINT_VERSION)` compiles against whatever Go
+# toolchain happens to be on the developer's PATH, while
+# golangci-lint-action's default `install-mode: binary` downloads the
+# official release artifact — built once, by the golangci-lint project, on
+# its own pinned Go version. Two builds of the same source at different Go
+# versions can format identical input differently, which is exactly the
+# false-negative-locally / fail-in-CI split this project hit (see the
+# gofmt-agnostic rewrite in internal/mission/migrate_test.go). Fetching the
+# same release asset CI fetches removes the toolchain as a variable: gofmt's
+# formatting logic is pure Go text processing with no OS/arch dependence, so
+# even a darwin/arm64 developer and the linux/amd64 CI runner make identical
+# formatting decisions once both are running a binary built from the same
+# release commit at the same Go version — only the raw bytes of the two
+# binaries differ, never their verdict on a given source file.
 # Resolve the install dir the way `go install` does: GOBIN if set, else
 # GOPATH/bin — so `make tools` and this path agree for anyone with GOBIN set.
 GOLANGCI_LINT_VERSION := v2.13.1
@@ -179,8 +198,106 @@ dist: clean ## Cross-compile for all platforms
 	CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w $(LDFLAGS)" -o dist/ethos-linux-arm64  ./cmd/ethos/
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w $(LDFLAGS)" -o dist/ethos-linux-amd64  ./cmd/ethos/
 
+# Fetches golangci-lint's official prebuilt release binary directly — the
+# same artifact golangci-lint-action's default install-mode=binary
+# downloads for CI — instead of compiling one against whatever local Go
+# toolchain happens to be on PATH. See the GOLANGCI_LINT_VERSION comment
+# above for why the artifact, not a fresh build, is the thing that must
+# match CI.
+#
+# This does NOT shell out to golangci-lint's own install.sh. That script
+# downloads and executes shell logic fetched fresh on every `make tools`
+# run, on every developer's persistent workstation — a workstation that,
+# in this org, holds GPG signing keys and pass-resolved credentials.
+# Piping curl into sh puts code nobody in this repo has read in the path
+# of every future `make tools`, invisible to `git blame` and to PR
+# review, and re-fetched (not reviewed once) on every run. CI already
+# runs the same prebuilt artifact via golangci-lint-action, so the trust
+# root below is not new; what matters is that the fetch, verify, and
+# extract logic are ordinary Makefile lines, reviewed once in this diff,
+# not a script this repo never sees.
+#
+# The checksum check is a same-origin integrity check, not a stronger
+# trust root: checksums.txt is published by the same account, in the
+# same release, over the same channel as the tarball it describes. It
+# catches transit corruption and accidental mismatches; it does not
+# defend against a compromise of golangci-lint's own release pipeline,
+# since whoever could swap the tarball could swap the checksums beside
+# it. Git tags are mutable — the $(GOLANGCI_LINT_VERSION) URL below
+# resolves live on every fetch, with no transparency log — so treat this
+# as exactly the trust root CI already uses via golangci-lint-action, not
+# an "immutable pin."
+#
+# The awk match below compares the filename FIELD exactly ($2), not a
+# substring (grep -F). checksums.txt also lists sibling artifacts — e.g.
+# "$tarball.sbom.json" — whose names have $tarball as a strict prefix; a
+# substring match against the whole line hits both and trips the
+# uniqueness guard below on every platform, aborting `make tools` even
+# when the real entry is fine. Comparing field 2 for equality is immune
+# to that, and to any other filename that merely contains $tarball
+# elsewhere in its name.
+#
+# This explanatory comment lives here, above the target, rather than
+# inline in the recipe body. An earlier version placed it inline as a
+# backslash-continued `#` comment between two other backslash-continued
+# shell statements. That construct is correct under POSIX sh (a `#`
+# comment consumes characters up to but excluding the newline, so the
+# trailing `\` is swallowed as comment text and the newline still ends
+# the statement — verified directly under /bin/sh, /bin/dash, and
+# /bin/bash) but it has now fooled two careful readers into opposite
+# wrong conclusions: once when the `\` continuations were stripped
+# (which really did break the recipe, by splitting it into separate
+# shell invocations and losing variable state) and once when an
+# automated reviewer flagged the restored `\`-continued comment as the
+# thing breaking verification, extraction, and install (it does not —
+# the recipe reaches and executes every statement after it). A
+# correct-but-treacherous construct inside a security-relevant
+# verification step is not worth keeping around for the next person to
+# "fix" into an actual break in either direction, so the prose moves up
+# here as ordinary Make comments and the recipe body keeps only
+# executable statements.
 tools: ## Install development tools
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+	@if [ -z "$(GOBIN)" ]; then \
+	  echo "error: could not determine GOBIN — is Go installed and on PATH? ('go env GOBIN' and 'go env GOPATH' both came back empty)" >&2; \
+	  exit 1; \
+	fi
+	@case "$(GOBIN)" in \
+	  /bin|/sbin|/usr/bin|/usr/sbin|/usr/local/bin) \
+	    echo "error: refusing to install into '$(GOBIN)' — that is a system directory, not a Go bin dir; check 'go env GOPATH' and 'go env GOBIN'" >&2; \
+	    exit 1 ;; \
+	esac
+	@mkdir -p "$(GOBIN)"
+	@set -e; \
+	ver=$(GOLANGCI_LINT_VERSION); \
+	verNum=$${ver#v}; \
+	os=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	arch=$$(uname -m); \
+	case "$$arch" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; esac; \
+	name=golangci-lint-$${verNum}-$${os}-$${arch}; \
+	tarball=$${name}.tar.gz; \
+	checksums=golangci-lint-$${verNum}-checksums.txt; \
+	base=https://github.com/golangci/golangci-lint/releases/download/$${ver}; \
+	tmpdir=$$(mktemp -d "$${TMPDIR:-/tmp}/ethos-tools.XXXXXXXXXX"); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	echo "fetching $$tarball ($$ver, $$os/$$arch)"; \
+	curl -sSfL -o "$$tmpdir/$$tarball" "$$base/$$tarball"; \
+	curl -sSfL -o "$$tmpdir/$$checksums" "$$base/$$checksums"; \
+	line=$$(awk -v n="$$tarball" '$$2 == n {print}' "$$tmpdir/$$checksums" || true); \
+	count=$$(printf '%s\n' "$$line" | grep -c . || true); \
+	if [ "$$count" -ne 1 ]; then \
+	  echo "expected exactly one checksum entry for $$tarball in $$checksums, found $$count" >&2; \
+	  exit 1; \
+	fi; \
+	if command -v sha256sum >/dev/null 2>&1; then \
+	  ( cd "$$tmpdir" && echo "$$line" | sha256sum -c - ) || { echo "checksum verification failed for $$tarball" >&2; exit 1; }; \
+	elif command -v shasum >/dev/null 2>&1; then \
+	  ( cd "$$tmpdir" && echo "$$line" | shasum -a 256 -c - ) || { echo "checksum verification failed for $$tarball" >&2; exit 1; }; \
+	else \
+	  echo "neither sha256sum nor shasum found; cannot verify $$tarball" >&2; exit 1; \
+	fi; \
+	tar -xzf "$$tmpdir/$$tarball" -C "$$tmpdir"; \
+	install "$$tmpdir/$$name/golangci-lint" "$(GOBIN)/golangci-lint"; \
+	echo "installed $(GOBIN)/golangci-lint $$ver"
 
 doctor: build ## Run ethos doctor
 	./ethos doctor

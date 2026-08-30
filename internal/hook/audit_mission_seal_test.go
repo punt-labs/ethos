@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // writeMissionLiveLines writes ts event lines to a (mission, session) live log.

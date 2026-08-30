@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // AuditDiagnostics reports read-time conditions that are not audit entries but

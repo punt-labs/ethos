@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/punt-labs/ethos/internal/enable"
-	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 

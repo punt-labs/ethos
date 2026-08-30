@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

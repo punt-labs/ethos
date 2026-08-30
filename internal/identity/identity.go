@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/repomiss"
+	"github.com/punt-labs/ethos/v4/internal/repomiss"
 )
 
 var validHandle = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)

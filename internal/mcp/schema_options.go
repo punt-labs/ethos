@@ -1,7 +1,7 @@
 package mcp
 
 import (
-	"github.com/punt-labs/ethos/internal/schema"
+	"github.com/punt-labs/ethos/v4/internal/schema"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )

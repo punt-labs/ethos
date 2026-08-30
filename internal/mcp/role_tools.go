@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/punt-labs/ethos/internal/role"
-	"github.com/punt-labs/ethos/internal/schema"
+	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/schema"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )

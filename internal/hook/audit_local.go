@@ -1,6 +1,6 @@
 package hook
 
-import "github.com/punt-labs/ethos/internal/audit"
+import "github.com/punt-labs/ethos/v4/internal/audit"
 
 // The DES-058 live/sealed zone layout is canonical in internal/audit. These
 // short package-local aliases keep the hook call sites terse.

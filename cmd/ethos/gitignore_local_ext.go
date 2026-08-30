@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/enable"
 )
 
 // ensureLocalExtIgnored adds DES-057 Part C's git-exclusion rule to the

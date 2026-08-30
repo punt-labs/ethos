@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/identity"
 )
 
 // closure walks the reference graph outward from the seed handles to a

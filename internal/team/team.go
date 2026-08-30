@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
 )
 
 // ErrNotFound is returned when a team is not found.

@@ -22,7 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/textscan"
+	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
 // ErrSectionTruncated indicates a BEGIN marker was found with no matching

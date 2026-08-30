@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/process"
-	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // HandleSessionEnd reads the SessionEnd hook payload from stdin,

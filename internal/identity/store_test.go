@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

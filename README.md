@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/github/license/punt-labs/ethos)](LICENSE)
 [![CI](https://img.shields.io/github/actions/workflow/status/punt-labs/ethos/test.yml?label=CI)](https://github.com/punt-labs/ethos/actions/workflows/test.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/punt-labs/ethos.svg)](https://pkg.go.dev/github.com/punt-labs/ethos)
+[![Go Reference](https://pkg.go.dev/badge/github.com/punt-labs/ethos/v4.svg)](https://pkg.go.dev/github.com/punt-labs/ethos/v4)
 [![Working Backwards](https://img.shields.io/badge/Working_Backwards-validated-blue)](./prfaq.pdf)
 
 Ethos runs typed mission contracts for AI agents — a write-set, a frozen

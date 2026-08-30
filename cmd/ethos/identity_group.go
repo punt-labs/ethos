@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/punt-labs/ethos/internal/schema"
+	"github.com/punt-labs/ethos/v4/internal/schema"
 
 	"github.com/spf13/cobra"
 )

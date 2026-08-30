@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/punt-labs/ethos/internal/process"
-	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // errNoSession is the step-4 failure of the session resolution chain: no

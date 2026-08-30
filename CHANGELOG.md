@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: the module path is now `github.com/punt-labs/ethos/v4`.**
+  `go.mod` declared `module github.com/punt-labs/ethos` while the repo was
+  tagged `v4.x`. Go's semantic import versioning requires a `/vN` suffix for
+  major version 2 and above, so the module was unresolvable by tag in either
+  form — `go install github.com/punt-labs/ethos/cmd/ethos@v4.15.0` and the
+  `/v4`-qualified form both failed with `invalid version: module contains a
+  go.mod file, so module path must match major version`. The practical effect
+  was that **ethos v4 had never been installable by any consumer via `go
+  install` at a tagged version**; every existing install came from `make
+  install` in a local checkout, which bypasses module resolution, so the
+  defect stayed invisible. Go was in fact treating the module as v1 and
+  ignoring the v4 tags entirely — a commit-SHA install resolved to a
+  `v1.2.1-0.2026...` pseudo-version. Consumers must now import
+  `github.com/punt-labs/ethos/v4/...` and install with
+  `go install github.com/punt-labs/ethos/v4/cmd/ethos@vX.Y.Z`. Git remote
+  URLs are unchanged: semantic import versioning changes the module path, not
+  the repository address. Found while wiring a pinned `ethos` provisioning
+  step into a downstream repo's CI, where the install step could not be made
+  to work at any tagged version (beadle-28ex).
+
 ## [4.15.0] - 2026-08-22
 
 ### Added

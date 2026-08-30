@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // InstallAgentDefinitions copies agent .md files from the ethos agents

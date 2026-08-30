@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // liveEntry appends one entry through appendLiveAudit and returns the

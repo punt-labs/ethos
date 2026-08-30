@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/seed"
+	"github.com/punt-labs/ethos/v4/internal/seed"
 )
 
 func writePipelineFile(t *testing.T, dir, name, content string) {

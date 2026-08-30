@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/role"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"

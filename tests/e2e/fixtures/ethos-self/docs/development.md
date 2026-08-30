@@ -244,7 +244,7 @@ talents:                               # slugs → talents/<slug>.md
 
 ## Go Standards
 
-Module path: `github.com/punt-labs/ethos`. Follows [Go standards](https://github.com/punt-labs/punt-kit/blob/main/standards/go.md).
+Module path: `github.com/punt-labs/ethos/v4`. Follows [Go standards](https://github.com/punt-labs/punt-kit/blob/main/standards/go.md).
 
 ## Operational Constraints
 

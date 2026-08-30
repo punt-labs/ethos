@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // WithLiveMissionLock executes fn while holding the per-(mission, session)

@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 
-	"github.com/punt-labs/ethos/internal/vendor"
+	"github.com/punt-labs/ethos/v4/internal/vendor"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )

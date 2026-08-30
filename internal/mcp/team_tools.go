@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/schema"
-	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/schema"
+	"github.com/punt-labs/ethos/v4/internal/team"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/textscan"
+	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
 // HooksDir returns the hooks directory git runs for the repo at repoRoot,
