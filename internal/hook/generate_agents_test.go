@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/role"
-	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/team"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"

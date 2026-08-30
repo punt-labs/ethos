@@ -1,4 +1,4 @@
-module github.com/punt-labs/ethos
+module github.com/punt-labs/ethos/v4
 
 go 1.26.1
 

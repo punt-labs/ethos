@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/hook"
-	"github.com/punt-labs/ethos/internal/mission"
-	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/spf13/cobra"
 )
 

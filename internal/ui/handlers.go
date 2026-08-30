@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/hook"
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 type dashboardData struct {

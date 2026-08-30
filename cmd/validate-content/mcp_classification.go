@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/mcpclass"
+	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 )
 
 // DES-069 R2: every mcp__ tool a role can grant must be classified

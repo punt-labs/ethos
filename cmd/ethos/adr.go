@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/punt-labs/ethos/internal/adr"
-	"github.com/punt-labs/ethos/internal/hook"
-	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/adr"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 
 	"github.com/spf13/cobra"
 )

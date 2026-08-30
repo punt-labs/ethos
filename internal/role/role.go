@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
 )
 
 // SafetyConstraint is a tool-usage restriction emitted as a body

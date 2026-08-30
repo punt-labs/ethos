@@ -6,9 +6,9 @@ import (
 
 	"path/filepath"
 
-	"github.com/punt-labs/ethos/internal/adr"
-	"github.com/punt-labs/ethos/internal/attribute"
-	"github.com/punt-labs/ethos/internal/mcp"
+	"github.com/punt-labs/ethos/v4/internal/adr"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/mcp"
 
 	"github.com/mark3labs/mcp-go/server"
 )

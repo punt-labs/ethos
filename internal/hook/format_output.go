@@ -10,7 +10,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // formatResult is the JSON output of the format-output hook.

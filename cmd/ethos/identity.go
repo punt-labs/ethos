@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/punt-labs/ethos/internal/bundle"
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/session"
-	"github.com/punt-labs/ethos/internal/vendor"
+	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/vendor"
 )
 
 // globalStore returns the user-global identity store (~/.punt-labs/ethos).

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // QuarantineChunk retires a corrupt sealed chunk named by its path and

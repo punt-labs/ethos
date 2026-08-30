@@ -1,6 +1,6 @@
 package hook
 
-import "github.com/punt-labs/ethos/internal/audit"
+import "github.com/punt-labs/ethos/v4/internal/audit"
 
 // WithLiveAuditLock executes fn while holding the per-session live-zone flock
 // beside the live audit file (DES-058). Appends, monotonic-ts allocation, and

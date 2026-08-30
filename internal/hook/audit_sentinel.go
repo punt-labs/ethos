@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // auditSentinel is the minimal JSONL line emitted when the audit

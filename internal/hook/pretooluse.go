@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/mcpclass"
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/mcpclass"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // PreToolUseResult is the JSON output of the pre-tool-use hook.

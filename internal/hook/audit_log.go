@@ -31,7 +31,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // HandleAuditLog appends one JSONL line to the session audit log.

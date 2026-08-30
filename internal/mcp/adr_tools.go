@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/adr"
+	"github.com/punt-labs/ethos/v4/internal/adr"
 
 	mcplib "github.com/mark3labs/mcp-go/mcp"
 )

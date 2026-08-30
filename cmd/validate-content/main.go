@@ -11,16 +11,16 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/attribute"
-	"github.com/punt-labs/ethos/internal/bundle"
-	"github.com/punt-labs/ethos/internal/doctor"
-	"github.com/punt-labs/ethos/internal/enable"
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/role"
-	"github.com/punt-labs/ethos/internal/schema"
-	"github.com/punt-labs/ethos/internal/seed"
-	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/doctor"
+	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/schema"
+	"github.com/punt-labs/ethos/v4/internal/seed"
+	"github.com/punt-labs/ethos/v4/internal/team"
 )
 
 // result records a single check result.

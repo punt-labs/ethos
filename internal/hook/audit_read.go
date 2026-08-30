@@ -10,7 +10,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // readSessionAudit reconstructs a session's full audit stream as the union of

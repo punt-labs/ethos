@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/mcpclass"
+	"github.com/punt-labs/ethos/v4/internal/mcpclass"
 )
 
 func TestClassifyMCPTools(t *testing.T) {

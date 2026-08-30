@@ -9,9 +9,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/role"
-	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/team"
 )
 
 // EvaluatorIdentity is the subset of an ethos identity the hash function

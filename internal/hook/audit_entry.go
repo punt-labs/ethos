@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // auditEntry is a single JSONL line in the session audit log.

@@ -17,7 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/textscan"
+	"github.com/punt-labs/ethos/v4/internal/textscan"
 )
 
 // Register appends line to the CLAUDE.md at path when no top-level,

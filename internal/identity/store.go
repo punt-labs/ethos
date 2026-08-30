@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
 	"gopkg.in/yaml.v3"
 )
 

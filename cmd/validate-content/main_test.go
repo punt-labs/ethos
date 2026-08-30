@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/attribute"
-	"github.com/punt-labs/ethos/internal/enable"
-	"github.com/punt-labs/ethos/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/stretchr/testify/require"
 )
 

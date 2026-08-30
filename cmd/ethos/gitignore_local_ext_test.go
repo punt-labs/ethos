@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/enable"
+	"github.com/punt-labs/ethos/v4/internal/enable"
 )
 
 // A repo that already excludes machine-local files must come back from setup

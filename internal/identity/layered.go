@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/attribute"
-	"github.com/punt-labs/ethos/internal/repomiss"
+	"github.com/punt-labs/ethos/v4/internal/attribute"
+	"github.com/punt-labs/ethos/v4/internal/repomiss"
 	"gopkg.in/yaml.v3"
 )
 

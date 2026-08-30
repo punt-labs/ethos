@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/mission"
-	"github.com/punt-labs/ethos/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 )
 
 // dispatchAgent handles the PreToolUse branch for `tool_name == "Agent"`.

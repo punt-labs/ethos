@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/team"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

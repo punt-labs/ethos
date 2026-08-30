@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"runtime"
 
-	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/ui"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/ui"
 	"github.com/spf13/cobra"
 )
 

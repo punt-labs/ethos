@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/mission"
-	"github.com/punt-labs/ethos/internal/process"
-	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // verifierMission pairs a parsed contract with the raw on-disk bytes

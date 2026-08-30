@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/audit"
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // vacuumTestRepoID is the identity the vacuum tests give their checkout's origin

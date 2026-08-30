@@ -7,12 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/bundle"
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/repomiss"
-	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/role"
-	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/bundle"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/repomiss"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/team"
 )
 
 // projectFilePatterns returns the shell case-statement glob pattern for

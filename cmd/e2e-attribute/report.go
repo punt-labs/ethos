@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/hook"
 )
 
 // Markers persona.go writes into the system prompt. Sourced from

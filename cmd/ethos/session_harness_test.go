@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/process"
-	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/process"
+	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

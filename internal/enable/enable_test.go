@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/plugin/hooks"
+	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
 
 // TestMain isolates HOME so the claudemd per-user lock dir

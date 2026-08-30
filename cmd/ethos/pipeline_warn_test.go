@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 	"github.com/stretchr/testify/assert"
 )
 

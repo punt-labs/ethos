@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/punt-labs/ethos/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/session"
 )
 
 // HandleSubagentStop reads the SubagentStop hook payload from stdin

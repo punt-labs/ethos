@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/punt-labs/ethos/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/mission"
 )
 
 // Environment-variable names the commit-msg hook reads back from

@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/role"
-	"github.com/punt-labs/ethos/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/role"
+	"github.com/punt-labs/ethos/v4/internal/team"
 )
 
 // entities is the set under guard. Names and required-ness come from

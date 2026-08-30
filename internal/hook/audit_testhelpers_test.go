@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/punt-labs/ethos/internal/audit"
+	"github.com/punt-labs/ethos/v4/internal/audit"
 )
 
 // writeChunkFile creates a JSONL file (a sealed chunk or a frozen legacy

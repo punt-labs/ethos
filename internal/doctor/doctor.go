@@ -15,14 +15,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/punt-labs/ethos/internal/githook"
-	"github.com/punt-labs/ethos/internal/identity"
-	"github.com/punt-labs/ethos/internal/resolve"
-	"github.com/punt-labs/ethos/internal/seed"
-	"github.com/punt-labs/ethos/internal/session"
-	"github.com/punt-labs/ethos/internal/team"
-	"github.com/punt-labs/ethos/internal/textscan"
-	"github.com/punt-labs/ethos/plugin/hooks"
+	"github.com/punt-labs/ethos/v4/internal/githook"
+	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
+	"github.com/punt-labs/ethos/v4/internal/seed"
+	"github.com/punt-labs/ethos/v4/internal/session"
+	"github.com/punt-labs/ethos/v4/internal/team"
+	"github.com/punt-labs/ethos/v4/internal/textscan"
+	"github.com/punt-labs/ethos/v4/plugin/hooks"
 )
 
 // Result holds the outcome of a single health check.

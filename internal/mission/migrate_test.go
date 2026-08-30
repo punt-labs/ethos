@@ -270,8 +270,8 @@ func TestRepoMissionIDs_SkipsMalformedLines(t *testing.T) {
 	// Order matters only for diagnostics. The scanner is line-oriented
 	// so each line is independent.
 	body := strings.Join([]string{
-		`{not json at all`,                                   // SyntaxError on a token
-		`{"contract_id": 12345}`,                             // UnmarshalTypeError (number for string)
+		`{not json at all`,       // SyntaxError on a token
+		`{"contract_id": 12345}`, // UnmarshalTypeError (number for string)
 		`{"ts":"2026-05-22T10:00:00Z","contract_id":"m-OK"}`, // well-formed
 		`{"contract_id":"m-trunc"`,                           // truncated trailing fragment
 	}, "\n") + "\n"

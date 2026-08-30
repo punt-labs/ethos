@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/punt-labs/ethos/internal/hook"
-	"github.com/punt-labs/ethos/internal/schema"
+	"github.com/punt-labs/ethos/v4/internal/hook"
+	"github.com/punt-labs/ethos/v4/internal/schema"
 
 	"github.com/spf13/cobra"
 )
