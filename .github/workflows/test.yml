@@ -44,6 +44,108 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
+  verify-tools:
+    # Exercises `make tools` against the REAL golangci-lint release -- no
+    # stubbing, no fixtures. Nothing else in this workflow runs the Makefile
+    # target: the `golangci-lint` step above installs its own binary via
+    # golangci-lint-action, bypassing `make tools` entirely, so the
+    # developer install path had zero CI coverage. PR #491 broke `make
+    # tools` on every platform (an unanchored `grep -F` checksum lookup
+    # matched a sibling release asset by prefix) while this workflow stayed
+    # green throughout -- see ethos-j2tg. Runs on every push/PR, matching
+    # e2e-smoke's cadence: a target nobody runs is exactly how the previous
+    # break shipped unnoticed, so this trades a few extra runner-minutes for
+    # catching a whole-platform regression before merge instead of after.
+    #
+    # Matrixed across ubuntu and macos because the recipe branches on
+    # OS/arch (`uname` mapping, `sha256sum` vs `shasum`) and, before this
+    # job existed, only the Linux/sha256sum leg had ever actually executed
+    # in an automated run -- the shasum fallback and darwin naming were
+    # exercised only by whichever developer happened to be on a Mac.
+    name: verify make tools (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: make tools
+        run: make tools
+
+      # Reference binary comes from golangci-lint's own release-install
+      # script rather than a second invocation of golangci-lint-action:
+      # the action has no documented install-only mode, so calling it again
+      # here would silently re-run a full `golangci-lint run ./...` on
+      # every matrix leg -- extra time, and this job's pass/fail would
+      # start depending on the action's internal lint step rather than on
+      # what it actually installed. install.sh fetches the identical
+      # GitHub Releases asset (same tarball, same checksums.txt) the action
+      # downloads under `install-mode: binary`, so it is an equally valid
+      # oracle for the two things this job checks: did golangci-lint change
+      # its release asset naming/layout, and does the binary our Makefile
+      # produced match the toolchain of the binary CI's own install path
+      # would have produced.
+      - name: Install reference binary via golangci-lint's release-install script
+        run: |
+          set -euo pipefail
+          pinned=$(grep -E '^GOLANGCI_LINT_VERSION' Makefile | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
+          refdir="$RUNNER_TEMP/golangci-lint-ref"
+          mkdir -p "$refdir"
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+            | sh -s -- -b "$refdir" "$pinned"
+          echo "REF_GOLANGCI_LINT=$refdir/golangci-lint" >> "$GITHUB_ENV"
+
+      - name: Verify version and build toolchain match expectations
+        run: |
+          set -euo pipefail
+          gobin=$(go env GOBIN)
+          if [ -z "$gobin" ]; then gobin=$(go env GOPATH)/bin; fi
+          made_bin="$gobin/golangci-lint"
+
+          test -x "$made_bin" || {
+            echo "expected an executable golangci-lint at $made_bin after 'make tools' -- did the install step change its target path?" >&2
+            exit 1
+          }
+          test -x "$REF_GOLANGCI_LINT" || {
+            echo "reference install script did not produce an executable at $REF_GOLANGCI_LINT" >&2
+            exit 1
+          }
+
+          pinned=$(grep -E '^GOLANGCI_LINT_VERSION' Makefile | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
+          made_out=$("$made_bin" version)
+          ref_out=$("$REF_GOLANGCI_LINT" version)
+          echo "make tools:          $made_out"
+          echo "reference installer: $ref_out"
+
+          made_ver=$(printf '%s' "$made_out" | grep -oE 'version [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}')
+          if [ -z "$made_ver" ]; then
+            echo "could not parse a version number out of: $made_out" >&2
+            exit 1
+          fi
+          if [ "v$made_ver" != "$pinned" ]; then
+            echo "'make tools' installed golangci-lint v$made_ver, but Makefile's GOLANGCI_LINT_VERSION pins $pinned" >&2
+            exit 1
+          fi
+
+          made_tc=$(printf '%s' "$made_out" | grep -oE 'built with go[0-9.]+')
+          ref_tc=$(printf '%s' "$ref_out" | grep -oE 'built with go[0-9.]+')
+          if [ -z "$made_tc" ] || [ -z "$ref_tc" ]; then
+            echo "could not parse a 'built with goX.Y.Z' toolchain string out of one of the two 'version' outputs above -- golangci-lint may have changed its version-string format" >&2
+            exit 1
+          fi
+          if [ "$made_tc" != "$ref_tc" ]; then
+            echo "toolchain drift: 'make tools' binary was $made_tc, reference installer's binary was $ref_tc -- the local/CI gofmt parity this fetch mechanism exists for is broken" >&2
+            exit 1
+          fi
+
+          echo "OK: v$made_ver, $made_tc, matches the reference install"
+
   e2e-smoke:
     # L4 (Wire Observability) smoke: real `claude --print` against a mocked LiteLLM upstream.
     # Runs the fast (single) smoke scenario on every push/PR. Zero Anthropic
