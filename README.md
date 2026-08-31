@@ -21,7 +21,7 @@ telemetry, no cloud.
 ## Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8322972/install.sh | sh
 ~/.local/bin/ethos setup
 ```
 
@@ -41,13 +41,13 @@ For a non-Claude harness, or a Claude install where org policy blocks
 plugins:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh | sh -s -- --no-plugin
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8322972/install.sh | sh -s -- --no-plugin
 ```
 
 Where arguments cannot pass through the pipe, set `ETHOS_NO_PLUGIN=1`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/c513be7/install.sh | ETHOS_NO_PLUGIN=1 sh
+curl -fsSL https://raw.githubusercontent.com/punt-labs/ethos/8322972/install.sh | ETHOS_NO_PLUGIN=1 sh
 ```
 
 `--no-plugin` skips only the marketplace-register and plugin-install
