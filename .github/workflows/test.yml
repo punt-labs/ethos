@@ -44,6 +44,152 @@ jobs:
       - name: Coverage summary
         run: go tool cover -func=coverage.out | tail -1
 
+  verify-tools:
+    # Exercises `make tools` against the REAL golangci-lint release -- no
+    # stubbing, no fixtures. Nothing else in this workflow runs the Makefile
+    # target: the `golangci-lint` step above installs its own binary via
+    # golangci-lint-action, bypassing `make tools` entirely, so the
+    # developer install path had zero CI coverage. PR #491 broke `make
+    # tools` on every platform (an unanchored `grep -F` checksum lookup
+    # matched a sibling release asset by prefix) while this workflow stayed
+    # green throughout -- see ethos-j2tg. Runs on every push/PR, matching
+    # e2e-smoke's cadence: a target nobody runs is exactly how the previous
+    # break shipped unnoticed, so this trades a few extra runner-minutes for
+    # catching a whole-platform regression before merge instead of after.
+    #
+    # Matrixed across ubuntu and macos because the recipe branches on
+    # OS/arch (`uname` mapping, `sha256sum` vs `shasum`) and, before this
+    # job existed, only the Linux/sha256sum leg had ever actually executed
+    # in an automated run -- the shasum fallback and darwin naming were
+    # exercised only by whichever developer happened to be on a Mac.
+    name: verify make tools (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5
+        with:
+          go-version-file: go.mod
+
+      - name: make tools
+        run: make tools
+
+      # No second golangci-lint install here. Two earlier attempts both
+      # installed a SECOND binary as the "reference" and compared it
+      # against the one `make tools` produced:
+      #
+      #   1. golangci-lint's own release-install script, fetched
+      #      unpinned from its abandoned `master` branch. Its
+      #      unanchored checksum grep matched a release tarball's
+      #      sibling `.tar.gz.sbom.json` entry as a false positive,
+      #      corrupting the comparison and reporting a mismatch against
+      #      a tarball `make tools` itself verified correctly, byte for
+      #      byte (see ethos-j2tg).
+      #   2. golangci-lint-action in `install-only: true` mode. That
+      #      input does not exist on the pinned commit -- GitHub Actions
+      #      silently ignores unknown inputs with a warning and runs the
+      #      step's default behavior, so this ran a full
+      #      `golangci-lint run ./...` on every matrix leg for no
+      #      reason. Worse, the follow-up step resolved "the reference
+      #      binary" via `command -v golangci-lint`, which depends on
+      #      PATH ORDER between the action's install directory and the
+      #      `make tools` install directory (`$(go env GOPATH)/bin`,
+      #      already on PATH via actions/setup-go). That happened to
+      #      resolve to the action's binary in the one run inspected
+      #      (env dump showed `REF_GOLANGCI_LINT=/home/runner/golangci-
+      #      lint-2.13.1-linux-amd64/golangci-lint`, not the GOPATH/bin
+      #      copy), so this specific run's pass was not the tautology
+      #      Bugbot warned about -- but nothing in the design GUARANTEES
+      #      that ordering, on this or any other action version, so the
+      #      check could not be trusted to ever catch a real drift.
+      #
+      # A second *install* is the wrong shape for this assertion: any
+      # binary fetched by another tool, resolved through PATH, is one
+      # more moving part whose own path/version/behavior can silently
+      # change and make the "reference" side untrustworthy by
+      # construction. Compare against an explicit, sourced expectation
+      # instead: the pinned version already lives in the Makefile, and
+      # the expected Go build toolchain is declared by golangci-lint
+      # itself, in `.github/workflows/release.yml`'s `GO_VERSION`, AS IT
+      # EXISTED AT THE PINNED TAG -- the actual GoReleaser config that
+      # built the binary `make tools` downloads. Fetched by tag (an
+      # immutable ref once published, unlike the `master` branch this
+      # job used to read from), not executed, so there is no `curl | sh`
+      # here: it is a read of one YAML field, not a script.
+      - name: Verify version and build toolchain match expectations
+        run: |
+          set -euo pipefail
+          gobin=$(go env GOBIN)
+          if [ -z "$gobin" ]; then gobin=$(go env GOPATH)/bin; fi
+          made_bin="$gobin/golangci-lint"
+
+          test -x "$made_bin" || {
+            echo "expected an executable golangci-lint at $made_bin after 'make tools' -- did the install step change its target path?" >&2
+            exit 1
+          }
+
+          pinned=$(grep -E '^GOLANGCI_LINT_VERSION' Makefile | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
+          made_out=$("$made_bin" version)
+          echo "make tools: $made_out"
+
+          made_ver=$(printf '%s' "$made_out" | grep -oE 'version [0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}')
+          if [ -z "$made_ver" ]; then
+            echo "could not parse a version number out of: $made_out" >&2
+            exit 1
+          fi
+          if [ "v$made_ver" != "$pinned" ]; then
+            echo "'make tools' installed golangci-lint v$made_ver, but Makefile's GOLANGCI_LINT_VERSION pins $pinned" >&2
+            exit 1
+          fi
+
+          made_tc=$(printf '%s' "$made_out" | grep -oE 'built with go[0-9.]+')
+          if [ -z "$made_tc" ]; then
+            echo "could not parse a 'built with goX.Y.Z' toolchain string out of: $made_out -- golangci-lint may have changed its version-string format" >&2
+            exit 1
+          fi
+          made_go=$(printf '%s' "$made_tc" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')
+          if [ -z "$made_go" ]; then
+            echo "could not parse a Go version number out of '$made_tc' -- golangci-lint may have changed its version-string format" >&2
+            exit 1
+          fi
+
+          # golangci-lint's own GO_VERSION pin is not consistently three-part
+          # across releases -- v2.13.1 declares '1.27.0', but earlier releases
+          # have declared a bare minor like '1.26'. Accept either shape: the
+          # regex below matches two or three dot-separated components, same
+          # as go.mod's own `go 1.26` vs `go 1.26.3` directive syntax.
+          release_workflow_url="https://raw.githubusercontent.com/golangci/golangci-lint/$pinned/.github/workflows/release.yml"
+          expected_go=$(curl -sSfL "$release_workflow_url" | grep -E '^[[:space:]]*GO_VERSION:' | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
+          if [ -z "$expected_go" ]; then
+            echo "could not find a GO_VERSION in $release_workflow_url -- golangci-lint's release workflow may have renamed, restructured, or reformatted this field (expected something like '1.26' or '1.27.0')" >&2
+            exit 1
+          fi
+
+          echo "make tools toolchain: $made_tc"
+          echo "expected pin:         go$expected_go (GO_VERSION from golangci-lint's own $pinned release.yml)"
+
+          # A two-part pin (e.g. '1.26') under-specifies the patch and is
+          # satisfied by any patch of that minor (go1.26, go1.26.3, ...); a
+          # three-part pin (e.g. '1.27.0') is a full pin and must match
+          # exactly. Both are the same relation: expected_go must be either
+          # the whole of made_go, or a component-wise prefix of it (matched
+          # with a trailing dot boundary, not a bare string prefix, so
+          # '1.26' does not spuriously match '1.260').
+          case "$made_go" in
+            "$expected_go" | "$expected_go".*)
+              ;;
+            *)
+              echo "toolchain drift: 'make tools' binary reports $made_tc, which is not consistent with golangci-lint's own $pinned release.yml GO_VERSION pin ($expected_go) -- the local/CI gofmt parity this fetch mechanism exists for is broken" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "OK: v$made_ver, $made_tc, consistent with golangci-lint's own $pinned release GO_VERSION pin ($expected_go)"
+
   e2e-smoke:
     # L4 (Wire Observability) smoke: real `claude --print` against a mocked LiteLLM upstream.
     # Runs the fast (single) smoke scenario on every push/PR. Zero Anthropic
