@@ -78,28 +78,50 @@ jobs:
       - name: make tools
         run: make tools
 
-      # Reference binary comes from golangci-lint's own release-install
-      # script rather than a second invocation of golangci-lint-action:
-      # the action has no documented install-only mode, so calling it again
-      # here would silently re-run a full `golangci-lint run ./...` on
-      # every matrix leg -- extra time, and this job's pass/fail would
-      # start depending on the action's internal lint step rather than on
-      # what it actually installed. install.sh fetches the identical
-      # GitHub Releases asset (same tarball, same checksums.txt) the action
-      # downloads under `install-mode: binary`, so it is an equally valid
-      # oracle for the two things this job checks: did golangci-lint change
-      # its release asset naming/layout, and does the binary our Makefile
-      # produced match the toolchain of the binary CI's own install path
-      # would have produced.
-      - name: Install reference binary via golangci-lint's release-install script
+      # Reference binary comes from golangci-lint-action itself -- the
+      # identical action, pinned to the identical commit, that the
+      # `golangci-lint` step in the `test` job above uses to lint this
+      # repo -- rather than a third, bespoke install path. This job
+      # previously fetched golangci-lint's own release-install script from
+      # https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh.
+      # That URL was doubly wrong: `master` is not golangci-lint's default
+      # branch (`main` is) and is an abandoned fork of it, and piping an
+      # unpinned script from a live branch into `sh` is a supply-chain
+      # smell on its own, regardless of correctness. It also turned out to
+      # be substantively broken: `master`'s checksum lookup is
+      # `grep "${BASENAME}"` with no trailing `$` anchor (`main`'s copy of
+      # the same script has the anchor), so it matches a release tarball's
+      # name as a bare substring of that tarball's sibling
+      # `.tar.gz.sbom.json` checksum entry -- confirmed by downloading
+      # v2.13.1's real checksums.txt and finding
+      # `golangci-lint-2.13.1-linux-amd64.tar.gz` and
+      # `golangci-lint-2.13.1-linux-amd64.tar.gz.sbom.json` both listed,
+      # the second sharing the first's full name as a literal prefix. The
+      # unanchored grep returns both checksum lines as one value, so the
+      # script's comparison is corrupted and it reports a mismatch against
+      # a tarball `make tools` itself verified correctly, byte for byte,
+      # against that same checksums.txt (see ethos-j2tg). golangci-lint's
+      # `main`-branch install.sh does not have this bug, but is still an
+      # unpinned live-branch fetch, and the action's own
+      # `install-mode: binary` (the default) needs no re-derived checksum
+      # at all -- it downloads the tarball straight from the release asset
+      # URL. Using the action here means the reference is exactly the code
+      # path CI's own lint step already depends on, not a fourth thing
+      # whose correctness also needs auditing.
+      - name: Install reference binary via golangci-lint-action
+        uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
+        with:
+          version: v2.13.1 # keep in sync with GOLANGCI_LINT_VERSION in the Makefile
+          install-only: true
+
+      - name: Locate reference binary
         run: |
           set -euo pipefail
-          pinned=$(grep -E '^GOLANGCI_LINT_VERSION' Makefile | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+')
-          refdir="$RUNNER_TEMP/golangci-lint-ref"
-          mkdir -p "$refdir"
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b "$refdir" "$pinned"
-          echo "REF_GOLANGCI_LINT=$refdir/golangci-lint" >> "$GITHUB_ENV"
+          ref_bin=$(command -v golangci-lint) || {
+            echo "golangci-lint-action's install-only step left no golangci-lint on PATH" >&2
+            exit 1
+          }
+          echo "REF_GOLANGCI_LINT=$ref_bin" >> "$GITHUB_ENV"
 
       - name: Verify version and build toolchain match expectations
         run: |
@@ -113,7 +135,7 @@ jobs:
             exit 1
           }
           test -x "$REF_GOLANGCI_LINT" || {
-            echo "reference install script did not produce an executable at $REF_GOLANGCI_LINT" >&2
+            echo "reference install did not produce an executable at $REF_GOLANGCI_LINT" >&2
             exit 1
           }
 
