@@ -153,7 +153,7 @@ jobs:
           fi
 
           release_workflow_url="https://raw.githubusercontent.com/golangci/golangci-lint/$pinned/.github/workflows/release.yml"
-          expected_go=$(curl -sSfL "$release_workflow_url" | grep -E '^\s*GO_VERSION:' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          expected_go=$(curl -sSfL "$release_workflow_url" | grep -E '^[[:space:]]*GO_VERSION:' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
           if [ -z "$expected_go" ]; then
             echo "could not find a GO_VERSION in $release_workflow_url -- golangci-lint's release workflow may have renamed or restructured this field" >&2
             exit 1
