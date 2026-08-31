@@ -151,22 +151,44 @@ jobs:
             echo "could not parse a 'built with goX.Y.Z' toolchain string out of: $made_out -- golangci-lint may have changed its version-string format" >&2
             exit 1
           fi
+          made_go=$(printf '%s' "$made_tc" | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')
+          if [ -z "$made_go" ]; then
+            echo "could not parse a Go version number out of '$made_tc' -- golangci-lint may have changed its version-string format" >&2
+            exit 1
+          fi
 
+          # golangci-lint's own GO_VERSION pin is not consistently three-part
+          # across releases -- v2.13.1 declares '1.27.0', but earlier releases
+          # have declared a bare minor like '1.26'. Accept either shape: the
+          # regex below matches two or three dot-separated components, same
+          # as go.mod's own `go 1.26` vs `go 1.26.3` directive syntax.
           release_workflow_url="https://raw.githubusercontent.com/golangci/golangci-lint/$pinned/.github/workflows/release.yml"
-          expected_go=$(curl -sSfL "$release_workflow_url" | grep -E '^[[:space:]]*GO_VERSION:' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+          expected_go=$(curl -sSfL "$release_workflow_url" | grep -E '^[[:space:]]*GO_VERSION:' | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n 1)
           if [ -z "$expected_go" ]; then
-            echo "could not find a GO_VERSION in $release_workflow_url -- golangci-lint's release workflow may have renamed or restructured this field" >&2
-            exit 1
-          fi
-          expected_tc="built with go$expected_go"
-
-          echo "expected:   $expected_tc (from golangci-lint's own $pinned release.yml)"
-          if [ "$made_tc" != "$expected_tc" ]; then
-            echo "toolchain drift: 'make tools' binary was '$made_tc', but golangci-lint's own $pinned release.yml declares GO_VERSION $expected_go -- the local/CI gofmt parity this fetch mechanism exists for is broken" >&2
+            echo "could not find a GO_VERSION in $release_workflow_url -- golangci-lint's release workflow may have renamed, restructured, or reformatted this field (expected something like '1.26' or '1.27.0')" >&2
             exit 1
           fi
 
-          echo "OK: v$made_ver, $made_tc, matches golangci-lint's own $pinned release declaration"
+          echo "make tools toolchain: $made_tc"
+          echo "expected pin:         go$expected_go (GO_VERSION from golangci-lint's own $pinned release.yml)"
+
+          # A two-part pin (e.g. '1.26') under-specifies the patch and is
+          # satisfied by any patch of that minor (go1.26, go1.26.3, ...); a
+          # three-part pin (e.g. '1.27.0') is a full pin and must match
+          # exactly. Both are the same relation: expected_go must be either
+          # the whole of made_go, or a component-wise prefix of it (matched
+          # with a trailing dot boundary, not a bare string prefix, so
+          # '1.26' does not spuriously match '1.260').
+          case "$made_go" in
+            "$expected_go" | "$expected_go".*)
+              ;;
+            *)
+              echo "toolchain drift: 'make tools' binary reports $made_tc, which is not consistent with golangci-lint's own $pinned release.yml GO_VERSION pin ($expected_go) -- the local/CI gofmt parity this fetch mechanism exists for is broken" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "OK: v$made_ver, $made_tc, consistent with golangci-lint's own $pinned release GO_VERSION pin ($expected_go)"
 
   e2e-smoke:
     # L4 (Wire Observability) smoke: real `claude --print` against a mocked LiteLLM upstream.
