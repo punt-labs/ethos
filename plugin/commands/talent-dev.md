@@ -9,11 +9,11 @@ Manage talents via `mcp__plugin_ethos-dev_self__talent`.
 
 ## Usage
 
-- `/ethos-dev:talent list` — list all talents
-- `/ethos-dev:talent show <slug>` — show talent content
-- `/ethos-dev:talent create <slug>` — create a new talent (prompt for content)
-- `/ethos-dev:talent delete <slug>` — delete a talent
-- `/ethos-dev:talent add <handle> <slug>` — add talent to an identity
-- `/ethos-dev:talent remove <handle> <slug>` — remove talent from an identity
+- `/ethos-dev:talent-dev list` — list all talents
+- `/ethos-dev:talent-dev show <slug>` — show talent content
+- `/ethos-dev:talent-dev create <slug>` — create a new talent (prompt for content)
+- `/ethos-dev:talent-dev delete <slug>` — delete a talent
+- `/ethos-dev:talent-dev add <handle> <slug>` — add talent to an identity
+- `/ethos-dev:talent-dev remove <handle> <slug>` — remove talent from an identity
 
 Parse $ARGUMENTS to determine the `method` and remaining parameters. The first word is the method.
