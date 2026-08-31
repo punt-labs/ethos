@@ -66,7 +66,11 @@ func runSeed(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	result, err := seed.SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, version, seedForce)
+	// resolveVersion, not the raw `version` var: `version` is only
+	// non-empty when the Makefile's ldflags set it (main.go, ethos-vqbk),
+	// and a `go install`-built binary should stamp its real module
+	// version into the manifest it seeds, same as `ethos version` reports.
+	result, err := seed.SeedVersionWithBundleDir(destRoot, skillsRoot, agentsRoot, activeBundle, activeBundleDir, resolveVersion(), seedForce)
 	if err != nil {
 		if result != nil {
 			for _, e := range result.Errors {

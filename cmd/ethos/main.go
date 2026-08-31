@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
 
@@ -17,7 +18,25 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var version = "dev"
+// version is set at build time via -ldflags "-X main.version=$(VERSION)"
+// (see the Makefile's build, install, and dist targets). It is left at its
+// zero value when the binary is produced by anything that does not run the
+// Makefile — a bare `go build ./cmd/ethos`, or `go install
+// github.com/punt-labs/ethos/v4/cmd/ethos@vX.Y.Z`, which compiles the
+// source directly and never sees LDFLAGS. Do not give this a non-empty
+// default: resolveVersion uses emptiness, not a magic string, as the
+// signal that ldflags did not run, specifically so that renaming a
+// placeholder default can never silently disable the runtime/debug
+// fallback below.
+var version string
+
+// readBuildInfo is a seam over debug.ReadBuildInfo. resolveVersion calls
+// through this variable, not the package function directly, so tests can
+// inject a fixed *debug.BuildInfo and exercise every branch (absent,
+// "(devel)", a real module version) deterministically — the real function
+// depends on the Go toolchain version and on whether the checkout has VCS
+// metadata, neither of which a test should have to control.
+var readBuildInfo = debug.ReadBuildInfo
 
 // jsonOutput is set by the --json persistent flag on rootCmd.
 var jsonOutput bool
@@ -222,11 +241,42 @@ func init() {
 }
 
 func runVersion(cmd *cobra.Command) error {
+	v := resolveVersion()
 	if jsonOutput {
-		return writeJSON(cmd.OutOrStdout(), map[string]string{"version": version})
+		return writeJSON(cmd.OutOrStdout(), map[string]string{"version": v})
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "ethos %s\n", version)
+	fmt.Fprintf(cmd.OutOrStdout(), "ethos %s\n", v)
 	return nil
+}
+
+// resolveVersion returns the version ethos reports to the user. It
+// prefers the ldflags-injected version, which is authoritative because it
+// is byte-for-byte what the Makefile computed with `git describe --tags`.
+// When ldflags did not run — version is still its zero value, empty
+// string — the binary was built by `go build` or installed by `go
+// install module@version`, neither of which runs the Makefile. In both
+// cases Go still stamps a module version into the binary's build info
+// (verify with `go version -m <binary>`), so fall back to that.
+//
+// `go install module@vX.Y.Z` always stamps the requested tag into
+// info.Main.Version — the exact case this function exists to fix
+// (ethos-vqbk). A bare `go build` varies by Go release and checkout: on
+// Go 1.24+, building from inside a VCS checkout stamps a real,
+// git-describe-derived version (e.g. "v4.16.0+dirty"), which is
+// surfaced as-is since it is genuinely more informative than "dev".
+// Only when Go has no version information at all — no VCS metadata,
+// -buildvcs=false, or an older toolchain — does info.Main.Version fall
+// back to the sentinel "(devel)", which we normalize to "dev" to match
+// the convention this command has always used for "no version
+// information available."
+func resolveVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := readBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
 }
 
 func runDoctor(cmd *cobra.Command) error {
