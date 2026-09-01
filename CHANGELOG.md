@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Post-release restore commits no longer carry `[skip ci]`.
+  `scripts/restore-dev-plugin.sh` tagged its commit with `[skip ci]`, which
+  suppressed all workflows on the head of the post-release PR — while the
+  repo's ruleset requires 2 status checks. With zero check runs ever created,
+  the release tool's wait-for-checks loop deadlocked (observed on PR #496
+  during the v4.16.1 release) until a later commit without `[skip ci]` was
+  pushed.
+
 ## [4.16.1] - 2026-08-31
 
 ### Changed

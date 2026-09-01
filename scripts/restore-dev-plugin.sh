@@ -46,4 +46,4 @@ if git -C "$REPO_ROOT" ls-tree "${RELEASE_PREP_COMMIT}^" -- plugin/commands/ | g
 fi
 
 git -C "$REPO_ROOT" add "$PLUGIN_JSON"
-git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state [skip ci]"
+git -C "$REPO_ROOT" commit --no-verify -m "chore: restore dev plugin state"
