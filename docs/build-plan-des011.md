@@ -86,7 +86,7 @@ from git/OS, not repo config.
 ```text
 Machine state:
   git config user.name  = jmf-pobox
-  git config user.email = jmf@pobox.com
+  git config user.email = jim@punt-labs.com
   $USER                 = jfreeman
 
 Identity store:
@@ -98,7 +98,7 @@ Resolution:
           → match: jfreeman.yaml (stop here)
 
   If step 1 had no match:
-  Step 2: git user.email "jmf@pobox.com" → scan for email=="jmf@pobox.com"
+  Step 2: git user.email "jim@punt-labs.com" → scan for email=="jim@punt-labs.com"
           → no match (jfreeman has email jim@punt-labs.com)
   Step 3: $USER "jfreeman" → scan for handle=="jfreeman"
           → match: jfreeman.yaml
@@ -200,7 +200,7 @@ participant's persona for that PID.
 (`runWhoami`, MCP handler) decides how to present it — the CLI prints
 an informational message, the MCP handler returns an error result. The
 error message includes the sources tried:
-`no identity matches git user "jmf-pobox", email "jmf@pobox.com", or OS user "jfreeman"`.
+`no identity matches git user "jmf-pobox", email "jim@punt-labs.com", or OS user "jfreeman"`.
 
 **`Resolve` needs the identity store** to do FindBy lookups (steps
 2–4) and the session store to check iam declarations (step 1). It
@@ -306,7 +306,7 @@ Replace "Active identity" check with two checks:
 
 ```text
 $ ethos doctor
-  Identity directory       PASS  /Users/jfreeman/.punt-labs/ethos/identities
+  Identity directory       PASS  /Users/jdoe/.punt-labs/ethos/identities
   Human identity           PASS  Jim Freeman (jfreeman) via git:github
   Default agent            PASS  claude
   Duplicate fields         PASS  no duplicates

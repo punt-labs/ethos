@@ -364,7 +364,7 @@ func TestRedactToolInput_NoHomeDropsInput(t *testing.T) {
 			t.Setenv("HOME", home)
 
 			got, redacted := redactToolInput(map[string]any{
-				"tool_input": map[string]any{"file_path": "/Users/jfreeman/.ssh/id_ed25519"},
+				"tool_input": map[string]any{"file_path": "/Users/jdoe/.ssh/id_ed25519"},
 			}, "Read", "")
 
 			assert.Nil(t, got, "unredactable input must not reach the entry")
@@ -383,7 +383,7 @@ func TestBuildAuditEntry_NoHomeKeepsTheTrail(t *testing.T) {
 	entry := buildAuditEntry(map[string]any{
 		"tool_name":     "Bash",
 		"delegation_id": "d-2026-07-28-001",
-		"tool_input":    map[string]any{"command": "cat /Users/jfreeman/.ssh/id_ed25519"},
+		"tool_input":    map[string]any{"command": "cat /Users/jdoe/.ssh/id_ed25519"},
 	}, "sess-1", "", now)
 
 	assert.Equal(t, "Bash", entry.Tool)
@@ -395,7 +395,7 @@ func TestBuildAuditEntry_NoHomeKeepsTheTrail(t *testing.T) {
 
 	line, err := json.Marshal(entry)
 	require.NoError(t, err)
-	assert.NotContains(t, string(line), "/Users/jfreeman")
+	assert.NotContains(t, string(line), "/Users/jdoe")
 }
 
 // TestBuildAuditEntry_HashOverRedactedForm is the ordering invariant

@@ -13,8 +13,8 @@ import (
 // path under neither prefix.
 func TestPathRedactorText(t *testing.T) {
 	const (
-		home = "/Users/jfreeman"
-		repo = "/Users/jfreeman/Coding/punt-labs/ethos"
+		home = "/Users/jdoe"
+		repo = "/Users/jdoe/Coding/punt-labs/ethos"
 	)
 
 	tests := []struct {
@@ -26,31 +26,31 @@ func TestPathRedactorText(t *testing.T) {
 		{
 			name: "home becomes tilde",
 			r:    PathRedactor{Home: home},
-			in:   "/Users/jfreeman/.claude/settings.json",
+			in:   "/Users/jdoe/.claude/settings.json",
 			want: "~/.claude/settings.json",
 		},
 		{
 			name: "repo becomes token",
 			r:    PathRedactor{Repo: repo},
-			in:   "/Users/jfreeman/Coding/punt-labs/ethos/internal/mission/redact.go",
+			in:   "/Users/jdoe/Coding/punt-labs/ethos/internal/mission/redact.go",
 			want: "<repo>/internal/mission/redact.go",
 		},
 		{
 			name: "repo wins over home when nested",
 			r:    PathRedactor{Home: home, Repo: repo},
-			in:   "/Users/jfreeman/Coding/punt-labs/ethos/Makefile",
+			in:   "/Users/jdoe/Coding/punt-labs/ethos/Makefile",
 			want: "<repo>/Makefile",
 		},
 		{
 			name: "every occurrence in one string",
 			r:    PathRedactor{Home: home, Repo: repo},
-			in:   "cp /Users/jfreeman/a.txt /Users/jfreeman/Coding/punt-labs/ethos/b.txt",
+			in:   "cp /Users/jdoe/a.txt /Users/jdoe/Coding/punt-labs/ethos/b.txt",
 			want: "cp ~/a.txt <repo>/b.txt",
 		},
 		{
 			name: "bare root with no trailing slash",
 			r:    PathRedactor{Home: home, Repo: repo},
-			in:   "cd /Users/jfreeman/Coding/punt-labs/ethos",
+			in:   "cd /Users/jdoe/Coding/punt-labs/ethos",
 			want: "cd <repo>",
 		},
 		{
@@ -62,25 +62,25 @@ func TestPathRedactorText(t *testing.T) {
 		{
 			name: "a sibling sharing the repo prefix is not corrupted",
 			r:    PathRedactor{Home: home, Repo: repo},
-			in:   "/Users/jfreeman/Coding/punt-labs/ethos-docs/README.md",
+			in:   "/Users/jdoe/Coding/punt-labs/ethos-docs/README.md",
 			want: "~/Coding/punt-labs/ethos-docs/README.md",
 		},
 		{
 			name: "a sibling sharing the home prefix keeps its own name",
 			r:    PathRedactor{Home: home},
-			in:   "/Users/jfreeman2/notes.md",
-			want: "/Users/jfreeman2/notes.md",
+			in:   "/Users/jdoe2/notes.md",
+			want: "/Users/jdoe2/notes.md",
 		},
 		{
 			name: "a repo path ending a sentence is still redacted",
 			r:    PathRedactor{Home: home, Repo: repo},
-			in:   "fix /Users/jfreeman/Coding/punt-labs/ethos.",
+			in:   "fix /Users/jdoe/Coding/punt-labs/ethos.",
 			want: "fix <repo>.",
 		},
 		{
 			name: "a quoted repo path is redacted",
 			r:    PathRedactor{Home: home, Repo: repo},
-			in:   `cd "/Users/jfreeman/Coding/punt-labs/ethos" && make`,
+			in:   `cd "/Users/jdoe/Coding/punt-labs/ethos" && make`,
 			want: `cd "<repo>" && make`,
 		},
 		{
@@ -92,8 +92,8 @@ func TestPathRedactorText(t *testing.T) {
 		{
 			name: "empty prefixes disable substitution",
 			r:    PathRedactor{},
-			in:   "/Users/jfreeman/a.txt",
-			want: "/Users/jfreeman/a.txt",
+			in:   "/Users/jdoe/a.txt",
+			want: "/Users/jdoe/a.txt",
 		},
 	}
 	for _, tt := range tests {
@@ -107,15 +107,15 @@ func TestPathRedactorText(t *testing.T) {
 // under maps and slices, leaves non-string scalars alone, and does not
 // mutate the input.
 func TestPathRedactorValue(t *testing.T) {
-	r := PathRedactor{Home: "/Users/jfreeman"}
+	r := PathRedactor{Home: "/Users/jdoe"}
 
 	t.Run("recurses through maps and slices", func(t *testing.T) {
 		in := map[string]any{
-			"prompt": "see /Users/jfreeman/notes.md",
+			"prompt": "see /Users/jdoe/notes.md",
 			"meta": map[string]any{
-				"cwd": "/Users/jfreeman/Coding",
+				"cwd": "/Users/jdoe/Coding",
 			},
-			"args":  []any{"/Users/jfreeman/x", 7, true},
+			"args":  []any{"/Users/jdoe/x", 7, true},
 			"count": 3,
 		}
 		got := r.Map(in)
@@ -126,9 +126,9 @@ func TestPathRedactorValue(t *testing.T) {
 	})
 
 	t.Run("input is not mutated", func(t *testing.T) {
-		in := map[string]any{"file_path": "/Users/jfreeman/a.txt"}
+		in := map[string]any{"file_path": "/Users/jdoe/a.txt"}
 		_ = r.Map(in)
-		assert.Equal(t, "/Users/jfreeman/a.txt", in["file_path"])
+		assert.Equal(t, "/Users/jdoe/a.txt", in["file_path"])
 	})
 
 	t.Run("nil map stays nil", func(t *testing.T) {
@@ -151,7 +151,7 @@ func TestNewPathRedactor(t *testing.T) {
 		home    string
 		wantErr string
 	}{
-		{name: "an absolute home is usable", home: "/Users/jfreeman"},
+		{name: "an absolute home is usable", home: "/Users/jdoe"},
 		{name: "empty home is refused", home: "", wantErr: "home directory"},
 		{name: "root home is refused", home: "/", wantErr: "unusable"},
 		{name: "root with trailing slashes is refused", home: "//", wantErr: "unusable"},
@@ -191,21 +191,21 @@ func TestNewPathRedactor(t *testing.T) {
 	}
 	for _, tt := range repos {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("HOME", "/Users/jfreeman")
+			t.Setenv("HOME", "/Users/jdoe")
 			r, err := NewPathRedactor(tt.repo)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, r.Repo)
-			assert.Equal(t, "/Users/jfreeman", r.Home,
+			assert.Equal(t, "/Users/jdoe", r.Home,
 				"an unusable repoRoot must not cost the home substitution")
 		})
 	}
 
 	t.Run("a normalized repo prefix still matches", func(t *testing.T) {
-		t.Setenv("HOME", "/Users/jfreeman")
-		r, err := NewPathRedactor("/Users/jfreeman/Coding/ethos/")
+		t.Setenv("HOME", "/Users/jdoe")
+		r, err := NewPathRedactor("/Users/jdoe/Coding/ethos/")
 		require.NoError(t, err)
 		assert.Equal(t, "<repo>/Makefile",
-			r.Text("/Users/jfreeman/Coding/ethos/Makefile"),
+			r.Text("/Users/jdoe/Coding/ethos/Makefile"),
 			"a trailing slash on repoRoot must not silently defeat the token")
 	})
 }

@@ -100,7 +100,7 @@ Created by `TeamCreate` at `~/.claude/teams/<team-name>/config.json`:
       "model": "claude-opus-4-6[1m]",
       "joinedAt": 1774672635443,
       "tmuxPaneId": "",
-      "cwd": "/Users/jfreeman/Coding/punt-labs/ethos"
+      "cwd": "/Users/jdoe/Coding/punt-labs/ethos"
     },
     {
       "agentId": "alpha@my-team",
@@ -111,7 +111,7 @@ Created by `TeamCreate` at `~/.claude/teams/<team-name>/config.json`:
       "color": "blue",
       "joinedAt": 1774672645782,
       "tmuxPaneId": "35B524F3-...",
-      "cwd": "/Users/jfreeman/Coding/punt-labs/ethos",
+      "cwd": "/Users/jdoe/Coding/punt-labs/ethos",
       "backendType": "iterm2",
       "isActive": true
     }
@@ -154,7 +154,7 @@ The SessionStart hook payload for teammates includes a valid `session_id`:
 {
   "session_id": "92438591-dcc9-4766-b68c-879981e75330",
   "transcript_path": "...",
-  "cwd": "/Users/jfreeman/Coding/punt-labs/ethos",
+  "cwd": "/Users/jdoe/Coding/punt-labs/ethos",
   "hook_event_name": "SessionStart",
   "source": "startup",
   "model": "claude-opus-4-6"
