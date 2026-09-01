@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "Ethos L4 end-to-end test tier: claude --print against a mocked LiteLLM upstream."
 requires-python = ">=3.13,<3.14"  # uvloop 0.21 drops asyncio.BaseDefaultEventLoopPolicy on 3.14
 dependencies = [
-  "litellm[proxy]==1.81.9",
-  "pytest>=8.3,<9",
+  "litellm[proxy]==1.99.0",
+  "pytest>=9.0.3,<10",
   "tiktoken>=0.8,<1",
 ]
 
