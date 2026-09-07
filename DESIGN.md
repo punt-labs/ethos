@@ -8108,3 +8108,118 @@ this decision moves it across. Extracting the rule into shared code is deferred
 until this implementation has survived review — three hand-copies is how this
 defect spread, and a fourth written before one correct version exists would not
 be an improvement.
+
+### Amendment 2026-09-07: participant keying is a second, unanticipated migration
+
+**The gap.** This decision's Decision section re-keys the SESSION pointer
+file (`sessions/current/<pid>`) from the topmost-ancestor walk to
+`CLAUDE_PID`. It says nothing about session ROSTERS
+(`sessions/<session_id>.yaml`), whose `participants[].agent_id` field is
+also written from `process.FindClaudePID()` — the primary participant in
+`internal/hook/session_start.go`, the subagent's `parent` field in
+`internal/hook/subagent_start.go`. Implementing the pointer-file fix
+necessarily changed what `FindClaudePID()` returns, and every caller of a
+shared function changes when its return value changes, whether or not the
+caller's own source line was edited. This was not anticipated when this
+decision was written; it surfaced in round 2 review of the implementing
+mission (m-2026-09-07-004).
+
+**Measured**, same host, same live session, moment of upgrade: the OLD
+binary resolved `ethos whoami` successfully (`Claude Agento (claude)`,
+exit 0); the NEW binary, run against the identical on-disk roster, failed
+(`session "e1e5a0da-..." has no participant matching "1710156"`, exit 1).
+The roster's primary participant was written by the OLD code as
+`agent_id: "518779"` (the daemon PID); the NEW code resolves
+`process.FindClaudePID()` to `"1710156"` (CLAUDE_PID) for the same live
+process. Every session that exists at upgrade time breaks this way and
+stays broken until it ends and a fresh `SessionStart` rewrites its
+roster — this decision's pointer-file fix has no equivalent write path
+for rosters, because a roster is not rewritten on every hook fire the way
+the pointer file is.
+
+**Decision.** Participant identity also moves to `CLAUDE_PID`, matching
+the pointer-file key, but lookups and writes both TOLERATE a participant
+record already keyed on `process.LegacyClaudePID()` — the unconditional
+process-tree walk, ignoring `CLAUDE_PID` entirely, i.e. exactly what the
+pre-fix `FindClaudePID()` always returned:
+
+1. **Reads try the preferred key, then the legacy key.**
+   `resolve.resolveFromSession` and
+   `internal/hook/subagent_start.go`'s `resolveParentLine` each try
+   `process.FindClaudePID()` first; on a miss, they retry with
+   `process.LegacyClaudePID()` before concluding no participant matches.
+   An explicit `ETHOS_AGENT_ID` override is exact by the caller's own
+   declaration and is never subject to this fallback — only the
+   self-resolved PID path tolerates ambiguity.
+2. **Writes update the existing record under whichever key already
+   matches, rather than filing a duplicate.** `internal/session.Store`
+   gains `JoinSelf(sessionID, preferredID, legacyID, p)`: it checks, under
+   the same lock `Join` uses, whether `preferredID` already has a
+   participant; if not, and `legacyID` does, it updates THAT record
+   (leaving its on-disk key alone) instead of appending a second
+   participant for the same physical process under the new key.
+   `cmd/ethos/iam.go` and `internal/mcp/tools.go`'s `handleIam` — the two
+   sites that self-key a participant via `Join` — now call `JoinSelf`
+   instead when the key is self-resolved (not an explicit
+   `ETHOS_AGENT_ID`).
+3. **No migration script, no rewrite-on-read.** A session created after
+   this fix already keys its primary on the preferred value from its
+   first `SessionStart`; the legacy key is consulted only as a fallback,
+   and only for a session that predates the upgrade. Such a session
+   self-heals the moment it ends and a fresh `SessionStart` writes a new
+   roster — there is nothing left to tolerate once no pre-upgrade session
+   remains alive.
+
+**Rejected: participant identity stays on the process-tree walk, only
+the pointer file moves to `CLAUDE_PID`.** Simpler — no dual-key lookup,
+no `JoinSelf` — but leaves two different PIDs identifying one session
+(the pointer file keyed on `CLAUDE_PID`, the roster keyed on the walk),
+which is exactly the kind of divergent, easy-to-misread state this
+decision's Decision section otherwise eliminates. A future reader (or
+agent) auditing a roster against its pointer file would see two PIDs and
+have no way to tell, from the data alone, whether that is drift or intent.
+
+**Rejected: a migration script that rewrites every existing roster's
+`agent_id` field on upgrade.** Handles the transition in one pass instead
+of a standing fallback, but requires every consumer (this repo, every
+sibling repo with its own `.punt-labs/ethos/sessions/`, every developer's
+`~/.punt-labs/ethos/sessions/`) to run it at the right moment relative to
+the binary upgrade — a coordination problem the tolerant-lookup approach
+does not have, since it works correctly regardless of which side of the
+upgrade a given session's roster was written on. A migration script is
+also permanent maintenance surface for a one-time transition; the
+tolerant lookup's own cost disappears on its own once no pre-upgrade
+session remains alive, with nothing to remember to remove.
+
+Full detail: `process.LegacyClaudePID`, `resolve.resolveFromSession`,
+`internal/hook/subagent_start.go`'s `resolveParentLine`,
+`session.Store.JoinSelf`. Regression tests:
+`TestResolve_TolerlatesLegacyKeyedParticipant`,
+`TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary`,
+`TestStore_JoinSelf_UpdatesLegacyKeyedParticipant`,
+`TestStore_JoinSelf_PrefersNewKeyWhenBothAbsent`,
+`TestStore_JoinSelf_PrefersNewKeyWhenBothPresent`,
+`TestRunIam_UpdatesLegacyKeyedParticipant`,
+`TestHandleIam_UpdatesLegacyKeyedParticipant`.
+
+### Amendment 2026-09-07: two round-2 review findings
+
+**Doubled error prefix.** `resolve.ErrNoSession`'s message carried its own
+`"ethos: "` prefix; `cmd/ethos`'s top-level error printer
+(`cmd/ethos/main.go`) adds that prefix once for every error the CLI
+returns, so the combination printed `"ethos: ethos: cannot identify the
+calling session..."`. Fixed by dropping the prefix from the error message
+itself — matching the convention every other CLI-surfaced error in this
+codebase already follows.
+
+**`ethos hook commit-trailers` stayed silent on the loud case too.**
+`runHookCommitTrailers` must never block a commit and must never emit a
+trailer it cannot vouch for, so it always exits 0 — that part was already
+correct. But it discarded `resolve.SessionID`'s error unconditionally,
+so a commit running under Claude Code whose session could not be
+identified produced no stderr output at all, indistinguishable from the
+ordinary, silent, not-under-Claude-Code case. Per this hook's own
+rationale (ethos-pobi: a missing trailer is the failure this hook exists
+to prevent), the under-Claude-Code-but-unresolvable case now prints a
+diagnostic to stderr while still emitting no trailer and still exiting 0;
+the not-under-Claude-Code case is unchanged and stays fully silent.

@@ -29,7 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still silently substituted the git/OS identity. Running with no Claude
   Code context at all (a headless, CI, or plain-terminal invocation) is
   unaffected and still resolves via git config or the OS user with no
-  session in play.
+  session in play. A session that was already running when this fix
+  deploys keeps working: participant lookups and `iam` writes tolerate a
+  roster whose primary participant is still keyed on the pre-fix
+  walk-derived PID, so `whoami`/`iam` do not break until that session
+  ends and a fresh session naturally picks up the new key.
 - Post-release restore commits no longer carry `[skip ci]`.
   `scripts/restore-dev-plugin.sh` tagged its commit with `[skip ci]`, which
   suppressed all workflows on the head of the post-release PR — while the
