@@ -23,7 +23,20 @@ func readProc(pid int) (ppid int, comm string, err error) {
 
 	var entry windows.ProcessEntry32
 	entry.Size = uint32(unsafe.Sizeof(entry))
-	for walkErr := windows.Process32First(snapshot, &entry); walkErr == nil; walkErr = windows.Process32Next(snapshot, &entry) {
+	for walkErr := windows.Process32First(snapshot, &entry); ; walkErr = windows.Process32Next(snapshot, &entry) {
+		if walkErr != nil {
+			// ERROR_NO_MORE_FILES is the only expected way this loop ends:
+			// the snapshot is exhausted and pid was never in it. Any other
+			// error is a genuine Process32First/Process32Next failure (e.g.
+			// the snapshot handle went bad) and must not be swallowed into
+			// the same "not found" message a real absence produces — that
+			// would hide API failures behind a benign-looking result and
+			// make session detection undebuggable.
+			if walkErr == windows.ERROR_NO_MORE_FILES {
+				break
+			}
+			return 0, "", fmt.Errorf("walking process snapshot: %w", walkErr)
+		}
 		if int(entry.ProcessID) != pid {
 			continue
 		}
