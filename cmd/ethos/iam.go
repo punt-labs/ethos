@@ -77,6 +77,19 @@ func resolveHardSession(explicit string) (sessionID, agentID string, err error) 
 // gone" is success there, handled by the caller.
 //
 // agentID keys the participant: ETHOS_AGENT_ID if set, else the Claude PID.
+//
+// Step 3's failure mode is NOT collapsed into errNoSession uniformly.
+// resolve.SessionID distinguishes "genuinely no session" (nil error) from
+// "a session was expected but could not be identified" (resolve.ErrNoSession,
+// DES-074) — the latter is returned here AS-IS, not swapped for the local
+// errNoSession sentinel. Advisory callers (bindDispatchedMission,
+// clearClosedSessionBindings) check errors.Is(err, errNoSession)
+// specifically to treat "no session at all" as their ordinary,
+// silent-skip case; collapsing resolve.ErrNoSession into that same
+// sentinel would make those callers treat a genuine resolution failure
+// as nothing-to-do and skip a real rebind silently — `mission dispatch`
+// reporting success while the next Agent() spawn still attributes under
+// the PREVIOUS mission id (round 2, R5).
 func resolveSession(explicit string, verifyEnv bool) (sessionID, agentID string, err error) {
 	agentID = os.Getenv("ETHOS_AGENT_ID")
 	ss := sessionStore()
@@ -91,13 +104,16 @@ func resolveSession(explicit string, verifyEnv bool) (sessionID, agentID string,
 
 	if sessionID == "" {
 		sid, source, serr := resolve.SessionID(ss)
-		if serr == nil {
+		switch {
+		case serr == nil:
 			if verifyEnv && source == resolve.SessionSourceEnv {
 				if _, lerr := ss.Load(sid); lerr != nil {
 					return "", "", fmt.Errorf("ETHOS_SESSION %q: %w", sid, lerr)
 				}
 			}
 			sessionID = sid
+		case errors.Is(serr, resolve.ErrNoSession):
+			return "", "", serr
 		}
 	}
 

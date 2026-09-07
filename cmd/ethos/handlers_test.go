@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -175,6 +176,24 @@ func TestRunWhoami_Plain(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, stdout, "test-agent")
 	assert.Contains(t, stdout, "Test Agent")
+}
+
+// TestRunWhoami_LoudWhenSessionUnresolvableUnderClaudeCode directly
+// rebuts round 2's R4 finding ("the loud branch has zero tests outside
+// internal/resolve"): with resolve.UnderClaudeCode forced true (a
+// session WAS expected) and no pointer file for any PID, `whoami` must
+// fail loud and non-zero, never silently substitute the git/OS identity
+// this fixture's git config would otherwise provide.
+func TestRunWhoami_LoudWhenSessionUnresolvableUnderClaudeCode(t *testing.T) {
+	se := setupCLISubprocessEnv(t)
+	setInProcessEnv(t, se)
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	_, _, err := execHandler(t, "whoami")
+	require.Error(t, err, "must not silently resolve via git/OS when a session was expected")
+	assert.Contains(t, err.Error(), "cannot identify the calling session")
 }
 
 func TestRunWhoami_JSON(t *testing.T) {

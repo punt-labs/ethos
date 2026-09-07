@@ -15,6 +15,7 @@ import (
 	"github.com/punt-labs/ethos/v4/internal/hook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/mission"
+	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/stretchr/testify/assert"
@@ -4568,6 +4569,42 @@ func TestMissionDispatch_RebindsStaleActiveMission(t *testing.T) {
 		"the leader must be told the rebind stops their trailers")
 }
 
+// TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode pins
+// round 2, R5: a session that was expected (running under Claude Code)
+// but could not be identified is a REAL resolution failure, not the
+// ordinary "no session at all" case bindDispatchedMission otherwise
+// treats as advisory and silent. Before this fix, resolveSession
+// collapsed both DES-074 branches into the same local errNoSession
+// sentinel, so bindDispatchedMission's own errors.Is(err, errNoSession)
+// check could never tell them apart and always skipped silently —
+// `mission dispatch` reported success while the next Agent() spawn still
+// attributed under the PREVIOUS mission id.
+func TestBindDispatchedMission_ReportsUnresolvableSessionUnderClaudeCode(t *testing.T) {
+	missionTestEnv(t)
+	t.Setenv("ETHOS_SESSION", "")
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
+
+	dispatchWorker = "bwk"
+	dispatchEvaluator = "djb"
+	dispatchWriteSet = "internal/alpha/store.go"
+	dispatchCriteria = []string{"make check passes"}
+	dispatchType = "implement"
+	dispatchBudget = 2
+
+	var warning string
+	captureStdoutE(t, func() error {
+		warning = captureStderrFn(t, func() {
+			require.NoError(t, runMissionDispatch(), "dispatch itself must still succeed")
+		})
+		return nil
+	})
+	assert.Contains(t, warning, "resolving session",
+		"an unresolvable session under Claude Code must be reported, not silently skipped")
+	assert.NotContains(t, warning, "ethos: ethos:")
+}
+
 // TestMissionDispatch_BindProducesNoCommitTrailers pins the ethos-7vo3
 // ruling: a dispatch binds the session for DELEGATION FILING only. The
 // leader keeps working in the same session, and stamping their later
@@ -4732,10 +4769,17 @@ func TestMissionClaim_RefusesWithoutSession_Subprocess(t *testing.T) {
 	cmd := exec.Command(ethosBinary, "mission", "claim", "m-2026-05-23-001")
 	// Scrub the env: HOME, PATH, and a TMPDIR for go runtime, nothing
 	// else. ETHOS_SESSION absent + no claude ancestor → refusal.
+	// process.ForceNotUnderClaudeCodeEnv covers what env-scrubbing alone
+	// cannot: this test binary's own process ancestry genuinely includes
+	// a real claude ancestor whenever this suite runs inside a live
+	// Claude Code session (as it normally does) — the negative-only
+	// escape hatch simulates the plain, non-Claude-Code process tree
+	// this test's own comment above describes wanting.
 	cmd.Env = []string{
 		"HOME=" + home,
 		"PATH=" + os.Getenv("PATH"),
 		"TMPDIR=" + t.TempDir(),
+		process.ForceNotUnderClaudeCodeEnv + "=1",
 	}
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
