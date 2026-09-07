@@ -845,33 +845,42 @@ func resolveParentLine(ss *session.Store, sessionID, parentID string, store iden
 		fmt.Fprintf(os.Stderr, "ethos: subagent-start: resolveParentLine: session load failed: %v\n", err)
 		return ""
 	}
-	// Find the participant whose AgentID matches the subagent's parent.
+	// Find the participant whose AgentID matches the subagent's parent, in
+	// two SEPARATE passes over the full roster — never a single loop
+	// testing both keys per participant in roster order. A single-pass
+	// loop breaks on whichever key matches FIRST by position, so a
+	// legacy-keyed participant appearing earlier in the roster would beat
+	// a correct, preferred-keyed one appearing later — the shared daemon
+	// PID this whole decision exists to stop trusting winning over the
+	// real answer sitting right next to it (round 2 finding, confirmed by
+	// two reviewers running this exact function). Pass 1 scans every
+	// participant for the preferred key to completion; only if that finds
+	// nothing does pass 2 compute LegacyClaudePID() and scan again. This
+	// mirrors resolve.resolveFromSession and session.Store.JoinSelf, which
+	// both already do the genuine two-pass — all three sites must agree,
+	// because DES-074 claims they do.
+	//
 	// parentID is this call's freshly-resolved process.FindClaudePID()
 	// value; a primary participant written before DES-074 is keyed on the
 	// walk-derived PID instead, which a brand-new subagent spawned against
 	// an in-flight pre-upgrade session would otherwise never match — the
 	// parent line would silently go missing rather than error, since this
-	// function's whole contract is "best effort, empty string on miss"
-	// (round 2 finding). legacyParentID is computed lazily, once, only if
-	// the first pass finds nothing.
-	var legacyParentID string
-	legacyResolved := false
+	// function's whole contract is "best effort, empty string on miss".
 	var parentHandle string
 	for _, p := range roster.Participants {
-		if p.Persona == "" {
-			continue
-		}
-		if p.AgentID == parentID {
+		if p.Persona != "" && p.AgentID == parentID {
 			parentHandle = p.Persona
 			break
 		}
-		if !legacyResolved {
-			legacyParentID = process.LegacyClaudePID()
-			legacyResolved = true
-		}
-		if legacyParentID != parentID && p.AgentID == legacyParentID {
-			parentHandle = p.Persona
-			break
+	}
+	if parentHandle == "" {
+		if legacyParentID := process.LegacyClaudePID(); legacyParentID != parentID {
+			for _, p := range roster.Participants {
+				if p.Persona != "" && p.AgentID == legacyParentID {
+					parentHandle = p.Persona
+					break
+				}
+			}
 		}
 	}
 	if parentHandle == "" {
