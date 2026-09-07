@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/punt-labs/ethos/v4/internal/identity"
 	"github.com/punt-labs/ethos/v4/internal/process"
@@ -60,7 +61,16 @@ type RepoConfig struct {
 func Resolve(store identity.IdentityStore, ss *session.Store) (string, error) {
 	// Step 1: check for iam declaration via process tree.
 	if ss != nil {
-		sp := resolveFromSession(ss)
+		sp, err := resolveFromSession(ss)
+		if err != nil {
+			// A session WAS expected here — running under Claude Code, or
+			// an explicit ETHOS_SESSION/pointer file resolved an ID — but
+			// something about it did not check out (unidentifiable,
+			// unreadable roster, no matching participant). DES-074: this
+			// is the wrong-answer risk, not an absence, so it must not
+			// fall through to git/OS.
+			return "", err
+		}
 		if sp.found {
 			if sp.handle != "" {
 				return sp.handle, nil
@@ -134,72 +144,137 @@ type sessionPersona struct {
 // as opposed to the Claude process-tree walk.
 const SessionSourceEnv = "env"
 
-// ErrNoSession is returned by SessionID when neither an explicit
-// ETHOS_SESSION nor the Claude-process pointer file identifies an active
-// session for this call. It names the remedy so a caller that requires a
+// ErrNoSession is returned by SessionID and resolveFromSession when a
+// session WAS expected — running under Claude Code (see
+// process.UnderClaudeCode), or an explicit ETHOS_SESSION was set — but
+// could not be identified: the env value is present but uncorroborated,
+// the pointer file is missing, or the named roster is unreadable or has no
+// matching participant. It names the remedy so a caller that requires a
 // session (iam, mission claim/release) can fail loud with a non-zero exit
 // instead of silently defaulting to some other identity (operator ruling
 // 2026-09-07, DES-074): a mechanism is reliable or it raises a clear error
 // with a hint.
 //
-// SessionID is also consulted by the general identity-resolution chain
-// (Resolve, step 1 of 4), where "no session declared" is one of several
-// legitimate, non-error identity sources — a plain-terminal `ethos whoami`
-// outside any Claude Code process is not "unresolvable," it simply has no
-// session to declare a persona in. Resolve treats ErrNoSession from this
-// step as "try the next source" for exactly that reason; it does not
-// silently substitute a session that was found but did not check out (a
-// participant with no persona, an unreadable roster) — those paths already
-// return an explicit error rather than falling through.
+// It is deliberately NOT returned for the other, unremarkable failure
+// state: not running under Claude Code at all (headless, CI, SDK, a plain
+// terminal). That is a normal condition — no session was ever expected —
+// and SessionID reports it as (id="", source="", err=nil) instead.
+// Conflating the two was itself a defect DES-074 names explicitly: "no
+// session" and "this git user" are different answers and must not be
+// returned interchangeably, but neither may a CI run's total absence of a
+// Claude Code session be treated as an alarming, loud failure.
 var ErrNoSession = errors.New(
 	"ethos: cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`")
 
+// UnderClaudeCode indirects process.UnderClaudeCode — the DES-074 "was a
+// session expected" signal — behind a package variable rather than a
+// direct call, so tests across every consumer package can override it
+// deterministically. Unlike CLAUDE_PID/CLAUDECODE, a real claude ancestor
+// process cannot be un-set with t.Setenv: this whole suite (and its
+// consumers' test suites) normally runs INSIDE a live Claude Code session,
+// where process.UnderClaudeCode's ancestor-walk check is unavoidably true
+// regardless of which env vars a test strips. A test that wants the
+// "genuinely no session expected" branch overrides this var instead.
+var UnderClaudeCode = process.UnderClaudeCode
+
+// pointerRetryAttempts and pointerRetryDelay bound the retry SessionID
+// applies to a missing pointer file when running under Claude Code: a
+// consumer can start before SessionStart finishes writing it (DES-074
+// point 5, ported from biff's bounded retry). The retry never fires when
+// not under Claude Code at all — there SessionStart never ran and never
+// will, so retrying would only add latency to the common no-session case
+// (CI, scripts) for no benefit.
+const (
+	pointerRetryAttempts = 3
+	pointerRetryDelay    = 20 * time.Millisecond
+)
+
 // SessionID resolves the active session ID using the harness-neutral chain:
-// ETHOS_SESSION, then the Claude process-tree current-pointer. It returns
-// the ID and its source (SessionSourceEnv or "walk") on success, or
-// ErrNoSession when neither yields one — never a silently empty ID+source
-// pair (DES-074). The source lets a caller apply the verification an
-// explicit env anchor warrants without re-reading the environment. Callers
-// that accept an explicit session (a --session flag or an MCP session_id
-// arg) check that first and bypass this (DES-061).
+// ETHOS_SESSION, then the Claude process-tree current-pointer.
+//
+// Three outcomes (DES-074):
+//   - id != "", err == nil: resolved. source names SessionSourceEnv or "walk".
+//   - id == "", err == nil: not running under Claude Code at all (headless,
+//     CI, SDK, a plain terminal) — a normal state. No session was ever
+//     expected; callers may silently try another identity source.
+//   - id == "", err == ErrNoSession: a session WAS expected (running under
+//     Claude Code, per process.UnderClaudeCode) but could not be
+//     identified. Callers must fail loud with a non-zero exit and must NOT
+//     substitute another identity source.
+//
+// Callers that accept an explicit session (a --session flag or an MCP
+// session_id arg) check that first and bypass this (DES-061).
 func SessionID(ss *session.Store) (id, source string, err error) {
 	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
 		return sid, SessionSourceEnv, nil
 	}
-	sid, rerr := ss.ReadCurrentSession(process.FindClaudePID())
+
+	pid := process.FindClaudePID()
+	underClaude := UnderClaudeCode()
+
+	sid, rerr := ss.ReadCurrentSession(pid)
+	if rerr != nil && underClaude {
+		sid, rerr = retryReadCurrentSession(ss, pid)
+	}
 	if rerr != nil {
+		if !underClaude {
+			return "", "", nil
+		}
+		// Corroboration failure and a transient process-table read error
+		// are indistinguishable from here, so the message asserts neither
+		// cause (DES-074 point 6) — it only names the remedy.
 		return "", "", ErrNoSession
 	}
 	return sid, "walk", nil
+}
+
+// retryReadCurrentSession re-reads the PID-keyed pointer file a few times
+// with a short delay, covering the startup race where a consumer runs
+// before SessionStart finishes writing it.
+func retryReadCurrentSession(ss *session.Store, pid string) (string, error) {
+	var lastErr error
+	for i := 0; i < pointerRetryAttempts-1; i++ {
+		time.Sleep(pointerRetryDelay)
+		sid, err := ss.ReadCurrentSession(pid)
+		if err == nil {
+			return sid, nil
+		}
+		lastErr = err
+	}
+	return "", lastErr
 }
 
 // resolveFromSession resolves the session via the harness-neutral chain
 // (ETHOS_SESSION, then the Claude PID walk), then returns the caller's
 // persona from the roster. The caller's participant is keyed on
 // ETHOS_AGENT_ID when set — matching how iam records it on both the CLI
-// and MCP surfaces — else on the Claude PID. Returns found=false if no
-// session or no matching participant. Returns found=true with empty handle
-// if the participant exists but has no persona configured — callers must
-// not fall through to git/OS.
-func resolveFromSession(ss *session.Store) sessionPersona {
-	sessionID, source, err := SessionID(ss)
+// and MCP surfaces — else on the Claude PID.
+//
+// Returns (sessionPersona{}, nil) when no session was ever expected (not
+// running under Claude Code at all) — the legitimate "try the next
+// identity source" case. Returns a non-nil error — always ErrNoSession or
+// wrapping it — for every other failure to check out: an unidentifiable
+// session, an unreadable roster, or no matching participant. These are
+// the three ways DES-074 measured this mechanism producing "a plausible
+// wrong answer with exit status 0" (a misspelled persona is a fourth,
+// already surfaced downstream when the caller loads the returned handle,
+// not a resolveFromSession concern). Returns found=true with empty handle
+// if the participant exists but has no persona configured — the caller
+// must not fall through to git/OS for that case either.
+func resolveFromSession(ss *session.Store) (sessionPersona, error) {
+	sessionID, _, err := SessionID(ss)
 	if err != nil {
-		// ErrNoSession is "no session declared" — a legitimate identity
-		// source among four, not a wrong-answer risk (DES-074's fix is
-		// about a session pointer that resolved to the WRONG session, not
-		// about there being no session at all). Step through to git/OS.
-		return sessionPersona{}
+		return sessionPersona{}, err
 	}
-	roster, err := ss.Load(sessionID)
-	if err != nil {
-		// A roster named explicitly by ETHOS_SESSION that exists but fails
-		// to parse is a real error — warn rather than silently answering
-		// with the git/OS identity. A not-found session is the soft
-		// no-session contract and stays silent.
-		if source == SessionSourceEnv && !errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "ethos: warning: ETHOS_SESSION %q names an unreadable roster: %v\n", sessionID, err)
+	if sessionID == "" {
+		return sessionPersona{}, nil
+	}
+	roster, lErr := ss.Load(sessionID)
+	if lErr != nil {
+		if errors.Is(lErr, os.ErrNotExist) {
+			return sessionPersona{}, fmt.Errorf("session %q not found: %w", sessionID, ErrNoSession)
 		}
-		return sessionPersona{}
+		return sessionPersona{}, fmt.Errorf("session %q has an unreadable roster (%v): %w", sessionID, lErr, ErrNoSession)
 	}
 	agentID := os.Getenv("ETHOS_AGENT_ID")
 	if agentID == "" {
@@ -207,14 +282,14 @@ func resolveFromSession(ss *session.Store) sessionPersona {
 	}
 	p := roster.FindParticipant(agentID)
 	if p == nil {
-		return sessionPersona{}
+		return sessionPersona{}, fmt.Errorf("session %q has no participant matching %q: %w", sessionID, agentID, ErrNoSession)
 	}
 	// Participant found. If persona is empty, that's an explicit
 	// "no persona configured" — not "try git/OS instead."
 	if p.Persona == "" {
-		return sessionPersona{found: true}
+		return sessionPersona{found: true}, nil
 	}
-	return sessionPersona{handle: p.Persona, found: true}
+	return sessionPersona{handle: p.Persona, found: true}, nil
 }
 
 // FindRepoEthosRoot returns the path to .punt-labs/ethos/ for the repo the

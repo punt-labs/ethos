@@ -513,10 +513,13 @@ func TestCLI_MissionClaim_StaleEnvErrors(t *testing.T) {
 	assert.Contains(t, stderr, "ETHOS_SESSION", "the refusal must name the stale source")
 }
 
-// TestCLI_Whoami_WarnsOnCorruptRoster pins M6: an ETHOS_SESSION that names
-// an existing-but-unparseable roster warns on stderr rather than silently
-// answering with the git/OS identity; whoami still falls back so it does
-// not brick.
+// TestCLI_Whoami_WarnsOnCorruptRoster pins M6, updated for DES-074: an
+// ETHOS_SESSION that names an existing-but-unparseable roster is "a
+// session was expected but did not check out" — a wrong-answer risk, not
+// an absence — so whoami now fails loud, naming the unreadable roster,
+// instead of silently answering with the git/OS identity. Before DES-074
+// this was a warn-and-fall-back; that silent substitution is exactly what
+// the decision closes.
 func TestCLI_Whoami_WarnsOnCorruptRoster(t *testing.T) {
 	if ethosBinary == "" {
 		t.Skip("ethos binary not built")
@@ -526,10 +529,9 @@ func TestCLI_Whoami_WarnsOnCorruptRoster(t *testing.T) {
 	rosterPath := filepath.Join(se.home, ".punt-labs", "ethos", "sessions", badID+".yaml")
 	require.NoError(t, os.WriteFile(rosterPath, []byte("not a roster mapping\n"), 0o644))
 
-	out, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+badID), "whoami")
-	require.Equal(t, 0, code, "whoami must fall back, not brick; stderr=%s", stderr)
-	assert.Contains(t, stderr, "unreadable roster", "a corrupt named roster must warn")
-	assert.Contains(t, out, "test-agent", "whoami falls back to the git/OS identity")
+	_, stderr, code := runCLI(t, withEnv(se, "ETHOS_SESSION="+badID), "whoami")
+	require.NotEqual(t, 0, code, "whoami must fail loud on a corrupt named roster")
+	assert.Contains(t, stderr, "unreadable roster")
 }
 
 // TestCurrentSessionIDBestEffort_EnvVerification pins M5: a non-empty

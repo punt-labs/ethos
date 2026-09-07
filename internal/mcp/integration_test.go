@@ -15,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcplib "github.com/mark3labs/mcp-go/mcp"
+	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -30,6 +31,16 @@ var ethosBinary string
 const mcpRPCTimeout = 30 * time.Second
 
 func TestMain(m *testing.M) {
+	// This suite normally runs inside a real Claude Code session, where
+	// CLAUDE_PID and CLAUDECODE are themselves set. DES-074 makes their
+	// presence the signal for "a session was expected, fail loud if
+	// unresolvable" — so leaving them ambient would make every fixture
+	// that wants the ordinary "no session here" state instead exercise
+	// the loud path. Strip them for the whole binary; a test that wants
+	// the under-Claude-Code path sets one back with t.Setenv.
+	os.Unsetenv("CLAUDE_PID")
+	os.Unsetenv("CLAUDECODE")
+
 	dir, err := os.MkdirTemp("", "ethos-mcp-integration-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "creating temp dir: %v\n", err)
@@ -117,6 +128,14 @@ func setupMCPTestEnv(t *testing.T) *mcpTestEnv {
 		"GIT_CONFIG_GLOBAL=/dev/null",
 		"GIT_CONFIG_SYSTEM=/dev/null",
 		"PATH=" + os.Getenv("PATH"),
+		// This suite normally runs inside a real Claude Code session, so
+		// the spawned ethos binary's own process ancestry genuinely
+		// includes a claude process regardless of which env vars this
+		// list omits (DES-074's ancestor-walk UnderClaudeCode signal
+		// cannot be defeated by env alone). This negative-only escape
+		// hatch simulates the plain, non-Claude-Code invocation this
+		// fixture intends.
+		process.ForceNotUnderClaudeCodeEnv + "=1",
 	}
 
 	return &mcpTestEnv{home: home, repo: repo, env: env}

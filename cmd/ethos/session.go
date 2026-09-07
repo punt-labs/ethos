@@ -312,8 +312,14 @@ func init() {
 
 func runSessionShow(cmd *cobra.Command) error {
 	ss := sessionStore()
-	sessionID, _, err := resolve.SessionID(ss)
-	if err != nil {
+	// `session show` is a benign inspector, not a state-writing consumer:
+	// it reports "no active session" the same way whether none was ever
+	// expected or one was expected but could not be identified (checking
+	// the ID's emptiness, not the error, keeps both cases on this one
+	// path) — unlike iam/mission claim, this command attributes nothing,
+	// so there is no wrong-answer risk to fail loud over.
+	sessionID, _, _ := resolve.SessionID(ss)
+	if sessionID == "" {
 		fmt.Fprintln(cmd.OutOrStdout(), "No active session.")
 		return nil
 	}

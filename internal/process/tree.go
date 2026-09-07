@@ -128,7 +128,21 @@ func findClaudeAncestor(startPID int) (pid string, found bool) {
 // CLAUDE_PID; checking it directly (rather than only the walk) covers a
 // nested or headless invocation where CLAUDE_PID might be stripped by an
 // intermediary but CLAUDECODE survives, or vice versa.
+//
+// forceNotUnderClaudeCodeEnv is a negative-only escape hatch: it can only
+// make this return false, never true, so it cannot be used to fabricate a
+// session context — only to suppress the loud-failure branch. It exists
+// for subprocess test harnesses simulating "genuinely no Claude Code in
+// play" (one of the two states this function distinguishes, and a real,
+// legitimate production case — headless/CI/SDK) from INSIDE a live Claude
+// Code development session: unlike CLAUDE_PID/CLAUDECODE, a spawned test
+// binary's real ancestry cannot be un-set with an env var, so without this
+// escape hatch that scenario is untestable in exactly the environment this
+// repo is developed in.
 func UnderClaudeCode() bool {
+	if os.Getenv(ForceNotUnderClaudeCodeEnv) != "" {
+		return false
+	}
 	if _, ok := claudePIDFromEnv(); ok {
 		return true
 	}
@@ -138,6 +152,13 @@ func UnderClaudeCode() bool {
 	_, found := findClaudeAncestor(os.Getpid())
 	return found
 }
+
+// ForceNotUnderClaudeCodeEnv is the escape-hatch variable name for
+// UnderClaudeCode, documented there. Exported so subprocess test harnesses
+// across every consumer package can reference it by name (rather than
+// duplicating the literal string) when constructing a child process's
+// environment.
+const ForceNotUnderClaudeCodeEnv = "ETHOS_TEST_NOT_UNDER_CLAUDE_CODE"
 
 // isClaudeComm checks if a process command name refers to Claude.
 // Matches "claude" exactly or paths ending in "/claude".

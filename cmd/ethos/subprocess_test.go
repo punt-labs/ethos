@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/punt-labs/ethos/v4/internal/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -88,6 +89,22 @@ func setupCLISubprocessEnv(t *testing.T) *cliSubprocessEnv {
 	return &cliSubprocessEnv{home: home, repo: repo, env: env}
 }
 
+// withForcedNotUnderClaudeCode appends process.ForceNotUnderClaudeCodeEnv
+// to env. This suite normally runs inside a real Claude Code session, so a
+// spawned ethos binary's own process ancestry genuinely includes a claude
+// process no matter which env vars a fixture's list omits (DES-074's
+// ancestor-walk UnderClaudeCode signal cannot be defeated by env alone).
+// Every runCLI invocation goes through this single choke point rather than
+// requiring each of the many hand-rolled env lists across this package's
+// test files to remember it individually. It is a no-op for a fixture that
+// also sets ETHOS_SESSION: that path resolves before UnderClaudeCode is
+// ever consulted (SessionID checks ETHOS_SESSION first), so the two never
+// conflict — no test here exercises the "under Claude Code via CLAUDE_PID/
+// CLAUDECODE, no explicit session" path through a spawned subprocess.
+func withForcedNotUnderClaudeCode(env []string) []string {
+	return append(append([]string{}, env...), process.ForceNotUnderClaudeCodeEnv+"=1")
+}
+
 // runCLI spawns ethosBinary with the given args, waits up to 5 seconds,
 // and returns stdout, stderr, and the exit code. It does not call t.Fatal
 // on non-zero exit — many tests assert the exit code directly.
@@ -97,7 +114,7 @@ func runCLI(t *testing.T, se *cliSubprocessEnv, args ...string) (stdout, stderr 
 	cmd := exec.Command(ethosBinary, args...)
 	if se != nil {
 		cmd.Dir = se.repo
-		cmd.Env = se.env
+		cmd.Env = withForcedNotUnderClaudeCode(se.env)
 	}
 
 	var outBuf, errBuf bytes.Buffer

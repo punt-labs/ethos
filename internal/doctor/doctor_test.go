@@ -12,6 +12,7 @@ import (
 
 	"github.com/punt-labs/ethos/v4/internal/githook"
 	"github.com/punt-labs/ethos/v4/internal/identity"
+	"github.com/punt-labs/ethos/v4/internal/resolve"
 	"github.com/punt-labs/ethos/v4/internal/seed"
 	"github.com/punt-labs/ethos/v4/internal/session"
 	"github.com/punt-labs/ethos/v4/internal/team"
@@ -19,6 +20,27 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestMain strips CLAUDE_PID and CLAUDECODE before any test runs. This
+// suite normally runs inside a real Claude Code session, where both are
+// themselves set. DES-074 makes their presence the signal for "a session
+// was expected, fail loud if unresolvable" — so leaving them ambient would
+// make CheckHumanIdentity's "no session, fall back to git/OS" fixtures
+// instead exercise the loud path. A test that wants the under-Claude-Code
+// path sets one back with t.Setenv.
+func TestMain(m *testing.M) {
+	os.Unsetenv("CLAUDE_PID")
+	os.Unsetenv("CLAUDECODE")
+	// Stripping the env vars is not enough: a real claude process is
+	// unavoidably this test binary's own process-tree ancestor whenever
+	// this suite runs inside a live Claude Code session (as it normally
+	// does), so process.UnderClaudeCode's ancestor-walk check would still
+	// see it regardless. Force the "not under Claude Code" branch as this
+	// binary's test default; a test that wants the loud, under-Claude-Code
+	// path overrides this back locally with t.Cleanup.
+	resolve.UnderClaudeCode = func() bool { return false }
+	os.Exit(m.Run())
+}
 
 // newFixture builds an identity.Store and matching session.Store at a
 // fresh temp root. The identities directory is created so CheckIdentityDir
