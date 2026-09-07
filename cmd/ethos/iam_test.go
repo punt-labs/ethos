@@ -55,7 +55,7 @@ func TestRunIam_UpdatesLegacyKeyedParticipant(t *testing.T) {
 	// result: our GRANDPARENT, not our immediate parent, since in an
 	// environment with no real "claude" ancestor (CI, a detached process)
 	// the walk's own fallback is exactly os.Getppid() (see
-	// resolve.TestResolve_TolerlatesLegacyKeyedParticipant for the same
+	// resolve.TestResolve_ToleratesLegacyKeyedParticipant for the same
 	// trick and why it is needed).
 	parentPID := os.Getppid()
 	grandparentPID, err := process.ParentPID(parentPID)

@@ -8204,7 +8204,7 @@ session remains alive, with nothing to remember to remove.
 Full detail: `process.LegacyClaudePID`, `resolve.resolveFromSession`,
 `internal/hook/subagent_start.go`'s `resolveParentLine`,
 `session.Store.JoinSelf`. Regression tests:
-`TestResolve_TolerlatesLegacyKeyedParticipant`,
+`TestResolve_ToleratesLegacyKeyedParticipant`,
 `TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary`,
 `TestStore_JoinSelf_UpdatesLegacyKeyedParticipant`,
 `TestStore_JoinSelf_PrefersNewKeyWhenBothAbsent`,

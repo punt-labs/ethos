@@ -151,7 +151,7 @@ func TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary(t *testing.T
 	// result: our GRANDPARENT, not our immediate parent, since in an
 	// environment with no real "claude" ancestor (CI, a detached process)
 	// the walk's own fallback is exactly os.Getppid() (see resolve.
-	// TestResolve_TolerlatesLegacyKeyedParticipant for the same trick).
+	// TestResolve_ToleratesLegacyKeyedParticipant for the same trick).
 	parentPID := os.Getppid()
 	grandparentPID, err := process.ParentPID(parentPID)
 	require.NoError(t, err, "need a real grandparent to run this test")

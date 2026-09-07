@@ -73,7 +73,7 @@ func TestResolve_IamDeclaration(t *testing.T) {
 	assert.Equal(t, "mal", handle)
 }
 
-// TestResolve_TolerlatesLegacyKeyedParticipant pins the round 2 finding: a
+// TestResolve_ToleratesLegacyKeyedParticipant pins the round 2 finding: a
 // session whose primary participant was written before DES-074 keys it on
 // process.LegacyClaudePID (the pre-fix walk-derived PID), not the new
 // preferred process.FindClaudePID (CLAUDE_PID, corroborated). A caller
@@ -82,7 +82,7 @@ func TestResolve_IamDeclaration(t *testing.T) {
 // session went from resolving cleanly to `session ... has no participant
 // matching "<new pid>"`) until that session ends and a fresh SessionStart
 // rekeys it. resolveFromSession must fall back to the legacy key.
-func TestResolve_TolerlatesLegacyKeyedParticipant(t *testing.T) {
+func TestResolve_ToleratesLegacyKeyedParticipant(t *testing.T) {
 	setGitConfig(t, "unknown", "")
 	t.Setenv("USER", "nobody")
 	t.Setenv("ETHOS_SESSION", "")
