@@ -22,35 +22,66 @@ const maxWalkDepth = 10
 // answering with the first session's PID forever (DES-074).
 //
 // Prefers CLAUDE_PID, the env var Claude Code sets on every spawned
-// subprocess (2.1.234+): distinct per session and per nesting level, unlike
-// the topmost-ancestor walk below, which every concurrent Claude Code
-// session on a host shares via the "claude daemon run" process — the root
-// cause of ethos-vqwn. CLAUDE_PID is captured once at this process's own
-// spawn time and never re-observed, so it is corroborated — not trusted
-// outright — against the caller's CURRENT live ancestry before use: a dead
-// ancestor's PID, later recycled by an unrelated but legitimate claude
-// session, would otherwise resolve to a real, live, WRONG process. Falls
-// back to walkToClaudeAncestor when the env var is absent (headless, CI,
-// SDK, or a Claude Code version predating it) or fails corroboration.
+// subprocess (2.1.234+): distinct per concurrent SESSION, unlike the
+// topmost-ancestor walk below, which every concurrent Claude Code session on
+// a host shares via the "claude daemon run" process — the root cause of
+// ethos-vqwn. (It is NOT distinct per nesting level: a Task-tool subagent
+// or hook subprocess inherits its leader's CLAUDE_PID verbatim, and
+// correctly so, since it belongs to the same session — see
+// ClaudePIDFromEnvCorroborated and DES-074's round-2 amendment.) Falls back
+// to walkToClaudeAncestor when the env var is absent (headless, CI, SDK, or
+// a Claude Code version predating it) or fails corroboration.
+//
+// This fallback is safe for FindClaudePID's own callers — writes (a stale
+// key self-heals on the next SessionStart) and participant self-keying (a
+// miss is non-fatal, round 2 R3) — but is NOT safe as a SESSION-POINTER
+// lookup key, which has no equivalent safety net: resolve.SessionID uses
+// ClaudePIDFromEnvCorroborated directly instead, with no walk fallback, so
+// an uncorroborated CLAUDE_PID makes a session unresolvable rather than
+// resolvable via the shared walk-derived key (review finding, PR #502).
 //
 // Uses native OS interfaces: /proc on Linux, sysctl on macOS.
 func FindClaudePID() string {
-	if pid, ok := claudePIDFromEnv(); ok {
-		if isLiveAncestor(pid) {
-			return strconv.Itoa(pid)
-		}
+	if pid, ok := ClaudePIDFromEnvCorroborated(); ok {
+		return pid
+	}
+	return walkToClaudeAncestor(os.Getpid())
+}
+
+// ClaudePIDFromEnvCorroborated returns CLAUDE_PID, verified as a live
+// ancestor of this process, or ok=false when the variable is absent, blank,
+// malformed, or fails corroboration. CLAUDE_PID is captured once at this
+// process's own spawn time and never re-observed, so it is corroborated —
+// not trusted outright — against the caller's CURRENT live ancestry: a dead
+// ancestor's PID, later recycled by an unrelated but legitimate claude
+// session, would otherwise resolve to a real, live, WRONG process.
+//
+// Exported so resolve.SessionID can key the SESSION-POINTER lookup on this
+// value ALONE, with no walk fallback: unlike FindClaudePID's other callers,
+// a session lookup has no self-healing or non-fatal path if the key is
+// wrong — the walk's shared "claude daemon run" PID is exactly the
+// collision this decision closes, and letting the pointer lookup fall back
+// to it silently recreates ethos-vqwn for any caller whose CLAUDE_PID is
+// absent or unresolvable (older harnesses, transient process-table
+// failures, ancestry deeper than maxWalkDepth) (review finding, PR #502).
+func ClaudePIDFromEnvCorroborated() (string, bool) {
+	pid, ok := claudePIDFromEnv()
+	if !ok {
+		return "", false
+	}
+	if !isLiveAncestor(pid) {
 		// Two distinct causes collapse to the same "not corroborated" here:
 		// a stale env value (the real ancestor died, its PID recycled by an
 		// unrelated but legitimate claude session) or a transient failure
 		// reading the process table (isLiveAncestor's own error path). The
-		// message stays neutral rather than asserting the former — falling
-		// back to the walk is the correct response either way (DES-074
+		// message stays neutral rather than asserting the former (DES-074
 		// point 6, ported from biff session_id.py's resolve_routing_id).
 		fmt.Fprintf(os.Stderr,
-			"ethos: CLAUDE_PID=%d could not be corroborated as a live ancestor of this process; falling back to the process-tree walk\n",
+			"ethos: CLAUDE_PID=%d could not be corroborated as a live ancestor of this process\n",
 			pid)
+		return "", false
 	}
-	return walkToClaudeAncestor(os.Getpid())
+	return strconv.Itoa(pid), true
 }
 
 // LegacyClaudePID returns the topmost-claude-ancestor PID via the

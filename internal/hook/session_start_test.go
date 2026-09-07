@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -252,6 +253,17 @@ func TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey(t *testing.T) {
 	s, ss := setupIdentityWithAttributes(t, id, "", "")
 	isolateGitConfig(t, "bob")
 	t.Setenv("ETHOS_SESSION", "") // force the pointer-file path, not an ambient env
+	// This package's TestMain strips CLAUDE_PID and forces
+	// resolve.UnderClaudeCode false process-wide so its many other
+	// fixtures can simulate "genuinely no Claude Code in play". Both must
+	// be restored locally for this test: a corroborated CLAUDE_PID (a
+	// genuinely live ancestor) so SessionStart's write and SessionID's
+	// later read key on the same value, per the review finding that
+	// SessionID no longer trusts an uncorroborated walk-derived key.
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	old := resolve.UnderClaudeCode
+	resolve.UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { resolve.UnderClaudeCode = old })
 
 	sessionID := "s-key-agreement"
 	out := captureSessionStartOutput(t, `{"session_id": "`+sessionID+`"}`, SessionStartDeps{Store: s, Sessions: ss})
@@ -265,7 +277,7 @@ func TestHandleSessionStart_WriteKeyAgreesWithLaterReadKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, sessionID, readID,
 		"a later call's read key must resolve the session SessionStart's write key just created")
-	assert.Equal(t, "walk", source)
+	assert.Equal(t, resolve.SessionSourcePID, source)
 }
 
 func TestHandleSessionStart_NoIdentity_NoOutput(t *testing.T) {

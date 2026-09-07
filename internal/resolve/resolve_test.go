@@ -176,10 +176,15 @@ func TestResolveFromSession_DeadRosterRemedy_EnvSourced(t *testing.T) {
 // writes both a new pointer and a new roster together.
 func TestResolveFromSession_DeadRosterRemedy_WalkSourced(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
-	t.Setenv("CLAUDE_PID", "") // exercise the walk, not env+corroboration
+	// A corroborated CLAUDE_PID, not ETHOS_SESSION -- exercises the
+	// SessionSourcePID path, not the SessionSourceEnv one this test's
+	// sibling covers. A genuinely live ancestor stands in for the owning
+	// claude process (review finding, PR #502: an absent/uncorroborated
+	// CLAUDE_PID is no longer a walk fallback here -- it is ErrNoSession).
+	parent := strconv.Itoa(os.Getppid())
+	t.Setenv("CLAUDE_PID", parent)
 	ss := session.NewStore(t.TempDir())
-	pid := process.FindClaudePID()
-	require.NoError(t, ss.WriteCurrentSession(pid, "session-that-does-not-exist"))
+	require.NoError(t, ss.WriteCurrentSession(parent, "session-that-does-not-exist"))
 
 	_, err := resolveFromSession(ss)
 	require.Error(t, err)
@@ -253,19 +258,19 @@ func TestSessionID(t *testing.T) {
 		assert.Equal(t, SessionSourceEnv, source)
 	})
 
-	t.Run("walk fallback", func(t *testing.T) {
+	t.Run("corroborated CLAUDE_PID resolves via the pointer file", func(t *testing.T) {
 		t.Setenv("ETHOS_SESSION", "")
-		// This suite usually runs inside a real Claude Code session, where
-		// CLAUDE_PID is itself set — strip it so this genuinely exercises
-		// the walk this subtest is named for, not the env+corroboration
-		// path "env wins over walk" already covers.
-		t.Setenv("CLAUDE_PID", "")
-		pid := process.FindClaudePID()
-		require.NoError(t, ss.WriteCurrentSession(pid, "walk-session"))
+		// os.Getppid() is a genuinely live ancestor of this test process,
+		// standing in for the owning claude process CLAUDE_PID would name
+		// in production — corroboration cares only about live ancestry,
+		// not the command name.
+		parent := strconv.Itoa(os.Getppid())
+		t.Setenv("CLAUDE_PID", parent)
+		require.NoError(t, ss.WriteCurrentSession(parent, "pid-session"))
 		sid, source, err := SessionID(ss)
 		require.NoError(t, err)
-		assert.Equal(t, "walk-session", sid)
-		assert.Equal(t, "walk", source)
+		assert.Equal(t, "pid-session", sid)
+		assert.Equal(t, SessionSourcePID, source)
 	})
 
 	t.Run("neither resolves, under Claude Code", func(t *testing.T) {
@@ -316,8 +321,39 @@ func TestSessionID(t *testing.T) {
 		assert.Empty(t, sid)
 		assert.Empty(t, source)
 		assert.ErrorIs(t, err, ErrNotUnderClaudeCode,
-			"whitespace-only ETHOS_SESSION must fall through to the walk/DES-074 outcomes, not resolve as a literal id")
+			"whitespace-only ETHOS_SESSION must fall through to the DES-074 outcomes, not resolve as a literal id")
 	})
+}
+
+// TestSessionID_UncorroboratedPIDDoesNotFallBackToSharedWalkKey pins the
+// review finding that a fallback to the topmost-ancestor walk for the
+// SESSION-POINTER key recreates the exact collision DES-074 exists to
+// close. Constructs the precise failure state: running under Claude Code,
+// CLAUDE_PID absent (the older-harness sub-case) or uncorroborated, and a
+// pointer file already present under the walk-derived key -- written by an
+// UNRELATED session sharing this host's "claude daemon run" process, per
+// the measured six-rosters-one-PID scenario in the DES-074 context. A
+// pre-fix SessionID would silently resolve that unrelated session's ID;
+// this asserts it must not, and must instead report ErrNoSession.
+func TestSessionID_UncorroboratedPIDDoesNotFallBackToSharedWalkKey(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", "") // absent: the older-harness sub-case
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true } // a session WAS expected
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	// The walk-derived key a pre-fix caller would have resolved through --
+	// standing in for the shared "claude daemon run" PID every concurrent
+	// session on a host collides on.
+	sharedKey := process.LegacyClaudePID()
+	require.NoError(t, ss.WriteCurrentSession(sharedKey, "unrelated-session-from-another-repo"))
+
+	sid, source, err := SessionID(ss)
+	assert.Empty(t, sid, "must not silently resolve an unrelated concurrent session's ID via the shared walk key")
+	assert.Empty(t, source)
+	assert.ErrorIs(t, err, ErrNoSession)
 }
 
 // TestSessionID_ConcurrentSessionsDoNotCollide pins the ethos-vqwn fix: two
@@ -469,21 +505,32 @@ func TestSessionID_RetriesPointerFileRace(t *testing.T) {
 	sid, source, err := SessionID(ss)
 	require.NoError(t, err)
 	assert.Equal(t, "raced-session", sid)
-	assert.Equal(t, "walk", source)
+	assert.Equal(t, SessionSourcePID, source)
 }
 
 // TestSessionID_RetrySkippedWhenNotUnderClaudeCode pins the other half of
 // point 5: the retry must not fire when no session was ever expected --
 // only the "session was expected but unresolvable" branch pays the retry
 // latency. A missing goroutine writer here means a passing retry would
-// have to be spurious; this test relies on the immediate ErrNoSession-free
-// return alone; timing is asserted structurally, not by wall-clock bound,
-// to avoid a flaky CI threshold.
+// have to be spurious.
+//
+// pointerRetryDelay is inflated for the duration of this test (Copilot,
+// PR #502): the shipped value (50ms) is tight enough that a non-sleeping
+// call can still exceed it on a loaded CI runner from scheduling noise
+// alone, flaking the test with no retry ever having fired. At a
+// multi-second delay, a single retry firing would blow the bound by
+// orders of magnitude, so the wall-clock assertion still proves the
+// retry path was skipped, without depending on a tight absolute
+// threshold.
 func TestSessionID_RetrySkippedWhenNotUnderClaudeCode(t *testing.T) {
 	t.Setenv("ETHOS_SESSION", "")
 	old := UnderClaudeCode
 	UnderClaudeCode = func() bool { return false }
 	t.Cleanup(func() { UnderClaudeCode = old })
+
+	oldDelay := pointerRetryDelay
+	pointerRetryDelay = 5 * time.Second
+	t.Cleanup(func() { pointerRetryDelay = oldDelay })
 
 	ss := session.NewStore(t.TempDir())
 	start := time.Now()

@@ -141,8 +141,15 @@ type sessionPersona struct {
 
 // SessionSourceEnv is the source SessionID reports when the ID came from
 // ETHOS_SESSION (an explicit, caller-supplied anchor that consumers verify),
-// as opposed to the Claude process-tree walk.
+// as opposed to the corroborated CLAUDE_PID pointer file (SessionSourcePID).
 const SessionSourceEnv = "env"
+
+// SessionSourcePID is the source SessionID reports when the ID came from
+// the pointer file keyed on a corroborated CLAUDE_PID. Named for the
+// mechanism that actually resolves it — no fallback to the topmost-ancestor
+// walk remains in this path (review finding, PR #502) — rather than the
+// pre-fix "walk", which described a mechanism this function no longer uses.
+const SessionSourcePID = "pid"
 
 // ErrNoSession is returned by SessionID and resolveFromSession when a
 // session WAS expected — running under Claude Code (see
@@ -197,6 +204,19 @@ var ErrNoSession = errors.New("cannot identify the calling session")
 // session start` alone does not.
 const restartPointerRemedy = "restart the Claude Code session (or run /clear) so SessionStart re-establishes the session pointer; " +
 	"the direct, non-interactive equivalent is `ethos session write-current --pid <pid> --session <id>`"
+
+// uncorroboratedPIDRemedy is ErrNoSession's remedy for the sub-case where
+// CLAUDE_PID itself is absent or fails corroboration: there is no key to
+// look a session pointer up by at all, so restartPointerRemedy's advice
+// (re-run SessionStart) does not apply until the underlying cause — an
+// older Claude Code harness (pre-2.1.234) or a genuinely broken ancestry —
+// is fixed. Falling back to the topmost-ancestor walk here would key the
+// lookup on the shared "claude daemon run" PID every concurrent session on
+// the host collides on — precisely the collision DES-074 exists to close
+// (review finding, PR #502) — so this case is reported as unresolvable
+// rather than resolved via that shared key.
+const uncorroboratedPIDRemedy = "CLAUDE_PID is absent or could not be corroborated as a live ancestor of this process; " +
+	"upgrade to Claude Code 2.1.234+ if this is an older harness, or set ETHOS_SESSION=<id> directly"
 
 // deadRosterRemedy is ErrNoSession's remedy for its other sub-case: an
 // explicit ETHOS_SESSION (or a resolved pointer) names a session ID whose
@@ -256,14 +276,15 @@ var (
 )
 
 // SessionID resolves the active session ID using the harness-neutral chain:
-// ETHOS_SESSION, then the Claude process-tree current-pointer.
+// ETHOS_SESSION, then the pointer file keyed on a corroborated CLAUDE_PID.
 //
 // Three outcomes (DES-074), and err == nil if and only if id != "" — a
 // caller may trust `err == nil` alone to mean "resolved, id is valid,"
 // full stop (round 2: two of the three outcomes used to share err == nil,
 // and at least three callers pattern-matched on the error alone, silently
 // accepting an empty id for the "no session" case):
-//   - id != "", err == nil: resolved. source names SessionSourceEnv or "walk".
+//   - id != "", err == nil: resolved. source names SessionSourceEnv or
+//     SessionSourcePID.
 //   - id == "", err == ErrNotUnderClaudeCode: not running under Claude Code
 //     at all (headless, CI, SDK, a plain terminal) — a normal state. No
 //     session was ever expected; callers may silently try another
@@ -272,6 +293,18 @@ var (
 //     (running under Claude Code, per process.UnderClaudeCode) but could
 //     not be identified. Callers must fail loud with a non-zero exit and
 //     must NOT substitute another identity source.
+//
+// Deliberately does NOT fall back to the topmost-ancestor walk
+// (process.FindClaudePID's own fallback) when CLAUDE_PID is absent or fails
+// corroboration: that walk returns the shared "claude daemon run" PID every
+// concurrent Claude Code session on a host collides on, which would key
+// this lookup on an unrelated session's pointer and resolve a plausible but
+// WRONG session — precisely the collision this decision exists to close,
+// reachable through an older harness, a transient process-table failure, or
+// ancestry deeper than the walk's own depth cap (review finding, PR #502).
+// process.LegacyClaudePID's walk remains legitimate for participant-roster
+// tolerance (resolveFromSession below) and for process.UnderClaudeCode's own
+// presence check, neither of which shares this function's wrong-answer risk.
 //
 // Callers that accept an explicit session (a --session flag or an MCP
 // session_id arg) check that first and bypass this (DES-061).
@@ -284,17 +317,24 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 		return sid, SessionSourceEnv, nil
 	}
 
-	pid := process.FindClaudePID()
-	underClaude := UnderClaudeCode()
+	if !UnderClaudeCode() {
+		return "", "", ErrNotUnderClaudeCode
+	}
+
+	pid, ok := process.ClaudePIDFromEnvCorroborated()
+	if !ok {
+		// A session WAS expected (UnderClaudeCode is true) but there is no
+		// key this call can trust to look a pointer file up by. See the
+		// function doc: falling back to the walk here would re-key on the
+		// shared daemon PID, not report a wrong-answer risk as unresolvable.
+		return "", "", fmt.Errorf("%w: %s", ErrNoSession, uncorroboratedPIDRemedy)
+	}
 
 	sid, rerr := ss.ReadCurrentSession(pid)
-	if rerr != nil && underClaude {
+	if rerr != nil {
 		sid, rerr = retryReadCurrentSession(ss, pid, rerr)
 	}
 	if rerr != nil {
-		if !underClaude {
-			return "", "", ErrNotUnderClaudeCode
-		}
 		// Wrap rerr and append restartPointerRemedy rather than returning
 		// the bare ErrNoSession sentinel: the real cause (a permission
 		// error or a corrupt file is DIFFERENT from an ordinary missing
@@ -307,7 +347,7 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 		// the chain.
 		return "", "", fmt.Errorf("%w: %s (%v)", ErrNoSession, restartPointerRemedy, rerr)
 	}
-	return sid, "walk", nil
+	return sid, SessionSourcePID, nil
 }
 
 // retryReadCurrentSession re-reads the PID-keyed pointer file a few times
@@ -332,8 +372,8 @@ func retryReadCurrentSession(ss *session.Store, pid string, firstErr error) (str
 }
 
 // resolveFromSession resolves the session via the harness-neutral chain
-// (ETHOS_SESSION, then the Claude PID walk), then returns the caller's
-// persona from the roster. The caller's participant is keyed on
+// (ETHOS_SESSION, then the corroborated-CLAUDE_PID pointer), then returns
+// the caller's persona from the roster. The caller's participant is keyed on
 // ETHOS_AGENT_ID when set — matching how iam records it on both the CLI
 // and MCP surfaces — else on the Claude PID.
 //
