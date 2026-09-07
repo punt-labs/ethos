@@ -405,9 +405,20 @@ func runSessionStart(cmd *cobra.Command) error {
 	//    a shell metacharacter before it can be interpolated into the
 	//    eval-able export lines, and aligns with persona resolving to a real
 	//    identity. Rejected values never reach stdout.
+	//
+	//    Then resolve it against the identity store, BEFORE any roster is
+	//    written (ethos-gu3p) — consistent with DES-060's fail-hard-on-
+	//    dangling-refs precedent. Without this, a typo'd handle mints a
+	//    session and joins a primary participant that resolves to no
+	//    identity; `whoami` inside that session then silently falls back
+	//    to the git/OS identity (the same silent-degrade shape as
+	//    ethos-vqwn) instead of ever surfacing the typo.
 	if sessionStartPersona != "" {
 		if err := attribute.ValidateSlug(sessionStartPersona); err != nil {
 			return fmt.Errorf("session start: --persona %q must be a valid handle (lowercase alphanumeric with hyphens)", sessionStartPersona)
+		}
+		if !identityStore().Exists(sessionStartPersona) {
+			return fmt.Errorf("session start: --persona %q does not name a known identity", sessionStartPersona)
 		}
 	}
 

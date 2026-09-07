@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`ethos session start --persona <handle>` now validates the handle
+  resolves to a known identity before writing the roster**, instead of
+  minting a session keyed on a dangling reference. A typo'd `--persona`
+  previously exited 0 and silently degraded `whoami` to the git/OS identity
+  rather than ever surfacing the mistake (ethos-gu3p).
 - **`ethos session end` now hints `unset ETHOS_SESSION`** when the variable
   is set, symmetric with `session start`, which prints `export
   ETHOS_SESSION=...`. Previously the command that invalidates the variable

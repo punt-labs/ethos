@@ -263,6 +263,9 @@ func TestCLI_SessionStart_IdempotentPersonaParentIsRoot(t *testing.T) {
 		t.Skip("ethos binary not built")
 	}
 	se := setupCLISubprocessEnv(t)
+	idsDir := filepath.Join(se.home, ".punt-labs", "ethos", "identities")
+	require.NoError(t, os.WriteFile(filepath.Join(idsDir, "bwk.yaml"),
+		[]byte("name: Brian K\nhandle: bwk\nkind: agent\n"), 0o644))
 	id := startedSessionID(t, se) // fresh, no persona; root == test-agent
 
 	// Two re-runs with the persona AND ETHOS_AGENT_ID exported — the second
@@ -392,6 +395,30 @@ func TestCLI_SessionStart_RejectsUnsafePersona(t *testing.T) {
 		assert.Contains(t, stderr, "valid handle", "the rejection must be actionable")
 		assert.NotContains(t, stdout, "export ETHOS_AGENT_ID", "an unsafe persona must never reach stdout")
 	}
+}
+
+// TestCLI_SessionStart_RejectsUnknownPersona pins ethos-gu3p: a --persona
+// naming no identity must be rejected BEFORE the roster is written, not
+// discovered later at whoami (where it previously degraded silently to the
+// git/OS identity — DES-060's fail-hard-on-dangling-refs precedent applies
+// here the same way it does to setup).
+func TestCLI_SessionStart_RejectsUnknownPersona(t *testing.T) {
+	if ethosBinary == "" {
+		t.Skip("ethos binary not built")
+	}
+	se := setupCLISubprocessEnv(t)
+	sessionsDir := filepath.Join(se.home, ".punt-labs", "ethos", "sessions")
+	before, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+
+	stdout, stderr, code := runCLI(t, se, "session", "start", "--persona", "definitely-not-a-real-persona")
+	require.NotEqual(t, 0, code, "unknown persona must be rejected; stdout=%q", stdout)
+	assert.Contains(t, stderr, "does not name a known identity")
+	assert.NotContains(t, stdout, "export ETHOS_SESSION", "a rejected persona must never mint a session")
+
+	after, err := os.ReadDir(sessionsDir)
+	require.NoError(t, err)
+	assert.Equal(t, len(before), len(after), "no roster file may be written when the persona is rejected")
 }
 
 // TestCLI_SessionStart_ReattachAcceptsOpaqueID pins the corrected hardening:
