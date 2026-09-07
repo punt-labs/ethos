@@ -172,8 +172,43 @@ const SessionSourceEnv = "env"
 // The message carries no "ethos: " prefix — cmd/ethos's top-level error
 // printer adds that once; prefixing it here doubled it to "ethos: ethos:
 // ..." (Bugbot/team-lead HIGH, round 2).
-var ErrNoSession = errors.New(
-	"cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`")
+//
+// The base message names only the failure, not a remedy (mission 005
+// finding G): "set ETHOS_SESSION=<id>, or run `ethos session start`" was
+// verified inert against this specific error's two sub-cases.
+// `ethos session start` (cmd/ethos/session.go's runSessionStart) creates a
+// roster and prints an `export ETHOS_SESSION=...` line to stdout — it
+// never calls session.Store.WriteCurrentSession, so it cannot repair a
+// broken pointer file, and its own output reaches nothing unless the
+// caller evaluates it (`eval "$(ethos session start)"`), which fixes only
+// that one shell's environment, never a process Claude Code spawned
+// (which inherits Claude Code's environment, not the terminal's). Naming
+// a remedy that does not remedy costs the reader a retry cycle before
+// they learn to distrust the message, so each call site below composes
+// its own sub-case-specific advice instead — see restartPointerRemedy and
+// deadRosterRemedy.
+var ErrNoSession = errors.New("cannot identify the calling session")
+
+// restartPointerRemedy is ErrNoSession's remedy for its dominant sub-case:
+// the session-current pointer file is missing, blank, or otherwise
+// unreadable (SessionID's own failure path). Restarting the Claude Code
+// session (or running /clear) makes SessionStart fire again, which is the
+// only thing that calls session.Store.WriteCurrentSession — `ethos
+// session start` alone does not.
+const restartPointerRemedy = "restart the Claude Code session (or run /clear) so SessionStart re-establishes the session pointer; " +
+	"the direct, non-interactive equivalent is `ethos session write-current --pid <pid> --session <id>`"
+
+// deadRosterRemedy is ErrNoSession's remedy for its other sub-case: an
+// explicit ETHOS_SESSION (or a resolved pointer) names a session ID whose
+// roster no longer exists on disk. Unlike restartPointerRemedy, there is
+// no Claude Code hook to re-fire here — the caller supplied (or the
+// pointer named) an ID that is simply gone. `eval "$(ethos session
+// start)"` mints a fresh one and sets it in the CALLING shell, but the
+// eval is mandatory: the bare command only prints the export, and even
+// with eval this fixes only that shell's own environment, never a process
+// Claude Code spawned.
+const deadRosterRemedy = "run `eval \"$(ethos session start)\"` in your shell to mint a fresh session " +
+	"(the eval is required; this does not help a process Claude Code spawned, which inherits Claude Code's own environment, not the shell's)"
 
 // ErrNotUnderClaudeCode is returned by SessionID when no session was ever
 // expected: not running under Claude Code at all (headless, CI, SDK, a
@@ -241,7 +276,11 @@ var (
 // Callers that accept an explicit session (a --session flag or an MCP
 // session_id arg) check that first and bypass this (DES-061).
 func SessionID(ss *session.Store) (id, source string, err error) {
-	if sid := os.Getenv("ETHOS_SESSION"); sid != "" {
+	// TrimSpace, not a bare non-empty check (mission 005 finding E): an
+	// env value of all whitespace is not a session ID any more than an
+	// empty string is, but `sid != ""` alone would have accepted it and
+	// handed a caller a garbage ID to look up.
+	if sid := strings.TrimSpace(os.Getenv("ETHOS_SESSION")); sid != "" {
 		return sid, SessionSourceEnv, nil
 	}
 
@@ -256,14 +295,17 @@ func SessionID(ss *session.Store) (id, source string, err error) {
 		if !underClaude {
 			return "", "", ErrNotUnderClaudeCode
 		}
-		// Wrap rerr rather than returning the bare ErrNoSession sentinel:
-		// "set ETHOS_SESSION" is the right remedy for the common case (no
-		// pointer file — the retry above just confirmed it, there is no
-		// session), but a permission error or a corrupt file is a
-		// DIFFERENT, determinable cause that remedy would not fix (round
-		// 2, R6). errors.Is(err, ErrNoSession) still holds for every
-		// caller that checks it, since %w preserves the chain.
-		return "", "", fmt.Errorf("%w (%v)", ErrNoSession, rerr)
+		// Wrap rerr and append restartPointerRemedy rather than returning
+		// the bare ErrNoSession sentinel: the real cause (a permission
+		// error or a corrupt file is DIFFERENT from an ordinary missing
+		// pointer, and the retry above already confirmed there is no
+		// pointer to find) must stay visible (round 2, R6), and the
+		// remedy must actually be the one that fixes THIS sub-case — a
+		// broken or absent pointer file, repaired only by a fresh
+		// SessionStart (mission 005 finding G). errors.Is(err, ErrNoSession)
+		// still holds for every caller that checks it, since %w preserves
+		// the chain.
+		return "", "", fmt.Errorf("%w: %s (%v)", ErrNoSession, restartPointerRemedy, rerr)
 	}
 	return sid, "walk", nil
 }
@@ -315,7 +357,7 @@ func retryReadCurrentSession(ss *session.Store, pid string, firstErr error) (str
 // since a declared-but-personaless participant is an explicit "no
 // identity," not an absence.
 func resolveFromSession(ss *session.Store) (sessionPersona, error) {
-	sessionID, _, err := SessionID(ss)
+	sessionID, source, err := SessionID(ss)
 	if err != nil {
 		if errors.Is(err, ErrNotUnderClaudeCode) {
 			// A legitimate absence, not a wrong-answer risk: translate to
@@ -327,10 +369,20 @@ func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 	}
 	roster, lErr := ss.Load(sessionID)
 	if lErr != nil {
-		if errors.Is(lErr, os.ErrNotExist) {
-			return sessionPersona{}, fmt.Errorf("session %q not found: %w", sessionID, ErrNoSession)
+		// The session ID itself resolved, but no roster exists for it — a
+		// dead reference, not a broken pointer, so the remedy differs
+		// (mission 005 finding G): an explicit ETHOS_SESSION named an ID
+		// that is simply gone (deadRosterRemedy); a resolved pointer
+		// naming a deleted roster is repaired the same way a broken
+		// pointer is, by a fresh SessionStart (restartPointerRemedy).
+		remedy := restartPointerRemedy
+		if source == SessionSourceEnv {
+			remedy = deadRosterRemedy
 		}
-		return sessionPersona{}, fmt.Errorf("session %q has an unreadable roster (%v): %w", sessionID, lErr, ErrNoSession)
+		if errors.Is(lErr, os.ErrNotExist) {
+			return sessionPersona{}, fmt.Errorf("session %q not found: %w: %s", sessionID, ErrNoSession, remedy)
+		}
+		return sessionPersona{}, fmt.Errorf("session %q has an unreadable roster (%v): %w: %s", sessionID, lErr, ErrNoSession, remedy)
 	}
 	agentID := os.Getenv("ETHOS_AGENT_ID")
 	selfKeyed := agentID == ""

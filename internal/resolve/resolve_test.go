@@ -153,6 +153,42 @@ func TestResolve_ParticipantMissFallsThroughToGitOS(t *testing.T) {
 	assert.Equal(t, "someone", handle, "must fall through to the git identity")
 }
 
+// TestResolveFromSession_DeadRosterRemedy_EnvSourced pins mission 005
+// finding G: an explicit ETHOS_SESSION naming a roster that no longer
+// exists on disk gets the deadRosterRemedy advice (eval a fresh session),
+// not restartPointerRemedy -- there is no Claude Code hook to re-fire for
+// an ID the caller supplied directly, unlike a broken pointer file.
+func TestResolveFromSession_DeadRosterRemedy_EnvSourced(t *testing.T) {
+	ss := session.NewStore(t.TempDir())
+	t.Setenv("ETHOS_SESSION", "session-that-does-not-exist")
+
+	_, err := resolveFromSession(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Contains(t, err.Error(), "eval", "an env-named dead roster must be told to mint a fresh session, not to restart Claude Code")
+	assert.NotContains(t, err.Error(), "restart the Claude Code session")
+}
+
+// TestResolveFromSession_DeadRosterRemedy_WalkSourced pins mission 005
+// finding G's other half: a resolved pointer (not an explicit
+// ETHOS_SESSION) naming a deleted roster gets restartPointerRemedy --
+// the same fix as a broken pointer file, since a fresh SessionStart
+// writes both a new pointer and a new roster together.
+func TestResolveFromSession_DeadRosterRemedy_WalkSourced(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	t.Setenv("CLAUDE_PID", "") // exercise the walk, not env+corroboration
+	ss := session.NewStore(t.TempDir())
+	pid := process.FindClaudePID()
+	require.NoError(t, ss.WriteCurrentSession(pid, "session-that-does-not-exist"))
+
+	_, err := resolveFromSession(ss)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Contains(t, err.Error(), "restart the Claude Code session",
+		"a resolved pointer naming a deleted roster must be told to restart, matching a broken pointer's own remedy")
+	assert.NotContains(t, err.Error(), "eval")
+}
+
 func TestResolve_SessionFromEnv(t *testing.T) {
 	// No current-pointer is written; discovery is via ETHOS_SESSION alone
 	// (the Codex / plain-terminal path). whoami must still reflect the
@@ -265,6 +301,23 @@ func TestSessionID(t *testing.T) {
 		assert.Empty(t, source)
 		assert.ErrorIs(t, err, ErrNotUnderClaudeCode)
 	})
+
+	t.Run("whitespace-only ETHOS_SESSION is not a session id", func(t *testing.T) {
+		// Mission 005 finding E's sibling: the pre-fix `sid != ""` check
+		// accepted "   " as a valid session id, handing a caller a
+		// whitespace string to look up instead of falling through to the
+		// walk (or the loud/silent DES-074 outcomes). TrimSpace closes it.
+		t.Setenv("ETHOS_SESSION", "   ")
+		old := UnderClaudeCode
+		UnderClaudeCode = func() bool { return false }
+		t.Cleanup(func() { UnderClaudeCode = old })
+		empty := session.NewStore(t.TempDir())
+		sid, source, err := SessionID(empty)
+		assert.Empty(t, sid)
+		assert.Empty(t, source)
+		assert.ErrorIs(t, err, ErrNotUnderClaudeCode,
+			"whitespace-only ETHOS_SESSION must fall through to the walk/DES-074 outcomes, not resolve as a literal id")
+	})
 }
 
 // TestSessionID_ConcurrentSessionsDoNotCollide pins the ethos-vqwn fix: two
@@ -356,12 +409,14 @@ func TestSessionID_UnresolvableIsNamedError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoSession)
 	assert.Empty(t, sid)
 	assert.Empty(t, source)
-	assert.Contains(t, err.Error(), "ethos session start", "the error must name the remedy")
+	assert.Contains(t, err.Error(), "restart the Claude Code session", "the error must name a remedy that actually fixes a broken pointer file")
+	assert.NotContains(t, err.Error(), "ethos session start",
+		"mission 005 finding G: this remedy is inert against a broken pointer file -- ethos session start never writes one")
 }
 
 // TestSessionID_SurfacesRealReadCauseNotJustGenericRemedy pins round 2,
 // R6: retryReadCurrentSession's accumulated error must not be discarded
-// in favor of the bare ErrNoSession sentinel. "set ETHOS_SESSION" is the
+// in favor of the bare ErrNoSession sentinel. restartPointerRemedy is the
 // right remedy for the common case (no pointer file at all), but a
 // determinable, different cause — here, the pointer "file" is actually a
 // directory — is not fixed by that remedy and must be visible in the
