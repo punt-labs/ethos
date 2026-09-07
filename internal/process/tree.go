@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || windows
 
 // Package process provides utilities for walking the process tree
 // using native OS interfaces (no subprocess spawning).
@@ -259,13 +259,16 @@ func UnderClaudeCode() bool {
 // environment.
 const ForceNotUnderClaudeCodeEnv = "ETHOS_TEST_NOT_UNDER_CLAUDE_CODE"
 
-// isClaudeComm checks if a process command name refers to Claude.
-// Matches "claude" exactly or paths ending in "/claude".
+// isClaudeComm checks if a process command name refers to Claude. Matches
+// "claude" exactly, paths ending in "/claude" or "\claude" (Windows'
+// ProcessEntry32.ExeFile carries a backslash-separated name), and the
+// Windows-suffixed "claude.exe" form.
 func isClaudeComm(comm string) bool {
 	base := comm
-	if idx := strings.LastIndex(comm, "/"); idx >= 0 {
+	if idx := strings.LastIndexAny(comm, `/\`); idx >= 0 {
 		base = comm[idx+1:]
 	}
+	base = strings.TrimSuffix(strings.ToLower(base), ".exe")
 	return base == "claude"
 }
 
