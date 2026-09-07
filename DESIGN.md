@@ -7976,9 +7976,14 @@ never inferred from the process tree and never cached.
 
 1. **Key the pointer file on `CLAUDE_PID`**, the owning `claude` process's own
    PID, which Claude Code sets on every spawned subprocess. Unlike the topmost
-   walk it is distinct per session and per nesting level. Fall back to the
-   existing walk only when the variable is absent (headless, CI, SDK, or a
-   Claude Code older than 2.1.234).
+   walk it is distinct per session — the collision this decision closes.
+   *(Corrected 2026-09-07, round 2 measurement: a Task-tool subagent
+   inherits its leader's `CLAUDE_PID` verbatim, not a value of its own —
+   "distinct per nesting level" was wrong. `CLAUDE_PID` distinguishes
+   concurrent SESSIONS, not nesting depth within one; a subagent and its
+   leader share a session and correctly share the key. See the round 2
+   amendment.)* Fall back to the existing walk only when the variable is
+   absent (headless, CI, SDK, or a Claude Code older than 2.1.234).
 2. **Corroborate before trusting it.** `CLAUDE_PID` is captured once at spawn
    and never re-observed, so a long-lived process whose ancestor died — with the
    PID since recycled by an unrelated but legitimate `claude` session — would
@@ -8223,3 +8228,137 @@ rationale (ethos-pobi: a missing trailer is the failure this hook exists
 to prevent), the under-Claude-Code-but-unresolvable case now prints a
 diagnostic to stderr while still emitting no trailer and still exiting 0;
 the not-under-Claude-Code case is unchanged and stays fully silent.
+
+### Amendment 2026-09-07: round 2 formal reflection — six findings
+
+A formal reflection (three independent local review agents plus direct
+leader verification — running the patched binary against the leader's
+own live session, not just the test suite) found the implementation of
+this decision reintroduced the class of defect it exists to close,
+through mechanisms the original decision text did not anticipate.
+
+**R1 / R1b — the pointer file itself could silently lie.**
+`WriteCurrentSession` used a direct `os.WriteFile` (truncate in place),
+unlike `writeRoster`'s existing temp+rename discipline for the roster
+file. A concurrent `ReadCurrentSession` could observe a zero-byte or
+partially written file mid-write, and `ReadCurrentSession` read that
+blank content as `("", nil)` — a *successful, empty* session id,
+indistinguishable from "no session," which took this decision's silent
+branch even while running under Claude Code. The pointer-file mechanism
+reintroduced exactly the silent-wrong-answer shape this decision exists
+to close, one layer down from the PID-collision bug it was written to
+fix. Fixed: `WriteCurrentSession` now writes via the same
+`CreateTemp` + `Chmod` + `Sync` + `Close` + `Rename` pattern as
+`writeRoster`; `ReadCurrentSession` treats a blank result as an error,
+identically to a missing file.
+
+**R2 / R2b — SessionStart paid its own retry, then lost the human's
+identity.** `internal/hook/session_start.go`'s `resolveHumanIdentity` ran
+*before* `createSessionRoster` wrote the pointer file — but at
+`SessionStart`, no pointer file or roster can exist yet for this exact
+invocation, since it is what would create them. Before this decision,
+that miss was silent and free, so the human's git/OS identity resolved
+immediately regardless. After it, the miss paid the bounded retry
+(~450ms) and then propagated a named error that `resolveHumanIdentity`
+caught and logged, degrading every fresh session's greeting to the bare
+OS username — a real, measurable regression on every single session
+start. Compounding it: `session-start.sh` redirects the hook's stderr to
+`hook-errors.log` and swallows its exit status with `|| true` (correct,
+documented fail-open policy for hook wrappers — see cli.md's Hook
+Architecture section), so the new 450ms cost and its error were both
+invisible to the operator. Fixed at the root, not by reordering:
+`resolveHumanIdentity` no longer consults the session store at all
+(`resolve.Resolve(store, nil)`). A session-based lookup at this exact
+call site is a structural, guaranteed miss by construction of when
+`SessionStart` fires, not a signal about the human's identity — it was
+never actually load-bearing, only silently free before this decision
+made misses expensive. R2b needed no separate fix: with no loud message
+produced at this call site anymore, there is nothing left for the
+wrapper to swallow.
+
+**R3 — participant miss is not fatal (binding ruling).** A session
+resolving and its roster loading successfully, but this caller having no
+matching participant in it, was treated as a loud `ErrNoSession` —
+conflating a genuine absence (any process that has not run `iam` yet,
+the ordinary state for most callers) with a wrong answer. `whoami` and
+`doctor` hard-failed on every session whose primary participant predated
+this decision's `CLAUDE_PID` re-keying (see the participant-keying
+amendment above), because a re-derived key correctly found the SESSION
+but the caller was not (yet, under the new key) a participant in it.
+Ruling: **a participant miss is not fatal; only an unresolvable session
+is.** `resolveFromSession` now returns silently (try the next identity
+source) on a participant miss, exactly like "not running under Claude
+Code at all." Only the session itself failing to identify or load
+remains loud — two of this decision's three originally measured
+wrong-answer cases ("an ended session", and before `CLAUDE_PID` keying,
+"the wrong repo"); a misspelled persona is the third, already surfaced
+downstream when the caller loads the returned handle, never a
+`resolveFromSession` concern.
+
+This also corrects the "distinct per nesting level" claim in the
+Decision section above: a Task-tool subagent's own environment shows it
+inherits its leader's `CLAUDE_PID` **verbatim**, not a value of its own
+(measured: worker subprocess PID 1984899 carried `CLAUDE_PID=1710156`,
+identical to its leader). `CLAUDE_PID` distinguishes concurrent
+*sessions*, not nesting depth within one session — a subagent and its
+leader belong to the same session and correctly share the same key. This
+is why R3's ruling matters beyond the immediate bug: a subagent is
+*expected* to share its leader's `CLAUDE_PID`-derived session pointer
+while genuinely not yet being a named roster participant under it (it
+joins the roster separately, keyed on its own Claude-assigned
+`agent_id` — see `internal/hook/subagent_start.go`), so treating a
+participant miss as fatal would have made routine subagent spawns loud
+failures, not just pre-upgrade rosters.
+
+**R4 — the loud branch had no direct test coverage in `cmd/ethos` or
+`internal/hook`.** Both packages force `resolve.UnderClaudeCode` false
+process-wide in their own `TestMain`, for an unrelated reason (defeating
+the ancestor-walk signal so their many other fixtures can simulate
+"genuinely no Claude Code in play" — this suite runs inside a live
+Claude Code session, where a real claude ancestor is otherwise
+unavoidable). No test in either package turned the flag back on to prove
+the loud branch is reachable there, so a green `make check` on the
+round 1 branch did not mean what it appeared to mean for the branch's
+headline behavior. Added direct coverage in both packages (see the
+regression test lists in the R1–R6 commits) that explicitly restores
+`resolve.UnderClaudeCode` to `true` and exercises the loud path end to
+end. `internal/hook`'s gap closed differently: after R2's fix,
+`resolve.Resolve`'s session-lookup path is no longer reachable from
+`internal/hook`'s production code at all (`resolveHumanIdentity` passes
+`ss = nil`), so there is structurally nothing left to test there.
+
+**R5 — `mission dispatch`/`create` could silently fail to rebind.**
+`cmd/ethos/iam.go`'s `resolveSession` collapsed both of this decision's
+branches (genuinely no session; a session was expected but
+unresolvable) into the same local `errNoSession` sentinel.
+`bindDispatchedMission` and `clearClosedSessionBindings` check
+`errors.Is(err, errNoSession)` specifically to treat "no session at all"
+as their ordinary, silent-skip case (a human running `mission dispatch`
+from a plain terminal has nothing to rebind) — with the collapse, that
+check was unconditionally true, so a genuine resolution failure under
+Claude Code was ALSO silently treated as nothing-to-do. The mission
+still dispatched successfully and printed so, but the session's
+active-mission sidecar was never rebound, and the next `Agent()` spawn
+filed its delegation under the PREVIOUS mission id. Fixed:
+`resolveSession` now propagates `resolve.ErrNoSession` as-is when that
+is what `resolve.SessionID` returned, instead of swapping it for the
+local sentinel; the two remain distinguishable by `errors.Is`, so every
+existing "no session at all" handling is unaffected and the genuine
+failure now reaches the caller's real-failure branch.
+
+**R6 — the wrong remedy for the wrong cause.** `SessionID` discarded
+`retryReadCurrentSession`'s accumulated error in favor of the bare
+`ErrNoSession` sentinel, so a permission error or a corrupt pointer file
+reported "set `ETHOS_SESSION`" — a remedy that fixes neither. Fixed:
+the real cause is now wrapped into the returned error
+(`fmt.Errorf("%w (%v)", ErrNoSession, rerr)`); `errors.Is(err,
+ErrNoSession)` still holds for every caller that pattern-matches on it,
+but the message names what actually went wrong when it is something
+other than "no pointer file at all".
+
+Full detail and regression tests: see the round 2 commits on
+`fix/session-pid-identity` following this reflection
+(`internal/session/store.go`'s `WriteCurrentSession`/
+`ReadCurrentSession`; `internal/hook/session_start.go`'s
+`resolveHumanIdentity`; `internal/resolve/resolve.go`'s
+`resolveFromSession`/`SessionID`; `cmd/ethos/iam.go`'s `resolveSession`).

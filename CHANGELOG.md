@@ -33,7 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deploys keeps working: participant lookups and `iam` writes tolerate a
   roster whose primary participant is still keyed on the pre-fix
   walk-derived PID, so `whoami`/`iam` do not break until that session
-  ends and a fresh session naturally picks up the new key.
+  ends and a fresh session naturally picks up the new key. A caller that
+  is simply not yet a declared participant in an otherwise-valid session
+  (has not run `iam` yet) is not an error either — only a session that
+  itself cannot be identified or loaded is. `ethos session start` no
+  longer pays a startup delay resolving its own not-yet-existing
+  session, and the session-current pointer file is now written
+  atomically, closing a window where a concurrent reader could see a
+  blank file and silently misattribute identity.
 - Post-release restore commits no longer carry `[skip ci]`.
   `scripts/restore-dev-plugin.sh` tagged its commit with `[skip ci]`, which
   suppressed all workflows on the head of the post-release PR — while the
