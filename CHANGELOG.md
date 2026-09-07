@@ -35,17 +35,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Code context at all (a headless, CI, or plain-terminal invocation) is
   unaffected and still resolves via git config or the OS user with no
   session in play. A session that was already running when this fix
-  deploys keeps working: participant lookups and `iam` writes tolerate a
-  roster whose primary participant is still keyed on the pre-fix
-  walk-derived PID, so `whoami`/`iam` do not break until that session
-  ends and a fresh session naturally picks up the new key. A caller that
-  is simply not yet a declared participant in an otherwise-valid session
+  deploys keeps working for its **roster**: participant lookups and `iam`
+  writes tolerate a primary participant still keyed on the pre-fix
+  walk-derived PID, so a session that has resolved does not break on
+  `whoami`/`iam` merely because it predates this fix. A caller that is
+  simply not yet a declared participant in an otherwise-valid session
   (has not run `iam` yet) is not an error either — only a session that
   itself cannot be identified or loaded is. `ethos session start` no
   longer pays a startup delay resolving its own not-yet-existing
   session, and the session-current pointer file is now written
   atomically, closing a window where a concurrent reader could see a
   blank file and silently misattribute identity.
+  **Upgrade note, corrected from an earlier draft of this entry:** the
+  session-**pointer** lookup itself has no equivalent tolerance and
+  cannot safely grow one (see the next entry) — an in-flight session
+  whose pointer file was written under the pre-fix walk-derived key
+  fails loud on its first call after upgrade (`whoami`, `iam`, commit
+  trailers, and mission rebind all report "cannot identify the calling
+  session"), not silently, and not by resolving to a wrong answer.
+  Restarting the Claude Code session (or running `/clear`) makes
+  `SessionStart` re-fire and rewrite the pointer under the corroborated
+  key, after which the session behaves normally again — a one-time,
+  per-session cost at upgrade, not a lasting break.
+- **A caller with no usable `CLAUDE_PID` could resolve an unrelated,
+  concurrent session's identity (PR #502 review).** Session-pointer
+  resolution still fell back to the topmost-`claude`-ancestor walk
+  whenever `CLAUDE_PID` was absent or failed corroboration (an older
+  Claude Code harness, a transient process-table read failure, or
+  ancestry deeper than the walk's depth cap) — reconstructing the exact
+  shared-PID collision the fix above exists to close, because that walk
+  returns the same PID every concurrent Claude Code session on a host
+  shares. Session-pointer lookup no longer calls the walk at all; when
+  `CLAUDE_PID` cannot be trusted, it now reports "cannot identify the
+  calling session" (naming the harness-version or `ETHOS_SESSION` remedy)
+  instead of guessing. The walk remains legitimate, and unchanged, for
+  its other two uses — roster participant-lookup tolerance and the
+  under-Claude-Code presence check — neither of which trusts the walk's
+  PID as a lookup key for someone else's state.
 - A subagent's `SubagentStart` announcement could report the wrong
   parent persona when the parent's session roster held both a
   legacy-keyed and a preferred-keyed record for the same process and

@@ -8185,6 +8185,12 @@ pre-fix `FindClaudePID()` always returned:
    self-heals the moment it ends and a fresh `SessionStart` writes a new
    roster — there is nothing left to tolerate once no pre-upgrade session
    remains alive.
+   *(Scope note, added after the PR #502 amendment below: this tolerance
+   is for the ROSTER's participant lookup only, and presumes the SESSION
+   POINTER lookup already resolved. It does not, by itself, describe
+   whether an in-flight session's pointer lookup succeeds at upgrade
+   time — see "Amendment: the upgrade-migration gap the participant-keying
+   amendment did not cover" for that.)*
 
 **Rejected: participant identity stays on the process-tree walk, only
 the pointer file moves to `CLAUDE_PID`.** Simpler — no dual-key lookup,
@@ -8791,3 +8797,96 @@ the pointer file" subtest of `TestSessionID`, and
 supply a corroborated CLAUDE_PID rather than relying on the now-removed
 walk fallback, since that is the only path left through which a non-env
 session resolves.
+
+### Amendment 2026-09-07: the upgrade-migration gap the participant-keying amendment did not cover
+
+Bugbot, reviewing the PR opened for the amendment directly above, found
+that its fix reopens a migration gap the participant-keying amendment
+(two amendments up) never anticipated, because that amendment was
+written while `SessionID` still had a walk fallback to fall into.
+
+**The gap.** The participant-keying amendment's item 3 states a session
+that predates an ethos upgrade "self-heals" via the roster's legacy-key
+tolerance — true, but scoped to the ROSTER's participant lookup, which
+presumes `SessionID` already resolved a session id to load a roster
+from. It says nothing about whether the SESSION-POINTER lookup itself
+resolves for such a session, because at the time it was written,
+`SessionID` still fell back to the topmost-ancestor walk whenever
+`CLAUDE_PID` was absent or uncorroborated — a fallback that could
+(dangerously) find a pre-upgrade session's pointer, since that pointer
+was itself written under the walk-derived key. The very amendment
+directly above removes that fallback, to close the cross-session
+collision it caused. A side effect neither amendment names directly:
+an in-flight session whose on-disk pointer file is still walk-keyed —
+any session that has not had `SessionStart` re-fire (no restart, no
+`/clear`) since the upgrade — now gets `ErrNoSession` on its very next
+call, not a resolved session with a legacy-keyed roster miss. The
+"Measured" paragraph in the participant-keying amendment shows a
+session where the POINTER resolved and only the PARTICIPANT lookup
+missed; that measurement's own session had already had its pointer
+rewritten under an intermediate CLAUDE_PID-preferring build sometime
+before the roster-keying gap was found, which is a specific history,
+not the general case a plain upgrade produces.
+
+**Ruling (operator, 2026-09-07).** Keep the no-fallback behavior from
+the amendment directly above. Do not add a legacy-key fallback to the
+session-POINTER lookup, even a narrowed one. The natural-seeming middle
+path — read the legacy-keyed pointer, then verify the roster it names
+has a `repo` field matching the caller's current repo before trusting
+it — was considered and rejected: it is defeated by the case of two
+concurrent Claude Code sessions in the SAME repo, which both walk to
+the identical `LegacyClaudePID` value (the shared "claude daemon run"
+process), so BOTH would have the SAME repo field and a repo check
+cannot tell them apart. Whichever session's pointer happened to be
+written to that shared key most recently would win, arbitrarily,
+handing the OTHER session a plausible but wrong identity with exit
+status 0 — reconstructing this decision's original wrong-answer defect
+through the one door believed closed, rather than the narrower
+"neither one resolves cleanly" gap this amendment describes. A
+mechanism that is reliable or raises a clear error, never a plausible
+guess (this decision's own operator ruling, above), is worth a one-time
+loud failure per in-flight session at upgrade over a check that mostly
+works and fails exactly when two sessions in the same repo are the
+scenario in play — the routine case for agents working across
+worktrees and sibling repos.
+
+**What actually happens, precisely.** An in-flight session at the
+moment of upgrade calls `whoami`, `iam`, `mission dispatch`/`claim`, or
+commits (the trailer hook): `SessionID` looks up the pointer file under
+the corroborated `CLAUDE_PID` key, finds nothing (the file exists only
+under the old walk-derived key), and returns `ErrNoSession` with
+`restartPointerRemedy` — "restart the Claude Code session (or run
+`/clear`) so `SessionStart` re-establishes the session pointer." This is
+loud (non-zero exit, or a stderr diagnostic for the commit-trailer hook,
+which never blocks a commit), safe (no wrong answer is ever returned),
+and self-healing (the very next `SessionStart` — a restart or `/clear`
+— rewrites the pointer under the new key, and the session behaves
+normally from then on, including the roster tolerance the
+participant-keying amendment already provides). It is a one-time,
+per-session cost at upgrade, not a lasting break.
+
+**Documentation corrected.** Both `CHANGELOG.md`'s original DES-074
+entry and the participant-keying amendment's item 3 (marginal note
+added above) stated or implied a stronger "keeps working" guarantee for
+in-flight sessions than the shipped code provides once the amendment
+directly above lands. `CHANGELOG.md`'s entry is corrected in place to
+scope the "keeps working" claim to the roster/participant mechanism and
+add the pointer-lookup upgrade note (restart or `/clear`, loud and
+self-healing) as its own, explicitly user-visible bullet — this was a
+documentation defect the leader is required to fix regardless of
+severity, per this repo's own "no pre-existing issue" standard, not
+merely a nice-to-have.
+
+Regression test:
+`TestSessionID_InFlightSessionPointerFailsLoudUntilSessionStartRefires`
+(`internal/resolve/resolve_test.go`) constructs an in-flight session
+exactly as an upgrade leaves it — a corroborating `CLAUDE_PID` distinct
+from `LegacyClaudePID`, a roster whose participant is legacy-keyed (so
+the roster tolerance would succeed if reached), and a pointer file
+written ONLY under the legacy key — and asserts `SessionID` still
+returns `ErrNoSession` with the restart remedy, never the session's id.
+This is a pinning test for ratified behavior, not a fix-driven one: it
+passes against the code as it already stands after the amendment
+directly above, and exists so a future, well-intentioned fallback
+cannot reintroduce the collision this ruling explicitly rejected without
+first deleting or rewriting this test.

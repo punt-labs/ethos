@@ -366,6 +366,71 @@ func TestSessionID_UncorroboratedPIDDoesNotFallBackToSharedWalkKey(t *testing.T)
 	assert.ErrorIs(t, err, ErrNoSession)
 }
 
+// TestSessionID_InFlightSessionPointerFailsLoudUntilSessionStartRefires
+// pins the operator's ruling on the PR #502 Bugbot finding: an in-flight
+// session whose pointer file was written under the pre-fix walk-derived
+// key (process.LegacyClaudePID) is NOT found by SessionID even when
+// CLAUDE_PID genuinely corroborates for this caller's own live process --
+// there is no legacy-key fallback for the SESSION-POINTER lookup, only for
+// the roster PARTICIPANT lookup (resolveFromSession,
+// TestResolve_ToleratesLegacyKeyedParticipant). A fallback here would
+// reopen exactly the cross-session collision the PR #502 fix closes: two
+// concurrent sessions in the SAME repo share the same LegacyClaudePID
+// value (the topmost "claude daemon run" ancestor both walk to), so a
+// repo-scoped check on the resolved roster cannot disambiguate them
+// either -- whichever pointer got written there first or last wins
+// arbitrarily, which is the wrong-answer-at-exit-0 shape DES-074 exists to
+// close, not a narrower version of it. Ruling: the loud failure here is
+// safe and self-healing -- restarting the Claude Code session (or
+// /clear) makes SessionStart re-fire and rewrite the pointer under the
+// corroborated key -- so this stays ErrNoSession rather than growing a
+// fallback. See CHANGELOG.md and DESIGN.md's DES-074 for the corrected
+// upgrade-behavior claim this test pins.
+func TestSessionID_InFlightSessionPointerFailsLoudUntilSessionStartRefires(t *testing.T) {
+	t.Setenv("ETHOS_SESSION", "")
+	old := UnderClaudeCode
+	UnderClaudeCode = func() bool { return true }
+	t.Cleanup(func() { UnderClaudeCode = old })
+
+	// A live, corroborating CLAUDE_PID distinct from LegacyClaudePID's walk
+	// result -- the grandparent trick, same as
+	// TestResolve_ToleratesLegacyKeyedParticipant -- so this test exercises
+	// the two-key scenario rather than the two keys coinciding by accident
+	// of environment.
+	parentPID := os.Getppid()
+	grandparentPID, err := process.ParentPID(parentPID)
+	require.NoError(t, err, "need a real grandparent to run this test")
+	t.Setenv("CLAUDE_PID", strconv.Itoa(grandparentPID))
+
+	preferredPID := process.FindClaudePID()
+	legacyPID := process.LegacyClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+	sessionID := "in-flight-session-predates-the-fix"
+	// The roster's own participant tolerance would find this fine -- see
+	// TestResolve_ToleratesLegacyKeyedParticipant -- if SessionID ever got
+	// that far. It never does: the pointer file itself only exists under
+	// the legacy key, exactly as an in-flight session's on-disk state is
+	// left by an upgrade with no SessionStart re-fire in between.
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: legacyPID, Persona: "mal", Parent: "root"},
+		"", "",
+	))
+	require.NoError(t, ss.WriteCurrentSession(legacyPID, sessionID))
+
+	id, source, err := SessionID(ss)
+	assert.Empty(t, id, "must not resolve via the legacy-keyed pointer even though the roster it names would tolerate this caller")
+	assert.Empty(t, source)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrNoSession)
+	assert.Contains(t, err.Error(), "restart the Claude Code session",
+		"the failure must be loud, safe, and self-healing, not silent")
+}
+
 // TestSessionID_ConcurrentSessionsDoNotCollide pins the ethos-vqwn fix: two
 // concurrent Claude Code sessions that shared a topmost-ancestor PID under
 // the pre-DES-074 walk (six rosters across four repos measured to PID
