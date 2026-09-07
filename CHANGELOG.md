@@ -2707,7 +2707,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MCP handlers receive `Store` via injection (no `os.Exit` in handler context)
 - ShellCheck added to CI and `make lint`
 
-[Unreleased]: https://github.com/punt-labs/ethos/compare/v4.11.0...HEAD
+[Unreleased]: https://github.com/punt-labs/ethos/compare/v4.17.0...HEAD
+[4.17.0]: https://github.com/punt-labs/ethos/compare/v4.16.1...v4.17.0
+[4.16.1]: https://github.com/punt-labs/ethos/compare/v4.15.0...v4.16.1
+[4.15.0]: https://github.com/punt-labs/ethos/compare/v4.14.0...v4.15.0
+[4.14.0]: https://github.com/punt-labs/ethos/compare/v4.13.1...v4.14.0
+[4.13.1]: https://github.com/punt-labs/ethos/compare/v4.13.0...v4.13.1
+[4.13.0]: https://github.com/punt-labs/ethos/compare/v4.12.0...v4.13.0
+[4.12.0]: https://github.com/punt-labs/ethos/compare/v4.11.0...v4.12.0
 [4.11.0]: https://github.com/punt-labs/ethos/compare/v4.10.0...v4.11.0
 [3.6.0]: https://github.com/punt-labs/ethos/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/punt-labs/ethos/compare/v3.4.0...v3.5.0
