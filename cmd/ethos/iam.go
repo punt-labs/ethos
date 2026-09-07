@@ -78,18 +78,27 @@ func resolveHardSession(explicit string) (sessionID, agentID string, err error) 
 //
 // agentID keys the participant: ETHOS_AGENT_ID if set, else the Claude PID.
 //
-// Step 3's failure mode is NOT collapsed into errNoSession uniformly.
-// resolve.SessionID distinguishes "genuinely no session" (nil error) from
-// "a session was expected but could not be identified" (resolve.ErrNoSession,
-// DES-074) — the latter is returned here AS-IS, not swapped for the local
-// errNoSession sentinel. Advisory callers (bindDispatchedMission,
-// clearClosedSessionBindings) check errors.Is(err, errNoSession)
-// specifically to treat "no session at all" as their ordinary,
-// silent-skip case; collapsing resolve.ErrNoSession into that same
-// sentinel would make those callers treat a genuine resolution failure
-// as nothing-to-do and skip a real rebind silently — `mission dispatch`
-// reporting success while the next Agent() spawn still attributes under
-// the PREVIOUS mission id (round 2, R5).
+// resolve.SessionID (step 3) returns one of three outcomes, and this
+// function's switch handles all three differently — mission 005 finding
+// C: nil error does NOT mean "genuinely no session"; it means resolved.
+// The three outcomes are:
+//   - nil error: resolved. sessionID is set from sid (case serr == nil).
+//   - resolve.ErrNotUnderClaudeCode: genuinely no session was ever
+//     expected (headless, CI, plain terminal). Neither switch case
+//     matches this sentinel, so it falls through with sessionID still
+//     "", and the `if sessionID == "" { return "", "", errNoSession }`
+//     below converts it to iam.go's own local, non-actionable
+//     errNoSession — this is the ordinary, silent-skip case.
+//   - resolve.ErrNoSession: a session WAS expected but could not be
+//     identified (DES-074) — returned here AS-IS, not swapped for the
+//     local errNoSession sentinel. Advisory callers (bindDispatchedMission,
+//     clearClosedSessionBindings) check errors.Is(err, errNoSession)
+//     specifically to treat "no session at all" as their ordinary,
+//     silent-skip case; collapsing resolve.ErrNoSession into that same
+//     sentinel would make those callers treat a genuine resolution failure
+//     as nothing-to-do and skip a real rebind silently — `mission dispatch`
+//     reporting success while the next Agent() spawn still attributes under
+//     the PREVIOUS mission id (round 2, R5).
 func resolveSession(explicit string, verifyEnv bool) (sessionID, agentID string, err error) {
 	agentID = os.Getenv("ETHOS_AGENT_ID")
 	ss := sessionStore()
