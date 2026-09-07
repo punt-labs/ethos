@@ -52,6 +52,8 @@ func TestCLI_Session_NonexistentRoster(t *testing.T) {
 	_, stderr, code = runCLI(t, sh, "whoami")
 	require.NotEqual(t, 0, code, "whoami must fail on a bogus explicit session")
 	assert.Contains(t, stderr, "not found")
+	assert.NotContains(t, stderr, "ethos: ethos:",
+		"the top-level error printer adds the \"ethos: \" prefix once; resolve.ErrNoSession must not add its own copy (round 2 finding)")
 }
 
 // TestCLI_Session_MalformedID_NoTraversal proves the roster path is built

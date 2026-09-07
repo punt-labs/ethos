@@ -846,9 +846,30 @@ func resolveParentLine(ss *session.Store, sessionID, parentID string, store iden
 		return ""
 	}
 	// Find the participant whose AgentID matches the subagent's parent.
+	// parentID is this call's freshly-resolved process.FindClaudePID()
+	// value; a primary participant written before DES-074 is keyed on the
+	// walk-derived PID instead, which a brand-new subagent spawned against
+	// an in-flight pre-upgrade session would otherwise never match — the
+	// parent line would silently go missing rather than error, since this
+	// function's whole contract is "best effort, empty string on miss"
+	// (round 2 finding). legacyParentID is computed lazily, once, only if
+	// the first pass finds nothing.
+	var legacyParentID string
+	legacyResolved := false
 	var parentHandle string
 	for _, p := range roster.Participants {
-		if p.AgentID == parentID && p.Persona != "" {
+		if p.Persona == "" {
+			continue
+		}
+		if p.AgentID == parentID {
+			parentHandle = p.Persona
+			break
+		}
+		if !legacyResolved {
+			legacyParentID = process.LegacyClaudePID()
+			legacyResolved = true
+		}
+		if legacyParentID != parentID && p.AgentID == legacyParentID {
 			parentHandle = p.Persona
 			break
 		}

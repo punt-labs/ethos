@@ -53,6 +53,21 @@ func FindClaudePID() string {
 	return walkToClaudeAncestor(os.Getpid())
 }
 
+// LegacyClaudePID returns the topmost-claude-ancestor PID via the
+// process-tree walk alone, ignoring CLAUDE_PID entirely — the value the
+// pre-DES-074 FindClaudePID always returned, and the value a session
+// roster's primary participant is keyed on if it was written before this
+// fix deployed. A participant lookup keyed only on the new, preferred
+// FindClaudePID would otherwise silently stop matching an in-flight
+// session's own participant record the moment the binary upgrades, and
+// stay broken until that session ends (round 2 finding, ethos-vqwn). This
+// is purely the participant-roster fallback — it has no session-lookup
+// use: the pointer file for an in-flight session heals itself onto the
+// new key the moment SessionStart next re-fires.
+func LegacyClaudePID() string {
+	return walkToClaudeAncestor(os.Getpid())
+}
+
 // claudePIDFromEnv parses CLAUDE_PID, returning ok=false when the variable
 // is absent, blank, or not a positive integer.
 func claudePIDFromEnv() (pid int, ok bool) {

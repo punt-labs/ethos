@@ -206,15 +206,27 @@ func (h *Handler) handleIam(_ context.Context, req mcplib.CallToolRequest, sessi
 	// with the CLI so the same declaration records the same agent key on
 	// both surfaces (DES-061 R4).
 	agentID := os.Getenv("ETHOS_AGENT_ID")
-	if agentID == "" {
+	selfKeyed := agentID == ""
+	if selfKeyed {
 		agentID = process.FindClaudePID()
 	}
 
-	if err := h.sessionStore.Join(sessionID, session.Participant{
-		AgentID: agentID,
-		Persona: persona,
-	}); err != nil {
-		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", err)), nil
+	p := session.Participant{AgentID: agentID, Persona: persona}
+	var joinErr error
+	if selfKeyed {
+		// Tolerate a session that started before this fix and keyed its
+		// primary participant on the walk-derived PID instead of the new
+		// preferred CLAUDE_PID — a plain Join would find no match and
+		// file a duplicate participant for the same physical process
+		// rather than updating the one already there (round 2 finding).
+		// An explicit ETHOS_AGENT_ID is exact by the caller's own
+		// declaration and is never subject to this fallback.
+		joinErr = h.sessionStore.JoinSelf(sessionID, agentID, process.LegacyClaudePID(), p)
+	} else {
+		joinErr = h.sessionStore.Join(sessionID, p)
+	}
+	if joinErr != nil {
+		return mcplib.NewToolResultError(fmt.Sprintf("failed to set persona: %v", joinErr)), nil
 	}
 	return mcplib.NewToolResultText(fmt.Sprintf("Set persona %q for %s in session %s", persona, agentID, sessionID)), nil
 }

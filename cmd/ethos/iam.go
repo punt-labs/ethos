@@ -21,10 +21,21 @@ func runIam(persona string) error {
 		return err
 	}
 	ss := sessionStore()
-	if err := ss.Join(sessionID, session.Participant{
-		AgentID: agentID,
-		Persona: persona,
-	}); err != nil {
+	p := session.Participant{AgentID: agentID, Persona: persona}
+	if os.Getenv("ETHOS_AGENT_ID") == "" {
+		// agentID is self-keyed on process.FindClaudePID(). Tolerate a
+		// session that started before this fix and keyed its primary
+		// participant on the walk-derived PID instead: a plain Join would
+		// find no match under the new key and file a second, duplicate
+		// participant for the same physical process rather than updating
+		// the one already there (round 2 finding). An explicit
+		// ETHOS_AGENT_ID (the else branch, via plain Join) is exact by the
+		// caller's own declaration and is never subject to this fallback.
+		err = ss.JoinSelf(sessionID, agentID, process.LegacyClaudePID(), p)
+	} else {
+		err = ss.Join(sessionID, p)
+	}
+	if err != nil {
 		return err
 	}
 

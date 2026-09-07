@@ -163,8 +163,11 @@ const SessionSourceEnv = "env"
 // session" and "this git user" are different answers and must not be
 // returned interchangeably, but neither may a CI run's total absence of a
 // Claude Code session be treated as an alarming, loud failure.
+// The message carries no "ethos: " prefix — cmd/ethos's top-level error
+// printer adds that once; prefixing it here doubled it to "ethos: ethos:
+// ..." (Bugbot/team-lead HIGH, round 2).
 var ErrNoSession = errors.New(
-	"ethos: cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`")
+	"cannot identify the calling session — set ETHOS_SESSION=<id>, or run `ethos session start`")
 
 // UnderClaudeCode indirects process.UnderClaudeCode — the DES-074 "was a
 // session expected" signal — behind a package variable rather than a
@@ -279,10 +282,23 @@ func resolveFromSession(ss *session.Store) (sessionPersona, error) {
 		return sessionPersona{}, fmt.Errorf("session %q has an unreadable roster (%v): %w", sessionID, lErr, ErrNoSession)
 	}
 	agentID := os.Getenv("ETHOS_AGENT_ID")
-	if agentID == "" {
+	selfKeyed := agentID == ""
+	if selfKeyed {
 		agentID = process.FindClaudePID()
 	}
 	p := roster.FindParticipant(agentID)
+	if p == nil && selfKeyed {
+		// A session's primary participant written before DES-074 is keyed
+		// on the walk-derived PID, not the corroborated CLAUDE_PID this
+		// caller just resolved — an in-flight session at upgrade time
+		// would otherwise show "no participant matching" until it ends
+		// (round 2 finding). Tolerate the legacy key as a fallback; an
+		// explicit ETHOS_AGENT_ID is never subject to this — that value is
+		// exact by the caller's own declaration, not a guess to widen.
+		if legacy := process.LegacyClaudePID(); legacy != agentID {
+			p = roster.FindParticipant(legacy)
+		}
+	}
 	if p == nil {
 		return sessionPersona{}, fmt.Errorf("session %q has no participant matching %q: %w", sessionID, agentID, ErrNoSession)
 	}

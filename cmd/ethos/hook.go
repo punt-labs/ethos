@@ -222,13 +222,22 @@ func runHookPreToolUse() error {
 // running under a Bash tool call inside a session finds that session
 // and no other.
 //
-// An unresolved session prints nothing and exits 0: the hook adds no
-// trailer rather than guessing at one (ethos-pobi). A commit from a
-// plain terminal, from a non-Claude harness, or from a session with
-// no active mission is untouched.
+// This hook must never block a commit, so it always exits 0 and never
+// emits a trailer it cannot vouch for (ethos-pobi). It does distinguish,
+// on stderr, WHY no trailer was added: a commit from a plain terminal or
+// a non-Claude harness (no session was ever expected) stays fully
+// silent — noisy stderr on every ordinary commit outside Claude Code
+// would defeat the point. A commit running under Claude Code whose
+// session could not be identified DOES print a note: per this hook's own
+// rationale, a silently missing trailer is exactly the failure class it
+// exists to prevent, so that case must not go unnoticed the same way.
 func runHookCommitTrailers(out io.Writer) error {
 	sessionID, _, err := resolve.SessionID(sessionStore())
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "ethos: commit-trailers: %v; no trailer added\n", err)
+		return nil
+	}
+	if sessionID == "" {
 		return nil
 	}
 	home, err := os.UserHomeDir()

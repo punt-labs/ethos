@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -70,6 +71,51 @@ func TestResolve_IamDeclaration(t *testing.T) {
 	handle, err := Resolve(s, ss)
 	require.NoError(t, err)
 	assert.Equal(t, "mal", handle)
+}
+
+// TestResolve_TolerlatesLegacyKeyedParticipant pins the round 2 finding: a
+// session whose primary participant was written before DES-074 keys it on
+// process.LegacyClaudePID (the pre-fix walk-derived PID), not the new
+// preferred process.FindClaudePID (CLAUDE_PID, corroborated). A caller
+// resolving "myself" via the new key alone would find no participant
+// match and hard-fail (measured: `ethos whoami` on a real in-flight
+// session went from resolving cleanly to `session ... has no participant
+// matching "<new pid>"`) until that session ends and a fresh SessionStart
+// rekeys it. resolveFromSession must fall back to the legacy key.
+func TestResolve_TolerlatesLegacyKeyedParticipant(t *testing.T) {
+	setGitConfig(t, "unknown", "")
+	t.Setenv("USER", "nobody")
+	t.Setenv("ETHOS_SESSION", "")
+	// Force a live, corroborating CLAUDE_PID distinct from the walk result
+	// so this test does not depend on the ambient environment happening
+	// to have one already (ambient CLAUDE_PID is real inside a live
+	// Claude Code session, but ONLY if it differs from the walk's answer
+	// does this test actually exercise the two-key scenario).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+
+	s := testStoreWithIdentity(t, &identity.Identity{
+		Name: "Mal Reynolds", Handle: "mal", Kind: "human",
+	})
+
+	root := t.TempDir()
+	ss := session.NewStore(root)
+
+	legacyPID := process.LegacyClaudePID()
+	preferredPID := process.FindClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	sessionID := "legacy-keyed-session"
+	require.NoError(t, ss.Create(sessionID,
+		session.Participant{AgentID: "root", Persona: "root"},
+		session.Participant{AgentID: legacyPID, Persona: "mal", Parent: "root"},
+		"", "",
+	))
+	require.NoError(t, ss.WriteCurrentSession(preferredPID, sessionID))
+
+	handle, err := Resolve(s, ss)
+	require.NoError(t, err)
+	assert.Equal(t, "mal", handle, "must tolerate a participant keyed on the legacy walk-derived PID")
 }
 
 func TestResolve_SessionFromEnv(t *testing.T) {

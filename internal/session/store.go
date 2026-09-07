@@ -115,27 +115,70 @@ func (s *Store) Join(sessionID string, p Participant) error {
 		if err != nil {
 			return err
 		}
-		if existing := roster.FindParticipant(p.AgentID); existing != nil {
-			if p.Persona != "" {
-				existing.Persona = p.Persona
-			}
-			if p.AgentType != "" {
-				existing.AgentType = p.AgentType
-			}
-			if p.Parent != "" {
-				existing.Parent = p.Parent
-			}
-			if p.Ext != nil {
-				existing.Ext = p.Ext
-			}
-		} else {
-			if p.Joined == "" {
-				p.Joined = time.Now().UTC().Format(time.RFC3339)
-			}
-			roster.Participants = append(roster.Participants, p)
-		}
+		joinParticipant(roster, p.AgentID, p)
 		return s.writeRoster(sessionID, roster)
 	})
+}
+
+// JoinSelf is Join for a caller declaring information about its OWN
+// participant record, keyed preferentially on preferredID (the
+// corroborated CLAUDE_PID, DES-074) but tolerating legacyID (the
+// pre-DES-074 walk-derived PID) when an in-flight session's primary
+// participant was written before this fix and has not yet been rekeyed
+// by a fresh SessionStart. A session created after this fix already
+// keys its primary on preferredID; legacyID is consulted only as a
+// fallback, and only when preferredID matches nothing already on the
+// roster — never preferred over an existing preferredID match.
+//
+// Without this, a caller resolving "myself" via the new preferredID
+// would find no existing record for an in-flight legacy-keyed session
+// and file a SECOND participant for the same physical process rather
+// than updating the one already there (round 2 finding: iam/whoami
+// against an in-flight pre-upgrade session either hard-failed to find a
+// participant, in read paths, or silently duplicated one, in this write
+// path). The check and the write happen under the same lock Join uses,
+// so "which key already exists" and the update are atomic.
+func (s *Store) JoinSelf(sessionID, preferredID, legacyID string, p Participant) error {
+	return s.withLock(sessionID, func() error {
+		roster, err := s.Load(sessionID)
+		if err != nil {
+			return err
+		}
+		key := preferredID
+		if legacyID != "" && legacyID != preferredID &&
+			roster.FindParticipant(preferredID) == nil &&
+			roster.FindParticipant(legacyID) != nil {
+			key = legacyID
+		}
+		joinParticipant(roster, key, p)
+		return s.writeRoster(sessionID, roster)
+	})
+}
+
+// joinParticipant updates the roster's existing participant at key, or
+// appends p (keyed on key) when none exists. Shared by Join and JoinSelf,
+// which differ only in how key is chosen.
+func joinParticipant(roster *Roster, key string, p Participant) {
+	if existing := roster.FindParticipant(key); existing != nil {
+		if p.Persona != "" {
+			existing.Persona = p.Persona
+		}
+		if p.AgentType != "" {
+			existing.AgentType = p.AgentType
+		}
+		if p.Parent != "" {
+			existing.Parent = p.Parent
+		}
+		if p.Ext != nil {
+			existing.Ext = p.Ext
+		}
+		return
+	}
+	p.AgentID = key
+	if p.Joined == "" {
+		p.Joined = time.Now().UTC().Format(time.RFC3339)
+	}
+	roster.Participants = append(roster.Participants, p)
 }
 
 // Leave removes a participant from a session roster.

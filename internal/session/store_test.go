@@ -122,6 +122,69 @@ func TestStore_JoinIdempotent(t *testing.T) {
 	assert.Equal(t, "updated-reviewer", roster.FindParticipant("sub-1").Persona)
 }
 
+// TestStore_JoinSelf_UpdatesLegacyKeyedParticipant pins the round 2
+// finding: a session created before DES-074 keys its primary participant
+// on the walk-derived PID (legacyID). A caller that has since resolved a
+// DIFFERENT preferred key (CLAUDE_PID) must update that existing record,
+// not file a second, duplicate participant for the same physical process.
+func TestStore_JoinSelf_UpdatesLegacyKeyedParticipant(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "518779", Persona: "claude", Parent: "user1"}
+	require.NoError(t, s.Create("sess-legacy", root, primary, "", ""))
+
+	update := Participant{AgentID: "1710156", Persona: "claude-updated"}
+	require.NoError(t, s.JoinSelf("sess-legacy", "1710156", "518779", update))
+
+	roster, err := s.Load("sess-legacy")
+	require.NoError(t, err)
+	require.Len(t, roster.Participants, 2, "must update the existing legacy-keyed record, not append a duplicate")
+	assert.Equal(t, "518779", roster.Participants[1].AgentID, "the on-disk key is left as-is; only the fields update")
+	assert.Equal(t, "claude-updated", roster.Participants[1].Persona)
+}
+
+// TestStore_JoinSelf_PrefersNewKeyWhenBothAbsent pins the ordinary case: a
+// session created after DES-074 (or one with no self participant yet at
+// all) has no legacy-keyed record to tolerate, so JoinSelf files the new
+// participant under preferredID exactly like Join would.
+func TestStore_JoinSelf_PrefersNewKeyWhenBothAbsent(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "user1", Persona: "user1"}
+	require.NoError(t, s.Create("sess-fresh", root, primary, "", ""))
+
+	p := Participant{Persona: "claude"}
+	require.NoError(t, s.JoinSelf("sess-fresh", "1710156", "518779", p))
+
+	roster, err := s.Load("sess-fresh")
+	require.NoError(t, err)
+	found := roster.FindParticipant("1710156")
+	require.NotNil(t, found)
+	assert.Equal(t, "claude", found.Persona)
+	assert.Nil(t, roster.FindParticipant("518779"))
+}
+
+// TestStore_JoinSelf_PrefersNewKeyWhenBothPresent pins the case DES-074's
+// corroboration is designed to make impossible in steady state (a caller
+// resolving the SAME live process would never get two different answers
+// from FindClaudePID across two calls) but which JoinSelf still resolves
+// deterministically if it ever occurs: preferredID wins.
+func TestStore_JoinSelf_PrefersNewKeyWhenBothPresent(t *testing.T) {
+	s := testStore(t)
+	root := Participant{AgentID: "user1", Persona: "user1"}
+	primary := Participant{AgentID: "1710156", Persona: "already-new"}
+	require.NoError(t, s.Create("sess-both", root, primary, "", ""))
+	require.NoError(t, s.Join("sess-both", Participant{AgentID: "518779", Persona: "also-legacy"}))
+
+	update := Participant{AgentID: "1710156", Persona: "updated"}
+	require.NoError(t, s.JoinSelf("sess-both", "1710156", "518779", update))
+
+	roster, err := s.Load("sess-both")
+	require.NoError(t, err)
+	assert.Equal(t, "updated", roster.FindParticipant("1710156").Persona)
+	assert.Equal(t, "also-legacy", roster.FindParticipant("518779").Persona, "the unrelated legacy record is untouched")
+}
+
 func TestStore_Leave(t *testing.T) {
 	s := testStore(t)
 	root := Participant{AgentID: "user1", Persona: "user1"}

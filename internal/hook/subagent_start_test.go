@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -116,6 +117,67 @@ func TestHandleSubagentStart_PersonaBlock(t *testing.T) {
 	assert.Contains(t, ctx, "go-specialist")
 	assert.Contains(t, ctx, "You report to Claude Agento (claude).")
 	assert.Equal(t, "SubagentStart", result.HookSpecificOutput.HookEventName)
+}
+
+// TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary pins the
+// round 2 finding: a session created before DES-074 keys its primary
+// participant on process.LegacyClaudePID (the walk-derived PID). A NEW
+// subagent spawned against that in-flight session after the fix deploys
+// sets its own Parent field from the current process.FindClaudePID
+// (CLAUDE_PID, corroborated) — a DIFFERENT value — so resolveParentLine
+// must also try the legacy key before giving up on "You report to ...".
+func TestHandleSubagentStart_ParentLine_ToleratesLegacyKeyedPrimary(t *testing.T) {
+	dir := t.TempDir()
+	s := identity.NewStore(dir)
+	ss := session.NewStore(dir)
+
+	// BuildPersonaBlock (and so the "You report to ..." line it carries)
+	// only fires when the identity has personality or writing-style
+	// content — give bwk a minimal personality so this test reaches the
+	// parent-line resolution it's actually about.
+	ps := attribute.NewStore(dir, attribute.Personalities)
+	require.NoError(t, ps.Save(&attribute.Attribute{
+		Slug:    "kernighan",
+		Content: "# Kernighan\n\nA methodical systems programmer.\n\n- Simplicity first",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Brian K", Handle: "bwk", Kind: "agent", Personality: "kernighan",
+	}))
+	require.NoError(t, s.Save(&identity.Identity{
+		Name: "Claude Agento", Handle: "claude", Kind: "agent",
+	}))
+
+	// Force a live, corroborating CLAUDE_PID distinct from the walk
+	// result, so this test does not depend on the ambient environment
+	// happening to have one that differs (see resolve.
+	// TestResolve_TolerlatesLegacyKeyedParticipant for the same trick).
+	t.Setenv("CLAUDE_PID", strconv.Itoa(os.Getppid()))
+	legacyPID := process.LegacyClaudePID()
+	preferredPID := process.FindClaudePID()
+	require.NotEqual(t, legacyPID, preferredPID,
+		"test setup requires the legacy and preferred keys to differ")
+
+	// The primary participant is keyed on the LEGACY PID, as a
+	// pre-DES-074 SessionStart would have written it.
+	require.NoError(t, ss.Create("sub-test-legacy",
+		session.Participant{AgentID: "user1", Persona: "jim"},
+		session.Participant{AgentID: legacyPID, Persona: "claude"},
+		"", "",
+	))
+
+	payload := `{
+		"agent_id": "sub-1",
+		"agent_type": "bwk",
+		"session_id": "sub-test-legacy"
+	}`
+
+	out := captureSubagentStartOutput(t, payload, s, ss)
+
+	var result SubagentStartResult
+	require.NoError(t, json.Unmarshal([]byte(out), &result))
+	ctx := result.HookSpecificOutput.AdditionalContext
+	assert.Contains(t, ctx, "You report to Claude Agento (claude).",
+		"must resolve the parent line via the legacy-keyed primary participant")
 }
 
 func TestHandleSubagentStart_WithExtensions(t *testing.T) {
